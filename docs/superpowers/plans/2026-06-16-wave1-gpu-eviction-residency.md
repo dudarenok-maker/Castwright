@@ -243,12 +243,18 @@ it('unloadResidentOllama() with no targets evicts EVERY resident with keep_alive
   expect(evicted.sort()).toEqual(['llama3.1:8b', 'qwen3.5:9b']);
 });
 
-it('verifyOllamaEvicted() resolves true once /api/ps no longer lists the target', async () => {
-  let calls = 0;
-  fetchMock.mockImplementation(async () => {
-    calls += 1;
-    const models = calls === 1 ? [{ name: 'qwen3.5:9b' }] : []; // gone on the 2nd probe
-    return new Response(JSON.stringify({ models }), { status: 200 });
+it('verifyOllamaEvicted() resolves true once /api/ps no longer lists a resident', async () => {
+  /* probeOllamaHealth fires /api/tags AND /api/ps in parallel (ollama-health.ts:123),
+     so discriminate by URL — only the /api/ps branch drives the "still resident?"
+     decision (`.resident`). Counting raw fetch calls would be non-deterministic. */
+  let psProbes = 0;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).endsWith('/api/ps')) {
+      psProbes += 1;
+      const models = psProbes === 1 ? [{ name: 'qwen3.5:9b' }] : []; // gone on the 2nd ps probe
+      return new Response(JSON.stringify({ models }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ models: [] }), { status: 200 }); // /api/tags
   });
   const { verifyOllamaEvicted } = await import('./ollama-health.js');
   await expect(verifyOllamaEvicted({ retries: 3, delayMs: 1 })).resolves.toBe(true);
@@ -472,8 +478,24 @@ git commit -m "feat(server): withGpuLoad — atomic evict+verify+load with refus
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-it('wraps the load in withGpuLoad (eviction precedes the first /load on a constrained card)', async () => {
+/* CRITICAL mocking note: ensureSidecarEngineReady pulls in the gate via a
+   RUNTIME `await import('../gpu/gpu-load.js')` (Step 3). The module graph is
+   already warm from this file's top-level `import … from './ensure-sidecar-loaded.js'`,
+   and `vi.doMock` is NOT hoisted — so without `vi.resetModules()` the dynamic
+   import returns the cached REAL module and the mock never applies. Each new
+   test must: register the doMock(s), reset modules, THEN dynamically import the
+   unit — re-declaring any static dep the reset drops (here getResolvedSidecarUrl,
+   imported at ensure-sidecar-loaded.ts:26). Clean up in afterEach so the file's
+   existing readiness tests see the real module. */
+afterEach(() => { vi.doUnmock('../gpu/gpu-load.js'); vi.doUnmock('../workspace/user-settings.js'); vi.resetModules(); });
+
+it('wraps the load in withGpuLoad (the gate runs before /load on a constrained card)', async () => {
   const order: string[] = [];
+  vi.resetModules();
+  vi.doMock('../workspace/user-settings.js', () => ({
+    getResolvedSidecarUrl: () => 'http://localhost:9000',
+    readConfigOverrides: () => ({}),
+  }));
   vi.doMock('../gpu/gpu-load.js', () => ({
     withGpuLoad: async (fn: () => Promise<unknown>) => { order.push('gpu-load-gate'); return fn(); },
     GpuBusyError: class extends Error {},
@@ -487,6 +509,7 @@ it('wraps the load in withGpuLoad (eviction precedes the first /load on a constr
 
 it('does NOT engage the gate for a cloud / non-sidecar engine', async () => {
   const gate = vi.fn(async (fn: () => Promise<unknown>) => fn());
+  vi.resetModules();
   vi.doMock('../gpu/gpu-load.js', () => ({ withGpuLoad: gate, GpuBusyError: class extends Error {} }));
   const { ensureSidecarEngineReady } = await import('./ensure-sidecar-loaded.js');
   await ensureSidecarEngineReady('gemini' as never);
@@ -501,22 +524,24 @@ Expected: FAIL — no gate today.
 
 - [ ] **Step 3: Wrap the loop**
 
-In `ensureSidecarEngineReady`, after `if (!SIDECAR_ENGINES.has(engine)) return;` and `if (signal?.aborted) throw …;`, wrap the existing readiness loop. Move the `for (;;) { … }` into a `withGpuLoad` callback:
+**Replace lines 109-128 IN THEIR ENTIRETY** — from `const target = …` through the closing `}` of the `for (;;)` loop. Do NOT leave the original loop in place (a paste-on-top yields duplicate `const target`/`const deadline` → TS redeclaration error → red commit). The replacement keeps the existing `const timeoutMs` (do not inline it away) and wraps the loop in a `withGpuLoad` callback:
 
 ```ts
 const { withGpuLoad } = await import('../gpu/gpu-load.js');
+const target = `${getResolvedSidecarUrl()}/load`;
+const timeoutMs = opts.timeoutMs ?? READINESS_TIMEOUT_MS;
+const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
+const deadline = Date.now() + timeoutMs;
+let lastReason = 'unknown';
+
 await withGpuLoad(async () => {
-  const target = `${getResolvedSidecarUrl()}/load`;
-  const deadline = Date.now() + (opts.timeoutMs ?? READINESS_TIMEOUT_MS);
-  const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
-  let lastReason = 'unknown';
   for (;;) {
     if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
     const outcome = await tryLoadOnce(target, engine, signal);
-    if (outcome.ready) return;
+    if (outcome.ready) return; // resolves the withGpuLoad callback; ensureSidecarEngineReady then returns void
     lastReason = outcome.reason;
     if (Date.now() >= deadline) {
-      console.warn(`[generation] preload ${engine}: not ready after budget (last: ${lastReason}) — falling back to lazy load.`);
+      console.warn(`[generation] preload ${engine}: not ready after ${timeoutMs}ms (last: ${lastReason}) — falling back to lazy load.`);
       return;
     }
     await sleep(pollIntervalMs, signal);
@@ -524,23 +549,31 @@ await withGpuLoad(async () => {
 });
 ```
 
-(The whole load is now inside the lock on a constrained card; `withGpuLoad` may throw `GpuBusyError` — let it propagate.)
+(The whole load is now inside the lock on a constrained card; `withGpuLoad` may throw `GpuBusyError` — let it propagate to the caller, handled in Step 4.)
 
 - [ ] **Step 4: Handle GpuBusyError at the generation worker**
 
-At the `await ensureSidecarEngineReady(engine, chapterSignal);` call sites in `generation.ts` (lines ~1103/1121/1329), wrap so a `GpuBusyError` fails the chapter with a clear, non-retryable message rather than tripping the consecutive-failure breaker:
+`generation.ts` has THREE `ensureSidecarEngineReady` call sites. Wrap **only the two primary preload sites — line ~1103 (`engine`) and line ~1121 (`'kokoro'` fallback)**. **Leave line ~1329 UNWRAPPED**: it sits inside the `onRecoverRecycle` callback with its own `try/finally { clearInterval(beat) }`, and recycle-recovery already polls through respawn — a `GpuBusyError` there should propagate unchanged, not be reworded.
+
+Add a tiny local helper near the top of the worker and call it at the two chosen sites (so the catch logic isn't duplicated):
 
 ```ts
-try {
-  await ensureSidecarEngineReady(engine, chapterSignal);
-} catch (e) {
-  const { GpuBusyError } = await import('../gpu/gpu-load.js');
-  if (e instanceof GpuBusyError) {
-    throw new Error(`Generation paused: ${e.message}`); // surfaced to the user; analysis must finish first
+// near the other generation worker helpers
+async function ensureReadyOrPause(eng: TtsEngine, sig: AbortSignal | undefined): Promise<void> {
+  try {
+    await ensureSidecarEngineReady(eng, sig);
+  } catch (e) {
+    const { GpuBusyError } = await import('../gpu/gpu-load.js');
+    if (e instanceof GpuBusyError) {
+      // Surface as a clear, user-facing pause — NOT a breaker-tripping crash.
+      throw new Error(`Generation paused: ${e.message}`);
+    }
+    throw e;
   }
-  throw e;
 }
 ```
+
+Then at line ~1103 replace `await ensureSidecarEngineReady(engine, chapterSignal);` with `await ensureReadyOrPause(engine, chapterSignal);`, and likewise at ~1121 for `'kokoro'`. (`TtsEngine` is already imported in this file via `ensure-sidecar-loaded.js` exports — reuse it.)
 
 - [ ] **Step 5: Run tests to verify pass**
 
@@ -565,20 +598,37 @@ git commit -m "feat(server): gate the generation preload through withGpuLoad"
 
 - [ ] **Step 1: Write the failing test (through the route, matching the suite's style)**
 
+The suite is route-level (`request(app).post(...)`) and builds `app` once in `beforeAll`; there is NO `freshApp()` factory (don't invent one). A runtime dynamic import of the gate can't be intercepted by in-body `vi.doMock`, so use a **file-level hoisted mock** that defaults to passthrough (keeps every existing design test green) and is overridden for one call in the 409 test.
+
+Add ONCE at the top of `qwen-voice.test.ts` (with the other top-level mocks):
 ```ts
-it('returns 409 when analysis is busy on a constrained card (GPU busy)', async () => {
-  vi.doMock('../gpu/gpu-load.js', () => ({
-    withGpuLoad: async () => { const { GpuBusyError } = await import('../gpu/gpu-load.js'); throw new GpuBusyError('GPU busy with analysis — try again once it finishes.'); },
-    GpuBusyError: class GpuBusyError extends Error { code = 'GPU_BUSY'; },
-  }));
-  const app = await freshApp(); // the suite's app factory
-  const res = await request(app).post('/api/books/demo/cast/maerin/design-voice').send({ persona: 'warm' });
+const { withGpuLoadMock } = vi.hoisted(() => ({
+  withGpuLoadMock: vi.fn(async (fn: () => Promise<unknown>) => fn()), // default: passthrough
+}));
+vi.mock('../gpu/gpu-load.js', () => ({
+  withGpuLoad: (fn: () => Promise<unknown>) => withGpuLoadMock(fn),
+  GpuBusyError: class GpuBusyError extends Error {
+    code = 'GPU_BUSY';
+    constructor(m: string) { super(m); this.name = 'GpuBusyError'; }
+  },
+}));
+```
+
+The new test (uses the suite's EXISTING `bookId` + `designBody` fixtures — `qwen-voice.test.ts:144,158` — and the same character route the suite's happy-path design test posts to; do NOT use `/books/demo/...` or a bare `{persona}` body, which 404/400 before reaching the gate):
+```ts
+it('returns 409 when the GPU is busy with analysis (constrained card)', async () => {
+  const { GpuBusyError } = await import('../gpu/gpu-load.js');
+  withGpuLoadMock.mockImplementationOnce(() => {
+    throw new GpuBusyError('GPU busy with analysis — try again once it finishes.');
+  });
+  const res = await request(app)
+    .post(`/api/books/${bookId}/cast/maerin/design-voice`) // same path the suite's design test uses
+    .send(designBody);
   expect(res.status).toBe(409);
   expect(res.body.error).toMatch(/GPU busy/i);
 });
 ```
-
-(If `withGpuLoad` is hard to mock through the route, instead assert the route's error mapping directly: make `designQwenVoiceForCharacter` reject with `GpuBusyError` via the mock and assert the handler's `catch` returns 409. Use whichever the suite's existing structure supports — do NOT leave this as a placeholder; the suite already builds `app` and posts design requests.)
+(Match the exact character segment + `designBody` shape the suite's existing successful `design-voice` test uses; the point is a request that reaches `designQwenVoiceForCharacter`, where the gate throws.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -587,24 +637,28 @@ Expected: FAIL — no gate / no 409 mapping yet.
 
 - [ ] **Step 3: Wrap the design fetch**
 
-Inside `withDesignLock(p.bookDir, async () => { … })`, wrap from the `gpuSemaphore.acquire` through the design fetch in `withGpuLoad`:
+Do NOT relocate any inner code — the `withDesignLock` callback (`qwen-voice.ts:270-379`) contains a `gpuSemaphore.acquire`/`releaseGpu`, a `setInterval` liveness timer, an `AbortController`, and a `try { … } finally { clearInterval; removeEventListener; releaseGpu(); }`. Splitting it mid-`try` would orphan the `finally`. Instead **wrap the entire existing callback body verbatim**:
 
-```ts
-const { withGpuLoad } = await import('../gpu/gpu-load.js');
-return withGpuLoad(async () => {
-  const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
-  // … existing body through the /qwen/design-voice fetch and PCM encode …
-});
-```
+1. Immediately AFTER the opening `return withDesignLock(p.bookDir, async () => {` (line 270), insert two lines:
+   ```ts
+   const { withGpuLoad } = await import('../gpu/gpu-load.js');
+   return withGpuLoad(async () => {
+   ```
+2. Immediately BEFORE the `});` that CLOSES the `withDesignLock` callback (line ~379), insert one closing line so the new `withGpuLoad(async () => {` is balanced:
+   ```ts
+   });
+   ```
+
+Net effect: the whole existing body (acquire → timer → try/finally → return) now runs inside `withGpuLoad`, untouched. On a constrained card with analysis busy, `withGpuLoad` throws `GpuBusyError` *before* `gpuSemaphore.acquire`, so no semaphore token is taken and there's nothing to clean up; on a roomy card it's a passthrough and behaviour is identical to today.
 
 - [ ] **Step 4: Map the error at the route**
 
-In the `design-voice` route handler's `catch`, add before the generic 500:
+In the `design-voice` route handler's `catch (e)` block (`qwen-voice.ts:497-501` — the one that currently does `return res.status(502)…`; NOT the `promote-voice` handler at ~514), add the 409 mapping BEFORE the existing 502 return. Note the catch binds `e`, not `err`:
 
 ```ts
 const { GpuBusyError } = await import('../gpu/gpu-load.js');
-if (err instanceof GpuBusyError) {
-  return res.status(409).json({ error: err.message, code: 'gpu_busy' });
+if (e instanceof GpuBusyError) {
+  return res.status(409).json({ error: e.message, code: 'gpu_busy' });
 }
 ```
 
