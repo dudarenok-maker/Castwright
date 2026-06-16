@@ -6,10 +6,14 @@ owner: null
 
 # 221 — Multilingual attribution: Russian prompt guards + local model + cast de-duplication
 
-> Status: active — **Wave A shipped** (deterministic narrator-default heuristic +
-> Russian dash-tag preamble guard); Waves B/C/D are follow-ups. Investigation
-> complete and reproduced cold against the real book; the **prompt-guard fix is
-> empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](162-fs2-multilanguage.md)
+> Status: active — **Wave A shipped** (#852, narrator-default heuristic + dash-tag
+> guard); **Wave D shipped** (#856, localized cast buckets); **Wave B core already
+> works** via #851's model picker + the existing `defaultAnalysisModel` setting
+> (set gemma in Account → Model settings — admin-selectable, no hardcoding; only
+> per-language auto-default would be net-new, optional); **Wave C OBSOLETE** —
+> re-measured 2026-06-17: plan 219 already deduplicates (17 chars, 0 dups). The
+> Russian pipeline is functional end-to-end. Investigation reproduced cold; the
+> **prompt-guard fix is empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](162-fs2-multilanguage.md)
 > and [187 (large-chapter stage-2 + attribution coverage)](archive/187-large-chapter-stage2-and-attribution-coverage.md).
 > Trigger: full analysis of a Russian book (Ночной дозор / Night Watch, 9 ch,
 > 43-char cast, run on the **local** engine with `qwen3.5:9b`) never completes —
@@ -191,7 +195,11 @@ Also note the residency landscape changed: **plan 222 / #840** shipped a GPU-res
 > - **Wave C: RE-MEASURE on current `main` FIRST.** The duplicate set in Defect 1 below is **pre-219** (transliteration removed in 219; ids are now Cyrillic via `unicodeKebab`; roster threaded into later chunks). The real residual must be re-collected before designing the tiering. Use `normaliseNameKey` (`safe-id.ts:76`), not `normaliseForMatch` (no combining-mark stripping). Run the fuzzy merge **once at finalisation** (analysis.ts:~3795), NOT inside the per-rebuild `mergeRosterChapter` (order-sensitive live-SSE path — keep that exact-id). **Tier-1 (exact normalized-name) only for v1** — Russian patronymic/surname token-sharing makes Tier-2 false-merge-prone (219 notes the 4B smears surnames). Russian `DIALOGUE_VERBS` extension needs the `.mjs` drift-copy + verb-initial word-order pattern, and may be redundant with Wave A.
 > - **Wave D:** thread `language` through `previewFoldForLiveView` AND the exported `buildInterimCast` (signature change + 6 preview call sites) or live/interim buckets show English then flip; `cast-merge.ts:84` `makeBucket` has no book language in scope — resolve it from the book record. Russian descriptor detection (`isDescriptorName`) is English-structured (no "the", inflection) → partial coverage for v1, state the limitation.
 
-### Wave C — name/alias-aware cross-chapter merge (Defect 1)
+### Wave C — name/alias-aware cross-chapter merge (Defect 1) — ❌ OBSOLETE (superseded by plan 219)
+
+**Re-measured 2026-06-17 on current `main` (real Phase-0, all 9 chapters, gemma4-e4b): 17 distinct characters, ZERO same-person duplicate groups.** Plan 219 (transliteration removed → Cyrillic `unicodeKebab` ids + accumulated roster threaded into each chapter's detection prompt) already deduplicates the cast. The 43-character pre-219 duplicate set (egor/yegor, boris-ignatyevich/boris-ignatievich/shef, anton/anton-gorodetsky…) no longer occurs — a single `anton` ("Антон Сергеевич Городецкий"), single `egor`, single `boris-ignatiyevich`, etc. **Do NOT build the cross-chapter fuzzy merge — it would solve an already-fixed problem** (the adversarial-review BLOCKER on this was confirmed). Residuals (NOT dedup; possible small follow-ups): stage-1 occasionally emits schema-invalid JSON on a chapter (bare probe lost ch1/ch7; the real `runStage1WithRosterGuard` + parse-retry likely recovers); cosmetic id↔name model quirks.
+
+_Original (obsolete) design retained for history:_
 
 Add a name/alias fallback to `mergeRosterChapter` when exact-id misses. Tiered:
 (1) exact normalized-name/alias match → merge (safe; kills the
