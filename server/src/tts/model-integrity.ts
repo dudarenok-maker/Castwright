@@ -8,8 +8,9 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { kokoroWeightPaths } from './model-paths.js';
+import type { EngineId } from './engine-health.js';
 
-export type IntegrityVerdict = 'verified' | 'mismatch' | undefined;
+export type IntegrityVerdict = 'verified' | 'unpinned' | 'mismatch' | undefined;
 
 interface HashEntry {
   sha256?: string | null;
@@ -25,14 +26,14 @@ function loadManifest(repoRoot: string): { kokoro?: Record<string, HashEntry> } 
   }
 }
 
-/** Size-check the on-disk Kokoro weights against the pinned manifest. Returns
-    `undefined` (no badge) when the manifest is missing/unpinned or a weight file
-    is absent; 'mismatch' when any present file's size differs from its pin;
-    'verified' when both present files match. */
-export function kokoroIntegrity(repoRoot: string): IntegrityVerdict {
+/** Size-check Kokoro weights against the pinned manifest. Returns `undefined` when a
+    weight file is absent (not fully installed); `'unpinned'` when the manifest has no
+    kokoro entry or no sizeBytes pins to compare; `'mismatch'` on a size diff;
+    `'verified'` when all pinned sizes match. */
+function kokoroSizeCheck(repoRoot: string): IntegrityVerdict {
   const manifest = loadManifest(repoRoot);
   const pins = manifest?.kokoro;
-  if (!pins) return undefined;
+  if (!pins) return 'unpinned';
 
   const [onnxPath, binPath] = kokoroWeightPaths(repoRoot);
   const byName: Record<string, string> = {
@@ -52,5 +53,24 @@ export function kokoroIntegrity(repoRoot: string): IntegrityVerdict {
       return undefined;
     }
   }
-  return sawOne ? 'verified' : undefined;
+  return sawOne ? 'verified' : 'unpinned';
 }
+
+/** Return an integrity verdict for any engine. Engines without manifest pins
+    (qwen, coqui, whisper) return `'unpinned'` — a neutral signal, not a blank.
+    For kokoro, runs the size-check against the pinned manifest. */
+export function engineIntegrity(engine: EngineId, repoRoot: string): IntegrityVerdict {
+  switch (engine) {
+    case 'kokoro':
+      return kokoroSizeCheck(repoRoot);
+    case 'qwen':
+    case 'coqui':
+    case 'whisper':
+      return 'unpinned';
+  }
+}
+
+/** Size-check the on-disk Kokoro weights against the pinned manifest.
+    Delegates to `engineIntegrity('kokoro', repoRoot)` — kept for backwards compat. */
+export const kokoroIntegrity = (repoRoot: string): IntegrityVerdict =>
+  engineIntegrity('kokoro', repoRoot);
