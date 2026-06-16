@@ -36,7 +36,12 @@ vi.mock('../workspace/user-settings.js', () => ({
    is filesystem-independent. */
 const SKILL_TEXT = `You design voices for an audiobook. From the character profile below, write ONE voice-design persona that a text-to-speech model will use to synthesise this character's voice. Describe how the voice SOUNDS, then end with a short purpose clause.
 
-Cover these dimensions: gender, apparent age, pitch (high / medium / low), speaking pace, timbre (e.g. warm, crisp, rich, gravelly, bright), and the dominant emotional register. End with the use — "suitable for audiobook narration" for a narrator, otherwise "for expressive character dialogue".
+Cover these dimensions: gender, apparent age, pitch (high / medium / low), speaking pace, timbre (e.g. warm, crisp, rich, gravelly, bright), and the dominant emotional register. State the apparent age with a concrete word or band ("a child of about eight", "a man in his seventies", "an elderly woman") — never leave it implied. End with the use — "suitable for audiobook narration" for a narrator, otherwise "for expressive character dialogue".
+
+Make age audible, not just stated — translate it into how the voice physically sounds:
+- Elderly / old: pair the explicit age word with aging acoustics — a dry rasp or gravel, a thinner, reedier or breathier edge, and often a faint tremor or quaver — at a slower, more deliberate pace. Do NOT describe an old voice as merely "deep"; age tends to thin and fray a voice rather than deepen it.
+- Child / young: brighter, higher, lighter and more energetic.
+- Middle-aged: fuller and steadier, without the fraying of age.
 
 Rules:
 - Output ONLY the persona. No preamble, no quotes, no markdown, no name.
@@ -46,7 +51,8 @@ Rules:
 - Don't imitate a real or famous person.
 - English.
 
-Example output: A bright teenage girl's voice, medium-high pitch and mid-paced, warm and lightly playful with a faintly nervous edge, suited to expressive character dialogue.`;
+Example (teenager): A bright teenage girl's voice, medium-high pitch and mid-paced, warm and lightly playful with a faintly nervous edge, suited to expressive character dialogue.
+Example (elderly man): An elderly man's voice in his seventies, low-to-medium pitch and gravelly, with a dry rasp and a faint tremor; slow and deliberate, carrying worn, unshakable authority, for expressive character dialogue.`;
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -129,6 +135,24 @@ describe('buildVoiceStylePrompt', () => {
     expect(prompt).toMatch(/NOT the character's feelings/i);
     /* The 15–40-word length band replaces the old "~30 words" cap. */
     expect(prompt).toMatch(/15\s*[–-]\s*40 words/);
+  });
+
+  it('instructs the model to make age audible (explicit age word + aging acoustics, not just "deep")', async () => {
+    /* Master Oduvan regression: an elderly profile produced a persona with no
+       age word and a "deep-pitched" cue, which Qwen VoiceDesign reads as a
+       prime-age baritone. The prompt must (a) demand an explicit age word and
+       (b) translate age into acoustics — including the guard against describing
+       an old voice as merely "deep". */
+    const { buildVoiceStylePrompt } = await import('./voice-style.js');
+    const prompt = await buildVoiceStylePrompt(MAERIN);
+    /* Age must be stated explicitly, not left implied. */
+    expect(prompt).toMatch(/apparent age with a concrete word or band/i);
+    /* Age must be translated into how the voice physically sounds. */
+    expect(prompt).toMatch(/Make age audible/i);
+    /* Elderly voices carry aging acoustics (tremor/quaver). */
+    expect(prompt).toMatch(/tremor|quaver/i);
+    /* The anti-"deep" guard — the exact thing that broke Oduvan. */
+    expect(prompt).toMatch(/do NOT describe an old voice as merely "deep"/i);
   });
 
   it('caps the quote block so a chatty character cannot blow out the prompt', async () => {

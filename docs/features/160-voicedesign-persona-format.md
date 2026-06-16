@@ -105,6 +105,30 @@ Sources:
 - Per-quote emotion/intonation at synth time (still deferred — Qwen ignores
   per-utterance `instruct` on cloned voices; see `108-qwen-coexistence.md`).
 
+## Follow-up (2026-06-16): make age audible
+
+A demo-book audition (Master Oduvan, `ageRange: "elderly"`) surfaced a gap the
+plan-160 rewrite left open: the prompt listed "apparent age" as one of six
+dimensions but never required it to be *stated explicitly* or *translated into
+acoustics*. Gemini satisfied the rule with psychology ("weary", "weathered" —
+which VoiceDesign ignores) and a "deep-pitched" cue, which the model reads as a
+prime-age baritone rather than an old man. A hand-edited instruct that named the
+age and added aging acoustics (dry rasp, faint tremor, low-to-medium not deep)
+audibly fixed it.
+
+The fix is in the same prompt builder (`skills/audiobook-voice-style.md`):
+- the age dimension now demands a concrete age word/band ("a man in his
+  seventies"), never implied;
+- a new "Make age audible" block translates age into acoustics, with an explicit
+  guard — *do NOT describe an old voice as merely "deep"; age thins and frays a
+  voice rather than deepening it* — plus child/young and middle-aged cues;
+- a second worked example (elderly man) anchors the format.
+
+Paired coverage: `voice-style.test.ts` → "instructs the model to make age audible".
+No code change (`buildVoiceStylePrompt` already passes `ageRange` in the profile
+block) and no migration — applies to personas generated from now on; existing
+books keep their `voiceStyle` until re-generated.
+
 ## Ship notes
 
 (Filled in when status flips to `stable` after the GPU audition confirms the
