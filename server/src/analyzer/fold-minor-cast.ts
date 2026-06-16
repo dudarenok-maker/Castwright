@@ -34,6 +34,7 @@
 
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { taggedSpeakerIds } from './recover-tagged-lines.js';
+import { normaliseBookLanguage } from '../tts/language.js';
 
 export interface FoldOptions {
   /** A character whose attributed line count is strictly below this
@@ -66,6 +67,11 @@ export interface FoldOptions {
       otherwise be silently dropped or bucketed into
       unknown-male/female. */
   protectedRoles?: string[];
+  /** BCP-47 book language (e.g. `'ru'`, `'en'`, `'ru-RU'`). Drives the
+      localized bucket name (`bucketName`) AND the language-keyed Russian
+      descriptor detection in `isDescriptorName`. Missing / English → the
+      existing English behaviour. Normalised via `normaliseBookLanguage`. */
+  language?: string;
 }
 
 export interface FoldResult {
@@ -96,6 +102,26 @@ export const PROTECTED_ROLES_DEFAULT = ['Bodyguard', 'Mentor', 'Family Member'];
 export const MALE_BUCKET_ID = 'unknown-male';
 export const FEMALE_BUCKET_ID = 'unknown-female';
 const NARRATOR_ID = 'narrator';
+
+/* Localized minor-cast bucket display names (Wave D, plan 221). Keyed by the
+   normalised primary subtag. English is the default for every unmapped
+   language. The single source of truth used by BOTH `makeBucket` (mint) AND
+   the `withCounts` canonicalizer (re-fold), so a Russian-named bucket is never
+   reverted to English on a subsequent fold. Russian strings are user-specified
+   and must stay exact. */
+const BUCKET_NAMES: Record<string, { male: string; female: string }> = {
+  ru: { male: 'Незнакомый Парень', female: 'Незнакомая Девушка' },
+};
+const BUCKET_NAMES_DEFAULT = { male: 'Unknown male', female: 'Unknown female' };
+
+/* The localized display name for a bucket given the book language. Used by
+   both the minting path (`makeBucket`) and the canonicalizer so re-folds are
+   stable/idempotent. */
+export function bucketName(gender: 'male' | 'female', language?: string): string {
+  const primary = normaliseBookLanguage(language);
+  const names = BUCKET_NAMES[primary] ?? BUCKET_NAMES_DEFAULT;
+  return names[gender];
+}
 
 /* Returns true if `role` matches any entry in `protectedRoles` via
    case-insensitive substring. `'Goblin Bodyguard'` matches `'Bodyguard'`;
@@ -129,6 +155,30 @@ const GENERIC_ROLE_TAIL = new Set([
   'voice',
 ]);
 
+/* Russian generic-role nouns that read as descriptors rather than proper
+   names ("девушка" = girl, "парень" = guy, "незнакомец" = stranger). Only
+   consulted when the book language is Russian. Unlike the English tail-word
+   rule these match a BARE single-word name (Russian background speakers are
+   typically emitted as a lone noun, not "<adj> <noun>"). Russian inflection
+   means this is PARTIAL coverage for v1 — case-declined forms ("девушку",
+   "парня") and adjective-prefixed phrases are not stemmed; we match the
+   nominative singular only. Extending to a stemmer is deliberately out of
+   scope (don't over-engineer). */
+const GENERIC_ROLE_RU = new Set([
+  'девушка',
+  'парень',
+  'юноша',
+  'мужчина',
+  'женщина',
+  'незнакомец',
+  'незнакомка',
+  'человек',
+  'голос',
+  'старик',
+  'старуха',
+  'парнишка',
+]);
+
 /* Decides whether a character's `name` reads as a descriptor rather
    than a proper name. The three patterns we catch in order:
      1. `^Unknown\b...` — the Stage-1 contract ("Unknown <descriptor>"
@@ -145,8 +195,14 @@ const GENERIC_ROLE_TAIL = new Set([
         role tail so a bare proper name that happens to be a role
         ("Boy" used as a nickname) doesn't get folded.
    Trim + lowercase normalisation up front so the model's casing
-   choices don't matter. */
-export function isDescriptorName(name: string): boolean {
+   choices don't matter.
+
+   When `language` is Russian the English patterns above still apply (the
+   model occasionally emits "Unknown …" even on a Russian book) AND a bare
+   Russian generic noun ("девушка", "парень") is additionally treated as a
+   descriptor. Russian inflection means partial coverage for v1 — see
+   `GENERIC_ROLE_RU`. */
+export function isDescriptorName(name: string, language?: string): boolean {
   const trimmed = name.trim();
   if (!trimmed) return false;
   if (/^unknown\b/i.test(trimmed)) return true;
@@ -155,6 +211,10 @@ export function isDescriptorName(name: string): boolean {
   if (parts.length >= 2) {
     const tail = parts[parts.length - 1].toLowerCase();
     if (GENERIC_ROLE_TAIL.has(tail)) return true;
+  }
+  if (normaliseBookLanguage(language) === 'ru') {
+    /* Match a lone Russian generic noun (the typical background-speaker form). */
+    if (parts.length === 1 && GENERIC_ROLE_RU.has(parts[0].toLowerCase())) return true;
   }
   return false;
 }
@@ -167,9 +227,13 @@ function pickBucket(c: CharacterOutput): string {
   return c.gender === 'female' ? FEMALE_BUCKET_ID : MALE_BUCKET_ID;
 }
 
-export function makeBucket(id: string, gender: 'male' | 'female'): CharacterOutput {
+export function makeBucket(
+  id: string,
+  gender: 'male' | 'female',
+  language?: string,
+): CharacterOutput {
   const label = gender === 'male' ? 'male' : 'female';
-  const title = gender === 'male' ? 'Unknown male' : 'Unknown female';
+  const title = bucketName(gender, language);
   return {
     id,
     name: title,
@@ -193,6 +257,9 @@ export function foldMinorCast(
   const minLines = opts.minLines ?? MIN_LINES_DEFAULT;
   const nameOnly = opts.nameOnly === true;
   const protectedRoles = opts.protectedRoles ?? PROTECTED_ROLES_DEFAULT;
+  const language = opts.language;
+  const maleName = bucketName('male', language);
+  const femaleName = bucketName('female', language);
 
   /* Count attributed lines per character id. In nameOnly mode the count
      is unused (line-count rules are off) — keep the map empty rather
@@ -239,7 +306,7 @@ export function foldMinorCast(
   for (const c of characters) {
     if (c.id === NARRATOR_ID) continue;
     if (c.id === MALE_BUCKET_ID || c.id === FEMALE_BUCKET_ID) continue;
-    const isDescriptor = isDescriptorName(c.name);
+    const isDescriptor = isDescriptorName(c.name, language);
     const lines = lineCount.get(c.id) ?? 0;
     const isProtected =
       (c.detectionSource === 'narrator-mention' &&
@@ -272,8 +339,8 @@ export function foldMinorCast(
      (plan 122). */
   const hasDriftedBucket = characters.some(
     (c) =>
-      (c.id === MALE_BUCKET_ID && c.name !== 'Unknown male') ||
-      (c.id === FEMALE_BUCKET_ID && c.name !== 'Unknown female'),
+      (c.id === MALE_BUCKET_ID && c.name !== maleName) ||
+      (c.id === FEMALE_BUCKET_ID && c.name !== femaleName),
   );
 
   /* No folds and no drops (and no drifted bucket) → no-op, preserve
@@ -305,12 +372,12 @@ export function foldMinorCast(
   /* Synthesise missing buckets (or re-use if already present in the input). */
   const survivorById = new Map(survivors.map((c) => [c.id, c]));
   if (needMale && !survivorById.has(MALE_BUCKET_ID)) {
-    const bucket = makeBucket(MALE_BUCKET_ID, 'male');
+    const bucket = makeBucket(MALE_BUCKET_ID, 'male', language);
     survivors.push(bucket);
     survivorById.set(bucket.id, bucket);
   }
   if (needFemale && !survivorById.has(FEMALE_BUCKET_ID)) {
-    const bucket = makeBucket(FEMALE_BUCKET_ID, 'female');
+    const bucket = makeBucket(FEMALE_BUCKET_ID, 'female', language);
     survivors.push(bucket);
     survivorById.set(bucket.id, bucket);
   }
@@ -366,10 +433,10 @@ export function foldMinorCast(
        drifted NAME is deliberately NOT kept as an alias, so the matcher won't
        re-bind that character to the bucket). */
     if (base.id === MALE_BUCKET_ID) {
-      return { ...base, name: 'Unknown male', gender: 'male' as const, role: base.role || 'background' };
+      return { ...base, name: maleName, gender: 'male' as const, role: base.role || 'background' };
     }
     if (base.id === FEMALE_BUCKET_ID) {
-      return { ...base, name: 'Unknown female', gender: 'female' as const, role: base.role || 'background' };
+      return { ...base, name: femaleName, gender: 'female' as const, role: base.role || 'background' };
     }
     return base;
   });
