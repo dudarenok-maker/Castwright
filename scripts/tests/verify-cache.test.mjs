@@ -21,11 +21,25 @@ import {
   stepTouchedByDiff,
   computeShared,
   parseNvidiaSmiUtil,
+  isVitestPoolCrash,
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
 
 const { SCHEMA_VERSION } = _internals;
+
+test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
+  // Transient fork-pool process crashes — warrant ONE auto-retry.
+  assert.equal(isVitestPoolCrash('Error: [vitest-pool]: Worker forks emitted error.'), true);
+  assert.equal(isVitestPoolCrash('Caused by: Error: Worker exited unexpectedly'), true);
+  // Real test failures — must NOT retry (that would mask a flaky test).
+  assert.equal(isVitestPoolCrash('FAIL  src/foo.test.ts > does a thing'), false);
+  assert.equal(isVitestPoolCrash('AssertionError: expected 1 to be 2'), false);
+  assert.equal(isVitestPoolCrash('Tests  1 failed | 200 passed'), false);
+  // Benign / empty.
+  assert.equal(isVitestPoolCrash(''), false);
+  assert.equal(isVitestPoolCrash(undefined), false);
+});
 
 function mkTmp() {
   return mkdtempSync(join(tmpdir(), 'verify-cache-test-'));
