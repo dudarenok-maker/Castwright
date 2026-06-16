@@ -1273,6 +1273,21 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
   });
 
+  it('carries the name-fidelity + no-spurious-merge guardrails (2026-06-16 Russian surname-smear / Игорь↔Илья)', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Night Watch',
+      { id: 1, title: 'Chapter 1', body: 'Body.' },
+      [],
+    );
+    // #1 name fidelity — no invented/copied surnames.
+    expect(inbox).toMatch(/Name fidelity/i);
+    expect(inbox).toMatch(/never copy another character'?s surname/i);
+    // #3 no spurious merge of distinct names.
+    expect(inbox).toMatch(/Do not merge distinct characters/i);
+    expect(inbox).toMatch(/explicitly equates them/i);
+  });
+
   it('renders the broadened first-person guidance so journal/registry chapters detect their author (regression for The Floodmark)', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
