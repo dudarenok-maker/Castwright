@@ -623,6 +623,7 @@ export function mergeRosterChapter(
 export function buildInterimCast(
   chapterCast: Record<number, CharacterOutput[]>,
   chapterOrder: number[],
+  language?: string,
 ): CharacterOutput[] {
   const roster = new Map<string, CharacterOutput>();
   for (const chapterId of chapterOrder) {
@@ -630,7 +631,7 @@ export function buildInterimCast(
     if (cast?.length) mergeRosterChapter(roster, cast);
   }
   if (roster.size === 0) return [];
-  const folded = previewFoldForLiveView(Array.from(roster.values()));
+  const folded = previewFoldForLiveView(Array.from(roster.values()), language);
   return attachLinesAndScenes(assignPaletteColors(folded), []);
 }
 
@@ -667,8 +668,11 @@ async function writeFoldJournal(
   );
 }
 
-function previewFoldForLiveView(characters: CharacterOutput[]): CharacterOutput[] {
-  return foldMinorCast(characters, [], { nameOnly: true }).characters;
+function previewFoldForLiveView(
+  characters: CharacterOutput[],
+  language?: string,
+): CharacterOutput[] {
+  return foldMinorCast(characters, [], { nameOnly: true, language }).characters;
 }
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
@@ -2498,7 +2502,7 @@ export async function runMainAnalyzerJob(
         await saveAnalysisCache(manuscriptId, cache);
       }
       await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
-      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
+      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
       /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
          the finalised stage1 is the canonical roster for any Phase 1
          worker that asks for a snapshot. Flip the flag so
@@ -2552,7 +2556,7 @@ export async function runMainAnalyzerJob(
            Unknown female buckets in the live view — same contract the
            on-disk interim cast.json uses, kept in lockstep so the user
            sees one consistent roster across SSE + .audiobook/. */
-        const folded = previewFoldForLiveView(Array.from(roster.values()));
+        const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage);
         send({ kind: 'cast-update', characters: folded });
       };
 
@@ -2898,6 +2902,7 @@ export async function runMainAnalyzerJob(
           const interim = buildInterimCast(
             chapterCast,
             recordRef.chapterHints.map((h) => h.id),
+            bookLanguage,
           );
           if (interim.length > 0) {
             try {
@@ -3084,7 +3089,7 @@ export async function runMainAnalyzerJob(
           verified,
         );
         stage1ActualMs = Date.now() - stage0Start;
-        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
+        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
         /* Cast.json reflects the verified Phase 0b state before Phase 1's
            attribution pass starts (which can be the longest phase by far
            on a long book). We apply the name-only fold here too — the
@@ -3101,7 +3106,7 @@ export async function runMainAnalyzerJob(
         if (recordRef.bookDir) {
           try {
             const stage1Cast = attachLinesAndScenes(
-              assignPaletteColors(previewFoldForLiveView(stage1.characters)),
+              assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage)),
               [],
             );
             await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
@@ -3794,6 +3799,7 @@ export async function runMainAnalyzerJob(
     }
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
+      language: bookLanguage,
     });
     if (folded.summary.foldedCount > 0) {
       const parts: string[] = [];
@@ -4403,7 +4409,7 @@ async function runSubsetAnalyzerJob(
     };
     const emitCastUpdate = (): void => {
       const roster = rebuildRoster();
-      const folded = previewFoldForLiveView(Array.from(roster.values()));
+      const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage);
       send({ kind: 'cast-update', characters: folded });
     };
 
@@ -4481,6 +4487,7 @@ async function runSubsetAnalyzerJob(
           const interim = buildInterimCast(
             chapterCast,
             record.chapterHints.map((h) => h.id),
+            bookLanguage,
           );
           if (interim.length > 0) {
             try {
@@ -4595,7 +4602,7 @@ async function runSubsetAnalyzerJob(
     }
     await saveAnalysisCache(manuscriptId, cache);
     await persistDroppedQuotesBatch(record.bookDir, manuscriptId, 'analysis-chapters', verified);
-    send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
+    send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label, model: subsetModelId });
 
     /* ── Phase 1 (subset). Sentence attribution for the new chapters only.
@@ -4744,7 +4751,9 @@ async function runSubsetAnalyzerJob(
     }
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions. */
-    const folded = foldMinorCast(stage1.characters, recovered.sentences);
+    const folded = foldMinorCast(stage1.characters, recovered.sentences, {
+      language: bookLanguage,
+    });
     if (folded.summary.droppedSilent > 0) {
       const sample = folded.dropped.slice(0, 4).join(', ');
       const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
