@@ -310,6 +310,26 @@ Fixed (maintainer chose "both"):
 - Tests: `stage1-chunk.test.ts` (single-call / split+union / roster-threading /
   adaptive re-split / budget derivation).
 
+### Follow-on — cast name fidelity (2026-06-16)
+
+On-box Russian testing showed the local 4B model **copying surnames** across
+characters (`Сергеевич Городецкий` / `Назарова` smeared from Anton / Svetlana
+onto unrelated cast) and **folding distinct names** together (`Игорь`↔`Илья`,
+`Гарик`↔`Игорь`). The Phase-0a prompt had strong id-reuse guidance but no
+anti-invention / anti-merge guardrail. Fixes:
+- Prompt: a **name-fidelity** rule (use the name exactly as the text uses it;
+  never add/copy a surname/patronymic/title; aliases only for forms the text
+  itself equates) + a **no-spurious-merge** rule (distinct names are separate
+  people unless the text explicitly equates them).
+- Dropped the Stage-1 chunker's **intra-chapter roster-threading** (it fed those
+  full names into every section, amplifying the smear); cross-chapter id
+  stability still comes from the book-level running roster.
+- Live ETA: also shipped section-progress refinement for the Phase-0a ticker so
+  the first chapter no longer reads "over budget" (`refineCastChapterEstMs`).
+
+Caveat: these reduce but don't eliminate the errors on a 4B local model over
+Russian — the reliable fix for name/alias fidelity is the **Gemini analyzer**.
+
 ### Owed (on-box acceptance — issue to file)
 
 - **ffmpeg + Cyrillic filesystem paths on Windows.** Book directories already use

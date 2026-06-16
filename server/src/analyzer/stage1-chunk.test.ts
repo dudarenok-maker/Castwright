@@ -3,7 +3,8 @@
      (byte-identical to pre-chunking),
    - an over-budget chapter is split, each chunk detected, rosters UNIONed
      (a character recurring across chunks collapses to one entry),
-   - later chunks receive the accumulated roster (so the model can reuse ids),
+   - each section is detected independently (the intra-chapter roster is NOT
+     threaded — it amplified a small-model surname-smear on Russian),
    - a chunk that truncates is adaptively re-split rather than failing the
      chapter,
    - the local budget derives from num_ctx. */
@@ -60,7 +61,12 @@ describe('runStage1ChapterChunked', () => {
       n += 1;
       return { characters: [char('anton'), char(`extra${n}`)] };
     });
-    const out = await runStage1ChapterChunked({ body, charBudget: 5000, callForBody, mergeRosters });
+    const out = await runStage1ChapterChunked({
+      body,
+      charBudget: 5000,
+      callForBody,
+      mergeRosters,
+    });
     expect(out.chunkCount).toBeGreaterThan(1);
     expect(callForBody).toHaveBeenCalledTimes(out.chunkCount);
     // "anton" appears once despite being detected in every chunk.
@@ -69,17 +75,17 @@ describe('runStage1ChapterChunked', () => {
     expect(out.characters.filter((c) => c.id.startsWith('extra'))).toHaveLength(out.chunkCount);
   });
 
-  it('threads the accumulated roster into later chunks', async () => {
-    const body = bodyOfParas(4, 3000); // > budget → ≥2 chunks
-    const seen: number[] = [];
-    const callForBody = vi.fn(async (_sub: string, knownSoFar: CharacterOutput[]) => {
-      seen.push(knownSoFar.length);
+  it('detects each section independently — does NOT thread the intra-chapter roster', async () => {
+    // Threading the accumulated roster into later sections amplified a small-model
+    // surname-smear on Russian (2026-06-16), so callForBody now takes ONLY the
+    // sub-body — section context comes solely from the caller's book-level roster.
+    const body = bodyOfParas(4, 3000);
+    const callForBody = vi.fn(async (...args: unknown[]) => {
+      expect(args).toHaveLength(1); // sub-body only, no roster argument
       return { characters: [char('anton')] };
     });
     await runStage1ChapterChunked({ body, charBudget: 4000, callForBody, mergeRosters });
-    // first chunk sees nothing; a later chunk sees the accumulated roster.
-    expect(seen[0]).toBe(0);
-    expect(Math.max(...seen)).toBeGreaterThan(0);
+    expect(callForBody.mock.calls.every((c) => c.length === 1)).toBe(true);
   });
 
   it('adaptively re-splits a chunk that truncates instead of failing', async () => {

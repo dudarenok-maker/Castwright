@@ -12,10 +12,15 @@
    This splits an over-budget chapter into paragraph-bounded sub-bodies, detects
    the roster on each, and UNIONs the per-chunk rosters. The union is INJECTED
    (`mergeRosters`, the route's `mergeRosterChapter`) so this module stays pure —
-   no I/O, no model calls, no prompt building, mirroring stage2-chunk.ts. The
-   accumulated roster is threaded into each later chunk's prompt (via
-   `callForBody`'s `knownSoFar`) so the model reuses ids for a character who
-   recurs across chunks instead of minting a divergent id.
+   no I/O, no model calls, no prompt building, mirroring stage2-chunk.ts.
+
+   Each section is detected INDEPENDENTLY against the book-level running roster
+   the caller supplies — the accumulated intra-chapter roster is deliberately NOT
+   threaded into later sections. Threading it amplified a small-model failure on
+   non-Latin text (2026-06-16): seeing a full name like "Антон Сергеевич
+   Городецкий" in the section-N prompt, qwen3.5:4b copied the surname onto
+   unrelated characters in section N+1 and folded distinct names together.
+   Cross-CHAPTER id stability still comes from the caller's running roster.
 
    A chapter that already fits the budget runs exactly one call and returns its
    raw result — byte-identical to the pre-chunking behaviour for the overwhelming
@@ -73,14 +78,10 @@ export interface Stage1ChunkRunOptions {
   body: string;
   /** Per-chunk char budget (resolveStage1ChunkCharBudget()). */
   charBudget: number;
-  /** Build + run the stage-1 detection call for a sub-body. `knownSoFar` is the
-      roster accumulated from earlier chunks of THIS chapter (empty on the
-      single-call path + first chunk) — fold it into the prompt's known-roster so
-      a recurring character keeps one id across chunks. */
-  callForBody: (
-    subBody: string,
-    knownSoFar: CharacterOutput[],
-  ) => Promise<{ characters: CharacterOutput[] }>;
+  /** Build + run the stage-1 detection call for a sub-body. Each section is
+      detected independently against the caller's book-level running roster (the
+      intra-chapter accumulation is intentionally NOT passed — see header). */
+  callForBody: (subBody: string) => Promise<{ characters: CharacterOutput[] }>;
   /** Injected roster union (the route's `mergeRosterChapter`) — folds a chunk's
       characters into the accumulating Map. Keeps this module pure + testable. */
   mergeRosters: (running: Map<string, CharacterOutput>, chars: CharacterOutput[]) => void;
@@ -111,7 +112,7 @@ export async function runStage1ChapterChunked(
   /* Detect one span, splitting it further if the model truncates on it. */
   const detectSpan = async (span: string, depth: number): Promise<void> => {
     try {
-      const { characters } = await opts.callForBody(span, Array.from(roster.values()));
+      const { characters } = await opts.callForBody(span);
       opts.mergeRosters(roster, characters);
     } catch (err) {
       if (err instanceof AnalyzerTruncatedError && depth < maxSplitDepth) {
@@ -134,7 +135,7 @@ export async function runStage1ChapterChunked(
        fall back to the adaptive split instead of failing the chapter. A body
        that's a single un-splittable paragraph still surfaces the truncation. */
     try {
-      const { characters } = await opts.callForBody(opts.body, []);
+      const { characters } = await opts.callForBody(opts.body);
       return { characters, chunkCount: 1 };
     } catch (err) {
       if (!(err instanceof AnalyzerTruncatedError)) throw err;

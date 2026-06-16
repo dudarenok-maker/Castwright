@@ -1275,6 +1275,23 @@ appears only by being mentioned or described in this chapter (no spoken
 line and not the author of the chapter's prose), omit them from this
 chapter's output.
 
+**Name fidelity — do not invent or copy names.** Set each character's
+\`name\` to exactly how THIS text refers to them. Never add a surname,
+patronymic, honorific, or title that the text does not use for that
+specific character, and never copy another character's surname onto them
+— even if other characters or the running roster have one. If the text
+only ever calls someone "Игорь" / "Olga", their name is "Игорь" / "Olga",
+not "Игорь Smith" / "Olga Petrova". \`aliases\` are ONLY for alternate
+forms the text itself uses for the SAME person (a nickname the narration
+explicitly attaches, a first-name/full-name pair the text equates).
+
+**Do not merge distinct characters.** Two characters with different names
+are SEPARATE people unless this text explicitly equates them (e.g.
+"Игорь, whom everyone called Гарик"). Do NOT fold one into the other via
+\`aliases\` just because the names are similar, or because one is a common
+nickname of the other in general — only the text of THIS book decides.
+When unsure, keep them separate.
+
 Return ONLY a JSON object matching the schema. No prose, no code fences.
 
 ## Manuscript metadata
@@ -2664,7 +2681,7 @@ export async function runMainAnalyzerJob(
                   );
                   sendCastLiveTick();
                 },
-                callForBody: (subBody, knownSoFar) =>
+                callForBody: (subBody) =>
                   analyzer.runStage1Chapter(
                     manuscriptId,
                     ch.id,
@@ -2672,7 +2689,7 @@ export async function runMainAnalyzerJob(
                       manuscriptId,
                       recordRef.title,
                       { ...ch, body: subBody },
-                      [...Array.from(rebuildRoster().values()), ...knownSoFar],
+                      Array.from(rebuildRoster().values()),
                       seriesPrior,
                     ),
                     {
@@ -4338,7 +4355,7 @@ async function runSubsetAnalyzerJob(
                     sec.total
                   } (${sec.chars.toLocaleString()} chars) to fit the model context…`,
                 ),
-              callForBody: (subBody, knownSoFar) =>
+              callForBody: (subBody) =>
                 analyzer.runStage1Chapter(
                   manuscriptId,
                   ch.id,
@@ -4346,7 +4363,7 @@ async function runSubsetAnalyzerJob(
                     manuscriptId,
                     record.title,
                     { ...ch, body: subBody },
-                    [...Array.from(rebuildRoster().values()), ...knownSoFar],
+                    Array.from(rebuildRoster().values()),
                     subsetSeriesPrior,
                   ),
                   {
