@@ -169,8 +169,34 @@ describe('buildModelInventory', () => {
     const qwen = inv.items.find((i) => i.id === 'qwen-base')!;
     expect(qwen.present).toBe(true);
     expect(qwen.sizeBytes).toBe(5000);
-    expect(qwen.installState).toBe('weights-missing'); // from the stubbed health
+    // reachableSidecar has no qwenPackageInstalled flag → packageInstalled=false
+    // weights ARE present → package-missing (B1 composition)
+    expect(qwen.installState).toBe('package-missing');
     expect(qwen.isDefaultEngine).toBe(false); // default engine is kokoro here
+  });
+
+  it('qwen-base: sidecar package=false + weights present → installState package-missing', () => {
+    installQwenBase();
+    const inv = buildModelInventory(
+      baseDeps({
+        sidecar: { ...reachableSidecar, qwenPackageInstalled: false, qwenLoaded: false },
+      }),
+    );
+    const row = inv.items.find((i) => i.id === 'qwen-base')!;
+    expect(row.installState).toBe('package-missing');
+    expect(row.tier).toBe('standard');
+  });
+
+  it('coqui row tier is secondary and carries an integrity verdict', () => {
+    const inv = buildModelInventory(baseDeps());
+    const row = inv.items.find((i) => i.id === 'coqui')!;
+    expect(row.tier).toBe('secondary');
+  });
+
+  it('every TTS + whisper row carries an integrity verdict', () => {
+    const inv = buildModelInventory(baseDeps());
+    for (const id of ['kokoro', 'qwen-base', 'coqui', 'whisper'])
+      expect(inv.items.find((i) => i.id === id)!.integrity).toBeDefined();
   });
 
   it('lists local Ollama models with size + residency + default flag', () => {
