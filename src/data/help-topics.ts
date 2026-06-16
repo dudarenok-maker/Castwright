@@ -85,4 +85,24 @@ export const HELP_TOPICS: HelpTopic[] = [
       'passes, pair one local model with a cloud one (Gemini uses no GPU at all), or run on a roomier ' +
       'card (12 GB and up), where both sit side by side.',
   },
+  {
+    id: 'ollama-model-not-in-list',
+    title: "I pulled a model but it's not in the analysis-model list",
+    body:
+      "The analysis-model menu lists every model you've pulled into Ollama, alongside the built-in " +
+      'suggestions. Pull a new one — from the in-app Install button, or `ollama pull <name>` in a ' +
+      'terminal — and it joins the list the moment the pull finishes. Reopen the menu, or hit Refresh ' +
+      "in the Model Manager, if it hasn't appeared yet. Still missing? Check that Ollama is running " +
+      'and the model shows up in `ollama list`.',
+  },
+  {
+    id: 'picked-local-but-ran-on-gemini',
+    title: 'I chose a model on my machine, but the analysis ran on Gemini',
+    body:
+      "When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back " +
+      'to Gemini — if you\'ve added a Gemini API key — so a stalled daemon doesn\'t stall your book. ' +
+      'The on-machine models still show in the menu while Ollama is down, which is why a "Local" ' +
+      'choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you ' +
+      'analyse, or set the analyzer engine to Gemini outright.',
+  },
 ];

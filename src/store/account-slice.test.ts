@@ -9,6 +9,7 @@ import {
   accountActions,
   fetchAccountSettings,
   saveAccountSettings,
+  fetchAnalyzerModels,
   selectAnalyzerSplitIsActive,
   selectAnalyzerPhase0Model,
   selectAnalyzerPhase1Model,
@@ -20,6 +21,12 @@ vi.mock('../lib/api', () => ({
   api: {
     getUserSettings: vi.fn(),
     putUserSettings: vi.fn(),
+    getOllamaHealth: vi.fn().mockResolvedValue({
+      status: 'reachable',
+      url: '(mock)',
+      models: ['qwen3.5:4b'],
+      pullable: ['qwen3.5:4b', 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL'],
+    }),
   },
 }));
 
@@ -342,6 +349,32 @@ describe('accountSlice — save lifecycle', () => {
     expect(s.status).toBe('error');
     expect(s.error).toBe('disk full');
     expect(s.hydrated).toBe(true);
+  });
+});
+
+describe('accountSlice — fetchAnalyzerModels (dynamic analyzer models)', () => {
+  it('fetchAnalyzerModels populates localAnalyzerModels + pullableModels', async () => {
+    const store = makeStore();
+    await store.dispatch(fetchAnalyzerModels());
+    const s = store.getState().account;
+    expect(s.localAnalyzerModels.map((t) => t.name)).toEqual(
+      expect.arrayContaining(['qwen3.5:4b']),
+    );
+    expect(s.pullableModels).toEqual(
+      expect.arrayContaining(['gemma-4-E4B-it-GGUF:UD-Q4_K_XL']),
+    );
+  });
+
+  it('leaves the local group empty when Ollama is unreachable (pullable still set)', async () => {
+    (api.getOllamaHealth as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      status: 'unreachable',
+      url: '',
+      pullable: ['qwen3.5:4b'],
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAnalyzerModels());
+    expect(store.getState().account.localAnalyzerModels).toEqual([]);
+    expect(store.getState().account.pullableModels).toEqual(['qwen3.5:4b']);
   });
 });
 

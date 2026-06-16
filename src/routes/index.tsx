@@ -25,7 +25,8 @@ import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
-import { MODEL_OPTION_GROUPS } from '../lib/models';
+import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
+import { fetchAnalyzerModels } from '../store/account-slice';
 import { Layout, type LayoutContext } from '../components/layout';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 /* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
@@ -976,6 +977,14 @@ function ReparseResultBody({
 }): ReactNode {
   const dispatch = useAppDispatch();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
+  /* Dynamic curated ∪ live-Ollama-tag union for the "Analyse with" picker, so
+     a pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels
+     on mount; empty (offline) falls back to the curated catalog. */
+  const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
+  const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  useEffect(() => {
+    void dispatch(fetchAnalyzerModels());
+  }, [dispatch]);
   /* Combine the server-preserved excluded set with auto-suggestions
      against the *new* chapter list. The heuristic only adds (never
      removes) — if the server preserved Chapter 1 as excluded but the
@@ -1034,7 +1043,7 @@ function ReparseResultBody({
           onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
           className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         >
-          {MODEL_OPTION_GROUPS.map((g) => (
+          {modelGroups.map((g) => (
             <optgroup key={g.engine} label={g.label}>
               {g.models.map((m) => (
                 <option key={m.id} value={m.id} title={m.hint}>

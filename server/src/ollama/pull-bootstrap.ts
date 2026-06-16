@@ -66,6 +66,7 @@ export const DEFAULT_ALLOWED_MODELS: ReadonlySet<string> = new Set([
   'llama3.1:8b',
   'llama3.2:3b',
   'gemma3:4b',
+  'gemma-4-E4B-it-GGUF:UD-Q4_K_XL',
 ]);
 
 const defaultFetchFn: FetchFn = (url, init) =>
@@ -85,6 +86,12 @@ export class PullBootstrap {
 
   isAllowed(model: string): boolean {
     return this.allowedModels.has(model);
+  }
+
+  /** The curated install list — both the pull suggestions the Model Manager
+      renders and the allowlist this proxy enforces. Single source of truth. */
+  listAllowed(): string[] {
+    return [...this.allowedModels];
   }
 
   getJob(id: string): PullJob | null {

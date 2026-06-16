@@ -89,23 +89,56 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
    slice, mock, and per-book pick fallback all follow. */
 export const DEFAULT_MODEL = FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel;
 
-/* Grouped form for <optgroup>-rendering pickers. Keeps the optgroup labels
-   in one place so the upload / re-parse / analysing pickers stay in sync.
-   Gemini renders first because it's now the default analyzer engine —
-   local Ollama follows as the on-device alternative. */
-export const MODEL_OPTION_GROUPS: Array<{
+/** Engine classification from the id shape — Ollama tags contain ':',
+    Gemini ids never do. Matches the server's inferEngineFromModelId. Use this
+    everywhere instead of looking the id up in MODEL_OPTIONS, so a dynamically-
+    pulled (uncurated) local tag is still correctly classified. */
+export function engineForModelId(id: string): 'local' | 'gemini' {
+  return id.includes(':') ? 'local' : 'gemini';
+}
+
+const norm = (t: string) => (t.includes(':') ? t : `${t}:latest`);
+
+/** Merge-on-top: curated local entries (always shown, even offline) unioned
+    with live Ollama tags. A live tag matching a curated id keeps the curated
+    label/hint; an uncurated live tag becomes a bare option. */
+export function buildLocalModelOptions(
+  liveTags: Array<{ name: string; size?: number }>,
+  curated: ModelOption[] = MODEL_OPTIONS.filter((m) => m.engine === 'local'),
+): ModelOption[] {
+  const out: ModelOption[] = [...curated];
+  const have = new Set(curated.map((m) => norm(m.id)));
+  for (const tag of liveTags) {
+    if (have.has(norm(tag.name))) continue;
+    have.add(norm(tag.name));
+    out.push({ id: tag.name, label: tag.name, engine: 'local' });
+  }
+  return out;
+}
+
+/** Grouped form for <optgroup>-rendering pickers. Gemini is the curated static
+    catalog; the local group is whatever was merged from live tags. Keeps the
+    optgroup labels in one place so the upload / re-parse / analysing pickers
+    stay in sync. Gemini renders first because it's now the default analyzer
+    engine — local Ollama follows as the on-device alternative. */
+export function buildModelOptionGroups(localOptions: ModelOption[]): Array<{
   engine: 'local' | 'gemini';
   label: string;
   models: ModelOption[];
-}> = [
-  {
-    engine: 'gemini',
-    label: 'Gemini API (default)',
-    models: MODEL_OPTIONS.filter((m) => m.engine === 'gemini'),
-  },
-  {
-    engine: 'local',
-    label: 'Local Ollama (on-device)',
-    models: MODEL_OPTIONS.filter((m) => m.engine === 'local'),
-  },
-];
+}> {
+  return [
+    {
+      engine: 'gemini',
+      label: 'Gemini API (default)',
+      models: MODEL_OPTIONS.filter((m) => m.engine === 'gemini'),
+    },
+    { engine: 'local', label: 'Local Ollama (on-device)', models: localOptions },
+  ];
+}
+
+/** Back-compat static export: groups built from the CURATED local entries only
+    (no live tags). Existing importers without store access keep working; the
+    dynamic pickers (later task) call buildModelOptionGroups(live) instead. */
+export const MODEL_OPTION_GROUPS = buildModelOptionGroups(
+  MODEL_OPTIONS.filter((m) => m.engine === 'local'),
+);

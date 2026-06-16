@@ -129,8 +129,19 @@ export function resolveOllamaRetryTemperature(): number {
    different local models across phase0/phase1). Two large local models
    resident at once would exceed the 8 GB budget — that path must keep
    its non-resident eviction; do not naively add both to this set.
-   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS. */
-const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b']);
+   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS.
+   `gemma4-e4b-8gb` is the local alias for the Gemma 4 E4B edge model (~5 GB
+   resident, fits 8 GB alongside the KV cache); both the bare name and the
+   `:latest` form Ollama reports in /api/tags are listed so the exact-match
+   lookup hits however the picker/env passes it. NOTE: this is a per-box local
+   name — model-agnostic measured residency is the deferred #845 work. */
+const RESIDENT_MODELS = new Set([
+  'qwen3.5:4b',
+  'qwen3.5:9b',
+  'llama3.1:8b',
+  'gemma4-e4b-8gb',
+  'gemma4-e4b-8gb:latest',
+]);
 
 /* Models that are only safe to keep resident where the constraint is VRAM
    (GPU box). On a CPU-only machine the same model would pin ~6.4 GB of
@@ -139,8 +150,14 @@ const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b']);
    either context and are NOT in this set. */
 const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
 
+/** Live-read the resident-model keep-alive window (registry wins; default '5m'). */
+export function resolveAnalyzerKeepAlive(): string {
+  return configValue<string>('analyzer.ollama.keepAlive');
+}
+
 /** Picks the `keep_alive` value for an Ollama /api/chat call:
-    - models in RESIDENT_MODELS → '5m' (stay loaded for the analysis loop)
+    - models in RESIDENT_MODELS → ANALYZER_KEEP_ALIVE knob (default '5m', stay
+                                  loaded for the analysis loop)
     - RAM_HEAVY_MODELS on CPU   → 0   (would pin ~6.4 GB in system RAM)
     - everything else            → 0   (unload immediately after the call,
                                         matching `keep_alive: 0` in Ollama's
@@ -148,11 +165,12 @@ const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
                                         https://github.com/ollama/ollama/blob/main/docs/api.md#keep-alive).
     The `accelerator` parameter defaults to 'unknown', which is treated as
     GPU (the common case + the perf win), so existing 1-arg callers are
-    unaffected. */
+    unaffected. Cross-engine eviction before a TTS load is handled separately
+    by withGpuLoad (gpu.safeCoexistMb), not here. */
 export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): string | number {
   if (!RESIDENT_MODELS.has(model)) return 0;
   if (RAM_HEAVY_MODELS.has(model) && accelerator === 'cpu') return 0;
-  return '5m';
+  return resolveAnalyzerKeepAlive();
 }
 
 /* num_ctx the analyzer hands Ollama on every /api/chat call (see the

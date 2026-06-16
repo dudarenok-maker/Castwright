@@ -13,6 +13,12 @@ import { api } from '../lib/api';
 
 export type AccountStatus = 'idle' | 'loading' | 'saving' | 'error';
 
+/** A locally-installed analyzer tag, as reported by Ollama's tag list. */
+export interface LocalAnalyzerTag {
+  name: string;
+  size?: number;
+}
+
 export interface AccountState extends UserSettings {
   status: AccountStatus;
   /** Surfacing fetch / save errors. Cleared on the next successful round-trip. */
@@ -20,6 +26,12 @@ export interface AccountState extends UserSettings {
   /** Set true once the server payload has hydrated this slice. Lets callers
       distinguish "still showing built-in defaults" from "user has confirmed". */
   hydrated: boolean;
+  /** Live analyzer tags installed locally (from Ollama's tag list). Empty when
+      Ollama is unreachable. Populated by `fetchAnalyzerModels`. */
+  localAnalyzerModels: LocalAnalyzerTag[];
+  /** Curated install list (server's single source). Populated by
+      `fetchAnalyzerModels`; the pickers + Model Manager read this. */
+  pullableModels: string[];
 }
 
 const initialState: AccountState = {
@@ -30,6 +42,8 @@ const initialState: AccountState = {
   status: 'idle',
   error: null,
   hydrated: false,
+  localAnalyzerModels: [],
+  pullableModels: [],
 };
 
 export const fetchAccountSettings = createAsyncThunk<UserSettings>('account/fetch', async () => {
@@ -52,6 +66,19 @@ export const saveGeminiApiKey = createAsyncThunk<UserSettings, string | null>(
     return api.putGeminiKey(key);
   },
 );
+
+/* Dynamic analyzer-model discovery — hits the mockable `api.getOllamaHealth()`
+   so it works under VITE_USE_MOCKS + e2e. Splits the response into the live
+   local tags (empty when Ollama is unreachable) and the server's curated
+   `pullable` install list. The pickers + Model Manager read both off state. */
+export const fetchAnalyzerModels = createAsyncThunk('account/fetchAnalyzerModels', async () => {
+  const health = await api.getOllamaHealth();
+  const localTags: LocalAnalyzerTag[] =
+    health.status === 'reachable' && Array.isArray(health.models)
+      ? health.models.map((name) => ({ name }))
+      : [];
+  return { localTags, pullable: Array.isArray(health.pullable) ? health.pullable : [] };
+});
 
 export const accountSlice = createSlice({
   name: 'account',
@@ -176,6 +203,10 @@ export const accountSlice = createSlice({
       .addCase(saveGeminiApiKey.rejected, (s, a) => {
         s.status = 'error';
         s.error = a.error.message ?? 'Failed to save Gemini API key.';
+      })
+      .addCase(fetchAnalyzerModels.fulfilled, (state, action) => {
+        state.localAnalyzerModels = action.payload.localTags;
+        state.pullableModels = action.payload.pullable;
       });
   },
 });

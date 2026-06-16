@@ -102,6 +102,23 @@ describe('GET /api/ollama/health', () => {
     expect(res.body.resident).toEqual(['qwen3.5:4b']);
   });
 
+  it('includes the pullable install list (curated suggestions + allowlist)', async () => {
+    mockOllamaProbes({ tags: [{ name: 'qwen3.5:4b' }], ps: [] });
+    const res = await request(makeApp()).get('/api/ollama/health');
+    expect(res.body.pullable).toEqual(
+      expect.arrayContaining(['gemma-4-E4B-it-GGUF:UD-Q4_K_XL']),
+    );
+  });
+
+  it('POST /refresh returns the same envelope shape including pullable', async () => {
+    mockOllamaProbes({ tags: [{ name: 'qwen3.5:4b' }], ps: [] });
+    const res = await request(makeApp()).post('/api/ollama/refresh');
+    expect(res.body).toHaveProperty('status');
+    expect(res.body.pullable).toEqual(
+      expect.arrayContaining(['gemma-4-E4B-it-GGUF:UD-Q4_K_XL']),
+    );
+  });
+
   it('separates "pulled" from "resident" — pulled-but-not-loaded must NOT flip the pill to ready', async () => {
     /* This is the regression that surfaced as the "Try Again" loop: the
        Analysing pill was showing green because the model was pulled, but

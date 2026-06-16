@@ -13,7 +13,12 @@ import {
 } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { computeOverallProgress } from '../lib/analysis-progress';
-import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
+import {
+  MODEL_OPTIONS,
+  buildLocalModelOptions,
+  buildModelOptionGroups,
+  engineForModelId,
+} from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
@@ -23,7 +28,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
-import { selectAnalyzerSplitIsActive } from '../store/account-slice';
+import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -278,6 +283,18 @@ export function AnalysingView({
   const selectedModelExplicit = useAppSelector((s) => s.ui.selectedModelExplicit);
   const phase0Model = useAppSelector((s) => s.account.analyzerPhase0Model);
   const phase1Model = useAppSelector((s) => s.account.analyzerPhase1Model);
+  /* Live local Ollama tags for the failed-retry model picker (curated ∪ live),
+     so a model the user just pulled is selectable here. Fetched only AFTER a
+     failure (gated on `error` below) — a healthy cloud run never probes Ollama,
+     preserving the cloud-no-probe invariant. */
+  const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
+  const analyzerModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  /* Populate the local-tag list only after a failure surfaces the retry picker
+     — never on a healthy (possibly cloud) run, so the Ollama probe stays off
+     the cloud path. */
+  useEffect(() => {
+    if (error) void dispatch(fetchAnalyzerModels());
+  }, [dispatch, error]);
   const requestModel = splitActive && !selectedModelExplicit ? undefined : model;
   /* The model id(s) the run will ACTUALLY execute on. The readiness/engine
      gate MUST derive from these, not from ui.selectedModel: ui.selectedModel is
@@ -297,9 +314,7 @@ export function AnalysingView({
     }
     return [model ?? MODEL_OPTIONS[0].id];
   }, [splitActive, selectedModelExplicit, phase0Model, phase1Model, model]);
-  const isLocalAnalyzer = effectiveModelIds.some(
-    (id) => MODEL_OPTIONS.find((m) => m.id === id)?.engine === 'local',
-  );
+  const isLocalAnalyzer = effectiveModelIds.some((id) => engineForModelId(id) === 'local');
   /* Engine tag captured into the cross-navigation snapshot (read by the
      reverse-local-analyzer guard). Mirror the effective-local derivation so a
      cloud run is never mis-tagged 'local' and made to nag the TTS-start path. */
@@ -1241,7 +1256,7 @@ export function AnalysingView({
                     onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
                     className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-red-400/40"
                   >
-                    {MODEL_OPTION_GROUPS.map((g) => (
+                    {analyzerModelGroups.map((g) => (
                       <optgroup key={g.engine} label={g.label}>
                         {g.models.map((m) => (
                           <option key={m.id} value={m.id} title={m.hint}>

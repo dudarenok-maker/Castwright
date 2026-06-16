@@ -43,10 +43,13 @@ interface ModelPullStatusProps {
   /** Initial health envelope — typically passed in from the parent so
       the component doesn't need a redundant probe on mount. */
   health: OllamaHealthEnvelope | null;
-  /** Allowlist of pullable models — mirror DEFAULT_ALLOWED_MODELS on
-      the server. Centralised here so the UI can grey out anything
-      not pullable. */
+  /** Allowlist of pullable models — the server's curated install list
+      (account.pullableModels). Centralised so the UI can grey out
+      anything not pullable. */
   pullableModels: readonly string[];
+  /** Called once when a pull job reaches the terminal 'pulled' state, so a
+      parent can re-fetch the model list (e.g. dispatch fetchAnalyzerModels). */
+  onPulled?: () => void;
 }
 
 const POLL_INTERVAL_MS = 1_000;
@@ -55,12 +58,15 @@ function formatMB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function ModelPullStatus({ health, pullableModels }: ModelPullStatusProps) {
+export function ModelPullStatus({ health, pullableModels, onPulled }: ModelPullStatusProps) {
   const [localHealth, setLocalHealth] = useState<OllamaHealthEnvelope | null>(health);
   const [refreshing, setRefreshing] = useState(false);
   const [pullJob, setPullJob] = useState<PullJob | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* Guard so onPulled fires exactly once per terminal-pulled job, not on
+     every re-run of the polling effect. */
+  const notifiedPulledId = useRef<string | null>(null);
 
   useEffect(() => {
     setLocalHealth(health);
@@ -87,6 +93,10 @@ export function ModelPullStatus({ health, pullableModels }: ModelPullStatusProps
       /* Terminal — one final refresh so the "pulled" indicator updates. */
       if (pullJob.status === 'pulled') {
         void refresh();
+        if (notifiedPulledId.current !== pullJob.id) {
+          notifiedPulledId.current = pullJob.id;
+          onPulled?.();
+        }
       }
       return;
     }
@@ -104,7 +114,7 @@ export function ModelPullStatus({ health, pullableModels }: ModelPullStatusProps
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [pullJob, refresh]);
+  }, [pullJob, refresh, onPulled]);
 
   const startPull = async (model: string) => {
     setPullError(null);

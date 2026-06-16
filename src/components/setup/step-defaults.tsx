@@ -5,11 +5,11 @@
 
 import { useEffect, useState } from 'react';
 import { TTS_ENGINES, type TtsEngineId } from '../../lib/tts-models';
-import { MODEL_OPTION_GROUPS } from '../../lib/models';
+import { buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
 import type { TtsModelKey } from '../../lib/types';
 import type { ThemePreference } from '../../lib/use-theme';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { saveAccountSettings } from '../../store/account-slice';
+import { saveAccountSettings, fetchAnalyzerModels } from '../../store/account-slice';
 import type { SetupReadiness } from '../../lib/api';
 
 // ── prop types ──────────────────────────────────────────────────────────────
@@ -37,6 +37,16 @@ export function StepDefaults({ readiness: _readiness }: Props) {
   const [ttsModel, setTtsModel] = useState<TtsModelKey>(effectiveTtsModelKey);
   const [analysisModel, setAnalysisModel] = useState<string>(account.defaultAnalysisModel);
   const [theme, setTheme] = useState<ThemePreference>(account.defaultThemePreference ?? 'system');
+
+  /* Dynamic curated ∪ live-Ollama-tag union for the analysis-model picker, so a
+     pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels on
+     mount; empty (offline) falls back to the curated catalog. */
+  const analysisModelGroups = buildModelOptionGroups(
+    buildLocalModelOptions(account.localAnalyzerModels),
+  );
+  useEffect(() => {
+    void dispatch(fetchAnalyzerModels());
+  }, [dispatch]);
 
   useEffect(() => {
     setEngine(account.defaultTtsEngine);
@@ -151,7 +161,7 @@ export function StepDefaults({ readiness: _readiness }: Props) {
             onChange={(e) => handleAnalysisModelChange(e.target.value)}
             className={SELECT_CLS}
           >
-            {MODEL_OPTION_GROUPS.map((g) => (
+            {analysisModelGroups.map((g) => (
               <optgroup key={g.engine} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>

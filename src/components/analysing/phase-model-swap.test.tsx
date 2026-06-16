@@ -37,6 +37,7 @@ function mountStore(
   initial: Partial<{
     analyzerPhase0Model: string | null;
     analyzerPhase1Model: string | null;
+    localAnalyzerModels: Array<{ name: string }>;
   }>,
   ui?: Partial<{ selectedModel: string; selectedModelExplicit: boolean }>,
 ) {
@@ -156,6 +157,28 @@ describe('PhaseModelSwap', () => {
       const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
       expect(el.disabled).toBe(false);
     });
+  });
+
+  it('renders a pulled-but-uncurated live tag as an option in the Local optgroup (dynamic union, not the static const)', () => {
+    /* Seed a live tag the curated catalog does NOT carry. The picker must
+       build its groups from buildModelOptionGroups(buildLocalModelOptions(...))
+       off the slice — proving the dynamic union, not the static const. */
+    const uncurated = 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL';
+    const store = mountStore({
+      analyzerPhase0Model: null,
+      localAnalyzerModels: [{ name: uncurated }],
+    });
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap phaseId={0} isActive={false} />
+      </Provider>,
+    );
+    const option = screen.getByRole('option', { name: uncurated });
+    expect(option).toBeInTheDocument();
+    expect((option as HTMLOptionElement).value).toBe(uncurated);
+    /* It lives inside the Local Ollama optgroup, not Gemini. */
+    const optgroup = option.closest('optgroup');
+    expect(optgroup?.getAttribute('label')).toMatch(/local/i);
   });
 
   it('no-ops when the chosen value matches the current persisted value', async () => {

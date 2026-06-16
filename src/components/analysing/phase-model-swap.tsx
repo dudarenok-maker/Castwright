@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../../lib/models';
+import { MODEL_OPTIONS, buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   saveAccountSettings,
@@ -43,6 +43,15 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
     (s) => (s as { ui?: { selectedModel?: string } }).ui?.selectedModel ?? '',
   );
   const [toast, setToast] = useState<string | null>(null);
+
+  /* Dynamic curated ∪ live-Ollama-tag union so a pulled-but-uncurated tag is
+     selectable here. localAnalyzerModels is populated by fetchAnalyzerModels
+     dispatched from the analysing-view failure card / Model Manager — this
+     picker renders inside every phase card (cloud runs included), so it must
+     NOT itself probe Ollama (that would break the cloud-run no-probe invariant).
+     Empty (not yet fetched / offline) falls back to the curated catalog. */
+  const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
+  const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
 
   useEffect(() => {
     if (!toast) return;
@@ -96,7 +105,7 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
         aria-label={`Phase ${phaseId} model swap`}
       >
         <option value="">(use server default)</option>
-        {MODEL_OPTION_GROUPS.map((g) => (
+        {modelGroups.map((g) => (
           <optgroup key={g.engine} label={g.label}>
             {g.models.map((m) => (
               <option key={m.id} value={m.id} title={m.hint}>

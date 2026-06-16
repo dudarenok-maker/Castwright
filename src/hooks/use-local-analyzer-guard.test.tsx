@@ -144,6 +144,27 @@ describe('useLocalAnalyzerGuard', () => {
     expect(screen.queryByText('Pause audio generation to analyse?')).not.toBeInTheDocument();
   });
 
+  it('opens the confirm dialog for an UNCURATED local tag while a stream is active', () => {
+    /* A dynamically-pulled Ollama tag (colon-bearing, not in MODEL_OPTIONS).
+       The old MODEL_OPTIONS.find(...).engine lookup mis-classified it as
+       'gemini' and skipped the guard; engineForModelId keys off the ':'. */
+    const store = makeStore({
+      selectedModel: 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL',
+      activeStream: liveSnapshot,
+    });
+    const proceed = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+
+    expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
+    expect(proceed).not.toHaveBeenCalled();
+  });
+
   it('falls back to the bookId in the body when the library has no matching entry', () => {
     const store = makeStore({ selectedModel: 'llama3.1:8b', activeStream: liveSnapshot });
     render(

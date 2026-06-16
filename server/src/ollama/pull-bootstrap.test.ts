@@ -52,6 +52,22 @@ describe('PullBootstrap — allowlist', () => {
   });
 });
 
+describe('canonical install list', () => {
+  it('includes the gemma-4 E4B edge model', () => {
+    expect(DEFAULT_ALLOWED_MODELS.has('gemma-4-E4B-it-GGUF:UD-Q4_K_XL')).toBe(true);
+  });
+
+  it('listAllowed() returns the allowlist as an array', () => {
+    const pb = new PullBootstrap();
+    expect(pb.listAllowed()).toEqual(expect.arrayContaining(['gemma-4-E4B-it-GGUF:UD-Q4_K_XL']));
+  });
+
+  it('still rejects an off-list tag', () => {
+    const pb = new PullBootstrap();
+    expect(pb.isAllowed('totally-made-up:99b')).toBe(false);
+  });
+});
+
 describe('PullBootstrap — progress streaming', () => {
   it('walks pulling → pulled, surfacing bytesReceived and lastStatusMessage', async () => {
     const fetchFn = vi.fn(() =>
