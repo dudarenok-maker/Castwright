@@ -847,9 +847,50 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
 
   const result = schema.safeParse(parsed);
   if (!result.success) {
-    return { ok: false, kind: 'schema-validation', detail: result.error.issues };
+    /* Constrained-decoding stray-key tolerance. Ollama's `format:<schema>`
+       (and Gemini's responseSchema) enforce JSON *shape* but NOT
+       additionalProperties:false, so a local model routinely stamps an extra
+       key the strict schema doesn't want onto an otherwise-valid object — the
+       real qwen3.5:9b per-chapter cast failure stamped a top-level `chapterId`
+       and the whole chapter's roster was discarded. When EVERY issue is an
+       unrecognized key, strip the offending keys at their reported paths and
+       re-validate once. Genuine shape problems (missing required fields, wrong
+       types) surface different issue codes and still hard-fail here. */
+    const issues = result.error.issues;
+    if (issues.length > 0 && issues.every((i) => i.code === 'unrecognized_keys')) {
+      const cleaned = stripUnrecognizedKeys(parsed, issues);
+      const reparse = schema.safeParse(cleaned);
+      if (reparse.success) {
+        return { ok: true, value: reparse.data, repaired: true };
+      }
+    }
+    return { ok: false, kind: 'schema-validation', detail: issues };
   }
   return { ok: true, value: result.data, repaired };
+}
+
+/* Remove the keys Zod flagged as `unrecognized_keys` from a deep clone of the
+   parsed object. Each `unrecognized_keys` issue carries the `path` to the
+   object that owns the extra keys and the `keys` list itself; walk to that
+   object and delete them. The clone keeps the caller's parsed value intact.
+   Used only by parseAndValidate to salvage a payload whose sole fault is stray
+   keys that constrained decoding failed to suppress. */
+function stripUnrecognizedKeys(root: unknown, issues: z.ZodIssue[]): unknown {
+  const clone = structuredClone(root);
+  for (const issue of issues) {
+    if (issue.code !== 'unrecognized_keys') continue;
+    let target: unknown = clone;
+    for (const seg of issue.path) {
+      if (target == null || typeof target !== 'object') break;
+      target = (target as Record<PropertyKey, unknown>)[seg];
+    }
+    if (target != null && typeof target === 'object') {
+      for (const key of issue.keys) {
+        delete (target as Record<string, unknown>)[key];
+      }
+    }
+  }
+  return clone;
 }
 
 /* Strips a wrapping ```json ... ``` (or bare ``` ... ```) markdown fence

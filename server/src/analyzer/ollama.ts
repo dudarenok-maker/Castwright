@@ -265,9 +265,13 @@ export class OllamaAnalyzer implements Analyzer {
        Ollama doesn't have to resolve $ref — safer across engine versions.
        target:'draft-07' keeps the same dialect zod-to-json-schema emitted
        before the Zod 4 bump. The resulting schema preserves .strict() as
-       additionalProperties:false and .min(1) as minItems:1, which is the
-       whole point: the model can't emit malformed JSON or extra fields by
-       construction. */
+       additionalProperties:false and .min(1) as minItems:1, constraining the
+       overall JSON shape. NOTE: llama.cpp's grammar conversion does NOT honour
+       additionalProperties:false — the model can still stamp an extra key on
+       an object (the real qwen3.5:9b per-chapter cast failure stamped a stray
+       top-level `chapterId`). parseAndValidate tolerates that by stripping
+       unrecognized-keys-only failures, so a stray key no longer discards a
+       whole chapter. */
     const responseFormat = z.toJSONSchema(schema, { target: 'draft-07', reused: 'inline' });
 
     const start = Date.now();

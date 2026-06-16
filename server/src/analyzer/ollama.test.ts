@@ -402,8 +402,12 @@ describe('OllamaAnalyzer — validation-retry', () => {
     const invalid = JSON.stringify({
       characters: [] /* missing required field on shape — empty arr is fine actually */,
     });
-    /* Use a stronger violation: extra field that .strict() forbids. */
-    const strictlyInvalid = JSON.stringify({ characters: [], stowaways: ['nope'] });
+    /* Use a genuine SHAPE violation to force the retry: `characters` must be
+       an array, so a string fails with an `invalid_type` issue. (An extra
+       strict-forbidden key would NOT work here — parseAndValidate now strips
+       stray keys and accepts the cleaned object on the first attempt, so it
+       would never reach the retry path this test exercises.) */
+    const strictlyInvalid = JSON.stringify({ characters: 'nope' });
 
     /* First call → strictlyInvalid, second call → valid. */
     fetchMock
@@ -478,7 +482,10 @@ describe('OllamaAnalyzer — validation-retry', () => {
   });
 
   it('hard-fails after the second attempt also fails validation', async () => {
-    const bad = JSON.stringify({ characters: [], extraField: 'nope' });
+    /* Genuine SHAPE violation (`characters` must be an array) so BOTH attempts
+       hard-fail and reach the post-retry throw. An extra strict-forbidden key
+       would be stripped and accepted by parseAndValidate, never failing. */
+    const bad = JSON.stringify({ characters: 'nope' });
     /* Fresh Response per call — a streamed body can only be consumed once,
        so a shared `mockResolvedValue(...)` would feed the second attempt
        an already-drained stream and trip the "empty response" branch. */
