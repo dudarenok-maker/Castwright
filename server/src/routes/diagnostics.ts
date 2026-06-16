@@ -22,6 +22,8 @@ import {
   getResolvedGeminiApiKey,
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT } from '../workspace/paths.js';
+import { readinessSeverity } from '../tts/engine-presence.js';
+import type { EngineId } from '../tts/engine-health.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
 export type CheckId = 'gpu' | 'sidecar' | 'asr' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
@@ -136,6 +138,30 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
       if (sidecar.modelLoaded) resident.push('coqui');
       if (sidecar.kokoroLoaded) resident.push('kokoro');
       if (sidecar.qwenLoaded) resident.push('qwen');
+
+      // Check standard TTS engines for sidecar-confirmed package-missing state.
+      const STANDARD_TTS: { engine: EngineId; pkg: boolean | undefined; name: string }[] = [
+        { engine: 'kokoro', pkg: sidecar.kokoroPackageInstalled, name: 'Kokoro' },
+        { engine: 'qwen', pkg: sidecar.qwenPackageInstalled, name: 'Qwen' },
+      ];
+      const broken = STANDARD_TTS.filter((e) => e.pkg === false);
+      if (broken.length > 0) {
+        const sev: CheckStatus = broken
+          .map((e) =>
+            readinessSeverity({ engine: e.engine, state: 'package-missing', sidecarConfirmed: true }),
+          )
+          .includes('block')
+          ? 'fail'
+          : 'warn';
+        return {
+          id: 'sidecar',
+          label: 'Voice engine',
+          status: sev,
+          detail: `reachable · ${broken.map((e) => e.name).join(', ')} package not importable — repair in Model Manager`,
+          value: resident.join(', ') || null,
+        };
+      }
+
       return {
         id: 'sidecar',
         label: 'Voice engine',

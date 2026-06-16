@@ -69,6 +69,11 @@ interface SidecarHealthBody {
   qwen_package_installed?: boolean;
   qwen_weights_present?: boolean;
   qwen_install_state?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
+  /* Task 8 — per-engine pip-importability booleans from the sidecar's
+     find_spec probe. Absent on an older sidecar → false (default-safe). */
+  coqui_package_installed?: boolean;
+  kokoro_package_installed?: boolean;
+  whisper_package_installed?: boolean;
   /* ASR content-QA Whisper engine (srv-31). Display-only in the model-watch
      pill — no per-engine Load/Stop (ASR loads lazily on /transcribe and
      idle-evicts). `asr_device` is 'cpu' | 'cuda' (where Whisper runs). Absent on
@@ -193,6 +198,10 @@ export interface SidecarHealthResult {
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
   qwenInstallState?: QwenInstallState;
+  /* Task 8 — per-engine pip-importability forwarded from the sidecar body. */
+  coquiPackageInstalled?: boolean;
+  kokoroPackageInstalled?: boolean;
+  whisperPackageInstalled?: boolean;
   /* ASR (Whisper) model-watch state (srv-31). `asrEnabled` is the SERVER's
      SEG_ASR_ENABLED (not from the sidecar body) — drives whether the model-watch
      shows an ASR pill at all. `asrLoaded` = the Whisper model is resident in the
@@ -256,6 +265,9 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       qwenPackageInstalled: qwenLoaded || body.qwen_package_installed === true,
       qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,
       qwenInstallState: qwenInstallState,
+      coquiPackageInstalled: typeof body.coqui_package_installed === 'boolean' ? body.coqui_package_installed : undefined,
+      kokoroPackageInstalled: typeof body.kokoro_package_installed === 'boolean' ? body.kokoro_package_installed : undefined,
+      whisperPackageInstalled: typeof body.whisper_package_installed === 'boolean' ? body.whisper_package_installed : undefined,
       asrEnabled: asrEnabled(),
       asrLoaded: body.asr_loaded === true,
       asrDevice: typeof body.asr_device === 'string' ? body.asr_device : null,

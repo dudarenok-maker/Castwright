@@ -4,19 +4,20 @@
 # the resolver-driven install scripts, NOT pinned here — see the notes below.
 -r base.txt
 
-# Coqui fork, WITHOUT the `[codec]` extra (torch 2.8 < 2.9 → torchcodec not
-# needed; in-core torchaudio I/O). Same shape as nvidia-cuda.txt / cpu.txt.
-coqui-tts>=0.24.0
+# Coqui XTTS is now opt-in — install it from the Model Manager (it pip-installs coqui-tts under base.txt's pins).
+
+# Qwen3-TTS — per-character bespoke voices; weights fetched by install-qwen3.mjs.
+qwen-tts
 
 # Kokoro v1 — plain (no [gpu] extra) → the CPU onnxruntime EP on every OS. S0.1
 # (2026-06-15) found DirectML CANNOT run the Kokoro model (ConvTranspose fails on
 # onnxruntime-directml; the CPU EP works), so the AMD profile does NOT swap in
-# onnxruntime-directml — Kokoro runs on CPU here while Qwen/Coqui ride ROCm torch.
+# onnxruntime-directml — Kokoro runs on CPU here while Qwen (and opt-in Coqui, when installed) ride ROCm torch.
 kokoro-onnx>=0.4.0,<0.5.0
 
 # torch + torchaudio are NOT pinned here. The AMD profile installs the ROCm
 # preview wheels (repo.radeon.com, alpha local-version tags like
 # `2.8.0a0+gitfc14c65` that a `torch==` spec can't match) via install-torch.mjs
-# BEFORE the engine packages, so coqui-tts / qwen-tts see torch already
-# satisfied. See accelerator-profile.mjs installRecipe('amd', …) for the exact
+# BEFORE the engine packages, so qwen-tts sees torch already satisfied.
+# See accelerator-profile.mjs installRecipe('amd', …) for the exact
 # wheel URLs and server/tts-sidecar/scripts/install-torch.mjs for the ordering.

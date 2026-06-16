@@ -150,27 +150,81 @@ function ModelInventory() {
         </p>
       )}
 
-      <ul className="mt-4 space-y-3">
-        {inv.items.map((item) => (
-          <ModelRow
-            key={item.id}
-            item={item}
-            sidecarReachable={inv.sidecarReachable}
-            busy={busyId === item.id}
-            onAction={async (action) => {
-              setBusyId(item.id);
-              try {
-                await action();
-                await refetch();
-              } finally {
-                setBusyId(null);
-              }
-            }}
-            onChanged={refetch}
-            onRemove={() => setConfirmItem(item)}
-          />
-        ))}
-      </ul>
+      {/* TTS rows grouped under Standard / Optional add-ons subheadings.
+          ASR (Whisper) and analyzer (Ollama) rows keep their own flat list below. */}
+      {(() => {
+        const ttsStandard = inv.items.filter((i) => i.kind === 'tts' && i.tier !== 'secondary');
+        const ttsSecondary = inv.items.filter((i) => i.kind === 'tts' && i.tier === 'secondary');
+        /* ttsStandard already includes tier===undefined items (undefined !== 'secondary'). */
+        const standardRows = ttsStandard;
+        const otherRows = inv.items.filter((i) => i.kind !== 'tts');
+
+        const rowProps = (item: ModelInventoryItem) => ({
+          item,
+          sidecarReachable: inv.sidecarReachable,
+          busy: busyId === item.id,
+          onAction: async (action: () => Promise<unknown>) => {
+            setBusyId(item.id);
+            try {
+              await action();
+              await refetch();
+            } finally {
+              setBusyId(null);
+            }
+          },
+          onChanged: refetch,
+          onRemove: () => setConfirmItem(item),
+        });
+
+        const hasTierInfo = inv.items.some((i) => i.kind === 'tts' && i.tier != null);
+
+        if (!hasTierInfo) {
+          /* No tier data — flat list (legacy / sidecar unreachable). */
+          return (
+            <ul className="mt-4 space-y-3">
+              {inv.items.map((item) => (
+                <ModelRow key={item.id} {...rowProps(item)} />
+              ))}
+            </ul>
+          );
+        }
+
+        return (
+          <div className="mt-4 space-y-5">
+            {standardRows.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/45 mb-2">
+                  Standard
+                </p>
+                <ul className="space-y-3">
+                  {standardRows.map((item) => (
+                    <ModelRow key={item.id} {...rowProps(item)} />
+                  ))}
+                </ul>
+              </div>
+            )}
+            {ttsSecondary.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/45 mb-2">
+                  Optional add-ons
+                </p>
+                <ul className="space-y-3">
+                  {ttsSecondary.map((item) => (
+                    <ModelRow key={item.id} {...rowProps(item)} />
+                  ))}
+                </ul>
+              </div>
+            )}
+            {otherRows.length > 0 && (
+              <ul className="space-y-3">
+                {otherRows.map((item) => (
+                  <ModelRow key={item.id} {...rowProps(item)} />
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })()}
 
       {confirmItem && (
         <ConfirmRemoveModal
@@ -273,6 +327,20 @@ function ConfirmRemoveModal({
 }
 
 function ResidencyBadge({ item }: { item: ModelInventoryItem }) {
+  if (item.installState === 'package-missing') {
+    return (
+      <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+        Needs repair
+      </span>
+    );
+  }
+  if (item.installState === 'weights-missing') {
+    return (
+      <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+        Weights missing
+      </span>
+    );
+  }
   if (!item.present) {
     return (
       <span className="text-[11px] font-semibold text-ink/45 bg-ink/4 border border-ink/10 rounded-full px-2.5 py-1">
@@ -290,6 +358,41 @@ function ResidencyBadge({ item }: { item: ModelInventoryItem }) {
   return (
     <span className="text-[11px] font-semibold text-ink/60 bg-white border border-ink/15 rounded-full px-2.5 py-1">
       Installed
+    </span>
+  );
+}
+
+function IntegrityChip({ integrity }: { integrity: NonNullable<ModelInventoryItem['integrity']> }) {
+  if (integrity === 'verified') {
+    return (
+      <span
+        className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5"
+        title="On-disk size matches the pinned release (full SHA256 is verified at install time)"
+        aria-label="integrity: verified"
+      >
+        verified
+      </span>
+    );
+  }
+  if (integrity === 'mismatch') {
+    return (
+      <span
+        className="text-[10px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-full px-2 py-0.5"
+        title="On-disk size differs from the pinned release — reinstall to restore integrity"
+        aria-label="integrity: mismatch"
+      >
+        mismatch
+      </span>
+    );
+  }
+  /* unpinned */
+  return (
+    <span
+      className="text-[10px] font-semibold text-ink/55 bg-ink/5 border border-ink/10 rounded-full px-2 py-0.5"
+      title="Integrity pinning applies to fixed-file models"
+      aria-label="integrity: unpinned"
+    >
+      unpinned
     </span>
   );
 }
@@ -313,10 +416,14 @@ function ModelRow({
   const Installer = INSTALLER_BY_ID[item.id];
   const engine = TTS_ENGINE_BY_ID[item.id];
   const isAnalyzer = item.kind === 'analyzer';
-  /* A Load/Unload pill is meaningful for the sidecar TTS engines and for every
-     installed Ollama analyzer model (all analyzer rows are Ollama; cloud Gemini
-     is not a disk artifact and never appears in the inventory). */
-  const hasControl = item.present && (engine !== undefined || isAnalyzer);
+  /* A Load/Unload pill is meaningful only when the engine is actually usable.
+     For analyzer/ollama rows installState is undefined — keep them working by
+     falling back to item.present. For TTS/ASR rows we gate on installState. */
+  const usable = item.installState
+    ? item.installState === 'ready' || item.installState === 'loaded'
+    : item.present;
+  const hasControl = usable && (engine !== undefined || isAnalyzer);
+  const isPackageMissing = item.installState === 'package-missing';
 
   /* Analyzer residency depends on the Ollama daemon, not the voice engine
      (sidecar) — an unreachable daemon already yields zero analyzer rows, so
@@ -369,22 +476,7 @@ function ModelRow({
                 Fallback
               </span>
             )}
-            {item.integrity === 'verified' && (
-              <span
-                className="text-[10px] font-semibold text-emerald-700"
-                title="On-disk size matches the pinned release (full SHA256 is verified at install time)"
-              >
-                ✓ verified
-              </span>
-            )}
-            {item.integrity === 'mismatch' && (
-              <span
-                className="text-[10px] font-semibold text-rose-700"
-                title="On-disk size differs from the pinned release — reinstall to restore integrity"
-              >
-                ⚠ size mismatch
-              </span>
-            )}
+            {item.integrity != null && <IntegrityChip integrity={item.integrity} />}
           </div>
           <div className="mt-1 text-xs text-ink/55">
             {item.present ? formatBytes(item.sizeBytes) : 'not installed'}
@@ -416,7 +508,8 @@ function ModelRow({
               aria-expanded={installerOpen}
               className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
             >
-              {item.present ? 'Update' : 'Install'} {installerOpen ? '▴' : '▾'}
+              {isPackageMissing ? 'Repair' : item.present ? 'Update' : 'Install'}{' '}
+              {installerOpen ? '▴' : '▾'}
             </button>
           )}
           {item.present && item.removable && (
@@ -434,7 +527,19 @@ function ModelRow({
 
       {Installer && installerOpen && (
         <div data-testid={`model-installer-${item.id}`} className="border-t border-ink/10 pt-3">
-          <Installer onInstalled={onChanged} />
+          {isPackageMissing && (
+            <p className="mb-2 text-xs text-ink/60">
+              Reinstalls the engine package, then restarts the sidecar.
+            </p>
+          )}
+          <Installer
+            onInstalled={async () => {
+              if (isPackageMissing) {
+                await api.restartSidecar();
+              }
+              onChanged();
+            }}
+          />
         </div>
       )}
     </li>

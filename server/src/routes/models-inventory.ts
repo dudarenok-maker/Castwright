@@ -28,8 +28,10 @@ import {
   getResolvedAnalysisEngine,
 } from '../workspace/user-settings.js';
 import { engineForModelKey, type TtsEngine } from '../tts/index.js';
-import { detectQwenInstallStateOnDisk } from '../tts/qwen-install-detect.js';
-import { coquiWeightsPresent } from '../tts/coqui-install-detect.js';
+import { coquiWeightsPresent, coquiPackageInstalled } from '../tts/coqui-install-detect.js';
+import { kokoroPackageInstalled } from '../tts/kokoro-install-detect.js';
+import { qwenPackageInstalled } from '../tts/qwen-install-detect.js';
+import { fasterWhisperInstalled } from '../tts/whisper-install-detect.js';
 import {
   kokoroWeightPaths,
   kokoroWeightDir,
@@ -40,7 +42,13 @@ import {
   dirSizeBytes,
   totalSizeBytes,
 } from '../tts/model-paths.js';
-import { kokoroIntegrity } from '../tts/model-integrity.js';
+import { engineIntegrity } from '../tts/model-integrity.js';
+import {
+  deriveEngineHealth,
+  engineTier,
+  type EngineHealthState,
+  type EngineTier,
+} from '../tts/engine-health.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -65,7 +73,8 @@ export interface ModelInventoryItem {
   sizeBytes: number | null;
   diskPath: string | null;
   loaded: boolean;
-  installState?: string;
+  installState?: EngineHealthState;
+  tier?: EngineTier;
   isDefaultEngine: boolean;
   /* Kokoro is the universal fallback engine — removing it breaks fallback for
      EVERY book, even ones whose default isn't Kokoro. The UI warns harder. */
@@ -119,63 +128,89 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
     deps;
   const items: ModelInventoryItem[] = [];
 
+  /* B1 composition rule: trust the sidecar's find_spec ONLY when it actually
+     reported this engine's boolean; an old/unknown sidecar (undefined) falls
+     back to the Node disk probe. When the sidecar is down entirely, always
+     use the Node probe. */
+  const pkgInstalled = (sidecarVal: boolean | undefined, nodeProbe: boolean): boolean =>
+    sidecarVal === undefined ? nodeProbe : sidecarVal;
+
   /* ── Kokoro (TTS, fallback engine) ─────────────────────────────────── */
   const kokoroPaths = kokoroWeightPaths(repoRoot);
   const kokoroSize = totalSizeBytes(kokoroPaths);
-  items.push({
-    id: 'kokoro',
-    kind: 'tts',
-    label: 'Kokoro v1',
-    present: kokoroSize.fileCount > 0,
-    sizeBytes: kokoroSize.fileCount > 0 ? kokoroSize.bytes : null,
-    diskPath: kokoroWeightDir(repoRoot),
-    loaded: sidecar.kokoroLoaded === true,
-    isDefaultEngine: resolvedTtsEngine === 'kokoro',
-    isFallbackEngine: true,
-    removable: kokoroSize.fileCount > 0,
-    updatable: true,
-    integrity: kokoroSize.fileCount > 0 ? kokoroIntegrity(repoRoot) : undefined,
-  });
+  {
+    const weightsPresent = kokoroSize.fileCount > 0;
+    const loaded = sidecar.kokoroLoaded === true;
+    const packageInstalled = pkgInstalled(sidecar.kokoroPackageInstalled, kokoroPackageInstalled(repoRoot));
+    items.push({
+      id: 'kokoro',
+      kind: 'tts',
+      label: 'Kokoro v1',
+      present: weightsPresent,
+      sizeBytes: weightsPresent ? kokoroSize.bytes : null,
+      diskPath: kokoroWeightDir(repoRoot),
+      loaded,
+      installState: deriveEngineHealth('kokoro', { packageInstalled, weightsPresent, loaded }).state,
+      tier: engineTier('kokoro'),
+      isDefaultEngine: resolvedTtsEngine === 'kokoro',
+      isFallbackEngine: true,
+      removable: weightsPresent,
+      updatable: true,
+      integrity: engineIntegrity('kokoro', repoRoot),
+    });
+  }
 
   /* ── Qwen Base (TTS, bespoke per-character voices) ─────────────────── */
   const qwenBasePath = qwenBaseRepoDir();
   const qwenBaseSize = dirSizeBytes(qwenBasePath);
   const qwenBasePresent = qwenBaseSize.bytes > 0;
-  items.push({
-    id: 'qwen-base',
-    kind: 'tts',
-    label: 'Qwen3-TTS Base (0.6B)',
-    present: qwenBasePresent,
-    sizeBytes: qwenBasePresent ? qwenBaseSize.bytes : null,
-    diskPath: qwenBasePath,
-    loaded: sidecar.qwenLoaded === true,
-    installState:
-      sidecar.qwenInstallState ?? detectQwenInstallStateOnDisk(repoRoot),
-    isDefaultEngine: resolvedTtsEngine === 'qwen',
-    isFallbackEngine: false,
-    removable: qwenBasePresent,
-    updatable: true,
-  });
+  {
+    const weightsPresent = qwenBasePresent;
+    const loaded = sidecar.qwenLoaded === true;
+    const packageInstalled = pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot));
+    items.push({
+      id: 'qwen-base',
+      kind: 'tts',
+      label: 'Qwen3-TTS Base (0.6B)',
+      present: weightsPresent,
+      sizeBytes: weightsPresent ? qwenBaseSize.bytes : null,
+      diskPath: qwenBasePath,
+      loaded,
+      installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
+      tier: engineTier('qwen'),
+      isDefaultEngine: resolvedTtsEngine === 'qwen',
+      isFallbackEngine: false,
+      removable: weightsPresent,
+      updatable: true,
+      integrity: engineIntegrity('qwen', repoRoot),
+    });
+  }
 
   /* ── Qwen VoiceDesign (transient design-time model) ────────────────── */
   const qwenDesignPath = qwenDesignRepoDir();
   const qwenDesignSize = dirSizeBytes(qwenDesignPath);
   const qwenDesignPresent = qwenDesignSize.bytes > 0;
-  items.push({
-    id: 'qwen-design',
-    kind: 'tts',
-    label: 'Qwen3-TTS VoiceDesign (1.7B)',
-    present: qwenDesignPresent,
-    sizeBytes: qwenDesignPresent ? qwenDesignSize.bytes : null,
-    diskPath: qwenDesignPath,
-    /* Design model loads transiently during voice design and isn't surfaced on
-       /health, so residency reads false here (it's never the steady state). */
-    loaded: false,
-    isDefaultEngine: false,
-    isFallbackEngine: false,
-    removable: qwenDesignPresent,
-    updatable: true,
-  });
+  {
+    const weightsPresent = qwenDesignPresent;
+    const loaded = false; /* Design model loads transiently and isn't surfaced on /health. */
+    const packageInstalled = pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot));
+    items.push({
+      id: 'qwen-design',
+      kind: 'tts',
+      label: 'Qwen3-TTS VoiceDesign (1.7B)',
+      present: weightsPresent,
+      sizeBytes: weightsPresent ? qwenDesignSize.bytes : null,
+      diskPath: qwenDesignPath,
+      loaded,
+      installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
+      tier: engineTier('qwen'),
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: weightsPresent,
+      updatable: true,
+      integrity: engineIntegrity('qwen', repoRoot),
+    });
+  }
 
   /* ── Coqui XTTS v2 (alternate TTS) ─────────────────────────────────── */
   const coquiPath = coquiWeightDir();
@@ -184,37 +219,53 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
      uses, so the inventory row and the installer card never disagree. A
      half-finished download (config.json only) reads as not-present. */
   const coquiPresent = coquiWeightsPresent();
-  items.push({
-    id: 'coqui',
-    kind: 'tts',
-    label: 'Coqui XTTS v2',
-    present: coquiPresent,
-    sizeBytes: coquiPresent ? coquiSize.bytes : null,
-    diskPath: coquiPath,
-    loaded: sidecar.modelLoaded === true,
-    isDefaultEngine: resolvedTtsEngine === 'coqui',
-    isFallbackEngine: false,
-    removable: coquiPresent,
-    updatable: true,
-  });
+  {
+    const weightsPresent = coquiPresent;
+    const loaded = sidecar.modelLoaded === true;
+    const packageInstalled = pkgInstalled(sidecar.coquiPackageInstalled, coquiPackageInstalled(repoRoot));
+    items.push({
+      id: 'coqui',
+      kind: 'tts',
+      label: 'Coqui XTTS v2',
+      present: weightsPresent,
+      sizeBytes: weightsPresent ? coquiSize.bytes : null,
+      diskPath: coquiPath,
+      loaded,
+      installState: deriveEngineHealth('coqui', { packageInstalled, weightsPresent, loaded }).state,
+      tier: engineTier('coqui'),
+      isDefaultEngine: resolvedTtsEngine === 'coqui',
+      isFallbackEngine: false,
+      removable: weightsPresent,
+      updatable: true,
+      integrity: engineIntegrity('coqui', repoRoot),
+    });
+  }
 
   /* ── Whisper ASR (content-QA, srv-31) ──────────────────────────────── */
   const whisperPath = whisperRepoDir();
   const whisperSize = dirSizeBytes(whisperPath);
   const whisperPresent = whisperSize.bytes > 0;
-  items.push({
-    id: 'whisper',
-    kind: 'asr',
-    label: 'Whisper ASR (faster-whisper)',
-    present: whisperPresent,
-    sizeBytes: whisperPresent ? whisperSize.bytes : null,
-    diskPath: whisperPath,
-    loaded: sidecar.asrLoaded === true,
-    isDefaultEngine: false,
-    isFallbackEngine: false,
-    removable: whisperPresent,
-    updatable: true,
-  });
+  {
+    const weightsPresent = whisperPresent;
+    const loaded = sidecar.asrLoaded === true;
+    const packageInstalled = pkgInstalled(sidecar.whisperPackageInstalled, fasterWhisperInstalled(repoRoot));
+    items.push({
+      id: 'whisper',
+      kind: 'asr',
+      label: 'Whisper ASR (faster-whisper)',
+      present: weightsPresent,
+      sizeBytes: weightsPresent ? whisperSize.bytes : null,
+      diskPath: whisperPath,
+      loaded,
+      installState: deriveEngineHealth('whisper', { packageInstalled, weightsPresent, loaded }).state,
+      tier: engineTier('whisper'),
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: weightsPresent,
+      updatable: true,
+      integrity: engineIntegrity('whisper', repoRoot),
+    });
+  }
 
   /* ── Analyzer (local Ollama models only — cloud Gemini is not a disk
         artifact and has nothing to install/remove) ───────────────────── */

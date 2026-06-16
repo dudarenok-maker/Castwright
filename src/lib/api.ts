@@ -4607,7 +4607,8 @@ export interface ModelInventoryItem {
   sizeBytes: number | null;
   diskPath: string | null;
   loaded: boolean;
-  installState?: string;
+  installState?: 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
+  tier?: 'standard' | 'secondary';
   isDefaultEngine: boolean;
   isFallbackEngine: boolean;
   removable: boolean;
@@ -5672,6 +5673,8 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
         sizeBytes: 346_030_080,
         diskPath: 'server/tts-sidecar/voices/kokoro',
         loaded: MOCK_SIDECAR_KOKORO_LOADED,
+        installState: MOCK_SIDECAR_KOKORO_LOADED ? 'loaded' : 'ready',
+        tier: 'standard',
         isDefaultEngine: !MOCK_SIDECAR_QWEN_LOADED,
         isFallbackEngine: true,
         removable: true,
@@ -5686,11 +5689,16 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
         sizeBytes: 1_283_457_024,
         diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base',
         loaded: MOCK_SIDECAR_QWEN_LOADED,
-        installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'ready',
+        /* package-missing exercises the Needs-repair / Repair / no-Load-pill
+           health states that model-manager-health.spec.ts pins (Task 12).
+           installState resolves back to 'loaded' when the user loads it. */
+        installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'package-missing',
+        tier: 'standard',
         isDefaultEngine: MOCK_SIDECAR_QWEN_LOADED,
         isFallbackEngine: false,
         removable: true,
         updatable: true,
+        integrity: 'unpinned',
       },
       {
         id: 'qwen-design',
@@ -5700,6 +5708,7 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
         sizeBytes: 3_623_878_656,
         diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign',
         loaded: false,
+        tier: 'standard',
         isDefaultEngine: false,
         isFallbackEngine: false,
         removable: true,
@@ -5713,6 +5722,8 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
         sizeBytes: null,
         diskPath: 'server/tts-sidecar/voices/coqui/tts/tts_models--multilingual--multi-dataset--xtts_v2',
         loaded: false,
+        installState: 'not-installed',
+        tier: 'secondary',
         isDefaultEngine: false,
         isFallbackEngine: false,
         removable: false,

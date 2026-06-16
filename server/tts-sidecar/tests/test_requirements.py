@@ -8,6 +8,9 @@ the overlay. Two things the overlay must therefore NEVER carry:
     resolution order can leave the CPU build owning the shared `onnxruntime/`
     namespace → a silent CPU-only Kokoro on a GPU box; the 2026-06-16 regression).
 
+Engine tier: Qwen + Kokoro are STANDARD (in the overlay); Coqui is OPT-IN (removed
+from the overlay, installed on demand from the Model Manager).
+
 requirements.txt is a layered structure (a shim that `-r`-includes
 requirements/nvidia-cuda.txt, which `-r`-includes requirements/base.txt), so the
 checks below resolve the `-r` include chain and assert against the flattened
@@ -15,6 +18,7 @@ dependency set — independent of which overlay file a line happens to live in."
 from pathlib import Path
 
 REQ = Path(__file__).resolve().parent.parent / "requirements.txt"
+OVERLAY_DIR = Path(__file__).resolve().parent.parent / "requirements"
 
 
 def _resolve(path, seen=None):
@@ -104,3 +108,31 @@ def test_no_torchcodec():
         "torchcodec must not be a requirement (dropped with the [codec] extra)"
     assert not any("coqui-tts[codec]" in l for l in _lines()), \
         "coqui-tts must NOT use the [codec] extra (it pulls torchcodec)"
+
+
+def _overlay_lines(name):
+    """Flatten a named overlay (e.g. 'nvidia-cuda.txt') and its includes."""
+    return _resolve(OVERLAY_DIR / name)
+
+
+def test_coqui_absent_from_all_overlays():
+    """Re-tier: Coqui is opt-in — it must NOT appear in any overlay (nvidia, amd, or cpu)."""
+    for overlay in ("nvidia-cuda.txt", "amd-rocm.txt", "cpu.txt"):
+        lines = _overlay_lines(overlay)
+        assert not any(_pkg(l) == "coqui-tts" for l in lines), \
+            f"coqui-tts must not be in {overlay} (it is now opt-in, installed via the Model Manager)"
+
+
+def test_qwen_present_in_gpu_overlays():
+    """Re-tier: qwen-tts is standard on GPU profiles (nvidia + amd)."""
+    for overlay in ("nvidia-cuda.txt", "amd-rocm.txt"):
+        lines = _overlay_lines(overlay)
+        assert any(_pkg(l) == "qwen-tts" for l in lines), \
+            f"qwen-tts must be in {overlay} (it is now standard on GPU profiles)"
+
+
+def test_qwen_absent_from_cpu_overlay():
+    """Qwen is GPU-only standard — it must NOT appear in the cpu overlay."""
+    lines = _overlay_lines("cpu.txt")
+    assert not any(_pkg(l) == "qwen-tts" for l in lines), \
+        "qwen-tts must not be in cpu.txt (Qwen is GPU-only standard)"

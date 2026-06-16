@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
-import { flashAttnWheelPin, sha256File, resolveFlashAttnInstall } from '../../tts-sidecar/scripts/install-qwen3.mjs';
+import { flashAttnWheelPin, sha256File, resolveFlashAttnInstall, qwenPipInstallArgs } from '../../tts-sidecar/scripts/install-qwen3.mjs';
 
 describe('sha256File', () => {
   it('hashes a file to its lowercased hex digest', () => {
@@ -31,6 +31,14 @@ describe('flashAttnWheelPin', () => {
        failing. When a hash is blessed in model-hashes.json this flips to the
        digest and the integrity gate activates. */
     expect(flashAttnWheelPin()).toBeNull();
+  });
+});
+
+describe('qwenPipInstallArgs', () => {
+  it('installs qwen-tts without -U and under base constraints', () => {
+    const args = qwenPipInstallArgs('/repo/server/tts-sidecar/requirements/base.txt');
+    expect(args).not.toContain('-U');
+    expect(args).toEqual(['-m', 'pip', 'install', 'qwen-tts', '-c', '/repo/server/tts-sidecar/requirements/base.txt']);
   });
 });
 

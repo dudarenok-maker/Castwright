@@ -30,8 +30,7 @@ psutil>=5.9
 # ENABLED=0), so this dep is dormant until the gate is switched on.
 faster-whisper>=1.0,<2.0
 
-# coqui-tts internals import `isin_mps_friendly` from transformers.pytorch_utils,
-# which is a 4.x-line private util. transformers 5.x removed/renamed it, so
-# pip happily resolves to a too-new wheel and the import explodes at runtime.
-# Pin to the 4.x line until coqui-tts updates its compat layer.
+# Shared transformers lockstep. Qwen + Kokoro resolve under <5.0; this pin also
+# keeps the OPT-IN Coqui (installed later via the Model Manager) on a compatible
+# transformers — coqui-tts imports a 4.x-only private util (isin_mps_friendly).
 transformers>=4.45,<5.0

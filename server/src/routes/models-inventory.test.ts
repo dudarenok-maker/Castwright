@@ -169,8 +169,34 @@ describe('buildModelInventory', () => {
     const qwen = inv.items.find((i) => i.id === 'qwen-base')!;
     expect(qwen.present).toBe(true);
     expect(qwen.sizeBytes).toBe(5000);
-    expect(qwen.installState).toBe('weights-missing'); // from the stubbed health
+    // reachableSidecar has no qwenPackageInstalled flag → packageInstalled=false
+    // weights ARE present → package-missing (B1 composition)
+    expect(qwen.installState).toBe('package-missing');
     expect(qwen.isDefaultEngine).toBe(false); // default engine is kokoro here
+  });
+
+  it('qwen-base: sidecar package=false + weights present → installState package-missing', () => {
+    installQwenBase();
+    const inv = buildModelInventory(
+      baseDeps({
+        sidecar: { ...reachableSidecar, qwenPackageInstalled: false, qwenLoaded: false },
+      }),
+    );
+    const row = inv.items.find((i) => i.id === 'qwen-base')!;
+    expect(row.installState).toBe('package-missing');
+    expect(row.tier).toBe('standard');
+  });
+
+  it('coqui row tier is secondary and carries an integrity verdict', () => {
+    const inv = buildModelInventory(baseDeps());
+    const row = inv.items.find((i) => i.id === 'coqui')!;
+    expect(row.tier).toBe('secondary');
+  });
+
+  it('every TTS + whisper row carries an integrity verdict', () => {
+    const inv = buildModelInventory(baseDeps());
+    for (const id of ['kokoro', 'qwen-base', 'coqui', 'whisper'])
+      expect(inv.items.find((i) => i.id === id)!.integrity).toBeDefined();
   });
 
   it('lists local Ollama models with size + residency + default flag', () => {
@@ -238,6 +264,39 @@ describe('buildModelInventory', () => {
     const inv = buildModelInventory(baseDeps({ resolvedTtsEngine: 'qwen' }));
     expect(inv.items.find((i) => i.id === 'kokoro')!.isDefaultEngine).toBe(false);
     expect(inv.items.find((i) => i.id === 'qwen-base')!.isDefaultEngine).toBe(true);
+  });
+
+  it('old-sidecar compat: kokoroPackageInstalled=undefined + Node probe true + weights present → installState ready', () => {
+    /* Regression: when a reachable but older sidecar omits kokoro_package_installed,
+       the pkgInstalled helper was treating the coerced `false` as authoritative and
+       returning package-missing even though the kokoro_onnx package IS on disk.
+       With the fix, undefined falls back to the Node disk probe (true here because
+       we create the site-packages dir), so installState must be 'ready'. */
+    installKokoro();
+    // Simulate the kokoro_onnx package being present in the sidecar venv (Node probe = true).
+    const kokoro_onnx_dir = join(
+      repoRoot,
+      'server',
+      'tts-sidecar',
+      '.venv',
+      'Lib',
+      'site-packages',
+      'kokoro_onnx',
+    );
+    mkdirSync(kokoro_onnx_dir, { recursive: true });
+
+    const inv = buildModelInventory(
+      baseDeps({
+        sidecar: {
+          ...reachableSidecar,
+          kokoroLoaded: false,
+          kokoroPackageInstalled: undefined, // old sidecar omitted the field
+        },
+      }),
+    );
+    const row = inv.items.find((i) => i.id === 'kokoro')!;
+    // Node probe sees the package on disk → should be 'ready' (weights present, package installed)
+    expect(row.installState).toBe('ready');
   });
 });
 

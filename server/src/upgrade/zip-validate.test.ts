@@ -115,7 +115,7 @@ describe('validateUpgradeZip reqHash (resolved overlay + base, not the shim)', (
   // live in the overlay (which `-r base.txt`) and base. The hash MUST cover the
   // resolved set, in resolveRequired's order (overlay THEN base).
   const SHIM = '-r requirements/nvidia-cuda.txt\n';
-  const OVERLAY = '-r base.txt\ncoqui-tts[codec]>=0.24.0\nkokoro-onnx[gpu]>=0.4.0,<0.5.0\n';
+  const OVERLAY = '-r base.txt\nqwen-tts\nkokoro-onnx>=0.4.0,<0.5.0\n';
   const BASE = 'fastapi>=0.115,<0.116\nnumpy>=1.26,<3.0\ntransformers>=4.45,<5.0\n';
 
   let dir: string;
@@ -174,7 +174,7 @@ describe('validateUpgradeZip reqHash (resolved overlay + base, not the shim)', (
   it('changes when an overlay pin is edited', async () => {
     const baseline = await validateUpgradeZip(await buildZip({}), '1.6.0');
     const edited = await validateUpgradeZip(
-      await buildZip({ overlay: OVERLAY.replace('0.24.0', '0.25.0') }),
+      await buildZip({ overlay: OVERLAY.replace('0.4.0', '0.5.0') }),
       '1.6.0',
     );
     expect(edited.reqHash).not.toBe(baseline.reqHash);

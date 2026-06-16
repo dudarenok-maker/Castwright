@@ -4,11 +4,8 @@
 # plain `onnxruntime` (CPU EP) instead of the onnxruntime-gpu the [gpu] extra pulls.
 -r base.txt
 
-# Coqui fork (the original `TTS` is discontinued / won't install on >=3.12).
-# DROP the `[codec]` extra: torchcodec is only needed on torch >=2.9 and only
-# ships cores for FFmpeg 4–7 (we ship FFmpeg 8). We pin torch 2.8 (< 2.9), so
-# torchaudio keeps in-core audio I/O and torchcodec is unnecessary.
-coqui-tts>=0.24.0
+# Coqui XTTS is opt-in on every profile — install it from the Model Manager.
+# Qwen is GPU-only (needs an nvidia/amd overlay) — it is not installable on a CPU-only box.
 
 # torch + torchaudio — EXPLICIT, matched, pinned (coqui-tts 0.27.5 dropped the
 # transitive torch dep). No index here: PyPI gives a CUDA-bundled wheel on

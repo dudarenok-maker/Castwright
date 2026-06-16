@@ -368,6 +368,64 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.error).toMatch(/503/);
   });
 
+  describe('per-engine package-installed forwarding (engine-retier, old-sidecar compat)', () => {
+    it('(a) body OMITTING the three fields → coqui/kokoro/whisperPackageInstalled are all undefined', async () => {
+      /* An older sidecar that predates the per-engine find_spec probe omits
+         coqui_package_installed / kokoro_package_installed / whisper_package_installed.
+         The proxy MUST preserve undefined — coercing to false would make the
+         Model Manager falsely flag them as "package-missing" on every poll. */
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: true, engines: ['kokoro', 'qwen'], qwen_loaded: true }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.status).toBe('reachable');
+      expect(res.body.coquiPackageInstalled).toBeUndefined();
+      expect(res.body.kokoroPackageInstalled).toBeUndefined();
+      expect(res.body.whisperPackageInstalled).toBeUndefined();
+    });
+
+    it('(b) body with the three fields set to false → each is false', async () => {
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            engines: ['kokoro'],
+            coqui_package_installed: false,
+            kokoro_package_installed: false,
+            whisper_package_installed: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.coquiPackageInstalled).toBe(false);
+      expect(res.body.kokoroPackageInstalled).toBe(false);
+      expect(res.body.whisperPackageInstalled).toBe(false);
+    });
+
+    it('(c) body with the three fields set to true → each is true', async () => {
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            engines: ['kokoro'],
+            coqui_package_installed: true,
+            kokoro_package_installed: true,
+            whisper_package_installed: true,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.coquiPackageInstalled).toBe(true);
+      expect(res.body.kokoroPackageInstalled).toBe(true);
+      expect(res.body.whisperPackageInstalled).toBe(true);
+    });
+  });
+
   it('tags every response with proxy="sidecar" so the frontend can distinguish Node-layer failures', async () => {
     /* `proxy` is the hop tag the frontend uses to choose between "restart
        Node" and "restart sidecar" recovery copy. The Node layer always
@@ -605,6 +663,52 @@ describe('POST /api/sidecar/restart', () => {
     await request(makeApp()).post('/api/sidecar/restart');
     /* kill() MUST be called before the health poll loop. */
     expect(kill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GET /api/sidecar/health — per-engine package booleans (Task 8)', () => {
+  it('forwards coqui/kokoro/whisper package booleans from the sidecar body', async () => {
+    /* Task 8: the sidecar /health body now carries find_spec booleans for
+       coqui, kokoro, and whisper. The proxy must forward them as camelCase
+       so the inventory (Task 10) can derive "package-missing" per engine
+       without an additional probe. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro', 'coqui'],
+          coqui_package_installed: true,
+          kokoro_package_installed: false,
+          whisper_package_installed: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.status).toBe(200);
+    expect(res.body.coquiPackageInstalled).toBe(true);
+    expect(res.body.kokoroPackageInstalled).toBe(false);
+    expect(res.body.whisperPackageInstalled).toBe(true);
+  });
+
+  it('preserves undefined for coqui/kokoro/whisper package booleans when an old sidecar omits them', async () => {
+    /* An old sidecar body that predates the per-engine find_spec probe omits
+       the three fields. The proxy MUST NOT coerce to false — that would make
+       the inventory falsely flag packages as missing even when they ARE on
+       disk. undefined is the "unknown" signal; the inventory's pkgInstalled
+       helper falls back to the Node disk probe when it sees undefined. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['kokoro'] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiPackageInstalled).toBeUndefined();
+    expect(res.body.kokoroPackageInstalled).toBeUndefined();
+    expect(res.body.whisperPackageInstalled).toBeUndefined();
   });
 });
 

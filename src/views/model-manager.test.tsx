@@ -25,7 +25,19 @@ vi.mock('../lib/api', () => ({
     getUserSettings: vi.fn(),
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
+    restartSidecar: vi.fn(),
   },
+}));
+
+/* Mock the QwenInstall component so the installer renders a simple stub button
+   that calls onInstalled() synchronously — avoids the real fetch polling loop
+   that the global fetch stub (offline) would block. */
+vi.mock('../components/qwen-install', () => ({
+  QwenInstall: ({ onInstalled }: { onInstalled?: () => void }) => (
+    <button type="button" data-testid="mock-qwen-install-btn" onClick={() => onInstalled?.()}>
+      Install now
+    </button>
+  ),
 }));
 
 const mockInventory = vi.mocked(api.getModelInventory);
@@ -433,6 +445,237 @@ describe('ModelManagerView — back-to-Admin breadcrumb', () => {
     const btn = screen.getByTestId('model-manager-back-to-admin');
     fireEvent.click(btn);
     expect(store.getState().ui.stage).toMatchObject({ kind: 'admin' });
+  });
+});
+
+describe('ModelManagerView — health honesty + repair + tier grouping', () => {
+  it('package-missing row shows "Needs repair" and disables Load', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'package-missing',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    expect(within(row).getByText(/needs repair/i)).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /load model/i })).toBeNull();
+  });
+
+  it('weights-missing row shows "Weights missing"', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'kokoro',
+          kind: 'tts',
+          label: 'Kokoro v1',
+          present: true,
+          sizeBytes: null,
+          diskPath: 'server/tts-sidecar/voices/kokoro',
+          loaded: false,
+          installState: 'weights-missing',
+          isDefaultEngine: true,
+          isFallbackEngine: true,
+          removable: false,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-kokoro');
+    expect(within(row).getByText(/weights missing/i)).toBeInTheDocument();
+  });
+
+  it('package-missing row labels the installer action "Repair"', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'package-missing',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Repair/);
+  });
+
+  it('Repair→onInstalled triggers api.restartSidecar for a package-missing row', async () => {
+    vi.mocked(api.restartSidecar).mockResolvedValue(undefined as never);
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'package-missing',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+
+    /* Open the Repair installer panel. */
+    fireEvent.click(within(row).getByTestId('model-install-toggle-qwen-base'));
+
+    /* The mocked QwenInstall stub is now visible; clicking it fires onInstalled(). */
+    const installBtn = within(row).getByTestId('mock-qwen-install-btn');
+    fireEvent.click(installBtn);
+
+    /* The onInstalled handler for a package-missing row calls api.restartSidecar. */
+    await waitFor(() => expect(api.restartSidecar).toHaveBeenCalledTimes(1));
+  });
+
+  it('Update completion does NOT call api.restartSidecar for a normal installed row', async () => {
+    /* qwen-base with installState "ready" (not package-missing) — Update path. */
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'ready',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+
+    /* Open the Update panel and trigger onInstalled. */
+    fireEvent.click(within(row).getByTestId('model-install-toggle-qwen-base'));
+    fireEvent.click(within(row).getByTestId('mock-qwen-install-btn'));
+
+    /* restartSidecar must NOT be called on a normal update. */
+    await waitFor(() => expect(api.getModelInventory).toHaveBeenCalledTimes(2)); // initial + onChanged refetch
+    expect(api.restartSidecar).not.toHaveBeenCalled();
+  });
+
+  it('renders an integrity chip per state', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'kokoro',
+          kind: 'tts',
+          label: 'Kokoro v1',
+          present: true,
+          sizeBytes: 346_030_080,
+          diskPath: 'server/tts-sidecar/voices/kokoro',
+          loaded: true,
+          installState: 'loaded',
+          isDefaultEngine: true,
+          isFallbackEngine: true,
+          removable: true,
+          updatable: true,
+          integrity: 'unpinned',
+        },
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'ready',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+          integrity: 'verified',
+        },
+      ],
+    });
+    renderManager();
+    const kokoro = await screen.findByTestId('model-row-kokoro');
+    expect(within(kokoro).getByText(/unpinned/i)).toBeInTheDocument();
+    const qwen = screen.getByTestId('model-row-qwen-base');
+    expect(within(qwen).getByText(/verified/i)).toBeInTheDocument();
+  });
+
+  it('groups TTS rows under Standard and Optional add-ons subheadings', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'kokoro',
+          kind: 'tts',
+          label: 'Kokoro v1',
+          present: true,
+          sizeBytes: 346_030_080,
+          diskPath: 'server/tts-sidecar/voices/kokoro',
+          loaded: true,
+          installState: 'loaded',
+          tier: 'standard',
+          isDefaultEngine: true,
+          isFallbackEngine: true,
+          removable: true,
+          updatable: true,
+        },
+        {
+          id: 'coqui',
+          kind: 'tts',
+          label: 'Coqui XTTS v2',
+          present: false,
+          sizeBytes: null,
+          diskPath: 'voices/coqui',
+          loaded: false,
+          installState: 'not-installed',
+          tier: 'secondary',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: false,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const board = await screen.findByTestId('model-inventory');
+    expect(within(board).getByText(/^Standard$/i)).toBeInTheDocument();
+    expect(within(board).getByText(/optional add-ons/i)).toBeInTheDocument();
   });
 });
 

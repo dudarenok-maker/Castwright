@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { kokoroIntegrity } from './model-integrity.js';
+import { kokoroIntegrity, engineIntegrity } from './model-integrity.js';
 
 let repoRoot: string;
 
@@ -58,9 +58,44 @@ describe('kokoroIntegrity', () => {
     expect(kokoroIntegrity(repoRoot)).toBeUndefined();
   });
 
-  it('returns undefined when the manifest is absent', () => {
+  it("returns 'unpinned' when the manifest is absent (no pins to compare)", () => {
     kokoroFile('kokoro-v1.0.onnx', 1000);
     kokoroFile('voices-v1.0.bin', 200);
-    expect(kokoroIntegrity(repoRoot)).toBeUndefined();
+    expect(kokoroIntegrity(repoRoot)).toBe('unpinned');
+  });
+});
+
+describe('engineIntegrity', () => {
+  it("returns 'unpinned' for qwen (no manifest entry)", () => {
+    expect(engineIntegrity('qwen', repoRoot)).toBe('unpinned');
+  });
+
+  it("returns 'unpinned' for coqui (no manifest entry)", () => {
+    expect(engineIntegrity('coqui', repoRoot)).toBe('unpinned');
+  });
+
+  it("returns 'unpinned' for whisper (no manifest entry)", () => {
+    expect(engineIntegrity('whisper', repoRoot)).toBe('unpinned');
+  });
+
+  it("returns 'verified' for kokoro when pinned sizes match", () => {
+    writeManifest(MANIFEST);
+    kokoroFile('kokoro-v1.0.onnx', 1000);
+    kokoroFile('voices-v1.0.bin', 200);
+    expect(engineIntegrity('kokoro', repoRoot)).toBe('verified');
+  });
+
+  it("returns 'mismatch' for kokoro when a pinned size differs", () => {
+    writeManifest(MANIFEST);
+    kokoroFile('kokoro-v1.0.onnx', 999); // wrong size
+    kokoroFile('voices-v1.0.bin', 200);
+    expect(engineIntegrity('kokoro', repoRoot)).toBe('mismatch');
+  });
+
+  it("returns 'unpinned' for kokoro when manifest has no kokoro entry", () => {
+    writeManifest({}); // manifest present but no kokoro key
+    kokoroFile('kokoro-v1.0.onnx', 1000);
+    kokoroFile('voices-v1.0.bin', 200);
+    expect(engineIntegrity('kokoro', repoRoot)).toBe('unpinned');
   });
 });

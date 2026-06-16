@@ -324,8 +324,9 @@ gemini?: {name} }` map. Engine switches preserve cast assignments;
     int8 model (~150–400 MB) gated by the weighted VRAM semaphore (`asr:1`) plus
     an idle-evict watchdog (`ASR_IDLE_TTL`, mirrors the Qwen VoiceDesign one).
     ASR and Qwen VoiceDesign never co-reside (design = cast-review, ASR =
-    generation/repair). OFF unless `SEG_ASR_ENABLED`; needs `pip install
-    faster-whisper` in the sidecar venv.
+    generation/repair). OFF unless `SEG_ASR_ENABLED`; `faster-whisper` ships
+    in `requirements/base.txt` (installed with the standard sidecar bootstrap)
+    — only the model weights are fetched on first ASR load.
 
 ## Commit gate
 

@@ -267,37 +267,53 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 
 **Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
-## Switching the voice engine to Coqui XTTS v2 (alternate, on-device)
+## Voice engines: standard vs optional
 
-1. **Account → Defaults for new books → Voice engine** → "Local (free)".
-2. **Voice model** → "Coqui XTTS v2".
-3. Save. The first chapter generation triggers a one-time ~2 GB model download.
+Castwright ships three **standard** voice engines that install automatically with the Python sidecar:
 
-## Switching TTS to Qwen3-TTS
+| Engine | Profile | What it does |
+|---|---|---|
+| **Kokoro** (default) | all boxes | High-quality preset-catalogue TTS; eagerly loaded; ~1.1 GB weights. |
+| **Qwen3-TTS** | GPU only (NVIDIA / AMD) | Per-character bespoke voice design from the cast persona. `qwen-tts` is included in `requirements/nvidia-cuda.txt` and `requirements/amd-rocm.txt`, so it installs with the standard `pip install -r requirements/<profile>.txt` step. Weights (~2.5 GB) are fetched separately (see below). |
+| **Whisper ASR** | all boxes | Speech-to-text QA gate (`faster-whisper` ships in `requirements/base.txt`). Off by default (`SEG_ASR_ENABLED=0`); model weights are fetched on first ASR load. |
 
-Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. It **becomes the default for new books once it's installed** (until then, and on any box without it, books render in Kokoro). It is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time install of the Python package + model weights (~2.5 GB).
+**Coqui XTTS v2** is an **optional add-on** (not in any requirements overlay). Install it from **Admin → Model Manager → Optional add-ons → Coqui → Install**. The in-app installer runs `pip install coqui-tts` constrained against `base.txt` to preserve the shared `transformers<5.0` lockstep. Existing Coqui installs from before this release are preserved across upgrades (pip-install never uninstalls).
 
-**Recommended — install in-app (no terminal).** Start the app, open **Account → Models**, and click **Install Qwen3-TTS** on the Qwen card. It downloads the Base + VoiceDesign models in the background with live progress; when it finishes, new books default to Qwen. The CLI below stays available for scripted / offline / CI setups and is equivalent.
+> **Manual pip install note.** If you need to `pip install` a package into the sidecar venv by hand (e.g. a scripted / offline setup), always pass `-c server/tts-sidecar/requirements/base.txt` to stay within the shared `transformers>=4.45,<5.0` pin that keeps Qwen, Kokoro, and optional Coqui compatible.
 
-1. **Install the engine (CLI alternative).** From the extracted folder, with the sidecar venv already bootstrapped (step 2 of the per-OS install above):
+## Installing Qwen3-TTS weights
 
-   ```sh
-   node server/tts-sidecar/scripts/install-qwen3.mjs
-   ```
+On a GPU box the `qwen-tts` Python package installs automatically with `pip install -r requirements/<profile>.txt`. The model weights (~2.5 GB) are a separate one-time download:
 
-   Cross-platform Node ESM — same command on Windows / macOS / Linux. Idempotent (pip is a no-op when satisfied; the model download is a no-op when the Hugging Face cache already has the snapshot). Pip-installs `qwen-tts` into the sidecar venv and pre-fetches the Base (synth) + VoiceDesign models into `server/tts-sidecar/voices/qwen/hf`. Add `--skip-design` if you only want the synth model (saves ~1.7 GB on machines that won't host the cast-review design step); add `--cpu` to force CPU-only torch on a box without a CUDA GPU.
+**Recommended — install in-app (no terminal).** Start the app, open **Admin → Model Manager**, and click **Install** on the Qwen card. It downloads the Base + VoiceDesign models in the background with live progress; when it finishes, new books default to Qwen. The CLI below is equivalent for scripted / offline / CI setups.
 
-2. **Optional — FlashAttention-2 wheel (Windows-only).** SDPA is the default attention impl and benchmarked at parity with FA2 on TTS-decode-bound workloads, so skipping FA2 costs nothing measurable. To install the wheel anyway (e.g. for a benchmark):
+**CLI alternative.** From the extracted folder, with the sidecar venv already bootstrapped:
 
-   ```sh
-   node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
-   ```
+```sh
+node server/tts-sidecar/scripts/install-qwen3.mjs
+```
 
-   The pinned prebuilt wheel is `cp311 + torch-2.6 + cu124`-only, so the script **auto-skips on the current Python 3.12 (cp312) stack** (and on macOS / Linux) — a wheel that can't load doesn't get installed, and Qwen runs on SDPA. (A matching cp312 / newer-torch wheel would have to be sourced to use FA2 on 3.12.) When a compatible wheel *is* installed, activate it by setting `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
+Cross-platform Node ESM — same command on Windows / macOS / Linux. Idempotent (pip is a no-op when already satisfied; the model download is a no-op when the Hugging Face cache already has the snapshot). Fetches the Base (synth) + VoiceDesign models into `server/tts-sidecar/voices/qwen/hf`. Add `--skip-design` to skip the VoiceDesign model (saves ~1.7 GB on machines that won't host the cast-review design step); add `--cpu` to force CPU-only torch on a box without a CUDA GPU.
 
-3. **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast with current-vs-proposed audition before regenerating.
+**Optional — FlashAttention-2 wheel (Windows-only).** SDPA is the default attention impl and benchmarked at parity with FA2 on TTS-decode-bound workloads, so skipping FA2 costs nothing measurable. To install the wheel anyway (e.g. for a benchmark):
+
+```sh
+node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
+```
+
+The pinned prebuilt wheel is `cp311 + torch-2.6 + cu124`-only, so the script **auto-skips on the current Python 3.12 (cp312) stack** (and on macOS / Linux) — a wheel that can't load doesn't get installed, and Qwen runs on SDPA. When a compatible wheel is installed, activate it via `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
+
+**Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast before regenerating.
 
 **Disk + VRAM.** Qwen Base ~1 GB on disk, Base + VoiceDesign together ~2.5 GB. At runtime Base resides at ~2 GB VRAM during synth and VoiceDesign loads transiently during a design (~4–5 GB on top of Base, freed on idle or at the next synth). The GPU-arbitration semaphore (`GPU_VRAM_BUDGET` in `server/.env`, default 8 GiB) keeps an 8 GB GPU from double-booking against the analyzer.
+
+## Adding Coqui XTTS v2 (optional add-on)
+
+Coqui XTTS v2 is not installed by default. To add it:
+
+1. Start the app, open **Admin → Model Manager → Optional add-ons**.
+2. Click **Install** on the Coqui card. The installer runs `pip install coqui-tts -c base.txt` (respects the shared `transformers<5.0` pin) and fetches the model weights (~2 GB) in the background.
+3. Once complete, go to **Account → Defaults for new books → Voice model** → pick "Coqui XTTS v2". Save.
 
 ## Using Gemini for TTS (cloud, free tier)
 
