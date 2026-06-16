@@ -153,12 +153,6 @@ _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user):_ non-English (Cyrillic, and other non-Latin) books work end-to-end instead of silently colliding ids / dead cross-book reuse / a stalled analysis.
 _Full detail + acceptance:_ [#823](https://github.com/dudarenok-maker/Castwright/issues/823).
 
-#### `fs-45` — VRAM MB-accounting policy + two-model-split UI (Wave 4, beta 12/16 GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
-
-- _What:_ Wave 1 (plan [222](features/222-gpu-residency-and-analysing-honesty.md)) already gives 12/16 GB cards coexistence via the `gpu.safeCoexistMb` threshold (a roomy card simply doesn't evict). Wave 4 refines it for beta testers running better cards than the 8 GB dev box: (a) a per-(engine, mode) MB cost table vs detected VRAM (non-additive Qwen synth/design modes) so a 12 GB card with a heavy combo that passes the coarse threshold but would overcommit is caught; (b) a two-model analysis-split warn + confirm UI when phase0/phase1 use two different local models that won't co-fit.
-- _Benefit (user):_ beta testers on 12/16 GB cards get precise coexistence (no needless eviction) without edge-case OOMs, and a split run can't silently overcommit.
-_Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-honesty.md) "Out of scope" + spec `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 · [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
-
 ### Companion app
 
 _The three items below are the companion-app follow-ups left after the Android v1 shipped
@@ -181,6 +175,12 @@ security & hardening, ops & distribution, listener-app handoffs).
 Sub-groups and the items within them are ranked top = highest priority.
 
 ### Reliability & observability
+
+#### `fs-45` — VRAM MB-accounting policy (Wave 4, beta 12/16 GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
+
+- _What:_ A per-(engine, mode) MB cost table vs detected VRAM, replacing Wave 1's coarse `gpu.safeCoexistMb` threshold so a 12 GB card with a heavy combo that passes the threshold but would overcommit is caught. **Deferred (Could) until a real 12/16 GB box yields measured cost numbers:** an adversarial review found that with guessed values the engine makes the same evict/coexist decisions as the threshold (and even mis-evicts on a 12 GB card during voice design), so it adds OOM risk for ~no decision-quality gain. The related two-model-split gotcha is now documented in `docs/local-llm.md` (no UI built). Revisit with telemetry from a beta tester's card.
+- _Benefit (user):_ precise coexistence on bigger cards without edge-case OOMs — once the cost table is measured rather than guessed.
+_Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-honesty.md) "Out of scope" + spec `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 · drafted plan `docs/superpowers/plans/2026-06-16-wave4-vram-mb-accounting.md` · [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
 
 #### `srv-30` — CPU-only analyzer device (large RAM-resident model, concurrent with GPU TTS) ([#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507))
 
