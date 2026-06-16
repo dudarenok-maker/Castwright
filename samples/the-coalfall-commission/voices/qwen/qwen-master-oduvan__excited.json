@@ -1,6 +1,6 @@
 {
   "voiceId": "qwen-master-oduvan__excited",
-  "instruct": "A deep-pitched, gravelly masculine voice with a slow, measured pace and a resonant, weary timbre, projecting a detached and weathered authority for expressive character dialogue. Delivered with bright, energetic excitement.",
+  "instruct": "An elderly man's voice in his seventies, low-to-medium in pitch and gravelly, with a dry rasp and a faint tremor at the edges; slow, deliberate and unhurried, carrying the worn, unshakable authority of a lifelong craftsman — for expressive character dialogue. Delivered with bright, energetic excitement.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
