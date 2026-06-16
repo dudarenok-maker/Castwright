@@ -343,6 +343,8 @@ interface PhaseCardProps {
   live: AnalysisLiveInfo | null;
   heartbeat?: { hb: AnalysisHeartbeat; receivedAt: number };
   throttle?: { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' };
+  /** Server-resolved model id per phase, populated from SSE phase events. */
+  serverModelByPhase?: Record<number, string>;
   isLocalAnalyzer: boolean;
   analysisStarted: boolean;
   conn: ConnState;
@@ -362,6 +364,7 @@ export function PhaseCard({
   live,
   heartbeat,
   throttle,
+  serverModelByPhase,
   isLocalAnalyzer,
   analysisStarted,
   conn,
@@ -413,7 +416,7 @@ export function PhaseCard({
           </p>
           {hasModelControls && (
             <div className="flex items-center gap-2 flex-wrap shrink-0">
-              <PhaseModelChip phaseId={p.id as 0 | 1} state={chipState} />
+              <PhaseModelChip phaseId={p.id as 0 | 1} state={chipState} serverModel={serverModelByPhase?.[p.id]} />
               <PhaseModelSwap phaseId={p.id as 0 | 1} isActive={isActive} />
             </div>
           )}

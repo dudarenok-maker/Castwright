@@ -156,7 +156,7 @@ export interface AnalyseOpts {
       working on the old request while the new one queues, manifesting
       to the user as cascading aborts in the server log. */
   signal?: AbortSignal;
-  onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo }) => void;
+  onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo; model?: string }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
       sentence counts) instead of canned snippets. */
@@ -1316,7 +1316,11 @@ async function mockAnalyseManuscript(
     await new Promise<void>((resolve) => {
       const t = setInterval(() => {
         const progress = Math.min(1, (Date.now() - start) / ph.durationMs);
-        onPhase?.({ phaseId: ph.id, progress });
+        /* Emit the server-resolved model on every phase tick so the chip
+           can mirror it. The mock uses qwen3.5:9b to exercise the
+           "server ran a different model than the UI default" path that
+           the e2e spec asserts in analysing-multi-model.spec.ts. */
+        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b' });
         if (progress >= 1) {
           clearInterval(t);
           resolve();
@@ -2364,7 +2368,12 @@ async function realAnalyseManuscript(
   const handle = (payload: AnalysisStreamEvent) => {
     if (payload.kind === 'phase') {
       if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
-        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress, live: payload.live });
+        onPhase?.({
+          phaseId: payload.phaseId,
+          progress: payload.progress,
+          live: payload.live,
+          model: typeof payload.model === 'string' ? payload.model : undefined,
+        });
       }
     } else if (payload.kind === 'log') {
       if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
@@ -3762,7 +3771,12 @@ async function realRunAnalysisForChapters(
   const handle = (payload: AnalysisStreamEvent) => {
     if (payload.kind === 'phase') {
       if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
-        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress, live: payload.live });
+        onPhase?.({
+          phaseId: payload.phaseId,
+          progress: payload.progress,
+          live: payload.live,
+          model: typeof payload.model === 'string' ? payload.model : undefined,
+        });
       }
     } else if (payload.kind === 'log') {
       if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {

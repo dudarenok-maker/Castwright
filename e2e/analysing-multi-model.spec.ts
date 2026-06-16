@@ -80,21 +80,22 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
     await expect(page.getByTestId('phase-model-chip-2')).toHaveCount(0);
   });
 
-  test('single-model (no split): both chips name the same model and Phase 1 shows no warm-up hint', async ({
+  test('single-model (no split): both chips name the server-reported model and Phase 1 shows no warm-up hint', async ({
     page,
   }) => {
     await bootFreshBookIntoAnalysing(page);
     await page.getByRole('button', { name: /Start analysis/i }).click();
     const phase1 = page.getByTestId('phase-model-chip-1');
     await expect(phase1).toBeVisible({ timeout: 5_000 });
-    /* No per-phase split is configured (fresh account), so both phases run
-       the single effective model — the mock default is Gemini 3.1 Flash Lite
-       (FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel). The old chip
-       fabricated "Gemma 4 31B" for Phase 0; plan 118 makes it honest. */
+    /* The mock analysis stream emits `model: 'qwen3.5:9b'` on every phase
+       event (Task 2 — the mock exercises the "server ran a different model
+       than the UI default" path). With Task 2 wired, the chip now prefers
+       the server-reported id over the Redux selection (Gemini 3.1 Flash Lite),
+       so both chips must show the 9B label once the SSE arrives. */
     await expect(page.getByTestId('phase-model-chip-0').first()).toContainText(
-      'Gemini 3.1 Flash Lite',
+      'Qwen3.5 9B (local)',
     );
-    await expect(phase1).toContainText('Gemini 3.1 Flash Lite');
+    await expect(phase1.first()).toContainText('Qwen3.5 9B (local)');
     /* And no false promise of a handoff that won't happen with the split off. */
     await expect(phase1).not.toContainText(/warms up/i);
   });
@@ -149,6 +150,22 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
        Resume button takes over. */
     await expect(page.getByTestId('sticky-pause-button')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Resume analysis/i })).toBeVisible();
+  });
+
+  test('chip shows the server-reported model label, not the Redux default', async ({ page }) => {
+    /* The mock analysis stream (mockAnalyseManuscript in src/lib/api.ts)
+       emits `model: 'qwen3.5:9b'` on every phase event.  The Redux default
+       for a fresh account is Gemini 3.1 Flash Lite.  Task 2 wires the chip
+       to prefer the server-reported model id over the Redux selection, so
+       once the first phase event arrives the chip must flip to the 9B label
+       rather than the UI's default. */
+    await bootFreshBookIntoAnalysing(page);
+    await page.getByRole('button', { name: /Start analysis/i }).click();
+    const chip0 = page.getByTestId('phase-model-chip-0').first();
+    await expect(chip0).toBeVisible({ timeout: 5_000 });
+    /* Server emitted qwen3.5:9b — chip must reflect that, not the Redux default. */
+    await expect(chip0).toContainText('Qwen3.5 9B (local)');
+    await expect(chip0).not.toContainText('Gemini');
   });
 
   test('Phase 0 model swap writes the saveAccountSettings patch + surfaces the toast', async ({

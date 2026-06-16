@@ -151,6 +151,10 @@ export function AnalysingView({
   const [throttleByPhase, setThrottleByPhase] = useState<
     Record<number, { until: number; model: string; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after' }>
   >({});
+  /* Server-resolved model id per phase — populated from the `model` field
+     on `kind: 'phase'` SSE events. Lets PhaseModelChip display what the
+     server ACTUALLY ran on rather than the client's Redux selection. */
+  const [serverModelByPhase, setServerModelByPhase] = useState<Record<number, string>>({});
   /* Server-refined total-remaining-ms. Null until the first chapter
      completes — then the heading swaps from the static describeSize
      string (Gemini-calibrated 22ms/word) to a value that reflects the
@@ -348,6 +352,7 @@ export function AnalysingView({
     setLastEventAt(null);
     setLive(null);
     setHeartbeatByPhase({});
+    setServerModelByPhase({});
     setRemainingMs(null);
     /* Clear castIncomplete on every re-entry so an old "paused" state
        doesn't linger when the user clicks Try again / Start fresh /
@@ -388,10 +393,13 @@ export function AnalysingView({
           model: requestModel,
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
-          onPhase: ({ phaseId, progress, live }) => {
+          onPhase: ({ phaseId, progress, live, model: serverModel }) => {
             if (cancelled) return;
             setConn('streaming');
             markEvent();
+            if (serverModel) {
+              setServerModelByPhase((prev) => ({ ...prev, [phaseId]: serverModel }));
+            }
             dispatch(
               analysisActions.applyAnalysisSnapshotTick({
                 manuscriptId,
@@ -1284,6 +1292,7 @@ export function AnalysingView({
               live={live}
               heartbeat={heartbeatByPhase[p.id]}
               throttle={throttleByPhase[p.id]}
+              serverModelByPhase={serverModelByPhase}
               isLocalAnalyzer={isLocalAnalyzer}
               analysisStarted={analysisStarted}
               conn={conn}
