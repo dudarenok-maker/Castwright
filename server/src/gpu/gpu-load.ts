@@ -30,7 +30,9 @@ export async function withGpuLoad<T>(loadFn: () => Promise<T>): Promise<T> {
     }
     await unloadResidentOllama();
     if (!(await verifyOllamaEvicted())) {
-      throw new GpuBusyError('Could not free GPU memory (analyzer still resident) — try again shortly.');
+      throw new GpuBusyError(
+        'Could not free GPU memory (analyzer still resident) — try again shortly.',
+      );
     }
     return loadFn();
   });

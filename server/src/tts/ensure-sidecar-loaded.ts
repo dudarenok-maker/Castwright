@@ -120,7 +120,9 @@ export async function ensureSidecarEngineReady(
       if (outcome.ready) return; // resolves the withGpuLoad callback; ensureSidecarEngineReady then returns void
       lastReason = outcome.reason;
       if (Date.now() >= deadline) {
-        console.warn(`[generation] preload ${engine}: not ready after ${timeoutMs}ms (last: ${lastReason}) — falling back to lazy load.`);
+        console.warn(
+          `[generation] preload ${engine}: not ready after ${timeoutMs}ms (last: ${lastReason}) — falling back to lazy load.`,
+        );
         return;
       }
       await sleep(pollIntervalMs, signal);
