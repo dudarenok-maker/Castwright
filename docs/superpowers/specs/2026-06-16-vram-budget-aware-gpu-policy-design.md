@@ -93,31 +93,52 @@ exists.
 ### 4.4 The two server-side hooks (this is the actual gap)
 Both points are **server-initiated**, so the eviction lives there — it does *not*
 need to hook the sidecar's lazy internal load:
-1. **Generation preload.** In `ensureSidecarEngineReady`, **once before the poll
-   loop** (not per attempt, `ensure-sidecar-loaded.ts:115`), if
-   `shouldEvictBeforeSidecarLoad(state)` → `unloadResidentOllama()` then proceed.
-2. **Voice design.** In `designQwenVoiceForCharacter`
-   (`qwen-voice.ts:270-316`), **before** the `/qwen/design-voice` fetch, run the
-   same evict. The sidecar then lazily loads VoiceDesign (~5 GB) into freed VRAM.
-   (The sidecar's own exclusion only evicts Kokoro, `main.py:1519`; Ollama is a
-   separate process only the server can evict.)
+Both wrap their load in `withGpuLoad(loadFn)` (§4.5), which evicts **all**
+resident Ollama models (`unloadResidentOllama()` with no targets — button-path
+parity, so a phase-env-resolved or quant-tagged resident isn't missed) and runs
+the load inside the lock:
+1. **Generation preload.** `ensureSidecarEngineReady` wraps its `/load` poll loop
+   in `withGpuLoad` (`ensure-sidecar-loaded.ts:115`).
+2. **Voice design.** `designQwenVoiceForCharacter` wraps the `/qwen/design-voice`
+   fetch in `withGpuLoad` (`qwen-voice.ts:270-316`). The sidecar then lazily
+   loads VoiceDesign (~5 GB) into freed VRAM. (The sidecar's own exclusion only
+   evicts Kokoro, `main.py:1519`; Ollama is a separate process only the server
+   can evict.)
 
-### 4.5 Atomicity (load-mutex, not the GpuSemaphore)
+### 4.5 Atomicity (evict + load in ONE critical section)
 The `GpuSemaphore` is a token FIFO around **execution**, not loads, and cannot
-evict (`semaphore.ts:55-103`). Evict-then-load must be atomic under a **new
-dedicated async mutex** (`gpuLoadMutex`) so two concurrent design/gen starts
-can't both evict then both overcommit. The token semaphore is unchanged and
-orthogonal.
+evict (`semaphore.ts:55-103`). A new dedicated async mutex (`gpuLoadMutex`) must
+wrap **evict + verify + the actual load together** — not just the evict. If the
+load runs after the lock releases, two concurrent starts each evict (serialized)
+then both load (concurrent) → overcommit. So the load chokepoints pass their
+load operation *into* the locked region (`withGpuLoad(loadFn)`). The mutex is
+engaged **only on a card that needs eviction** (`shouldEvictBeforeSidecarLoad`);
+on 12/16 GB / CPU the loads fit and run unserialized. The token semaphore is
+unchanged and orthogonal.
 
-### 4.6 In-flight analysis is non-evictable
-An analyzer model actively serving an analysis must not be evicted mid-run (that
-*is* the sawtooth, and would corrupt the run). In practice analysis and
-generation/design are **sequential pipeline phases**: assert "no sidecar
-TTS/design load is requested while an analysis job is active" via the existing
-`isAnyAnalysisBusy()` (`design-lock.ts:83`). That makes the evict-an-active-model
-case impossible by construction; the hooks in §4.4 only run post-analysis.
+### 4.6 Analysis-busy → REFUSE the load (not skip-and-proceed)
+`isAnyAnalysisBusy()` is **global** (`design-lock.ts:83`), and generation has
+**no** analysis-busy gate today — so a load on Book Y can be requested while
+analysis runs on Book X (or in a second session). The analyzer is actively
+resident during that analysis and must not be evicted (it would corrupt the
+run). On a card that can't coexist, the load therefore **cannot safely proceed**.
+`withGpuLoad` **refuses** it: if `shouldEvictBeforeSidecarLoad` AND
+`isAnyAnalysisBusy()` → throw `GpuBusyError`, which the generation/design routes
+surface as a 409 ("GPU busy with analysis — try again when it finishes"),
+mirroring the existing bulk cast-design 409 (`cast-design.ts:364`). The load is
+never started during analysis; the analyzer is never evicted mid-run. (Earlier
+drafts proposed *skipping* eviction while letting the load through — that was an
+OOM hole; refusing is the fix.)
 
-### 4.7 CPU residency guard
+### 4.7 Verify-then-load, fail-closed
+Ollama's `keep_alive:0` unload is asynchronous. After evicting, re-probe
+`/api/ps` (bounded retries); proceed only once the target is gone. On a
+constrained card, if eviction can't be confirmed, **refuse the load**
+(`GpuBusyError`) rather than load on top of a still-resident model. "Best-effort,
+proceed anyway" is only acceptable where coexistence was already safe (i.e.
+where no eviction was needed).
+
+### 4.8 CPU residency guard
 The flip added 9B to `RESIDENT_MODELS` unconditionally; on a CPU-only box that
 keeps ~6.4 GB warm in **RAM** for 5 min with no guard (RAM exhaustion is out of
 scope, but the flip *creates* the exposure). **Gate big-model residency on a

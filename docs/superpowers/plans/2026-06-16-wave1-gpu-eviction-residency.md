@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the already-done `qwen3.5:9b` `keep_alive: '5m'` flip safe by evicting a resident Ollama model server-side before any sidecar TTS/voice-design load, gated by a single VRAM threshold.
+**Goal:** Make the already-done `qwen3.5:9b` `keep_alive: '5m'` flip safe by evicting resident Ollama models server-side before any sidecar TTS/voice-design load — atomically (evict+load under one lock), evicting **all** residents, and **refusing** the load (409) when analysis is busy on a card that can't coexist.
 
-**Architecture:** A pure `residency` policy decides "evict before load?" from a cached VRAM state (last-known-good from sidecar `/health`, resilient to respawn). A shared `unloadResidentOllama()` (extracted from the `/unload` route) performs the eviction under a dedicated load-mutex, scoped to the configured analyzer model so concurrent sessions aren't stomped. Two server-side chokepoints call it: `ensureSidecarEngineReady` (generation/bulk) and `designQwenVoiceForCharacter` (voice design). An `isAnyAnalysisBusy()` interlock guarantees an in-flight analysis is never evicted.
+**Architecture:** A pure `residency` policy decides "evict before load?" from a cached VRAM state (last-known-good from sidecar `/health`, resilient to respawn). `withGpuLoad(loadFn)` is the single chokepoint: on a constrained card it takes a load-mutex, refuses if an analysis is in flight (`GpuBusyError` → 409), evicts **all** resident Ollama models, verifies they're gone (fail-closed), then runs the load **inside the lock**; on a roomy card / CPU it runs the load directly. Two call sites wrap their loads in it: `ensureSidecarEngineReady` (generation/bulk) and `designQwenVoiceForCharacter` (voice design).
 
-**Tech Stack:** TypeScript (Node ESM), Vitest (node env), Express routes, the existing config registry (`configValue`).
+**Tech Stack:** TypeScript (Node ESM), Vitest (node env), Express routes, the config registry (`configValue`).
 
-**Spec:** `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` (§4).
+**Spec:** `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` (§4). This plan was revised after a two-lens adversarial review of v1 — see §"Review fixes baked in" at the end.
 
-**Branch:** `git switch feat/analysing-residency-label-progress` then rename: `git branch -m fix/server-gpu-eviction-before-sidecar-load`. The keep_alive flip + its ollama tests already live here (uncommitted) and ship with this wave.
+**Branch:** `git switch feat/analysing-residency-label-progress` then `git branch -m fix/server-gpu-eviction-before-sidecar-load`. The keep_alive flip + its ollama tests already live here (uncommitted) and ship with this wave. **Keep the flip as the LAST commit** so it can be reverted independently if a post-merge OOM surfaces.
 
 ---
 
@@ -18,27 +18,31 @@
 
 **Files:**
 - Modify: `server/src/config/registry.ts` (the `gpu-lifecycle` group)
+- Reference: `server/src/config/types.ts` (the `ConfigKnob` shape — fields are `key`, `env`, `type`, `default`, `risk`, `apply`, `group`, `label`, `help`; numeric knobs may carry `min`)
 
 - [ ] **Step 1: Add the knob to the registry**
 
-Find the `gpu-lifecycle` group entries (search `gpu.vramBudget` / `gpu.concurrency`) and add an entry alongside them:
+Find the `gpu-lifecycle` entries (search `gpu.vramBudget`) and add, matching the existing `ConfigKnob` shape exactly:
 
 ```ts
 {
-  id: 'gpu.safeCoexistMb',
+  key: 'gpu.safeCoexistMb',
+  env: 'GPU_SAFE_COEXIST_MB',
   group: 'gpu-lifecycle',
   type: 'number',
   default: 11000,
-  label: 'Safe analyzer+TTS coexistence VRAM (MB)',
-  help: 'If detected GPU VRAM is below this, evict the resident Ollama analyzer before loading a sidecar TTS/voice-design model. 8 GB cards evict; 12/16 GB coexist. Set 0 to always evict.',
+  min: 0,
+  risk: 'high',
   apply: 'live',
+  label: 'Safe analyzer+TTS coexistence VRAM (MB)',
+  help: 'If detected GPU VRAM is below this, evict the resident Ollama analyzer before loading a sidecar TTS/voice-design model. 8 GB cards evict; 12/16 GB coexist. 0 = always evict.',
 },
 ```
 
 - [ ] **Step 2: Verify it resolves**
 
-Run: `cd server && npx vitest run src/config -t "registry"`
-Expected: PASS (existing registry-shape tests still green with the new entry).
+Run: `cd server && npx vitest run src/config`
+Expected: PASS — existing registry-shape tests stay green with the new entry; `configValue<number>('gpu.safeCoexistMb')` resolves to 11000 (or `GPU_SAFE_COEXIST_MB`).
 
 - [ ] **Step 3: Commit**
 
@@ -49,38 +53,36 @@ git commit -m "feat(server): add gpu.safeCoexistMb eviction-threshold knob"
 
 ---
 
-### Task 2: VRAM-state cache on sidecar health (resilient to respawn)
+### Task 2: VRAM-state module (cache + types), resilient to respawn
 
 **Files:**
-- Modify: `server/src/routes/sidecar-health.ts` (near `setLastKnownQwenInstallState`, ~line 244)
-- Test: `server/src/routes/sidecar-health.test.ts`
+- Create: `server/src/gpu/vram-state.ts` (own the `VramState`/`Accelerator` types + the cache, so neither the analyzer nor the policy has to import the heavy `routes/sidecar-health.ts` graph)
+- Modify: `server/src/routes/sidecar-health.ts` (populate the cache on a reachable probe, ~line 244)
+- Test: `server/src/gpu/vram-state.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest';
-import { setLastKnownVram, getLastKnownVram } from './sidecar-health.js';
+import { setLastKnownVram, getLastKnownVram } from './vram-state.js';
 
 describe('last-known VRAM cache', () => {
   beforeEach(() => setLastKnownVram(null)); // reset to "never probed"
 
-  it('defaults to unknown accelerator / null total before any probe', () => {
+  it('defaults to unknown / null before any probe', () => {
     expect(getLastKnownVram()).toEqual({ accelerator: 'unknown', totalMb: null });
   });
-
-  it('records a CUDA total and exposes accelerator cuda', () => {
+  it('records a CUDA total as accelerator cuda', () => {
     setLastKnownVram({ totalMb: 8188 });
     expect(getLastKnownVram()).toEqual({ accelerator: 'cuda', totalMb: 8188 });
   });
-
   it('records a reachable-but-no-CUDA probe as cpu', () => {
     setLastKnownVram({ totalMb: null });
     expect(getLastKnownVram()).toEqual({ accelerator: 'cpu', totalMb: null });
   });
-
   it('an unreachable poll (undefined) leaves the last-known state intact', () => {
     setLastKnownVram({ totalMb: 8188 });
-    setLastKnownVram(undefined); // unreachable — do not downgrade
+    setLastKnownVram(undefined);
     expect(getLastKnownVram()).toEqual({ accelerator: 'cuda', totalMb: 8188 });
   });
 });
@@ -88,14 +90,13 @@ describe('last-known VRAM cache', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/routes/sidecar-health.test.ts -t "last-known VRAM"`
-Expected: FAIL — `setLastKnownVram`/`getLastKnownVram` are not exported.
+Run: `cd server && npx vitest run src/gpu/vram-state.test.ts`
+Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement the cache**
-
-Add near `setLastKnownQwenInstallState` in `sidecar-health.ts`:
+- [ ] **Step 3: Implement the module**
 
 ```ts
+// server/src/gpu/vram-state.ts
 export type Accelerator = 'cuda' | 'cpu' | 'unknown';
 export interface VramState {
   accelerator: Accelerator;
@@ -104,15 +105,13 @@ export interface VramState {
 
 /* Last-known VRAM, mirroring the Qwen-install-state cache: only a REACHABLE
    probe updates it, so a transient sidecar respawn (when eviction must still
-   make a decision) doesn't downgrade a known-good reading. `null` = reset to
-   "never probed"; `undefined` = unreachable poll (no-op). CUDA presence is
-   inferred from a non-null vram_total_mb (the sidecar reports it iff CUDA). */
+   decide) doesn't downgrade a known-good reading. `null` resets to "never
+   probed"; `undefined` is an unreachable poll (no-op). CUDA presence is inferred
+   from a non-null vram_total_mb (the sidecar reports it iff CUDA). */
 let lastKnownVram: VramState = { accelerator: 'unknown', totalMb: null };
 
-export function setLastKnownVram(
-  next: { totalMb: number | null } | null | undefined,
-): void {
-  if (next === undefined) return; // unreachable — keep last-known
+export function setLastKnownVram(next: { totalMb: number | null } | null | undefined): void {
+  if (next === undefined) return;
   if (next === null) {
     lastKnownVram = { accelerator: 'unknown', totalMb: null };
     return;
@@ -130,8 +129,11 @@ export function getLastKnownVram(): VramState {
 
 - [ ] **Step 4: Populate it on a reachable probe**
 
-In `probeSidecarHealth`, immediately after `setLastKnownQwenInstallState(qwenInstallState);` (line ~244):
-
+In `sidecar-health.ts` add the import at the top:
+```ts
+import { setLastKnownVram } from '../gpu/vram-state.js';
+```
+and immediately after `setLastKnownQwenInstallState(qwenInstallState);` (line ~244):
 ```ts
 setLastKnownVram({
   totalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
@@ -140,14 +142,14 @@ setLastKnownVram({
 
 - [ ] **Step 5: Run tests to verify pass**
 
-Run: `cd server && npx vitest run src/routes/sidecar-health.test.ts`
-Expected: PASS (new cache tests + existing health tests).
+Run: `cd server && npx vitest run src/gpu/vram-state.test.ts src/routes/sidecar-health.test.ts`
+Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/routes/sidecar-health.ts server/src/routes/sidecar-health.test.ts
-git commit -m "feat(server): cache last-known GPU VRAM state from sidecar health"
+git add server/src/gpu/vram-state.ts server/src/gpu/vram-state.test.ts server/src/routes/sidecar-health.ts
+git commit -m "feat(server): last-known GPU VRAM state cache (gpu/vram-state)"
 ```
 
 ---
@@ -161,32 +163,22 @@ git commit -m "feat(server): cache last-known GPU VRAM state from sidecar health
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('../config/resolver.js', () => ({
-  configValue: vi.fn(() => 11000), // gpu.safeCoexistMb default
-}));
-
+import { describe, it, expect, vi } from 'vitest';
+vi.mock('../config/resolver.js', () => ({ configValue: vi.fn(() => 11000) }));
 import { shouldEvictBeforeSidecarLoad } from './residency.js';
 
 describe('shouldEvictBeforeSidecarLoad', () => {
-  it('CPU never evicts (no VRAM contention)', () => {
+  it('CPU never evicts', () => {
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cpu', totalMb: null })).toBe(false);
   });
-
-  it('GPU with unknown total is conservative — evict', () => {
+  it('GPU unknown total → evict (conservative)', () => {
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: null })).toBe(true);
   });
-
-  it('accelerator unknown (never probed) is conservative — evict', () => {
+  it('accelerator unknown (never probed) → evict (conservative)', () => {
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'unknown', totalMb: null })).toBe(true);
   });
-
-  it('8 GB card (below threshold) evicts', () => {
+  it('8 GB evicts; 12/16 GB coexist', () => {
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 8188 })).toBe(true);
-  });
-
-  it('12 GB and 16 GB cards coexist (no evict)', () => {
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 12288 })).toBe(false);
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 16384 })).toBe(false);
   });
@@ -203,15 +195,11 @@ Expected: FAIL — module not found.
 ```ts
 // server/src/gpu/residency.ts
 import { configValue } from '../config/resolver.js';
-import type { VramState } from '../routes/sidecar-health.js';
+import type { VramState } from './vram-state.js';
 
-/** Should a resident Ollama analyzer be evicted before loading a sidecar
-    TTS/voice-design model, given the detected VRAM?
-    - CPU: never (models share system RAM; no GPU to overflow).
-    - GPU, total unknown / never probed: yes (conservative — better a reload
-      than an OOM).
-    - GPU with a known total below `gpu.safeCoexistMb`: yes (8 GB can't host
-      analyzer + TTS together). At/above it: no (12/16 GB coexist). */
+/** Evict a resident Ollama analyzer before loading a sidecar TTS/voice-design
+    model? CPU: never. GPU with unknown/never-probed total: yes (conservative).
+    GPU below `gpu.safeCoexistMb`: yes; at/above: no (12/16 GB coexist). */
 export function shouldEvictBeforeSidecarLoad(v: VramState): boolean {
   if (v.accelerator === 'cpu') return false;
   if (v.totalMb == null) return true;
@@ -228,65 +216,82 @@ Expected: PASS.
 
 ```bash
 git add server/src/gpu/residency.ts server/src/gpu/residency.test.ts
-git commit -m "feat(server): VRAM-threshold residency policy (shouldEvictBeforeSidecarLoad)"
+git commit -m "feat(server): VRAM-threshold residency policy"
 ```
 
 ---
 
-### Task 4: Extract `unloadResidentOllama` and reuse it in the route
+### Task 4: `unloadResidentOllama` (evict ALL) + `verifyOllamaEvicted`
 
 **Files:**
-- Modify: `server/src/routes/ollama-health.ts` (the `POST /unload` handler, ~lines 282-301)
-- Test: `server/src/routes/ollama-health.test.ts` (existing `/unload` describe block, ~line 225)
+- Modify: `server/src/routes/ollama-health.ts` (extract from `POST /unload`, ~lines 282-301; reuse `probeOllamaHealth().resident`, `callOllamaGenerate`, `PROBE_TIMEOUT_MS`, `getResolvedOllamaUrl`)
+- Test: `server/src/routes/ollama-health.test.ts` (the `/unload` describe, ~line 225)
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the existing `/unload` describe in `ollama-health.test.ts`:
-
 ```ts
-it('exposes unloadResidentOllama() that evicts the named targets with keep_alive: 0', async () => {
-  const fetchMock = vi.fn().mockResolvedValue(okResponse('{}')); // reuse the file's helpers
-  vi.stubGlobal('fetch', fetchMock);
+it('unloadResidentOllama() with no targets evicts EVERY resident with keep_alive: 0', async () => {
+  // probeOllamaHealth reports two residents; the helper must evict both.
+  fetchMock.mockImplementation(async (url: string) => {
+    if (String(url).endsWith('/api/ps')) {
+      return new Response(JSON.stringify({ models: [{ name: 'qwen3.5:9b' }, { name: 'llama3.1:8b' }] }), { status: 200 });
+    }
+    return new Response('', { status: 200 }); // /api/generate unload
+  });
   const { unloadResidentOllama } = await import('./ollama-health.js');
-  await unloadResidentOllama(['qwen3.5:9b']);
-  const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-  expect(body.model).toBe('qwen3.5:9b');
-  expect(body.keep_alive).toBe(0);
+  const evicted = await unloadResidentOllama();
+  expect(evicted.sort()).toEqual(['llama3.1:8b', 'qwen3.5:9b']);
+});
+
+it('verifyOllamaEvicted() resolves true once /api/ps no longer lists the target', async () => {
+  let calls = 0;
+  fetchMock.mockImplementation(async () => {
+    calls += 1;
+    const models = calls === 1 ? [{ name: 'qwen3.5:9b' }] : []; // gone on the 2nd probe
+    return new Response(JSON.stringify({ models }), { status: 200 });
+  });
+  const { verifyOllamaEvicted } = await import('./ollama-health.js');
+  await expect(verifyOllamaEvicted({ retries: 3, delayMs: 1 })).resolves.toBe(true);
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/routes/ollama-health.test.ts -t "unloadResidentOllama"`
-Expected: FAIL — `unloadResidentOllama` not exported.
+Run: `cd server && npx vitest run src/routes/ollama-health.test.ts -t "unloadResidentOllama|verifyOllamaEvicted"`
+Expected: FAIL — neither is exported.
 
-- [ ] **Step 3: Extract the helper**
-
-In `ollama-health.ts`, add an exported function and have the route call it:
+- [ ] **Step 3: Implement**
 
 ```ts
-/** Evict resident Ollama model(s) by issuing keep_alive:0 generate calls.
-    `targets` empty/omitted → evict EVERY model /api/ps reports (the explicit
-    Stop path). Returns the list actually evicted. Throws on the first failed
-    eviction so callers can surface it. */
+/** Evict resident Ollama model(s) via keep_alive:0 generate calls. Empty/omitted
+    `targets` → evict EVERY model /api/ps reports (the safe default: a phase-env
+    or quant-tagged resident won't be missed; matches the /unload-all route).
+    Returns the list evicted. Throws on the first failed eviction. */
 export async function unloadResidentOllama(targets?: string[]): Promise<string[]> {
   const url = getResolvedOllamaUrl();
-  const list =
-    targets && targets.length > 0 ? targets : (await probeOllamaHealth()).resident ?? [];
+  const list = targets && targets.length > 0 ? targets : (await probeOllamaHealth()).resident ?? [];
   for (const model of list) {
-    const result = await callOllamaGenerate(
-      url,
-      { model, prompt: '', keep_alive: 0, stream: false },
-      PROBE_TIMEOUT_MS,
-    );
+    const result = await callOllamaGenerate(url, { model, prompt: '', keep_alive: 0, stream: false }, PROBE_TIMEOUT_MS);
     if (!result.ok) throw new Error(result.error ?? `unload ${model} failed`);
   }
   return list;
 }
+
+/** Poll /api/ps until no model remains resident (Ollama unloads asynchronously).
+    Returns true when clear; false if still resident after the retries. */
+export async function verifyOllamaEvicted(opts: { retries?: number; delayMs?: number } = {}): Promise<boolean> {
+  const retries = opts.retries ?? 5;
+  const delayMs = opts.delayMs ?? 400;
+  for (let i = 0; i < retries; i += 1) {
+    const resident = (await probeOllamaHealth()).resident ?? [];
+    if (resident.length === 0) return true;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return ((await probeOllamaHealth()).resident ?? []).length === 0;
+}
 ```
 
-Replace the body of the `POST /unload` handler to delegate:
-
+Replace the `POST /unload` handler body to delegate:
 ```ts
 ollamaHealthRouter.post('/unload', async (req: Request, res: Response) => {
   const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
@@ -302,103 +307,100 @@ ollamaHealthRouter.post('/unload', async (req: Request, res: Response) => {
 - [ ] **Step 4: Run tests to verify pass**
 
 Run: `cd server && npx vitest run src/routes/ollama-health.test.ts`
-Expected: PASS (new test + the existing single/all/error eviction tests).
+Expected: PASS (new tests + existing single/all/error eviction tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/routes/ollama-health.ts server/src/routes/ollama-health.test.ts
-git commit -m "refactor(server): extract unloadResidentOllama() shared eviction helper"
+git commit -m "refactor(server): unloadResidentOllama (evict-all) + verifyOllamaEvicted"
 ```
 
 ---
 
-### Task 5: Load-mutex + the `evictOllamaForGpuLoad` orchestrator
+### Task 5: `withGpuLoad` orchestrator + load-mutex + `GpuBusyError`
 
 **Files:**
 - Create: `server/src/gpu/load-mutex.ts`
-- Create: `server/src/gpu/evict-for-load.ts`
-- Test: `server/src/gpu/evict-for-load.test.ts`
+- Create: `server/src/gpu/gpu-load.ts`
+- Test: `server/src/gpu/gpu-load.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const unloadMock = vi.fn().mockResolvedValue(['qwen3.5:9b']);
+const unloadMock = vi.fn(async () => ['qwen3.5:9b']);
+const verifyMock = vi.fn(async () => true);
 const vramMock = vi.fn();
-const busyMock = vi.fn().mockReturnValue(false);
+const busyMock = vi.fn(() => false);
+const shouldEvictMock = vi.fn((v: { totalMb: number | null }) => v.totalMb != null && v.totalMb < 11000);
 
-vi.mock('../routes/ollama-health.js', () => ({ unloadResidentOllama: unloadMock }));
-vi.mock('../routes/sidecar-health.js', () => ({ getLastKnownVram: vramMock }));
+vi.mock('../routes/ollama-health.js', () => ({ unloadResidentOllama: unloadMock, verifyOllamaEvicted: verifyMock }));
+vi.mock('./vram-state.js', () => ({ getLastKnownVram: vramMock }));
 vi.mock('../tts/design-lock.js', () => ({ isAnyAnalysisBusy: busyMock }));
-vi.mock('../workspace/user-settings.js', () => ({
-  getResolvedOllamaModel: () => 'qwen3.5:9b',
-}));
-vi.mock('./residency.js', () => ({
-  shouldEvictBeforeSidecarLoad: (v: { totalMb: number | null }) =>
-    v.totalMb != null && v.totalMb < 11000,
-}));
+vi.mock('./residency.js', () => ({ shouldEvictBeforeSidecarLoad: shouldEvictMock }));
 
-import { evictOllamaForGpuLoad } from './evict-for-load.js';
+import { withGpuLoad, GpuBusyError } from './gpu-load.js';
 
-describe('evictOllamaForGpuLoad', () => {
-  beforeEach(() => {
-    unloadMock.mockClear();
-    busyMock.mockReturnValue(false);
-  });
+beforeEach(() => {
+  unloadMock.mockClear(); verifyMock.mockClear(); busyMock.mockReturnValue(false); verifyMock.mockResolvedValue(true);
+});
 
-  it('evicts the configured analyzer model on an 8 GB card', async () => {
+describe('withGpuLoad', () => {
+  it('on 8 GB: evicts, verifies, then runs the load (in that order)', async () => {
     vramMock.mockReturnValue({ accelerator: 'cuda', totalMb: 8188 });
-    await evictOllamaForGpuLoad();
-    expect(unloadMock).toHaveBeenCalledWith(['qwen3.5:9b']);
+    const order: string[] = [];
+    unloadMock.mockImplementationOnce(async () => { order.push('evict'); return ['qwen3.5:9b']; });
+    verifyMock.mockImplementationOnce(async () => { order.push('verify'); return true; });
+    const out = await withGpuLoad(async () => { order.push('load'); return 'ok'; });
+    expect(out).toBe('ok');
+    expect(order).toEqual(['evict', 'verify', 'load']);
   });
 
-  it('does NOT evict on a 12 GB card (coexist)', async () => {
+  it('on 12 GB: runs the load directly, no eviction', async () => {
     vramMock.mockReturnValue({ accelerator: 'cuda', totalMb: 12288 });
-    await evictOllamaForGpuLoad();
+    const out = await withGpuLoad(async () => 'ok');
+    expect(out).toBe('ok');
     expect(unloadMock).not.toHaveBeenCalled();
   });
 
-  it('does NOT evict while an analysis is in flight (interlock)', async () => {
+  it('REFUSES with GpuBusyError when analysis is busy on a constrained card (no load)', async () => {
     vramMock.mockReturnValue({ accelerator: 'cuda', totalMb: 8188 });
     busyMock.mockReturnValue(true);
-    await evictOllamaForGpuLoad();
+    const load = vi.fn();
+    await expect(withGpuLoad(load as never)).rejects.toBeInstanceOf(GpuBusyError);
+    expect(load).not.toHaveBeenCalled();
     expect(unloadMock).not.toHaveBeenCalled();
   });
 
-  it('never throws if eviction fails (best-effort — a load must still proceed)', async () => {
+  it('fail-closed: if eviction cannot be verified, throws and does NOT load', async () => {
     vramMock.mockReturnValue({ accelerator: 'cuda', totalMb: 8188 });
-    unloadMock.mockRejectedValueOnce(new Error('ollama down'));
-    await expect(evictOllamaForGpuLoad()).resolves.toBeUndefined();
+    verifyMock.mockResolvedValue(false);
+    const load = vi.fn();
+    await expect(withGpuLoad(load as never)).rejects.toBeInstanceOf(GpuBusyError);
+    expect(load).not.toHaveBeenCalled();
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/gpu/evict-for-load.test.ts`
+Run: `cd server && npx vitest run src/gpu/gpu-load.test.ts`
 Expected: FAIL — modules not found.
 
 - [ ] **Step 3: Implement the load-mutex**
 
 ```ts
 // server/src/gpu/load-mutex.ts
-/* Serialises evict-then-load sequences. The GpuSemaphore arbitrates EXECUTION
-   (token budget around /chat and /synthesize); it neither knows about nor
-   serialises model LOADS. Two concurrent generation/design starts could each
-   read "fits", then both load and overcommit. This mutex makes the
-   evict→load decision atomic. Distinct from, and orthogonal to, the token
-   semaphore. */
+/* Serialises evict+load sequences. The GpuSemaphore arbitrates EXECUTION (token
+   budget around /chat and /synthesize); it neither knows about nor serialises
+   model LOADS. This mutex makes evict→verify→load atomic so two concurrent
+   starts can't both evict then both load and overcommit. */
 let tail: Promise<unknown> = Promise.resolve();
-
 export function withGpuLoadLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = tail.then(fn, fn);
-  // Keep the chain alive regardless of fn's outcome; swallow to avoid unhandled.
-  tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
+  tail = run.then(() => undefined, () => undefined);
   return run;
 }
 ```
@@ -406,153 +408,216 @@ export function withGpuLoadLock<T>(fn: () => Promise<T>): Promise<T> {
 - [ ] **Step 4: Implement the orchestrator**
 
 ```ts
-// server/src/gpu/evict-for-load.ts
-import { getLastKnownVram } from '../routes/sidecar-health.js';
-import { unloadResidentOllama } from '../routes/ollama-health.js';
-import { isAnyAnalysisBusy } from '../tts/design-lock.js';
-import { getResolvedOllamaModel } from '../workspace/user-settings.js';
+// server/src/gpu/gpu-load.ts
+import { getLastKnownVram } from './vram-state.js';
 import { shouldEvictBeforeSidecarLoad } from './residency.js';
 import { withGpuLoadLock } from './load-mutex.js';
+import { unloadResidentOllama, verifyOllamaEvicted } from '../routes/ollama-health.js';
+import { isAnyAnalysisBusy } from '../tts/design-lock.js';
 
-/** Best-effort: before a server-initiated sidecar TTS/voice-design load, free a
-    resident Ollama analyzer if the card can't host both. No-op on CPU / big
-    cards / when an analysis is in flight (it must not be evicted; analysis and
-    generation are sequential pipeline phases). Scoped to the configured
-    analyzer model so a concurrent session's different model isn't stomped.
-    Never throws — a failed eviction must not block the load it precedes. */
-export async function evictOllamaForGpuLoad(): Promise<void> {
-  if (isAnyAnalysisBusy()) return;
-  if (!shouldEvictBeforeSidecarLoad(getLastKnownVram())) return;
-  await withGpuLoadLock(async () => {
-    try {
-      await unloadResidentOllama([getResolvedOllamaModel()]);
-    } catch (e) {
-      console.warn(`[gpu] pre-load Ollama eviction failed (continuing): ${(e as Error).message}`);
+/** Thrown when a sidecar TTS/voice-design load cannot proceed on a card that
+    can't coexist — because an analysis is in flight, or eviction couldn't be
+    confirmed. Routes map it to HTTP 409. */
+export class GpuBusyError extends Error {
+  readonly code = 'GPU_BUSY';
+  constructor(message: string) {
+    super(message);
+    this.name = 'GpuBusyError';
+  }
+}
+
+/** Run a sidecar model load safely w.r.t. the resident Ollama analyzer.
+    - Roomy card / CPU: run the load directly (it fits; no serialisation needed).
+    - Constrained card: under the load-mutex — refuse if analysis is busy
+      (would have to evict an active analyzer), else evict ALL residents, verify
+      they're gone (fail-closed), then run the load INSIDE the lock. */
+export async function withGpuLoad<T>(loadFn: () => Promise<T>): Promise<T> {
+  if (!shouldEvictBeforeSidecarLoad(getLastKnownVram())) {
+    return loadFn();
+  }
+  return withGpuLoadLock(async () => {
+    if (isAnyAnalysisBusy()) {
+      throw new GpuBusyError('GPU busy with analysis — try again once it finishes.');
     }
+    await unloadResidentOllama();
+    if (!(await verifyOllamaEvicted())) {
+      throw new GpuBusyError('Could not free GPU memory (analyzer still resident) — try again shortly.');
+    }
+    return loadFn();
   });
 }
 ```
 
 - [ ] **Step 5: Run tests to verify pass**
 
-Run: `cd server && npx vitest run src/gpu/evict-for-load.test.ts`
+Run: `cd server && npx vitest run src/gpu/gpu-load.test.ts`
 Expected: PASS (all four cases).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/gpu/load-mutex.ts server/src/gpu/evict-for-load.ts server/src/gpu/evict-for-load.test.ts
-git commit -m "feat(server): evictOllamaForGpuLoad orchestrator + GPU load-mutex"
+git add server/src/gpu/load-mutex.ts server/src/gpu/gpu-load.ts server/src/gpu/gpu-load.test.ts
+git commit -m "feat(server): withGpuLoad — atomic evict+verify+load with refuse-on-busy"
 ```
 
 ---
 
-### Task 6: Hook the generation/bulk preload (`ensureSidecarEngineReady`)
+### Task 6: Wrap the generation preload in `withGpuLoad`
 
 **Files:**
-- Modify: `server/src/tts/ensure-sidecar-loaded.ts` (`ensureSidecarEngineReady`, before the `for (;;)` loop, ~line 113)
+- Modify: `server/src/tts/ensure-sidecar-loaded.ts` (`ensureSidecarEngineReady`, wrap the poll loop, after the early returns ~line 107)
+- Modify: `server/src/routes/generation.ts` (the worker that calls `ensureSidecarEngineReady`, ~line 1103 — surface `GpuBusyError` as a clean refusal, not a breaker-tripping crash)
 - Test: `server/src/tts/ensure-sidecar-loaded.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-it('evicts a resident Ollama model BEFORE the first /load poll', async () => {
-  const calls: string[] = [];
-  const evictMock = vi.fn(async () => { calls.push('evict'); });
-  vi.doMock('../gpu/evict-for-load.js', () => ({ evictOllamaForGpuLoad: evictMock }));
-  vi.stubGlobal('fetch', vi.fn(async () => { calls.push('load'); return okJson({ status: 'ready' }); }));
+it('wraps the load in withGpuLoad (eviction precedes the first /load on a constrained card)', async () => {
+  const order: string[] = [];
+  vi.doMock('../gpu/gpu-load.js', () => ({
+    withGpuLoad: async (fn: () => Promise<unknown>) => { order.push('gpu-load-gate'); return fn(); },
+    GpuBusyError: class extends Error {},
+  }));
+  vi.stubGlobal('fetch', vi.fn(async () => { order.push('load'); return { ok: true, json: async () => ({ status: 'ready' }) }; }));
   const { ensureSidecarEngineReady } = await import('./ensure-sidecar-loaded.js');
   await ensureSidecarEngineReady('qwen', undefined, { timeoutMs: 1000, pollIntervalMs: 10 });
-  expect(evictMock).toHaveBeenCalledTimes(1);
-  expect(calls[0]).toBe('evict'); // eviction precedes the first load
+  expect(order[0]).toBe('gpu-load-gate'); // gate wraps the load
+  expect(order).toContain('load');
 });
 
-it('does NOT evict for a cloud / non-sidecar engine', async () => {
-  const evictMock = vi.fn();
-  vi.doMock('../gpu/evict-for-load.js', () => ({ evictOllamaForGpuLoad: evictMock }));
+it('does NOT engage the gate for a cloud / non-sidecar engine', async () => {
+  const gate = vi.fn(async (fn: () => Promise<unknown>) => fn());
+  vi.doMock('../gpu/gpu-load.js', () => ({ withGpuLoad: gate, GpuBusyError: class extends Error {} }));
   const { ensureSidecarEngineReady } = await import('./ensure-sidecar-loaded.js');
   await ensureSidecarEngineReady('gemini' as never);
-  expect(evictMock).not.toHaveBeenCalled();
+  expect(gate).not.toHaveBeenCalled();
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/tts/ensure-sidecar-loaded.test.ts -t "evicts a resident"`
-Expected: FAIL — no eviction call happens today.
+Run: `cd server && npx vitest run src/tts/ensure-sidecar-loaded.test.ts -t "withGpuLoad"`
+Expected: FAIL — no gate today.
 
-- [ ] **Step 3: Implement the hook**
+- [ ] **Step 3: Wrap the loop**
 
-In `ensureSidecarEngineReady`, after the `if (!SIDECAR_ENGINES.has(engine)) return;` guard and before computing `target`/the loop:
+In `ensureSidecarEngineReady`, after `if (!SIDECAR_ENGINES.has(engine)) return;` and `if (signal?.aborted) throw …;`, wrap the existing readiness loop. Move the `for (;;) { … }` into a `withGpuLoad` callback:
 
 ```ts
-const { evictOllamaForGpuLoad } = await import('../gpu/evict-for-load.js');
-await evictOllamaForGpuLoad(); // once, before polling /load (not per attempt)
+const { withGpuLoad } = await import('../gpu/gpu-load.js');
+await withGpuLoad(async () => {
+  const target = `${getResolvedSidecarUrl()}/load`;
+  const deadline = Date.now() + (opts.timeoutMs ?? READINESS_TIMEOUT_MS);
+  const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
+  let lastReason = 'unknown';
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
+    const outcome = await tryLoadOnce(target, engine, signal);
+    if (outcome.ready) return;
+    lastReason = outcome.reason;
+    if (Date.now() >= deadline) {
+      console.warn(`[generation] preload ${engine}: not ready after budget (last: ${lastReason}) — falling back to lazy load.`);
+      return;
+    }
+    await sleep(pollIntervalMs, signal);
+  }
+});
 ```
 
-(Place it after the early returns so cloud engines and an already-aborted signal skip it; the dynamic import keeps the gpu module out of the cloud path.)
+(The whole load is now inside the lock on a constrained card; `withGpuLoad` may throw `GpuBusyError` — let it propagate.)
 
-- [ ] **Step 4: Run tests to verify pass**
+- [ ] **Step 4: Handle GpuBusyError at the generation worker**
+
+At the `await ensureSidecarEngineReady(engine, chapterSignal);` call sites in `generation.ts` (lines ~1103/1121/1329), wrap so a `GpuBusyError` fails the chapter with a clear, non-retryable message rather than tripping the consecutive-failure breaker:
+
+```ts
+try {
+  await ensureSidecarEngineReady(engine, chapterSignal);
+} catch (e) {
+  const { GpuBusyError } = await import('../gpu/gpu-load.js');
+  if (e instanceof GpuBusyError) {
+    throw new Error(`Generation paused: ${e.message}`); // surfaced to the user; analysis must finish first
+  }
+  throw e;
+}
+```
+
+- [ ] **Step 5: Run tests to verify pass**
 
 Run: `cd server && npx vitest run src/tts/ensure-sidecar-loaded.test.ts`
-Expected: PASS (eviction-precedes-load + cloud-skips + existing readiness tests).
+Expected: PASS (gate-wraps-load + cloud-skips + existing readiness tests).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/tts/ensure-sidecar-loaded.ts server/src/tts/ensure-sidecar-loaded.test.ts
-git commit -m "feat(server): evict resident Ollama before the generation preload /load"
+git add server/src/tts/ensure-sidecar-loaded.ts server/src/tts/ensure-sidecar-loaded.test.ts server/src/routes/generation.ts
+git commit -m "feat(server): gate the generation preload through withGpuLoad"
 ```
 
 ---
 
-### Task 7: Hook the voice-design path (`designQwenVoiceForCharacter`)
+### Task 7: Wrap voice design in `withGpuLoad` + map `GpuBusyError` → 409
 
 **Files:**
-- Modify: `server/src/routes/qwen-voice.ts` (inside `withDesignLock`, before the `/qwen/design-voice` fetch, ~line 271)
-- Test: `server/src/routes/qwen-voice.test.ts`
+- Modify: `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter`, wrap the design fetch inside `withDesignLock`, ~line 270)
+- Modify: the route that calls `designQwenVoiceForCharacter` (search `design-voice` route handler in `qwen-voice.ts`) — map `GpuBusyError` → HTTP 409
+- Test: `server/src/routes/qwen-voice.test.ts` (route-level — the suite is `request(app).post(...)`)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test (through the route, matching the suite's style)**
 
 ```ts
-it('evicts a resident Ollama model before the design fetch', async () => {
-  const order: string[] = [];
-  const evictMock = vi.fn(async () => { order.push('evict'); });
-  vi.doMock('../gpu/evict-for-load.js', () => ({ evictOllamaForGpuLoad: evictMock }));
-  vi.stubGlobal('fetch', vi.fn(async () => { order.push('design'); return okJson({ voiceId: 'v', url: 'u' }); }));
-  const { designQwenVoiceForCharacter } = await import('./qwen-voice.js');
-  await designQwenVoiceForCharacter(/* minimal valid params per the existing suite's helper */);
-  expect(evictMock).toHaveBeenCalledTimes(1);
-  expect(order[0]).toBe('evict');
+it('returns 409 when analysis is busy on a constrained card (GPU busy)', async () => {
+  vi.doMock('../gpu/gpu-load.js', () => ({
+    withGpuLoad: async () => { const { GpuBusyError } = await import('../gpu/gpu-load.js'); throw new GpuBusyError('GPU busy with analysis — try again once it finishes.'); },
+    GpuBusyError: class GpuBusyError extends Error { code = 'GPU_BUSY'; },
+  }));
+  const app = await freshApp(); // the suite's app factory
+  const res = await request(app).post('/api/books/demo/cast/maerin/design-voice').send({ persona: 'warm' });
+  expect(res.status).toBe(409);
+  expect(res.body.error).toMatch(/GPU busy/i);
 });
 ```
 
-(Reuse the file's existing param/fixture helper for `DesignQwenVoiceParams`; mock `withDesignLock` to invoke its callback if the suite already does.)
+(If `withGpuLoad` is hard to mock through the route, instead assert the route's error mapping directly: make `designQwenVoiceForCharacter` reject with `GpuBusyError` via the mock and assert the handler's `catch` returns 409. Use whichever the suite's existing structure supports — do NOT leave this as a placeholder; the suite already builds `app` and posts design requests.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/routes/qwen-voice.test.ts -t "evicts a resident"`
-Expected: FAIL — no eviction before the design fetch.
+Run: `cd server && npx vitest run src/routes/qwen-voice.test.ts -t "GPU busy"`
+Expected: FAIL — no gate / no 409 mapping yet.
 
-- [ ] **Step 3: Implement the hook**
+- [ ] **Step 3: Wrap the design fetch**
 
-Inside the `withDesignLock(p.bookDir, async () => { ... })` callback, as the FIRST statement (before `gpuSemaphore.acquire`):
+Inside `withDesignLock(p.bookDir, async () => { … })`, wrap from the `gpuSemaphore.acquire` through the design fetch in `withGpuLoad`:
 
 ```ts
-const { evictOllamaForGpuLoad } = await import('../gpu/evict-for-load.js');
-await evictOllamaForGpuLoad(); // free VRAM before the sidecar lazily loads VoiceDesign (~5 GB)
+const { withGpuLoad } = await import('../gpu/gpu-load.js');
+return withGpuLoad(async () => {
+  const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
+  // … existing body through the /qwen/design-voice fetch and PCM encode …
+});
 ```
 
-- [ ] **Step 4: Run tests to verify pass**
+- [ ] **Step 4: Map the error at the route**
+
+In the `design-voice` route handler's `catch`, add before the generic 500:
+
+```ts
+const { GpuBusyError } = await import('../gpu/gpu-load.js');
+if (err instanceof GpuBusyError) {
+  return res.status(409).json({ error: err.message, code: 'gpu_busy' });
+}
+```
+
+- [ ] **Step 5: Run tests to verify pass**
 
 Run: `cd server && npx vitest run src/routes/qwen-voice.test.ts`
-Expected: PASS (eviction-precedes-design + existing design tests).
+Expected: PASS (new 409 test + existing design tests).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add server/src/routes/qwen-voice.ts server/src/routes/qwen-voice.test.ts
-git commit -m "feat(server): evict resident Ollama before voice-design loads VoiceDesign"
+git commit -m "feat(server): gate voice design through withGpuLoad (409 when GPU busy)"
 ```
 
 ---
@@ -560,22 +625,18 @@ git commit -m "feat(server): evict resident Ollama before voice-design loads Voi
 ### Task 8: CPU-gate the 9B residency (keep_alive × accelerator)
 
 **Files:**
-- Modify: `server/src/analyzer/ollama.ts` (`keepAliveFor`, ~line 129; its caller at ~line 416)
-- Test: `server/src/analyzer/ollama.test.ts` (the keep_alive describe, ~line 186)
+- Modify: `server/src/analyzer/ollama.ts` (`keepAliveFor` ~line 129; its caller ~line 416 — import `Accelerator`/`getLastKnownVram` from `../gpu/vram-state.js`, NOT from routes, to keep the import graph light)
+- Test: `server/src/analyzer/ollama.test.ts` (keep_alive describe, ~line 186)
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the keep_alive describe:
-
 ```ts
-it('keeps the heavy 9B resident only on a GPU; CPU-only unloads it to spare RAM', async () => {
+it('pins the heavy 9B resident only on a GPU; CPU unloads it to spare RAM', async () => {
   const { keepAliveFor } = await import('./ollama.js');
   expect(keepAliveFor('qwen3.5:9b', 'cuda')).toBe('5m');
   expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(0);
-  // small models stay resident regardless — they don't threaten RAM
-  expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe('5m');
-  // unknown accelerator: treat as GPU (the common case) — keep 9B resident
-  expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe('5m');
+  expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe('5m'); // small model: stays
+  expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe('5m'); // unprobed: assume GPU (the perf win)
 });
 ```
 
@@ -584,12 +645,13 @@ it('keeps the heavy 9B resident only on a GPU; CPU-only unloads it to spare RAM'
 Run: `cd server && npx vitest run src/analyzer/ollama.test.ts -t "only on a GPU"`
 Expected: FAIL — `keepAliveFor` takes one arg.
 
-- [ ] **Step 3: Implement the gate**
-
-Update `keepAliveFor` and its caller. Add a set of "big" models that are only worth pinning where VRAM (not RAM) is the constraint:
+- [ ] **Step 3: Implement**
 
 ```ts
-const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']); // pin only on a GPU
+import type { Accelerator } from '../gpu/vram-state.js';
+import { getLastKnownVram } from '../gpu/vram-state.js';
+
+const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']); // pin only where VRAM (not RAM) is the constraint
 
 export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): string | number {
   if (!RESIDENT_MODELS.has(model)) return 0;
@@ -598,82 +660,77 @@ export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'
 }
 ```
 
-Import `Accelerator` + `getLastKnownVram` and thread the accelerator at the call site (~line 416):
-
+Caller (~line 416):
 ```ts
-import type { Accelerator } from '../routes/sidecar-health.js';
-import { getLastKnownVram } from '../routes/sidecar-health.js';
-// ...
 keep_alive: keepAliveFor(this.model, getLastKnownVram().accelerator),
 ```
 
 - [ ] **Step 4: Run tests to verify pass**
 
 Run: `cd server && npx vitest run src/analyzer/ollama.test.ts`
-Expected: PASS (new gate test + the 3 updated 9B='5m' tests already on this branch).
+Expected: PASS (new gate test + the 3 updated 9B='5m' tests already on this branch — they call `keepAliveFor('qwen3.5:9b')` with the default 'unknown' → '5m', still green).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/analyzer/ollama.ts server/src/analyzer/ollama.test.ts
-git commit -m "feat(server): pin the 9B analyzer resident only on a GPU (spare CPU RAM)"
+git commit -m "feat(server): pin the 9B analyzer resident only on a GPU"
 ```
 
 ---
 
-### Task 9: Regression — no sidecar `/load` while an over-budget Ollama model is resident
+### Task 9: Regression — eviction/refusal invariants under real wiring
 
 **Files:**
-- Test: `server/src/gpu/eviction-regression.test.ts` (new, integration-style with mocks)
+- Test: `server/src/gpu/eviction-regression.test.ts`
 
-- [ ] **Step 1: Write the failing-then-passing guard test**
+- [ ] **Step 1: Write the guard tests**
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-/* The load-bearing safety invariant for the keep_alive flip: on an 8 GB card,
-   a sidecar /load must be PRECEDED by an Ollama eviction. Drive the real
-   ensureSidecarEngineReady with mocked VRAM (8 GB), a resident model, and a
-   recording fetch; assert the eviction generate-call lands before the /load. */
-
 const events: string[] = [];
-vi.mock('../routes/sidecar-health.js', () => ({
-  getLastKnownVram: () => ({ accelerator: 'cuda', totalMb: 8188 }),
-}));
-vi.mock('../tts/design-lock.js', () => ({ isAnyAnalysisBusy: () => false }));
-vi.mock('../workspace/user-settings.js', () => ({
-  getResolvedOllamaModel: () => 'qwen3.5:9b',
-  getResolvedSidecarUrl: () => 'http://sidecar',
-}));
+const busy = { value: false };
+
+vi.mock('./vram-state.js', () => ({ getLastKnownVram: () => ({ accelerator: 'cuda', totalMb: 8188 }) }));
+vi.mock('../tts/design-lock.js', () => ({ isAnyAnalysisBusy: () => busy.value }));
+vi.mock('./residency.js', () => ({ shouldEvictBeforeSidecarLoad: (v: { totalMb: number | null }) => v.totalMb != null && v.totalMb < 11000 }));
 vi.mock('../routes/ollama-health.js', () => ({
-  unloadResidentOllama: vi.fn(async () => { events.push('ollama-evict'); return ['qwen3.5:9b']; }),
+  unloadResidentOllama: vi.fn(async () => { events.push('evict'); return ['qwen3.5:9b']; }),
+  verifyOllamaEvicted: vi.fn(async () => { events.push('verify'); return true; }),
 }));
 
-beforeEach(() => { events.length = 0; });
+beforeEach(() => { events.length = 0; busy.value = false; });
 
-it('on 8 GB, eviction precedes the sidecar /load', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => { events.push('sidecar-load'); return new Response(JSON.stringify({ status: 'ready' }), { status: 200 }); }));
-  const { ensureSidecarEngineReady } = await import('../tts/ensure-sidecar-loaded.js');
-  await ensureSidecarEngineReady('qwen', undefined, { timeoutMs: 1000, pollIntervalMs: 10 });
-  expect(events).toEqual(['ollama-evict', 'sidecar-load']);
+it('on 8 GB idle: evict → verify → load, in order', async () => {
+  const { withGpuLoad } = await import('./gpu-load.js');
+  await withGpuLoad(async () => { events.push('load'); });
+  expect(events).toEqual(['evict', 'verify', 'load']);
+});
+
+it('on 8 GB with analysis busy: REFUSES (GpuBusyError), never evicts or loads', async () => {
+  busy.value = true;
+  const { withGpuLoad, GpuBusyError } = await import('./gpu-load.js');
+  await expect(withGpuLoad(async () => { events.push('load'); })).rejects.toBeInstanceOf(GpuBusyError);
+  expect(events).toEqual([]); // no evict, no load
 });
 ```
 
 - [ ] **Step 2: Run it**
 
 Run: `cd server && npx vitest run src/gpu/eviction-regression.test.ts`
-Expected: PASS (Tasks 5-6 already wired the ordering; this pins it against regressions).
+Expected: PASS (Tasks 4-5 wired the ordering + refusal).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add server/src/gpu/eviction-regression.test.ts
-git commit -m "test(server): regression — eviction precedes sidecar load on 8 GB"
+git commit -m "test(server): eviction precedes load; refuses on analysis-busy (8 GB)"
 ```
 
 ---
 
-### Task 10: Document the .env knob + full verify
+### Task 10: Document the knob + full verify
 
 **Files:**
 - Modify: `server/.env.example`
@@ -681,7 +738,6 @@ git commit -m "test(server): regression — eviction precedes sidecar load on 8 
 - [ ] **Step 1: Document the knob**
 
 Add under the GPU section of `server/.env.example`:
-
 ```
 # Below this detected GPU VRAM (MB), evict the resident Ollama analyzer before
 # loading a sidecar TTS/voice-design model. 8 GB cards evict; 12/16 GB coexist.
@@ -692,9 +748,9 @@ GPU_SAFE_COEXIST_MB=11000
 - [ ] **Step 2: Run the full server battery**
 
 Run: `cd server && npm run test:server && npm run test:server-slow`
-Expected: PASS (all green; the keep_alive-flip tests, the new gpu/ tests, the eviction hooks).
+Expected: PASS (keep_alive-flip tests, the new gpu/ tests, the two hooks, the regression).
 
-- [ ] **Step 3: Typecheck + verify**
+- [ ] **Step 3: Typecheck + verify (GPU idle)**
 
 Run: `npm run typecheck` then `npm run verify`
 Expected: PASS. (Run `verify` only when the GPU is idle — it contends with any live analysis/generation.)
@@ -703,13 +759,25 @@ Expected: PASS. (Run `verify` only when the GPU is idle — it contends with any
 
 ```bash
 git add server/.env.example
-git commit -m "docs(server): document GPU_SAFE_COEXIST_MB eviction threshold"
+git commit -m "docs(server): document GPU_SAFE_COEXIST_MB threshold"
 ```
 
 ---
 
-## Self-review notes
+## Review fixes baked in (v1 → v2, from the adversarial review)
 
-- **Spec coverage:** §4.1 threshold (Task 3), §4.2 VRAM cache (Task 2), §4.3 shared helper + scoped eviction (Tasks 4-5), §4.4 both hooks (Tasks 6-7), §4.5 load-mutex (Task 5), §4.6 in-flight interlock (Task 5), §4.7 CPU residency gate (Task 8), §8 W1 tests incl. the no-load-while-resident regression (Task 9). Registry knob (Task 1) + .env (Task 10).
+- **Registry shape** (B1): `key`/`env`/`risk`/`min`, not `id` — Task 1.
+- **Test helpers** (B2/B3): `new Response(...)` and inline `{ ok, json }` — no nonexistent `okResponse`/`okJson` — Tasks 4, 6, 9.
+- **Mock completeness** (B4): regression uses module-level mocks of the gpu deps, not a partial user-settings mock — Task 9.
+- **Voice-design test** (B5): route-level (`request(app)`), asserting the 409 — Task 7, not an unfillable direct-call placeholder.
+- **Interlock hole** (safety B1): analysis-busy on a constrained card now **REFUSES** (`GpuBusyError` → 409), never skip-and-load — Tasks 5, 6, 7.
+- **Scoped-evict miss** (safety B2): evict **ALL** residents (button-path parity), not `getResolvedOllamaModel()` — Task 4/5.
+- **Mutex scope** (safety B3): `withGpuLoad` holds the lock across **evict + verify + load** — Task 5.
+- **Fail-open** (safety S1): `verifyOllamaEvicted` + fail-closed (`GpuBusyError`) on a constrained card — Tasks 4, 5.
+- **Heavy import** (code S1): `VramState`/`Accelerator` + cache live in `gpu/vram-state.ts`; analyzer imports from there — Task 2, 8.
+- **`'unknown'` accelerator**: eviction treats it as evict (conservative, Task 3); residency treats it as GPU/pin (the perf win, Task 8) — opposite-but-correct per decision; CPU-RAM in the brief unprobed window is the documented out-of-scope caveat (spec §4.8).
+- **Independent flip revert** (N1): keep_alive flip stays the last commit on the branch.
+
+## Self-review notes
+- **Spec coverage:** §4.1 threshold (T3), §4.2 cache (T2), §4.3 evict-all helper + verify (T4), §4.4 both hooks (T6/T7), §4.5 mutex-wraps-load (T5), §4.6 refuse-on-busy (T5/T6/T7), §4.7 verify/fail-closed (T4/T5), §4.8 CPU residency gate (T8), §8 tests incl. the regression (T9). Knob (T1) + .env (T10).
 - **Out of scope (later waves):** label honesty (W2), progress explainer (W3), MB-accounting policy + split-guard UI (W4 deferred).
-- **Merge:** this branch carries the keep_alive flip; do not merge a build with the flip but without Tasks 5-7.
