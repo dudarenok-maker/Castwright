@@ -1,5 +1,12 @@
-# Refuse force-push / deletion of protected branches (main) before the
-# ~15-min verify even starts. Bypass intentionally with `git push --no-verify`.
-# See docs/features/163-protected-push-guard.md.
-node scripts/guard-protected-push.mjs "$@" || exit 1
+# Pre-push guards run before the ~15-min verify. git pipes the pushed-ref list
+# on stdin; capture it ONCE and feed both guards (stdin can only be read once).
+# Bypass intentionally with `git push --no-verify`.
+#   1. guard-protected-push  — refuse force-push / deletion of main (#163).
+#   2. guard-commit-subjects — reject any pushed commit whose subject violates
+#      the Conventional-Commits rule, even if commit-msg was bypassed
+#      (--no-verify / worktree hook couldn't spawn). Backstops the @-leak that
+#      shipped on #856.
+PUSH_REFS=$(cat)
+printf '%s\n' "$PUSH_REFS" | node scripts/guard-protected-push.mjs "$@" || exit 1
+printf '%s\n' "$PUSH_REFS" | node scripts/guard-commit-subjects.mjs "$@" || exit 1
 npm run verify

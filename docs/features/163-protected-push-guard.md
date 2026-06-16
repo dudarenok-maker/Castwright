@@ -121,6 +121,23 @@ Run from the repo root (no real remote needed — pipe a fake ref line):
   `npm run verify` check would deadlock doc-only PRs (`verify.yml` skips them
   via `paths-ignore: docs/**`, so the required check would never report).
 
+## Sibling guard — pre-push commit-subject lint (2026-06-17)
+
+`.husky/pre-push` now runs a second guard, `scripts/guard-commit-subjects.mjs`,
+alongside the force-push/deletion guard. It validates **every commit being
+pushed** against the Conventional-Commits subject rule (reusing
+`validateCommitSubject` from `scripts/validate-commit-msg.mjs`), so a malformed
+subject is caught at push time **even when `commit-msg` was skipped** — e.g. a
+`git commit --no-verify`, or a worktree whose husky hook couldn't spawn. The
+motivating bug: a PowerShell here-string `@'…'@` used to build `git commit -m`
+leaked a stray `@` into three subjects (`@ feat(server): …`) that reached `main`
+via #856 because that worktree committed with `--no-verify`; once merged, the
+only fix is a history rewrite + force-push (blocked). The hook captures git's
+pushed-ref stdin once (`PUSH_REFS=$(cat)`) and feeds both guards. Pure core
+(`evaluatePush`) is unit-tested in `scripts/tests/guard-commit-subjects.test.mjs`
+(auto-discovered by `npm run test:hooks`); intentional bypass is still
+`git push --no-verify`.
+
 ## Ship notes
 
 (Filled in when status flips to `stable`: shipped date + commit SHA.)
