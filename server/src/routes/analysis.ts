@@ -2410,7 +2410,7 @@ export async function runMainAnalyzerJob(
         0,
         `Resuming — Phase 0 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`,
       );
-      send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+      send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label, model: activeModelId });
       stage1 = cache.stage1;
       sortEvidence(stage1.characters);
       const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, (msg) =>
@@ -2535,7 +2535,7 @@ export async function runMainAnalyzerJob(
       };
 
       /* Initial cast-update + progress reflecting any cached cast. */
-      send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+      send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label, model: activeModelId });
       if (cachedCastCount > 0) emitCastUpdate();
 
       /* Tasks that need to run. Excluded chapters (front/back-matter the
@@ -2593,6 +2593,7 @@ export async function runMainAnalyzerJob(
           phaseId: 0,
           progress: phase0Progress(),
           label: PHASES[0].label,
+          model: activeModelId,
           live:
             running.length > 0
               ? {
@@ -2798,7 +2799,7 @@ export async function runMainAnalyzerJob(
             remediation: classified.remediation,
           });
           sendCastLiveTick();
-          send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+          send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label, model: activeModelId });
           return;
         }
 
@@ -2947,7 +2948,7 @@ export async function runMainAnalyzerJob(
             0,
             `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
           );
-          send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
+          send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label, model: activeModelId });
           /* Release any parked Phase 1 waiters so they can observe
              `phase0FailedCount > 0` and short-circuit out of dispatch.
              Without this they'd hang forever waiting on the watermark. */
@@ -3079,7 +3080,7 @@ export async function runMainAnalyzerJob(
             `${parserChapterCount} chapter${parserChapterCount === 1 ? '' : 's'} identified in ${humanSeconds(stage1ActualMs)}`,
           );
         }
-        send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+        send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label, model: activeModelId });
         /* Plan 88 — Phase 0b consolidation has produced the final roster
            (`stage1.characters` above). Release any remaining Phase 1
            waiters parked on the back-pressure semaphore — they'll dispatch
@@ -3112,7 +3113,7 @@ export async function runMainAnalyzerJob(
        pipelined mode parks until Phase 0 chapter `i + LAG` completes
        (the new back-pressure semaphore). */
     markPhase(1);
-    send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
+    send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label, model: phase1ModelId });
     const totalChapters = record.chapterHints.length;
     log(
       1,
@@ -3230,6 +3231,7 @@ export async function runMainAnalyzerJob(
         phaseId: 1,
         progress: Math.min(0.02 + 0.93 * cachedFrac, 0.95),
         label: PHASES[1].label,
+        model: phase1ModelId,
       });
     }
 
@@ -3276,6 +3278,7 @@ export async function runMainAnalyzerJob(
         phaseId: 1,
         progress: p,
         label: PHASES[1].label,
+        model: phase1ModelId,
         live:
           running.length > 0
             ? {
@@ -3674,7 +3677,7 @@ export async function runMainAnalyzerJob(
         .slice(0, 4);
       for (const t of top) log(1, `${t.name}: ${t.lines.toLocaleString()} lines`);
     }
-    send({ kind: 'phase', phaseId: 1, progress: 1, label: PHASES[1].label });
+    send({ kind: 'phase', phaseId: 1, progress: 1, label: PHASES[1].label, model: phase1ModelId });
 
     /* ── Phase 2: matching library — empty for first slice. */
     markPhase(2);
@@ -4293,7 +4296,7 @@ async function runSubsetAnalyzerJob(
       0,
       `Re-analyzing ${toRun.length} chapter${toRun.length === 1 ? '' : 's'} via ${analyzerLabel}.`,
     );
-    send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label });
+    send({ kind: 'phase', phaseId: 0, progress: 0.02, label: PHASES[0].label, model: subsetModelId });
 
     /* Same series-cast prior the main route uses (C2). Resolved once
        per subset retry so the prompt still recognises series-regulars
@@ -4441,6 +4444,7 @@ async function runSubsetAnalyzerJob(
         phaseId: 0,
         progress: 0.02 + 0.93 * ((idx + 1) / toRun.length),
         label: PHASES[0].label,
+        model: subsetModelId,
       });
     }
 
@@ -4517,7 +4521,7 @@ async function runSubsetAnalyzerJob(
     await saveAnalysisCache(manuscriptId, cache);
     await persistDroppedQuotesBatch(record.bookDir, manuscriptId, 'analysis-chapters', verified);
     send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters) });
-    send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label });
+    send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label, model: subsetModelId });
 
     /* ── Phase 1 (subset). Sentence attribution for the new chapters only.
        Cached chapters are left alone — their sentences stay in
@@ -4559,7 +4563,7 @@ async function runSubsetAnalyzerJob(
       endJob(job);
       return;
     }
-    send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
+    send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label, model: phase1ModelId });
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
@@ -4633,6 +4637,7 @@ async function runSubsetAnalyzerJob(
         phaseId: 1,
         progress: 0.02 + 0.93 * ((idx + 1) / toRun.length),
         label: PHASES[1].label,
+        model: phase1ModelId,
       });
     }
 
