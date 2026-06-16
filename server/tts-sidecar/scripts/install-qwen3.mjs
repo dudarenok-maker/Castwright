@@ -9,7 +9,9 @@
 // What it does:
 //   1. Locate the sidecar venv's python (.venv/Scripts/python.exe on Windows,
 //      .venv/bin/python elsewhere). Fail with a clear bootstrap hint if absent.
-//   2. `python -m pip install -U qwen-tts` (pulls torch + soundfile).
+//   2. `python -m pip install qwen-tts -c requirements/base.txt` (torch-safe:
+//      no -U, pinned via base.txt — the package now ships in the GPU overlays,
+//      so this is mainly weights-prefetch + repair).
 //   3. Pre-fetch the Base (resident synth) model and, unless --skip-design,
 //      the VoiceDesign model via Qwen3TTSModel.from_pretrained, with the HF
 //      cache pointed at server/tts-sidecar/voices/qwen/hf so the weights live
@@ -73,6 +75,12 @@ const VOICEDESIGN_MODEL =
 export const FLASH_ATTN_WHEEL_URL =
   'https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/' +
   'flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl';
+
+/** Pure helper: returns the pip args to install qwen-tts under base constraints.
+ *  No -U so torch/transformers stay on the pinned stack from the overlay reqs. */
+export function qwenPipInstallArgs(baseTxtPath) {
+  return ['-m', 'pip', 'install', 'qwen-tts', '-c', baseTxtPath];
+}
 
 // Pure decision fn (no I/O) so the platform/version gate is unit-testable without
 // a venv. enabled=false short-circuits to a silent skip; the caller only invokes
@@ -235,8 +243,11 @@ function main() {
   const env = { HF_HUB_DISABLE_SYMLINKS_WARNING: '1' };
   if (FORCE_CPU) env.QWEN_DEVICE = 'cpu';
 
-  step('Installing qwen-tts (pulls torch + soundfile)...');
-  if (run(python, ['-m', 'pip', 'install', '-U', 'qwen-tts'], env) !== 0) {
+  // qwen-tts ships in the GPU requirements overlays (nvidia/amd/cpu base.txt),
+  // so this step is primarily weights-prefetch + repair. Drop -U to avoid
+  // bumping torch/transformers out of the pinned stack; pin via base.txt instead.
+  step('Installing qwen-tts (idempotent, torch-safe — pinned via base.txt)...');
+  if (run(python, qwenPipInstallArgs(join(SIDECAR_DIR, 'requirements', 'base.txt')), env) !== 0) {
     step('FAIL: pip install qwen-tts failed. Check network + sidecar venv.');
     process.exit(1);
   }
