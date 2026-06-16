@@ -265,6 +265,39 @@ describe('buildModelInventory', () => {
     expect(inv.items.find((i) => i.id === 'kokoro')!.isDefaultEngine).toBe(false);
     expect(inv.items.find((i) => i.id === 'qwen-base')!.isDefaultEngine).toBe(true);
   });
+
+  it('old-sidecar compat: kokoroPackageInstalled=undefined + Node probe true + weights present → installState ready', () => {
+    /* Regression: when a reachable but older sidecar omits kokoro_package_installed,
+       the pkgInstalled helper was treating the coerced `false` as authoritative and
+       returning package-missing even though the kokoro_onnx package IS on disk.
+       With the fix, undefined falls back to the Node disk probe (true here because
+       we create the site-packages dir), so installState must be 'ready'. */
+    installKokoro();
+    // Simulate the kokoro_onnx package being present in the sidecar venv (Node probe = true).
+    const kokoro_onnx_dir = join(
+      repoRoot,
+      'server',
+      'tts-sidecar',
+      '.venv',
+      'Lib',
+      'site-packages',
+      'kokoro_onnx',
+    );
+    mkdirSync(kokoro_onnx_dir, { recursive: true });
+
+    const inv = buildModelInventory(
+      baseDeps({
+        sidecar: {
+          ...reachableSidecar,
+          kokoroLoaded: false,
+          kokoroPackageInstalled: undefined, // old sidecar omitted the field
+        },
+      }),
+    );
+    const row = inv.items.find((i) => i.id === 'kokoro')!;
+    // Node probe sees the package on disk → should be 'ready' (weights present, package installed)
+    expect(row.installState).toBe('ready');
+  });
 });
 
 function item(over: Partial<ModelInventoryItem>): ModelInventoryItem {

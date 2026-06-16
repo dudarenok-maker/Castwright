@@ -267,6 +267,28 @@ describe('GET /api/diagnostics', () => {
       const sidecar = byId(res.body.checks, 'sidecar');
       expect(sidecar.status).toBe('ok');
     });
+
+    it('old-sidecar compat: kokoroPackageInstalled=undefined (old sidecar omitted it) → sidecar row ok, NOT fail', async () => {
+      /* Regression: an older sidecar that omits kokoro_package_installed causes
+         the proxy to forward undefined. The STANDARD_TTS filter is `e.pkg === false`
+         so undefined must NOT trigger the package-missing path. */
+      probeSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: 'http://localhost:9000',
+        proxy: 'sidecar',
+        device: 'cuda',
+        vramReservedMb: 1024,
+        vramTotalMb: 8192,
+        qwenLoaded: false,
+        qwenPackageInstalled: true,
+        kokoroPackageInstalled: undefined, // old sidecar omitted this field
+        // coquiPackageInstalled also absent → undefined
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const sidecar = byId(res.body.checks, 'sidecar');
+      expect(sidecar.status).toBe('ok');
+      expect(res.body.overall).toBe('ok');
+    });
   });
 
   describe('ASR (Whisper) row (srv-31)', () => {

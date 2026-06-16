@@ -128,11 +128,12 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
     deps;
   const items: ModelInventoryItem[] = [];
 
-  /* B1 composition rule: sidecar package booleans are authoritative when the
-     sidecar is reachable; fall back to Node disk probes when it's down. */
-  const sidecarUp = sidecar.status === 'reachable';
+  /* B1 composition rule: trust the sidecar's find_spec ONLY when it actually
+     reported this engine's boolean; an old/unknown sidecar (undefined) falls
+     back to the Node disk probe. When the sidecar is down entirely, always
+     use the Node probe. */
   const pkgInstalled = (sidecarVal: boolean | undefined, nodeProbe: boolean): boolean =>
-    sidecarUp ? sidecarVal === true : nodeProbe;
+    sidecarVal === undefined ? nodeProbe : sidecarVal;
 
   /* ── Kokoro (TTS, fallback engine) ─────────────────────────────────── */
   const kokoroPaths = kokoroWeightPaths(repoRoot);
