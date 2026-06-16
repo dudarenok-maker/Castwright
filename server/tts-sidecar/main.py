@@ -2583,6 +2583,36 @@ def _qwen_package_installed() -> bool:
         return False
 
 
+def _coqui_package_installed() -> bool:
+    """True if the `TTS` (Coqui) package is importable without importing it."""
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("TTS") is not None
+    except Exception:
+        return False
+
+
+def _kokoro_package_installed() -> bool:
+    """True if the `kokoro_onnx` package is importable without importing it."""
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("kokoro_onnx") is not None
+    except Exception:
+        return False
+
+
+def _whisper_package_installed() -> bool:
+    """True if the `faster_whisper` package is importable without importing it."""
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("faster_whisper") is not None
+    except Exception:
+        return False
+
+
 def _qwen_hub_cache_dir() -> str:
     """Resolve the Hugging Face hub cache the same way huggingface_hub does, so
     the weights probe looks exactly where QwenEngine.from_pretrained downloads
@@ -2814,7 +2844,7 @@ def health() -> dict[str, Any]:
     # "Qwen not installed" apart from "installed but cold", which drives the
     # conditional default (Qwen-when-installed) + the install-check warning.
     qwen_package_installed = _qwen_package_installed()
-    qwen_weights_present = _qwen_weights_present() if qwen_package_installed else False
+    qwen_weights_present = _qwen_weights_present()
     qwen_install_state = _qwen_install_state(qwen_loaded)
     # side-14 — per-engine device map: loaded engines report their ACTUAL
     # device; unloaded ones the startup probe's prediction. Same resolvers on
@@ -2842,6 +2872,9 @@ def health() -> dict[str, Any]:
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
         "qwen_install_state": qwen_install_state,
+        "coqui_package_installed": _coqui_package_installed(),
+        "kokoro_package_installed": _kokoro_package_installed(),
+        "whisper_package_installed": _whisper_package_installed(),
         # ASR (srv-31) load state — its own pair, same pattern as the synth
         # engines, so the one-poll invariant holds. `asr_device` lets an
         # operator confirm whether transcription is on the GPU or CPU.
