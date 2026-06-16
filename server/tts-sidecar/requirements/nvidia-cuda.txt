@@ -41,12 +41,16 @@ torchaudio==2.8.0
 # DeepSpeed isn't available.
 
 # Kokoro v1 — quality-tuned local TTS engine, eagerly loaded at sidecar startup.
-# The [gpu] extra pulls onnxruntime-gpu ONLY on x86_64 non-macOS (kokoro-onnx's
-# own platform marker); plain onnxruntime always comes from the core dep, so a
-# macOS / Apple Silicon install gets the CPU/CoreML runtime and `pip install`
-# succeeds. Run scripts/install-kokoro.{ps1,sh} once to fetch the model + voices
-# manifest into voices/kokoro/ (gitignored, ~330 MB).
-kokoro-onnx[gpu]>=0.4.0,<0.5.0
+# Installed PLAIN (no [gpu] extra) so it deterministically lands the core
+# `onnxruntime` (CPU) module; install-ort.mjs then swaps in the GPU runtime the
+# profile needs (nvidia → onnxruntime-gpu) as the single enforcement point. We do
+# NOT use kokoro-onnx[gpu]: that extra coexists with the core onnxruntime dep, and
+# pip's resolution order can leave the CPU build owning the shared `onnxruntime/`
+# namespace → a silent CPU-only Kokoro on a GPU box (the 2026-06-16 regression).
+# macOS/Apple-Silicon keeps the plain CPU/CoreML runtime (no swap for non-nvidia).
+# Run scripts/install-kokoro.{ps1,sh} once to fetch the model + voices manifest
+# into voices/kokoro/ (gitignored, ~330 MB).
+kokoro-onnx>=0.4.0,<0.5.0
 
 # Qwen3-TTS — per-character bespoke voices via design -> clone -> cache ->
 # reuse (plan 108). NOT a fixed-voice catalog like Kokoro; voices are designed

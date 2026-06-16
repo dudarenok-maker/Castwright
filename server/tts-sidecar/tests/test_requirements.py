@@ -1,6 +1,12 @@
-"""Lock the onnxruntime dependency strategy: the GPU runtime must be pulled via
-kokoro-onnx's platform-gated [gpu] extra, NOT a bare unmarked onnxruntime-gpu
-line (which has no macOS wheel and aborts `pip install` on Apple Silicon).
+"""Lock the onnxruntime dependency strategy: the shared overlay installs PLAIN
+`kokoro-onnx` (→ the core `onnxruntime` CPU module). The GPU runtime is swapped in
+separately by the nvidia-only ORT swap (scripts/install-ort.mjs), NOT by a line in
+the overlay. Two things the overlay must therefore NEVER carry:
+  - a bare unmarked `onnxruntime-gpu` line (no macOS wheel → aborts `pip install`
+    on Apple Silicon, which reads this same overlay), and
+  - `kokoro-onnx[gpu]` (the extra coexists with the core onnxruntime dep, and pip's
+    resolution order can leave the CPU build owning the shared `onnxruntime/`
+    namespace → a silent CPU-only Kokoro on a GPU box; the 2026-06-16 regression).
 
 requirements.txt is a layered structure (a shim that `-r`-includes
 requirements/nvidia-cuda.txt, which `-r`-includes requirements/base.txt), so the
@@ -36,12 +42,19 @@ def _lines():
     return _resolve(REQ)
 
 
-def test_kokoro_uses_gpu_extra():
-    assert any(l.startswith("kokoro-onnx[gpu]") for l in _lines()), \
-        "expected kokoro-onnx[gpu] so onnxruntime-gpu is platform-gated by the extra"
+def test_kokoro_is_plain_no_gpu_extra():
+    lines = _lines()
+    assert any(_pkg(l) == "kokoro-onnx" for l in lines), \
+        "expected a plain kokoro-onnx requirement"
+    assert not any(l.startswith("kokoro-onnx[gpu]") for l in lines), \
+        ("kokoro-onnx[gpu] must NOT be used — the [gpu] extra coexists with the core "
+         "onnxruntime dep and can leave the CPU build owning the namespace (silent "
+         "CPU-only Kokoro). onnxruntime-gpu is installed by the nvidia ORT swap instead.")
 
 
 def test_no_bare_unmarked_onnxruntime_gpu():
+    """onnxruntime-gpu must never appear in the shared overlay (mac reads it too) —
+    it's installed only by the nvidia-only swap in scripts/install-ort.mjs."""
     for l in _lines():
         if l.startswith("onnxruntime-gpu") and ";" not in l:
             raise AssertionError(

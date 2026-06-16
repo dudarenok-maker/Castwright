@@ -39,11 +39,23 @@ describe('bootstrap-venv helpers', () => {
 });
 
 describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
-  it('nvidia installs its overlay directly and returns nvidia', () => {
+  it('nvidia installs its overlay then swaps onnxruntime → onnxruntime-gpu', () => {
     const pip = fakePip();
     expect(installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toBe('nvidia');
-    expect(pip.calls).toHaveLength(1);
-    expect(pip.calls[0].join(' ')).toMatch(/install -r .*nvidia-cuda\.txt/);
+    const joined = pip.calls.map((c) => c.join(' '));
+    // overlay first (pulls plain onnxruntime via kokoro-onnx), then the GPU swap —
+    // so onnxruntime-gpu unambiguously owns the shared onnxruntime/ namespace.
+    expect(joined[0]).toMatch(/install -r .*nvidia-cuda\.txt/);
+    expect(joined[1]).toBe('uninstall -y onnxruntime');
+    expect(joined[2]).toBe('install onnxruntime-gpu');
+    expect(pip.calls).toHaveLength(3);
+  });
+
+  it('nvidia: a failed ORT swap is fatal (no silent CPU-only Kokoro)', () => {
+    const pip = fakePip(['onnxruntime-gpu']); // the GPU install step fails
+    expect(() => installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toThrow(
+      /ONNX runtime swap failed/,
+    );
   });
 
   it('amd success: pre-installs ROCm wheels + amd overlay, returns amd', () => {

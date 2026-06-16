@@ -88,9 +88,9 @@ export function classifyVenvState({ venvExists, stamp, required }) {
 /**
  * The requirements overlay file for an install profile. amd/cpu get their own
  * overlay; nvidia, apple, and anything unrecognised fall back to the nvidia-cuda
- * overlay — which is also the mac-safe set (kokoro-onnx[gpu] degrades to plain
- * onnxruntime on darwin, torch from PyPI gives the mps build), preserving today's
- * NVIDIA + macOS behaviour. Pure.
+ * overlay — which is also the mac-safe set (plain kokoro-onnx gives the CPU/CoreML
+ * onnxruntime, the GPU swap is nvidia-only, torch from PyPI gives the mps build),
+ * preserving today's NVIDIA + macOS behaviour. Pure.
  * @param {string} profile
  * @returns {string} a filename under requirements/
  */

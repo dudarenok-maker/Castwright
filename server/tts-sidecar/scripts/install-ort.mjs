@@ -1,15 +1,22 @@
 #!/usr/bin/env node
-// install-ort.mjs — the AMD-Windows ONNX-runtime swap (S0.3). Kokoro is installed
-// plain (`kokoro-onnx`, no [gpu] extra), which pulls the base `onnxruntime` CPU
-// module. To run Kokoro on DirectML we must REPLACE that module with
-// `onnxruntime-directml` — the two can't co-exist (same import name). This runs
-// AFTER the requirements overlay install (Wave B wires it into the bootstrap
-// flow). No-op for every non-amd-win profile, where the overlay's onnxruntime
-// (or onnxruntime-gpu via kokoro-onnx[gpu]) is already correct.
+// install-ort.mjs — the ONNX-runtime swap that puts the RIGHT Kokoro runtime in
+// place after the requirements overlay. The overlay always installs plain
+// `onnxruntime` (kokoro-onnx's core dependency — see requirements/nvidia-cuda.txt),
+// so any profile whose Kokoro must run on a GPU runtime has to REPLACE that module
+// with the accelerator-specific one (they all share the `onnxruntime` import name
+// and can't co-exist reliably):
+//   - nvidia  → onnxruntime-gpu      (CUDAExecutionProvider)
+//   - amd-win → onnxruntime-directml (disabled after S0.1 — Kokoro stays CPU)
+//   - cpu/apple → no swap (plain onnxruntime is correct)
+// This is the SINGLE enforcement point for GPU Kokoro: we deliberately do NOT lean
+// on `kokoro-onnx[gpu]`, because that extra coexists with the core `onnxruntime`
+// dep and pip's resolution order can leave the CPU build owning the namespace — a
+// silent CPU-only Kokoro on a GPU box (the 2026-06-16 regression). Runs AFTER the
+// overlay install (bootstrap-venv.mjs wires it into every profile's flow).
 // Pure planner (planOrtSwap) + guarded CLI, mirroring install-torch.mjs.
 //
-// Usage (Phase 2 bootstrap wires this; manual form for testing):
-//   CASTWRIGHT_ACCELERATOR_PROFILE=amd node install-ort.mjs <venv-python>
+// Usage (the bootstrap wires this; manual form for testing):
+//   CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
 //
 // NOTE: the minimum working onnxruntime-directml version (the release carrying
 // the Kokoro ConvTranspose fix) is OWED on real AMD hardware (Wave H1). Until
@@ -20,17 +27,19 @@ import { pathToFileURL } from 'node:url';
 import { installRecipe } from './accelerator-profile.mjs';
 
 /**
- * Decide the ordered pip steps to put the correct ONNX runtime in place after
- * the overlay install. Only amd+win needs a swap (base onnxruntime →
- * onnxruntime-directml); every other profile already has the right runtime from
- * its overlay. Pure — no I/O. `steps` are pip sub-command arg arrays, run in
- * order with the venv python.
+ * Decide the ordered pip steps to put the correct ONNX runtime in place after the
+ * overlay install. The overlay always lands plain `onnxruntime` (kokoro-onnx's
+ * core dep), so any profile whose recipe needs a different ortPackage (nvidia →
+ * onnxruntime-gpu; a future DirectML re-enable → onnxruntime-directml) is a swap;
+ * a recipe that already wants plain `onnxruntime` (cpu/amd/apple) is a no-op. Pure
+ * — no I/O. `steps` are pip sub-command arg arrays, run in order with the venv
+ * python.
  * @returns {{action:'skip', reason:string} | {action:'swap', steps:string[][]}}
  */
 export function planOrtSwap(profile, platform) {
   const { ortPackage } = installRecipe(profile, platform);
-  if (ortPackage !== 'onnxruntime-directml') {
-    return { action: 'skip', reason: `${ortPackage} is installed by the overlay; no swap` };
+  if (ortPackage === 'onnxruntime') {
+    return { action: 'skip', reason: 'plain onnxruntime from the overlay is correct; no swap' };
   }
   return {
     action: 'swap',
