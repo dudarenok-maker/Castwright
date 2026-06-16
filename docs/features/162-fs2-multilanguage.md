@@ -110,6 +110,41 @@ audio language. So `generateVoiceStyle` / `designQwenVoice` / the voice-sample
 APIs stay language-free (CLAUDE.md simplicity-first). Do not re-add a persona
 language param.
 
+### Non-English narrator-default heuristic (plan 221 Wave A)
+
+The per-sentence attribution model — especially on non-Latin scripts —
+mislabels third-person NARRATION as the named character (e.g. "Егор засунул
+руки в карманы" → `egor`), which would read narration in that character's
+voice. Because the spoken-vs-narration distinction is mechanical, non-English
+stage-2 attribution decides it in code instead of trusting the model: after
+`runStage2ChapterChunked` returns, `applyNonEnglishNarratorDefault`
+(`server/src/analyzer/narrator-default.ts`) forces every NON-spoken sentence's
+`characterId` to `narrator`. A "spoken line" begins with a dialogue dash
+(—/–/-, including the named HTML entities `&mdash;`/`&ndash;`) or an opening
+quote («/"/“), or contains a quoted span; everything else is narration. The
+helper is wired inside the shared `attributeChapterStage2`
+(`server/src/routes/analysis.ts`) gated on `isNonEnglish(language)`, so both the
+main and subset analysis routes get it and the English path is byte-identical
+(same-array no-op). It runs AFTER coverage, which keys on sentence text not
+`characterId`, so the coverage verdict is unchanged.
+
+The one class the heuristic deliberately leaves to the model is the dashed
+narrative TAG ("— сказал юноша."), which looks spoken — the Russian branch of
+`languagePreamble` (`server/src/analyzer/gemini.ts`) appends a guard telling the
+model that a dashed line describing who spoke or what they did is the narrator,
+not the speaker.
+
+**Evidence (`server/repro-heuristic.mts`, against a local non-committed Russian
+EPUB):** the model's narration-block correctness was 0–1/6 per run; the
+heuristic deterministically produced 6/6 every run while leaving every dialogue
+line untouched (`spoken-lines-kept-named` unchanged across 3 runs).
+
+**Known limitation:** a genuine spoken line that lacks BOTH a leading
+dash/quote AND any quoted span would be wrongly forced to `narrator`. This
+depends on the model preserving the dialogue marker; empirically gemma-e4b
+preserved the dash on every dialogue line, but it is a model-preservation
+dependency, not a guarantee.
+
 ## Test plan
 
 ### Automated coverage
