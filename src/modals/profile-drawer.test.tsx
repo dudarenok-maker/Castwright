@@ -1279,6 +1279,47 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(await screen.findByRole('dialog', { name: /compare/i })).toBeInTheDocument();
   });
 
+  it('portals the compare modal OUTSIDE the clip-path drawer aside (regression: compare rendered clipped underneath the drawer)', async () => {
+    /* The drawer aside carries `scrollbar-thin`, whose `clip-path: inset(...)`
+       clips ALL descendants — including `position: fixed` ones. If the
+       full-screen A/B compare overlay renders as a DOM child of the aside it is
+       clipped to the ~520px drawer column ("rendered underneath the drawer"),
+       so it MUST be portaled out to document.body. jsdom can't see clip-path,
+       but it CAN assert the overlay is not nested in the clipped aside. */
+    const { store } = renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceId: 'v_hal',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      voiceStyle: 'a steady adult voice',
+    });
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
+    const overlay = await screen.findByTestId('voice-compare-overlay');
+    const drawerAside = document.querySelector('[data-tour-id="profile-drawer"]');
+    expect(drawerAside).toBeTruthy();
+    expect(drawerAside!.contains(overlay)).toBe(false);
+  });
+
   it('on Save writes ttsEngine=qwen + the qwen override series-scoped', async () => {
     setVoiceOverride.mockClear();
     const onSave = vi.fn();

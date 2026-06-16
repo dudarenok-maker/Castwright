@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   IconClose,
   IconWaveform,
@@ -1042,40 +1043,50 @@ export function ProfileDrawer({
               />
             )}
 
-            {voiceCompareInitial && bookId && (
-              <VoiceCompareModal
-                bookId={bookId}
-                character={character}
-                currentSubject={currentSubject}
-                currentSampleVoiceId={sampleVoiceId}
-                currentModelKey={currentModelKey}
-                designModelKey={effectiveSampleModelKey}
-                sampleVoiceId={sampleVoiceId}
-                initial={voiceCompareInitial}
-                onApprove={({ voiceId, persona: approvedPersona, previewUrl }) => {
-                  /* Stage the PROMOTED (stable) voice into the drawer; Save
-                     persists it series-scoped exactly as before. */
-                  setPersona(approvedPersona);
-                  setDesignedVoiceId(voiceId);
-                  designPreviewUrlRef.current = previewUrl;
-                  dispatch(
-                    castActions.setVoiceStyle({
-                      characterId: character.id,
-                      voiceStyle: approvedPersona,
-                    }),
-                  );
-                  setVoiceCompareInitial(null);
-                  /* Resolving the compare ends the single-design lifecycle —
-                     clear the slice so the Design pill / ready-to-compare state
-                     reset (otherwise the effect would re-open the modal). */
-                  dispatch(castDesignActions.clear());
-                }}
-                onClose={() => {
-                  setVoiceCompareInitial(null);
-                  dispatch(castDesignActions.clear());
-                }}
-              />
-            )}
+            {/* Portaled to document.body: the drawer aside carries
+                `scrollbar-thin`, whose `clip-path` clips ALL descendants —
+                including `position: fixed` ones — so a nested full-screen A/B
+                compare overlay renders clipped to the ~520px drawer column.
+                Portaling out (the app's convention for top-bar/tour/picker
+                overlays) lets it cover the viewport. */}
+            {voiceCompareInitial &&
+              bookId &&
+              typeof document !== 'undefined' &&
+              createPortal(
+                <VoiceCompareModal
+                  bookId={bookId}
+                  character={character}
+                  currentSubject={currentSubject}
+                  currentSampleVoiceId={sampleVoiceId}
+                  currentModelKey={currentModelKey}
+                  designModelKey={effectiveSampleModelKey}
+                  sampleVoiceId={sampleVoiceId}
+                  initial={voiceCompareInitial}
+                  onApprove={({ voiceId, persona: approvedPersona, previewUrl }) => {
+                    /* Stage the PROMOTED (stable) voice into the drawer; Save
+                       persists it series-scoped exactly as before. */
+                    setPersona(approvedPersona);
+                    setDesignedVoiceId(voiceId);
+                    designPreviewUrlRef.current = previewUrl;
+                    dispatch(
+                      castActions.setVoiceStyle({
+                        characterId: character.id,
+                        voiceStyle: approvedPersona,
+                      }),
+                    );
+                    setVoiceCompareInitial(null);
+                    /* Resolving the compare ends the single-design lifecycle —
+                       clear the slice so the Design pill / ready-to-compare state
+                       reset (otherwise the effect would re-open the modal). */
+                    dispatch(castDesignActions.clear());
+                  }}
+                  onClose={() => {
+                    setVoiceCompareInitial(null);
+                    dispatch(castDesignActions.clear());
+                  }}
+                />,
+                document.body,
+              )}
 
             {/* Preset (Coqui/Kokoro/Gemini) speaker picker — shown only when
                 this character will actually synthesise with a PRESET engine.
