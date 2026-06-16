@@ -169,28 +169,22 @@ preamble guard, rather than guard-text-only:
   was superseded by the code-side heuristic, which is more reliable; untagged
   dashed-line speaker-continuation remains a model-only concern (Wave C roster).
 
-### Wave B — recommended local model for non-English
+### Wave B — language-aware local default model for non-English  *(reconciled with PR #851)*
 
-The **shipped default is cloud Gemini** (`analysisEngine:'gemini'`,
-`gemini-3.1-flash-lite`; `user-settings.ts:236,253`). This bug hits **local**
-users (offline) whose Ollama default is `qwen3.5:4b` (`DEFAULT_OLLAMA_MODEL`).
-So this is NOT a global default flip — it's about the **local** model:
+**Reconciliation (2026-06-16):** a concurrent effort — **PR #851 `feat/dynamic-analyzer-models` (OPEN, also tagged "plan 221 Part A")** — overlaps this wave and **subsumes its selection mechanics**. #851 ships: analyzer-model pickers rendering the UNION of curated `MODEL_OPTIONS` + **live Ollama tags** (so a pulled `…gemma-4-E4B-it-GGUF:UD-Q4_K_XL` is selectable with no code change), `pullable` models from the server `DEFAULT_ALLOWED_MODELS` install list, a list-independent `engineForModelId()` `:`-heuristic (GPU-contention guard fires for uncurated tags), and the `ANALYZER_KEEP_ALIVE` knob (default `'5m'`). So **"add gemma to the list" / "make it selectable + pullable" / engine-classification / keep-alive are DONE by #851** — do NOT re-implement them here.
 
-1. Add `gemma4-e4b` (UD-Q4) to the model list (`src/lib/models.ts`, engine
-   `'local'`) with a "best for non-English / multilingual" hint.
-2. Make the **local** model selection language-aware: non-English →
-   `gemma4-e4b`; keep `qwen3.5:4b/9b` for English and selectable for any
-   language (CJK untested — no claim). User override always wins.
-3. Make `gemma4-e4b` resident (`RESIDENT_MODELS`, ollama.ts) so it stays warm
-   across the loop. (NOTE: the earlier "9b comment is stale" claim was WRONG —
-   `RESIDENT_MODELS = {qwen3.5:4b, llama3.1:8b}`, 9b is correctly non-resident,
-   `ollama.test.ts:199` pins it. Leave that comment alone.)
-4. **Model availability:** making a new local model the non-English default
-   means it must be present — wire into the Model Manager (193/fs-23) /
-   installer, with a graceful "model not installed → fall back to qwen +
-   actionable diagnostic." This is a hard dependency, not a "until then."
-- **Tests:** unit on language-aware local model resolution (`ru`→gemma,
-  `en`→qwen, override wins); model-missing fallback path.
+Also note the residency landscape changed: **plan 222 / #840** shipped a GPU-residency system on main (`withGpuLoad` + `residency.ts` + `vram-state.ts`, `keepAliveFor(model, accelerator)`, extended `RESIDENT_MODELS`); the measured-VRAM eviction half is **deferred to #845 / fs-45**. Wave B must layer on #840's residency, not fight it.
+
+**What remains UNIQUE to Wave B (the actual deliverable): an ADMIN-SELECTABLE default analyzer model — NO hardcoded model choices.** #851 is per-run user selection; nothing yet lets the operator set the *default*. The hard requirement (user-stated, critical): **the default model must be selectable in Admin; do NOT hardcode any model (no `isNonEnglish → gemma4-e4b` code rule, no baked tag).** Code provides plumbing + the picker; the *choice* lives in settings.
+
+1. **Admin-settable default(s):** surface the default analyzer model in the **Admin** UI using #851's picker (the union of curated `MODEL_OPTIONS` + live Ollama tags), persisted to user-settings. Support **per-language defaults** (e.g. an admin sets the default model for `ru`, separately from the global/English default) so a Russian book can default to a Cyrillic-robust model **because the admin chose it**, not because code hardwired it. Absent an admin choice for a language, fall through to the existing global default. No language→model mapping in code.
+2. **Resolution order (all data-driven):** explicit per-run pick (#851) → admin per-language default (settings) → admin global default (settings) → existing `DEFAULT_OLLAMA_MODEL`/`OLLAMA_MODEL` fallback. Nothing in this chain is a hardcoded model literal beyond the pre-existing `DEFAULT_OLLAMA_MODEL` last-resort.
+3. **Install presence:** `gemma4-e4b` must be *pullable/selectable* in Admin (it already is via #851's live-tags ∪ `DEFAULT_ALLOWED_MODELS`). Confirm the canonical tag is in the install allowlist so the admin can pick it without hunting — but it is offered, never auto-selected.
+4. **Residency + fallback:** whatever model the admin selects is kept warm via #840's `keepAliveFor`/`RESIDENT_MODELS` (reconcile with #840; do NOT touch the #845-deferred measured-eviction). If an admin-chosen default isn't installed, fall back to the existing default + an actionable "pull <tag>" diagnostic (reuse #851's `pullable` surface). Never hard-fail.
+
+- **Recommendation lives in DOCS/Help, not code:** the Help/troubleshooting copy *recommends* a Cyrillic-robust model (e.g. gemma4-e4b) for non-English and notes the qwen collapse — but the operator makes the call in Admin.
+- **Depends on #851 merging first** (builds on its picker + `engineForModelId` + keep-alive knob). **Interim path until Wave B:** in Admin/the picker, pull `gemma-4-E4B-it-GGUF:UD-Q4_K_XL` and select it (post-#851), or set `OLLAMA_MODEL` — then re-run the Russian analysis (Wave A's heuristic applies to the completed output).
+- **Tests:** unit on the data-driven resolution order (admin per-language default wins over global; explicit per-run pick wins over both; unset → existing fallback; **no test encodes a language→model constant**); admin persistence round-trip; model-missing fallback path.
 
 ### Wave C — name/alias-aware cross-chapter merge (Defect 1)
 
