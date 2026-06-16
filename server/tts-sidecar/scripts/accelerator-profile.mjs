@@ -134,7 +134,9 @@ export function ortProviders(profile, platform) {
  * USED to arrive transitively via coqui-tts, but coqui-tts 0.27.5 dropped that
  * declaration, so it is now pinned explicitly in the overlay; null here means
  * "nothing extra beyond the requirements," not "torch is transitive." NVIDIA ORT
- * is `onnxruntime-gpu` via kokoro-onnx[gpu]. AMD pre-installs the ROCm torch
+ * is `onnxruntime-gpu`, swapped in by install-ort.mjs after the overlay (which
+ * carries plain kokoro-onnx → core onnxruntime) — NOT via kokoro-onnx[gpu], whose
+ * extra can leave the CPU build owning the namespace. AMD pre-installs the ROCm torch
  * wheels (a {wheels:[…]} list) BEFORE the engine packages — install-torch.mjs
  * runs them; their alpha local-version tags can't be pinned in amd-rocm.txt.
  * The CPU recipe (cpu-index torch) is a Phase-2 improvement.

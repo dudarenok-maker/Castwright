@@ -26,14 +26,19 @@ describe('layered requirements (base + nvidia/cpu/amd overlays)', () => {
   // extra was dropped (commit b2a1ac19) — torchcodec only ships cores for FFmpeg
   // 4–7 and is only needed on torch >=2.9; we pin torch 2.8, so torchaudio keeps
   // in-core audio I/O and [codec] is unnecessary. torch/torchaudio are EXPLICIT
-  // (coqui-tts 0.27.5 dropped the transitive torch dep).
-  it('nvidia overlay == TODAY: explicit pinned torch 2.8 + kokoro-onnx[gpu], NO [codec]', () => {
+  // (coqui-tts 0.27.5 dropped the transitive torch dep). Kokoro is PLAIN (no [gpu]
+  // extra): onnxruntime-gpu is installed by the nvidia ORT swap (install-ort.mjs),
+  // not the overlay — so the [gpu] extra can't leave the CPU build owning the
+  // shared onnxruntime/ namespace (the 2026-06-16 silent-CPU-Kokoro regression).
+  it('nvidia overlay == TODAY: explicit pinned torch 2.8 + plain kokoro-onnx, NO [gpu]/[codec]', () => {
     const n = read('nvidia-cuda.txt');
     expect(n).toMatch(/^coqui-tts/m);
     expect(n).not.toMatch(/coqui-tts\[codec\]/);
     expect(n).toMatch(/^torch==2\.8\.0/m);
     expect(n).toMatch(/^torchaudio==2\.8\.0/m);
-    expect(n).toMatch(/kokoro-onnx\[gpu\]/);
+    expect(n).toMatch(/^kokoro-onnx\b/m);
+    expect(n).not.toMatch(/^kokoro-onnx\[gpu\]/m); // anchored: a requirement line, not the explanatory comment
+    expect(n).not.toMatch(/^onnxruntime-gpu/m); // swap-only; never in the shared overlay
   });
 
   it('requirements.txt shim points at the nvidia-cuda overlay (sole legacy default)', () => {

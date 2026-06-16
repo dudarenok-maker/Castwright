@@ -178,6 +178,20 @@ export function installForProfile(
   if (!runPip(['install', '-r', overlayPath(profile)])) {
     throw new Error(`pip install failed for the ${profile} overlay`);
   }
+  // Put the right Kokoro ONNX runtime in place. The overlay lands plain
+  // `onnxruntime` (kokoro-onnx's core dep); nvidia swaps it for onnxruntime-gpu so
+  // CUDAExecutionProvider is actually available (a missing swap = silent CPU-only
+  // Kokoro on a GPU box). A swap failure is fatal here — better to fail the install
+  // loudly than ship a GPU box that quietly synthesises on the CPU.
+  const ort = planOrtSwap(profile, platform);
+  if (ort.action === 'swap') {
+    log(`swapping ONNX runtime → the ${profile} GPU build`);
+    for (const step of ort.steps) {
+      if (!runPip(step)) {
+        throw new Error(`ONNX runtime swap failed (pip ${step.join(' ')}) for the ${profile} overlay`);
+      }
+    }
+  }
   return profile;
 }
 

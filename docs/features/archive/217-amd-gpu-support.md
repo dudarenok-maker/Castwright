@@ -237,3 +237,26 @@ Phase-2 section above + spec "Spike findings"):
 on **ROCm** on a supported AMD card + pin the wheel sha256s into `model-hashes.json`
 (the author's 780M iGPU is not ROCm-supported); Phase-1 CPU-only + macOS fresh-install
 synth (B/C). These reopen this plan from archive only if beta surfaces a real failure.
+
+### Post-ship hardening — NVIDIA Kokoro forced to `onnxruntime-gpu` (2026-06-16)
+
+**Supersedes the "NVIDIA regression fence: `onnxruntime-gpu` via `kokoro-onnx[gpu]`"
+claims above (lines ~32, 42, 47).** On-box, a stamped-`nvidia` venv was found running
+Kokoro on the **CPU**: `kokoro-onnx[gpu]` declares plain `onnxruntime` as a *core* dep
+and only *adds* `onnxruntime-gpu` via the extra; both land in the same `onnxruntime/`
+import namespace and pip's resolution order can leave the CPU build winning →
+`CUDAExecutionProvider` absent → silent CPU-only Kokoro on a GPU box.
+
+Fix (branch `fix/sidecar-nvidia-ort-gpu-enforce`): the `install-ort.mjs` ORT swap —
+previously AMD/DirectML-only — is now the **single GPU-runtime enforcement point for
+every profile**. The overlay carries **plain `kokoro-onnx`** (deterministic core
+`onnxruntime`); `planOrtSwap` swaps to the profile's `ortPackage` whenever it isn't
+plain `onnxruntime` (nvidia → `onnxruntime-gpu`), and `installForProfile` runs the swap
+in the generic branch too — a swap failure is now **fatal** (no silent CPU fallback on
+a GPU box). macOS stays on plain `onnxruntime` (the swap is nvidia-only, so no broken
+bare-`onnxruntime-gpu` line in the shared overlay). Paired tests:
+`install-ort-helpers.test.ts` (nvidia → swap), `bootstrap-venv-helpers.test.ts` (nvidia
+overlay + swap, swap-failure fatal), `requirements-layout.test.ts` +
+`test_requirements.py` (overlay is plain `kokoro-onnx`, never `[gpu]` / bare
+`onnxruntime-gpu`). This changes `nvidia-cuda.txt`'s reqHash, so existing nvidia venvs
+self-heal via a `pip-in-place` on next bootstrap.

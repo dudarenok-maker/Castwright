@@ -14,7 +14,7 @@ torch dependency tree doesn't leak into Node tooling.
 | → CPU / macOS | PyPI default = CPU / MPS build | |
 | coqui-tts | `>=0.24.0` (resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit); `[codec]` dropped → no torchcodec |
 | **torchcodec** | **not installed** | only needed on torch ≥2.9; its cores support FFmpeg 4–7 only (fails vs FFmpeg 8) — sidestepped by pinning torch <2.9 |
-| kokoro-onnx | `[gpu]>=0.4.0,<0.5.0` | onnxruntime-gpu via the platform-gated extra; no torch |
+| kokoro-onnx | `>=0.4.0,<0.5.0` (plain, **no `[gpu]`**) | overlay lands core `onnxruntime` (CPU); `install-ort.mjs` swaps in `onnxruntime-gpu` on the nvidia profile. `[gpu]` is avoided — it coexists with the core dep and can silently leave CPU onnxruntime winning. No torch |
 | transformers | `>=4.45,<5.0` | coqui-tts compat cap |
 
 ## Accelerator profiles (NVIDIA / AMD / CPU / Apple)
