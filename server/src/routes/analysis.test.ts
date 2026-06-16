@@ -23,6 +23,7 @@ import {
   buildStage1ChapterInbox,
   readPriorCastForMerge,
   trackForReplay,
+  castInFlightEntryToLiveChapter,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -1779,5 +1780,41 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('castInFlightEntryToLiveChapter — live tick chapter map (Phase-0a cast)', () => {
+  it('live tick chapters carry section counts', () => {
+    /* A chapter chunked into 4 sections with 2 done — the live tick entry
+       must expose sectionsDone and sectionsTotal so the frontend can render
+       section-level progress. */
+    const entry = {
+      chapterIndex: 0,
+      chapterTitle: 'Chapter One',
+      baseEstMs: 60_000,
+      startedAt: Date.now() - 30_000,
+      sectionsDone: 2,
+      sectionsTotal: 4,
+    };
+    const result = castInFlightEntryToLiveChapter(entry, Date.now());
+    expect(result.sectionsDone).toBe(2);
+    expect(result.sectionsTotal).toBe(4);
+  });
+
+  it('preserves existing chapterIndex / chapterTitle / elapsedMs / estMs fields', () => {
+    const now = Date.now();
+    const entry = {
+      chapterIndex: 2,
+      chapterTitle: 'Chapter Three',
+      baseEstMs: 30_000,
+      startedAt: now - 10_000,
+      sectionsDone: 0,
+      sectionsTotal: 1,
+    };
+    const result = castInFlightEntryToLiveChapter(entry, now);
+    expect(result.chapterIndex).toBe(3); // 0-based → 1-based
+    expect(result.chapterTitle).toBe('Chapter Three');
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(typeof result.estMs).toBe('number');
   });
 });

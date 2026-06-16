@@ -872,6 +872,42 @@ export function clampStageEstMs(ms: number): number {
   return Math.max(MIN_EST_MS, Math.round(ms));
 }
 
+/** Shape of a single entry in the Phase-0a cast live-tick `chapters[]` array.
+    Exported so callers (frontend type consumers, tests) can reference it. */
+export interface CastLiveChapter {
+  chapterIndex: number;
+  chapterTitle: string;
+  elapsedMs: number;
+  estMs: number;
+  /** Section progress for chunked chapters (1/1 for single-section chapters). */
+  sectionsDone: number;
+  sectionsTotal: number;
+}
+
+/** Pure mapping helper: converts one `CastInFlight`-shaped slot and a `now`
+    timestamp into the live-tick chapter entry.  Exported for unit tests. */
+export function castInFlightEntryToLiveChapter(
+  r: {
+    chapterIndex: number;
+    chapterTitle: string;
+    baseEstMs: number;
+    startedAt: number;
+    sectionsDone: number;
+    sectionsTotal: number;
+  },
+  now: number,
+): CastLiveChapter {
+  const elapsedMs = now - r.startedAt;
+  return {
+    chapterIndex: r.chapterIndex + 1,
+    chapterTitle: r.chapterTitle,
+    elapsedMs,
+    estMs: refineCastChapterEstMs(elapsedMs, r.baseEstMs, r.sectionsDone, r.sectionsTotal),
+    sectionsDone: r.sectionsDone,
+    sectionsTotal: r.sectionsTotal,
+  };
+}
+
 /* Decide whether cached per-chapter durations may seed this run's observed-
    rate tracker. The samples are only valid when the resumed run uses the SAME
    analyzer engine that produced them — a Gemini-paced duration would mis-seed
@@ -2598,22 +2634,11 @@ export async function runMainAnalyzerJob(
             running.length > 0
               ? {
                   totalChapters: totalCastChapters,
-                  chapters: running.map((r) => {
-                    /* Chapter-total elapsed (NOT the per-section call elapsed —
-                       the chunker calls the model once per section). */
-                    const elapsedMs = now - r.startedAt;
-                    return {
-                      chapterIndex: r.chapterIndex + 1,
-                      chapterTitle: r.chapterTitle,
-                      elapsedMs,
-                      estMs: refineCastChapterEstMs(
-                        elapsedMs,
-                        r.baseEstMs,
-                        r.sectionsDone,
-                        r.sectionsTotal,
-                      ),
-                    };
-                  }),
+                  /* Chapter-total elapsed (NOT the per-section call elapsed —
+                     the chunker calls the model once per section).
+                     sectionsDone/sectionsTotal are forwarded so the frontend
+                     can render section-level progress within a chapter. */
+                  chapters: running.map((r) => castInFlightEntryToLiveChapter(r, now)),
                 }
               : undefined,
         });
