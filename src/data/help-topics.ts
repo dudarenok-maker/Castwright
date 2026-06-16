@@ -71,4 +71,18 @@ export const HELP_TOPICS: HelpTopic[] = [
       'exports. Deleting a book folder removes that book; back up the workspace folder and ' +
       "you've backed up your whole library.",
   },
+  {
+    id: 'analysis-reloads-or-gpu-busy',
+    title: 'Analysis keeps reloading the model, or says "GPU busy"',
+    body:
+      'The analyzer stays loaded while it reads through your book, so it is not reloading between ' +
+      "chapters. On a smaller GPU it can't share the card with a voice engine at the same time, so " +
+      'Castwright frees the analyzer before it loads a voice — and if you kick off generation while ' +
+      'analysis is still running, you\'ll see a brief "GPU busy with analysis" note: let the analysis ' +
+      "finish, then generate. One thing to watch — if you've pointed the two analysis passes at two " +
+      'different local models (Advanced settings, a per-phase analysis model), a smaller card can\'t ' +
+      'hold both, so it reloads between passes and the run drags. Keep the same local model for both ' +
+      'passes, pair one local model with a cloud one (Gemini uses no GPU at all), or run on a roomier ' +
+      'card (12 GB and up), where both sit side by side.',
+  },
 ];
