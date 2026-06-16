@@ -129,8 +129,19 @@ export function resolveOllamaRetryTemperature(): number {
    different local models across phase0/phase1). Two large local models
    resident at once would exceed the 8 GB budget — that path must keep
    its non-resident eviction; do not naively add both to this set.
-   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS. */
-const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b']);
+   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS.
+   `gemma4-e4b-8gb` is the local alias for the Gemma 4 E4B edge model (~5 GB
+   resident, fits 8 GB alongside the KV cache); both the bare name and the
+   `:latest` form Ollama reports in /api/tags are listed so the exact-match
+   lookup hits however the picker/env passes it. NOTE: this is a per-box local
+   name — model-agnostic measured residency is the deferred #845 work. */
+const RESIDENT_MODELS = new Set([
+  'qwen3.5:4b',
+  'qwen3.5:9b',
+  'llama3.1:8b',
+  'gemma4-e4b-8gb',
+  'gemma4-e4b-8gb:latest',
+]);
 
 /* Models that are only safe to keep resident where the constraint is VRAM
    (GPU box). On a CPU-only machine the same model would pin ~6.4 GB of

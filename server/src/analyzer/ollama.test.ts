@@ -201,6 +201,10 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
        model). The generation-phase auto-evict frees it before Qwen TTS /
        XTTS load. */
     expect(keepAliveFor('qwen3.5:9b')).toBe('5m');
+    /* The Gemma 4 E4B edge model (~5 GB resident) stays warm across the loop —
+       both the bare alias and the `:latest` form Ollama reports in /api/tags. */
+    expect(keepAliveFor('gemma4-e4b-8gb')).toBe('5m');
+    expect(keepAliveFor('gemma4-e4b-8gb:latest')).toBe('5m');
     /* An unknown model id defaults to 0 — the conservative choice is
        "unload immediately" so we never accidentally pin a model the
        allowlist hasn't been tuned for. */
