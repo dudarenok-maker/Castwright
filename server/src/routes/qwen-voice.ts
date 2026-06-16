@@ -268,6 +268,8 @@ export async function designQwenVoiceForCharacter(
   const calibrationText = buildSampleText(toVoiceLike(p.character), buildHintFromCast(p.character));
 
   return withDesignLock(p.bookDir, async () => {
+    const { withGpuLoad } = await import('../gpu/gpu-load.js');
+    return withGpuLoad(async () => {
     const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
     const sidecarUrl = getResolvedSidecarUrl();
     const target = `${sidecarUrl}/qwen/design-voice`;
@@ -376,6 +378,7 @@ export async function designQwenVoiceForCharacter(
       if (p.signal) p.signal.removeEventListener('abort', onExternalAbort);
       releaseGpu();
     }
+    });
   });
 }
 
@@ -497,6 +500,10 @@ qwenVoiceRouter.post(
     } catch (e) {
       /* The core throws a user-facing message for sidecar/encode/timeout
          failures — surface it as a 502 (the sidecar boundary). */
+      const { GpuBusyError } = await import('../gpu/gpu-load.js');
+      if (e instanceof GpuBusyError) {
+        return res.status(409).json({ error: e.message, code: 'gpu_busy' });
+      }
       return res.status(502).json({ error: (e as Error).message || 'Voice design failed.' });
     }
   },
