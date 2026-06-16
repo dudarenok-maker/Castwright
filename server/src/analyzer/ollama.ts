@@ -109,16 +109,26 @@ export function resolveOllamaRetryTemperature(): number {
 /* Models we want Ollama to hold in VRAM between back-to-back analysis
    calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
    reloading a multi-GB weight set between each one would dominate
-   wall-clock time. The 4B (~3 GB) and Llama-8B (~5 GB) both fit
-   resident on an 8 GB box alongside the ~1–1.5 GB KV cache at
-   ANALYZER_NUM_CTX, with enough headroom to absorb a long-chapter KV
-   spike. The 9B (~6.6 GB) is too tight — KV cache pushes it over budget
-   — so we still evict that immediately after each call. XTTS is loaded
-   on a separate, mutually-exclusive pipeline phase, so neither tenant
-   has to fit alongside the other; the auto-evict pill mediates the
-   swap. Tune the allowlist in lockstep with src/lib/models.ts
-   MODEL_OPTIONS. */
-const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'llama3.1:8b']);
+   wall-clock time — the 9B otherwise unloads+reloads ~6.35 GB on every
+   chapter section, which surfaces as a VRAM sawtooth and mid-stream
+   "no response" stalls. The 4B (~3 GB), Llama-8B (~5 GB), and 9B
+   (~6.6 GB) all fit resident on an 8 GB box alongside the KV cache at
+   ANALYZER_NUM_CTX: the chunker caps each section to ~24k chars so the
+   KV cache never reaches the 32k worst case (confirmed live — the 9B
+   ran ~6.25 GB / 8 GB resident).
+
+   The cross-engine handoff is the load-bearing assumption: a resident 9B
+   CANNOT co-reside with Qwen TTS / XTTS, so we rely on the generation
+   engine's auto-evict to drop a resident Ollama model before it loads.
+   With that protection in place, keeping the 9B warm across the analysis
+   loop is safe and removes the reload tax.
+
+   NOTE: this does NOT hold for a LOCAL-MODEL SPLIT (a run that uses two
+   different local models across phase0/phase1). Two large local models
+   resident at once would exceed the 8 GB budget — that path must keep
+   its non-resident eviction; do not naively add both to this set.
+   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS. */
+const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b']);
 
 /** Picks the `keep_alive` value for an Ollama /api/chat call:
     - models in RESIDENT_MODELS → '5m' (stay loaded for the analysis loop)
