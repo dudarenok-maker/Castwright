@@ -31,7 +31,7 @@ import { engineForModelKey, type TtsEngine } from '../tts/index.js';
 import { coquiWeightsPresent, coquiPackageInstalled } from '../tts/coqui-install-detect.js';
 import { kokoroPackageInstalled } from '../tts/kokoro-install-detect.js';
 import { qwenPackageInstalled } from '../tts/qwen-install-detect.js';
-import { whisperPackageInstalled } from '../tts/whisper-install-detect.js';
+import { fasterWhisperInstalled } from '../tts/whisper-install-detect.js';
 import {
   kokoroWeightPaths,
   kokoroWeightDir,
@@ -247,7 +247,7 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = whisperPresent;
     const loaded = sidecar.asrLoaded === true;
-    const packageInstalled = pkgInstalled(sidecar.whisperPackageInstalled, whisperPackageInstalled(repoRoot));
+    const packageInstalled = pkgInstalled(sidecar.whisperPackageInstalled, fasterWhisperInstalled(repoRoot));
     items.push({
       id: 'whisper',
       kind: 'asr',
