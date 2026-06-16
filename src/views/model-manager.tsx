@@ -150,14 +150,16 @@ function ModelInventory() {
         </p>
       )}
 
-      {/* TTS rows grouped under Standard / Optional add-ons subheadings.
-          ASR (Whisper) and analyzer (Ollama) rows keep their own flat list below. */}
+      {/* TTS rows grouped under Standard / Optional add-ons subheadings. ASR
+          (Whisper) and analyzer (Ollama) rows each get their OWN subheading so
+          local analyzer models aren't visually lumped under "Optional add-ons". */}
       {(() => {
         const ttsStandard = inv.items.filter((i) => i.kind === 'tts' && i.tier !== 'secondary');
         const ttsSecondary = inv.items.filter((i) => i.kind === 'tts' && i.tier === 'secondary');
         /* ttsStandard already includes tier===undefined items (undefined !== 'secondary'). */
         const standardRows = ttsStandard;
-        const otherRows = inv.items.filter((i) => i.kind !== 'tts');
+        const asrRows = inv.items.filter((i) => i.kind === 'asr');
+        const analyzerRows = inv.items.filter((i) => i.kind === 'analyzer');
 
         const rowProps = (item: ModelInventoryItem) => ({
           item,
@@ -215,12 +217,29 @@ function ModelInventory() {
                 </ul>
               </div>
             )}
-            {otherRows.length > 0 && (
-              <ul className="space-y-3">
-                {otherRows.map((item) => (
-                  <ModelRow key={item.id} {...rowProps(item)} />
-                ))}
-              </ul>
+            {analyzerRows.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/45 mb-2">
+                  Analyzer models (Ollama)
+                </p>
+                <ul className="space-y-3">
+                  {analyzerRows.map((item) => (
+                    <ModelRow key={item.id} {...rowProps(item)} />
+                  ))}
+                </ul>
+              </div>
+            )}
+            {asrRows.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/45 mb-2">
+                  Speech recognition (ASR)
+                </p>
+                <ul className="space-y-3">
+                  {asrRows.map((item) => (
+                    <ModelRow key={item.id} {...rowProps(item)} />
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         );

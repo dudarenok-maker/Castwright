@@ -144,7 +144,82 @@ describe('ModelPullStatus — pull flow', () => {
   });
 });
 
+describe('ModelPullStatus — curated ∪ installed union', () => {
+  it('renders installed-but-uncurated tags as read-only on-disk rows', () => {
+    render(
+      <ModelPullStatus
+        pullableModels={['qwen3.5:4b']}
+        health={{
+          status: 'reachable',
+          url: 'http://localhost:11434',
+          models: ['qwen3.5:4b', 'gemma4-e4b-8gb:latest'],
+          pullable: ['qwen3.5:4b', 'llama3.1:8b'],
+          expectedModel: 'qwen3.5:4b',
+        }}
+      />,
+    );
+    /* The uncurated installed tag shows as an on-disk "Installed" row with NO
+       Pull button (it's not pullable, it's already there). */
+    const extraRow = screen.getByTestId('model-row-gemma4-e4b-8gb:latest');
+    expect(extraRow).toHaveTextContent(/installed/i);
+    expect(screen.getByTestId('model-installed-gemma4-e4b-8gb:latest')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-pull-gemma4-e4b-8gb:latest')).not.toBeInTheDocument();
+    /* Curated rows still come from the health envelope's pullable list. */
+    expect(screen.getByTestId('model-row-llama3.1:8b')).toHaveTextContent(/not pulled yet/i);
+  });
+
+  it('drives curated rows off health.pullable even when the redux prop is empty (self-healing)', () => {
+    render(
+      <ModelPullStatus
+        pullableModels={[]}
+        health={{
+          status: 'reachable',
+          url: 'http://localhost:11434',
+          models: ['qwen3.5:4b'],
+          pullable: ['qwen3.5:4b', 'llama3.1:8b'],
+          expectedModel: 'qwen3.5:4b',
+        }}
+      />,
+    );
+    /* An empty redux pullableModels must NOT blank the list — health.pullable
+       carries the curated set. */
+    expect(screen.getByTestId('model-row-qwen3.5:4b')).toHaveTextContent(/on disk/i);
+    expect(screen.getByTestId('model-row-llama3.1:8b')).toBeInTheDocument();
+  });
+});
+
 describe('ModelPullStatus — refresh', () => {
+  it('recovers an empty list when the refresh response carries pullable', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/ollama/refresh' && init?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({
+            status: 'reachable',
+            url: 'http://localhost:11434',
+            models: ['qwen3.5:4b'],
+            pullable: ['qwen3.5:4b', 'llama3.1:8b'],
+            expectedModel: 'qwen3.5:4b',
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    /* Start fully empty: no redux prop, no pullable in the initial envelope. */
+    render(
+      <ModelPullStatus
+        pullableModels={[]}
+        health={{ status: 'reachable', url: 'http://localhost:11434', models: [], pullable: [] }}
+      />,
+    );
+    expect(screen.queryByTestId('model-row-qwen3.5:4b')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('model-pull-refresh'));
+    await waitFor(() => {
+      expect(screen.getByTestId('model-row-qwen3.5:4b')).toBeInTheDocument();
+      expect(screen.getByTestId('model-row-llama3.1:8b')).toBeInTheDocument();
+    });
+  });
+
+
   it('clicking "Refresh available models" POSTs /api/ollama/refresh and updates the rows', async () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url === '/api/ollama/refresh' && init?.method === 'POST') {

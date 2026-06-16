@@ -9,6 +9,7 @@ import { uiSlice } from '../../store/ui-slice';
 import { PhaseModelSwap } from './phase-model-swap';
 
 const putUserSettingsMock = vi.fn();
+const getOllamaHealthMock = vi.fn();
 
 vi.mock('../../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api');
@@ -25,12 +26,15 @@ vi.mock('../../lib/api', async () => {
           ...(patch as Record<string, unknown>),
         });
       },
+      getOllamaHealth: () => getOllamaHealthMock(),
     },
   };
 });
 
 beforeEach(() => {
   putUserSettingsMock.mockReset();
+  getOllamaHealthMock.mockReset();
+  getOllamaHealthMock.mockResolvedValue({ status: 'reachable', url: '', models: [], pullable: [] });
 });
 
 function mountStore(
@@ -159,11 +163,29 @@ describe('PhaseModelSwap', () => {
     });
   });
 
+  it('fetches live analyzer models when the picker is focused (lazy refresh on open)', async () => {
+    /* A healthy run never auto-probes Ollama (cloud-no-probe invariant), so the
+       slice can be stale. Opening the dropdown is an explicit user interaction —
+       it MUST refresh the live tag list so a just-pulled model is selectable. */
+    const store = mountStore({ analyzerPhase0Model: null, localAnalyzerModels: [] });
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap phaseId={0} isActive={false} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
+    expect(getOllamaHealthMock).not.toHaveBeenCalled();
+    fireEvent.focus(select);
+    await waitFor(() => {
+      expect(getOllamaHealthMock).toHaveBeenCalled();
+    });
+  });
+
   it('renders a pulled-but-uncurated live tag as an option in the Local optgroup (dynamic union, not the static const)', () => {
     /* Seed a live tag the curated catalog does NOT carry. The picker must
        build its groups from buildModelOptionGroups(buildLocalModelOptions(...))
        off the slice — proving the dynamic union, not the static const. */
-    const uncurated = 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL';
+    const uncurated = 'gemma4-e4b-8gb:latest';
     const store = mountStore({
       analyzerPhase0Model: null,
       localAnalyzerModels: [{ name: uncurated }],

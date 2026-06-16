@@ -7,7 +7,7 @@ owner: null
 # 221 — Dynamic analyzer model picker (curated ∪ live Ollama tags)
 
 > Status: active
-> Key files: `src/lib/models.ts`, `src/store/account-slice.ts`, `src/components/model-settings-form.tsx`, `src/components/analysis-model-picker.tsx`, `src/views/analysing.tsx`, `src/hooks/use-local-analyzer-guard.tsx`, `server/src/routes/ollama-health.ts`, `server/src/ollama/pull-bootstrap.ts`, `server/src/analyzer/ollama.ts`, `server/src/config/registry.ts`
+> Key files: `src/lib/models.ts`, `src/store/account-slice.ts`, `src/components/model-settings-form.tsx`, `src/components/model-pull-status.tsx`, `src/components/analysis-model-picker.tsx`, `src/components/analysing/phase-model-swap.tsx`, `src/views/analysing.tsx`, `src/views/model-manager.tsx`, `src/hooks/use-local-analyzer-guard.tsx`, `server/src/routes/ollama-health.ts`, `server/src/ollama/pull-bootstrap.ts`, `server/src/analyzer/ollama.ts`, `server/src/config/registry.ts`
 > URL surface: analyzer-model pickers (upload, re-parse modal, Account → Defaults, analysing retry, setup wizard); Model Manager pull rows
 > OpenAPI: none — the `/api/ollama/*` routes are deliberately out of `openapi.yaml` (like the sidecar/qwen routes)
 
@@ -31,7 +31,7 @@ This is **Part A** of the original "dynamic analyzer models" work. The measured-
 
 - **Invariants preserved:**
   - `keepAliveFor(model, accelerator)` keeps main's `RESIDENT_MODELS` + accelerator logic (9B unloads on CPU). The knob only parameterises the `'5m'` literal; cross-engine eviction stays owned by `withGpuLoad` (plan 222).
-  - Cloud-no-probe: the analysing-view retry picker fetches the local tag list only after a failure (`error`-gated), so a healthy cloud run never probes Ollama.
+  - Cloud-no-probe: the analysing-view retry picker fetches the local tag list only after a failure (`error`-gated), so a healthy cloud run never *auto*-probes Ollama. The per-phase `PhaseModelSwap` picker additionally refreshes the live list **on `onFocus`** (explicit user interaction) — the invariant holds because the probe fires only when the user opens the dropdown, never on the passive healthy-run render.
   - Gemini fallback (`selectAnalyzer`) unchanged: `ANALYZER=local` + Ollama down + key set → silent Gemini fallback.
 
 - **Deleted:** the frontend `PULLABLE_MODELS` mirror (now `account.pullableModels` from the server).
@@ -44,6 +44,10 @@ This is **Part A** of the original "dynamic analyzer models" work. The measured-
 2. **Engine classification by tag shape.** Use `engineForModelId(id)` (`:` ⇒ local) for the GPU-contention guard and readiness gating — never `MODEL_OPTIONS.find(...).engine` (which mis-classifies an uncurated pulled tag as Gemini and silently skips the guard).
 3. **Single canonical install list.** `DEFAULT_ALLOWED_MODELS` (server) is the only source of pull suggestions; it is both the Model Manager's Pull rows (via `pullable`) and the pull-proxy allowlist (`isAllowed`). It is suggestions + a pull guard, NOT an execution boundary (anything actually pulled is runnable).
 4. **`/health` and `/refresh` stay identical.** `/refresh` delegates to `probeOllamaHealth()`; both carry `pullable`.
+5. **Analysing-view picker refreshes on open.** `PhaseModelSwap` dispatches `fetchAnalyzerModels` on `onFocus`, so a just-pulled local tag becomes selectable on a healthy run without a reload — without auto-probing on the passive render (preserves invariant in §"Cloud-no-probe").
+6. **`ModelPullStatus` rows = `health.pullable` ∪ installed tags.** The "Analyzer models" pull list derives its curated rows from the live health envelope's `pullable` (falling back to the redux `pullableModels` prop), so **"Refresh available models" is self-healing** — a refresh response repopulates an empty list (the redux prop alone could get stuck empty after a transient fetch failure). Installed-but-uncurated tags (e.g. a custom local `gemma4-e4b-8gb:latest`) are unioned in as read-only "Installed" on-disk rows, so the list is a complete picture of what the analyzer can run.
+7. **Model Manager groups by kind.** Inventory rows render under explicit subheadings — TTS under *Standard* / *Optional add-ons*, analyzer (Ollama) under *Analyzer models (Ollama)*, ASR under *Speech recognition (ASR)* — so local analyzer models are never visually lumped under the TTS "Optional add-ons".
+8. **Curated Gemma entry.** `gemma-4-E4B-it-GGUF:UD-Q4_K_XL` is a curated `MODEL_OPTIONS` local entry (friendly label "Gemma 4 E4B (local)"), matching its long-standing membership in the server pull allowlist.
 
 ## Test plan
 
@@ -55,7 +59,8 @@ This is **Part A** of the original "dynamic analyzer models" work. The measured-
 - `src/lib/models.test.ts` — `engineForModelId`; `buildLocalModelOptions` union (curated kept, uncurated appended, dedup, offline=curated); `buildModelOptionGroups`; back-compat `MODEL_OPTION_GROUPS`.
 - `src/store/account-slice.test.ts` — `fetchAnalyzerModels` populates `localAnalyzerModels` + `pullableModels`; unreachable → empty local, pullable still set.
 - `src/hooks/use-local-analyzer-guard.test.tsx` — the guard fires for an uncurated local tag.
-- `src/views/model-manager.test.tsx`, `src/components/analysing/phase-model-swap.test.tsx` — pull rows + picker render the dynamic union (incl. an uncurated tag in the Local optgroup).
+- `src/views/model-manager.test.tsx`, `src/components/analysing/phase-model-swap.test.tsx` — pull rows + picker render the dynamic union (incl. an uncurated tag in the Local optgroup); `phase-model-swap` also asserts the on-`focus` `fetchAnalyzerModels` refresh; `model-manager` asserts analyzer/ASR rows render under their own subheadings (not under Optional add-ons).
+- `src/components/model-pull-status.test.tsx` — curated ∪ installed union (uncurated tag → read-only "Installed" row); curated rows drive off `health.pullable` even when the redux prop is empty (self-healing); "Refresh available models" recovers an empty list from the refresh response's `pullable`.
 - `e2e/model-manager-models.spec.ts` — the e4b tag is offered in the pull list.
 
 ### Manual acceptance walkthrough

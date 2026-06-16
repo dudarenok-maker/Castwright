@@ -36,6 +36,12 @@ export const MODEL_OPTIONS: ModelOption[] = [
     hint: '~5 GB VRAM, stays resident across the analysis loop; stronger than the 4B on dialogue-dense edge cases',
     engine: 'local',
   },
+  {
+    id: 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL',
+    label: 'Gemma 4 E4B (local)',
+    hint: '~6 GB VRAM (UD-Q4 quant), strong on multilingual (incl. Russian) dialogue attribution',
+    engine: 'local',
+  },
   /* --- Gemini API (direct or fallback) — sorted by free-tier headroom,
         most-comfortable first. Hints carry the live RPM/TPM/RPD limits
         pulled from aistudio.google.com/app/rate-limit on 2026-05-16 so
