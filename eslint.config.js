@@ -44,6 +44,9 @@ export default tseslint.config(
       'e2e/**/__snapshots__/',
       'audiobook-workspace/',
       'src/lib/api-types.ts',
+      // Ad-hoc, local-only repro/bisect scripts (e.g. server/repro-attribution.mts).
+      // Throwaway debugging probes — git-ignored and not held to the lint bar.
+      'server/repro-*.mts',
     ],
   },
 

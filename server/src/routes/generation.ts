@@ -1086,6 +1086,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           })
         : null;
 
+    /* Wraps ensureSidecarEngineReady at the two primary preload sites so a
+       GpuBusyError (analysis in progress on a constrained card) surfaces as a
+       user-facing "Generation paused" message rather than an unhandled throw. */
+    async function ensureReadyOrPause(eng: TtsEngine, sig: AbortSignal | undefined): Promise<void> {
+      try {
+        await ensureSidecarEngineReady(eng, sig);
+      } catch (e) {
+        const { GpuBusyError } = await import('../gpu/gpu-load.js');
+        if (e instanceof GpuBusyError) {
+          throw new Error(`Generation paused: ${(e as Error).message}`); // user-facing pause, NOT a breaker-tripping crash
+        }
+        throw e;
+      }
+    }
+
     try {
       const renderBody = async (chapterSignal: AbortSignal): Promise<void> => {
       /* Build the spoken chapter-title phrase from chapter.id + chapter.title.
@@ -1100,7 +1115,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          racing the lazy load. Idempotent + best-effort (the sidecar
          `_base_load_lock` is the correctness guarantee; this is the explicit
          "wait until ready" on top). Honours the run abort. */
-      await ensureSidecarEngineReady(engine, chapterSignal);
+      await ensureReadyOrPause(engine, chapterSignal);
       /* Warm Kokoro ONLY when this chapter will actually render a Qwen→Kokoro
          fallback — either the whole-cast `qwenUnavailable` case, or a confirmed
          per-character undesigned-voice fallback (an unconfirmed one parked the
@@ -1118,7 +1133,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             engine,
           ).length > 0);
       if (willFallBackToKokoro) {
-        await ensureSidecarEngineReady('kokoro', chapterSignal);
+        await ensureReadyOrPause('kokoro', chapterSignal);
       }
       /* Wall around the synth phase only (all TTS — title beat + body groups;
          encode/disk happens after and is excluded) — drives the RTF rollup +

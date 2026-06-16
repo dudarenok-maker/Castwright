@@ -5,6 +5,14 @@ vi.mock('../workspace/user-settings.js', () => ({
   readConfigOverrides: () => ({}),
 }));
 
+/* Passthrough mock for the existing readiness tests — they don't care about
+   the GPU gate; the withGpuLoad suite overrides this per-test via vi.doMock +
+   vi.resetModules. */
+vi.mock('../gpu/gpu-load.js', () => ({
+  withGpuLoad: async (fn: () => Promise<unknown>) => fn(),
+  GpuBusyError: class extends Error {},
+}));
+
 import { ensureSidecarEngineReady } from './ensure-sidecar-loaded.js';
 
 const realFetch = global.fetch;
@@ -123,5 +131,43 @@ describe('ensureSidecarEngineReady', () => {
     await expect(
       ensureSidecarEngineReady('qwen', ac.signal, { timeoutMs: 5_000, pollIntervalMs: 50 }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
+
+describe('ensureSidecarEngineReady — withGpuLoad gate', () => {
+  /* Each test must: vi.resetModules() → vi.doMock() → dynamic import.
+     This ensures the dynamic `await import('../gpu/gpu-load.js')` inside
+     ensureSidecarEngineReady resolves to the test's mock, not the module cache. */
+  afterEach(() => {
+    vi.doUnmock('../gpu/gpu-load.js');
+    vi.doUnmock('../workspace/user-settings.js');
+    vi.resetModules();
+  });
+
+  it('wraps the load in withGpuLoad (the gate runs before /load on a constrained card)', async () => {
+    const order: string[] = [];
+    vi.resetModules();
+    vi.doMock('../workspace/user-settings.js', () => ({
+      getResolvedSidecarUrl: () => 'http://localhost:9000',
+      readConfigOverrides: () => ({}),
+    }));
+    vi.doMock('../gpu/gpu-load.js', () => ({
+      withGpuLoad: async (fn: () => Promise<unknown>) => { order.push('gpu-load-gate'); return fn(); },
+      GpuBusyError: class extends Error {},
+    }));
+    vi.stubGlobal('fetch', vi.fn(async () => { order.push('load'); return { ok: true, json: async () => ({ status: 'ready' }) }; }));
+    const { ensureSidecarEngineReady: ensureReady } = await import('./ensure-sidecar-loaded.js');
+    await ensureReady('qwen', undefined, { timeoutMs: 1000, pollIntervalMs: 10 });
+    expect(order[0]).toBe('gpu-load-gate');
+    expect(order).toContain('load');
+  });
+
+  it('does NOT engage the gate for a cloud / non-sidecar engine', async () => {
+    const gate = vi.fn(async (fn: () => Promise<unknown>) => fn());
+    vi.resetModules();
+    vi.doMock('../gpu/gpu-load.js', () => ({ withGpuLoad: gate, GpuBusyError: class extends Error {} }));
+    const { ensureSidecarEngineReady: ensureReady } = await import('./ensure-sidecar-loaded.js');
+    await ensureReady('gemini' as never);
+    expect(gate).not.toHaveBeenCalled();
   });
 });

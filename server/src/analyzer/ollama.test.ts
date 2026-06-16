@@ -147,12 +147,14 @@ describe('OllamaAnalyzer — happy path streaming', () => {
      * the string sentinel. */
     expect(body.format).not.toBe('json');
     expect(typeof body.format).toBe('object');
-    /* 9B is too heavy to leave resident on an 8 GB box (weights + KV cache
-       at num_ctx 32768 spill over budget) — see RESIDENT_MODELS in
-       ollama.ts. The 4B and llama3.1:8b both hold the keep_alive: '5m'
-       slot; the 9B and any unknown tag get unloaded immediately with
-       keep_alive: 0. */
-    expect(body.keep_alive).toBe(0);
+    /* 9B now holds the resident keep_alive: '5m' slot alongside the 4B and
+       llama3.1:8b. The chunker caps each section so weights + KV stay within
+       the 8 GB budget; the old keep_alive: 0 unloaded+reloaded ~6.35 GB
+       between every section, which dominated wall-clock — badly so on
+       Cyrillic manuscripts that need the larger model. The generation
+       engine's auto-evict frees it before Qwen TTS / XTTS load. See
+       RESIDENT_MODELS in ollama.ts; unknown tags still get 0. */
+    expect(body.keep_alive).toBe('5m');
     expect(body.options.num_ctx).toBe(32768);
     /* Pin all layers to GPU — see ANALYZER_NUM_GPU in ollama.ts. 999 is
        the standard "all layers" idiom; without this, Ollama auto-splits
@@ -193,14 +195,24 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
        Stage 1 → Stage 2 → next-chapter loop. */
     expect(keepAliveFor('qwen3.5:4b')).toBe('5m');
     expect(keepAliveFor('llama3.1:8b')).toBe('5m');
-    /* 9B (~6.6 GB) is over budget once the KV cache lands — unload
-       immediately so XTTS isn't squeezed when the user flips to the
-       generation phase. */
-    expect(keepAliveFor('qwen3.5:9b')).toBe(0);
+    /* 9B (~6.6 GB) is now resident too: it fits within budget with the
+       chunker-capped KV cache, and dropping ~6.35 GB between every section
+       was crippling analysis (especially Cyrillic, which needs the larger
+       model). The generation-phase auto-evict frees it before Qwen TTS /
+       XTTS load. */
+    expect(keepAliveFor('qwen3.5:9b')).toBe('5m');
     /* An unknown model id defaults to 0 — the conservative choice is
        "unload immediately" so we never accidentally pin a model the
        allowlist hasn't been tuned for. */
     expect(keepAliveFor('placeholder:test-7b')).toBe(0);
+  });
+
+  it('pins the heavy 9B resident only on a GPU; CPU unloads it to spare RAM', async () => {
+    const { keepAliveFor } = await import('./ollama.js');
+    expect(keepAliveFor('qwen3.5:9b', 'cuda')).toBe('5m');
+    expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(0);
+    expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe('5m'); // small model: stays
+    expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe('5m'); // unprobed: assume GPU (the perf win)
   });
 
   it('threads keep_alive: "5m" into the /api/chat body when the model is qwen3.5:4b', async () => {
@@ -221,13 +233,13 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
     expect(body.keep_alive).toBe('5m');
   });
 
-  it('threads keep_alive: 0 into the /api/chat body for qwen3.5:9b (over budget — unload immediately)', async () => {
+  it('threads keep_alive: "5m" into the /api/chat body for qwen3.5:9b (resident — reload tax removed)', async () => {
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
     await analyzer.runStage1Chapter('m_ollama_keepalive_9b', 1, '# prompt', {});
     const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(body.keep_alive).toBe(0);
+    expect(body.keep_alive).toBe('5m');
   });
 });
 

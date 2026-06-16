@@ -466,6 +466,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
   },
   {
+    key: 'gpu.safeCoexistMb',
+    env: 'GPU_SAFE_COEXIST_MB',
+    group: 'gpu-lifecycle',
+    label: 'Safe analyzer+TTS coexistence VRAM (MB)',
+    help: 'If detected GPU VRAM is below this, evict the resident Ollama analyzer before loading a sidecar TTS/voice-design model. 8 GB cards evict; 12/16 GB coexist. 0 = always evict.',
+    type: 'integer', min: 0,
+    default: 11000, // ← gpu/residency.ts: below this threshold Ollama is evicted before sidecar load
+    apply: 'live', risk: 'high',
+  },
+  {
     key: 'sidecar.qwenDesignIdleTtl',
     env: 'QWEN_DESIGN_IDLE_TTL',
     group: 'gpu-lifecycle',

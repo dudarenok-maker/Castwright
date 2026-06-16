@@ -39,6 +39,16 @@ vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona: personaMock,
 }));
 
+/* Passthrough mock — keeps withGpuLoad a no-op in tests so the unit boundary
+   stays at the sidecar fetch and doesn't try to evict a real Ollama. */
+vi.mock('../gpu/gpu-load.js', () => ({
+  withGpuLoad: async (fn: () => Promise<unknown>) => fn(),
+  GpuBusyError: class GpuBusyError extends Error {
+    code = 'GPU_BUSY';
+    constructor(m: string) { super(m); this.name = 'GpuBusyError'; }
+  },
+}));
+
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
   {

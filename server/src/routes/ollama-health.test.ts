@@ -276,6 +276,32 @@ describe('POST /api/ollama/unload', () => {
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
   });
+
+  it('unloadResidentOllama() with no targets evicts EVERY resident with keep_alive: 0', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/api/ps')) {
+        return new Response(JSON.stringify({ models: [{ name: 'qwen3.5:9b' }, { name: 'llama3.1:8b' }] }), { status: 200 });
+      }
+      return new Response('', { status: 200 }); // /api/tags + the /api/generate unload calls
+    });
+    const { unloadResidentOllama } = await import('./ollama-health.js');
+    const evicted = await unloadResidentOllama();
+    expect(evicted.sort()).toEqual(['llama3.1:8b', 'qwen3.5:9b']);
+  });
+
+  it('verifyOllamaEvicted() resolves true once /api/ps no longer lists a resident', async () => {
+    let psProbes = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/api/ps')) {
+        psProbes += 1;
+        const models = psProbes === 1 ? [{ name: 'qwen3.5:9b' }] : []; // gone on the 2nd ps probe
+        return new Response(JSON.stringify({ models }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ models: [] }), { status: 200 }); // /api/tags
+    });
+    const { verifyOllamaEvicted } = await import('./ollama-health.js');
+    await expect(verifyOllamaEvicted({ retries: 3, delayMs: 1 })).resolves.toBe(true);
+  });
 });
 
 /* ============================================================

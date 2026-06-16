@@ -60,6 +60,17 @@ vi.mock('../tts/index.js', async (importOriginal) => {
   return { ...actual, selectTtsProvider: vi.fn(() => ({ synthesize })) };
 });
 
+const { withGpuLoadMock } = vi.hoisted(() => ({
+  withGpuLoadMock: vi.fn(async (fn: () => Promise<unknown>) => fn()), // default: passthrough
+}));
+vi.mock('../gpu/gpu-load.js', () => ({
+  withGpuLoad: (fn: () => Promise<unknown>) => withGpuLoadMock(fn),
+  GpuBusyError: class GpuBusyError extends Error {
+    code = 'GPU_BUSY';
+    constructor(m: string) { super(m); this.name = 'GpuBusyError'; }
+  },
+}));
+
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
   {
@@ -395,6 +406,18 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(res.status).toBe(200);
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sent.language).toBe('English');
+  });
+
+  it('returns 409 when the GPU is busy with analysis (constrained card)', async () => {
+    const { GpuBusyError } = await import('../gpu/gpu-load.js');
+    withGpuLoadMock.mockImplementationOnce(() => {
+      throw new GpuBusyError('GPU busy with analysis — try again once it finishes.');
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/GPU busy/i);
   });
 });
 

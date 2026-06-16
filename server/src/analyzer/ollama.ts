@@ -15,6 +15,8 @@ import { z } from 'zod';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
 import { configValue } from '../config/resolver.js';
+import type { Accelerator } from '../gpu/vram-state.js';
+import { getLastKnownVram } from '../gpu/vram-state.js';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
@@ -109,25 +111,48 @@ export function resolveOllamaRetryTemperature(): number {
 /* Models we want Ollama to hold in VRAM between back-to-back analysis
    calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
    reloading a multi-GB weight set between each one would dominate
-   wall-clock time. The 4B (~3 GB) and Llama-8B (~5 GB) both fit
-   resident on an 8 GB box alongside the ~1–1.5 GB KV cache at
-   ANALYZER_NUM_CTX, with enough headroom to absorb a long-chapter KV
-   spike. The 9B (~6.6 GB) is too tight — KV cache pushes it over budget
-   — so we still evict that immediately after each call. XTTS is loaded
-   on a separate, mutually-exclusive pipeline phase, so neither tenant
-   has to fit alongside the other; the auto-evict pill mediates the
-   swap. Tune the allowlist in lockstep with src/lib/models.ts
-   MODEL_OPTIONS. */
-const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'llama3.1:8b']);
+   wall-clock time — the 9B otherwise unloads+reloads ~6.35 GB on every
+   chapter section, which surfaces as a VRAM sawtooth and mid-stream
+   "no response" stalls. The 4B (~3 GB), Llama-8B (~5 GB), and 9B
+   (~6.6 GB) all fit resident on an 8 GB box alongside the KV cache at
+   ANALYZER_NUM_CTX: the chunker caps each section to ~24k chars so the
+   KV cache never reaches the 32k worst case (confirmed live — the 9B
+   ran ~6.25 GB / 8 GB resident).
+
+   The cross-engine handoff is the load-bearing assumption: a resident 9B
+   CANNOT co-reside with Qwen TTS / XTTS, so we rely on the generation
+   engine's auto-evict to drop a resident Ollama model before it loads.
+   With that protection in place, keeping the 9B warm across the analysis
+   loop is safe and removes the reload tax.
+
+   NOTE: this does NOT hold for a LOCAL-MODEL SPLIT (a run that uses two
+   different local models across phase0/phase1). Two large local models
+   resident at once would exceed the 8 GB budget — that path must keep
+   its non-resident eviction; do not naively add both to this set.
+   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS. */
+const RESIDENT_MODELS = new Set(['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b']);
+
+/* Models that are only safe to keep resident where the constraint is VRAM
+   (GPU box). On a CPU-only machine the same model would pin ~6.4 GB of
+   system RAM for 5 min with no eviction guard, so we unload immediately
+   when the accelerator is 'cpu'. Small models (4B/8B) fit comfortably in
+   either context and are NOT in this set. */
+const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
 
 /** Picks the `keep_alive` value for an Ollama /api/chat call:
     - models in RESIDENT_MODELS → '5m' (stay loaded for the analysis loop)
+    - RAM_HEAVY_MODELS on CPU   → 0   (would pin ~6.4 GB in system RAM)
     - everything else            → 0   (unload immediately after the call,
                                         matching `keep_alive: 0` in Ollama's
                                         own unload pattern — see
-                                        https://github.com/ollama/ollama/blob/main/docs/api.md#keep-alive). */
-export function keepAliveFor(model: string): string | number {
-  return RESIDENT_MODELS.has(model) ? '5m' : 0;
+                                        https://github.com/ollama/ollama/blob/main/docs/api.md#keep-alive).
+    The `accelerator` parameter defaults to 'unknown', which is treated as
+    GPU (the common case + the perf win), so existing 1-arg callers are
+    unaffected. */
+export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): string | number {
+  if (!RESIDENT_MODELS.has(model)) return 0;
+  if (RAM_HEAVY_MODELS.has(model) && accelerator === 'cpu') return 0;
+  return '5m';
 }
 
 /* num_ctx the analyzer hands Ollama on every /api/chat call (see the
@@ -413,7 +438,7 @@ export class OllamaAnalyzer implements Analyzer {
          The 4B and Llama-8B stay resident across the analysis loop; the
          9B unloads immediately so its 6.6 GB doesn't squat on VRAM that
          XTTS needs after analysis. */
-      keep_alive: keepAliveFor(this.model),
+      keep_alive: keepAliveFor(this.model, getLastKnownVram().accelerator),
       /* Suppress qwen3.5's thinking tokens — they'd appear as
          `<think>…</think>` ahead of the JSON and break the parser. Ollama
          silently ignores this flag on non-thinking models. */

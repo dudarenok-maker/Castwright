@@ -14,6 +14,7 @@ import {
 } from '../workspace/user-settings.js';
 import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
+import { setLastKnownVram } from '../gpu/vram-state.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -251,6 +252,9 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
        a reachable response — an unreachable poll leaves the last-known state
        intact (a transient timeout shouldn't downgrade a known-ready Qwen). */
     setLastKnownQwenInstallState(qwenInstallState);
+    setLastKnownVram({
+      totalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
+    });
     return {
       status: 'reachable',
       url,
