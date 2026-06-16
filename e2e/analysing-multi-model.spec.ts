@@ -48,9 +48,7 @@ async function bootFreshBookIntoAnalysing(page: Page) {
   await page.getByRole('button', { name: /Paste text/i }).click();
   await page
     .locator('textarea')
-    .fill(
-      '# The Plan 95 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n',
-    );
+    .fill('# The Plan 95 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n');
   await page.getByRole('button', { name: /Upload pasted text/i }).click();
   await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
     timeout: 5_000,
@@ -80,21 +78,22 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
     await expect(page.getByTestId('phase-model-chip-2')).toHaveCount(0);
   });
 
-  test('single-model (no split): both chips name the same model and Phase 1 shows no warm-up hint', async ({
+  test('single-model (no split): both chips name the server-reported model and Phase 1 shows no warm-up hint', async ({
     page,
   }) => {
     await bootFreshBookIntoAnalysing(page);
     await page.getByRole('button', { name: /Start analysis/i }).click();
     const phase1 = page.getByTestId('phase-model-chip-1');
     await expect(phase1).toBeVisible({ timeout: 5_000 });
-    /* No per-phase split is configured (fresh account), so both phases run
-       the single effective model — the mock default is Gemini 3.1 Flash Lite
-       (FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel). The old chip
-       fabricated "Gemma 4 31B" for Phase 0; plan 118 makes it honest. */
+    /* The mock analysis stream emits `model: 'qwen3.5:9b'` on every phase
+       event (Task 2 — the mock exercises the "server ran a different model
+       than the UI default" path). With Task 2 wired, the chip now prefers
+       the server-reported id over the Redux selection (Gemini 3.1 Flash Lite),
+       so both chips must show the 9B label once the SSE arrives. */
     await expect(page.getByTestId('phase-model-chip-0').first()).toContainText(
-      'Gemini 3.1 Flash Lite',
+      'Qwen3.5 9B (local)',
     );
-    await expect(phase1).toContainText('Gemini 3.1 Flash Lite');
+    await expect(phase1.first()).toContainText('Qwen3.5 9B (local)');
     /* And no false promise of a handoff that won't happen with the split off. */
     await expect(phase1).not.toContainText(/warms up/i);
   });
@@ -151,6 +150,22 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
     await expect(page.getByRole('button', { name: /Resume analysis/i })).toBeVisible();
   });
 
+  test('chip shows the server-reported model label, not the Redux default', async ({ page }) => {
+    /* The mock analysis stream (mockAnalyseManuscript in src/lib/api.ts)
+       emits `model: 'qwen3.5:9b'` on every phase event.  The Redux default
+       for a fresh account is Gemini 3.1 Flash Lite.  Task 2 wires the chip
+       to prefer the server-reported model id over the Redux selection, so
+       once the first phase event arrives the chip must flip to the 9B label
+       rather than the UI's default. */
+    await bootFreshBookIntoAnalysing(page);
+    await page.getByRole('button', { name: /Start analysis/i }).click();
+    const chip0 = page.getByTestId('phase-model-chip-0').first();
+    await expect(chip0).toBeVisible({ timeout: 5_000 });
+    /* Server emitted qwen3.5:9b — chip must reflect that, not the Redux default. */
+    await expect(chip0).toContainText('Qwen3.5 9B (local)');
+    await expect(chip0).not.toContainText('Gemini');
+  });
+
   test('Phase 0 model swap writes the saveAccountSettings patch + surfaces the toast', async ({
     page,
   }) => {
@@ -178,5 +193,20 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
     await expect
       .poll(async () => (await readAccountSlice(page)).analyzerPhase0Model, { timeout: 5_000 })
       .toBe('gemini-3.1-flash-lite');
+  });
+
+  test('live ticker shows "section M/N" sub-bar when mock emits sectionsDone/sectionsTotal', async ({
+    page,
+  }) => {
+    /* The mock analysis stream (mockAnalyseManuscript in src/lib/api.ts)
+       emits a live payload with sectionsDone:2 / sectionsTotal:5 on Phase 0
+       between 40–70% progress. Assert the section text renders in the ticker
+       before the phase completes. */
+    await bootFreshBookIntoAnalysing(page);
+    await page.getByRole('button', { name: /Start analysis/i }).click();
+    /* Wait for the live ticker to appear with section info. The mock emits
+       the live payload during Phase 0 progress 40–70%, so it will appear
+       while Phase 0 is streaming. */
+    await expect(page.getByText(/section 2\/5/i)).toBeVisible({ timeout: 8_000 });
   });
 });

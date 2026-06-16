@@ -35,6 +35,114 @@ function renderPhase(phase: AnalysisPhase) {
   );
 }
 
+const activePhase: AnalysisPhase = {
+  id: 0,
+  label: 'Detecting characters',
+  detail: 'Named-entity extraction, dialogue attribution, speaker resolution.',
+  duration: 1000,
+};
+
+describe('LiveChapterRow — section sub-bar', () => {
+  /* When a chapter has sectionsTotal > 1 the row must show "section M/N"
+     and a thin sub-bar; single-section (or absent) chapters must stay clean. */
+  it('shows "section M/N" text when sectionsTotal > 1', () => {
+    const store = mountStore();
+    render(
+      <Provider store={store}>
+        <PhaseCard
+          phase={activePhase}
+          activePhaseId={activePhase.id}
+          phaseProgress={0.5}
+          phaseLogs={[]}
+          live={{
+            totalChapters: 10,
+            chapters: [
+              {
+                chapterIndex: 2,
+                chapterTitle: 'Chapter 2',
+                elapsedMs: 3000,
+                estMs: 8000,
+                sectionsDone: 3,
+                sectionsTotal: 4,
+              },
+            ],
+          }}
+          isLocalAnalyzer={false}
+          analysisStarted={true}
+          conn="streaming"
+          bookId={null}
+          droppedQuotesRefreshKey={0}
+        />
+      </Provider>,
+    );
+    expect(screen.getByText(/section 3\/4/i)).toBeInTheDocument();
+  });
+
+  it('renders no "section" text when sectionsTotal is 1', () => {
+    const store = mountStore();
+    render(
+      <Provider store={store}>
+        <PhaseCard
+          phase={activePhase}
+          activePhaseId={activePhase.id}
+          phaseProgress={0.5}
+          phaseLogs={[]}
+          live={{
+            totalChapters: 10,
+            chapters: [
+              {
+                chapterIndex: 2,
+                chapterTitle: 'Chapter 2',
+                elapsedMs: 3000,
+                estMs: 8000,
+                sectionsDone: 1,
+                sectionsTotal: 1,
+              },
+            ],
+          }}
+          isLocalAnalyzer={false}
+          analysisStarted={true}
+          conn="streaming"
+          bookId={null}
+          droppedQuotesRefreshKey={0}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByText(/section/i)).toBeNull();
+  });
+
+  it('renders no "section" text when sectionsTotal is absent', () => {
+    const store = mountStore();
+    render(
+      <Provider store={store}>
+        <PhaseCard
+          phase={activePhase}
+          activePhaseId={activePhase.id}
+          phaseProgress={0.5}
+          phaseLogs={[]}
+          live={{
+            totalChapters: 10,
+            chapters: [
+              {
+                chapterIndex: 2,
+                chapterTitle: 'Chapter 2',
+                elapsedMs: 3000,
+                estMs: 8000,
+              },
+            ],
+          }}
+          isLocalAnalyzer={false}
+          analysisStarted={true}
+          conn="streaming"
+          bookId={null}
+          droppedQuotesRefreshKey={0}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByText(/section/i)).toBeNull();
+  });
+});
+
 describe('PhaseCard layout', () => {
   /* The detail copy must span the full card width rather than the narrow
      column beneath the label. The model chip + swap dropdown share the

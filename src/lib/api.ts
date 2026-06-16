@@ -128,6 +128,12 @@ export interface AnalysisLiveChapter {
   chapterTitle: string;
   elapsedMs: number;
   estMs: number;
+  /** How many sections of this chapter the analyzer has finished so far.
+      Only present when sectionsTotal > 1 (multi-section chapters). */
+  sectionsDone?: number;
+  /** Total sections this chapter was split into.
+      Absent or ≤ 1 means the chapter is a single section — no sub-bar. */
+  sectionsTotal?: number;
 }
 export interface AnalysisLiveInfo {
   totalChapters: number;
@@ -156,7 +162,12 @@ export interface AnalyseOpts {
       working on the old request while the new one queues, manifesting
       to the user as cascading aborts in the server log. */
   signal?: AbortSignal;
-  onPhase?: (e: { phaseId: number; progress: number; live?: AnalysisLiveInfo }) => void;
+  onPhase?: (e: {
+    phaseId: number;
+    progress: number;
+    live?: AnalysisLiveInfo;
+    model?: string;
+  }) => void;
   /** Narrative log lines streamed from the server. Surface them in the
       active phase so the user sees real progress (e.g. detected characters,
       sentence counts) instead of canned snippets. */
@@ -184,7 +195,12 @@ export interface AnalyseOpts {
       persisted to the analysis cache so the analysing view can render a
       per-chapter Retry button. Emitted by both the full and subset
       analysis routes. */
-  onChapterFailed?: (e: { chapterId: number; message: string; code?: string; remediation?: string }) => void;
+  onChapterFailed?: (e: {
+    chapterId: number;
+    message: string;
+    code?: string;
+    remediation?: string;
+  }) => void;
   /** A previously-failed chapter just had its Phase 0a re-run succeed
       (either via the main route re-queueing failedChapterIds on resume,
       or via the subset retry route). The chapter id has been cleared
@@ -981,7 +997,12 @@ function buildCarricksCompassMockState(): BookStateResponse {
     manuscriptEdits: null,
     revisions: null,
     completedSlugs: [],
-    chapterCharacters: { 1: ['eliza_cc'], 2: ['eliza_cc', 'greene'], 3: ['eliza_cc', 'greene'], 4: ['greene'] },
+    chapterCharacters: {
+      1: ['eliza_cc'],
+      2: ['eliza_cc', 'greene'],
+      3: ['eliza_cc', 'greene'],
+      4: ['greene'],
+    },
     changeLog: null,
     analysis: undefined,
   };
@@ -1205,7 +1226,8 @@ export async function mockPutListenStats(
 
 export async function mockGetLibraryStats() {
   await wait(15);
-  const seeded = (globalThis as unknown as { __SEED_LIBRARY_STATS__?: LibraryStats }).__SEED_LIBRARY_STATS__;
+  const seeded = (globalThis as unknown as { __SEED_LIBRARY_STATS__?: LibraryStats })
+    .__SEED_LIBRARY_STATS__;
   if (seeded) return seeded;
   let totalListenedSec = 0;
   const byDayMap = new Map<string, number>();
@@ -1233,7 +1255,8 @@ export async function mockGetContinueListening() {
   // Marketing capture: pose the rail from our manuscripts. Fresh copies, since
   // the slice's hydrate freezes its payload via Immer.
   if (DEMO_CAPTURE) return HOLLOW_TIDE_CONTINUE.map((x) => ({ ...x }));
-  const seeded = (globalThis as unknown as { __SEED_CONTINUE__?: ContinueListeningItem[] }).__SEED_CONTINUE__;
+  const seeded = (globalThis as unknown as { __SEED_CONTINUE__?: ContinueListeningItem[] })
+    .__SEED_CONTINUE__;
   return seeded ?? [];
 }
 
@@ -1316,7 +1339,29 @@ async function mockAnalyseManuscript(
     await new Promise<void>((resolve) => {
       const t = setInterval(() => {
         const progress = Math.min(1, (Date.now() - start) / ph.durationMs);
-        onPhase?.({ phaseId: ph.id, progress });
+        /* Emit the server-resolved model on every phase tick so the chip
+           can mirror it. The mock uses qwen3.5:9b to exercise the
+           "server ran a different model than the UI default" path that
+           the e2e spec asserts in analysing-multi-model.spec.ts.
+           Phase 0 also emits a live payload at ~50% progress to exercise
+           the per-chapter section sub-bar (sectionsDone/sectionsTotal). */
+        const live =
+          ph.id === 0 && progress >= 0.4 && progress < 0.7
+            ? {
+                totalChapters: 2,
+                chapters: [
+                  {
+                    chapterIndex: 1,
+                    chapterTitle: 'Chapter 1',
+                    elapsedMs: Math.round(progress * ph.durationMs),
+                    estMs: ph.durationMs,
+                    sectionsDone: 2,
+                    sectionsTotal: 5,
+                  },
+                ],
+              }
+            : undefined;
+        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live });
         if (progress >= 1) {
           clearInterval(t);
           resolve();
@@ -1511,7 +1556,12 @@ function mockStreamGeneration({
 
 /* fs-26 mock — emits the start → assembling → complete arc synchronously so
    mock-mode (e2e / unit) drives the splice flow without a backend. */
-async function mockStreamSplice({ chapterId, mode, characterId, onTick }: SpliceArgs): Promise<void> {
+async function mockStreamSplice({
+  chapterId,
+  mode,
+  characterId,
+  onTick,
+}: SpliceArgs): Promise<void> {
   onTick({ type: 'splice_start', chapterId, mode, characterId });
   await wait(80);
   onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
@@ -2364,7 +2414,12 @@ async function realAnalyseManuscript(
   const handle = (payload: AnalysisStreamEvent) => {
     if (payload.kind === 'phase') {
       if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
-        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress, live: payload.live });
+        onPhase?.({
+          phaseId: payload.phaseId,
+          progress: payload.progress,
+          live: payload.live,
+          model: typeof payload.model === 'string' ? payload.model : undefined,
+        });
       }
     } else if (payload.kind === 'log') {
       if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
@@ -3214,10 +3269,7 @@ async function realReparseBook(bookId: string): Promise<ReparseBookResponse> {
   return res.json();
 }
 
-async function realReplaceManuscript(
-  bookId: string,
-  file: File,
-): Promise<ReparseBookResponse> {
+async function realReplaceManuscript(bookId: string, file: File): Promise<ReparseBookResponse> {
   const form = new FormData();
   form.append('file', file);
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/replace-manuscript`, {
@@ -3257,7 +3309,11 @@ async function realLoadSample(slug: string): Promise<{ bookId: string }> {
   const res = await fetch(`/api/samples/${encodeURIComponent(slug)}/load`, { method: 'POST' });
   if (!res.ok) {
     let detail = '';
-    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
     throw new Error(detail || `Couldn't load the sample (${res.status}).`);
   }
   return res.json();
@@ -3350,10 +3406,7 @@ async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
 }
 
-async function mockReplaceManuscript(
-  _bookId: string,
-  _file: File,
-): Promise<ReparseBookResponse> {
+async function mockReplaceManuscript(_bookId: string, _file: File): Promise<ReparseBookResponse> {
   await wait(120);
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
 }
@@ -3762,7 +3815,12 @@ async function realRunAnalysisForChapters(
   const handle = (payload: AnalysisStreamEvent) => {
     if (payload.kind === 'phase') {
       if (typeof payload.phaseId === 'number' && typeof payload.progress === 'number') {
-        onPhase?.({ phaseId: payload.phaseId, progress: payload.progress, live: payload.live });
+        onPhase?.({
+          phaseId: payload.phaseId,
+          progress: payload.progress,
+          live: payload.live,
+          model: typeof payload.model === 'string' ? payload.model : undefined,
+        });
       }
     } else if (payload.kind === 'log') {
       if (typeof payload.phaseId === 'number' && typeof payload.message === 'string') {
@@ -4129,7 +4187,11 @@ async function realStreamSplice({
     }
   } catch (e) {
     if ((e as { name?: string })?.name === 'AbortError') return;
-    onTick({ type: 'chapter_failed', chapterId, errorReason: (e as Error).message ?? 'Splice failed.' });
+    onTick({
+      type: 'chapter_failed',
+      chapterId,
+      errorReason: (e as Error).message ?? 'Splice failed.',
+    });
   }
 }
 
@@ -4268,10 +4330,7 @@ export interface CastDesignStatus {
   failures?: Array<{ characterId: string; name: string; error: string }>;
 }
 
-export async function readCastDesignStream(
-  res: Response,
-  cb: CastDesignCallbacks,
-): Promise<void> {
+export async function readCastDesignStream(res: Response, cb: CastDesignCallbacks): Promise<void> {
   if (!res.ok || !res.body) {
     let detail = '';
     try {
@@ -4297,11 +4356,18 @@ export async function readCastDesignStream(
             phase: e.phase === 'rendering' ? 'rendering' : 'designing',
           });
         } else {
-          cb.onResumeFrom?.({ total: e.total ?? 0, done: e.done ?? 0, currentName: e.currentName ?? null });
+          cb.onResumeFrom?.({
+            total: e.total ?? 0,
+            done: e.done ?? 0,
+            currentName: e.currentName ?? null,
+          });
         }
         break;
       case 'phase':
-        if (typeof e.characterId === 'string' && (e.phase === 'designing' || e.phase === 'rendering'))
+        if (
+          typeof e.characterId === 'string' &&
+          (e.phase === 'designing' || e.phase === 'rendering')
+        )
           cb.onPhase?.({ characterId: e.characterId, phase: e.phase });
         break;
       case 'designed':
@@ -4344,7 +4410,11 @@ export async function readCastDesignStream(
           typeof e.emotion === 'string' &&
           typeof e.voiceId === 'string'
         )
-          cb.onVariantDesigned?.({ characterId: e.characterId, emotion: e.emotion as Emotion, voiceId: e.voiceId });
+          cb.onVariantDesigned?.({
+            characterId: e.characterId,
+            emotion: e.emotion as Emotion,
+            voiceId: e.voiceId,
+          });
         break;
       case 'character_skipped':
         if (typeof e.characterId === 'string')
@@ -4465,10 +4535,12 @@ async function realStartSingleDesign(
 }
 
 async function realSubscribeSingleDesign(bookId: string, cb: CastDesignCallbacks): Promise<void> {
-  const res = await fetch(
-    `/api/books/${encodeURIComponent(bookId)}/cast/design-single/subscribe`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: cb.signal },
-  );
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design-single/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    signal: cb.signal,
+  });
   await readCastDesignStream(res, cb);
 }
 
@@ -4504,7 +4576,10 @@ async function mockStartSingleDesign(
       persona: args.persona,
     });
   } else {
-    cb.onCharacterDesigned?.({ characterId: args.characterId, voiceId: `qwen-${args.characterId}` });
+    cb.onCharacterDesigned?.({
+      characterId: args.characterId,
+      voiceId: `qwen-${args.characterId}`,
+    });
   }
   cb.onIdle?.({ done: args.preview ? 0 : 1, total: 1, skipped: 0, failures: [] });
 }
@@ -4564,7 +4639,11 @@ async function mockStartCastDesign(
       cb.onProgress?.({ characterId: t.characterId, name: t.characterId, done, total });
       await wait(120);
       if (cb.signal?.aborted) return;
-      cb.onVariantDesigned?.({ characterId: t.characterId, emotion, voiceId: `qwen-${t.characterId}__${emotion}` });
+      cb.onVariantDesigned?.({
+        characterId: t.characterId,
+        emotion,
+        voiceId: `qwen-${t.characterId}__${emotion}`,
+      });
       done += 1;
     }
   }
@@ -4909,7 +4988,9 @@ async function realPutGeminiKey(key: string | null): Promise<UserSettings> {
 async function realGetAppInfo(): Promise<AppInfo> {
   const res = await fetch('/api/info');
   if (!res.ok)
-    throw new Error(`App info fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new Error(
+      `App info fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 /* "Is a newer release available?" check for the Application updates card.
@@ -4919,10 +5000,23 @@ async function realGetAppInfo(): Promise<AppInfo> {
 async function realGetUpdateStatus(): Promise<UpdateStatus> {
   try {
     const res = await fetch('/api/updates/latest');
-    if (!res.ok) return { reachable: false, currentVersion: '', latestVersion: null, updateAvailable: false, url: null };
+    if (!res.ok)
+      return {
+        reachable: false,
+        currentVersion: '',
+        latestVersion: null,
+        updateAvailable: false,
+        url: null,
+      };
     return res.json();
   } catch {
-    return { reachable: false, currentVersion: '', latestVersion: null, updateAvailable: false, url: null };
+    return {
+      reachable: false,
+      currentVersion: '',
+      latestVersion: null,
+      updateAvailable: false,
+      url: null,
+    };
   }
 }
 /* Interim — HEAD-probe GET /api/companion/apk to learn whether a packaged
@@ -4942,30 +5036,40 @@ async function realCheckCompanionApk(): Promise<CompanionApkAvailability> {
 async function realDismissWhatsNew(): Promise<void> {
   const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
   if (!res.ok)
-    throw new Error(`Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new Error(
+      `Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 async function realUpgradeStage(file: File): Promise<UpgradeStageResult> {
   const form = new FormData();
   form.append('zip', file, file.name);
   const res = await fetch('/api/upgrade/stage', { method: 'POST', body: form });
   if (!res.ok)
-    throw new Error(`Upgrade staging failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new Error(
+      `Upgrade staging failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 async function realUpgradeApply(): Promise<void> {
   const res = await fetch('/api/upgrade/apply', { method: 'POST' });
   if (!res.ok)
-    throw new Error(`Upgrade apply failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new Error(
+      `Upgrade apply failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 async function realUpgradeAbort(): Promise<void> {
   const res = await fetch('/api/upgrade/abort', { method: 'POST' });
   if (!res.ok)
-    throw new Error(`Upgrade abort failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new Error(
+      `Upgrade abort failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
 }
 async function realUpgradeState(): Promise<UpgradeStatePayload> {
   const res = await fetch('/api/upgrade/state');
   if (!res.ok)
-    throw new Error(`Upgrade state failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new Error(
+      `Upgrade state failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -5012,7 +5116,13 @@ async function mockDismissWhatsNew(): Promise<void> {
 }
 async function mockUpgradeStage(_file: File): Promise<UpgradeStageResult> {
   await wait(50);
-  return { candidateVersion: '1.7.0', runningVersion: '1.6.0', reqHash: 'mock', requiresPipInstall: false, isDowngrade: false };
+  return {
+    candidateVersion: '1.7.0',
+    runningVersion: '1.6.0',
+    reqHash: 'mock',
+    requiresPipInstall: false,
+    isDowngrade: false,
+  };
 }
 async function mockUpgradeApply(): Promise<void> {
   await wait(30);
@@ -5223,9 +5333,7 @@ async function realCreatePairSession(): Promise<PairSessionInfo> {
     body: '{}',
   });
   if (!res.ok)
-    throw new Error(
-      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+    throw new Error(`pair session failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -5515,10 +5623,27 @@ async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
     ts: '2026-01-01T00:00:00.000Z',
     overall: 'ok',
     checks: [
-      { id: 'gpu', label: 'GPU / VRAM', status: 'ok', detail: 'cuda · 1.2 / 8.0 GB reserved', value: '1.2/8.0 GB' },
-      { id: 'sidecar', label: 'Voice engine', status: 'ok', detail: 'reachable · kokoro, qwen', value: 'kokoro, qwen' },
+      {
+        id: 'gpu',
+        label: 'GPU / VRAM',
+        status: 'ok',
+        detail: 'cuda · 1.2 / 8.0 GB reserved',
+        value: '1.2/8.0 GB',
+      },
+      {
+        id: 'sidecar',
+        label: 'Voice engine',
+        status: 'ok',
+        detail: 'reachable · kokoro, qwen',
+        value: 'kokoro, qwen',
+      },
       { id: 'asr', label: 'ASR (Whisper)', status: 'ok', detail: 'off — content-QA disabled' },
-      { id: 'analyzer', label: 'Analyzer (Ollama)', status: 'ok', detail: 'reachable · model resident' },
+      {
+        id: 'analyzer',
+        label: 'Analyzer (Ollama)',
+        status: 'ok',
+        detail: 'reachable · model resident',
+      },
       { id: 'gemini', label: 'Analyzer (Gemini)', status: 'ok', detail: 'not in use' },
       { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail: 'both present' },
       { id: 'disk', label: 'Free disk', status: 'ok', detail: '142 GB free', value: 142 },
@@ -5532,7 +5657,12 @@ export type BlockerStatus = 'pass' | 'fail';
 export interface SetupReadiness {
   ready: boolean;
   completedAt: string | null;
-  blockers: { sidecar: BlockerStatus; ffmpeg: BlockerStatus; tts: BlockerStatus; analyzer: BlockerStatus };
+  blockers: {
+    sidecar: BlockerStatus;
+    ffmpeg: BlockerStatus;
+    tts: BlockerStatus;
+    analyzer: BlockerStatus;
+  };
   info: { gpu: string };
 }
 
@@ -5620,7 +5750,13 @@ async function realRunSmokeTest(): Promise<SmokeTestResult> {
 
 export async function mockRunSmokeTest(): Promise<SmokeTestResult> {
   await wait(800);
-  return { ok: true, url: stubAudioA, durationSec: 3.2, analyzerOk: true, analyzerDetail: '(mock)' };
+  return {
+    ok: true,
+    url: stubAudioA,
+    durationSec: 3.2,
+    analyzerOk: true,
+    analyzerDetail: '(mock)',
+  };
 }
 
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
@@ -5665,109 +5801,110 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       ? { ...item, present: false, loaded: false, sizeBytes: null, removable: false }
       : item;
   const items: ModelInventoryItem[] = [
-      {
-        id: 'kokoro',
-        kind: 'tts',
-        label: 'Kokoro v1',
-        present: true,
-        sizeBytes: 346_030_080,
-        diskPath: 'server/tts-sidecar/voices/kokoro',
-        loaded: MOCK_SIDECAR_KOKORO_LOADED,
-        installState: MOCK_SIDECAR_KOKORO_LOADED ? 'loaded' : 'ready',
-        tier: 'standard',
-        isDefaultEngine: !MOCK_SIDECAR_QWEN_LOADED,
-        isFallbackEngine: true,
-        removable: true,
-        updatable: true,
-        integrity: 'verified',
-      },
-      {
-        id: 'qwen-base',
-        kind: 'tts',
-        label: 'Qwen3-TTS Base (0.6B)',
-        present: true,
-        sizeBytes: 1_283_457_024,
-        diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base',
-        loaded: MOCK_SIDECAR_QWEN_LOADED,
-        /* package-missing exercises the Needs-repair / Repair / no-Load-pill
+    {
+      id: 'kokoro',
+      kind: 'tts',
+      label: 'Kokoro v1',
+      present: true,
+      sizeBytes: 346_030_080,
+      diskPath: 'server/tts-sidecar/voices/kokoro',
+      loaded: MOCK_SIDECAR_KOKORO_LOADED,
+      installState: MOCK_SIDECAR_KOKORO_LOADED ? 'loaded' : 'ready',
+      tier: 'standard',
+      isDefaultEngine: !MOCK_SIDECAR_QWEN_LOADED,
+      isFallbackEngine: true,
+      removable: true,
+      updatable: true,
+      integrity: 'verified',
+    },
+    {
+      id: 'qwen-base',
+      kind: 'tts',
+      label: 'Qwen3-TTS Base (0.6B)',
+      present: true,
+      sizeBytes: 1_283_457_024,
+      diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base',
+      loaded: MOCK_SIDECAR_QWEN_LOADED,
+      /* package-missing exercises the Needs-repair / Repair / no-Load-pill
            health states that model-manager-health.spec.ts pins (Task 12).
            installState resolves back to 'loaded' when the user loads it. */
-        installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'package-missing',
-        tier: 'standard',
-        isDefaultEngine: MOCK_SIDECAR_QWEN_LOADED,
-        isFallbackEngine: false,
-        removable: true,
-        updatable: true,
-        integrity: 'unpinned',
-      },
-      {
-        id: 'qwen-design',
-        kind: 'tts',
-        label: 'Qwen3-TTS VoiceDesign (1.7B)',
-        present: true,
-        sizeBytes: 3_623_878_656,
-        diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign',
-        loaded: false,
-        tier: 'standard',
-        isDefaultEngine: false,
-        isFallbackEngine: false,
-        removable: true,
-        updatable: true,
-      },
-      {
-        id: 'coqui',
-        kind: 'tts',
-        label: 'Coqui XTTS v2',
-        present: false,
-        sizeBytes: null,
-        diskPath: 'server/tts-sidecar/voices/coqui/tts/tts_models--multilingual--multi-dataset--xtts_v2',
-        loaded: false,
-        installState: 'not-installed',
-        tier: 'secondary',
-        isDefaultEngine: false,
-        isFallbackEngine: false,
-        removable: false,
-        updatable: true,
-      },
-      {
-        id: 'whisper',
-        kind: 'asr',
-        label: 'Whisper ASR (faster-whisper)',
-        present: false,
-        sizeBytes: null,
-        diskPath: '~/.cache/huggingface/hub/models--Systran--faster-whisper-base',
-        loaded: false,
-        isDefaultEngine: false,
-        isFallbackEngine: false,
-        removable: false,
-        updatable: true,
-      },
-      {
-        id: 'ollama:qwen3.5:4b',
-        kind: 'analyzer',
-        label: 'qwen3.5:4b',
-        present: true,
-        sizeBytes: 2_600_000_000,
-        diskPath: null,
-        loaded: MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b'),
-        isDefaultEngine: true,
-        isFallbackEngine: false,
-        removable: true,
-        updatable: true,
-      },
-      {
-        id: 'ollama:llama3.1:8b',
-        kind: 'analyzer',
-        label: 'llama3.1:8b',
-        present: true,
-        sizeBytes: 4_700_000_000,
-        diskPath: null,
-        loaded: MOCK_OLLAMA_RESIDENT.has('llama3.1:8b'),
-        isDefaultEngine: false,
-        isFallbackEngine: false,
-        removable: true,
-        updatable: true,
-      },
+      installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'package-missing',
+      tier: 'standard',
+      isDefaultEngine: MOCK_SIDECAR_QWEN_LOADED,
+      isFallbackEngine: false,
+      removable: true,
+      updatable: true,
+      integrity: 'unpinned',
+    },
+    {
+      id: 'qwen-design',
+      kind: 'tts',
+      label: 'Qwen3-TTS VoiceDesign (1.7B)',
+      present: true,
+      sizeBytes: 3_623_878_656,
+      diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+      loaded: false,
+      tier: 'standard',
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: true,
+      updatable: true,
+    },
+    {
+      id: 'coqui',
+      kind: 'tts',
+      label: 'Coqui XTTS v2',
+      present: false,
+      sizeBytes: null,
+      diskPath:
+        'server/tts-sidecar/voices/coqui/tts/tts_models--multilingual--multi-dataset--xtts_v2',
+      loaded: false,
+      installState: 'not-installed',
+      tier: 'secondary',
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: false,
+      updatable: true,
+    },
+    {
+      id: 'whisper',
+      kind: 'asr',
+      label: 'Whisper ASR (faster-whisper)',
+      present: false,
+      sizeBytes: null,
+      diskPath: '~/.cache/huggingface/hub/models--Systran--faster-whisper-base',
+      loaded: false,
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: false,
+      updatable: true,
+    },
+    {
+      id: 'ollama:qwen3.5:4b',
+      kind: 'analyzer',
+      label: 'qwen3.5:4b',
+      present: true,
+      sizeBytes: 2_600_000_000,
+      diskPath: null,
+      loaded: MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b'),
+      isDefaultEngine: true,
+      isFallbackEngine: false,
+      removable: true,
+      updatable: true,
+    },
+    {
+      id: 'ollama:llama3.1:8b',
+      kind: 'analyzer',
+      label: 'llama3.1:8b',
+      present: true,
+      sizeBytes: 4_700_000_000,
+      diskPath: null,
+      loaded: MOCK_OLLAMA_RESIDENT.has('llama3.1:8b'),
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: true,
+      updatable: true,
+    },
   ];
   return {
     ts: new Date().toISOString(),
@@ -6092,10 +6229,34 @@ const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
 
 /* In-memory mock config store. Starts with default values; PUT/reset mutate it. */
 const MOCK_CONFIG_VALUES: import('./types').ConfigValues = {
-  KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 24000, source: 'default', locked: false, overridden: false },
-  SEG_QA_MAX_RERECORDS: { key: 'SEG_QA_MAX_RERECORDS', effective: 2, source: 'default', locked: false, overridden: false },
-  SEG_ASR_ENABLED: { key: 'SEG_ASR_ENABLED', effective: false, source: 'default', locked: false, overridden: false },
-  ANALYZER_STAGE1_PROMPT: { key: 'ANALYZER_STAGE1_PROMPT', effective: 'Attribute each sentence to its speaker.', source: 'default', locked: false, overridden: false },
+  KOKORO_SAMPLE_RATE: {
+    key: 'KOKORO_SAMPLE_RATE',
+    effective: 24000,
+    source: 'default',
+    locked: false,
+    overridden: false,
+  },
+  SEG_QA_MAX_RERECORDS: {
+    key: 'SEG_QA_MAX_RERECORDS',
+    effective: 2,
+    source: 'default',
+    locked: false,
+    overridden: false,
+  },
+  SEG_ASR_ENABLED: {
+    key: 'SEG_ASR_ENABLED',
+    effective: false,
+    source: 'default',
+    locked: false,
+    overridden: false,
+  },
+  ANALYZER_STAGE1_PROMPT: {
+    key: 'ANALYZER_STAGE1_PROMPT',
+    effective: 'Attribute each sentence to its speaker.',
+    source: 'default',
+    locked: false,
+    overridden: false,
+  },
 };
 
 /* In-memory prompt store keyed by id. */
@@ -6128,16 +6289,23 @@ export async function mockPutConfig(
   const applied: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
     if (key in MOCK_CONFIG_VALUES) {
-      MOCK_CONFIG_VALUES[key] = { ...MOCK_CONFIG_VALUES[key], effective: value, source: 'override', overridden: true };
+      MOCK_CONFIG_VALUES[key] = {
+        ...MOCK_CONFIG_VALUES[key],
+        effective: value,
+        source: 'override',
+        overridden: true,
+      };
       applied.push(key);
     }
   }
   return { ok: true, applied, values: { ...MOCK_CONFIG_VALUES } };
 }
 
-export async function mockResetConfig(
-  body: { keys?: string[]; group?: string; all?: boolean },
-): Promise<{ ok: boolean; values: ConfigValues }> {
+export async function mockResetConfig(body: {
+  keys?: string[];
+  group?: string;
+  all?: boolean;
+}): Promise<{ ok: boolean; values: ConfigValues }> {
   await wait(30);
   const keysToReset: string[] = body.all
     ? Object.keys(MOCK_CONFIG_VALUES)
@@ -6149,7 +6317,13 @@ export async function mockResetConfig(
   for (const key of keysToReset) {
     const descriptor = MOCK_CONFIG_DESCRIPTORS.find((d) => d.key === key);
     if (descriptor && key in MOCK_CONFIG_VALUES) {
-      MOCK_CONFIG_VALUES[key] = { key, effective: descriptor.default, source: 'default', locked: false, overridden: false };
+      MOCK_CONFIG_VALUES[key] = {
+        key,
+        effective: descriptor.default,
+        source: 'default',
+        locked: false,
+        overridden: false,
+      };
     }
   }
   return { ok: true, values: { ...MOCK_CONFIG_VALUES } };
@@ -6189,10 +6363,34 @@ export async function mockRestartSidecar(): Promise<{ ok: boolean; error?: strin
 /* Test helper — reset the mock config store to its initial defaults. */
 export function _resetMockConfig(): void {
   Object.assign(MOCK_CONFIG_VALUES, {
-    KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 24000, source: 'default', locked: false, overridden: false },
-    SEG_QA_MAX_RERECORDS: { key: 'SEG_QA_MAX_RERECORDS', effective: 2, source: 'default', locked: false, overridden: false },
-    SEG_ASR_ENABLED: { key: 'SEG_ASR_ENABLED', effective: false, source: 'default', locked: false, overridden: false },
-    ANALYZER_STAGE1_PROMPT: { key: 'ANALYZER_STAGE1_PROMPT', effective: 'Attribute each sentence to its speaker.', source: 'default', locked: false, overridden: false },
+    KOKORO_SAMPLE_RATE: {
+      key: 'KOKORO_SAMPLE_RATE',
+      effective: 24000,
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
+    SEG_QA_MAX_RERECORDS: {
+      key: 'SEG_QA_MAX_RERECORDS',
+      effective: 2,
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
+    SEG_ASR_ENABLED: {
+      key: 'SEG_ASR_ENABLED',
+      effective: false,
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
+    ANALYZER_STAGE1_PROMPT: {
+      key: 'ANALYZER_STAGE1_PROMPT',
+      effective: 'Attribute each sentence to its speaker.',
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
   });
   MOCK_PROMPTS.set('ANALYZER_STAGE1_PROMPT', {
     id: 'ANALYZER_STAGE1_PROMPT',
@@ -6225,27 +6423,25 @@ async function realPutConfig(
   return res.json();
 }
 
-async function realResetConfig(
-  body: { keys?: string[]; group?: string; all?: boolean },
-): Promise<{ ok: boolean; values: ConfigValues }> {
+async function realResetConfig(body: {
+  keys?: string[];
+  group?: string;
+  all?: boolean;
+}): Promise<{ ok: boolean; values: ConfigValues }> {
   const res = await fetch('/api/config/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!res.ok)
-    throw new Error(
-      `Config reset failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+    throw new Error(`Config reset failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
 async function realGetPrompt(id: string): Promise<PromptState> {
   const res = await fetch(`/api/config/prompts/${encodeURIComponent(id)}`);
   if (!res.ok)
-    throw new Error(
-      `Prompt fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+    throw new Error(`Prompt fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -6267,9 +6463,7 @@ async function realResetPrompt(id: string): Promise<PromptState> {
     method: 'POST',
   });
   if (!res.ok)
-    throw new Error(
-      `Prompt reset failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+    throw new Error(`Prompt reset failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -6511,17 +6705,13 @@ const real = {
     const res = await fetch('/api/generation/stats');
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      throw new Error(
-        `Generation stats fetch failed (${res.status}): ${detail || res.statusText}`,
-      );
+      throw new Error(`Generation stats fetch failed (${res.status}): ${detail || res.statusText}`);
     }
     return res.json();
   },
   /* fs-20 — per-run resource telemetry for the Admin trend panel (GET
      /api/generation/telemetry). Newest-first; empty when nothing recorded. */
-  getResourceTelemetry: async (
-    limit?: number,
-  ): Promise<{ records: ResourceTelemetryRecord[] }> => {
+  getResourceTelemetry: async (limit?: number): Promise<{ records: ResourceTelemetryRecord[] }> => {
     const qs = limit != null ? `?limit=${encodeURIComponent(limit)}` : '';
     const res = await fetch(`/api/generation/telemetry${qs}`);
     if (!res.ok) {
@@ -6724,9 +6914,7 @@ const mock = {
   /* fs-20 — mock per-run resource telemetry. Mirrors the throughput mock's
      newest-first shape; VRAM climbs slightly across the run so the trend
      panel's sparkline has a visible slope in mock mode. */
-  getResourceTelemetry: async (
-    limit?: number,
-  ): Promise<{ records: ResourceTelemetryRecord[] }> => {
+  getResourceTelemetry: async (limit?: number): Promise<{ records: ResourceTelemetryRecord[] }> => {
     /* Newest-first; the first three rows come from a second book so the Admin
        panel's per-book grouping has more than one group to render in mock mode. */
     const books = [
@@ -6769,7 +6957,13 @@ const mock = {
    record type from the same `../lib/api` surface as the other admin types. */
 export type { ResourceTelemetryRecord } from './types';
 /* Re-export config types so the config slice + view import from a single source. */
-export type { ConfigResponse, ConfigValues, KnobDescriptor, ConfigGroup, PromptState } from './types';
+export type {
+  ConfigResponse,
+  ConfigValues,
+  KnobDescriptor,
+  ConfigGroup,
+  PromptState,
+} from './types';
 
 /** One finished chapter's own throughput, for the dev Worktrees throughput
     table. `rtf` is synth-wall ÷ audio (< 1 = faster than realtime) or null when

@@ -71,9 +71,15 @@ describe('PhaseModelChip', () => {
     });
 
     it('falls back to account.defaultAnalysisModel when ui has no selected model', () => {
-      renderChip({ analyzerPhase0Model: null }, { phaseId: 0, state: 'pending' }, { selectedModel: '' });
+      renderChip(
+        { analyzerPhase0Model: null },
+        { phaseId: 0, state: 'pending' },
+        { selectedModel: '' },
+      );
       /* account initial defaultAnalysisModel is gemini-3.1-flash-lite. */
-      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemini 3.1 Flash Lite');
+      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain(
+        'Gemini 3.1 Flash Lite',
+      );
     });
 
     it('does NOT show the warm-up hint for phase 1 even in the warming state', () => {
@@ -118,7 +124,9 @@ describe('PhaseModelChip', () => {
         },
         { phaseId: 1, state: 'warming' },
       );
-      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('warms up after ch. 15');
+      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain(
+        'warms up after ch. 15',
+      );
     });
 
     it('shows an honest "Server default" when a phase is left blank but the split is active', () => {
@@ -186,5 +194,45 @@ describe('PhaseModelChip', () => {
   it('renders nothing for phase 2 (no model selection)', () => {
     const { container } = renderChip({}, { phaseId: 2, state: 'pending' });
     expect(container.querySelector('[data-testid^="phase-model-chip"]')).toBeNull();
+  });
+
+  describe('serverModel prop — mirrors the server-resolved model id', () => {
+    it('PREFERS serverModel over the Redux selection when present', () => {
+      /* Regression for Task 2: chip must show the server-reported model id
+         ("qwen3.5:9b") even when Redux has a different selection ("qwen3.5:4b").
+         This is the core truthfulness requirement: if the server actually ran
+         on a different model than the UI's default, the chip must say so. */
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'streaming', serverModel: 'qwen3.5:9b' },
+        { selectedModel: 'qwen3.5:4b' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Qwen3.5 9B (local)');
+      expect(chip.textContent).not.toContain('Qwen3.5 4B');
+    });
+
+    it('falls back to Redux selection when serverModel is absent (pre-stream)', () => {
+      /* Pre-stream: no server events have arrived yet, so serverModel is
+         undefined. The existing Redux-derived behaviour must be preserved. */
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'pending' },
+        { selectedModel: 'qwen3.5:4b' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Qwen3.5 4B (local)');
+    });
+
+    it('resolves an unknown serverModel id to the raw id (graceful fallback)', () => {
+      /* A future model the frontend doesn't know about yet should still
+         render its id rather than crashing or hiding it. */
+      renderChip(
+        { analyzerPhase0Model: null },
+        { phaseId: 0, state: 'streaming', serverModel: 'unknown-future-model:70b' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('unknown-future-model:70b');
+    });
   });
 });

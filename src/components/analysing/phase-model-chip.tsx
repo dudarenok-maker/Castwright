@@ -1,9 +1,6 @@
 import { MODEL_OPTIONS } from '../../lib/models';
 import { useAppSelector } from '../../store';
-import {
-  selectAnalyzerSplitIsActive,
-  selectAnalyzerPhase1MinLag,
-} from '../../store/account-slice';
+import { selectAnalyzerSplitIsActive, selectAnalyzerPhase1MinLag } from '../../store/account-slice';
 
 export type PhaseChipState = 'pending' | 'warming' | 'streaming' | 'done';
 
@@ -13,6 +10,11 @@ interface PhaseModelChipProps {
   /** Override the chip label (used by sticky bar to render "Phase N · model").
       Default is just the model name. */
   prefix?: string;
+  /** Server-resolved model id, carried from the `model` field on SSE phase
+      events. When present, PREFERRED over the Redux-derived selection so the
+      chip shows what the server actually ran on rather than the UI default.
+      Absent pre-stream (no SSE events yet) → existing Redux fallback applies. */
+  serverModel?: string;
 }
 
 /* Pill displaying the model that ACTUALLY owns a phase, with a state-coloured
@@ -27,11 +29,15 @@ interface PhaseModelChipProps {
        see (it depends on server env) — show an honest "Server default" rather
        than guessing.
    Phase 2 (library match) has no model and is intentionally not surfaced. */
-export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) {
+export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseModelChipProps) {
   const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const minLag = useAppSelector((s) => selectAnalyzerPhase1MinLag(s.account));
   const phaseModel = useAppSelector((s) =>
-    phaseId === 0 ? s.account.analyzerPhase0Model : phaseId === 1 ? s.account.analyzerPhase1Model : null,
+    phaseId === 0
+      ? s.account.analyzerPhase0Model
+      : phaseId === 1
+        ? s.account.analyzerPhase1Model
+        : null,
   );
   /* The model that a single-model run uses for BOTH phases: the per-run pick
      (ui.selectedModel) which is seeded from, and falls back to, the account
@@ -39,7 +45,8 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
      mount the chip without the ui slice; production always has it. */
   const effectiveSingleModel = useAppSelector(
     (s) =>
-      (s as { ui?: { selectedModel?: string } }).ui?.selectedModel || s.account.defaultAnalysisModel,
+      (s as { ui?: { selectedModel?: string } }).ui?.selectedModel ||
+      s.account.defaultAnalysisModel,
   );
   /* A per-run override (an explicit pick on the analysis-failed card, e.g.
      qwen3.5:4b chosen to dodge a Gemini block) wins over the saved per-phase
@@ -56,9 +63,16 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
   const useSingle = overrideActive || !splitActive;
   const serverDefault = !useSingle && !phaseModel;
   const modelId = useSingle ? effectiveSingleModel : phaseModel;
-  const label = serverDefault
-    ? 'Server default'
-    : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
+  /* Prefer the server-reported model id when one has arrived over SSE —
+     it reflects what the server ACTUALLY ran on, overriding the client's
+     Redux selection. Falls back to the existing Redux derivation pre-stream
+     (when serverModel is undefined). */
+  const label =
+    serverModel !== undefined
+      ? (MODEL_OPTIONS.find((m) => m.id === serverModel)?.label ?? serverModel)
+      : serverDefault
+        ? 'Server default'
+        : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
 
   const meta = (() => {
     if (state === 'streaming') {
