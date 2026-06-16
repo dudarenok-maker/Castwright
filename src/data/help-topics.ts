@@ -53,6 +53,18 @@ export const HELP_TOPICS: HelpTopic[] = [
       'settings; changing the accelerator rebuilds the Python environment, so it is not instant.',
   },
   {
+    id: 'engine-needs-repair',
+    title: 'A voice engine says "Needs repair"',
+    body:
+      'Open Models (Admin → Model Manager). Each engine now shows its real state — whether its ' +
+      'Python package is installed, whether the voice weights are on disk, and whether the two ' +
+      'match. If something is half-installed (a common outcome after the Python environment has ' +
+      'been rebuilt) the row reads "Needs repair" and its button changes to Repair. Click Repair ' +
+      'to reinstall just what is missing; Castwright restarts the voice engine for you when it ' +
+      'finishes. Your books and designed voices are never touched — they live in the workspace, ' +
+      'not the engine.',
+  },
+  {
     id: 'phone-cant-reach',
     title: "My phone can't reach the app (LAN / HTTPS)",
     body:
