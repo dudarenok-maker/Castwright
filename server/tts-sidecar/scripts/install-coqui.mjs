@@ -9,7 +9,9 @@
 // What it does:
 //   1. Locate the sidecar venv's python (.venv/Scripts/python.exe on Windows,
 //      .venv/bin/python elsewhere). Fail with a clear bootstrap hint if absent.
-//   2. Trigger the `coqui-tts` (import `TTS`) auto-downloader for XTTS v2 via
+//   2. pip-install `coqui-tts` constrained by requirements/base.txt (opt-in:
+//      coqui-tts is no longer a base requirement — it must be installed here).
+//   3. Trigger the `coqui-tts` (import `TTS`) auto-downloader for XTTS v2 via
 //      `from TTS.api import TTS; TTS('tts_models/multilingual/multi-dataset/
 //      xtts_v2')`, with COQUI_TOS_AGREED=1 so the license click-through is
 //      auto-accepted (running this script IS the consent).
@@ -21,9 +23,6 @@
 // pre-fetch into a directory the runtime ignores -- the same trap install-
 // qwen3.mjs records for HF_HOME. (server/src/tts/coqui-install-detect.ts probes
 // this same default path.)
-//
-// Unlike install-qwen3.mjs there's no pip step: `coqui-tts` is a base sidecar
-// requirement (requirements.txt), so it's already in the venv.
 //
 // Usage:
 //   node server/tts-sidecar/scripts/install-coqui.mjs
@@ -84,7 +83,17 @@ function main() {
   // Auto-accept the XTTS license click-through. Do NOT set TTS_HOME — let the
   // weights land in the lib's default user-data dir, which is exactly where the
   // sidecar runtime looks (it never sets TTS_HOME either).
-  const env = { COQUI_TOS_AGREED: '1' };
+  const env = { COQUI_TOS_AGREED: '1', HF_HUB_DISABLE_SYMLINKS_WARNING: '1' };
+
+  // coqui-tts is opt-in (not in base.txt), so pip-install it now, constrained by
+  // base.txt to keep shared deps (numpy, transformers) in lockstep.
+  const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
+  // No -U: base.txt already pins compatible versions; upgrading on every run could pull a broken coqui-tts release.
+  step('Installing coqui-tts (opt-in)...');
+  if (run(python, ['-m', 'pip', 'install', 'coqui-tts', '-c', baseTxt], env) !== 0) {
+    step('FAIL: pip install coqui-tts failed. Check network + sidecar venv.');
+    process.exit(1);
+  }
 
   step('Pre-fetching XTTS v2 into the default TTS cache (~1.8 GB; expect 2-5 min on a fast link)...');
   const code =

@@ -127,4 +127,22 @@ describe('CoquiInstallBootstrap', () => {
     const rechecked = await b.recheck(job.id);
     expect(rechecked?.status).toBe('installed');
   });
+
+  it('installs coqui-tts then weights when starting from not-installed', async () => {
+    let spawned = 0;
+    const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+    const boot = new CoquiInstallBootstrap({
+      repoRoot: '/repo',
+      detectFn,
+      spawnFn: () => {
+        spawned++;
+        return makeFakeChild(0, {
+          stdout: '[install-coqui] Installing coqui-tts (opt-in)\n',
+        }) as never;
+      },
+    });
+    const job = boot.start();
+    await until(() => boot.getJob(job.id)?.status === 'installed');
+    expect(spawned).toBe(1);
+  });
 });

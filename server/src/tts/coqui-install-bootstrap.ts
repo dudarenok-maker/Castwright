@@ -2,10 +2,10 @@
  * a deployer can pre-fetch the XTTS v2 weights from Account → Models without a
  * terminal. Differences from the Qwen flow:
  *
- *   - `coqui-tts` is already a base sidecar requirement, so there's no pip step
- *     — `server/tts-sidecar/scripts/install-coqui.mjs` only triggers the TTS
- *     lib's auto-downloader and streams `[install-coqui]` step lines. Progress
- *     is STEP-based (the multi-GB download has no single content-length).
+ *   - `coqui-tts` is opt-in (not in base.txt); `install-coqui.mjs` pip-installs
+ *     it first, then triggers the TTS lib's auto-downloader for XTTS v2, and
+ *     streams `[install-coqui]` step lines. Progress is STEP-based (the
+ *     multi-GB download has no single content-length).
  *   - `detect()` is the on-disk install-state probe (TTS package in the venv +
  *     XTTS v2 weights in the lib's user-data dir).
  *
@@ -135,7 +135,7 @@ export class CoquiInstallBootstrap {
         error:
           after === 'weights-missing'
             ? 'Installer finished but the XTTS v2 weights are still missing — the download may have been interrupted. Retry (downloads resume).'
-            : 'Installer finished but the coqui-tts (TTS) package is not importable in the sidecar venv. Check the sidecar venv bootstrap.',
+            : 'Installer finished but the coqui-tts (TTS) package is still not importable. Retry the install, or repair the sidecar venv.',
       });
     }
   }
