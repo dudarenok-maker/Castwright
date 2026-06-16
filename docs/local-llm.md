@@ -84,6 +84,27 @@ then running analysis at 16384 triggers a silent full reload mid-stream,
 which used to surface as "Analysis stream ended without a result event" with
 no other signal. The reasoning is at `server/src/routes/ollama-health.ts:161`.
 
+### Keeping the analyzer warm + the analyzer↔TTS / two-model-split gotcha (plan 222)
+
+The analyzer model is kept **resident** across the chapter loop (`keep_alive: '5m'`)
+so it isn't unloaded+reloaded between sections — reloading a multi-GB model every
+section is the "VRAM sawtooth" / mid-stream stall that hurts large (especially
+Cyrillic) books. A resident analyzer can't co-reside with a TTS/voice-design load
+on a small GPU, so the server **evicts the resident analyzer before any sidecar
+TTS/voice-design load** (or returns a 409 if an analysis is mid-flight), then loads.
+On a roomy card (detected VRAM ≥ `GPU_SAFE_COEXIST_MB`, default 11000 MB) nothing
+is evicted — analyzer + TTS coexist. See `server/src/gpu/` + plan 222.
+
+**Two-model analysis split — troubleshooting.** If you set TWO *different local*
+models for the two analysis phases (`ANALYZER_PHASE0_MODEL` + `ANALYZER_PHASE1_MODEL`),
+they can't both stay resident on a small GPU — they'll **reload between phases**,
+slowing the run (each phase pays a cold model load). On an 8 GB card this is
+unavoidable. To avoid it: use the **same** local model for both phases, pair **one
+local + one cloud** model (Gemini uses no VRAM), or run on a **larger card** (12/16 GB)
+where both co-reside. A VRAM-aware in-app warning + per-model MB budgeting is tracked
+but deferred (issue #845 / `fs-45`) until there's measured telemetry from real
+12/16 GB hardware.
+
 ## Pinning the analyzer to 100% GPU
 
 By default Ollama makes its own GPU-vs-CPU layer-split decision on every model
