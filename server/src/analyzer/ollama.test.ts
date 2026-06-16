@@ -207,6 +207,14 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
     expect(keepAliveFor('placeholder:test-7b')).toBe(0);
   });
 
+  it('pins the heavy 9B resident only on a GPU; CPU unloads it to spare RAM', async () => {
+    const { keepAliveFor } = await import('./ollama.js');
+    expect(keepAliveFor('qwen3.5:9b', 'cuda')).toBe('5m');
+    expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(0);
+    expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe('5m'); // small model: stays
+    expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe('5m'); // unprobed: assume GPU (the perf win)
+  });
+
   it('threads keep_alive: "5m" into the /api/chat body when the model is qwen3.5:4b', async () => {
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
     const { OllamaAnalyzer } = await import('./ollama.js');
