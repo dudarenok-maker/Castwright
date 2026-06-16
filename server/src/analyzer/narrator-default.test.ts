@@ -5,6 +5,7 @@ import {
   forceNarratorOnNonSpokenLines,
   applyNonEnglishNarratorDefault,
 } from './narrator-default.js';
+import { foldMinorCast } from './fold-minor-cast.js';
 
 const s = (id: number, characterId: string, text: string): SentenceOutput =>
   ({ id, chapterId: 1, characterId, text, confidence: 0.9 }) as SentenceOutput;
@@ -82,5 +83,43 @@ describe('applyNonEnglishNarratorDefault', () => {
     const en = [s(1, 'halloran', 'The wind had turned.'), s(2, 'halloran', '"Hard to starboard,"')];
     const out = applyNonEnglishNarratorDefault(en, 'en');
     expect(out.map((x) => x.characterId)).toEqual(['halloran', 'halloran']);
+  });
+});
+
+describe('narrator-default + foldMinorCast interaction', () => {
+  it('a speaker with >= minLines real (dashed) dialogue lines survives the fold', () => {
+    // egor: 4 narration lines (model mislabeled as egor) + 3 real dashed lines
+    const sentences = [
+      s(1, 'egor', 'Егор засунул руки в карманы.'),
+      s(2, 'egor', 'Мальчик посмотрел вверх.'),
+      s(3, 'egor', 'Егор побежал.'),
+      s(4, 'egor', 'Он обернулся.'),
+      s(5, 'egor', '— Хорошо.'),
+      s(6, 'egor', '— Иду.'),
+      s(7, 'egor', '— Сейчас.'),
+    ];
+    const chars = [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', gender: 'neutral' },
+      { id: 'egor', name: 'Егор', role: 'Boy', gender: 'male' },
+    ] as any;
+    const fixed = forceNarratorOnNonSpokenLines(sentences); // 4 narration -> narrator, 3 dashed stay egor
+    const folded = foldMinorCast(chars, fixed, { minLines: 3 });
+    expect(folded.characters.some((c) => c.id === 'egor')).toBe(true); // survived (3 dialogue lines)
+    expect(folded.rewrites['egor']).toBeUndefined(); // not folded into a bucket
+  });
+
+  it('a speaker with < minLines real dialogue lines folds — intended (count is now accurate)', () => {
+    const sentences = [
+      s(1, 'extra', 'Прохожий шёл мимо.'),
+      s(2, 'extra', 'Он остановился.'),
+      s(3, 'extra', '— Что?'),
+    ];
+    const chars = [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', gender: 'neutral' },
+      { id: 'extra', name: 'Прохожий', role: 'Passerby', gender: 'male' },
+    ] as any;
+    const fixed = forceNarratorOnNonSpokenLines(sentences); // 2 narration -> narrator, 1 dashed stays
+    const folded = foldMinorCast(chars, fixed, { minLines: 3 });
+    expect(folded.rewrites['extra']).toBe('unknown-male'); // 1 dialogue line < 3 -> folded (correct)
   });
 });
