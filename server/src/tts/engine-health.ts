@@ -12,7 +12,6 @@ export type EngineHealthState =
   | 'not-installed'
   | 'loaded';
 export type EngineTier = 'standard' | 'secondary';
-export type RepairAction = 'venv-bootstrap' | 'installer';
 
 /* Standard engines ride the requirements bundle (their package reinstalls via a
    venv re-bootstrap); Coqui is the opt-in secondary engine with its own installer. */
@@ -37,8 +36,3 @@ export function deriveEngineHealth(_id: EngineId, p: EngineProbe): { state: Engi
   return { state: 'not-installed' };
 }
 
-/** Repair routing by tier: standard engines re-bootstrap the venv (reinstall the
-    overlay → the missing package); Coqui uses its opt-in installer (pip-installs). */
-export function repairActionFor(id: EngineId, _state: EngineHealthState): RepairAction {
-  return engineTier(id) === 'secondary' ? 'installer' : 'venv-bootstrap';
-}

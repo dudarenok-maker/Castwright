@@ -12,11 +12,11 @@ owner: null
 >   `server/tts-sidecar/requirements/nvidia-cuda.txt`,
 >   `server/tts-sidecar/requirements/amd-rocm.txt`,
 >   `server/tts-sidecar/scripts/install-coqui.mjs`,
->   `server/src/inventory/engine-health.ts`,
->   `server/src/inventory/inventory.ts`,
+>   `server/src/tts/engine-health.ts`,
+>   `server/src/routes/models-inventory.ts`,
 >   `src/views/model-manager.tsx`
 > URL surface: `#/account` (Model Manager section)
-> OpenAPI ops: `GET /api/inventory`, `GET /api/diagnostics`, `POST /api/installer/:engine`
+> OpenAPI ops: `GET /api/models/inventory`, `GET /api/diagnostics`, `POST /api/{qwen,coqui,kokoro,whisper}/install`
 
 Spec: [`docs/superpowers/specs/2026-06-16-engine-retier-and-health-honesty-design.md`](../superpowers/specs/2026-06-16-engine-retier-and-health-honesty-design.md)
 Plan: [`docs/superpowers/plans/2026-06-16-engine-retier-and-health-honesty.md`](../superpowers/plans/2026-06-16-engine-retier-and-health-honesty.md)
@@ -50,11 +50,11 @@ The NVIDIA (`nvidia-cuda.txt`) and AMD (`amd-rocm.txt`) overlays now include `qw
 
 ### 4-state health model
 
-`server/src/inventory/engine-health.ts` exports:
+`server/src/tts/engine-health.ts` exports:
 
 ```
 type EngineHealthState = 'ready' | 'package-missing' | 'weights-missing' | 'not-installed';
-type EngineHealthTier  = 'standard' | 'optional';
+type EngineTier        = 'standard' | 'secondary';
 ```
 
 Detection precedence:
@@ -69,14 +69,14 @@ Weights are always probed via Node disk (the sidecar doesn't expose weight prese
 |---|---|---|---|
 | `ready` | Installed (green) | enabled | hidden |
 | `package-missing` | Needs repair (amber) | disabled | shown |
-| `weights-missing` | Not installed (neutral) | disabled | hidden (Install shown) |
+| `weights-missing` | Weights missing (amber) | disabled | hidden (Install shown) |
 | `not-installed` | Not installed (neutral) | disabled | hidden (Install shown) |
 
-Model Manager groups TTS engines under **Standard** / **Optional add-ons** headings matching the tier field.
+Model Manager groups TTS engines under **Standard** / **Optional add-ons** headings matching the tier field (`'standard'` / `'secondary'`).
 
 ### Integrity chip
 
-Every engine row carries an integrity chip (`verified | unpinned | mismatch`) sourced from `server/src/inventory/inventory.ts`. `mismatch` indicates the package was updated outside the pip-install path; `unpinned` means no lockfile hash to compare against.
+Every engine row carries an integrity chip (`verified | unpinned | mismatch`) sourced from `server/src/routes/models-inventory.ts`. `mismatch` indicates the package was updated outside the pip-install path; `unpinned` means no lockfile hash to compare against.
 
 ### Warn-vs-block readiness gate
 
@@ -94,8 +94,8 @@ Changing the requirements overlay bumps the venv `reqHash`. On the next `npm run
 
 ### New seams
 
-- `GET /api/inventory` — per-engine `{ state, tier, integrity }` response (extends existing inventory shape).
-- `POST /api/installer/coqui` — triggers Coqui opt-in install; existing engine installers unchanged.
+- `GET /api/models/inventory` — per-engine `{ state, tier, integrity }` response (extends existing inventory shape).
+- `POST /api/coqui/install` — triggers Coqui opt-in install; existing engine installers (`/api/qwen/install`, `/api/kokoro/install`, `/api/whisper/install`) are unchanged.
 - `api.restartSidecar()` — called by the frontend Repair action after reinstall completes.
 
 ### Reversibility
@@ -117,8 +117,8 @@ Rolling back: restore the previous `nvidia-cuda.txt` / `amd-rocm.txt` (remove `q
 
 Tests landed with the implementation commits on this branch:
 
-- Vitest server (`server/src/inventory/engine-health.test.ts`) — asserts 4-state transitions for each probe combination (sidecar-reachable/not × package-present/missing × weights-present/missing).
-- Vitest server (`server/src/inventory/inventory.test.ts`) — asserts per-engine `{ state, tier, integrity }` response shape; asserts Qwen and Kokoro are `standard`, Coqui is `optional`.
+- Vitest server (`server/src/tts/engine-health.test.ts`) — asserts 4-state transitions for each probe combination (sidecar-reachable/not × package-present/missing × weights-present/missing).
+- Vitest server (`server/src/routes/models-inventory.test.ts`) — asserts per-engine `{ state, tier, integrity }` response shape; asserts Qwen and Kokoro are `standard`, Coqui is `secondary`.
 - Vitest server (`server/src/diagnostics/diagnostics.test.ts`) — asserts "Voice engine" check goes `fail` when sidecar is reachable and reports `qwen find_spec=false`.
 - Vitest frontend (`src/views/model-manager.test.tsx`) — asserts "Needs repair" badge visible + Load disabled + Repair button present when engine state is `package-missing`; asserts Standard / Optional grouping headings render.
 - Playwright e2e (`e2e/model-manager-health.spec.ts`) — needs-repair badge visible, Repair action re-enables Load after mock reinstall completes.

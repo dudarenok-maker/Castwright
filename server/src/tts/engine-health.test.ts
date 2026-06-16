@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveEngineHealth, engineTier, repairActionFor } from './engine-health.js';
+import { deriveEngineHealth, engineTier } from './engine-health.js';
 
 describe('engine-health', () => {
   it('package absent + weights present → package-missing', () => {
@@ -22,10 +22,5 @@ describe('engine-health', () => {
     expect(engineTier('qwen')).toBe('standard');
     expect(engineTier('whisper')).toBe('standard');
     expect(engineTier('coqui')).toBe('secondary');
-  });
-  it('repair routing: standard → venv-bootstrap, coqui → installer', () => {
-    expect(repairActionFor('qwen', 'package-missing')).toBe('venv-bootstrap');
-    expect(repairActionFor('kokoro', 'package-missing')).toBe('venv-bootstrap');
-    expect(repairActionFor('coqui', 'package-missing')).toBe('installer');
   });
 });
