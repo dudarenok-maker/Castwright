@@ -153,6 +153,12 @@ _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user):_ non-English (Cyrillic, and other non-Latin) books work end-to-end instead of silently colliding ids / dead cross-book reuse / a stalled analysis.
 _Full detail + acceptance:_ [#823](https://github.com/dudarenok-maker/Castwright/issues/823).
 
+#### `fs-45` — VRAM MB-accounting policy + two-model-split UI (Wave 4, beta 12/16 GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
+
+- _What:_ Wave 1 (plan [222](features/222-gpu-residency-and-analysing-honesty.md)) already gives 12/16 GB cards coexistence via the `gpu.safeCoexistMb` threshold (a roomy card simply doesn't evict). Wave 4 refines it for beta testers running better cards than the 8 GB dev box: (a) a per-(engine, mode) MB cost table vs detected VRAM (non-additive Qwen synth/design modes) so a 12 GB card with a heavy combo that passes the coarse threshold but would overcommit is caught; (b) a two-model analysis-split warn + confirm UI when phase0/phase1 use two different local models that won't co-fit.
+- _Benefit (user):_ beta testers on 12/16 GB cards get precise coexistence (no needless eviction) without edge-case OOMs, and a split run can't silently overcommit.
+_Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-honesty.md) "Out of scope" + spec `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 · [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
+
 ### Companion app
 
 _The three items below are the companion-app follow-ups left after the Android v1 shipped
