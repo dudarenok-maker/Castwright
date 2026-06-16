@@ -70,15 +70,35 @@ export function VoiceCompareModal({
 
   const currentPrefix = sampleUrlPrefix(currentSampleVoiceId, currentModelKey);
 
+  /* The current voice's Qwen voiceId. A designed/reused Qwen voice carries its
+     id in `ttsVoice.name` but often NOT in `overrideTtsVoices.qwen` — and the
+     server's `pickVoiceForEngine('qwen', …)` reads ONLY the override slot and
+     returns '' otherwise (sidecar then 400s). So resolve it the same 3-way way
+     the drawer does and inject it below, mirroring the drawer's own Play 12s. */
+  const currentQwenName =
+    currentSubject.overrideTtsVoices?.qwen?.name ??
+    (currentSubject.ttsVoice?.provider === 'qwen' ? currentSubject.ttsVoice.name : undefined);
+
   const sides: Record<'a' | 'b', AbSide> = {
     a: {
       matchUrl: currentPrefix,
       matchMode: 'prefix',
       play: async () => {
+        /* Inject the resolved Qwen voiceId into the override slot the server
+           reads; non-Qwen current voices pass through unchanged. */
+        const requestVoice: Voice = currentQwenName
+          ? {
+              ...currentSubject,
+              overrideTtsVoices: {
+                ...(currentSubject.overrideTtsVoices ?? {}),
+                qwen: { name: currentQwenName },
+              },
+            }
+          : currentSubject;
         await playSampleWithAutoLoad({
           args: {
             voiceId: currentSampleVoiceId,
-            voice: currentSubject,
+            voice: requestVoice,
             modelKey: currentModelKey,
             characterHint: buildCharacterHint(character),
           },
@@ -186,9 +206,37 @@ export function VoiceCompareModal({
       onClose={handleClose}
       sideA={
         <SideCard side="a" title="Current voice" character={character}>
-          <p className="text-sm text-ink/70" data-testid="voice-compare-current-name">
-            {currentSubject.ttsVoice?.name ?? 'Current voice'}
+          {/* Descriptor line for the CURRENT voice — provider · name · description,
+              mirroring the drawer card — so Side A isn't a bare voiceId. */}
+          <p
+            className="text-[11px] truncate"
+            data-testid="voice-compare-current-name"
+            title={`${capitalise(currentSubject.ttsVoice?.provider)} voice — ${currentSubject.ttsVoice?.description ?? ''}`}
+          >
+            <span className="text-ink/40">
+              {capitalise(currentSubject.ttsVoice?.provider) || 'Voice'} ·{' '}
+            </span>
+            {currentSubject.ttsVoice?.name && (
+              <span className="font-semibold text-ink/70">{currentSubject.ttsVoice.name}</span>
+            )}
+            <span className="text-ink/40">
+              {currentSubject.ttsVoice?.name ? ' · ' : ''}
+              {currentSubject.ttsVoice?.description ?? 'Current voice'}
+            </span>
           </p>
+          {/* The persona the current voice was designed with (read-only) so the
+              user can A/B the old description against the proposed one on Side B. */}
+          {character.voiceStyle?.trim() && (
+            <div>
+              <p className="text-[11px] text-ink/60 font-medium mb-1">Voice persona</p>
+              <p
+                data-testid="voice-compare-current-persona"
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white/60 text-sm text-ink/80 max-h-28 overflow-y-auto whitespace-pre-wrap"
+              >
+                {character.voiceStyle}
+              </p>
+            </div>
+          )}
           <PlayButton
             testId="voice-compare-current-play"
             label="Play current"
@@ -197,6 +245,14 @@ export function VoiceCompareModal({
             disabled={autoRunning && (rowState.b?.loading ?? false)}
             onClick={() => playSide('a')}
           />
+          {rowState.a?.error && (
+            <p
+              className="text-[11px] text-red-600/90 font-medium"
+              data-testid="voice-compare-current-error"
+            >
+              ⚠ {rowState.a.error}
+            </p>
+          )}
         </SideCard>
       }
       sideB={
@@ -287,6 +343,11 @@ export function VoiceCompareModal({
       }
     />
   );
+}
+
+/** Title-case a provider tag for the Side-A descriptor line (e.g. qwen → Qwen). */
+function capitalise(s: string | undefined): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
 }
 
 function SideCard({

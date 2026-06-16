@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { VoiceCompareModal } from './voice-compare-modal';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
 
 vi.mock('../lib/use-sample-playback', () => {
@@ -43,16 +44,22 @@ const currentSubject = {
   ttsVoice: { provider: 'kokoro', name: 'af_heart', description: 'warm' },
 } as unknown as Voice;
 
-function renderModal(overrides?: { onApprove?: () => void; onClose?: () => void }) {
+function renderModal(overrides?: {
+  onApprove?: () => void;
+  onClose?: () => void;
+  character?: Character;
+  currentSubject?: Voice;
+  currentModelKey?: string;
+}) {
   const onApprove = vi.fn(overrides?.onApprove);
   const onClose = vi.fn(overrides?.onClose);
   render(
     <VoiceCompareModal
       bookId="b1"
-      character={character}
-      currentSubject={currentSubject}
+      character={overrides?.character ?? character}
+      currentSubject={overrides?.currentSubject ?? currentSubject}
       currentSampleVoiceId="v_x"
-      currentModelKey="kokoro-v1"
+      currentModelKey={(overrides?.currentModelKey ?? 'kokoro-v1') as never}
       designModelKey="qwen3-tts-0.6b"
       sampleVoiceId="v_x"
       initial={{ voiceId: 'qwen-x-preview', previewUrl: '/audio/initial.mp3', persona: 'initial persona' }}
@@ -63,8 +70,25 @@ function renderModal(overrides?: { onApprove?: () => void; onClose?: () => void 
   return { onApprove, onClose };
 }
 
+/* A Qwen current voice whose id lives in `ttsVoice.name` only (the reused /
+   designed shape) — NOT in `overrideTtsVoices.qwen`, which is what tripped the
+   server pick. */
+const qwenCurrentSubject = {
+  id: 'v_q',
+  character: 'Master Oduvan',
+  ttsVoice: { provider: 'qwen', name: 'qwen-master-oduvan', description: 'Designed voice' },
+} as unknown as Voice;
+const qwenCharacter = {
+  id: 'x',
+  name: 'Master Oduvan',
+  color: 'lilac',
+  role: 'elder',
+  voiceStyle: 'An elderly gravelly voice with a dry rasp.',
+} as unknown as Character;
+
 beforeEach(() => {
   Object.values(api).forEach((fn) => fn.mockClear());
+  (playSampleWithAutoLoad as unknown as ReturnType<typeof vi.fn>).mockClear();
 });
 
 describe('VoiceCompareModal', () => {
@@ -125,5 +149,49 @@ describe('VoiceCompareModal', () => {
       ),
     );
     expect(api.generateVoiceStyle).toHaveBeenCalledWith('b1', 'x');
+  });
+
+  it('Play current injects the Qwen voiceId into overrideTtsVoices so the server can resolve it (regression: Play current did nothing)', async () => {
+    renderModal({
+      character: qwenCharacter,
+      currentSubject: qwenCurrentSubject,
+      currentModelKey: 'qwen3-tts-0.6b',
+    });
+    fireEvent.click(screen.getByTestId('voice-compare-current-play'));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const arg = (playSampleWithAutoLoad as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.args.voice.overrideTtsVoices.qwen.name).toBe('qwen-master-oduvan');
+    expect(arg.args.modelKey).toBe('qwen3-tts-0.6b');
+  });
+
+  it('Side A shows the current voice descriptor line AND its persona', () => {
+    renderModal({
+      character: qwenCharacter,
+      currentSubject: qwenCurrentSubject,
+      currentModelKey: 'qwen3-tts-0.6b',
+    });
+    const descriptor = screen.getByTestId('voice-compare-current-name');
+    expect(descriptor.textContent).toMatch(/Qwen/);
+    expect(descriptor.textContent).toMatch(/Designed voice/);
+    expect(screen.getByTestId('voice-compare-current-persona').textContent).toBe(
+      'An elderly gravelly voice with a dry rasp.',
+    );
+  });
+
+  it('a failing Play current surfaces an error instead of silently doing nothing', async () => {
+    (playSampleWithAutoLoad as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Voice engine (:9000) is unreachable'),
+    );
+    renderModal({
+      character: qwenCharacter,
+      currentSubject: qwenCurrentSubject,
+      currentModelKey: 'qwen3-tts-0.6b',
+    });
+    fireEvent.click(screen.getByTestId('voice-compare-current-play'));
+    await waitFor(() =>
+      expect(screen.getByTestId('voice-compare-current-error').textContent).toMatch(
+        /unreachable/,
+      ),
+    );
   });
 });
