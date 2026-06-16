@@ -106,26 +106,26 @@ export async function ensureSidecarEngineReady(
   if (!SIDECAR_ENGINES.has(engine)) return; // cloud / unknown — nothing to load
   if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
 
+  const { withGpuLoad } = await import('../gpu/gpu-load.js');
   const target = `${getResolvedSidecarUrl()}/load`;
   const timeoutMs = opts.timeoutMs ?? READINESS_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
   const deadline = Date.now() + timeoutMs;
   let lastReason = 'unknown';
 
-  for (;;) {
-    if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
-    const outcome = await tryLoadOnce(target, engine, signal);
-    if (outcome.ready) return;
-    lastReason = outcome.reason;
-    if (Date.now() >= deadline) {
-      console.warn(
-        `[generation] preload ${engine}: not ready after ${timeoutMs}ms (last: ${lastReason}) — ` +
-          `falling back to lazy load.`,
-      );
-      return;
+  await withGpuLoad(async () => {
+    for (;;) {
+      if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
+      const outcome = await tryLoadOnce(target, engine, signal);
+      if (outcome.ready) return; // resolves the withGpuLoad callback; ensureSidecarEngineReady then returns void
+      lastReason = outcome.reason;
+      if (Date.now() >= deadline) {
+        console.warn(`[generation] preload ${engine}: not ready after ${timeoutMs}ms (last: ${lastReason}) — falling back to lazy load.`);
+        return;
+      }
+      await sleep(pollIntervalMs, signal);
     }
-    await sleep(pollIntervalMs, signal);
-  }
+  });
 }
 
 /* Abort-aware sleep — resolves after `ms`, or rejects promptly if `signal`
