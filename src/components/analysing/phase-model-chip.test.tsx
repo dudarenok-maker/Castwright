@@ -71,9 +71,15 @@ describe('PhaseModelChip', () => {
     });
 
     it('falls back to account.defaultAnalysisModel when ui has no selected model', () => {
-      renderChip({ analyzerPhase0Model: null }, { phaseId: 0, state: 'pending' }, { selectedModel: '' });
+      renderChip(
+        { analyzerPhase0Model: null },
+        { phaseId: 0, state: 'pending' },
+        { selectedModel: '' },
+      );
       /* account initial defaultAnalysisModel is gemini-3.1-flash-lite. */
-      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemini 3.1 Flash Lite');
+      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain(
+        'Gemini 3.1 Flash Lite',
+      );
     });
 
     it('does NOT show the warm-up hint for phase 1 even in the warming state', () => {
@@ -118,7 +124,9 @@ describe('PhaseModelChip', () => {
         },
         { phaseId: 1, state: 'warming' },
       );
-      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('warms up after ch. 15');
+      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain(
+        'warms up after ch. 15',
+      );
     });
 
     it('shows an honest "Server default" when a phase is left blank but the split is active', () => {

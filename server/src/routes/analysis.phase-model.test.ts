@@ -13,11 +13,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
-import type {
-  Stage1ChapterOutput,
-  Stage1Output,
-  Stage2ChapterOutput,
-} from '../handoff/schemas.js';
+import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
 
@@ -28,10 +24,7 @@ function buildSpyPhase0Analyzer(): Analyzer {
     async runStage1(): Promise<Stage1Output> {
       throw new Error('runStage1 not used in this suite');
     },
-    async runStage1Chapter(
-      _manuscriptId: string,
-      chapterId: number,
-    ): Promise<Stage1ChapterOutput> {
+    async runStage1Chapter(_manuscriptId: string, chapterId: number): Promise<Stage1ChapterOutput> {
       return {
         characters: [
           {
@@ -158,7 +151,9 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       if (opts.phase === 'phase1' && g.__phase_model_test_phase1_selection) {
         return g.__phase_model_test_phase1_selection;
       }
-      return actual.selectAnalyzerForPhase(opts as Parameters<typeof actual.selectAnalyzerForPhase>[0]);
+      return actual.selectAnalyzerForPhase(
+        opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
+      );
     },
     isPerPhaseModelSelectionActive: () => {
       /* Always return false (sequential mode) — keeps Phase 1 simple and
@@ -207,66 +202,62 @@ function attachEventCapture(job: AnalysisJob): CapturedEvent[] {
 /* ── Suite: phase events carry the resolved model id ─────────────────── */
 
 describe('phase events carry the resolved model id', () => {
-  it(
-    'phase-0 events have model===phase0ModelId; phase-1 events have model===phase1ModelId',
-    async () => {
-      const PHASE0_MODEL = 'gemma-phase0-test-model';
-      const PHASE1_MODEL = 'gemini-phase1-test-model';
+  it('phase-0 events have model===phase0ModelId; phase-1 events have model===phase1ModelId', async () => {
+    const PHASE0_MODEL = 'gemma-phase0-test-model';
+    const PHASE1_MODEL = 'gemini-phase1-test-model';
 
-      const manuscriptId = `test-phase-model-${Date.now()}`;
-      registerStubManuscript(manuscriptId, 2);
+    const manuscriptId = `test-phase-model-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
 
-      /* Disable the stage-2 coverage guard (plan 181): stub responses are
+    /* Disable the stage-2 coverage guard (plan 181): stub responses are
          intentionally minimal and would fail coverage, tripling call counts.
          This is the same pattern as analysis-pipelining.test.ts. */
-      const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
 
-      const phase0Analyzer = buildSpyPhase0Analyzer();
-      const phase1Analyzer = buildSpyPhase1Analyzer();
-      const phase0Selection = buildSelection(phase0Analyzer, PHASE0_MODEL);
-      const phase1Selection = buildSelection(phase1Analyzer, PHASE1_MODEL);
-      setPhase1Selection(phase1Selection);
+    const phase0Analyzer = buildSpyPhase0Analyzer();
+    const phase1Analyzer = buildSpyPhase1Analyzer();
+    const phase0Selection = buildSelection(phase0Analyzer, PHASE0_MODEL);
+    const phase1Selection = buildSelection(phase1Analyzer, PHASE1_MODEL);
+    setPhase1Selection(phase1Selection);
 
-      const job = buildStubJob(manuscriptId);
-      const events = attachEventCapture(job);
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
 
-      try {
-        const { getManuscript } = await import('../store/manuscripts.js');
-        const recordRef = getManuscript(manuscriptId);
-        if (!recordRef) throw new Error('stub manuscript not found');
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
 
-        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
-          requestedFresh: true,
-          allowStage1Shrink: true,
-          requestedModel: undefined,
-        });
+      await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
 
-        const phaseEvents = events.filter((e) => e.kind === 'phase') as Array<
-          CapturedEvent & { phaseId: number; model?: string }
-        >;
+      const phaseEvents = events.filter((e) => e.kind === 'phase') as Array<
+        CapturedEvent & { phaseId: number; model?: string }
+      >;
 
-        /* Must have emitted at least one phase-0 and one phase-1 event. */
-        const phase0Events = phaseEvents.filter((e) => e.phaseId === 0);
-        const phase1Events = phaseEvents.filter((e) => e.phaseId === 1);
-        expect(phase0Events.length).toBeGreaterThan(0);
-        expect(phase1Events.length).toBeGreaterThan(0);
+      /* Must have emitted at least one phase-0 and one phase-1 event. */
+      const phase0Events = phaseEvents.filter((e) => e.phaseId === 0);
+      const phase1Events = phaseEvents.filter((e) => e.phaseId === 1);
+      expect(phase0Events.length).toBeGreaterThan(0);
+      expect(phase1Events.length).toBeGreaterThan(0);
 
-        /* Every phase-0 event must carry the resolved phase-0 model id. */
-        for (const ev of phase0Events) {
-          expect(ev.model, `phase-0 event missing model: ${JSON.stringify(ev)}`).toBe(PHASE0_MODEL);
-        }
-
-        /* Every phase-1 event must carry the resolved phase-1 model id. */
-        for (const ev of phase1Events) {
-          expect(ev.model, `phase-1 event missing model: ${JSON.stringify(ev)}`).toBe(PHASE1_MODEL);
-        }
-      } finally {
-        removeManuscript(manuscriptId);
-        await clearAnalysisCache(manuscriptId);
-        process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      /* Every phase-0 event must carry the resolved phase-0 model id. */
+      for (const ev of phase0Events) {
+        expect(ev.model, `phase-0 event missing model: ${JSON.stringify(ev)}`).toBe(PHASE0_MODEL);
       }
-    },
-    60_000,
-  );
+
+      /* Every phase-1 event must carry the resolved phase-1 model id. */
+      for (const ev of phase1Events) {
+        expect(ev.model, `phase-1 event missing model: ${JSON.stringify(ev)}`).toBe(PHASE1_MODEL);
+      }
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
 });

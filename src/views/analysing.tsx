@@ -124,9 +124,12 @@ export function AnalysingView({
   const [phase, setPhase] = useState(0);
   const [phaseProgress, setPhaseProgress] = useState(0);
   const [logs, setLogs] = useState<Record<number, string[]>>({});
-  const [error, setError] = useState<{ message: string; code: string; detail?: string; remediation?: string } | null>(
-    null,
-  );
+  const [error, setError] = useState<{
+    message: string;
+    code: string;
+    detail?: string;
+    remediation?: string;
+  } | null>(null);
   const [retry, setRetry] = useState<{
     nonce: number;
     fresh: boolean;
@@ -571,7 +574,12 @@ export function AnalysingView({
             message: (e as Error)?.message ?? 'Analysis failed.',
           }),
         );
-        setError({ message: (e as Error).message || 'Analysis failed.', code, detail, remediation });
+        setError({
+          message: (e as Error).message || 'Analysis failed.',
+          code,
+          detail,
+          remediation,
+        });
       }
     })();
     return () => {
@@ -623,9 +631,17 @@ export function AnalysingView({
             if (live) return live;
             const record = errorById[String(id)];
             if (record) {
-              return { chapterId: id, message: record.message, code: record.code, remediation: record.remediation };
+              return {
+                chapterId: id,
+                message: record.message,
+                code: record.code,
+                remediation: record.remediation,
+              };
             }
-            return { chapterId: id, message: 'Analysis failed on a previous attempt. Retry to try again.' };
+            return {
+              chapterId: id,
+              message: 'Analysis failed on a previous attempt. Retry to try again.',
+            };
           });
         });
       })
@@ -1179,7 +1195,7 @@ export function AnalysingView({
           {error && (
             <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left">
               <p className="text-sm font-semibold text-red-900">
-                {(error.code === 'daily_quota' || error.code === 'analyzer-daily-quota')
+                {error.code === 'daily_quota' || error.code === 'analyzer-daily-quota'
                   ? 'Daily free-tier quota exhausted'
                   : 'Analysis failed'}
               </p>

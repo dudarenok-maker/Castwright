@@ -1,9 +1,6 @@
 import { MODEL_OPTIONS } from '../../lib/models';
 import { useAppSelector } from '../../store';
-import {
-  selectAnalyzerSplitIsActive,
-  selectAnalyzerPhase1MinLag,
-} from '../../store/account-slice';
+import { selectAnalyzerSplitIsActive, selectAnalyzerPhase1MinLag } from '../../store/account-slice';
 
 export type PhaseChipState = 'pending' | 'warming' | 'streaming' | 'done';
 
@@ -36,7 +33,11 @@ export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseMod
   const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const minLag = useAppSelector((s) => selectAnalyzerPhase1MinLag(s.account));
   const phaseModel = useAppSelector((s) =>
-    phaseId === 0 ? s.account.analyzerPhase0Model : phaseId === 1 ? s.account.analyzerPhase1Model : null,
+    phaseId === 0
+      ? s.account.analyzerPhase0Model
+      : phaseId === 1
+        ? s.account.analyzerPhase1Model
+        : null,
   );
   /* The model that a single-model run uses for BOTH phases: the per-run pick
      (ui.selectedModel) which is seeded from, and falls back to, the account
@@ -44,7 +45,8 @@ export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseMod
      mount the chip without the ui slice; production always has it. */
   const effectiveSingleModel = useAppSelector(
     (s) =>
-      (s as { ui?: { selectedModel?: string } }).ui?.selectedModel || s.account.defaultAnalysisModel,
+      (s as { ui?: { selectedModel?: string } }).ui?.selectedModel ||
+      s.account.defaultAnalysisModel,
   );
   /* A per-run override (an explicit pick on the analysis-failed card, e.g.
      qwen3.5:4b chosen to dodge a Gemini block) wins over the saved per-phase
@@ -65,11 +67,12 @@ export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseMod
      it reflects what the server ACTUALLY ran on, overriding the client's
      Redux selection. Falls back to the existing Redux derivation pre-stream
      (when serverModel is undefined). */
-  const label = serverModel !== undefined
-    ? (MODEL_OPTIONS.find((m) => m.id === serverModel)?.label ?? serverModel)
-    : serverDefault
-      ? 'Server default'
-      : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
+  const label =
+    serverModel !== undefined
+      ? (MODEL_OPTIONS.find((m) => m.id === serverModel)?.label ?? serverModel)
+      : serverDefault
+        ? 'Server default'
+        : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
 
   const meta = (() => {
     if (state === 'streaming') {

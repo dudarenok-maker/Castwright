@@ -55,8 +55,7 @@ function LiveChapterRow({
   }, [chapter.elapsedMs, chapter.chapterIndex]);
 
   const overBudget = displayMs > chapter.estMs * 1.25;
-  const showSections =
-    chapter.sectionsTotal !== undefined && chapter.sectionsTotal > 1;
+  const showSections = chapter.sectionsTotal !== undefined && chapter.sectionsTotal > 1;
   const sectionPct = showSections
     ? ((chapter.sectionsDone ?? 0) / chapter.sectionsTotal!) * 100
     : 0;
@@ -88,10 +87,7 @@ function LiveChapterRow({
       </div>
       {showSections && (
         <div className="h-0.5 w-48 rounded-full bg-ink/10 overflow-hidden">
-          <div
-            className="h-full rounded-full bg-ink/20"
-            style={{ width: `${sectionPct}%` }}
-          />
+          <div className="h-full rounded-full bg-ink/20" style={{ width: `${sectionPct}%` }} />
         </div>
       )}
     </div>
@@ -426,9 +422,7 @@ export function PhaseCard({
             <IconSpinner className="w-4 h-4 text-magenta" />
           </span>
         )}
-        {!isDone && !isActive && (
-          <span className="w-7 h-7 rounded-full border border-ink/15" />
-        )}
+        {!isDone && !isActive && <span className="w-7 h-7 rounded-full border border-ink/15" />}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -439,7 +433,11 @@ export function PhaseCard({
           </p>
           {hasModelControls && (
             <div className="flex items-center gap-2 flex-wrap shrink-0">
-              <PhaseModelChip phaseId={p.id as 0 | 1} state={chipState} serverModel={serverModelByPhase?.[p.id]} />
+              <PhaseModelChip
+                phaseId={p.id as 0 | 1}
+                state={chipState}
+                serverModel={serverModelByPhase?.[p.id]}
+              />
               <PhaseModelSwap phaseId={p.id as 0 | 1} isActive={isActive} />
             </div>
           )}

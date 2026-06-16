@@ -48,9 +48,7 @@ async function bootFreshBookIntoAnalysing(page: Page) {
   await page.getByRole('button', { name: /Paste text/i }).click();
   await page
     .locator('textarea')
-    .fill(
-      '# The Plan 95 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n',
-    );
+    .fill('# The Plan 95 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n');
   await page.getByRole('button', { name: /Upload pasted text/i }).click();
   await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
     timeout: 5_000,
