@@ -251,10 +251,47 @@ describe('parseAndValidate — repair integration', () => {
     }
   });
 
-  it('returns schema-validation when the JSON is valid but violates the schema', () => {
-    /* Repair path is not engaged — JSON.parse succeeds on the first try.
-       Result must NOT spuriously claim `repaired: true`. */
-    const r = parseAndValidate('{"quote":"hi","note":"n","extra":"forbidden"}', schema);
+  it('salvages a failure whose ONLY issues are unrecognized keys (constrained-decoding stray-key tolerance)', () => {
+    /* Ollama's `format:<schema>` (and Gemini's responseSchema) enforce JSON
+       *shape* but NOT additionalProperties:false, so a local model routinely
+       stamps an extra key the strict schema doesn't want onto an otherwise
+       valid object — the real qwen3.5:9b per-chapter cast failure stamped a
+       top-level `chapterId` and a whole chapter's roster was discarded. The
+       stray key is stripped, the cleaned object is accepted, and `repaired`
+       is flagged so the caller logs the cleanup. */
+    const r = parseAndValidate('{"quote":"hi","note":"n","chapterId":1}', schema);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({ quote: 'hi', note: 'n' });
+      expect(r.repaired).toBe(true);
+    }
+  });
+
+  it('strips an unrecognized key inside a NESTED strict object (path-walk), not just top-level', () => {
+    const nested = z.object({ inner: z.object({ a: z.string() }).strict() }).strict();
+    const r = parseAndValidate('{"inner":{"a":"x","stray":1}}', nested);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({ inner: { a: 'x' } });
+      expect(r.repaired).toBe(true);
+    }
+  });
+
+  it('still returns schema-validation for a REAL violation (missing required field)', () => {
+    /* The salvage path must NOT mask genuine shape errors — only failures whose
+       issues are ALL `unrecognized_keys` are recoverable. */
+    const r = parseAndValidate('{"quote":"hi"}', schema);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.kind).toBe('schema-validation');
+    }
+  });
+
+  it('still returns schema-validation when a stray key is MIXED with a real violation', () => {
+    /* `note` is the wrong type AND there's an extra key. Because not EVERY
+       issue is unrecognized_keys, we do not salvage — a genuine shape problem
+       must still surface. */
+    const r = parseAndValidate('{"quote":"hi","note":42,"chapterId":1}', schema);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.kind).toBe('schema-validation');
