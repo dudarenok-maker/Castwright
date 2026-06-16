@@ -55,22 +55,45 @@ function LiveChapterRow({
   }, [chapter.elapsedMs, chapter.chapterIndex]);
 
   const overBudget = displayMs > chapter.estMs * 1.25;
+  const showSections =
+    chapter.sectionsTotal !== undefined && chapter.sectionsTotal > 1;
+  const sectionPct = showSections
+    ? ((chapter.sectionsDone ?? 0) / chapter.sectionsTotal!) * 100
+    : 0;
   return (
-    <div
-      className={`inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}
-    >
-      <span className="font-semibold">
-        Chapter {chapter.chapterIndex}/{totalChapters}
-      </span>
-      <span className="text-ink/30">·</span>
-      <span className="truncate max-w-[220px]" title={chapter.chapterTitle}>
-        {chapter.chapterTitle}
-      </span>
-      <span className="text-ink/30">·</span>
-      <span>
-        {humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}
-      </span>
-      {overBudget && <span className="ml-1 font-semibold">over budget</span>}
+    <div className="flex flex-col gap-0.5">
+      <div
+        className={`inline-flex items-center gap-2 text-[11px] font-mono tabular-nums ${overBudget ? 'text-amber-700' : 'text-ink/60'}`}
+      >
+        <span className="font-semibold">
+          Chapter {chapter.chapterIndex}/{totalChapters}
+        </span>
+        <span className="text-ink/30">·</span>
+        <span className="truncate max-w-[220px]" title={chapter.chapterTitle}>
+          {chapter.chapterTitle}
+        </span>
+        <span className="text-ink/30">·</span>
+        <span>
+          {humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}
+        </span>
+        {showSections && (
+          <>
+            <span className="text-ink/30">·</span>
+            <span className="text-ink/50">
+              section {chapter.sectionsDone}/{chapter.sectionsTotal}
+            </span>
+          </>
+        )}
+        {overBudget && <span className="ml-1 font-semibold">over budget</span>}
+      </div>
+      {showSections && (
+        <div className="h-0.5 w-48 rounded-full bg-ink/10 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-ink/20"
+            style={{ width: `${sectionPct}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }

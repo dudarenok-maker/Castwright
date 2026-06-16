@@ -128,6 +128,12 @@ export interface AnalysisLiveChapter {
   chapterTitle: string;
   elapsedMs: number;
   estMs: number;
+  /** How many sections of this chapter the analyzer has finished so far.
+      Only present when sectionsTotal > 1 (multi-section chapters). */
+  sectionsDone?: number;
+  /** Total sections this chapter was split into.
+      Absent or ≤ 1 means the chapter is a single section — no sub-bar. */
+  sectionsTotal?: number;
 }
 export interface AnalysisLiveInfo {
   totalChapters: number;
@@ -1319,8 +1325,26 @@ async function mockAnalyseManuscript(
         /* Emit the server-resolved model on every phase tick so the chip
            can mirror it. The mock uses qwen3.5:9b to exercise the
            "server ran a different model than the UI default" path that
-           the e2e spec asserts in analysing-multi-model.spec.ts. */
-        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b' });
+           the e2e spec asserts in analysing-multi-model.spec.ts.
+           Phase 0 also emits a live payload at ~50% progress to exercise
+           the per-chapter section sub-bar (sectionsDone/sectionsTotal). */
+        const live =
+          ph.id === 0 && progress >= 0.4 && progress < 0.7
+            ? {
+                totalChapters: 2,
+                chapters: [
+                  {
+                    chapterIndex: 1,
+                    chapterTitle: 'Chapter 1',
+                    elapsedMs: Math.round(progress * ph.durationMs),
+                    estMs: ph.durationMs,
+                    sectionsDone: 2,
+                    sectionsTotal: 5,
+                  },
+                ],
+              }
+            : undefined;
+        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live });
         if (progress >= 1) {
           clearInterval(t);
           resolve();

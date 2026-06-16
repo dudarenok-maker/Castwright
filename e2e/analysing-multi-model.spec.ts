@@ -196,4 +196,19 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
       .poll(async () => (await readAccountSlice(page)).analyzerPhase0Model, { timeout: 5_000 })
       .toBe('gemini-3.1-flash-lite');
   });
+
+  test('live ticker shows "section M/N" sub-bar when mock emits sectionsDone/sectionsTotal', async ({
+    page,
+  }) => {
+    /* The mock analysis stream (mockAnalyseManuscript in src/lib/api.ts)
+       emits a live payload with sectionsDone:2 / sectionsTotal:5 on Phase 0
+       between 40–70% progress. Assert the section text renders in the ticker
+       before the phase completes. */
+    await bootFreshBookIntoAnalysing(page);
+    await page.getByRole('button', { name: /Start analysis/i }).click();
+    /* Wait for the live ticker to appear with section info. The mock emits
+       the live payload during Phase 0 progress 40–70%, so it will appear
+       while Phase 0 is streaming. */
+    await expect(page.getByText(/section 2\/5/i)).toBeVisible({ timeout: 8_000 });
+  });
 });
