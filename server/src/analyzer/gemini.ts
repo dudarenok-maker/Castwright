@@ -163,7 +163,7 @@ export function languagePreamble(language?: string): string {
   const ru = normaliseBookLanguage(language) === 'ru';
   const where = ru ? 'Russian (Cyrillic script)' : `${language} (a non-English language)`;
   const conventions = ru
-    ? ' Dialogue is often marked with guillemets «…» or an em-dash —, not English "quotes". Characters may be named by first name, patronymic, surname, or diminutive (e.g. "Соня" for "Софья") — treat these as the same person.'
+    ? ' Dialogue is often marked with guillemets «…» or an em-dash —, not English "quotes". Characters may be named by first name, patronymic, surname, or diminutive (e.g. "Соня" for "Софья") — treat these as the same person. IMPORTANT: a dashed line that is a narrative TAG describing who spoke or what they did — e.g. «— сказал юноша.», «— тихо произнесла девушка.», «— Девушка улыбнулась.» (verbs like сказал/произнёс(ла)/воскликнул(а)/спросил(а)/засмеялся/улыбнулась/нахмурился) — is the narrator, NOT the speaker. Only the actually-spoken words belong to the speaker.'
     : '';
   return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${conventions}`;
 }

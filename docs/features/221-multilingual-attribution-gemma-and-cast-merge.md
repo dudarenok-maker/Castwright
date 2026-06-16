@@ -1,0 +1,255 @@
+---
+status: active
+shipped: null
+owner: null
+---
+
+# 221 — Multilingual attribution: Russian prompt guards + local model + cast de-duplication
+
+> Status: active — **Wave A shipped** (deterministic narrator-default heuristic +
+> Russian dash-tag preamble guard); Waves B/C/D are follow-ups. Investigation
+> complete and reproduced cold against the real book; the **prompt-guard fix is
+> empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](162-fs2-multilanguage.md)
+> and [187 (large-chapter stage-2 + attribution coverage)](archive/187-large-chapter-stage2-and-attribution-coverage.md).
+> Trigger: full analysis of a Russian book (Ночной дозор / Night Watch, 9 ch,
+> 43-char cast, run on the **local** engine with `qwen3.5:9b`) never completes —
+> stage-2 attribution fails the coverage guard, and the cast is full of
+> un-merged duplicates.
+
+## Benefit / Rationale
+
+- **User:** a non-English manuscript (Russian first) completes a full local
+  analysis, with sentences attributed *correctly* (dialogue to speakers,
+  narration to the narrator), the cast collapsed to the real people, and one-off
+  background speakers folded into localized generic voices.
+- **Technical:** the stage-2 attribution prompt becomes script-aware (Russian
+  dash-dialogue + third-person-narration rules); the recommended local model for
+  non-English is one proven robust on Cyrillic dialogue; cross-chapter roster
+  merging stops minting duplicates.
+- **Architectural:** no contract change — `language` stays an open BCP-47 string
+  (162); model id stays a free string routed by `selectAnalyzer`.
+
+---
+
+## Root cause (reproduced, with correctness measured — not just coverage)
+
+Driven through the **real** pipeline (real EPUB parse → real chunker → real
+skill prompt → exact Ollama `/api/chat` body). Probe scripts:
+`server/repro-*.mts` (untracked scratch — delete before any commit).
+
+**Critical methodology note:** the stage-2 coverage guard (`stage2-coverage.ts`)
+**never inspects `characterId`** — `ok` is computed purely from word-overlap of
+sentence *text*. So "coverage PASS (ratio 0.9)" means *"~90% of words were
+transcribed back"*, NOT *"speakers are correct."* All model judgements below
+were therefore re-measured on **attribution correctness** (per-sentence speaker
+labels), not coverage.
+
+### Defect 3 — stage-2 under-production + mis-attribution on Russian dialogue (blocker)
+
+`qwen3.5:9b`, under constrained JSON decoding, attributes the opening narration
+then **collapses at the first em-dash («—») dialogue line**, emits a tiny valid
+JSON, and stops (`done_reason: stop`, not `length` — the truncation guard never
+fires; only coverage catches it). **Stochastic — ~⅔ of attempts fail** at temp
+0.2 (small-N estimate), which is why all 3 coverage retries failed. The current
+coverage-guard retry re-runs the **identical call at the same temperature**;
+bumping temperature made it *worse* in testing — grammar-off ~doubled Qwen's
+completion rate but didn't fix it.
+
+Independently, **both** Qwen and Gemma mis-handle two Russian-specific things
+even when they complete:
+1. **Third-person narration labelled as the character** (`Егор засунул руки в
+   карманы` → `egor`) instead of `narrator` — would read narration in the
+   character's voice.
+2. **Dash-dialogue narrative *tags*** (`— коротко сказал юноша`, `— Девушка
+   улыбнулась`) attributed to a speaker instead of `narrator`. Root cause: the
+   attribution skill's "split dialogue from tags" rules + examples are
+   English-quote-centric (`"…," he said`); Russian `— speech — tag` gets
+   segmented into tag-fragments that look like speech.
+
+### Defect 1 — cross-chapter cast merge is exact-id only
+
+`mergeRosterChapter` (`server/src/routes/analysis.ts:545`, key line `:550`
+`roster.get(incoming.id)`) merges by **exact id**, with no name/alias fallback.
+The analyzer emits divergent ids for the same Russian person across chapters
+(transliteration + name-form drift) → 43 unmerged duplicates, every
+`aliases: []`: `boris-ignatyevich`/`boris-ignatievich`/`shef`,
+`anton`/`anton-gorodetsky`, `egor`/`yegor`, `tigrenok`/`tigerlet`,
+`olga`/`olya`, `svet`/`svetlana`/`svetlana-nazarova`. This is *also* the source
+of the residual attribution slips — e.g. the young vampire "юноша" has **no
+roster character**, so his lines (`— Сильнее`) land on `egor`/`yegor`. No
+prompt or model fixes a missing roster entry.
+
+### Defect 2 — `unknown-male/female` fold never ran + is English-only
+
+`foldMinorCast` (`server/src/analyzer/fold-minor-cast.ts`) runs **post-stage-2**
+(needs line counts; main call `analysis.ts:~3787`). Stage-2 failed (Defect 3) →
+the fold never ran → **buckets never created** (as observed). And it's
+English-only: `GENERIC_ROLE_TAIL` can't catch девушка/парень/Депутат/Следователь;
+`makeBucket` hardcodes English names; and the **canonicalizer invariant**
+(`fold-minor-cast.ts:368-373`) *re-stamps* `name:'Unknown male'/'Unknown female'`
+on every fold pass — so localizing `makeBucket` alone is a no-op unless the
+canonicalizer is localized too (it has no `language` in scope today).
+
+---
+
+## Empirical findings (this is the new core — measured on the failing section)
+
+Same section (7576 chars / 1095 words), production-shaped inbox, real 43-char
+roster, `think:false`, `num_ctx 32768`, RTX 4070 (8 GB).
+
+**Prompt guards are the biggest quality lever** (Russian narration rule +
+dash-tag splitting, injected into the system instruction):
+
+| | Gemma e4b, **no guards** | Gemma e4b, **+ guards** |
+|---|---|---|
+| narrator ratio | 67% | **88%** |
+| Narration-about-Egor correct | ❌ many → `egor` | ✅ **9/10** (one `[11]` straggler) |
+| Dialogue tags → narrator | ❌ → speaker | ✅ mostly |
+| Completes / deterministic | ✅ | ✅ |
+
+Guards are **model-specific**: they sharply help Gemma; they *regressed* Qwen
+(53% narrator — Qwen keys on the many mid-sentence dashes in Russian prose).
+
+**Model comparison (with guards, correctness + speed):**
+
+| Model | gen tok/s | prefill | quality | verdict |
+|---|---|---|---|---|
+| **gemma e4b UD-Q4** (`gemma4-e4b-8gb`) | **~56** | <2 s | 88% narr, `[11]` stray | ✅ **production pick** |
+| gemma e4b UD-Q5 (`gemma4-e4b-q5`) | ~52 | low | 83–86% narr, `[11]` stray | ≈ Q4, no gain — skip |
+| gemma 12B (`gemma4-12b-8gb`) | **~7** | **~50 s** | 91% narr, `[11]` fixed | ❌ ~24 h/book, 16k didn't help |
+| qwen3.5:9b | ~22–26 | — | 85% narr *when it completes* (~⅓) | ❌ unreliable; guards hurt it |
+| qwen3.5:4b | — | — | unparseable JSON | ❌ |
+
+**Conclusions:** (1) `gemma4-e4b` **UD-Q4** + guards is the sweet spot — fast,
+fits, reliable, good quality. (2) Climbing quant (Q5) or size (12B) yields no
+usable gain — Q5 ≈ Q4, the 12B is fatally slow on an 8 GB card (compute/bandwidth
+bound; KV reduction to 16k did not help). (3) Residual errors (`[11]`
+action-narration, the missing "юноша") are **prompt + roster**, not model
+fidelity. (4) **Wall-clock is a real constraint**: even the fast e4b is ~158 s
+per ~9k-char section → **~3 h for this ~72-section book.** The 12B would be
+~24 h. This bounds any model choice.
+
+---
+
+## The plan
+
+TDD throughout (CLAUDE.md): each behaviour ships a paired test; each fix a
+regression test that fails before. Implementation branches off `main` (the
+current `fix/server-gpu-eviction-…` branch holds unrelated work).
+
+### Wave A — Russian attribution prompt guards (the validated quality fix) — IMPLEMENTED
+
+**Status: shipped.** Implemented as a deterministic post-model heuristic plus a
+preamble guard, rather than guard-text-only:
+
+1. **Narrator-default heuristic** (`server/src/analyzer/narrator-default.ts`,
+   wired into `attributeChapterStage2` in `server/src/routes/analysis.ts`, gated
+   on `isNonEnglish(language)`): after stage-2 returns, every NON-spoken sentence
+   is forced to `narrator`. Mechanically catches third-person narration labelled
+   as a character (`Егор засунул руки в карманы` → `narrator`) without trusting
+   the model. Runs after coverage (which keys on text, not `characterId`), so the
+   verdict is unchanged; English is a byte-identical no-op. Empirically (the
+   model's narration correctness 0–1/6 → a deterministic 6/6 every run, dialogue
+   untouched). See [162](162-fs2-multilanguage.md) for the full write-up.
+2. **Russian dash-dialogue tag guard** in `languagePreamble`
+   (`server/src/analyzer/gemini.ts`): the one class the heuristic deliberately
+   leaves to the model is the dashed narrative TAG (`— сказал юноша`,
+   `— Девушка улыбнулась`), which looks spoken — the Russian preamble now tells
+   the model that such a line is the narrator, only the spoken words → the
+   speaker.
+
+- **Tests:** `server/src/analyzer/narrator-default.test.ts` (pure unit:
+  `isSpokenLine`, `forceNarratorOnNonSpokenLines`, `applyNonEnglishNarratorDefault`,
+  + the `foldMinorCast` interaction); `server/src/analyzer/gemini.test.ts`
+  (dash-tag guard present for `ru`, absent for `en`/absent).
+- **Known limitation:** a genuine spoken line with no leading dash/quote and no
+  quoted span would be wrongly forced to `narrator` (model-marker-preservation
+  dependency). The deterministic narration rule from the original guard-text plan
+  (heavy stage-2-only guard block threading the stage through `languagePreamble`)
+  was superseded by the code-side heuristic, which is more reliable; untagged
+  dashed-line speaker-continuation remains a model-only concern (Wave C roster).
+
+### Wave B — recommended local model for non-English
+
+The **shipped default is cloud Gemini** (`analysisEngine:'gemini'`,
+`gemini-3.1-flash-lite`; `user-settings.ts:236,253`). This bug hits **local**
+users (offline) whose Ollama default is `qwen3.5:4b` (`DEFAULT_OLLAMA_MODEL`).
+So this is NOT a global default flip — it's about the **local** model:
+
+1. Add `gemma4-e4b` (UD-Q4) to the model list (`src/lib/models.ts`, engine
+   `'local'`) with a "best for non-English / multilingual" hint.
+2. Make the **local** model selection language-aware: non-English →
+   `gemma4-e4b`; keep `qwen3.5:4b/9b` for English and selectable for any
+   language (CJK untested — no claim). User override always wins.
+3. Make `gemma4-e4b` resident (`RESIDENT_MODELS`, ollama.ts) so it stays warm
+   across the loop. (NOTE: the earlier "9b comment is stale" claim was WRONG —
+   `RESIDENT_MODELS = {qwen3.5:4b, llama3.1:8b}`, 9b is correctly non-resident,
+   `ollama.test.ts:199` pins it. Leave that comment alone.)
+4. **Model availability:** making a new local model the non-English default
+   means it must be present — wire into the Model Manager (193/fs-23) /
+   installer, with a graceful "model not installed → fall back to qwen +
+   actionable diagnostic." This is a hard dependency, not a "until then."
+- **Tests:** unit on language-aware local model resolution (`ru`→gemma,
+  `en`→qwen, override wins); model-missing fallback path.
+
+### Wave C — name/alias-aware cross-chapter merge (Defect 1)
+
+Add a name/alias fallback to `mergeRosterChapter` when exact-id misses. Tiered:
+(1) exact normalized-name/alias match → merge (safe; kills the
+`boris-ignatyevich`≡`boris-ignatievich`, `egor`≡`yegor`, `tigrenok`≡`tigerlet`
+duplicates); (2) high token-overlap → merge with a single-dominant-candidate +
+high-floor guard (`Антон`/`Антон Городецкий`); (3) diminutives/epithets
+(`Оля`/`Ольга`, `шеф`) → manual UI for v1. Reuse `text-match.ts`
+(`normaliseForMatch`/`nameTokens`/`jaccard`) and export/reimplement
+`exactNameOverlap` (currently private in `voice-match.ts`).
+
+- **Scope caveat:** `mergeRosterChapter` returns `void`, has no sentence access,
+  and is called from 5+ sites incl. intra-chapter chunk union (first-wins) —
+  so a sentence-`characterId` rewrite must be threaded out as a rewrite-table
+  (parallel to `foldMinorCast.rewrites`), and the fuzzy match must be
+  order-deterministic. This is a structural change, not a one-line fallback.
+- **Tests:** unit fixtures — identical-name/drifted-id merge; token-overlap
+  merge; **non-merge** of two distinct same-token names; gender-disagreement
+  (`tigrenok`/`tigerlet`) without corrupting gender; chunk-union determinism.
+
+### Wave D — localized minor-cast fold (Defect 2)
+
+Thread `language` into `foldMinorCast` → `makeBucket` **and** the canonicalizer
+(`:368-373`); Russian → **Незнакомый Парень** / **Незнакомая Девушка**. Make
+`isDescriptorName`/`GENERIC_ROLE_TAIL` language-keyed (add девушка/парень/
+мужчина/женщина/незнакомец/незнакомка/человек/голос). Localize `cast-merge.ts`
+manual-downgrade `makeBucket` call too.
+
+- **Tests:** `makeBucket('ru')` names survive the canonicalizer; Russian
+  `isDescriptorName` positives/negatives; fold threads language.
+
+### Cross-cutting — reliable completion + wall-clock
+
+- **Perturbed retry (required, not optional):** on a coverage failure, retry
+  with a perturbation chosen *empirically* — grammar-off is the lever that
+  helped (temperature-up made it worse). Bounds the all-fail probability for any
+  model. Extend `runStage2WithCoverageGuard`.
+- **Wall-clock:** measure full-chapter (all 13 sections of ch1) end-to-end with
+  the chosen model; confirm full-book time against an acceptable target before
+  declaring done.
+
+---
+
+## Open questions
+
+1. **Local non-English default = `gemma4-e4b` UD-Q4** — confirm the canonical
+   Ollama tag to ship (the tuned `gemma4-e4b-8gb` vs an upstream tag).
+2. **Wave C aggressiveness** — Tier 1 (exact-name, safe) only, or +Tier 2
+   (token-overlap)?
+3. **How does gemma reach installs** — Model Manager auto-fetch, installer
+   bundle, or documented manual pull (with qwen fallback) for now?
+4. **Cloud-gemini on Russian untested** — the shipped default (cloud
+   `gemini-3.1-flash-lite`) was never run on this book; if cloud handles Russian
+   well, the local fix is the only gap. Worth one confirmation run.
+
+## Out of scope (v1)
+
+- Automatic diminutive/epithet merging (Оля/Ольга, шеф) — manual UI.
+- CJK / non-Russian tuning (no data; no claims).
+- Chunker / coverage thresholds (187) — unchanged.
+- Quant above UD-Q4 / models larger than e4b — measured, no usable gain on 8 GB.

@@ -263,6 +263,20 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
     expect(languagePreamble('')).toBe('');
   });
 
+  describe('languagePreamble — Russian dash-dialogue tag guard', () => {
+    it('tells the model that dashed narrative tags are narrator, for ru', async () => {
+      const { languagePreamble } = await import('./gemini.js');
+      const p = languagePreamble('ru');
+      expect(p).toMatch(/тег|narrative tag|сказал/i);
+      expect(p).toMatch(/narrator/);
+    });
+    it('adds nothing for English', async () => {
+      const { languagePreamble } = await import('./gemini.js');
+      expect(languagePreamble('en')).toBe('');
+      expect(languagePreamble(undefined)).toBe('');
+    });
+  });
+
   it('buildSystemInstruction appends the preamble only for non-English', async () => {
     const { buildSystemInstruction } = await import('./gemini.js');
     expect(buildSystemInstruction('SKILL', 'ru')).toMatch(/manuscript text is in Russian/i);
