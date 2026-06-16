@@ -1,253 +1,176 @@
-# Self-calibrating VRAM MB-accounting policy + two-model-split UI — Design
+# Self-calibrating VRAM telemetry (v1) + deferred MB-accounting engine — Design
 
 **Issue:** #845 (`fs-45`) · **Area:** `area:fs` · **Priority:** `moscow:could` · `needs-plan`
 **Date:** 2026-06-17 · **Builds on:** plan 222 (Wave 1 GPU eviction/residency), spec
-`2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 (which this supersedes for Wave 4), and the
-**already-built measured-VRAM modules** parked on branch `feat/server-dynamic-analyzer-models` /
-tag `backup/dynamic-analyzer-models-pre-rebase` (see "Existing foundation" below — reuse, don't rebuild).
+`2026-06-16-vram-budget-aware-gpu-policy-design.md` §7, and the built-but-parked measured-VRAM modules
+on branch `feat/server-dynamic-analyzer-models` / tag `backup/dynamic-analyzer-models-pre-rebase`.
 
-## Problem
+## Decision: phase the work
 
-Wave 1 gave 12/16 GB cards coexistence via a single coarse threshold (`gpu.safeCoexistMb`): a roomy
-card simply doesn't evict. Correct for the common case but blunt — a heavy combination on a 12 GB
-card (a 9B analyzer resident + a Qwen voice-design load) can pass the coarse threshold yet still
-overcommit and OOM.
+This spec was adversarially reviewed twice (2026-06-17). Both reviews — one on correctness/OOM-safety,
+one on scope/value — converged, from opposite directions, on **"do not build the decision engine yet"**:
 
-The obvious fix — a per-(engine, mode) MB cost table fed into a `planLoad` budget check — was
-drafted and then **deferred** (`docs/superpowers/plans/2026-06-16-wave4-vram-mb-accounting.md`). An
-adversarial review (2026-06-16, on #845) found the deferral correct **as drafted**: with *guessed*
-cost numbers, `planLoad` reproduces Wave 1's threshold decisions across 8/12/16 GB and even
-**mis-evicts on a 12 GB card during voice design** (9B 6400 + design 5000 = 11400 > 12288 − 1024).
-Guessed numbers add OOM risk for ~no decision-quality gain.
+- **The engine wouldn't change decisions on the real hardware.** On a 12 GB card (the RTX 4070 beta
+  box) the measured path still evicts a 9B-analyzer + Qwen-design combo — identical to Wave 1's free
+  `gpu.safeCoexistMb` threshold. MB-precision only flips a decision on 16 GB cards in a narrow combo
+  band that can't be shown to be common.
+- **The engine's TTS input can't be measured safely as first drafted.** The proposed TTS cost — a
+  *delta* of the sidecar's process-wide, sticky `vram_reserved_mb` high-water mark — conflates
+  "increment" with "footprint." For `qwen:design` (Base stays resident, VoiceDesign loads transiently)
+  the delta captures only the VoiceDesign increment, recording a value *below* the true peak →
+  `planLoad` would coexist → the documented plan-108 three-way OOM.
+- **The two-model-split warning guards an anti-recommended config.** `model-settings-form.tsx` steers
+  users toward a Gemma + **Gemini** (cloud) split to spread free-tier buckets; a local-local split is a
+  discouraged power-user path.
 
-**This design removes the guessing.** Costs are no longer authored constants — they are **measured
-per-machine, per-model, during real usage**, and the table self-tunes from the high (OOM-safe)
-defaults *downward* toward this box's true footprint. OOM risk decays with use; numbers are specific
-to this card and the exact model *variants* in play.
+So fs-45 ships in two phases:
+
+- **v1 (this spec, this plan): the passive telemetry substrate.** Revive the already-built analyzer
+  sampler + device-total probe, extend measurement to the TTS engines with an **OOM-safe absolute**
+  reading (not a delta), persist per-machine. **Nothing consumes the data for a decision yet** — it
+  records at near-zero risk so beta testers accumulate *real* per-card, per-variant numbers.
+- **v2 (DEFERRED — separate future plan, gated): the decision engine.** `costMb`/`planLoad`/`splitFits`
+  + MB-precise `withGpuLoad`, built **only once v1 telemetry from a real 12/16 GB card proves the MB
+  decision would flip at least one real eviction** vs the Wave-1 threshold. The split-warning and the
+  AMD/`rocm-smi` path are **dropped** unless evidence later justifies them.
+
+This delivers the user's actual goal — *ship defaults, tune on the real machine, OOM risk decays with
+use, numbers are machine- and variant-specific* — via the measurement, while deferring the engine that
+the data hasn't yet earned.
 
 ## Existing foundation (reuse, do NOT rebuild)
 
-The hard, well-tested half of this already exists on `feat/server-dynamic-analyzer-models` (built
-for plan 222 adaptive analyzer keep-alive, parked, never merged to `main`). fs-45 **revives and
-extends** it; it does not re-implement it.
+Built for plan 222 adaptive analyzer keep-alive, parked, never merged to `main`. **Verified
+self-contained** (both reviews): `model-vram-stats.ts` imports only `node:fs`/`node:path` +
+`telemetryDir` (on `main` at `workspace/paths.ts:256`); `device-total.ts` imports only
+`node:child_process`. Reviving the *modules* drags in no keep-alive/registry coupling.
 
-- **`server/src/analyzer/model-vram-stats.ts`** — the measured-VRAM store + sampler:
-  - `sampleAndRecordVram(url, model, numCtx)` reads Ollama `/api/ps`, finds the resident model, and
-    records `size_vram` **only if ≥95 % GPU-resident** (`GPU_RESIDENT_FRACTION` — a partial CPU/GPU
-    split under-reports the true need and would teach the engine a model "fits" when it spilled).
-    Best-effort, never throws, 1 s abort budget (it runs inside the analyzer GPU lock).
-  - Append-only **JSONL** at `telemetryDir()/model-vram-stats.jsonl` (`<WORKSPACE_ROOT>/.telemetry/`),
-    capped at 1000 lines. Append-only on purpose — a read-modify-write JSON object loses concurrent
-    updates (mirrors `resource-telemetry.ts`).
-  - **Key = `canonicalVramKey(model, numCtx)`** = `<tag-or-:latest>@<numCtx>`. Two refinements I would
-    otherwise have missed: (1) num_ctx is part of the key because **KV-cache VRAM scales with context**;
-    (2) bare family ⇄ `:latest` are the same model, but `:4b` vs `:9b` are not.
-  - Aggregation today = **EMA (α 0.3)**, both an async `emaForModelAsync` and a boot-primed sync cache
-    (`emaForModelSync`) for the hot `keepAliveFor()` path. `_emaFromRecords` shows the fold pattern.
-- **`server/src/gpu/device-total.ts`** — boot-time **`nvidia-smi --query-gpu=memory.total`** probe,
-  cached synchronously (`getDeviceTotalVramMb()`). **NVIDIA-only**: non-NVIDIA / no `nvidia-smi` → `null`,
-  which *disables* adaptive eviction (callers fall back to the flat knob).
-- Consumed by `analyzer/ollama.ts` `keepAliveFor(model)` — adaptive analyzer eviction — and the
-  `gpu.*` registry knobs already exist.
+- **`server/src/analyzer/model-vram-stats.ts`** — `sampleAndRecordVram(url, model, numCtx)` reads
+  Ollama `/api/ps`, records `size_vram` **only if ≥95 % GPU-resident** (`GPU_RESIDENT_FRACTION`; a
+  partial CPU/GPU split under-reports and would teach a model "fits" when it spilled). Best-effort,
+  never throws, 1 s abort budget. Append-only **JSONL** at `telemetryDir()/model-vram-stats.jsonl`,
+  capped (see M2 fix). Key = `canonicalVramKey(model, numCtx)` = `<tag-or-:latest>@<numCtx>` — num_ctx
+  is in the key because **KV-cache VRAM scales with context**; `:4b`≠`:9b`. Has EMA (α 0.3) reads
+  (`emaForModelSync/Async`) — **dormant in v1** (their only consumer, `keepAliveFor`, stays parked).
+- **`server/src/gpu/device-total.ts`** — boot `nvidia-smi --query-gpu=memory.total` probe, cached
+  synchronously (`getDeviceTotalVramMb()`). **NVIDIA-only**: non-NVIDIA / no `nvidia-smi` → `null`.
 
-**Two corrections to my first-draft architecture, forced by reading this code:**
-1. "The server never shells to a GPU vendor tool" is **false** — `device-total.ts` already shells to
-   `nvidia-smi` at boot. So there *is* server-side precedent; the AMD story is "extend device-total or
-   degrade", not "the server must stay pure".
-2. The analyzer-model store already exists with **better keying** (`@numCtx`) and a **resident-fraction
-   guard** I didn't have. The spec adopts both verbatim.
+Note: the Ollama `size_vram` path is a **clean total resident footprint, not a delta** — the OOM
+blocker below applies only to the TTS path, never the analyzer.
 
-## Goals / Non-goals
+## v1 design — the passive telemetry substrate
 
-**Goals**
-- Reuse the built analyzer sampler; **extend** measurement to the TTS engines (the genuinely-unbuilt
-  part) so the MB cost table is measured end to end.
-- Make the eviction/coexistence decision MB-precise so 12/16 GB cards coexist *precisely* without
-  evicting in the common case.
-- Warn at the settings surface when a two-model analysis split won't co-fit.
-- One honest read-only **calibration status line** so beta testers see the engine working and report back.
-- Cross-platform by construction (CUDA / ROCm / DirectML / MPS / CPU): vendor tools are best-effort
-  enrichment, and absent them the engine degrades to the Wave-1 threshold — never a hard dependency.
+### Unit A — Revive the analyzer sampler (record-only)
 
-**Non-goals**
-- Active / synthetic calibration passes — measurement is **passive only** (driven by real loads).
-- Per-op live-MB re-measurement mid-run.
-- Touching the concurrency semaphore (`gpu.weight.*` / `gpu.vramBudget`) — a *different* axis (how many
-  ops co-run as integer tokens), not an MB budget. Untouched.
-- A mid-analysis split *confirmation* dialog — pre-flight **warning** only.
-- A user-editable cost table / reset controls — the status line is read-only.
-- Reworking the existing **EMA**-driven `keepAliveFor()` behavior — it stays as is (see "EMA vs p95").
+Port `model-vram-stats.ts` + `device-total.ts` onto a fresh fs-45 branch off current `main` (do **not**
+merge the 33-commits-behind branch). Wire two things and nothing else:
 
-## Architecture
+- Boot init: `initVramStats()` (prime from disk) + `initDeviceTotalVram()` (nvidia-smi total).
+- One record-only call on the analyzer chat path (the branch's `ollama.ts:615` site):
+  `await sampleAndRecordVram(url, model, resolveAnalyzerNumCtx())` after a provably-resident chat.
 
-Four units (Unit 1 already exists; 1-TTS, 2-resolver-extension, 3-decision, 4-frontend are the work).
+**Do NOT wire `keepAliveFor()`'s adaptive-eviction branch** — that is a *decision* consuming telemetry,
+which belongs to v2. `main`'s keep-alive behavior (flat `ANALYZER_KEEP_ALIVE` knob) is unchanged. v1 is
+pure observation.
 
-```
- Real usage (analyzer chats + TTS loads)
-        │  samples appended {at,key,vramMb}
-        ▼
- model-vram-stats.jsonl  ──reads──▶  Cost resolver  ──MB──▶  Decision engine
- (telemetryDir, existing)            costMb(key,mode?)        planLoad / splitFits /
-   ▲        ▲          ▲             EMA→keepAlive             withGpuLoad (MB-precise)
-   │Ollama  │torch     │sidecar       p95+margin→eviction              │
-   │size_vram reserved  gpu_used_mb  default<MIN_SAMPLES   ┌───────────┼────────────┐
-   │(built) (qwen/coqui) (kokoro,new)                      ▼           ▼            ▼
-                                              GET /api/gpu/split-fits  warning  calibration line
- device-total.ts (nvidia-smi, existing) ──▶ getDeviceTotalVramMb() / getLastKnownVram()
-```
+### Unit B — Extend measurement to the TTS engines (OOM-safe, absolute)
 
-### Unit 1 — Analyzer telemetry (EXISTS) + Unit 1-TTS (NEW)
+The B1 fix, stated as a principle: **record an absolute "reserved-at-peak" reading, never a delta.**
+A delta of the sticky process-wide `memory_reserved()` can err *low* (unsafe → OOM). The absolute
+reserved pool at an op's peak **over-estimates** the model's footprint (it includes sticky/overhead) —
+and over-estimation is **conservative / OOM-safe** for any eventual eviction decision (you'd evict more
+readily, never coexist into an overcommit). That asymmetry is the whole reason to switch.
 
-Revive `model-vram-stats.ts` + `device-total.ts` onto the fs-45 branch unchanged. **Extend** the store
-with TTS-engine sample keys, written through the *same* append-only JSONL + the *same* record shape
-(`{at, key, vramMb}`), so there is one telemetry file and one read path:
+- After a successful TTS op, read the sidecar's existing `/health` `vram_reserved_mb` (absolute) at the
+  op's peak and record it as a sample for that engine+mode, into the **same JSONL**, same record shape
+  `{at, key, vramMb}`.
+- Keys (separate sample pools, **never cross-contaminated**): `qwen:synth` (Base 0.6B; generation),
+  `qwen:design` (Base + VoiceDesign 1.7B peak; **design only, never generation**), `coqui`.
+- **Guard (mirrors the ≥95 %-resident analyzer guard):** record only when the expected engine/model is
+  the dominant resident — i.e. for `qwen:design`, only when VoiceDesign is actually loaded; for
+  `qwen:synth`, only in a generation context with VoiceDesign *not* resident. This needs a
+  "currently-resident engines" signal from the sidecar (see Open choices) so a sample taken while the
+  wrong model is resident is discarded rather than mislabeled. Discard non-positive / absurd readings.
+- **Kokoro is DEFERRED from v1.** Its onnxruntime allocation is invisible to torch, so it would need a
+  net-new sidecar `gpu_used_mb` field with `nvidia-smi`/`rocm-smi` vendor dispatch — speculative and
+  cross-vendor. Kokoro is ~1 GB and low-stakes; note it as a known measurement gap, revisit in v2.
 
-| Key | Source | Vendor-agnostic? | Notes |
-|---|---|---|---|
-| `<tag>@<numCtx>` (analyzer) | Ollama `/api/ps` `size_vram` | **Yes** (HTTP API) | **Built.** Exact, per-variant, ≥95 %-resident guard. |
-| `qwen:synth` | sidecar `/health` `vram_reserved_mb` delta | **Yes** (torch) | **Base 0.6B only.** Gates generation↔analyzer coexistence. |
-| `qwen:design` | sidecar `/health` `vram_reserved_mb` delta | **Yes** (torch) | **Base + VoiceDesign 1.7B** (transient). **Design only — never during generation.** |
-| `coqui` | sidecar `/health` `vram_reserved_mb` delta | **Yes** (torch) | |
-| `kokoro` | sidecar `gpu_used_mb` delta across eager startup | best-effort | onnxruntime invisible to torch — see Unit 1a. |
+### Unit C — Telemetry identity & staleness (M-fix)
 
-**`qwen:synth` and `qwen:design` are separate sample pools and must never cross-contaminate.** A
-design-time peak (Base+VoiceDesign) must not inflate `synth` (generation would needlessly evict the
-analyzer); a synth sample must not deflate `design`. Mode is known at the call site that triggers the
-load. TTS deltas use torch `vram_reserved_mb` (process-scoped, so concurrent non-sidecar allocations
-don't contaminate them) measured around the load under the existing GPU lock; apply the same
-fully-resident sanity guard in spirit (discard a non-positive or absurd delta).
+The JSONL has no GPU stamp today. Persist the boot `getDeviceTotalVramMb()` (+ GPU name when available)
+as a one-line sidecar marker; if it differs from the live probe at boot, **rotate** the stats file
+(rename `.stale`) so numbers from another card never persist into a future decision. Ollama re-pulls
+self-correct (size_vram read live).
 
-#### Unit 1a — Kokoro / onnxruntime blind spot (cross-platform)
+### Folded review corrections
 
-torch can't see Kokoro's onnxruntime allocation, so Kokoro needs a whole-GPU "used MB" reading. Put it
-in the **sidecar**, which already detects accelerator family (`main.py:_accel_family`:
-`cuda`/`rocm`/`directml`/`mps`/`cpu`) and can dispatch the right probe:
+- **M2 — global 1000-line trim starves rare keys.** The analyzer samples on *every* chapter chat, so a
+  low-frequency key (coqui, a second analyzer tag) can be trimmed out before reaching a useful count.
+  Change the cap from a global last-N to **per-key last-N** (keep e.g. the last 50 samples *per key*),
+  so a chatty key can't evict a rare key's history. (Matters for v2's reads and the eventual "N of M
+  measured" legibility; harmless but worth doing while the file format is in hand.)
+- **m1 — symbol name.** The sidecar family helper is **`_normalize_device_family`** (`main.py:2704`)
+  (+ `_ort_providers_to_family`, `main.py:2690`), **not** `_accel_family`. Any v2/Kokoro work cites the
+  correct name.
+- **M1 — resident→key mapping (v2 note).** `probeOllamaHealth().resident` is **bare model names, no
+  numCtx**; the only Ollama-resident model that matters is the analyzer, mapped to its key via
+  `resolveAnalyzerNumCtx()`. TTS engines are not Ollama-resident. (Recorded here so v2 doesn't trip.)
 
-- `cuda` → `nvidia-smi --query-gpu=memory.used` · `rocm` → `rocm-smi` used-memory ·
-  `directml`/`mps`/`cpu`/probe-absent → **omit `gpu_used_mb`**.
+### v1 explicit NON-goals
 
-The sidecar exposes `gpu_used_mb` on `/health`; the server computes Kokoro's startup delta (baseline →
-post-Kokoro) from sidecar numbers. Kokoro loads **eagerly at startup before anything else**, so the
-delta attributes unambiguously. **Why the sidecar and not server-side `nvidia-smi` (which device-total
-already uses):** device-total needs only the *total* (one number, NVIDIA-only is acceptable since
-non-NVIDIA disables the engine anyway); `gpu_used_mb` is per-vendor *and* must work on ROCm, where only
-the sidecar knows it's really ROCm-behind-a-`cuda`-device-string.
+No `costMb`/`planLoad`/`splitFits`; no `withGpuLoad` rewire; no `GET /api/gpu/split-fits`; no
+two-model-split warning; no calibration status line; no Kokoro `gpu_used_mb`; no AMD/`rocm-smi`; no
+change to `keepAliveFor` or the concurrency semaphore (`gpu.weight.*` / `gpu.vramBudget`). v1 records;
+it never decides.
 
-**Graceful degradation:** absent a probe, **Kokoro keeps its default**; the engine never *requires* a
-vendor tool. Low-stakes — on the proven on-box DirectML path Kokoro fell back to **CPU (0 VRAM)**, and
-its ~1 GB default is small next to the analyzer/Qwen costs that drive eviction.
+## v2 (DEFERRED) — the decision engine, gated on evidence
 
-**AMD/DirectML floor:** on a DirectML-only box `getDeviceTotalVramMb()` is `null` (no `nvidia-smi`) and
-sidecar `vram_total_mb` is `None` → no budget → the MB engine **falls back to the Wave-1 threshold**
-(`planLoad` unknown-total path). No regression, no false precision. (Optional, deferred: teach
-`device-total.ts` a `rocm-smi` fallback so ROCm cards get the MB engine too.)
+Written down so the substrate is built toward it, but **not** in this plan. Trigger to start v2: v1
+telemetry from a real 12/16 GB card shows the MB decision would flip ≥1 real eviction vs the threshold.
 
-### Unit 2 — Cost resolver: `costMb(key, mode?)`
+- `costMb(key, mode?)` = **p95(samples) + margin** for the OOM-critical decision (`< MIN_SAMPLES` →
+  high default; gemini → 0; unknown → high fallback). p95 (not EMA) because eviction's risk posture is
+  catastrophic-vs-cheap, unlike keep-alive's. Both are pure reads of the same log.
+- `planLoad(state, residentMbs[], incomingMb)` (pure) + `splitFits`; `withGpuLoad(loadFn, incomingMb?)`
+  with the **trailing-optional arg** (verified: keeps the ~5 single-param passthrough mocks green —
+  `cast-design.test.ts`, `ensure-sidecar-loaded.test.ts`, `qwen-voice.test.ts`,
+  `eviction-regression.test.ts`, `gpu-load.test.ts`; call-site tests must be *updated* to assert the
+  cost is propagated, else a wiring regression goes uncaught). Evict/verify/refuse machinery unchanged.
+- **Dropped from v2 unless evidence justifies:** the two-model-split warning (anti-recommended config),
+  the AMD/`rocm-smi` path (speculative, zero code, untested hardware).
 
-Reads the existing JSONL records (filtered by key) — **two aggregations off the same samples**:
+## Testing (v1)
 
-- **EMA (existing)** keeps driving `keepAliveFor()` — untouched.
-- **`costMb` uses p95 + margin** for the OOM-critical eviction/coexistence decision:
-  - `gemini`/cloud → 0. Unknown id → high fallback (`gpu.modelCostMb.unknown`, default 7000 — prefer
-    evicting when unsure).
-  - **`< MIN_SAMPLES` (default 5) → the registry default** (biased high, OOM-safe). A new machine
-    behaves exactly as the static plan would have — safe by construction.
-  - **`≥ MIN_SAMPLES` → `p95(samples) + margin`**, margin = `max(10 %, 512 MB)` (registry knob). The
-    measured value **may go below the default** — that's the point (a 12 GB card measuring Qwen design
-    at ~4200 coexists where the 5000 guess evicted).
-
-**Why p95 for eviction but EMA for keep-alive (deliberate, asymmetric):** the two consumers have
-opposite risk postures. `keepAliveFor()` smoothing a wrong call just reloads a model — cheap; EMA's
-central-tendency is fine. An eviction OOM is catastrophic and unrecoverable mid-render — so the
-eviction path wants the conservative high-quantile + margin, never the average. Same raw samples, two
-reads (`_emaFromRecords` and a new `_p95FromRecords`).
-
-Registry defaults (initial, biased UP on the OOM-critical design path; MB): analyzer rows fall back to
-the per-tag default only until measured (analyzer is the *measured-first* path in practice); qwen
-`synth`=3700, qwen `design`=5000 (Base+VoiceDesign, non-additive — one value, never summed);
-coqui=3500; kokoro=1000; unknown=7000.
-
-### Unit 3 — Decision engine
-
-- **`planLoad(state, residentMbs[], incomingMb)`** (pure): `sum(residentMbs) + incomingMb ≤ totalMb −
-  headroom`, headroom = `gpu.vramHeadroomMb` (new knob, default 1024). `totalMb` from
-  `getDeviceTotalVramMb()` (boot nvidia-smi) ?? `getLastKnownVram().totalMb` (sidecar) — prefer the
-  boot probe (the sidecar is typically down during analysis). CPU → always fits. Unknown/`null` total →
-  **`{ fits: false }`** conservatively (decline to coexist when blind; caller evicts — today's behavior).
-- **`splitFits(a, b, state)`** = `planLoad(state, [costMb(a)], costMb(b)).fits`.
-- **`withGpuLoad(loadFn, incomingMb?)`** — incoming cost is a **trailing optional arg** (prior review's
-  BLOCKER 1: the ~5 passthrough mocks survive; omitted → today's `shouldEvictBeforeSidecarLoad`
-  threshold). Provided → residents via `probeOllamaHealth().resident` → map through `costMb` →
-  `planLoad(...).fits` ? `loadFn()` : (mutex → refuse-if-busy → evict-all → verify-closed → load).
-  **The evict/verify/refuse machinery is unchanged — only the decision becomes MB-precise.** `planLoad`
-  stays pure (probe + mapping happen in `withGpuLoad`, injected). Call sites pass the cost:
-  `ensureSidecarEngineReady` → `costMb(engine, engine==='qwen'?'synth':undefined)`;
-  `designQwenVoiceForCharacter` → `costMb('qwen','design')`.
-
-### Unit 4 — Frontend surfaces
-
-- **`GET /api/gpu/split-fits?a=&b=`** → `{ fits, totalMb, budgetMb }` (uses `splitFits` + the total
-  resolution above; CPU/unknown conservative). Client `api.getSplitFits(a, b)`, mock-backed.
-- **Two-model-split warning** in `src/components/model-settings-form.tsx`: when `analyzerPhase0Model` ≠
-  `analyzerPhase1Model`, **both local** (Ollama-shaped ids), and `getSplitFits` → `fits:false`, render
-  an inline warning ("These two models won't both fit in your ~12 GB GPU — they'll reload between
-  phases, slowing analysis."). No warning when equal, either cloud/gemini, or it fits. Debounced,
-  design tokens only.
-- **Calibration status line** (read-only beta-tester signal) in diagnostics/settings: e.g. *"VRAM
-  calibration: 8 of 11 models measured on this GPU (RTX 4070, 12 GB)"* vs *"using defaults"*. Counts
-  keys with ≥ MIN_SAMPLES. No controls.
-
-## Telemetry identity & staleness
-
-The JSONL has no GPU stamp today. fs-45 adds a lightweight guard: persist the boot
-`getDeviceTotalVramMb()` (+ GPU name when available) as a one-line header/sidecar marker; if it differs
-from the live probe at boot, **rotate** the stats file (rename to `.stale`) so numbers from another card
-never drive a decision. Ollama re-pulls self-correct already (size_vram read live). This is the only
-change to the existing store's persistence contract.
-
-## Data flow (12 GB card mid-design)
-
-1. Analysis with `qwen3.5:9b` (num_ctx 32768) → Ollama `size_vram` ≈ 6100 MB, ≥95 % resident → sample
-   `qwen3.5:9b@32768`.
-2. After ≥5 samples, `costMb('qwen3.5:9b@32768')` = `p95 + margin` ≈ 6700 (honest, may be ↑ or ↓ vs 6400).
-3. Design a voice → `costMb('qwen','design')` from measured design peaks ≈ 4200 + margin ≈ 4720 (vs 5000).
-4. `withGpuLoad(designFn, 4720)`: residents `[6700]`, `planLoad({total 12288},[6700],4720)` → `11420 ≤
-   11264`? **No → evict.** Guessed 6400+5000 also evicted — but on a card with even slightly lower real
-   costs, or 16 GB, the measured path **coexists** where the guess evicted. The win is precision on real
-   hardware, earned by measurement.
-
-## Testing
-
-- **Reuse:** port the existing `model-vram-stats.test.ts` + `device-total.test.ts` unchanged (they pin
-  the resident-fraction guard, canonical key incl. `@numCtx`, EMA fold, nvidia-smi parse, null-on-absent).
-- **TTS sampling (new):** `qwen:synth` vs `qwen:design` recorded to separate pools, no cross-contamination;
-  non-positive/absurd delta discarded; Kokoro startup-delta from sidecar `gpu_used_mb`.
-- **Sidecar:** `gpu_used_mb` present on cuda/rocm, omitted on directml/cpu (mock family + probe).
-- **Resolver:** `<MIN_SAMPLES`→default; `≥MIN_SAMPLES`→p95+margin (incl. below-default); unknown→high;
-  gemini→0; EMA path still returns its value for `keepAliveFor`.
-- **Decision:** `planLoad` fit math (evict 8 GB, coexist 12 GB, unknown-total→not-fits, CPU→fits);
-  `splitFits` true/false; `withGpuLoad` trailing-optional arg (omitted→threshold unchanged;
-  provided→MB), eviction-verify fail-closed unchanged, analysis-busy→`GpuBusyError`.
-- **Staleness:** fingerprint change → stats file rotated.
-- **Route + frontend unit:** `/api/gpu/split-fits` shape; warning shows on local mismatch + `fits:false`,
-  hidden on equal/cloud/`fits:true`; calibration line renders measured-vs-default counts.
-- **e2e** (settings/redux seam, mandatory): two different local models + stubbed `getSplitFits:false` →
-  warning; equal/cloud → none.
-- **Regression plan:** new `docs/features/NN-vram-mb-accounting.md` (`needs-plan`).
+- **Reuse:** port `model-vram-stats.test.ts` + `device-total.test.ts` (pin the ≥95 %-resident guard,
+  `@numCtx` key, nvidia-smi parse, null-on-absent). Adjust the trim test for per-key capping.
+- **Unit A:** boot init primes the cache; the analyzer chat path records a sample with the right key;
+  best-effort failure never throws / never blocks the chat.
+- **Unit B:** `qwen:synth` vs `qwen:design` write to separate pools, no cross-contamination; the
+  resident-engine guard discards a sample taken while the wrong model is resident; absolute reading
+  recorded (assert it is the `/health` reserved value, not a delta); non-positive/absurd discarded.
+- **Unit C:** GPU-fingerprint change → stats file rotated to `.stale`; same fingerprint → appended.
+- **No decision tests** — there is no decision in v1 (this is the point). A follow-up assertion that
+  `keepAliveFor` / `withGpuLoad` behavior is **unchanged** from `main` guards against accidental wiring.
+- **Regression plan:** new `docs/features/NN-vram-telemetry.md` (`needs-plan`) documenting the substrate
+  + the v2 trigger condition + the manual "read the JSONL after a tester OOM" acceptance step.
 
 ## Risks & mitigations
 
-- **p95 below true peak → OOM.** Additive margin + conservative `<MIN_SAMPLES` cold-start + unknown-total
-  → not-fits. The resident-fraction guard prevents spilled (under-reported) samples from poisoning the pool.
-- **EMA/p95 divergence confusing.** Documented asymmetric-risk rationale; both are pure reads of one log.
-- **`withGpuLoad` signature churn.** Trailing-optional arg keeps existing call sites/mocks green.
-- **Reviving a 33-commits-behind branch.** Port the *modules* (small, self-contained) onto a fresh
-  fs-45 branch off current `main`; do not merge the stale branch. Re-run their tests after porting.
-- **Semaphore confusion.** Explicit non-goal — `gpu.weight.*` is untouched.
+- **Absolute reserved over-estimates footprint.** Intended — it's the OOM-safe direction. Documented so
+  v2's `costMb` reads it knowing it's a conservative ceiling, not an exact footprint.
+- **`qwen:synth` measured after a design session reads sticky-high reserved → over-conservative.** The
+  resident-engine guard (VoiceDesign-not-resident for synth) plus measuring synth in a clean generation
+  context mitigates; worst case is "evict when could coexist," never OOM.
+- **Reviving a stale branch.** Port the small self-contained modules onto a fresh branch off `main`;
+  re-run their tests after porting. Do not merge the branch.
+- **Rare-key starvation.** Fixed by per-key trim (M2).
+- **Best-effort recording masks bugs.** Recording is fire-and-forget by design; cover the record path
+  with unit tests rather than relying on runtime signal.
 
-## Open implementation choices (deferred to the plan)
+## Open implementation choices (for the plan)
 
-- Exact staleness-marker format (header line vs sidecar `.meta` file) and rotation vs truncation.
-- Whether `gpu_used_mb` Kokoro sampling is one-shot at startup or also opportunistic.
-- Status-line placement (diagnostics view vs model-settings footer).
-- Whether to land the optional `rocm-smi` device-total fallback now or defer to an AMD follow-up.
+- The "currently-resident engines" signal Unit B's guard needs — does `/health` already expose loaded
+  engines, or is a small additive field required? (Prefer reusing existing state.)
+- Per-key trim N (50?) and whether to also keep a per-key rolling aggregate line for fast reads.
+- Staleness marker format (header line vs sidecar `.meta`) and rotate vs truncate.
+- Status-line + engine + warning are all v2 — not chosen here.
