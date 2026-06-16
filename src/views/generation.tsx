@@ -55,7 +55,7 @@ import { api, AnalysisError } from '../lib/api';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
-import { MODEL_OPTIONS } from '../lib/models';
+import { engineForModelId } from '../lib/models';
 import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
@@ -320,7 +320,7 @@ export function GenerationView({
        server job (it tries the main route's map, which is empty).
        Captured engine: ui.selectedModel — the analyzer that will
        handle this subset retry. */
-    const engine = MODEL_OPTIONS.find((m) => m.id === selectedAnalyzerModelId)?.engine;
+    const engine = engineForModelId(selectedAnalyzerModelId);
     dispatch(
       analysisActions.setActiveStream({
         bookId,
@@ -489,7 +489,7 @@ export function GenerationView({
         controller,
       },
     }));
-    const engine = MODEL_OPTIONS.find((m) => m.id === selectedAnalyzerModelId)?.engine;
+    const engine = engineForModelId(selectedAnalyzerModelId);
     dispatch(
       analysisActions.setActiveStream({
         bookId,

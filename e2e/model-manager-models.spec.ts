@@ -11,7 +11,7 @@ import { waitForRouteReady } from './helpers';
 test.describe.configure({ mode: 'serial' });
 
 test.describe('plan 61 — in-app multi-model management UX', () => {
-  test('install Ollama → pull qwen3.5:4b → ready for analysis', async ({ page }) => {
+  test('install Ollama → pull an uncurated pullable tag → ready for analysis', async ({ page }) => {
     /* Track which step of the install state machine we're on. */
     let installPolls = 0;
     let detectInstalled = false;
@@ -89,18 +89,33 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
       });
     });
 
+    /* Pull the UNCURATED tag the server's pullable list now carries
+       (gemma-4-E4B-it-GGUF:UD-Q4_K_XL). The mock health reports it as NOT on
+       disk, so its row is pullable — proving a pulled-but-uncurated tag is
+       offered (and selectable in the analyzer pickers, per Task 11b). The
+       curated default (qwen3.5:4b) is already on-disk in the mock, so we drive
+       the not-yet-pulled flow against the uncurated tag instead. */
+    const UNCURATED = 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL';
+    const ALL_PULLABLE = [
+      'qwen3.5:4b',
+      'qwen3.5:9b',
+      'llama3.1:8b',
+      'llama3.2:3b',
+      'gemma3:4b',
+      UNCURATED,
+    ];
     let pullPolls = 0;
     let modelOnDisk = false;
     await page.route('**/api/ollama/pull', async (route) => {
       if (route.request().method() !== 'POST') return route.continue();
       const body = JSON.parse(route.request().postData() ?? '{}');
-      expect(body.model).toBe('qwen3.5:4b');
+      expect(body.model).toBe(UNCURATED);
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
         body: JSON.stringify({
           id: '7',
-          model: 'qwen3.5:4b',
+          model: UNCURATED,
           status: 'pulling',
           lastStatusMessage: 'pulling manifest',
           bytesReceived: 0,
@@ -118,7 +133,7 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
       if (pullPolls === 1) {
         body = {
           id: '7',
-          model: 'qwen3.5:4b',
+          model: UNCURATED,
           status: 'pulling',
           lastStatusMessage: 'downloading',
           bytesReceived: 500_000,
@@ -131,7 +146,7 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
         modelOnDisk = true;
         body = {
           id: '7',
-          model: 'qwen3.5:4b',
+          model: UNCURATED,
           status: 'pulled',
           lastStatusMessage: 'success',
           bytesReceived: 1_000_000,
@@ -155,11 +170,12 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
         body: JSON.stringify({
           status: 'reachable',
           url: 'http://localhost:11434',
-          models: modelOnDisk ? ['qwen3.5:4b'] : [],
+          models: modelOnDisk ? ['qwen3.5:4b', UNCURATED] : ['qwen3.5:4b'],
           expectedModel: 'qwen3.5:4b',
-          modelPulled: modelOnDisk,
+          modelPulled: true,
           resident: [],
           modelResident: false,
+          pullable: ALL_PULLABLE,
         }),
       });
     });
@@ -172,9 +188,10 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
         body: JSON.stringify({
           status: 'reachable',
           url: 'http://localhost:11434',
-          models: modelOnDisk ? ['qwen3.5:4b'] : [],
+          models: modelOnDisk ? ['qwen3.5:4b', UNCURATED] : ['qwen3.5:4b'],
           expectedModel: 'qwen3.5:4b',
-          modelPulled: modelOnDisk,
+          modelPulled: true,
+          pullable: ALL_PULLABLE,
         }),
       });
     });
@@ -195,20 +212,23 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
     await expect(page.getByTestId('ollama-install-job')).toBeVisible({ timeout: 5_000 });
     await expect(page.getByTestId('ollama-install-ready')).toBeVisible({ timeout: 10_000 });
 
-    /* Step 4 — pull qwen3.5:4b. */
-    await page.getByTestId('model-pull-qwen3.5:4b').click();
-    await expect(page.getByTestId('model-pull-progress-qwen3.5:4b')).toBeVisible({
+    /* Step 4 — the uncurated tag is OFFERED (a pull row exists for it),
+       proving the server's pullable allowlist (incl. tags the curated catalog
+       doesn't carry) flows through to the Model Manager. Then pull it. */
+    await expect(page.getByTestId(`model-row-${UNCURATED}`)).toBeVisible();
+    await page.getByTestId(`model-pull-${UNCURATED}`).click();
+    await expect(page.getByTestId(`model-pull-progress-${UNCURATED}`)).toBeVisible({
       timeout: 3_000,
     });
 
     /* Step 5 — once the pull completes, the refresh hook should
        re-render the row as "on disk." */
-    await expect(page.getByTestId('model-row-qwen3.5:4b')).toContainText(/on disk/i, {
+    await expect(page.getByTestId(`model-row-${UNCURATED}`)).toContainText(/on disk/i, {
       timeout: 10_000,
     });
 
     /* Step 6 — Refresh available models button re-runs /refresh. */
     await page.getByTestId('model-pull-refresh').click();
-    await expect(page.getByTestId('model-row-qwen3.5:4b')).toContainText(/on disk/i);
+    await expect(page.getByTestId(`model-row-${UNCURATED}`)).toContainText(/on disk/i);
   });
 });

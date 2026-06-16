@@ -195,7 +195,15 @@ in memory for the deferred root-cause measurement pass.
 
 ## Moving up to an 8B: the actual options
 
-The candidates already in the model picker (`src/lib/models.ts:19`):
+> Since plan 221 the analyzer pickers are **dynamic** — they show the union of
+> the curated `MODEL_OPTIONS` below and whatever you've actually pulled into
+> Ollama (live, via `/api/ollama/health`). So you can `ollama pull` any tag and
+> select it without editing this list; the curated entries below are the
+> suggestions + their VRAM notes. `keepAliveFor` still uses `RESIDENT_MODELS`
+> for the resident set, but the `'5m'` window is now the `ANALYZER_KEEP_ALIVE`
+> knob. Cross-engine eviction before a TTS load is plan 222's `withGpuLoad`.
+
+The curated candidates in the model picker (`src/lib/models.ts`):
 
 - **qwen3.5:9b** — ~6.6 GB resident. Strongest on edge cases in my testing.
   Leaves ~1 GB of headroom for KV cache at 16K context, which is tight. Right

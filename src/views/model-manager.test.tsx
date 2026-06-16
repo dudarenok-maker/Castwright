@@ -26,6 +26,12 @@ vi.mock('../lib/api', () => ({
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
     restartSidecar: vi.fn(),
+    getOllamaHealth: vi.fn().mockResolvedValue({
+      status: 'reachable',
+      url: '(mock)',
+      models: ['qwen3.5:4b'],
+      pullable: ['qwen3.5:4b', 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL'],
+    }),
   },
 }));
 
@@ -116,6 +122,8 @@ function renderManager(initial: Partial<UserSettings> = {}) {
     status: 'idle',
     error: null,
     hydrated: true,
+    localAnalyzerModels: [],
+    pullableModels: [],
   };
   const store = configureStore({
     reducer: {
@@ -268,6 +276,11 @@ describe('ModelManagerView — moved settings form', () => {
     const input = (await screen.findByTestId('account-sidecar-url')) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'http://evil.example.com:9000' } });
     expect(screen.getByTestId('sidecar-url-invalid')).toBeInTheDocument();
+  });
+
+  it('renders pull rows from fetched pullableModels (incl. the gemma-4 E4B tag)', async () => {
+    renderManager();
+    expect(await screen.findByText(/gemma-4-E4B-it-GGUF:UD-Q4_K_XL/)).toBeInTheDocument();
   });
 });
 

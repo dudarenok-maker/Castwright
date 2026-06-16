@@ -226,6 +226,7 @@ describe('a11y — upload view', () => {
         analysis: analysisSlice.reducer,
         chapters: chaptersSlice.reducer,
         library: librarySlice.reducer,
+        account: accountSlice.reducer,
       },
     });
     const { container } = render(

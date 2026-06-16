@@ -19,12 +19,17 @@ interface AnalysisModelPickerProps {
   selectedModel: string;
   onChange: (modelId: string) => void;
   disabled?: boolean;
+  /** Grouped model catalog to render. Defaults to the curated-only static
+      groups for store-less callers; the upload view passes the dynamic
+      curated ∪ live-Ollama-tag union so pulled tags are selectable. */
+  groups?: typeof MODEL_OPTION_GROUPS;
 }
 
 export function AnalysisModelPicker({
   selectedModel,
   onChange,
   disabled = false,
+  groups: groupsProp = MODEL_OPTION_GROUPS,
 }: AnalysisModelPickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -32,12 +37,12 @@ export function AnalysisModelPicker({
   /* Resolve the trigger label from the selected id. Falls back to the
      id itself if the catalog ever rolls a model we don't carry locally
      (defensive — the catalog is the single source of truth). */
-  const selectedOption = MODEL_OPTION_GROUPS.flatMap((g) => g.models).find(
+  const selectedOption = groupsProp.flatMap((g) => g.models).find(
     (m) => m.id === selectedModel,
   );
   const triggerLabel = selectedOption?.label ?? selectedModel;
 
-  const groups: PickerGroup<ModelOption>[] = MODEL_OPTION_GROUPS.map((g) => ({
+  const groups: PickerGroup<ModelOption>[] = groupsProp.map((g) => ({
     label: g.label,
     items: g.models.map((m) => ({
       id: m.id,

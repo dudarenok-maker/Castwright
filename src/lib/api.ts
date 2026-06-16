@@ -4774,6 +4774,9 @@ export interface OllamaHealth {
      16K ctx mid-request, pill stayed green because pulled never flips). */
   resident?: string[];
   modelResident?: boolean;
+  /* Curated install list (pull suggestions + allowlist) from the server's
+     single source; the frontend no longer hardcodes a mirror. */
+  pullable?: string[];
   error?: string;
 }
 
@@ -6060,6 +6063,7 @@ async function mockGetOllamaHealth(): Promise<OllamaHealth> {
     modelPulled: true,
     resident: Array.from(MOCK_OLLAMA_RESIDENT),
     modelResident: MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b'),
+    pullable: ['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b', 'llama3.2:3b', 'gemma3:4b', 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL'],
   };
 }
 

@@ -15,11 +15,16 @@ import {
   SettingsSection,
   type SectionNavItem,
 } from './settings/settings-accordion';
-import { MODEL_OPTION_GROUPS } from '../lib/models';
+import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
-import { saveAccountSettings, saveGeminiApiKey } from '../store/account-slice';
+import {
+  saveAccountSettings,
+  saveGeminiApiKey,
+  fetchAnalyzerModels,
+} from '../store/account-slice';
+import { api } from '../lib/api';
 import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
 import { ModelPullStatus } from './model-pull-status';
@@ -81,19 +86,20 @@ export const MODEL_SETTINGS_SECTIONS: SectionNavItem[] = [
   },
 ];
 
-/* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS
-   (static per release; the card renders rows without re-fetching the allowlist). */
-const PULLABLE_MODELS = [
-  'qwen3.5:4b',
-  'qwen3.5:9b',
-  'llama3.1:8b',
-  'llama3.2:3b',
-  'gemma3:4b',
-] as const;
-
 export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } = {}) {
   const dispatch = useAppDispatch();
   const account = useAppSelector((s) => s.account);
+
+  /* Dynamic curated ∪ live-Ollama-tag union for the three analyzer-model
+     pickers (default + phase 0 + phase 1), so a pulled-but-uncurated tag is
+     selectable. Populated by fetchAnalyzerModels on mount; empty (offline)
+     falls back to the curated catalog. */
+  const analyzerModelGroups = buildModelOptionGroups(
+    buildLocalModelOptions(account.localAnalyzerModels),
+  );
+  useEffect(() => {
+    void dispatch(fetchAnalyzerModels());
+  }, [dispatch]);
 
   const [defaultAnalysisModel, setDefaultAnalysisModel] = useState(account.defaultAnalysisModel);
   const [defaultTtsEngine, setDefaultTtsEngine] = useState<TtsEngineId>(account.defaultTtsEngine);
@@ -262,7 +268,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             onChange={(e) => setDefaultAnalysisModel(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
-            {MODEL_OPTION_GROUPS.map((g) => (
+            {analyzerModelGroups.map((g) => (
               <optgroup key={g.engine} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
@@ -341,7 +347,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
             <option value="">(use server default)</option>
-            {MODEL_OPTION_GROUPS.map((g) => (
+            {analyzerModelGroups.map((g) => (
               <optgroup key={g.engine} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
@@ -363,7 +369,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
             <option value="">(use server default)</option>
-            {MODEL_OPTION_GROUPS.map((g) => (
+            {analyzerModelGroups.map((g) => (
               <optgroup key={g.engine} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
@@ -607,32 +613,31 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   return <SettingsAccordion sections={MODEL_SETTINGS_SECTIONS}>{body}</SettingsAccordion>;
 }
 
-/* Plan 61 — Models card body. In-app installers (Ollama + analyzer pulls).
-   Rendered inside a SettingsSection shell (GROUP_MODELS_INSTALL). Direct-fetches
-   /api/ollama/health (bypassing the mock layer) so ModelPullStatus reflects
-   real on-disk state. The data-testid is preserved for existing tests. */
+/* Plan 61 / Task 11a — Models card body. In-app installers (Ollama + analyzer
+   pulls). Rendered inside a SettingsSection shell (GROUP_MODELS_INSTALL).
+   Sources its pull rows from the server's curated allowlist via
+   `account.pullableModels` (populated by `fetchAnalyzerModels`) and routes the
+   health probe through the mockable api layer so it works under mocks / e2e.
+   Re-fetches the model list after a pull completes so a just-pulled tag shows
+   on disk without a remount. The data-testid is preserved for existing tests. */
 function ModelsCardBody() {
+  const dispatch = useAppDispatch();
+  const pullableModels = useAppSelector((s) => s.account.pullableModels);
   const [health, setHealth] = useState<import('./model-pull-status').OllamaHealthEnvelope | null>(
     null,
   );
 
   useEffect(() => {
+    void dispatch(fetchAnalyzerModels());
     let cancelled = false;
     void (async () => {
-      try {
-        const res = await fetch('/api/ollama/health');
-        if (!res.ok) return;
-        const body = await res.json();
-        if (!cancelled) setHealth(body);
-      } catch {
-        /* Best-effort probe — leave health null and let ModelPullStatus render
-           the "daemon unreachable" banner. */
-      }
+      const h = await api.getOllamaHealth();
+      if (!cancelled) setHealth(h as unknown as import('./model-pull-status').OllamaHealthEnvelope);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [dispatch]);
 
   return (
     <div data-testid="account-models-card" className="space-y-6">
@@ -650,7 +655,11 @@ function ModelsCardBody() {
           Pulled tags appear in the Analysis-model dropdown above. The configured default is
           highlighted.
         </p>
-        <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
+        <ModelPullStatus
+          health={health}
+          pullableModels={pullableModels}
+          onPulled={() => dispatch(fetchAnalyzerModels())}
+        />
       </div>
     </div>
   );

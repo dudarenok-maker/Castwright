@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { IconUpload, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
@@ -7,7 +7,9 @@ import type { UploadArgs } from '../lib/api';
 import { TAGLINE_SHORT } from '../lib/brand';
 import { AnalysisModelPicker } from '../components/analysis-model-picker';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
+import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
 import { useAppDispatch, useAppSelector } from '../store';
+import { fetchAnalyzerModels } from '../store/account-slice';
 import { uiActions } from '../store/ui-slice';
 import { libraryActions } from '../store/library-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -31,6 +33,14 @@ export function UploadView() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
+  /* Dynamic curated ∪ live-Ollama-tag union for the analysis-model picker, so a
+     pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels on
+     mount; empty (offline) falls back to the curated catalog. */
+  const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
+  const analysisModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  useEffect(() => {
+    void dispatch(fetchAnalyzerModels());
+  }, [dispatch]);
   /* Plan 74 — re-upload mode is signalled by ui-slice.reuploadingBookId.
      When set, we route the import through the diff modal instead of
      ConfirmMetadata + a fresh analysis run. */
@@ -289,6 +299,7 @@ export function UploadView() {
             selectedModel={selectedModel}
             onChange={(id) => dispatch(uiActions.setSelectedModel(id))}
             disabled={busy}
+            groups={analysisModelGroups}
           />
         </div>
 

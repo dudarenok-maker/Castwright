@@ -97,6 +97,8 @@ function renderView(initial: Partial<UserSettings> = {}) {
     status: 'idle',
     error: null,
     hydrated: true,
+    localAnalyzerModels: [],
+    pullableModels: [],
   };
   const store = configureStore({
     reducer: {

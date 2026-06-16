@@ -37,7 +37,7 @@ import { useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
-import { MODEL_OPTIONS } from '../lib/models';
+import { engineForModelId } from '../lib/models';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { IconWarning } from '../lib/icons';
 
@@ -75,7 +75,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
   /* Engine lookup — `local` engines are the only ones that compete for
      GPU. Anything else (gemini, gemma-via-Gemini) is a remote API and
      safe to fire alongside an in-flight TTS run. */
-  const engine = MODEL_OPTIONS.find((m) => m.id === selectedModel)?.engine ?? 'gemini';
+  const engine = engineForModelId(selectedModel);
 
   const guard: GuardResult['guard'] = (proceed) => {
     if (engine !== 'local' || !anyActiveStream) {

@@ -55,6 +55,8 @@ function makeStore({
     status: 'idle',
     error: null,
     hydrated: true,
+    localAnalyzerModels: [],
+    pullableModels: [],
     defaultThemePreference: accountDefault,
   };
   return configureStore({

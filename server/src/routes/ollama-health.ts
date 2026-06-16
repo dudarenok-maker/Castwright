@@ -101,6 +101,9 @@ export interface OllamaHealthResult {
   modelPulled?: boolean;
   resident?: string[];
   modelResident?: boolean;
+  /** Curated install list (= pull suggestions + pull allowlist). Static per
+      release; surfaced here so the frontend stops mirroring it. */
+  pullable?: string[];
   error?: string;
 }
 
@@ -109,6 +112,10 @@ export interface OllamaHealthResult {
 export async function probeOllamaHealth(): Promise<OllamaHealthResult> {
   const url = getResolvedOllamaUrl();
   const expectedModel = getResolvedOllamaModel();
+  /* The curated install list — both the Model Manager's pull suggestions and
+     the in-app pull allowlist. Static per release; attached to every envelope
+     so the frontend fetches it instead of hardcoding a mirror. */
+  const pullable = pullBootstrap.listAllowed();
   /* Two probes in parallel: /api/tags for "is it pulled" and /api/ps for
      "is it actually resident in VRAM". The pill needs the *resident*
      signal — pulled-but-not-loaded looks identical to ready without it,
@@ -129,6 +136,7 @@ export async function probeOllamaHealth(): Promise<OllamaHealthResult> {
       return {
         status: 'unreachable',
         url,
+        pullable,
         error: `Ollama returned ${tagsResp.status} ${tagsResp.statusText}`,
       };
     }
@@ -170,6 +178,7 @@ export async function probeOllamaHealth(): Promise<OllamaHealthResult> {
       modelPulled: hasExpected,
       resident,
       modelResident: expectedResident,
+      pullable,
     };
   } catch (e) {
     clearTimeout(timer);
@@ -178,6 +187,7 @@ export async function probeOllamaHealth(): Promise<OllamaHealthResult> {
     return {
       status: 'unreachable',
       url,
+      pullable,
       /* Same distinction the sidecar probe makes: "process down" vs
          "process up but not responding". Remediation differs (start
          the daemon vs. wait or restart). */
@@ -385,80 +395,9 @@ ollamaHealthRouter.get('/pull/:id', (req: Request, res: Response) => {
   return res.json(job);
 });
 
-/* POST /api/ollama/refresh — a thin alias for the existing GET /health.
-   The UI uses POST semantically ("re-probe now") and we re-export the
-   same envelope so the dropdown updates without a page reload. */
+/* POST /api/ollama/refresh — a thin "re-probe now" alias for GET /health.
+   Delegates to probeOllamaHealth() so the two stay byte-identical (incl. the
+   `pullable` install list) — no duplicated inline probe to drift. */
 ollamaHealthRouter.post('/refresh', async (_req: Request, res: Response) => {
-  /* Inline-dispatch into the existing GET handler by re-invoking the
-     same probe. We can't just `res.redirect()` because the caller wants
-     the body now, and the GET handler isn't memoised. Easiest: build a
-     fake req+res chain. Instead we just re-implement the small probe
-     here — it's already a one-liner that returns the JSON. */
-  const url = getResolvedOllamaUrl();
-  const expectedModel = getResolvedOllamaModel();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  try {
-    const [tagsResp, psResp] = await Promise.all([
-      fetch(`${url}/api/tags`, { method: 'GET', signal: controller.signal }),
-      fetch(`${url}/api/ps`, { method: 'GET', signal: controller.signal }),
-    ]);
-    clearTimeout(timer);
-    if (!tagsResp.ok) {
-      return res.json({
-        status: 'unreachable',
-        url,
-        error: `Ollama returned ${tagsResp.status} ${tagsResp.statusText}`,
-      });
-    }
-    const tagsBody = (await tagsResp.json().catch(() => ({}))) as {
-      models?: Array<{ name?: string; model?: string }>;
-    };
-    const models = Array.isArray(tagsBody.models)
-      ? tagsBody.models.map((m) => m.name ?? m.model ?? '').filter(Boolean)
-      : [];
-    const expectedRoot = expectedModel.split(':')[0];
-    const hasExpected = models.some(
-      (m) =>
-        m === expectedModel ||
-        m.startsWith(`${expectedModel}-`) ||
-        (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
-    );
-    let resident: string[] = [];
-    let expectedResident = false;
-    if (psResp.ok) {
-      const psBody = (await psResp.json().catch(() => ({}))) as {
-        models?: Array<{ name?: string; model?: string }>;
-      };
-      resident = Array.isArray(psBody.models)
-        ? psBody.models.map((m) => m.name ?? m.model ?? '').filter(Boolean)
-        : [];
-      expectedResident = resident.some(
-        (m) =>
-          m === expectedModel ||
-          m.startsWith(`${expectedModel}-`) ||
-          (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
-      );
-    }
-    return res.json({
-      status: 'reachable',
-      url,
-      models,
-      expectedModel,
-      modelPulled: hasExpected,
-      resident,
-      modelResident: expectedResident,
-    });
-  } catch (e) {
-    clearTimeout(timer);
-    const err = e as { name?: string; message?: string };
-    const isTimeout = err.name === 'AbortError';
-    return res.json({
-      status: 'unreachable',
-      url,
-      error: isTimeout
-        ? `No response from ${url} within ${PROBE_TIMEOUT_MS}ms`
-        : err.message || 'Ollama fetch failed.',
-    });
-  }
+  res.json(await probeOllamaHealth());
 });
