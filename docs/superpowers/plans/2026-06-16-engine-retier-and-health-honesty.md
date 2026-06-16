@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revision 3 (2026-06-16, post plan-adversarial-review + ORT-merge reconcile):** the concurrent `fix/sidecar-nvidia-ort-gpu-enforce` branch **merged** (PR #828, `main`=`d941ea83`); this plan's `feat` branch is **rebased onto it**. Corrections folded in: Task 1 rewritten against the REAL `requirements-layout.test.ts` (helper is `read`, and the three overlay tests are regression *fences* asserting `coqui-tts` present — they must be inverted); the per-engine `package-missing` data-flow now carries **separate package+weights booleans** end-to-end (Tasks 7/8/10) instead of the collapsing install-state string; Task 11 wires to the **existing** `venv-bootstrap` route + `api.restartSidecar`; Task 13 audits `anyTtsEnginePresent` callers; test-helper references made concrete.
+
 **Goal:** Move Qwen into the GPU requirements (standard) and Coqui to an opt-in secondary installer, then make the Model Manager + readiness gate report honest per-engine health (package vs weights vs integrity) across Kokoro/Qwen/Coqui/Whisper.
 
-**Architecture:** A new `engine-health.ts` derives a 4-state health (`ready` / `package-missing` / `weights-missing` / `not-installed`) + `tier` per engine, sourcing package-importability from the sidecar `/health` (`find_spec`, authoritative when reachable) and weight-presence from Node disk probes (authoritative for files). Inventory, the badge, and the readiness gate all read it. Repair is routed by tier: standard engines → venv re-bootstrap; Coqui → its own installer (now pip-installs the package).
+**Architecture:** A new `engine-health.ts` derives a 4-state health (`ready` / `package-missing` / `weights-missing` / `not-installed`) + `tier` per engine. **Package-importability** comes from the sidecar `/health` per-engine boolean (`find_spec`, authoritative when reachable) falling back to a Node disk probe; **weight-presence** comes from Node disk probes (authoritative for files). Inventory, the badge, and the readiness gate all read it. Repair is routed by tier: standard engines (Kokoro/Qwen/Whisper) → venv re-bootstrap + sidecar restart; Coqui → its own installer (now pip-installs the package).
 
 **Tech Stack:** Node/Express + TypeScript (server), Python/FastAPI (sidecar), React + Redux + Vitest (frontend), Playwright (e2e), pytest (sidecar), pip requirements overlays.
 
@@ -12,9 +14,13 @@
 
 ---
 
-## ⚠️ Prerequisite — reconcile the concurrent ORT branch FIRST
+## Prerequisite — DONE: ORT branch reconciled
 
-A concurrent session's branch `fix/sidecar-nvidia-ort-gpu-enforce` is editing the **same files** Phase 1 touches: `requirements/nvidia-cuda.txt`, `requirements-layout.test.ts`, `test_requirements.py`, `bootstrap-venv.mjs`, `install-ort.mjs`. **Do not start Task 1 until that branch is merged to `main`**, then rebase `feat/engine-retier-health-honesty` onto the updated `main`. All requirements edits below are described **semantically** ("uncomment the `qwen-tts` line", "delete the `coqui-tts` line") rather than by line number, because their merge will shift line numbers.
+`fix/sidecar-nvidia-ort-gpu-enforce` merged to `main` (PR #828, `d941ea83`: "force onnxruntime-gpu via ORT swap, not kokoro-onnx[gpu]"). `feat/engine-retier-health-honesty` is rebased onto it. Two interactions to keep in mind while implementing:
+
+- **Fleet self-heal (benefit):** their venv-migration keys re-bootstrap off a `reqHash`. Editing `nvidia-cuda.txt` in Task 1 flips that hash, so **every existing nvidia box auto-runs `pip install -r` on next start → qwen-tts installs automatically** — the original bug self-heals fleet-wide, not just on fresh installs.
+- **Decision 4 auto-satisfied:** `pip install -r` never *uninstalls*, so an upgraded box's existing `coqui-tts` **stays**; only genuinely fresh venvs lose it. No migration code needed.
+- **Repair inherits a fatal ORT swap:** their `installForProfile` now runs `planOrtSwap` and a swap failure is FATAL. The standard-engine "venv re-bootstrap" Repair (Task 11) routes through this — note it in the Repair error copy.
 
 ---
 
@@ -28,18 +34,20 @@ A concurrent session's branch `fix/sidecar-nvidia-ort-gpu-enforce` is editing th
 | `server/tts-sidecar/requirements/base.txt` | vendor-neutral | re-comment transformers pin rationale |
 | `server/tts-sidecar/scripts/install-coqui.mjs` | Coqui installer | + pip-install step (`-c base.txt`) |
 | `server/tts-sidecar/scripts/install-qwen3.mjs` | Qwen installer | torch-safe (drop `-U`, `-c base.txt`) |
-| `server/src/tts/coqui-install-bootstrap.ts` | Coqui job machine | update line-138 message |
+| `server/src/tts/coqui-install-bootstrap.ts` | Coqui job machine | update stale "not importable" message |
 | `server/src/tts/kokoro-install-detect.ts` | Kokoro probe | + `kokoroPackageInstalled` + 4-state |
 | `server/src/tts/whisper-install-detect.ts` | Whisper probe | **NEW** |
 | `server/src/tts/engine-health.ts` | unified health + tier | **NEW** |
 | `server/src/tts/model-integrity.ts` | integrity verdict | generalize to all engines |
-| `server/tts-sidecar/main.py` | `/health` | + coqui/kokoro/whisper `_install_state` |
-| `server/src/routes/sidecar-health.ts` | health proxy | forward 3 new install states |
+| `server/tts-sidecar/main.py` | `/health` | + per-engine package/weights/state |
+| `server/src/routes/sidecar-health.ts` | health proxy | forward per-engine booleans + state |
 | `server/src/routes/models-inventory.ts` | inventory API | health + integrity + tier per row |
 | `src/views/model-manager.tsx` | Model Manager UI | badge reads health; Repair; tier |
 | `server/src/tts/engine-presence.ts` | readiness gate | health-aware, warn-not-block |
-| `e2e/` | browser regression | Needs-repair + Repair affordance |
+| `e2e/` | browser regression | Needs-repair + Repair + integrity chips |
 | `docs/...` | docs | INSTALL + wizard + regression plan |
+
+**Test-helper note (applies to Tasks 4, 5):** there is no shared `makeTempVenv`. Reuse the temp-tree pattern already in `server/src/tts/qwen-install-detect.test.ts` (it builds a `mkdtempSync` dir with `Lib/site-packages/<pkg>` subdirs and points the probe at it). Either lift that into a small local helper in each test file or copy the `mkdtempSync` setup inline. Do NOT invent a global helper.
 
 ---
 
@@ -51,43 +59,47 @@ A concurrent session's branch `fix/sidecar-nvidia-ort-gpu-enforce` is editing th
 - Modify: `server/tts-sidecar/requirements/nvidia-cuda.txt`, `amd-rocm.txt`, `cpu.txt`, `base.txt`
 - Test: `server/src/tts/requirements-layout.test.ts`, `server/src/upgrade/zip-validate.test.ts`, `server/tts-sidecar/tests/test_requirements.py`
 
-- [ ] **Step 1: Update the layout test to the new invariants (write the failing assertions first)**
+> The three overlay tests in `requirements-layout.test.ts` are regression *fences* that currently assert `coqui-tts` is PRESENT and are titled "== TODAY". Our re-tier deliberately changes "today", so we REWRITE those assertions (the helper is `read(f)`, defined at the top of the file). Leave their ORT-swap assertions (`kokoro-onnx` plain, no `[gpu]`, no `onnxruntime-gpu`, `torch==2.8.0`) untouched.
 
-In `requirements-layout.test.ts`, change the NVIDIA/AMD overlay assertions so they require `qwen-tts` present (uncommented) and `coqui-tts` absent; CPU overlay requires `coqui-tts` absent. Example shape (adapt to the file's existing helper that reads each overlay):
+- [ ] **Step 1: Rewrite the overlay fence assertions (write the failing assertions first)**
 
+In `requirements-layout.test.ts`, in the **nvidia** test, replace `expect(n).toMatch(/^coqui-tts/m);` with:
 ```ts
-it('nvidia overlay ships qwen-tts as standard and not coqui-tts', () => {
-  const txt = readOverlay('nvidia-cuda.txt');
-  expect(txt).toMatch(/^\s*qwen-tts\b/m);        // uncommented, active
-  expect(txt).not.toMatch(/^\s*coqui-tts\b/m);   // demoted to secondary
-});
-it('cpu overlay drops coqui-tts and keeps qwen GPU-only', () => {
-  const txt = readOverlay('cpu.txt');
-  expect(txt).not.toMatch(/^\s*coqui-tts\b/m);
-  expect(txt).not.toMatch(/^\s*qwen-tts\b/m);     // qwen is GPU-only
-});
+expect(n).not.toMatch(/^coqui-tts/m);   // re-tiered: Coqui is opt-in now
+expect(n).toMatch(/^qwen-tts\b/m);      // Qwen is standard on GPU profiles
 ```
+In the **cpu** test, replace `expect(c).toMatch(/^coqui-tts/m);` with:
+```ts
+expect(c).not.toMatch(/^coqui-tts/m);   // opt-in
+expect(c).not.toMatch(/^qwen-tts\b/m);  // Qwen is GPU-only standard
+```
+In the **amd** test, replace `expect(a).toMatch(/^coqui-tts/m);` with:
+```ts
+expect(a).not.toMatch(/^coqui-tts/m);
+expect(a).toMatch(/^qwen-tts\b/m);
+```
+Update each test's title (e.g. nvidia → `'nvidia overlay: qwen-tts standard, coqui-tts opt-in, plain kokoro-onnx, pinned torch 2.8'`) and the explanatory comment above it (the "== TODAY" fence comment now describes the re-tier).
 
-- [ ] **Step 2: Run the tests, verify they FAIL**
+- [ ] **Step 2: Run the test, verify it FAILS**
 
 Run: `cd server && npx vitest run src/tts/requirements-layout.test.ts`
-Expected: FAIL (qwen-tts still commented, coqui-tts still present).
+Expected: FAIL (qwen-tts still commented, coqui-tts still present in the overlays).
 
 - [ ] **Step 3: Edit the overlays**
 
-- `nvidia-cuda.txt`: delete the `coqui-tts>=0.24.0` line (and tighten the now-stale `[codec]`/coqui comment to a one-line pointer to the opt-in installer). Uncomment the `# qwen-tts` line → `qwen-tts` (keep the surrounding comment, drop the "if pip reports a conflict" hedge since Coqui is no longer co-resident in base).
+- `nvidia-cuda.txt`: delete the `coqui-tts>=0.24.0` line and collapse its big `[codec]`/coqui comment to one line: `# Coqui XTTS is now opt-in — install it from the Model Manager (it pip-installs coqui-tts under base.txt's pins).` Uncomment the trailing `# qwen-tts` → `qwen-tts`, and trim its comment to drop the "if pip reports a conflict, run EITHER Coqui OR Qwen" hedge (Coqui is no longer co-resident in base): keep "per-character bespoke voices; weights fetched by install-qwen3.mjs".
 - `amd-rocm.txt`: same (delete `coqui-tts`, uncomment/add `qwen-tts`).
-- `cpu.txt`: delete `coqui-tts`; leave qwen absent; add a one-line comment `# Qwen is GPU-only standard — install Coqui or Qwen via the in-app Model Manager on CPU boxes.`
-- `base.txt`: keep `transformers>=4.45,<5.0`; replace its comment with: `# Shared transformers lockstep. Qwen + Kokoro resolve under <5.0; this pin also keeps the OPT-IN Coqui (installed later via the Model Manager) on a compatible transformers — coqui-tts imports a 4.x-only private util.`
+- `cpu.txt`: delete `coqui-tts`; leave qwen absent; add `# Qwen is GPU-only standard — on CPU boxes install Coqui or Qwen on demand from the Model Manager.`
+- `base.txt`: keep `transformers>=4.45,<5.0` + `faster-whisper`; replace the transformers comment with: `# Shared transformers lockstep. Qwen + Kokoro resolve under <5.0; this pin also keeps the OPT-IN Coqui (installed later via the Model Manager) on a compatible transformers — coqui-tts imports a 4.x-only private util (isin_mps_friendly).`
 
 - [ ] **Step 4: Update `zip-validate.test.ts` and `test_requirements.py`**
 
-In `zip-validate.test.ts:~118`, change the `OVERLAY` fixture string from `'-r base.txt\ncoqui-tts[codec]>=0.24.0\nkokoro-onnx[gpu]>=0.4.0,<0.5.0\n'` to the new shape (`qwen-tts` present, `coqui-tts` absent). In `test_requirements.py`, mirror: assert `qwen-tts` active in GPU overlays, `coqui-tts` absent.
+In `zip-validate.test.ts` (~L118) change the `OVERLAY` fixture string `'-r base.txt\ncoqui-tts[codec]>=0.24.0\nkokoro-onnx[gpu]>=0.4.0,<0.5.0\n'` to the new shape: `'-r base.txt\nqwen-tts\nkokoro-onnx>=0.4.0,<0.5.0\n'` (qwen present, coqui absent, plain kokoro per the merged ORT work). In `test_requirements.py`, invert any `coqui-tts in nvidia/amd overlay` assertion to absent + add `qwen-tts` present in the GPU overlays.
 
 - [ ] **Step 5: Run all three test files, verify PASS**
 
 Run: `cd server && npx vitest run src/tts/requirements-layout.test.ts src/upgrade/zip-validate.test.ts`
-Run: `npm run test:sidecar -- -k requirements` (or `pytest server/tts-sidecar/tests/test_requirements.py`)
+Run: `npm run test:sidecar -- -k requirements`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -100,42 +112,45 @@ git commit -m "feat(sidecar): re-tier engines — qwen-tts standard (GPU), coqui
 ### Task 2: Coqui opt-in installer pip-installs the package
 
 **Files:**
-- Modify: `server/tts-sidecar/scripts/install-coqui.mjs` (add pip step), `server/src/tts/coqui-install-bootstrap.ts:138`
+- Modify: `server/tts-sidecar/scripts/install-coqui.mjs` (add pip step), `server/src/tts/coqui-install-bootstrap.ts` (message)
 - Test: `server/src/tts/coqui-install-bootstrap.test.ts`
 
 - [ ] **Step 1: Write the failing test for the not-installed → installed path**
 
-In `coqui-install-bootstrap.test.ts`, add a test where `detectFn` returns `'not-installed'` first, the spawned installer succeeds, and a follow-up `detectFn` returns `'ready'`; assert the job ends `installed` (today the code can reach this, but the install-coqui.mjs spawn must now perform the pip step — the unit covers the bootstrap contract; the pip step itself is covered by the script's own helper test if present, else by the spawn args).
-
 ```ts
-it('installs the coqui-tts package then weights when starting from not-installed', async () => {
+it('installs coqui-tts then weights when starting from not-installed', async () => {
   const states: CoquiInstallState[] = ['not-installed', 'ready'];
   const boot = new CoquiInstallBootstrap({
     repoRoot: '/repo',
     detectFn: () => states.shift() ?? 'ready',
-    spawnFn: () => makeFakeChild(0, { stdout: '[install-coqui] pip install coqui-tts\n' }),
+    spawnFn: () => makeFakeChild(0, { stdout: '[install-coqui] Installing coqui-tts (opt-in)\n' }),
   });
   const job = boot.start();
   await vi.waitFor(() => expect(boot.getJob(job.id)?.status).toBe('installed'));
 });
 ```
+(`makeFakeChild` already exists in this test file — see its current `coqui-install-bootstrap.test.ts:68`.)
 
-- [ ] **Step 2: Run it, verify FAIL** (or that the message assertion below fails)
+- [ ] **Step 2: Run it, verify FAIL/that it exercises the new path**
 
 Run: `cd server && npx vitest run src/tts/coqui-install-bootstrap.test.ts`
 
 - [ ] **Step 3: Add the pip step to `install-coqui.mjs`**
 
-Before the weights auto-download, run (mirroring `install-qwen3.mjs`'s `run()` helper): locate the venv python, then
-`python -m pip install coqui-tts -c <repoRoot>/server/tts-sidecar/requirements/base.txt`, streaming a `[install-coqui] Installing coqui-tts (opt-in)…` step line. Fail the script (exit 1) with a clear `[install-coqui] FAIL: pip install coqui-tts failed.` if it returns non-zero.
+Before the weights auto-download, locate the venv python (mirror `install-qwen3.mjs`'s `findVenvPython`) and run, streaming a `[install-coqui] Installing coqui-tts (opt-in)…` step line:
+```js
+const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
+if (run(python, ['-m', 'pip', 'install', 'coqui-tts', '-c', baseTxt], env) !== 0) {
+  step('FAIL: pip install coqui-tts failed. Check network + sidecar venv.');
+  process.exit(1);
+}
+```
 
-- [ ] **Step 4: Update the stale assumption message in `coqui-install-bootstrap.ts:138`**
+- [ ] **Step 4: Update the stale assumption message in `coqui-install-bootstrap.ts` (the `else` branch of `run()`)**
 
 Change `'Installer finished but the coqui-tts (TTS) package is not importable in the sidecar venv. Check the sidecar venv bootstrap.'` → `'Installer finished but the coqui-tts (TTS) package is still not importable. Retry the install, or repair the sidecar venv.'`
 
-- [ ] **Step 5: Run tests, verify PASS**
-
-Run: `cd server && npx vitest run src/tts/coqui-install-bootstrap.test.ts`
+- [ ] **Step 5: Run tests, verify PASS** — `cd server && npx vitest run src/tts/coqui-install-bootstrap.test.ts`
 
 - [ ] **Step 6: Commit**
 
@@ -150,30 +165,28 @@ git commit -m "feat(sidecar): coqui opt-in installer pip-installs coqui-tts unde
 - Modify: `server/tts-sidecar/scripts/install-qwen3.mjs`
 - Test: `server/src/tts/install-qwen3-helpers.test.ts`
 
-- [ ] **Step 1: Write/extend a helper test asserting the pip args are torch-safe**
-
-Add a pure helper `qwenPipInstallArgs(baseTxtPath)` returning `['-m','pip','install','qwen-tts','-c',baseTxtPath]` (no `-U`). Test it:
+- [ ] **Step 1: Write a helper test asserting torch-safe pip args**
 
 ```ts
 it('installs qwen-tts without -U and under base constraints', () => {
   const args = qwenPipInstallArgs('/repo/server/tts-sidecar/requirements/base.txt');
   expect(args).not.toContain('-U');
-  expect(args).toContain('-c');
-  expect(args).toContain('/repo/server/tts-sidecar/requirements/base.txt');
+  expect(args).toEqual(['-m', 'pip', 'install', 'qwen-tts', '-c', '/repo/server/tts-sidecar/requirements/base.txt']);
 });
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/tts/install-qwen3-helpers.test.ts`
 
-Run: `cd server && npx vitest run src/tts/install-qwen3-helpers.test.ts`
+- [ ] **Step 3: Implement `qwenPipInstallArgs` and use it**
 
-- [ ] **Step 3: Implement `qwenPipInstallArgs` and use it in `install-qwen3.mjs`**
+```js
+export function qwenPipInstallArgs(baseTxtPath) {
+  return ['-m', 'pip', 'install', 'qwen-tts', '-c', baseTxtPath];
+}
+```
+In `install-qwen3.mjs`, replace the `['-m', 'pip', 'install', '-U', 'qwen-tts']` call with `qwenPipInstallArgs(join(SIDECAR_DIR, 'requirements', 'base.txt'))`. Update the step log to note the package now ships in the GPU overlay; this path is primarily weights prefetch + repair.
 
-Replace the `['-m', 'pip', 'install', '-U', 'qwen-tts']` call with `qwenPipInstallArgs(join(SIDECAR_DIR,'requirements','base.txt'))`. Update the step log to note it's idempotent (package now ships in the GPU overlay; this path is primarily weights prefetch + repair).
-
-- [ ] **Step 4: Run, verify PASS**
-
-Run: `cd server && npx vitest run src/tts/install-qwen3-helpers.test.ts`
+- [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/tts/install-qwen3-helpers.test.ts`
 
 - [ ] **Step 5: Commit**
 
@@ -192,26 +205,22 @@ git commit -m "fix(sidecar): qwen install path drops -U and pins via base constr
 - Modify: `server/src/tts/kokoro-install-detect.ts`
 - Test: `server/src/tts/kokoro-install-detect.test.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write failing tests** (build the temp venv with the `mkdtempSync` pattern from `qwen-install-detect.test.ts`)
 
 ```ts
 it('kokoroPackageInstalled true when kokoro_onnx dir present', () => {
-  const root = makeTempVenv({ 'Lib/site-packages/kokoro_onnx': {} });
+  const root = makeVenvTree({ 'Lib/site-packages/kokoro_onnx': {} });
   expect(kokoroPackageInstalled(root)).toBe(true);
 });
 it('detectKokoroInstallStateOnDisk: package present, weights absent → weights-missing', () => {
-  const root = makeTempVenv({ 'Lib/site-packages/kokoro_onnx': {} }); // no weights
+  const root = makeVenvTree({ 'Lib/site-packages/kokoro_onnx': {} }); // no weights
   expect(detectKokoroInstallStateOnDisk(root)).toBe('weights-missing');
 });
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/tts/kokoro-install-detect.test.ts`
 
-Run: `cd server && npx vitest run src/tts/kokoro-install-detect.test.ts`
-
-- [ ] **Step 3: Implement `kokoroPackageInstalled` + richer state**
-
-Add `kokoroPackageInstalled(repoRoot)` mirroring `coquiPackageInstalled` (probe `Lib/site-packages/kokoro_onnx` + posix `lib/*/site-packages/kokoro_onnx`). Add `detectKokoroInstallStateOnDisk(repoRoot): 'not-installed' | 'weights-missing' | 'ready'` (package first, then `detectKokoroInstalledOnDisk` for weights). Keep the existing weights-only `detectKokoroInstalledOnDisk` (other callers depend on it).
+- [ ] **Step 3: Implement** — add `kokoroPackageInstalled(repoRoot)` mirroring `coquiPackageInstalled` (probe `Lib/site-packages/kokoro_onnx` + posix `lib/*/site-packages/kokoro_onnx`) and `detectKokoroInstallStateOnDisk(repoRoot): 'not-installed' | 'weights-missing' | 'ready'` (package first, then existing weights check). Keep the existing weights-only `detectKokoroInstalledOnDisk` (other callers depend on it).
 
 - [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/tts/kokoro-install-detect.test.ts`
 
@@ -232,17 +241,16 @@ git commit -m "feat(server): kokoro package probe + 4-state install detector"
 
 ```ts
 it('whisperPackageInstalled true when faster_whisper present', () => {
-  const root = makeTempVenv({ 'Lib/site-packages/faster_whisper': {} });
-  expect(whisperPackageInstalled(root)).toBe(true);
+  expect(whisperPackageInstalled(makeVenvTree({ 'Lib/site-packages/faster_whisper': {} }))).toBe(true);
 });
 it('detectWhisperInstallStateOnDisk: no package → not-installed', () => {
-  expect(detectWhisperInstallStateOnDisk(makeTempVenv({}))).toBe('not-installed');
+  expect(detectWhisperInstallStateOnDisk(makeVenvTree({}))).toBe('not-installed');
 });
 ```
 
 - [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/tts/whisper-install-detect.test.ts`
 
-- [ ] **Step 3: Implement** mirroring `coqui-install-detect.ts`: `whisperPackageInstalled(repoRoot)` (probe `faster_whisper`), `whisperWeightsPresent()` (model dir under `whisperRepoDir()` from `model-paths.ts` holds a real model blob), `detectWhisperInstallStateOnDisk(repoRoot)` (package → weights → ready).
+- [ ] **Step 3: Implement** mirroring `coqui-install-detect.ts`: `whisperPackageInstalled(repoRoot)` (probe `faster_whisper`), `whisperWeightsPresent()` (a model blob under `whisperRepoDir()` from `model-paths.ts` — already imported by `models-inventory.ts`), `detectWhisperInstallStateOnDisk(repoRoot)` (package → weights → ready).
 
 - [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/tts/whisper-install-detect.test.ts`
 
@@ -259,19 +267,17 @@ git commit -m "feat(server): whisper (faster-whisper) install detector"
 - Create: `server/src/tts/engine-health.ts`
 - Test: `server/src/tts/engine-health.test.ts`
 
-- [ ] **Step 1: Write failing tests for the 4-state derivation + tier**
-
-The crux: `package-missing` = weights present but package absent (must NOT collapse to `not-installed`). Package-importability prefers the sidecar's per-engine boolean when provided; weights come from Node disk probes.
+- [ ] **Step 1: Write failing tests** (the crux: `package-missing` must NOT collapse to `not-installed`)
 
 ```ts
-it('package absent + weights present → package-missing (not not-installed)', () => {
-  const h = deriveEngineHealth('qwen', { packageInstalled: false, weightsPresent: true, loaded: false });
-  expect(h.state).toBe('package-missing');
+it('package absent + weights present → package-missing', () => {
+  expect(deriveEngineHealth('qwen', { packageInstalled: false, weightsPresent: true, loaded: false }).state).toBe('package-missing');
 });
-it('both present → ready; tier(qwen)=standard, tier(coqui)=secondary', () => {
+it('both present → ready; tier(qwen)=standard, tier(coqui)=secondary, tier(whisper)=standard', () => {
   expect(deriveEngineHealth('qwen', { packageInstalled: true, weightsPresent: true, loaded: false }).state).toBe('ready');
   expect(engineTier('qwen')).toBe('standard');
   expect(engineTier('coqui')).toBe('secondary');
+  expect(engineTier('whisper')).toBe('standard');
 });
 it('repair routing: standard → venv-bootstrap, coqui → installer', () => {
   expect(repairActionFor('qwen', 'package-missing')).toBe('venv-bootstrap');
@@ -317,51 +323,54 @@ git add server/src/tts/engine-health.ts server/src/tts/engine-health.test.ts
 git commit -m "feat(server): unified per-engine health (4-state) + tier + repair routing"
 ```
 
-### Task 7: Sidecar `/health` — per-engine install states via find_spec
+### Task 7: Sidecar `/health` — per-engine package + weights + state
+
+> **Key correctness fix (B1):** the collapsing `*_install_state` string can't express `package-missing`. Expose **separate booleans** per engine (mirror the existing `qwen_package_installed`/`qwen_weights_present`) so Node can derive `package-missing`. Also lift the weights short-circuit so weights are reported **independently of** the package.
 
 **Files:**
 - Modify: `server/tts-sidecar/main.py`
-- Test: `server/tts-sidecar/tests/test_runtime_wiring.py` (or a new `test_install_state.py`)
+- Test: `server/tts-sidecar/tests/test_install_state.py` (NEW)
 
 - [ ] **Step 1: Write failing pytest**
 
 ```python
-def test_health_reports_per_engine_install_state(monkeypatch, health_body):
-    # coqui_tts package present, weights absent → 'weights-missing'
-    monkeypatch.setattr(main, "_coqui_package_installed", lambda: True)
-    monkeypatch.setattr(main, "_coqui_weights_present", lambda: False)
+def test_health_reports_per_engine_package_and_weights(monkeypatch, health_body):
+    monkeypatch.setattr(main, "_coqui_package_installed", lambda: False)
+    monkeypatch.setattr(main, "_coqui_weights_present", lambda: True)  # weights without package
     body = health_body()
-    assert body["coqui_install_state"] == "weights-missing"
-    assert "kokoro_install_state" in body and "whisper_install_state" in body
+    assert body["coqui_package_installed"] is False
+    assert body["coqui_weights_present"] is True   # NOT short-circuited to False
+    for e in ("coqui", "kokoro", "whisper"):
+        assert f"{e}_install_state" in body
 ```
 
 - [ ] **Step 2: Run, verify FAIL** — `npm run test:sidecar -- -k install_state`
 
 - [ ] **Step 3: Implement**
 
-Add `_coqui_package_installed()` / `_kokoro_package_installed()` / `_whisper_package_installed()` (each `importlib.util.find_spec("TTS" | "kokoro_onnx" | "faster_whisper") is not None`, guarded like `_qwen_package_installed`). Add matching `_coqui_weights_present()` etc. (or reuse the engines' existing on-disk checks). Add `_coqui_install_state(loaded)` / `_kokoro_install_state(loaded)` / `_whisper_install_state(loaded)` mirroring `_qwen_install_state`. In the `/health` dict (near `qwen_install_state`), add `coqui_install_state`, `kokoro_install_state`, `whisper_install_state`.
-**Also fix the weights short-circuit:** report each engine's `*_weights_present` **independently of** its package boolean (today `qwen_weights_present = _qwen_weights_present() if qwen_package_installed else False` hides weights-present-package-missing — set it unconditionally so Node can derive `package-missing`).
+Add `_coqui_package_installed()` / `_kokoro_package_installed()` / `_whisper_package_installed()` — each `importlib.util.find_spec("TTS" | "kokoro_onnx" | "faster_whisper") is not None`, guarded exactly like `_qwen_package_installed`. Add `_coqui_weights_present()` etc. (reuse each engine's on-disk check). Add `_coqui_install_state(loaded)` / `_kokoro_install_state(loaded)` / `_whisper_install_state(loaded)` mirroring `_qwen_install_state`. In the `/health` dict, beside the qwen keys, add per engine: `<e>_package_installed`, `<e>_weights_present`, `<e>_install_state`.
+**Lift the short-circuit:** change `qwen_weights_present = _qwen_weights_present() if qwen_package_installed else False` to `qwen_weights_present = _qwen_weights_present()` (and report the new engines' weights unconditionally too), so `package-missing` is observable.
 
 - [ ] **Step 4: Run, verify PASS** — `npm run test:sidecar -- -k install_state`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/tts-sidecar/main.py server/tts-sidecar/tests/
-git commit -m "feat(sidecar): /health reports coqui/kokoro/whisper install-state via find_spec"
+git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_install_state.py
+git commit -m "feat(sidecar): /health reports per-engine package+weights+install-state"
 ```
 
-### Task 8: Forward the new install states through `sidecar-health.ts`
+### Task 8: Forward per-engine booleans through `sidecar-health.ts`
 
 **Files:**
 - Modify: `server/src/routes/sidecar-health.ts`
 - Test: `server/src/routes/sidecar-health.test.ts`
 
-- [ ] **Step 1: Write failing test** asserting `probeSidecarHealth` forwards `coquiInstallState`/`kokoroInstallState`/`whisperInstallState` from a stub body, defaulting an old sidecar (field absent) to `'not-installed'`.
+- [ ] **Step 1: Write failing test** asserting `probeSidecarHealth` forwards, per engine, `<e>PackageInstalled` / `<e>WeightsPresent` / `<e>InstallState` from a stub body, defaulting an old sidecar (fields absent) to `false`/`false`/`'not-installed'`.
 
 - [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/routes/sidecar-health.test.ts`
 
-- [ ] **Step 3: Implement** — add `coquiInstallState?`, `kokoroInstallState?`, `whisperInstallState?` to `SidecarHealthResult`; add a generic `normaliseInstallState(raw)` (reuse the `QWEN_INSTALL_STATES` list) and forward each from `body.coqui_install_state` etc. on the reachable path.
+- [ ] **Step 3: Implement** — extend `SidecarHealthResult` with `coquiPackageInstalled?`, `coquiWeightsPresent?`, `coquiInstallState?` (and the kokoro/whisper triples). Reuse the existing `QWEN_INSTALL_STATES` list via a generic `normaliseInstallState(raw)`. Forward each from `body.coqui_package_installed` / `body.coqui_weights_present` / `body.coqui_install_state` on the reachable path (mirror the existing qwen forwarding at L256-258).
 
 - [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/routes/sidecar-health.test.ts`
 
@@ -369,7 +378,7 @@ git commit -m "feat(sidecar): /health reports coqui/kokoro/whisper install-state
 
 ```bash
 git add server/src/routes/sidecar-health.ts server/src/routes/sidecar-health.test.ts
-git commit -m "feat(server): forward per-engine install-state from sidecar /health"
+git commit -m "feat(server): forward per-engine package/weights/install-state from sidecar"
 ```
 
 ---
@@ -395,7 +404,7 @@ it('engineIntegrity(qwen) → unpinned (no manifest entry)', () => {
 
 - [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/tts/model-integrity.test.ts`
 
-- [ ] **Step 3: Implement** — add `export type IntegrityVerdict = 'verified' | 'unpinned' | 'mismatch' | undefined;` and `export function engineIntegrity(engine: EngineId, repoRoot: string): IntegrityVerdict`. For `kokoro` delegate to the existing size-check but return `'unpinned'` (not `undefined`) when the manifest has no `kokoro` entry. For `qwen`/`coqui`/`whisper` (no manifest pins) return `'unpinned'`. Keep `kokoroIntegrity` as a thin wrapper so existing callers compile.
+- [ ] **Step 3: Implement** — add `export function engineIntegrity(engine: EngineId, repoRoot: string): 'verified' | 'unpinned' | 'mismatch' | undefined`. For `kokoro` delegate to the existing size-check but return `'unpinned'` (not `undefined`) when the manifest has no `kokoro` entry. For `qwen`/`coqui`/`whisper` (no pins) return `'unpinned'`. Keep `kokoroIntegrity` as a thin wrapper so existing callers compile.
 
 - [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/tts/model-integrity.test.ts`
 
@@ -406,7 +415,9 @@ git add server/src/tts/model-integrity.ts server/src/tts/model-integrity.test.ts
 git commit -m "feat(server): integrity verdict for every engine (verified/unpinned/mismatch)"
 ```
 
-### Task 10: Inventory sets health + integrity + tier for every row
+### Task 10: Inventory composes health + integrity + tier per row
+
+> **Composition rule (B1):** `packageInstalled` = sidecar `<e>PackageInstalled` when the sidecar is reachable, else the Node disk package probe; `weightsPresent` = **Node disk weight probe** (authoritative for files, regardless of sidecar); `loaded` = sidecar `<e>Loaded`. Then `deriveEngineHealth(engineId, probe)`.
 
 **Files:**
 - Modify: `server/src/routes/models-inventory.ts`
@@ -415,8 +426,9 @@ git commit -m "feat(server): integrity verdict for every engine (verified/unpinn
 - [ ] **Step 1: Write failing tests**
 
 ```ts
-it('qwen-base row: weights present + sidecar says package missing → installState package-missing', () => {
-  const inv = buildModelInventory({ ...deps, sidecar: { ...up, qwenInstallState: 'not-installed', qwenPackageInstalled: false, qwenWeightsPresent: true } });
+it('qwen-base: sidecar package=false + node weights present → package-missing', () => {
+  const inv = buildModelInventory({ ...deps,
+    sidecar: { ...up, qwenPackageInstalled: false, qwenWeightsPresent: true, qwenLoaded: false } });
   const row = inv.items.find(i => i.id === 'qwen-base')!;
   expect(row.installState).toBe('package-missing');
   expect(row.tier).toBe('standard');
@@ -430,9 +442,7 @@ it('every TTS + whisper row carries an integrity verdict', () => {
 
 - [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/routes/models-inventory.test.ts`
 
-- [ ] **Step 3: Implement**
-
-Add `installState?: EngineHealthState` and `tier?: EngineTier` to `ModelInventoryItem`. For each TTS row + whisper, compute `installState` via `deriveEngineHealth(engineId, { packageInstalled, weightsPresent, loaded })` where `packageInstalled` prefers the sidecar field (`sidecar.<engine>InstallState !== 'not-installed'` / explicit boolean) and falls back to the Node disk package probe, and `weightsPresent` comes from the existing Node weight sizing. Set `tier = engineTier(...)`, `integrity = engineIntegrity(...)` for all four. Keep `present` weights-based.
+- [ ] **Step 3: Implement** — add `installState?: EngineHealthState` + `tier?: EngineTier` to `ModelInventoryItem`. For each TTS row + whisper, build the probe per the composition rule above (sidecar booleans from Task 8, Node weight probe from the existing sizing + the detectors), then set `installState = deriveEngineHealth(engineId, probe).state`, `tier = engineTier(engineId)`, `integrity = engineIntegrity(engineId, repoRoot)`. Keep `present` weights-based. Map row id → `EngineId` (`'qwen-base'`→`'qwen'`, `'qwen-design'` reuses qwen health, `'whisper'`→`'whisper'`).
 
 - [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/routes/models-inventory.test.ts`
 
@@ -440,10 +450,12 @@ Add `installState?: EngineHealthState` and `tier?: EngineTier` to `ModelInventor
 
 ```bash
 git add server/src/routes/models-inventory.ts server/src/routes/models-inventory.test.ts
-git commit -m "feat(server): inventory carries health + integrity + tier per engine"
+git commit -m "feat(server): inventory composes health + integrity + tier per engine"
 ```
 
 ### Task 11: Model Manager badge reads health; Repair; tier grouping
+
+> **Repair backends EXIST (verified):** `api.restartSidecar` (`POST /api/sidecar/restart`, `api.ts:6266`) and the `venv-bootstrap` route (`server/src/routes/venv-bootstrap.ts`, with `api`-side caller — confirm the exact `api.*` symbol before coding). A standard-engine Repair = trigger venv re-bootstrap (reinstalls the overlay → the missing package) **then** `api.restartSidecar()` (a mid-process pip install isn't visible to `find_spec` until restart). Surface the inherited fatal-ORT-swap possibility in the error copy ("re-bootstrap also re-runs the GPU runtime swap"). Whisper is `kind: 'asr'` — render it in its existing ASR section, not under the voice-engine tier headings.
 
 **Files:**
 - Modify: `src/views/model-manager.tsx`
@@ -467,9 +479,7 @@ it('renders an integrity chip (unpinned) for qwen', () => {
 
 - [ ] **Step 2: Run, verify FAIL** — `npx vitest run src/views/model-manager.test.tsx`
 
-- [ ] **Step 3: Implement**
-
-In `ResidencyBadge`, branch on `item.installState`: `package-missing` → amber "Needs repair"; `weights-missing` → amber "Weights missing"; else fall through to the existing present/loaded/installed logic. Gate the Load pill: `hasControl = item.installState === 'ready' || item.loaded` (was `item.present && …`). Add the action label: when `installState === 'package-missing'`, render a **"Repair"** button whose handler routes by `repairActionFor(engineId, state)` — `installer` → open the engine's `<Installer>` (Coqui); `venv-bootstrap` → trigger the venv-bootstrap flow (`api.bootstrapVenv()` / the fs-21 route) — and surface a "restarting the sidecar…" note. Add an `IntegrityChip` (emerald verified / red mismatch / neutral-grey unpinned w/ tooltip). Group rows by `tier` under "Standard" / "Optional add-ons" sub-headings.
+- [ ] **Step 3: Implement** — in `ResidencyBadge`, branch on `item.installState`: `package-missing` → amber "Needs repair"; `weights-missing` → amber "Weights missing"; else the existing present/loaded/installed logic. Gate Load: `hasControl = (item.installState === 'ready' || item.loaded) && (engine !== undefined || isAnalyzer)`. Add a "Repair" button when `installState === 'package-missing'`, handler routes by `repairActionFor(engineId, state)` — `installer` → open the engine's `<Installer>`; `venv-bootstrap` → call the venv-bootstrap api then `api.restartSidecar()`, showing a "Repairing & restarting the sidecar…" status. Add an `IntegrityChip` (emerald verified / red mismatch / neutral-grey unpinned with a tooltip "integrity pinning applies to fixed-file models"). Group the TTS rows under "Standard" / "Optional add-ons" by `tier`; leave the ASR (Whisper) + analyzer rows in their existing sections.
 
 - [ ] **Step 4: Run, verify PASS** — `npx vitest run src/views/model-manager.test.tsx`
 
@@ -480,12 +490,12 @@ git add src/views/model-manager.tsx src/views/model-manager.test.tsx
 git commit -m "feat(frontend): Model Manager honest health badge + per-engine Repair + tier"
 ```
 
-### Task 12: E2E — Needs-repair + Repair affordance
+### Task 12: E2E — Needs-repair + Repair + integrity chips
 
 **Files:**
 - Modify: `e2e/` (add a spec or a case to the Model Manager coverage spec)
 
-- [ ] **Step 1: Write the spec** — with the mock inventory returning a `qwen-base` row at `installState: 'package-missing'`, assert the Model Manager shows "Needs repair", the Load control is disabled, a "Repair" control is present, and Coqui (secondary, not-installed) shows "Install".
+- [ ] **Step 1: Write the spec** — with the mock inventory returning `qwen-base` at `installState: 'package-missing'`, assert: "Needs repair" shown, Load disabled, a "Repair" control present, an integrity chip rendered for every TTS + whisper row (qwen → "unpinned", kokoro → "verified"), and Coqui (secondary, not-installed) shows "Install".
 
 - [ ] **Step 2: Run, verify it drives the UI** — `npm run test:e2e -- model-manager`
 
@@ -493,7 +503,7 @@ git commit -m "feat(frontend): Model Manager honest health badge + per-engine Re
 
 ```bash
 git add e2e/
-git commit -m "test(e2e): Model Manager needs-repair + repair affordance"
+git commit -m "test(e2e): Model Manager needs-repair + repair + integrity chips"
 ```
 
 ---
@@ -502,26 +512,30 @@ git commit -m "test(e2e): Model Manager needs-repair + repair affordance"
 
 ### Task 13: Readiness gate is health-aware and fail-open
 
+> **Caller audit (B3):** `anyTtsEnginePresent` is consumed by the fs-21 readiness spine/wizard. Tightening weights-only → `ready` could make a fresh box (Kokoro package present, weights not yet fetched) read "no engine ready" and over-block. Audit every caller (`grep -rn anyTtsEnginePresent server/src`) and add a test that the wizard still reaches "ready" after Kokoro weights install.
+
 **Files:**
-- Modify: `server/src/tts/engine-presence.ts` (+ the diagnostics consumer if it re-derives presence)
+- Modify: `server/src/tts/engine-presence.ts` (+ the diagnostics/wizard consumer if it re-derives presence)
 - Test: `server/src/tts/engine-presence.test.ts`
 
 - [ ] **Step 1: Write failing tests**
 
 ```ts
 it('anyTtsEnginePresent requires ready (package+weights), not weights alone', () => {
-  // kokoro weights present but package missing → not "present"
   expect(anyTtsEnginePresent(repoKokoroWeightsNoPackage)).toBe(false);
 });
-it('package-missing warns but does not hard-block unless sidecar-confirmed', () => {
+it('package-missing warns; hard-blocks only when sidecar-confirmed', () => {
   expect(readinessSeverity({ engine: 'qwen', state: 'package-missing', sidecarConfirmed: false })).toBe('warn');
   expect(readinessSeverity({ engine: 'qwen', state: 'package-missing', sidecarConfirmed: true })).toBe('block');
+});
+it('a fresh box reaches ready once Kokoro weights are installed', () => {
+  expect(anyTtsEnginePresent(repoKokoroReady)).toBe(true);
 });
 ```
 
 - [ ] **Step 2: Run, verify FAIL** — `cd server && npx vitest run src/tts/engine-presence.test.ts`
 
-- [ ] **Step 3: Implement** — switch each engine in `anyTtsEnginePresent` to `detect…InstallStateOnDisk(...) === 'ready'` (Kokoro/Coqui were weights-only). Add `readinessSeverity({engine,state,sidecarConfirmed})`: `package-missing` → `'block'` only when `sidecarConfirmed` (the sidecar's `find_spec` said unimportable), else `'warn'`; `not-installed` for a **secondary** engine → `'info'`. Wire the diagnostics surface to use it.
+- [ ] **Step 3: Implement** — switch each engine in `anyTtsEnginePresent` to `detect…InstallStateOnDisk(...) === 'ready'` (Kokoro/Coqui were weights-only). Add `readinessSeverity({engine,state,sidecarConfirmed})`: `package-missing` → `'block'` only when `sidecarConfirmed` (the sidecar's `find_spec` said unimportable), else `'warn'`; `not-installed` for a **secondary** engine → `'info'`. Wire `sidecarConfirmed` from the diagnostics aggregator's reachable-sidecar per-engine `packageInstalled === false`. Update any caller that depended on the looser semantics.
 
 - [ ] **Step 4: Run, verify PASS** — `cd server && npx vitest run src/tts/engine-presence.test.ts`
 
@@ -535,11 +549,11 @@ git commit -m "feat(server): readiness gate health-aware, fail-open (warn vs sid
 ### Task 14: Docs — INSTALL, wizard copy, regression plan
 
 **Files:**
-- Modify: `INSTALL.md`, the fs-21 wizard copy, `CLAUDE.md` (Whisper "needs pip install" note is stale — it's base), `docs/features/INDEX.md`
+- Modify: `INSTALL.md`, the fs-21 wizard copy, `CLAUDE.md` (stale "Whisper needs pip install faster-whisper" note — it's a BASE requirement), `docs/features/INDEX.md`
 - Create: `docs/features/<n>-engine-retier-health-honesty.md` (regression plan from TEMPLATE)
 
-- [ ] **Step 1: Write the regression plan** — invariants: standard set (Kokoro+Qwen+Whisper packages on GPU; Kokoro+Whisper on CPU), Coqui opt-in, the badge↔health states table, the warn-vs-block gate, the `base.txt` transformers lockstep. Manual acceptance: simulate package-missing (uninstall qwen-tts) → Model Manager shows "Needs repair" → Repair → sidecar restart → "Installed".
-- [ ] **Step 2: Update INSTALL.md + wizard copy** — standard vs optional engines; Coqui as legacy alternate; `-c base.txt` note for manual venv installs.
+- [ ] **Step 1: Write the regression plan** — invariants: standard set (Kokoro+Qwen+Whisper packages on GPU; Kokoro+Whisper on CPU), Coqui opt-in; the badge↔health states table; the warn-vs-block gate; the `base.txt` transformers lockstep; the reqHash fleet-self-heal. **On-box acceptance (B6):** confirm `pip install -r nvidia-cuda.txt` resolves (qwen-tts + `transformers<5.0` + torch 2.8 + the ORT swap) — observed this session: qwen-tts resolved transformers to 4.57.3 (compatible). Manual walkthrough: uninstall `qwen-tts` → Model Manager shows "Needs repair" → Repair → sidecar restart → "Installed".
+- [ ] **Step 2: Update INSTALL.md + wizard copy** — standard vs optional engines; Coqui as a legacy alternate; the `-c base.txt` note for manual venv installs.
 - [ ] **Step 3: Update `docs/features/INDEX.md`** and fix the stale CLAUDE.md Whisper note.
 - [ ] **Step 4: Commit**
 
@@ -551,16 +565,16 @@ git commit -m "docs: engine re-tier + health-honesty regression plan + install/w
 ### Task 15: Full verify + PR
 
 - [ ] **Step 1:** `npm run verify` (typecheck + all tests + e2e + build). Triage any red per CLAUDE.md (related → fix; pre-existing → surface).
-- [ ] **Step 2:** Open the PR from `feat/engine-retier-health-honesty`; title `feat(server,sidecar,frontend): re-tier engines + honest per-engine health`; body links the spec + this plan + the bug/feature issue; note the dependency on the merged `fix/sidecar-nvidia-ort-gpu-enforce`.
+- [ ] **Step 2:** Open the PR from `feat/engine-retier-health-honesty`; title `feat(server,sidecar,frontend): re-tier engines + honest per-engine health`; body links the spec + this plan + the bug/feature issue; note it builds on the merged `fix/sidecar-nvidia-ort-gpu-enforce` (#828).
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** Decision 1 (re-tier, GPU-only Qwen) → Task 1. Decision 2 (weights on-demand) → Task 3 (no prefetch added). Decision 3 (Kokoro default) → unchanged, asserted nowhere new (no task needed). Decision 4 (migration) → Task 14 docs. Decision 5 (no constraints file; base.txt pin; Coqui installs against it) → Tasks 1, 2. Decision 6 (integrity for all) → Task 9. Decision 7 (warn vs sidecar-confirmed block) → Task 13. Decision 8 (4 engines incl. Whisper) → Tasks 5, 7, 10. Per-engine repair routing → Task 6 (`repairActionFor`) + Task 11. find_spec/disk split → Tasks 7, 10. Sidecar-restart-on-repair → Task 11. Test touchpoints (zip-validate, test_requirements, spawn-windows-hide) → Task 1 (spawn-windows-hide references `install-coqui.mjs`; if Task 2 changes its arg surface, update that test there).
+**Spec coverage:** Decision 1 (re-tier, GPU-only Qwen) → Task 1. Decision 2 (weights on-demand) → Task 3 (no prefetch added). Decision 3 (Kokoro default) → unchanged (no task). Decision 4 (migration) → auto-satisfied by pip non-removal (Prerequisite note) + Task 14 docs. Decision 5 (no constraints file; base.txt pin; Coqui installs against it) → Tasks 1, 2. Decision 6 (integrity for all) → Task 9. Decision 7 (warn vs sidecar-confirmed block) → Task 13. Decision 8 (4 engines incl. Whisper) → Tasks 5, 7, 10. Per-engine repair routing → Task 6 + Task 11. find_spec/disk split → Tasks 7 (booleans), 10 (composition rule). Sidecar-restart-on-repair → Task 11.
 
-**Placeholder scan:** repair-button handler in Task 11 references `api.bootstrapVenv()` / the fs-21 route — confirm the exact symbol when implementing (the venv-bootstrap route exists per fs-21; name it precisely in the task before coding). No "TBD"/"handle edge cases" left.
+**Placeholder scan:** test-helper references made concrete (`read` is the real helper; `makeVenvTree` defined via the `qwen-install-detect.test.ts` pattern, called out in the File-Structure note). Task 11's venv-bootstrap `api.*` symbol is the one item to confirm at code time (the route exists; name the caller before coding).
 
-**Type consistency:** `EngineId`/`EngineHealthState`/`EngineTier` defined in Task 6 are reused verbatim in Tasks 9, 10, 11, 13. `installState` on `ModelInventoryItem` (Task 10) matches the badge read (Task 11). `engineIntegrity(engine, repoRoot)` signature (Task 9) matches the inventory call (Task 10).
+**Type consistency:** `EngineId`/`EngineHealthState`/`EngineTier`/`RepairAction` (Task 6) reused verbatim in Tasks 9, 10, 11, 13. `installState`/`tier` on `ModelInventoryItem` (Task 10) match the badge read (Task 11). The sidecar per-engine boolean names (`<e>_package_installed`/`<e>_weights_present`/`<e>_install_state`, Task 7) match the proxy camelCase (`<e>PackageInstalled`…, Task 8) and the inventory composition (Task 10).
 
 **Note for implementer:** `spawn-windows-hide.test.ts` lists `install-coqui.mjs` — Task 2 keeps it a `node <script>` spawn, so that test stays green; verify after Task 2.
