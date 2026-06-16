@@ -98,10 +98,10 @@ export function StepModels({
         <VenvBootstrap onBootstrapped={onRefetch} />
         <KokoroInstall onInstalled={onRefetch} />
 
-        {/* Alternative engines — collapsible */}
+        {/* Additional engines — collapsible */}
         <details className="group rounded-2xl border border-ink/10">
           <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium text-ink select-none">
-            <span>Alternative voice engines</span>
+            <span>More voice engines</span>
             <span className="text-xs text-ink/50 group-open:hidden">
               Qwen3-TTS · Coqui XTTS v2
             </span>
@@ -111,9 +111,10 @@ export function StepModels({
           </summary>
           <div className="px-4 pb-4 space-y-4">
             <p className="text-xs text-ink/55">
-              Kokoro is the default engine and covers most use cases.
-              Install Qwen3-TTS for bespoke per-character voice design, or
-              Coqui XTTS v2 for zero-shot cloning.
+              On a GPU box, Qwen3-TTS installs automatically with the
+              Python runtime — fetch its model weights here to enable
+              bespoke per-character voice design. Coqui XTTS v2 is an
+              optional add-on for zero-shot voice cloning.
             </p>
             <QwenInstall onInstalled={onRefetch} />
             <CoquiInstall onInstalled={onRefetch} />
