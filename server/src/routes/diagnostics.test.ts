@@ -212,6 +212,63 @@ describe('GET /api/diagnostics', () => {
     expect(byId(res.body.checks, 'sidecar').status).toBe('ok');
   });
 
+  describe('sidecar package-presence checks (engine-retier)', () => {
+    it('fails the sidecar row when a standard engine package is missing (sidecar-confirmed)', async () => {
+      probeSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: 'http://localhost:9000',
+        proxy: 'sidecar',
+        device: 'cuda',
+        vramReservedMb: 1024,
+        vramTotalMb: 8192,
+        qwenLoaded: false,
+        qwenPackageInstalled: false,
+        kokoroPackageInstalled: true,
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const sidecar = byId(res.body.checks, 'sidecar');
+      expect(sidecar.status).toBe('fail');
+      expect(sidecar.detail).toMatch(/qwen/i);
+      expect(sidecar.detail).toMatch(/repair/i);
+      expect(res.body.overall).toBe('fail');
+    });
+
+    it('keeps the sidecar row ok when all standard package booleans are true', async () => {
+      probeSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: 'http://localhost:9000',
+        proxy: 'sidecar',
+        device: 'cuda',
+        vramReservedMb: 1024,
+        vramTotalMb: 8192,
+        qwenLoaded: true,
+        qwenPackageInstalled: true,
+        kokoroPackageInstalled: true,
+        coquiPackageInstalled: true,
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const sidecar = byId(res.body.checks, 'sidecar');
+      expect(sidecar.status).toBe('ok');
+    });
+
+    it('does NOT fail the sidecar row when only the secondary (coqui) package is missing', async () => {
+      probeSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: 'http://localhost:9000',
+        proxy: 'sidecar',
+        device: 'cuda',
+        vramReservedMb: 1024,
+        vramTotalMb: 8192,
+        qwenPackageInstalled: true,
+        kokoroPackageInstalled: true,
+        coquiPackageInstalled: false,
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const sidecar = byId(res.body.checks, 'sidecar');
+      expect(sidecar.status).toBe('ok');
+    });
+  });
+
   describe('ASR (Whisper) row (srv-31)', () => {
     it('reports off when content-QA ASR is disabled (the default)', async () => {
       /* Default mock omits asrEnabled → ASR is off; never a failure. */
