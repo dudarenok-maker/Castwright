@@ -1,9 +1,12 @@
 /* Measured per-model VRAM store. Each analysis call samples the resident
    model's actual GPU footprint from Ollama /api/ps (size_vram) and appends a
-   JSONL line; keepAliveFor() reads back an EMA to decide whether the model is
-   small enough to stay resident. Append-only (mirrors resource-telemetry.ts)
-   because a read-modify-write JSON object loses concurrent updates. EMA is
-   computed at read time by folding the log in chronological (file) order. */
+   JSONL line. Append-only (mirrors resource-telemetry.ts) because a
+   read-modify-write JSON object loses concurrent updates.
+   fs-45 v1 is RECORD-ONLY: nothing reads this store for a decision (the
+   analyzer's keepAliveFor() uses the flat RESIDENT_MODELS logic, unchanged).
+   The EMA read below — computed at read time by folding the log in
+   chronological (file) order — is the DEFERRED v2 consumer: an adaptive
+   keepAliveFor() that would evict a model too big to stay resident. Dormant. */
 
 import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -91,15 +94,15 @@ export async function recordVramSample(rec: VramSampleRecord): Promise<void> {
   }
 }
 
-/** Async EMA read (used by tooling / tests that read the file). The hot
-    keepAliveFor() path uses a synchronous in-memory cache primed below
-    (added in Task 5). */
+/** Async EMA read (used by tooling / tests that read the file). The deferred-v2
+    keepAliveFor() path would use the synchronous in-memory cache primed below. */
 export async function emaForModelAsync(model: string, numCtx: number): Promise<number | null> {
   return _emaFromRecords(await readRecords(), canonicalVramKey(model, numCtx));
 }
 
-/* Synchronous EMA cache for keepAliveFor(). Keyed by canonicalVramKey. Updated
-   on every sample and primed from disk at boot. */
+/* Synchronous EMA cache for the deferred-v2 keepAliveFor(). Keyed by
+   canonicalVramKey. Updated on every sample and primed from disk at boot;
+   no v1 consumer reads it. */
 const emaCache = new Map<string, number>();
 
 export function emaForModelSync(model: string, numCtx: number): number | null {

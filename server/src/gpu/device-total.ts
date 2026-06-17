@@ -1,9 +1,10 @@
-/* Boot-time GPU total-VRAM probe. The analyzer keep-alive decision
-   (analyzer/ollama.ts keepAliveFor) needs the device total synchronously,
+/* Boot-time GPU total-VRAM probe. The DEFERRED v2 adaptive keep-alive decision
+   (analyzer/ollama.ts keepAliveFor) would need the device total synchronously,
    and the TTS sidecar — the other VRAM source — is typically DOWN during
    analysis (sequential phases). So we probe once at server start via
-   nvidia-smi and cache the result. Non-NVIDIA / no nvidia-smi → null, which
-   disables adaptive eviction (keep-alive falls back to the flat knob). */
+   nvidia-smi and cache the result. Non-NVIDIA / no nvidia-smi → null. In fs-45
+   v1 this is recorded but unconsumed (keepAliveFor uses the flat knob today);
+   it primes the v2 adaptive-eviction decision when that lands. */
 
 import { execFile } from 'node:child_process';
 

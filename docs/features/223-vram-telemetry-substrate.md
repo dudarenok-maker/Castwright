@@ -44,6 +44,8 @@ owner: null
 
 Within a single process, switching between heavy engines (e.g. a Coqui synth then a Qwen synth) can leave a sticky-high reserved reading; the gate only excludes *design* contamination, not engine-switch contamination. Sidecar recycles reset it. v2's per-model sidecar accounting (if ever built) supersedes this. This is an acceptable over-estimate (OOM-safe direction) for a record-only substrate.
 
+A second, benign edge: a **pre-fs-45 sidecar** that omits the `qwen_design_ever_loaded` field is mapped to `false` in `probeSidecarHealth` (`qwen_design_ever_loaded === true` defaults absent → `false`), so a `qwen:synth`/`coqui` sample taken against an old sidecar that *had* loaded VoiceDesign would record a design-sized (over-estimate) row. Over-estimate is the OOM-safe direction, and old sidecars vanish after one restart — so this self-heals and never under-reports.
+
 ## v2 trigger (the deferred MB engine)
 
 Start the deferred MB-accounting engine (`costMb` p95+margin → `planLoad`/`splitFits` → MB-precise `withGpuLoad`, spec `docs/superpowers/specs/2026-06-17-vram-telemetry-mb-accounting-design.md`) **only once telemetry from a real 12/16 GB card shows the MB decision would flip ≥1 real eviction** vs the Wave-1 `gpu.safeCoexistMb` threshold (plan 222). The two-model-split warning + AMD/`rocm-smi` path were dropped from scope by adversarial review unless evidence resurfaces them.
