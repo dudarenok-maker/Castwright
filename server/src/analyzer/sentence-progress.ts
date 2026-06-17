@@ -62,3 +62,40 @@ export function refineSentencesTotal(args: {
   const projected = Math.round(committedSentences + rate * remainingChars);
   return Math.max(projected, committedSentences);
 }
+
+const MIN_REFINE_ELAPSED_MS = 8_000; // mirrors projectChapterEstMsFromOutput
+const MIN_FRACTION = 0.02;
+
+/** Project chapter total time from the sentence fraction. Null when too early
+    (mirrors the byte projector's guards) so the caller keeps the prior value. */
+export function projectChapterEstMsFromSentences(
+  elapsedMs: number,
+  done: number,
+  total: number,
+): number | null {
+  if (elapsedMs < MIN_REFINE_ELAPSED_MS) return null;
+  if (done < 1 || total <= 0) return null;
+  const frac = Math.min(0.95, done / total);
+  if (frac < MIN_FRACTION) return null;
+  return Math.round(elapsedMs / frac);
+}
+
+/** Clamp an estimate into the per-chapter band: a floor that always sits just
+    above elapsed (never "over budget"; reuse the refineCastChapterEstMs idiom),
+    a fallback to the last good value when the candidate is null, and a ceiling
+    that is never the whole-stage estimate (so the stage total can't leak into a
+    chapter row). IMPORTANT: pass `stageEstMs = 0` to DISABLE the ceiling — the
+    caller does this for a single-chapter book, where the chapter estimate
+    legitimately equals the stage estimate and a 0.9× ceiling would force it
+    permanently ~10% low. */
+export function clampChapterEstMs(
+  candidate: number | null,
+  elapsedMs: number,
+  lastGood: number,
+  stageEstMs: number,
+): number {
+  const floor = Math.round(elapsedMs * 1.1) + 3000;
+  const base = candidate ?? (lastGood > 0 ? lastGood : floor);
+  const ceiling = stageEstMs > 0 ? stageEstMs * 0.9 : base;
+  return Math.max(floor, Math.min(base, ceiling));
+}

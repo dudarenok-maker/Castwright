@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countSentencesHeuristic, countStreamedSentences, refineSentencesTotal, sentenceProgressForTick } from './sentence-progress.js';
+import { countSentencesHeuristic, countStreamedSentences, refineSentencesTotal, sentenceProgressForTick, projectChapterEstMsFromSentences, clampChapterEstMs } from './sentence-progress.js';
 
 describe('countSentencesHeuristic', () => {
   it('counts sentence-boundary splits', () => {
@@ -64,5 +64,36 @@ describe('refineSentencesTotal', () => {
     expect(
       refineSentencesTotal({ committedSentences: 50, committedChars: 9000, totalChars: 9000, heuristicTotal: 10 }),
     ).toBe(50);
+  });
+});
+
+describe('projectChapterEstMsFromSentences', () => {
+  it('returns null before MIN_REFINE_ELAPSED (8s)', () => {
+    expect(projectChapterEstMsFromSentences(5000, 50, 100)).toBeNull();
+  });
+  it('returns null below the 2% fraction floor', () => {
+    expect(projectChapterEstMsFromSentences(20000, 1, 100)).toBeNull(); // 1% done
+  });
+  it('projects total from the fraction once meaningful', () => {
+    // 10s elapsed at 25% done → ~40s total.
+    expect(projectChapterEstMsFromSentences(10000, 25, 100)).toBe(40000);
+  });
+});
+
+describe('clampChapterEstMs', () => {
+  it('never returns below a floor just above elapsed', () => {
+    expect(clampChapterEstMs(1000, 60000, 0, 600000)).toBeGreaterThan(60000);
+  });
+  it('falls back to lastGood when candidate is null', () => {
+    expect(clampChapterEstMs(null, 10000, 90000, 600000)).toBe(90000);
+  });
+  it('never returns the whole-stage value (multi-chapter)', () => {
+    expect(clampChapterEstMs(600000, 10000, 0, 600000)).toBeLessThan(600000);
+  });
+  it('applies NO stage ceiling when stageEstMs<=0 (single-chapter book)', () => {
+    // A 1-chapter book: chapter estimate legitimately equals the stage estimate,
+    // so the caller passes stageEstMs=0 to disable the ceiling. The candidate
+    // survives (only the elapsed-floor applies).
+    expect(clampChapterEstMs(300000, 10000, 0, 0)).toBe(300000);
   });
 });
