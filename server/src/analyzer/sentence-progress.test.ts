@@ -74,6 +74,12 @@ describe('projectChapterEstMsFromSentences', () => {
   it('returns null below the 2% fraction floor', () => {
     expect(projectChapterEstMsFromSentences(20000, 1, 100)).toBeNull(); // 1% done
   });
+  it('returns null when no sentence is done yet (done < 1)', () => {
+    expect(projectChapterEstMsFromSentences(20000, 0, 100)).toBeNull();
+  });
+  it('returns null when the total is not yet known (total <= 0)', () => {
+    expect(projectChapterEstMsFromSentences(20000, 5, 0)).toBeNull();
+  });
   it('projects total from the fraction once meaningful', () => {
     // 10s elapsed at 25% done → ~40s total.
     expect(projectChapterEstMsFromSentences(10000, 25, 100)).toBe(40000);
