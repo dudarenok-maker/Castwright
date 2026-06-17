@@ -95,7 +95,7 @@ export const STEPS = [
     },
   },
   {
-    /* Plan 45 (vitest pool tuning) — 5 hot files (analyzer/gemini + 4 routes test
+    /* Plan 45 (vitest pool tuning) — 10 hot files (analyzer/gemini + routes test
        files) run serially in a separate vitest invocation so their
        mkdtempSync + module-import contention can't trip the main
        parallel test:server battery. Cache invalidates on the same

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-/* Plan 45 (vitest pool tuning) — slow-test config that runs the 5 hot files in
+/* Plan 45 (vitest pool tuning) — slow-test config that runs the 10 hot files in
    a single fork (maxForks=1), separate from the main parallel `test`
    battery. The hot files all share the same shape: mkdtempSync +
    module imports in beforeAll racing on Windows tmpdir under
@@ -23,6 +23,12 @@ import { defineConfig } from 'vitest/config';
        crashes a sibling fork ("Worker exited unexpectedly"), ~2/3 of full
        runs. Passes 3/3 single-fork. Not slow (~0.4s) — pool-destabilising,
        same class as generation-boundary-recycle (deps round 3).
+     - src/routes/setup-readiness.route.test.ts — SSE + tempdir bootstrap
+       under load; serialised to prevent cross-fork workspace collisions.
+     - src/routes/kokoro-install.route.test.ts  — long-running install mock +
+       tempdir; serialised alongside the other route integration tests.
+     - src/routes/venv-bootstrap.route.test.ts  — venv-bootstrap SSE mock +
+       tempdir; same contention class as the other install route tests.
 
    Mirror invariant: each entry in SLOW_FILES below MUST also appear
    in server/vitest.config.ts's `test.exclude` array. Add a file in
