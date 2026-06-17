@@ -101,11 +101,12 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: 'ollama-model-not-in-list',
     title: "I pulled a model but it's not in the analysis-model list",
     body:
-      "The analysis-model menu lists every model you've pulled into Ollama, alongside the built-in " +
-      'suggestions. Pull a new one — from the in-app Install button, or `ollama pull <name>` in a ' +
-      'terminal — and it joins the list the moment the pull finishes. Reopen the menu, or hit Refresh ' +
-      "in the Model Manager, if it hasn't appeared yet. Still missing? Check that Ollama is running " +
-      'and the model shows up in `ollama list`.',
+      "The analysis-model menu lists the models you've already installed into Ollama — the built-in " +
+      'suggestions you pulled, plus any others you added yourself. A suggested model you haven\'t ' +
+      'pulled yet won\'t be in this menu; install it from the Model Manager\'s list first (or ' +
+      '`ollama pull <name>` in a terminal) and it joins the menu the moment the pull finishes. ' +
+      "Reopen the menu, or hit Refresh in the Model Manager, if it hasn't appeared yet. Still " +
+      'missing? Check that Ollama is running and the model shows up in `ollama list`.',
   },
   {
     id: 'picked-local-but-ran-on-gemini',
