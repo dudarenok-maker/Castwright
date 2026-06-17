@@ -1,13 +1,23 @@
-# Castwright v1.8.0
+<!--
+Draft release notes for the NEXT version (technical register — this IS the
+GitHub release body). bump-version.mjs feeds this file verbatim as the
+annotated-tag message → release.yml, and now uses it by DEFAULT (no
+--notes-file needed). Everything in this HTML comment is invisible in the
+rendered release, so it never leaks into the body.
 
-Draft release notes for the next version (technical register — this is the
-**GitHub release body**, fed to `bump-version.mjs` as
-`--notes-file docs/release-notes-next.md` → the annotated tag → `release.yml`).
-The user-facing, brand-voice notes live separately in the committed
-`RELEASE_NOTES.md` (shown in-app at `#/release-notes`). Remove this header after
-the tag is created.
+Keep it current for each release:
+  1. Update the version marker below.
+  2. Rewrite the body (theme paragraph → ## ✨ Headline features with
+     ### … (new) subsections → emoji-themed sections → bold-lead bullets with
+     (#PR) refs → **Full changelog:** vPREV...vNEW footer). v1.7.0 is the
+     canonical example; see CONTRIBUTING.md "Release notes".
 
----
+The marker is what bump-version checks: if it doesn't match the version being
+cut, the bump refuses (so a stale file can't ship as the body). The
+user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
+
+release-notes-next-version: 1.8.0
+-->
 
 **The open-beta release.** Castwright reaches more machines this cycle — an early **AMD GPU** preview and a **one-click Pinokio** install — on top of a deep round of analysis honesty, multilingual depth, and GPU-contention resilience that keeps long runs upright on an 8 GB card.
 

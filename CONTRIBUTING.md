@@ -513,14 +513,20 @@ Cutting a public release is one command (after the notes file is ready):
 git switch main
 git pull --ff-only
 
-# 2. Author release notes (markdown file, sections per "Release notes" below).
-$EDITOR ~/Desktop/vX.Y.Z-notes.md   # or notepad on Windows
+# 2. Author the release body in docs/release-notes-next.md (sections per
+#    "Release notes" below) and set its `release-notes-next-version:` marker to
+#    the version you're cutting. This file IS the GitHub release body, and
+#    bump-version uses it by DEFAULT — no --notes-file flag needed.
+$EDITOR docs/release-notes-next.md
 
 # 3. Bump versions, GATE on a green cross-OS run, then create the chore commit
 #    + annotated tag. Same command on Windows, macOS, Linux. This fires
 #    cross-os.yml on main and BLOCKS (~15–20 min); if it fails the tag is NOT
 #    created — fix main and re-run. --skip-cross-os bypasses the gate.
-node scripts/bump-version.mjs --level minor --notes-file ~/Desktop/vX.Y.Z-notes.md
+#    The bump REFUSES if the notes are missing or their version marker is stale
+#    (a release can't ship a placeholder body); --allow-placeholder overrides.
+node scripts/bump-version.mjs --level minor
+#    (Or point at a different file: --notes-file path/to/notes.md)
 
 # 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
 git push origin main
@@ -565,11 +571,16 @@ git tag -d vX.Y.Z
 
 ## Release notes
 
-Release notes live in the annotated git tag message (`git tag -a vX.Y.Z`),
-which the release workflow uses verbatim as the GitHub Release body. The tag
-message is the source of truth; the regression plans under `docs/features/`
-are the long-form companion (reference plan / PR numbers in parens, e.g.
-`(#637, plan 195)`).
+Release notes are authored in `docs/release-notes-next.md` (technical
+register). `bump-version.mjs` feeds that file verbatim into the annotated git
+tag message, which the release workflow uses as the GitHub Release body — so the
+file IS the source of truth. Its leading HTML-comment carries a
+`release-notes-next-version:` marker the bump checks against the version being
+cut (a stale or missing file fails the bump rather than shipping a placeholder).
+The regression plans under `docs/features/` are the long-form companion
+(reference plan / PR numbers in parens, e.g. `(#637, plan 195)`). The
+user-facing, brand-voice notes are separate — `RELEASE_NOTES.md`, shown in-app
+at `#/release-notes`.
 
 A release describes what shipped, diffed against the **previous public
 release**, and is organised as a **headline block + emoji-themed sections**
