@@ -71,6 +71,17 @@ vi.mock('../gpu/gpu-load.js', () => ({
   },
 }));
 
+/* fs-45 v1 — spy on the TTS VRAM sampler so we can assert the design call site
+   invokes it with 'qwen:design'. The whole function is replaced, so the call
+   fires regardless of the suite-wide CASTWRIGHT_VRAM_SAMPLE='0' env gate (which
+   lives inside the real function). */
+const { maybeSampleSidecarEngineMock } = vi.hoisted(() => ({
+  maybeSampleSidecarEngineMock: vi.fn(async (_key: string) => {}),
+}));
+vi.mock('../gpu/sidecar-vram-sample.js', () => ({
+  maybeSampleSidecarEngine: (key: string) => maybeSampleSidecarEngineMock(key),
+}));
+
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
   {
@@ -183,6 +194,7 @@ beforeEach(() => {
   fetchMock.mockResolvedValue(okSidecarResponse());
   synthesize.mockReset();
   synthesize.mockResolvedValue({ pcm: Buffer.alloc(24_000 * 2 * 0.3, 0), sampleRate: 24_000 });
+  maybeSampleSidecarEngineMock.mockClear();
   for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
   /* Wipe designed-voice sidecars between tests so the persona GET cases stay
      isolated (a sidecar written by one test must not leak into the next). */
@@ -199,6 +211,17 @@ afterAll(() => {
 });
 
 describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
+  it('records a qwen:design VRAM sample at the design call site (fs-45 v1 wiring)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    // The design site calls maybeSampleSidecarEngine('qwen:design') while
+    // VoiceDesign is still resident (inside the withGpuLoad callback, before return).
+    expect(maybeSampleSidecarEngineMock).toHaveBeenCalledWith('qwen:design');
+  });
+
   it('forwards persona + a calibrationText from the character line, caches the MP3, returns {voiceId,url}', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
