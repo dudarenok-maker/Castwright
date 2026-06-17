@@ -195,6 +195,7 @@ export interface SidecarHealthResult {
   kokoroLoaded?: boolean;
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
+  qwenDesignEverLoaded?: boolean;
   qwenLoading?: boolean;
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
@@ -280,6 +281,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
          for an older sidecar that omits them). */
       recyclePending: body.recycle_pending === true,
       committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
+      qwenDesignEverLoaded: body.qwen_design_ever_loaded === true,
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
