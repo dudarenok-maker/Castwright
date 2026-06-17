@@ -806,6 +806,15 @@ def test_health_exposes_qwen_design_ever_loaded(monkeypatch):
     VRAM sampling (fs-45 clean-process gate)."""
     monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
     monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    # `_QWEN_DESIGN_EVER_LOADED` is a process-lifetime module global; another test
+    # in the same pytest process may have loaded VoiceDesign and flipped it True.
+    # Pin it deterministically (monkeypatch auto-restores) and assert BOTH states.
+    monkeypatch.setattr(main, "_QWEN_DESIGN_EVER_LOADED", False)
     with TestClient(main.app) as client:
         body = client.get("/health").json()
-    assert body["qwen_design_ever_loaded"] is False  # fresh process, no design yet
+    assert body["qwen_design_ever_loaded"] is False  # fresh / clean process
+
+    monkeypatch.setattr(main, "_QWEN_DESIGN_EVER_LOADED", True)
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_ever_loaded"] is True  # after a design load
