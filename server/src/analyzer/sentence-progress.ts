@@ -24,6 +24,26 @@ export function countStreamedSentences(buffer: string): number {
   return (buffer.match(/"characterId"\s*:/g) ?? []).length;
 }
 
+/** Combine committed (exact, per completed section) + in-flight (marker count
+    for the current section) into the displayed numerator, and pair it with a
+    self-calibrated denominator that never sits below the numerator. */
+export function sentenceProgressForTick(args: {
+  committedSentences: number;
+  committedChars: number;
+  inflightSentences: number;
+  totalChars: number;
+  heuristicTotal: number;
+}): { sentencesDone: number; sentencesTotal: number } {
+  const sentencesDone = args.committedSentences + args.inflightSentences;
+  const refined = refineSentencesTotal({
+    committedSentences: args.committedSentences,
+    committedChars: args.committedChars,
+    totalChars: args.totalChars,
+    heuristicTotal: args.heuristicTotal,
+  });
+  return { sentencesDone, sentencesTotal: Math.max(refined, sentencesDone) };
+}
+
 /** Self-calibrate the denominator once ≥1 section is committed: the observed
     sentences-per-char from completed sections, applied to the remaining chars.
     Falls back to the static heuristic before any section completes (graceful

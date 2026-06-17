@@ -134,6 +134,14 @@ export interface AnalysisLiveChapter {
   /** Total sections this chapter was split into.
       Absent or ≤ 1 means the chapter is a single section — no sub-bar. */
   sectionsTotal?: number;
+  /** Sentences attributed so far (committed exact + in-flight marker count).
+      Absent until the chapter enters sentence mode. */
+  sentencesDone?: number;
+  /** Self-calibrated sentence total (shown with a leading `~`). */
+  sentencesTotal?: number;
+  /** Once true, the row shows the sentence headline; one-way per chapter
+      (set server-side so a reload can't revert it). */
+  inSentenceMode?: boolean;
 }
 export interface AnalysisLiveInfo {
   totalChapters: number;
