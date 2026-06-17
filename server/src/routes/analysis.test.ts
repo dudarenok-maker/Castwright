@@ -23,6 +23,7 @@ import {
   buildStage1ChapterInbox,
   readPriorCastForMerge,
   trackForReplay,
+  replayCatchUp,
   castInFlightEntryToLiveChapter,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
@@ -962,6 +963,84 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
       (job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId
         .size,
     ).toBe(0);
+  });
+});
+
+/* Bug-3 diagnosis (Task B4): a page reload re-subscribes to the sticky job and
+   the server replays `job.replay.lastPhase` verbatim via replayCatchUp. The
+   live elapsed/sentence rows survive a reload IFF that snapshot is kept fresh.
+   `send` (analysis.ts) routes EVERY payload through trackForReplay, and every
+   `sendLiveTick` emits a `kind:'phase'` event — so trackForReplay overwrites
+   `lastPhase` with the latest `live` snapshot on every tick. This pins the
+   forwarding half of that contract: whatever `live.chapters` (incl. elapsedMs)
+   `lastPhase` holds at reconnect is exactly what replayCatchUp re-emits. */
+describe('replayCatchUp forwards live chapter rows on reconnect (bug 3 buffer)', () => {
+  function makeJob(lastPhase: unknown) {
+    return {
+      replay: {
+        lastPhase,
+        logs: [],
+        failedByChapterId: new Map(),
+      },
+    } as unknown as Parameters<typeof replayCatchUp>[0];
+  }
+
+  it('re-emits the live chapter with its elapsedMs held in lastPhase', () => {
+    const livePhase = {
+      kind: 'phase',
+      phaseId: 1,
+      progress: 0.4,
+      label: 'Casting voices',
+      live: {
+        totalChapters: 3,
+        chapters: [
+          {
+            chapterIndex: 1,
+            chapterTitle: 'Chapter One',
+            elapsedMs: 302000,
+            estMs: 400000,
+            sectionsDone: 2,
+            sectionsTotal: 5,
+          },
+        ],
+      },
+    };
+    const job = makeJob(livePhase);
+    const captured: unknown[] = [];
+    replayCatchUp(job, (ev) => captured.push(ev));
+
+    const phaseEv = captured.find(
+      (e) => (e as { kind?: string }).kind === 'phase',
+    ) as typeof livePhase | undefined;
+    expect(phaseEv).toBeDefined();
+    expect(phaseEv!.live?.chapters).toHaveLength(1);
+    expect(phaseEv!.live?.chapters[0]).toMatchObject({
+      chapterIndex: 1,
+      elapsedMs: 302000,
+    });
+  });
+
+  it('a live tick refreshes lastPhase so reconnect replays the latest elapsed', () => {
+    // Simulate two successive live ticks landing in the replay buffer via the
+    // same trackForReplay path `send` uses, then a reconnect replay.
+    const job = makeJob(undefined);
+    const tick = (elapsedMs: number) =>
+      trackForReplay(job, {
+        kind: 'phase',
+        phaseId: 1,
+        progress: 0.5,
+        label: 'Casting voices',
+        live: { totalChapters: 1, chapters: [{ chapterIndex: 1, elapsedMs }] },
+      });
+    tick(120000);
+    tick(305000); // newest tick wins
+
+    const captured: unknown[] = [];
+    replayCatchUp(job, (ev) => captured.push(ev));
+    const phaseEv = captured.find(
+      (e) => (e as { kind?: string }).kind === 'phase',
+    ) as { live?: { chapters: { elapsedMs: number }[] } } | undefined;
+    expect(phaseEv?.live?.chapters[0].elapsedMs).toBe(305000);
   });
 });
 

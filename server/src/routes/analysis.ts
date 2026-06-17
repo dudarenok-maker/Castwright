@@ -1838,7 +1838,7 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   }
 }
 
-function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
+export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
   if (job.replay.lastPhase) send(job.replay.lastPhase);
   for (const log of job.replay.logs) send(log);
   if (job.replay.lastEta) send(job.replay.lastEta);
