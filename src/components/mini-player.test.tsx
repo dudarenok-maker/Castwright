@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, act, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MiniPlayer } from './mini-player';
+import { MiniPlayer, makeSessionId } from './mini-player';
 import type { Chapter, ChapterAudio } from '../lib/types';
 import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
@@ -867,5 +867,11 @@ describe('MiniPlayer — scrubber thumb touch fallback (fe-5)', () => {
     expect(thumb).toHaveClass('coarse-pointer:opacity-100');
     expect(thumb).toHaveClass('opacity-0'); // hidden by default for mouse
     expect(thumb).toHaveClass('group-hover:opacity-100');
+  });
+});
+
+describe('MiniPlayer — makeSessionId (insecure-randomness fix)', () => {
+  it('mints a non-empty session id without Math.random', () => {
+    expect(makeSessionId()).toMatch(/^(ss_|[0-9a-f-]{36})/i);
   });
 });
