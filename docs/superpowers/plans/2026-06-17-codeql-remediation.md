@@ -6,7 +6,18 @@
 
 **Architecture:** Three code scopes — A (server), B (sidecar), C (frontend) — are non-overlapping **across** scopes, so B and C run in their own worktrees/branches in parallel with A. **Scope A is internally SEQUENTIAL** (A1 creates `safe-path.ts`, which A2–A6 import; **A3/A5** both edit `paths.ts`, **A9/A10** both edit `voice-sample-cache.ts`, **A3/A11/A12** all edit `epub.ts`). A sequential Scope D (integrator-only) adds the CodeQL config, updates docs, and runs the merge→scan→dismiss→confirm sequence. CodeQL JS barriers are in-CFG branching guards that dominate the sink **in the same function** — so every path-containment guard is applied at the `fs` sink site, never buried in a returning helper.
 
-**Branch topology (for subagent execution):** each scope commits to its own branch off `main`, reconciled by D3 — **A → `fix/server-codeql`**, **B → `fix/sidecar-codeql`**, **C → `fix/frontend-codeql`**. Each branch lives in its own git worktree (junction `node_modules` for root + `server/` before running anything). **Task A6 is an integrator/judgment task** (an audit, not a mechanical edit) — run it from the orchestrating session on the Scope-A branch, not as a blind task subagent.
+**Branch topology (for subagent execution):** each scope commits to its own branch off `main`, reconciled by D3 — **A → `fix/server-codeql`**, **B → `fix/sidecar-codeql`**, **C → `fix/frontend-codeql`**; Scope D commits onto the **`integration/2026-06-18-codeql`** branch (created in Setup). Each branch lives in its own git worktree (junction `node_modules` for root + `server/` before running anything). **Task A6 is an integrator/judgment task** (an audit, not a mechanical edit) — run it from the orchestrating session on the Scope-A branch, not as a blind task subagent.
+
+**Execution model:** run **Scope A inline in the main (orchestrating) session** (A is sequential and A6 requires inline judgment); **dispatch B and C as two concurrent worktree subagents** at the start (`isolation: "worktree"`, per the project's parallel-agent convention); reconcile all three in D3. Do the **Setup** block below before anything else.
+
+## Setup (do first)
+
+- [ ] Create the four worktrees + branches off the latest `main`, and junction `node_modules` (root + `server/`) into each (PowerShell `New-Item -ItemType Junction`, the project pattern — git-bash `mklink` does not apply):
+  - `git worktree add <path>/codeql-server fix/server-codeql` (Scope A, driven inline)
+  - `git worktree add <path>/codeql-sidecar fix/sidecar-codeql` (Scope B subagent)
+  - `git worktree add <path>/codeql-frontend fix/frontend-codeql` (Scope C subagent)
+  - `git worktree add <path>/codeql-integration -b integration/2026-06-18-codeql` (Scope D; D1/D2/D3 all commit here)
+- [ ] In each worktree, junction `node_modules` and `server/node_modules` from the primary checkout so `vitest`/`tsc`/`verify` resolve. (Sidecar worktree also needs the sidecar venv reachable for `npm run test:sidecar` — it falls back to a SKIP banner if absent.)
 
 **Tech Stack:** Node 20 / TypeScript / Express 5.2.1, Vitest 4, Python 3.12 / FastAPI / pytest, React 18, GitHub CodeQL (`build-mode: none`), `express-rate-limit` v7.
 
@@ -180,6 +191,8 @@ describe('cachePath', () => {
 ```
 
 > Reuse the inline-`express()` harness already at the top of `samples.test.ts` (the repo has **no** shared `test-utils/app`). If the existing file names the app differently, match it.
+>
+> **On the 400 assertion:** Express 5.2.1 captures `..%2f..%2fevil` as a single `:slug` and decodes `req.params.slug` to `../../evil` → `safeSegment` throws → the explicit 400 fires. The decode-then-reject behavior of `safeSegment` itself is **authoritatively** covered by `safe-path.test.ts` (A1). If a future Express change routes the encoded slug to a 404 instead, the guard is still correct — do **not** "fix" it; assert the guard by calling the handler with a pre-decoded `slug` (`../../evil`) instead.
 
 - [ ] **Step 2: Run to verify they fail** — `cd server && npx vitest run src/routes/samples.test.ts src/store/analysis-cache.test.ts` → FAIL (cachePath not exported → TypeError; samples returns 404/500 not 400).
 
@@ -243,7 +256,7 @@ it('rejects a poisoned voice name', () => {
 - `book-state.ts` — before `unlink(join(bookDir, oldFile))` (~`:1001`) **and** before the manuscript `writeFile(join(bookDir, newFile))` (~`:999`), add `safeSegment(oldFile);` / `safeSegment(newFile);` (`oldFile` is `state.manuscriptFile`, persisted/bundle-derived; `newFile` is a literal but guarding is cheap and consistent).
 - `epub.ts:61` — `epub.ts` currently imports only `{ join }` from `node:path`, so **add `basename` to that import** (`import { join, basename } from 'node:path'`). Change `opts.fileName ?? 'book.epub'` to `basename(opts.fileName ?? 'book.epub')`, and add `safeSegment(basename(opts.fileName ?? 'book.epub'));` before the `writeFile`.
 
-- [ ] **Step 4: Run to verify they pass** — same command → PASS.
+- [ ] **Step 4: Run to verify they pass + the slow-tier book-state suite** — `cd server && npx vitest run src/parsers/epub.test.ts src/routes/qwen-voice.test.ts && npm run test:server-slow` → PASS. (`book-state.test.ts` is **slow-tier**, excluded from pre-commit `test:server` — a source edit that breaks it would otherwise only surface at pre-push.)
 
 - [ ] **Step 5: Commit**
 
@@ -286,7 +299,7 @@ In `protocol.ts` `writeInbox` first line: `safeSegment(manuscriptId);`. Then gua
 
 `manuscriptId` is the in-scope variable name in all of these (confirmed). Import `safeSegment` at the correct relative depth in each file.
 
-- [ ] **Step 4: Run to verify it passes** — same command → PASS.
+- [ ] **Step 4: Run to verify it passes + the slow-tier gemini suite** — `cd server && npx vitest run src/handoff/protocol.test.ts && npm run test:server-slow` → PASS. (`gemini.test.ts` is **slow-tier**; a `gemini.ts` source edit that breaks it would otherwise only surface at pre-push.)
 
 - [ ] **Step 5: Commit**
 
@@ -616,7 +629,9 @@ Try replacing the adjacent lazy `.+?` groups with delimiter-anchored negated cla
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/src/util/text-match.ts server/src/tts/voice-sample-cache.ts server/src/parsers/text.ts server/src/parsers/text.test.ts server/src/util/text-match.test.ts docs/security/codeql-dismissal-residue.md
+# Stage the residue doc ONLY if Step 3 took the dismiss branch (reverted FILENAME_RE + appended a row).
+git add server/src/util/text-match.ts server/src/tts/voice-sample-cache.ts server/src/parsers/text.ts server/src/parsers/text.test.ts server/src/util/text-match.test.ts
+# if dismissed: git add docs/security/codeql-dismissal-residue.md
 git commit -F - <<'EOF'
 fix(server): linearize ReDoS-prone trims; dismiss filename regex if unrewritable
 
@@ -630,7 +645,9 @@ EOF
 
 **Files:** Modify `server/src/parsers/html-utils.ts` (tag strips at `:40` AND `:63` — `incomplete-multi-character-sanitization`), `server/src/parsers/epub.ts` (`htmlBodyOnly` script/style strip, `:356` — `incomplete-multi-character-sanitization`), `scripts/bump-version.mjs` (shell-quote escape, `:206` — `incomplete-sanitization`); test `server/src/parsers/html-utils.test.ts` (extend).
 
-Two distinct fixes: **(a)** the `<…>` tag strips → replace-until-stable; **(b)** the bump-version shell-quote escape → escape backslash **before** quote. (a) is a CodeQL-*shape* fix — the single-pass `<[^>]+>` is flagged regardless of a constructible bypass, so its test asserts behavior is preserved + idempotence, and **D3's re-scan is the alert-clearing gate** (like A9). (b) has a real fail-before.
+Two distinct fixes: **(a)** the `<…>` tag strips → replace-until-stable; **(b)** the bump-version shell-quote escape → escape backslash **before** quote.
+
+> **Surgical check first:** the only sites the CodeQL inventory definitely flags are `html-utils.ts:40` (`incomplete-multi-character-sanitization`), `epub.ts:356`, and `bump-version.mjs` (`incomplete-sanitization`). The second html-utils strip (`:63`, in `extractFirstHeading`) may **not** be flagged — confirm it appears in the alert list (cross-check the rule/path/line from the inventory `gh api … code-scanning/alerts`) before touching it; if it isn't flagged, leave it (surgical-changes rule) and drop it from this task. (a) is a CodeQL-*shape* fix — the single-pass `<[^>]+>` is flagged regardless of a constructible bypass, so its test asserts behavior is preserved + idempotence, and **D3's re-scan is the alert-clearing gate** (like A9). (b) has a real fail-before.
 
 - [ ] **Step 1: Write the tests**
 
@@ -723,22 +740,33 @@ EOF
 
 > Slow-tier file — **not** in pre-commit. Run its test manually before committing (`cd server && npx vitest run --config vitest.config.slow.ts src/analyzer/gemini.test.ts`); it gates at pre-push.
 
-- [ ] **Step 1: Write the failing test (pin the injection seam)**
+- [ ] **Step 1: Write the failing test (deterministic seam first)**
 
-Add a test that drives the streaming path with a mocked response whose chunks sum past the ceiling, and asserts the accumulation **throws**. Use the file's existing stream-mock seam (the same mock the other gemini tests use to feed `buf += text`); assert the thrown message. If the mock can't reach the accumulator, route the cap through a tiny exported `appendBounded(buf, text)` helper and unit-test that helper directly.
+**Primary (fast, deterministic):** factor the cap into a tiny exported helper `appendBounded(buf: string, text: string, max = MAX_RESPONSE_BYTES): string` (throws when `buf.length + text.length > max`, else returns `buf + text`), and unit-test it directly — this is a clean in-CFG barrier site and avoids the slow-tier streaming mock:
+
+```ts
+// in gemini.test.ts (or a fast sibling) — assert the bound, not the whole stream
+import { appendBounded } from './gemini.js';
+it('appendBounded throws past the ceiling', () => {
+  expect(() => appendBounded('x'.repeat(8 * 1024 * 1024), 'y')).toThrow(/maximum size/);
+  expect(appendBounded('a', 'b')).toBe('ab');
+});
+```
+
+(Only fall back to driving the full SSE mock if you choose not to extract the helper — slower, slow-tier.)
 
 - [ ] **Step 2: Run to verify it fails** — `cd server && npx vitest run --config vitest.config.slow.ts src/analyzer/gemini.test.ts` → FAIL.
 
-- [ ] **Step 3: Cap `buf` inside the loop**
+- [ ] **Step 3: Add `appendBounded` and use it at the accumulator**
 
 ```ts
-const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-// inside the stream loop, before `buf += text`:
-if (buf.length + text.length > MAX_RESPONSE_BYTES) {
-  throw new Error('Analyzer response exceeded the maximum size.');
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+export function appendBounded(buf: string, text: string, max = MAX_RESPONSE_BYTES): string {
+  if (buf.length + text.length > max) throw new Error('Analyzer response exceeded the maximum size.');
+  return buf + text;
 }
-buf += text;
 ```
+Then at `:559` replace `buf += text;` with `buf = appendBounded(buf, text);` (an in-CFG guard dominating the accumulation, in the same function).
 
 - [ ] **Step 4: Run to verify it passes** — same command → PASS.
 
@@ -759,7 +787,7 @@ EOF
 
 **Files:** Modify `scripts/start-app-prod.mjs` (`probeServed`, `:115-132`).
 
-The script is plain ESM and **cannot import the compiled server module** (its own comment says so). So **replicate** `resolveRootCaPath`'s 3-step lookup inline — do not import from `dist/`. Not unit-testable; verified by D3's re-scan + a manual `start:lan` smoke.
+The script is plain ESM and **cannot import the compiled server module** (its own comment says so). So **replicate** `resolveRootCaPath`'s 3-step lookup inline — do not import from `dist/`. Not unit-testable; verified by D3's re-scan + a manual `start:lan` smoke. **Note:** a `scripts/`-only commit matches no pre-commit test leg, so the commit passes the hook trivially — the manual smoke is the *only* gate; don't read the green commit as verification.
 
 - [ ] **Step 1: Replace the global TLS-disable + fetch with a CA-trusting `node:https` probe**
 
@@ -1068,6 +1096,8 @@ EOF
 
 # Scope D — Integration, config & dismissals (integrator, SEQUENTIAL, runs last)
 
+> **All of D1/D2/D3 run on the `integration/2026-06-18-codeql` worktree** (created in Setup). D1 (CodeQL config) and D2 (docs) commit there directly; D3 then merges the three scope branches into it, verifies, and merges to `main`. The config + docs must be present on the integration branch **before** the post-merge re-scan so `paths-ignore` takes effect.
+
 ### Task D1: CodeQL config + workflow wiring
 
 **Files:** Create `.github/codeql/codeql-config.yml`; Modify `.github/workflows/codeql.yml` (init step `:35-38`).
@@ -1129,11 +1159,11 @@ EOF
 
 - [ ] **Step 1: Resolve the srv-22 issue number** — `gh issue list --search "srv-22" --state open` → note `#NN` for the PR body.
 
-- [ ] **Step 2: Reconcile + verify** — create `integration/2026-06-18-codeql` off `main` in a fresh worktree; **junction `node_modules`** (root + `server/`) into it; merge Scopes A/B/C one at a time, running `npm run verify` between merges. Final `npm run verify` green.
+- [ ] **Step 2: Reconcile + verify** — on the `integration/2026-06-18-codeql` worktree (created in Setup; D1/D2 already committed here), merge `fix/server-codeql`, `fix/sidecar-codeql`, `fix/frontend-codeql` one at a time, running `npm run verify` between merges. Final `npm run verify` green.
 
 - [ ] **Step 3: Merge to `main`** (PR, "Create a merge commit"); PR body `Closes #NN` (srv-22) + fix/dismissal summary.
 
-- [ ] **Step 4: Re-scan** — `gh workflow run codeql.yml --ref main`; then `gh run watch` (a long, attended ~5–15 min step). Code-fix alerts auto-clear; the dismissal-budget alerts reappear **open**.
+- [ ] **Step 4: Re-scan** — `gh workflow run codeql.yml --ref main`; wait a few seconds, then capture the dispatched run id (don't bare-`gh run watch`, which can attach to a stale run): `gh run list --workflow=codeql.yml --branch main --limit 1 --json databaseId -q '.[0].databaseId'`, then `gh run watch <id>` (a long, attended ~5–15 min step). Code-fix alerts auto-clear; the dismissal-budget alerts reappear **open**.
 
 - [ ] **Step 5: List → map → dismiss** — enumerate the still-open alerts and map each to the budget:
 
