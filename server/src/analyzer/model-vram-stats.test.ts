@@ -38,7 +38,6 @@ describe('model-vram-stats helpers', () => {
 });
 
 describe('sampleAndRecordVram', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let stats: any;
 
   beforeAll(async () => {
@@ -84,7 +83,6 @@ describe('sampleAndRecordVram', () => {
 });
 
 describe('per-key trim (M2)', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let stats: any;
 
   beforeAll(async () => {
