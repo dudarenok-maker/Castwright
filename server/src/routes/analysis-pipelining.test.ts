@@ -472,16 +472,7 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
    only the Phase 0 chapters whose watermark has caught up (K + LAG).
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — rolling roster snapshot', () => {
-  /* QUARANTINED IN CI (#875) — CPU-contention timeout flake. The watermark/
-     roster logic asserted below is correct (green on Windows + Ubuntu CI and
-     locally on a quiet box), but the test awaits a full pipelined run whose
-     wall-clock time balloons under load: it blew past its 180s budget on the
-     macOS cross-OS release gate (two cuts) and locally (363s) under
-     contention. Already bumped 30s→90s→180s; skip in CI rather than gamble
-     on a bigger number. Still runs locally. Re-enable once it's made
-     deterministic (fake timers / no full-run await) per #875. */
-  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
-  quarantinedIt('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
+  it('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
     const manuscriptId = `test-rolling-roster-${Date.now()}`;
     /* 12 chapters + min-lag=5 + concurrency=1 keeps the Phase 0 grind
        short enough (11 sequential dispatches before the holding chapter
@@ -516,16 +507,9 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
         requestedModel: undefined,
       });
 
-      /* Wait until Phase 1 chapter 6 (index 5, needs watermark>=10) has
-         dispatched. Warm-cache local runs land in <600 ms; CI cold-start
-         runners are the slow leg. 840194b bumped to 30 s inner + 90 s
-         per-test for release.yml's windows-latest. PR #131 then surfaced
-         the same edge on verify.yml's ubuntu-latest (timed out at exactly
-         90 000 ms; local pre-push observed 90 347 ms). The per-test budget
-         bumps to 180 s here — well above worst-case observed CI runtime
-         on either OS; healthy runs short-circuit via the inner waitFor
-         the moment the trace lands, so no slowdown for warm caches. */
-      await waitFor(() => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 6), 30_000);
+      /* Event-driven wait — resolves the instant Phase 1 chapter 6 records
+         into the trace; no polling, no wall-clock budget. */
+      await fixture.whenDispatched(1, 6);
 
       const phase1Chapter6 = fixture.trace.find((t) => t.phase === 1 && t.chapterId === 6);
       expect(phase1Chapter6).toBeDefined();
@@ -538,14 +522,19 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
       expect(roster).toContain('ch11-char');
       expect(roster).not.toContain('ch12-char');
 
-      /* Release the rest so the run can complete. */
+      /* Wait for Phase 0 chapter 12 to actually enter its dispatchHold
+         (the spy records BEFORE the hold, so whenDispatched resolves the
+         instant ch12 is parked and ready to be released). Then release so
+         runPromise can complete. Without this guard, releasePhase0(12)
+         fires before ch12 starts and the hold is permanently stuck. */
+      await fixture.whenDispatched(0, 12);
       fixture.releasePhase0(12);
       await runPromise;
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 180_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────

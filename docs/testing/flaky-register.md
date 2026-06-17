@@ -8,7 +8,6 @@ Empty register = done. See the rewrite playbook in
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| Phase 1 chapter K rolling-roster snapshot | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — rolling roster snapshot` | CPU+I/O contention timeout (blew 180s budget under load; also 363s locally under contention) | #878 | 2026-06-17 |
 | pipelined Phase 0/1 interleaved execution | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
 | back-pressure under stall | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — back-pressure under stall` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
 | non-pipelined mode collapses to sequential | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — non-pipelined mode collapses to sequential` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
