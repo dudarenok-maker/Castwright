@@ -453,10 +453,14 @@ const SENTENCE_MODE_MIN_MARKERS = 5;
       startedAt: number;
       elapsedMs: number;
       receivedBytes: number;
-      /* Sentence progress (section-accumulated). */
+      /* Sentence progress (section-accumulated). committedChars/Sentences cover
+         ONLY completed sections (kept in lockstep so the rate is never diluted);
+         currentSectionChars is the in-flight section's size, stashed at section
+         start and folded into committedChars when that section completes. */
       heuristicTotal: number;
       committedSentences: number;
       committedChars: number;
+      currentSectionChars: number;
       inflightSentences: number;
       sectionsDone: number;
       sectionsTotal: number;
@@ -502,6 +506,7 @@ const SENTENCE_MODE_MIN_MARKERS = 5;
         heuristicTotal: countSentencesHeuristic(ch.body),
         committedSentences: 0,
         committedChars: 0,
+        currentSectionChars: 0,
         inflightSentences: 0,
         sectionsDone: 0,
         sectionsTotal: 1,
@@ -535,15 +540,26 @@ const SENTENCE_MODE_MIN_MARKERS = 5;
         chapter: ch,
         stageCall: stage2Call,
         engine: phase1Selection.engine,
+        // Section START: record this section's char count and total. Do NOT add
+        // it to committedChars yet — committedChars must stay in lockstep with
+        // committedSentences (completed sections only), or the rate dilutes and
+        // the denominator collapses mid-section (adversarial-review fix #1).
         onChunk: (sec) => {
           const slot = inFlight.get(i);
-          if (slot) slot.sectionsTotal = sec.total;
+          if (slot) {
+            slot.sectionsTotal = sec.total;
+            slot.currentSectionChars = sec.chars;
+            slot.inflightSentences = 0; // fresh section → buffer reset on the engine side
+          }
         },
+        // Section DONE: commit BOTH chars and sentences together, so the
+        // observed sentences-per-char rate is always measured over the same
+        // completed sections.
         onSectionDone: (_index, sentenceCount) => {
           const slot = inFlight.get(i);
           if (!slot) return;
           slot.committedSentences += sentenceCount;
-          slot.committedChars = Math.min(ch.body.length, slot.committedChars + 0); // chars tracked via onChunk below
+          slot.committedChars = Math.min(ch.body.length, slot.committedChars + slot.currentSectionChars);
           slot.sectionsDone += 1;
           slot.inflightSentences = 0;
           slot.inSentenceMode = true; // ≥1 section done always qualifies
@@ -553,34 +569,28 @@ const SENTENCE_MODE_MIN_MARKERS = 5;
           // …existing…
 ```
 
-To track `committedChars`, extend the section-start `onChunk` above to add the just-finished section's chars. Simplest: in the `onChunk` (section-start) handler, stash the current section's char count, and add it in `onSectionDone`:
+Note: the single-call path (a chapter ≤ budget) never fires the section-start
+`onChunk` (the chunker only calls it on the multi-chunk path), so `currentSectionChars`
+stays 0 and `committedChars` stays 0 for that chapter — `refineSentencesTotal`
+then returns the heuristic unchanged. That's correct: a single-section chapter
+is short/fast and the final count is authoritative on completion. Within-chunk
+adaptive re-splits (truncation recovery) can momentarily reset `inflightSentences`;
+the non-decreasing guarantee holds across *committed section* boundaries, which is
+what the test and e2e assert — note this edge in a code comment.
 
-```ts
-        onChunk: (sec) => {
-          const slot = inFlight.get(i);
-          if (slot) {
-            slot.sectionsTotal = sec.total;
-            slot.committedChars = Math.min(ch.body.length, slot.committedChars + sec.chars);
-          }
-        },
-```
+- [ ] **Step 7: Coverage via pure fns + e2e (NO route-integration harness)**
 
-(`committedChars` then leads by the in-flight section's chars, which is fine for the rate estimate — it converges as sections complete; the test in Task A2 covers the committed-only math, and a leading denominator only makes the bar slightly conservative.)
-
-- [ ] **Step 7: Write the route regression test (anti-snap-back integration)**
-
-Add to `server/src/routes/analysis.test.ts` a test that runs Phase-1 attribution against a fake analyzer producing a 2-section chapter and asserts the emitted `live` `sentencesDone` is non-decreasing across the section boundary. Follow the file's existing harness for building a fake analyzer + capturing `send` events (search the file for an existing Phase-1 test to copy the scaffold). Assert: every consecutive pair of `phase` events with `phaseId === 1` for the same chapter has non-decreasing `sentencesDone`, and `sentencesTotal >= sentencesDone`.
+`analysis.test.ts` has **no** reusable end-to-end Phase-1 fake-analyzer + SSE-capture harness (confirmed: there's an explicit blocker comment deferring it, and the file tests this kind of logic via *pure* exported helpers like `castInFlightEntryToLiveChapter` at `analysis.test.ts:1809`). Do **not** build a route harness here. Anti-snap-back is already locked by the pure `sentenceProgressForTick` test in Step 1 (the section-boundary case asserts `earlyS2.sentencesDone >= afterS1.sentencesDone`), and the real route seam is covered by the e2e in Task A6. If you want one more server-side guard, add a tiny pure unit test asserting that committing a section then starting the next never lowers `sentenceProgressForTick(...).sentencesDone` — but no `phaseId: 1` end-to-end run.
 
 - [ ] **Step 8: Run tests**
 
-Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts`
-Expected: PASS (new test + existing).
-Then: `cd server && npx vitest run src/analyzer/sentence-progress.test.ts` — PASS.
+Run: `cd server && npx vitest run src/analyzer/sentence-progress.test.ts`
+Expected: PASS. (No `analysis.test.ts` change in this task — the route wiring is type-checked by the build and exercised by the e2e.)
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add server/src/routes/analysis.ts server/src/analyzer/sentence-progress.ts server/src/analyzer/sentence-progress.test.ts server/src/routes/analysis.test.ts src/lib/api.ts
+git add server/src/routes/analysis.ts server/src/analyzer/sentence-progress.ts server/src/analyzer/sentence-progress.test.ts src/lib/api.ts
 git commit -m "feat(server): section-accumulated sentence progress in stage-2 live payload"
 ```
 
@@ -597,59 +607,70 @@ git commit -m "feat(server): section-accumulated sentence progress in stage-2 li
 
 - [ ] **Step 1: Write the failing test**
 
-Create or extend `src/components/analysing/phase-card.test.tsx`:
+**CRITICAL — Provider required.** `PhaseCard` calls `useAppSelector` unconditionally (`phase-card.tsx:401`), and `PhaseModelChip`/`PhaseModelSwap` render for `phaseId: 1`, so a bare `render(<PhaseCard/>)` throws "could not find react-redux context." The file **already exists** with the correct pattern: a `mountStore()` (account + cast slices) + `<Provider>` wrapper and a `renderPhase(phase)` helper. Reuse that infrastructure — add a `renderCard(overrides)` helper alongside it. Also note `AnalysisPhase` requires a `duration` field (`src/lib/types.ts:691` — `{ id, label, detail, duration }`).
+
+Extend `src/components/analysing/phase-card.test.tsx`:
 
 ```tsx
-import { describe, it, expect } from 'vitest';
+// At top of file — these imports already exist in the file; add what's missing:
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
 import { render, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
 import { PhaseCard } from './phase-card';
 import type { AnalysisLiveChapter } from '../../lib/api';
+import type { AnalysisPhase } from '../../lib/types';
+// Reuse the file's existing accountSlice/castSlice imports + mountStore().
+
+const phase1: AnalysisPhase = {
+  id: 1,
+  label: 'Parsing and attribution',
+  detail: 'Splitting chapters into sentences and labelling each speaker.',
+  duration: 1000,
+};
 
 function liveChapter(over: Partial<AnalysisLiveChapter> = {}): AnalysisLiveChapter {
   return { chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs: 5000, estMs: 60000, ...over };
 }
 
-// Minimal phase fixture — copy the shape the file's other tests use for `phase`.
-const phase = { id: 1, label: 'Parsing and attribution', detail: '…' } as never;
-
-describe('LiveChapterRow sentence headline', () => {
-  it('shows "Attributed ~N of ~M sentences" in sentence mode', () => {
-    render(
+// Wraps PhaseCard in a real store so useAppSelector resolves. mountStore() is
+// the helper already defined in this file (account + cast reducers).
+function renderCard(props: Partial<React.ComponentProps<typeof PhaseCard>>) {
+  return render(
+    <Provider store={mountStore()}>
       <PhaseCard
-        phase={phase}
+        phase={phase1}
         activePhaseId={1}
         phaseProgress={0.4}
         phaseLogs={['x']}
-        live={{ totalChapters: 9, chapters: [liveChapter({ sentencesDone: 247, sentencesTotal: 900, inSentenceMode: true })] }}
+        live={null}
         isLocalAnalyzer
         analysisStarted
         conn="streaming"
         bookId={null}
         droppedQuotesRefreshKey={0}
-      />,
-    );
+        {...props}
+      />
+    </Provider>,
+  );
+}
+
+describe('LiveChapterRow sentence headline', () => {
+  it('shows "Attributed ~N of ~M sentences" in sentence mode', () => {
+    renderCard({
+      live: { totalChapters: 9, chapters: [liveChapter({ sentencesDone: 247, sentencesTotal: 900, inSentenceMode: true })] },
+    });
     expect(screen.getByText(/Attributed ~247 of ~900 sentences/)).toBeInTheDocument();
   });
 
   it('omits the sentence headline before sentence mode', () => {
-    render(
-      <PhaseCard
-        phase={phase}
-        activePhaseId={1}
-        phaseProgress={0.1}
-        phaseLogs={['x']}
-        live={{ totalChapters: 9, chapters: [liveChapter()] }}
-        isLocalAnalyzer
-        analysisStarted
-        conn="streaming"
-        bookId={null}
-        droppedQuotesRefreshKey={0}
-      />,
-    );
+    renderCard({ live: { totalChapters: 9, chapters: [liveChapter()] } });
     expect(screen.queryByText(/Attributed/)).not.toBeInTheDocument();
   });
 });
 ```
+
+Use this same `renderCard(...)` helper for every subsequent frontend test in Tasks A5 and B3 — never call bare `render(<PhaseCard/>)`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -691,21 +712,10 @@ Add a test asserting `HeartbeatRow`'s chars/s still renders when a heartbeat is 
 
 ```tsx
 it('keeps the chars/s speed pulse in the heartbeat row', () => {
-  render(
-    <PhaseCard
-      phase={phase}
-      activePhaseId={1}
-      phaseProgress={0.4}
-      phaseLogs={['x']}
-      live={{ totalChapters: 9, chapters: [liveChapter({ sentencesDone: 10, sentencesTotal: 900, inSentenceMode: true })] }}
-      heartbeat={{ hb: { phaseId: 1, receivedBytes: 2048, charsPerSec: 145, elapsedMs: 14000, sinceLastChunkMs: 0, chapterIndex: 1 }, receivedAt: Date.now() }}
-      isLocalAnalyzer
-      analysisStarted
-      conn="streaming"
-      bookId={null}
-      droppedQuotesRefreshKey={0}
-    />,
-  );
+  renderCard({
+    live: { totalChapters: 9, chapters: [liveChapter({ sentencesDone: 10, sentencesTotal: 900, inSentenceMode: true })] },
+    heartbeat: { hb: { phaseId: 1, receivedBytes: 2048, charsPerSec: 145, elapsedMs: 14000, sinceLastChunkMs: 0, chapterIndex: 1 }, receivedAt: Date.now() },
+  });
   expect(screen.getByText(/145 chars\/s/)).toBeInTheDocument();
 });
 ```
@@ -912,27 +922,75 @@ git commit -m "feat(server): sentence-fraction ETA + per-chapter estimate band"
 
 ---
 
-### Task B2: Route — estimate precedence + band (bugs 1 & 2)
+### Task B2: Estimate precedence + band — pure selector, wired into the route (bugs 1 & 2)
+
+The estimate-selection logic is the bug. Extract it into ONE pure function and unit-test the invariants there (no route harness — same reasoning as Task A4 Step 7). The route just calls it.
 
 **Files:**
-- Modify: `server/src/routes/analysis.ts` (`runChapter` — estimate selection at `:3417-3433` and `:3499-3510`; the slot needs a `lastGoodEstMs`)
-- Test: `server/src/routes/analysis.test.ts`
+- Modify: `server/src/analyzer/sentence-progress.ts` (add `selectChapterEstMs`)
+- Test: `server/src/analyzer/sentence-progress.test.ts`
+- Modify: `server/src/routes/analysis.ts` (`InFlight` gains `lastGoodEstMs`; call the selector at the two refinement sites `:3417-3433` and `:3499-3510`)
 
 **Interfaces:**
-- Consumes: `projectChapterEstMsFromSentences`, `clampChapterEstMs` (B1); the stage estimate `stage2EstMs` (already in scope in this route).
+- Produces: `selectChapterEstMs(args: { elapsedMs; bySentenceMs: number | null; byBytesMs: number | null; lastGoodMs: number; stageEstMs: number }): number` — never null, never the stage value, always > elapsed.
+- Consumes: `projectChapterEstMsFromSentences`, `clampChapterEstMs` (B1); `projectChapterEstMsFromOutput` (existing route fn — its result is passed in, keeping the selector pure).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test (append to sentence-progress.test.ts)**
 
-Add to `analysis.test.ts` a Phase-1 test asserting the emitted per-chapter `estMs` across ticks: (a) is never null/undefined, (b) never equals `stage2EstMs`, (c) is always `> elapsedMs`. Drive it with a fake analyzer whose throughput briefly drops out (so the projector returns null and the band must hold the last good value). Copy the Phase-1 harness scaffold from the Task A4 test.
+```ts
+import { selectChapterEstMs } from './sentence-progress.js';
+
+describe('selectChapterEstMs (estimate-band invariants — bugs 1 & 2)', () => {
+  const stage = 600_000; // whole-stage value that must NEVER appear in a chapter row
+  it('prefers the sentence projection over bytes', () => {
+    const r = selectChapterEstMs({ elapsedMs: 10_000, bySentenceMs: 40_000, byBytesMs: 99_000, lastGoodMs: 50_000, stageEstMs: stage });
+    expect(r).toBe(40_000);
+  });
+  it('falls back to bytes, then last-good, when earlier signals are null', () => {
+    expect(selectChapterEstMs({ elapsedMs: 10_000, bySentenceMs: null, byBytesMs: 70_000, lastGoodMs: 50_000, stageEstMs: stage })).toBe(70_000);
+    expect(selectChapterEstMs({ elapsedMs: 10_000, bySentenceMs: null, byBytesMs: null, lastGoodMs: 50_000, stageEstMs: stage })).toBe(50_000);
+  });
+  it('never returns null/blank, never the stage value, always > elapsed', () => {
+    const r = selectChapterEstMs({ elapsedMs: 120_000, bySentenceMs: stage, byBytesMs: null, lastGoodMs: 0, stageEstMs: stage });
+    expect(r).toBeGreaterThan(120_000);
+    expect(r).toBeLessThan(stage);
+    expect(r).toBeTypeOf('number');
+  });
+});
+```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts -t "estimate band"`
-Expected: FAIL — current code can emit a stage-range value / leave estMs stale-null.
+Run: `cd server && npx vitest run src/analyzer/sentence-progress.test.ts -t selectChapterEstMs`
+Expected: FAIL — `selectChapterEstMs is not a function`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement the pure selector (append to sentence-progress.ts)**
 
-Add `lastGoodEstMs: number` to `InFlight` (seed `= chapterEstMs`). Replace the two estimate-refinement sites with a single selection that prefers the sentence projection, falls back to the byte projection, then last-good, all run through `clampChapterEstMs`:
+```ts
+/** Choose the per-chapter estimate for a tick and clamp it to the band.
+    Precedence: sentence projection → byte projection → last-good. Pure: the
+    projection results are computed by the caller and passed in (the byte
+    projector lives in analysis.ts), so this stays free of route state. */
+export function selectChapterEstMs(args: {
+  elapsedMs: number;
+  bySentenceMs: number | null;
+  byBytesMs: number | null;
+  lastGoodMs: number;
+  stageEstMs: number;
+}): number {
+  const candidate = args.bySentenceMs ?? args.byBytesMs;
+  return clampChapterEstMs(candidate, args.elapsedMs, args.lastGoodMs, args.stageEstMs);
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `cd server && npx vitest run src/analyzer/sentence-progress.test.ts -t selectChapterEstMs`
+Expected: PASS.
+
+- [ ] **Step 5: Wire the route**
+
+Add `lastGoodEstMs: number` to `InFlight` (seed `= chapterEstMs` in the `inFlight.set` of Task A4). Define a local helper in `runChapter` and call it from BOTH refinement sites (`tickOverall` `:3417` and the throttled `onChunk` `:3501`), replacing the inline `projectChapterEstMsFromOutput` blocks:
 
 ```ts
       const refineEstMs = (slot: InFlight, elapsed: number) => {
@@ -943,26 +1001,26 @@ Add `lastGoodEstMs: number` to `InFlight` (seed `= chapterEstMs`). Replace the t
           totalChars: ch.body.length,
           heuristicTotal: slot.heuristicTotal,
         });
-        const bySentence = projectChapterEstMsFromSentences(elapsed, prog.sentencesDone, prog.sentencesTotal);
-        const byBytes = projectChapterEstMsFromOutput(elapsed, slot.receivedBytes, ch.body.length, currentOutputRatio());
-        const candidate = bySentence ?? byBytes; // may be null → band uses lastGood
-        const clamped = clampChapterEstMs(candidate, elapsed, slot.lastGoodEstMs, stage2EstMs);
-        slot.chapterEstMs = clamped;
-        slot.lastGoodEstMs = clamped;
+        const next = selectChapterEstMs({
+          elapsedMs: elapsed,
+          bySentenceMs: projectChapterEstMsFromSentences(elapsed, prog.sentencesDone, prog.sentencesTotal),
+          byBytesMs: projectChapterEstMsFromOutput(elapsed, slot.receivedBytes, ch.body.length, currentOutputRatio()),
+          lastGoodMs: slot.lastGoodEstMs,
+          stageEstMs: stage2EstMs,
+        });
+        slot.chapterEstMs = next;
+        slot.lastGoodEstMs = next;
       };
 ```
 
-Call `refineEstMs(slot, elapsed)` from both `tickOverall` (`:3417`) and the throttled `onChunk` refinement (`:3501`), replacing the inline `projectChapterEstMsFromOutput` blocks.
+- [ ] **Step 6: Run tests + typecheck**
 
-- [ ] **Step 4: Run tests**
+Run: `cd server && npx vitest run src/analyzer/sentence-progress.test.ts` (PASS) and `npm run typecheck` (the route wiring compiles).
 
-Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts`
-Expected: PASS (new + existing).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/routes/analysis.ts server/src/routes/analysis.test.ts
+git add server/src/analyzer/sentence-progress.ts server/src/analyzer/sentence-progress.test.ts server/src/routes/analysis.ts
 git commit -m "fix(server): stabilise per-chapter ETA with a sentence-aware band"
 ```
 
@@ -978,20 +1036,9 @@ git commit -m "fix(server): stabilise per-chapter ETA with a sentence-aware band
 
 ```tsx
 it('hides the "of ~est" clause when estMs is missing', () => {
-  render(
-    <PhaseCard
-      phase={phase}
-      activePhaseId={1}
-      phaseProgress={0.4}
-      phaseLogs={['x']}
-      live={{ totalChapters: 9, chapters: [{ chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs: 5000, estMs: 0 }] }}
-      isLocalAnalyzer
-      analysisStarted
-      conn="streaming"
-      bookId={null}
-      droppedQuotesRefreshKey={0}
-    />,
-  );
+  renderCard({
+    live: { totalChapters: 9, chapters: [{ chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs: 5000, estMs: 0 }] },
+  });
   expect(screen.queryByText(/of ~/)).not.toBeInTheDocument();
 });
 ```
@@ -1026,29 +1073,41 @@ git commit -m "fix(frontend): never render a bare 'of ~' when the estimate is ab
 
 ---
 
-### Task B4: Reload elapsed — reproduce, then enrich the replay snapshot
+### Task B4: Reload elapsed — diagnose the replay buffer, then fix if real
+
+**Diagnosis groundwork (from adversarial review).** `replayCatchUp` (`analysis.ts:1827`) replays only `job.replay.lastPhase` (plus logs/eta/cast/series/failed) — it forwards whatever `live` payload `lastPhase` happens to hold. So whether a reconnect shows live elapsed hinges entirely on **whether `job.replay.lastPhase` is refreshed on every `sendLiveTick`**. There is NO reusable end-to-end route harness to simulate a real reconnect, so diagnose at the buffer level instead.
 
 **Files:**
-- Investigate: `server/src/routes/analysis.ts` (`replayCatchUp` near `:2003`, the in-flight live-tick snapshot)
-- Modify (only if reproduced): `replayCatchUp` to include the current in-flight chapter rows
-- Test: `server/src/routes/analysis.test.ts`
+- Investigate: `server/src/routes/analysis.ts` — find the site that ASSIGNS `job.replay.lastPhase` (search `replay.lastPhase =`), and confirm whether the `kind: 'phase'` events emitted by `sendLiveTick` flow through it (vs. only major phase transitions).
+- Test: `server/src/routes/analysis.test.ts` (buffer-level — `replayCatchUp` is a small near-pure function: build a fake `job` with a `replay` object and a capturing `send`).
+- Modify (only if the gap is real): the `lastPhase` assignment so live-tick phase events refresh it, and/or `replayCatchUp`.
 
-- [ ] **Step 1: Reproduce first (systematic-debugging).** Write a test that: starts a Phase-1 job, captures the live ticks, then opens a SECOND subscriber (simulating reload) and asserts the replay it receives includes the in-flight chapter row with the server-side `elapsedMs`. Run it. **If it already passes**, the reload symptom is elsewhere — STOP, report to the user, and re-scope bug 3 (do not invent a fix). If it fails, proceed.
+- [ ] **Step 1: Diagnose at the buffer level.** Write a test that constructs a fake `job` whose `replay.lastPhase` is a `phaseId: 1` event carrying `live.chapters: [{ chapterIndex: 1, elapsedMs: 302000, … }]`, calls `replayCatchUp(job, capture)`, and asserts the captured events include that live chapter with its `elapsedMs`. This pins `replayCatchUp`'s forwarding contract.
 
-Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts -t "replay includes in-flight"`
+Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts -t "replayCatchUp forwards live"`
+Expected: PASS (it already forwards `lastPhase`) — confirming the forwarding works.
 
-- [ ] **Step 2: Implement the fix (only if Step 1 reproduced the gap).** In `replayCatchUp`, include a `phase` event carrying the current `inFlight` chapters (via `sendLiveTick`'s payload shape) so a reconnecting client sees the running rows immediately, not blank-until-next-tick.
+- [ ] **Step 2: Locate the real gap (manual read, no test yet).** Read the `replay.lastPhase =` assignment site. **Decision point:**
+  - If `sendLiveTick`'s phase events DO update `lastPhase` → the buffer is fresh; the reload symptom is NOT here (likely a frontend re-derivation). **STOP, report to the user, re-scope bug 3 — do not invent a server fix.**
+  - If only major phase transitions update `lastPhase` (live ticks bypass it) → that's the bug: on reconnect mid-chapter the client gets a stale phase with no/empty `live`. Proceed to Step 3.
 
-- [ ] **Step 3: Run the test to verify it passes.**
+- [ ] **Step 3: Fix (only if Step 2 found the gap).** Make `sendLiveTick`'s phase event refresh `job.replay.lastPhase` (so the latest in-flight `live` snapshot is always the one replayed). Add a buffer-level regression test: after a simulated live tick updates the replay buffer, `replayCatchUp` emits the current chapter rows.
 
-Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts -t "replay includes in-flight"`
+Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/analysis.test.ts -t "replay"`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Commit (or report).** If fixed:
 
 ```bash
 git add server/src/routes/analysis.ts server/src/routes/analysis.test.ts
-git commit -m "fix(server): replay in-flight chapter rows so reload keeps elapsed"
+git commit -m "fix(server): refresh replay snapshot on live ticks so reload keeps elapsed"
+```
+
+If Step 2 found the buffer already fresh, commit only the diagnostic test and report the re-scope to the user:
+
+```bash
+git add server/src/routes/analysis.test.ts
+git commit -m "test(server): pin replayCatchUp live-row forwarding (bug 3 re-scoped)"
 ```
 
 ---
@@ -1079,8 +1138,24 @@ git commit -m "docs(docs): record ETA-band + reload fixes in plan 216"
 - **Display layout:** the spec's single-line `Attributed … · 24 chars/s · … · 3:09 of ~15:13` is illustrative. The real UI keeps chars/s in the separate `HeartbeatRow` (existing) and renders the sentence headline + bar inside `LiveChapterRow`. chars/s is preserved; the two simply live on adjacent lines, not one.
 - **Byte-`%` fallback:** the spec shows `Receiving response · 38% · …` pre-threshold. The implementation uses the existing `HeartbeatRow` (`KB · chars/s · last chunk`) as the pre-threshold liveness display and does not add a separate `%` (which would need a server-side expected-bytes calc). Trivial to add later if wanted.
 
+## Adversarial-review fixes folded into this revision (v2)
+
+Three code-grounded probes overturned four assumptions in the first draft:
+
+1. **`committedChars` accounting bug (BLOCKER).** Adding a section's chars at section *start* but its sentences at section *done* diluted the rate and collapsed the denominator mid-section. Fixed: `currentSectionChars` stashed at start, committed in lockstep with sentences at `onSectionDone` (Task A4 step 6).
+2. **Frontend tests crash without a Redux Provider (BLOCKER).** `PhaseCard` calls `useAppSelector` unconditionally and `PhaseModelChip`/`PhaseModelSwap` render for `phaseId: 1`. Fixed: all frontend tests route through a `renderCard()` helper wrapping `<Provider store={mountStore()}>` (the file's existing pattern); `AnalysisPhase` fixture now includes the required `duration` field (A5/B3).
+3. **No reusable Phase-1 route-integration harness exists (BLOCKER).** The first draft told the engineer to "copy the Phase-1 scaffold" — there isn't one (explicit blocker comment in `analysis.test.ts`). Fixed by following the codebase's actual pattern (pure exported helpers, e.g. `castInFlightEntryToLiveChapter`): logic lives in pure fns (`sentenceProgressForTick`, `selectChapterEstMs`) unit-tested directly; the route seam is covered by the e2e (A6). Tasks A4 step 7 and B2 restructured; no fabricated route harness.
+4. **Reload bug-3 murkier than stated (SHOULD-FIX).** `replayCatchUp` forwards only `lastPhase`; whether elapsed survives depends on whether live ticks refresh `lastPhase`. B4 reframed to diagnose that assignment site at the buffer level, with an explicit STOP-and-re-scope branch if the buffer is already fresh.
+
+Line-number citations in `analysis.ts` were spot-checked exact (±0).
+
+## Known deviations from the spec (flagged for the user)
+
+(See the dedicated section above — display layout keeps chars/s in `HeartbeatRow`; no literal byte-`%`.)
+
 ## Self-Review
 
-- **Spec coverage:** numerator/section-accumulation (A3/A4), `"characterId":` marker (A1), self-calibrating denominator (A2/A4), chars/s retention (A5 guard + A6), display threshold + server-side hysteresis (A4 `inSentenceMode` + A5), `onSectionDone` + InFlight interface deltas (A3/A4), sentence-fraction ETA + band (B1/B2), bare-`of ~` fix (B3), reload re-diagnosis (B4), testable estimate invariants (B2), e2e at the seam (A6), plan-216 update (A7/B5). All spec sections map to a task.
-- **Type consistency:** `sentencesDone`/`sentencesTotal`/`inSentenceMode`/`sectionsDone`/`sectionsTotal` used identically in `AnalysisLiveChapter` (A4), the route payload (A4), and the component (A5). `onSectionDone(index, sentenceCount)` identical in chunker (A3), `attributeChapterStage2` (A3), and route (A4). `sentenceProgressForTick`/`refineSentencesTotal`/`clampChapterEstMs` signatures match across their definition and call sites.
-- **Placeholder scan:** every code step shows real code; investigation-only steps (B4.1) are explicitly reproduce-first by design, not deferred implementation.
+- **Spec coverage:** numerator/section-accumulation (A3/A4), `"characterId":` marker (A1), self-calibrating denominator (A2/A4), chars/s retention (A5 guard + A6), display threshold + server-side hysteresis (A4 `inSentenceMode` + A5), `onSectionDone` + InFlight interface deltas (A3/A4), sentence-fraction ETA + band (B1/B2), bare-`of ~` fix (B3), reload re-diagnosis (B4), testable estimate invariants (B1/B2 pure), e2e at the seam (A6), plan-216 update (A7/B5). All spec sections map to a task.
+- **Type consistency:** `sentencesDone`/`sentencesTotal`/`inSentenceMode`/`sectionsDone`/`sectionsTotal` used identically in `AnalysisLiveChapter` (A4), the route payload (A4), and the component (A5). `onSectionDone(index, sentenceCount)` identical in chunker (A3), `attributeChapterStage2` (A3), and route (A4). `countSentencesHeuristic`/`countStreamedSentences`/`refineSentencesTotal`/`sentenceProgressForTick`/`projectChapterEstMsFromSentences`/`clampChapterEstMs`/`selectChapterEstMs` signatures match across definition and call sites.
+- **Test strategy:** every assertion is either a pure-fn unit test (server) wrapped-Provider component test (frontend), or the one e2e at the real seam — no test depends on a nonexistent route harness.
+- **Placeholder scan:** every code step shows real code; investigation-only steps (B4) are explicitly diagnose-first with a STOP branch, not deferred implementation.
