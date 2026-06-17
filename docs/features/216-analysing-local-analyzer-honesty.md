@@ -66,6 +66,18 @@ all want a real Ollama + a long chapter to confirm end to end).
    local engines (MIN with the configured value — only ever tightens).
    *Files:* `server/src/analyzer/stage2-chunk.ts`, `routes/analysis.ts`.
 
+6. **Per-chapter sentence progress.** During Stage-1 attribution, long chapters
+   now show a live `Attributed ~N of ~M sentences` headline + fraction bar
+   instead of only an elapsed-time row. The numerator is section-accumulated
+   (exact `sentences.length` per completed section via a new `onSectionDone`
+   chunker callback, plus a `"characterId":` marker count for the in-flight
+   section); the denominator self-calibrates from observed sentences-per-char
+   once a section completes; a server-side one-way `inSentenceMode` flag
+   (`SENTENCE_MODE_MIN_MARKERS`) gates the display; the chars/s speed pulse is
+   retained. *Files:* `server/src/analyzer/sentence-progress.ts`,
+   `server/src/analyzer/stage2-chunk.ts`, `server/src/routes/analysis.ts`,
+   `src/components/analysing/phase-card.tsx`, `src/lib/api.ts`.
+
 ## Invariants (regression guards)
 
 - A per-run override (`selectedModelExplicit`) collapses the split in the UI —
