@@ -3,6 +3,9 @@ import {
   engineForModelId,
   buildLocalModelOptions,
   buildModelOptionGroups,
+  localRunModelIds,
+  isOllamaModelResident,
+  runModelsAllResident,
   MODEL_OPTION_GROUPS,
   MODEL_OPTIONS,
 } from './models';
@@ -34,13 +37,40 @@ describe('buildLocalModelOptions', () => {
       engine: 'local',
     });
   });
-  it('always includes curated entries even when not in the live list (offline)', () => {
-    const opts = buildLocalModelOptions([], curated);
-    expect(opts.some((o) => o.id === 'qwen3.5:4b')).toBe(true);
+  it('is installed-only: omits curated entries that are not in the live list', () => {
+    /* Offline / nothing pulled → empty local list (the Gemini group keeps the
+       picker non-blank). Reversal of the old curated-always union (plan 221
+       invariant 1) so the dropdown only lists runnable models. */
+    expect(buildLocalModelOptions([], curated)).toEqual([]);
+    /* Only the installed curated tag shows; the other curated locals are omitted. */
+    const opts = buildLocalModelOptions([{ name: 'qwen3.5:4b' }], curated);
+    expect(opts.map((o) => o.id)).toEqual(['qwen3.5:4b']);
   });
   it('does not duplicate a curated tag that is also live', () => {
-    const opts = buildLocalModelOptions([{ name: 'qwen3.5:4b' }], curated);
+    const opts = buildLocalModelOptions([{ name: 'qwen3.5:4b' }, { name: 'qwen3.5:4b' }], curated);
     expect(opts.filter((o) => o.id === 'qwen3.5:4b')).toHaveLength(1);
+  });
+});
+
+describe('run-model residency helpers (analysing-view warm targets)', () => {
+  it('localRunModelIds keeps only the local (colon-tagged) ids', () => {
+    expect(localRunModelIds(['gemma4-e4b-8gb:latest', 'gemini-3.1-flash-lite'])).toEqual([
+      'gemma4-e4b-8gb:latest',
+    ]);
+  });
+  it('isOllamaModelResident matches exact tag and tolerates bare ⇄ :latest', () => {
+    expect(isOllamaModelResident('gemma4-e4b-8gb:latest', ['gemma4-e4b-8gb:latest'])).toBe(true);
+    expect(isOllamaModelResident('gemma4-e4b-8gb', ['gemma4-e4b-8gb:latest'])).toBe(true);
+    expect(isOllamaModelResident('qwen3.5:4b', ['gemma4-e4b-8gb:latest'])).toBe(false);
+  });
+  it('runModelsAllResident keys off the RUN model, not the configured default', () => {
+    /* Run executes on gemma; only gemma is resident (qwen default is NOT). The
+       analysing view must read this as ready/warm — the #3/#4 fix. */
+    expect(runModelsAllResident(['gemma4-e4b-8gb:latest'], ['gemma4-e4b-8gb:latest'])).toBe(true);
+    /* Default qwen resident but the run is gemma → NOT ready (don't false-green). */
+    expect(runModelsAllResident(['gemma4-e4b-8gb:latest'], ['qwen3.5:4b'])).toBe(false);
+    /* Pure-cloud run → no local models → false here (engine check makes it ready). */
+    expect(runModelsAllResident(['gemini-3.1-flash-lite'], [])).toBe(false);
   });
 });
 

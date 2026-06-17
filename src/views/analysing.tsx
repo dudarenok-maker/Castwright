@@ -18,6 +18,8 @@ import {
   buildLocalModelOptions,
   buildModelOptionGroups,
   engineForModelId,
+  localRunModelIds,
+  runModelsAllResident,
 } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
@@ -327,9 +329,19 @@ export function AnalysingView({
      throws. Without it the auto-load path looks stuck on "Loading…" and
      the manual Load click silently bounces the pill back to idle. */
   const [analyzerLoadError, setAnalyzerLoadError] = useState<string | null>(null);
+  /* Residency MUST be judged on the model(s) the run actually executes
+     (`effectiveModelIds`), NOT `ollamaHealth.modelResident` — that flag is the
+     residency of the server's CONFIGURED DEFAULT (e.g. qwen3.5:4b). Keying off
+     it made the view warm/check the default while the run used a per-run override
+     or per-phase pick (e.g. gemma): the pill showed "Load model" mid-analysis and
+     auto-warm kept reloading the default after the user stopped it. We derive
+     residency from `ollamaHealth.resident` (Ollama /api/ps) against the run model
+     instead, and warm the run model (`runModelToWarm`), never the default. */
+  const localRunModels = useMemo(() => localRunModelIds(effectiveModelIds), [effectiveModelIds]);
+  const runModelToWarm = localRunModels[0];
+  const runModelsResident = runModelsAllResident(effectiveModelIds, ollamaHealth?.resident ?? []);
   const isAnalyzerReady =
-    !isLocalAnalyzer ||
-    (ollamaHealth?.status === 'reachable' && ollamaHealth?.modelResident === true);
+    !isLocalAnalyzer || (ollamaHealth?.status === 'reachable' && runModelsResident);
 
   useEffect(() => {
     if (!manuscriptId) return; // nothing to analyse — UI shows a CTA below
@@ -933,10 +945,11 @@ export function AnalysingView({
     /* Active SSE means the analysis is mid-chunk against the model, so the
        pill should reflect "in use" regardless of probe staleness. */
     if (conn === 'streaming') return 'streaming';
-    /* Resident-in-VRAM (not just "pulled") — the model has to be loaded
+    /* Resident-in-VRAM (not just "pulled") — the RUN model has to be loaded
        AND at the analyzer's num_ctx for the next chat call to skip the
-       reload. modelResident comes from Ollama's /api/ps. */
-    if (ollamaHealth?.modelResident) return 'ready';
+       reload. Judged on the run model's residency (Ollama /api/ps), not the
+       configured default's modelResident flag. */
+    if (runModelsResident) return 'ready';
     /* Model not resident yet AND analysis is reaching out — the very first
        chat call is implicitly warming the model, so surface as 'loading'
        so the user has visible feedback during the cold-load tax. */
@@ -965,7 +978,10 @@ export function AnalysingView({
        Check both paths so a silent error doesn't strand the pill on
        "Loading…" until the probe ticks. */
     try {
-      const result = await api.loadAnalyzer();
+      /* Warm the model the run will ACTUALLY execute on (per-run override or
+         per-phase pick), not the server's configured default. Passing no model
+         here is what made the view re-warm qwen behind a gemma run. */
+      const result = await api.loadAnalyzer(runModelToWarm ? { model: runModelToWarm } : undefined);
       if (result.status === 'error') {
         setAnalyzerLoadError(result.error || 'Analyzer failed to load. Check Ollama is running.');
         setPendingAnalyzerPill(null);
@@ -997,7 +1013,7 @@ export function AnalysingView({
   /* Auto-warm the analyzer on arrival when:
        1. there's a manuscript to analyse (skip pre-import screens),
        2. the selected engine is local,
-       3. we've probed Ollama and the configured model is NOT resident,
+       3. we've probed Ollama and the RUN model is NOT resident,
        4. no Load is already in flight (avoid double-fire on re-render).
      The analysis useEffect above is gated on isAnalyzerReady, so the run
      starts the moment Ollama confirms the model is resident — no extra
@@ -1010,12 +1026,15 @@ export function AnalysingView({
     if (!isLocalAnalyzer) return;
     if (!ollamaHealth) return; // probe still pending
     if (ollamaHealth.status !== 'reachable') return;
-    if (ollamaHealth.modelResident) return; // already warm
+    if (runModelsResident) return; // the RUN model is already warm
     if (pendingAnalyzerPill) return; // a Load is already in flight
     if (autoLoadFiredRef.current) return; // one-shot per mount
     autoLoadFiredRef.current = true;
     void handleLoadAnalyzer();
-  }, [manuscriptId, isLocalAnalyzer, ollamaHealth, pendingAnalyzerPill]);
+    /* handleLoadAnalyzer is recreated each render; the autoLoadFiredRef guard
+       already makes this one-shot, so listing it would only churn re-runs. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manuscriptId, isLocalAnalyzer, ollamaHealth, runModelsResident, pendingAnalyzerPill]);
 
   const isAnalysisRunning = conn === 'streaming' || conn === 'connecting';
   /* Single source of truth for the Pause/Resume/Start cycle. Both the
