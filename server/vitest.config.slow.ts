@@ -65,6 +65,5 @@ export default defineConfig({
     /* Vitest 4 removed `poolOptions`; the single-fork serialisation
        (`maxForks: 1`) is now the top-level `maxWorkers: 1`. */
     maxWorkers: 1,
-    retry: 1,
   },
 });
