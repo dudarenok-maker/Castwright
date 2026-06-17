@@ -16,42 +16,55 @@ A release tag fires `release.yml`, whose `publish` job is gated on four legs:
 tag from publishing.
 
 Timing/contention-sensitive tests blow their per-test budgets under CPU
-contention on shared CI runners — worst on macOS (10× billed, slowest of the
-three). When that happens at a release tag, the whole tag fails to publish; the
-only recovery is to re-run the full (macOS-billed) battery. This has burned
-**two separate v1.8.0 cut attempts** on the same test (#875) — hours and macOS
-minutes each time.
+**and disk-I/O** contention on shared CI runners — worst on macOS (10× billed,
+slowest runner, most-contended filesystem). When that happens at a release tag,
+the whole tag fails to publish; the only recovery is to re-run the full
+(macOS-billed) battery. This burned **two separate v1.8.0 cut attempts** (#875).
 
 The most recent offender (`server/src/routes/analysis-pipelining.test.ts`,
-"rolling roster" case) is exhibit A but **not** a one-off:
+"rolling roster" Case 2) is exhibit A but **not** a one-off:
 
-- Its **scheduling** invariant (when Phase 1 may dispatch — watermark, lag,
-  back-pressure, monotonicity) *is* pinned deterministically by
-  `phase-watermark.test.ts` + `select-analyzer.test.ts` in isolation. **But its
-  roster-content invariant is NOT** — the watermark unit test is pure numeric
-  counting and has no concept of character rosters, whereas Case 2 asserts the
-  *roster snapshot folding* (Phase 1 chapter K's prompt contains
-  `ch1-char…ch11-char` and `not.toContain('ch12-char')`), which lives in
-  `analysis.ts`. So this end-to-end test is the **only** coverage of roster
-  folding — quarantining it without a deterministic replacement drops real
-  coverage. This is why its rewrite (Wave 2) is mandatory, not optional, and why
-  Wave 1 adds a deterministic roster-folding unit test before relying on the
-  lane (see C1 in the review history).
-- It fails because it drives the **real** `runMainAnalyzerJob` pipeline to
-  completion using **real timers** and polls for ordering with `setTimeout`
-  (`waitFor`, line 344), asserting on wall-clock-ordered traces. Its runtime is
-  therefore hostage to runner load. Quiet box: <600 ms. Loaded macOS runner:
-  >180 s → timeout. The 30 s → 90 s → 180 s budget history is the smell of
-  fighting a symptom.
-- `vitest.config.slow.ts` already routes **10** hot files to a single fork with
-  `retry: 1` — and the flake *still* fails both attempts. The contention knobs
-  are exhausted.
+- **What actually fails is *runtime*, not correctness.** The assertions are
+  already deterministic — they use trace **array insertion order**
+  (`trace.indexOf` / `slice` / `findIndex`) under the pinned
+  `STAGE2_CONCURRENCY=1`, NOT wall-clock timing. (`CallTrace.startedAt` is
+  recorded but **never asserted on** — verified.) The flake is that the test
+  **drives the whole `runMainAnalyzerJob` to completion**, polling for a
+  dispatch *event* via a `setTimeout` budget loop (`waitFor`, line 344), and
+  every chapter completion does a **real atomic `saveAnalysisCache` write** to a
+  shared `CACHE_DIR` (with OneDrive/AV EPERM retry-with-backoff). Under load the
+  drive-to-completion + that disk path balloon past the budget. Quiet box:
+  <600 ms. Loaded macOS runner: >180 s. The 30 s→90 s→180 s budget-bump history
+  is the smell of fighting the symptom.
+- **Coverage status (corrected after review):** the *roster fold itself* is
+  **already** unit-covered — `mergeRosterChapter` and `buildInterimCast` are
+  exported and tested in `analysis.test.ts` (its "skips chapters missing from
+  the chapterCast map" case is exactly Case 2's `not.toContain('ch12-char')`).
+  What is **NOT** independently covered is the **watermark→snapshot timing
+  coupling** — that the roster snapshot is taken at the *instant* the watermark
+  releases chapter K, so it folds exactly chapters 1..K+LAG. That coupling lives
+  in inline closures inside `runMainAnalyzerJob` (`rosterSnapshotFn`,
+  `getPhase1Stage1Snapshot`, the dispatch gate — none exported), so making it
+  deterministically unit-testable needs a small **extraction** (a permitted
+  test-seam; see Non-goals + Wave 2). `phase-watermark.test.ts` covers the
+  numeric watermark in isolation but has no concept of rosters.
+- **Current blast radius is already shifting.** Case 2 carries
+  `it.skipIf(process.env.CI)` since #875, so on CI it's *already* skipped — its
+  release-gate risk today is ~zero. The live pain is now (a) **local pre-push**
+  (the 363 s hang the user hit, CI-skip doesn't help locally) and (b) **Cases
+  1/3/4/5 + the plan-118 regression, which share the identical
+  drive-to-completion shape but are NOT skipped** — they run on CI under a 30 s
+  budget and are the next release-blockers in waiting.
+- `vitest.config.slow.ts` already pins these to a single fork (`maxWorkers: 1`)
+  with `retry: 1` — and Case 2 still blew both cuts *at* `maxWorkers=1`. So the
+  contention knobs are exhausted, and worker-count is NOT the axis (the disk/CPU
+  contention is) — which constrains what a valid fix and acceptance bar look like.
 
 So two independent things make this awful, and both must be fixed:
 
 1. **Blast radius** — a single flaky test can block an entire release.
-2. **Fragility** — tests depend on wall-clock budgets, scheduling order, and
-   worker counts instead of on deterministic behavior.
+2. **Fragility** — tests depend on wall-clock budgets and real I/O under load
+   instead of on deterministic events.
 
 ### The two flake classes
 
@@ -89,16 +102,22 @@ So two independent things make this awful, and both must be fixed:
    `publish` job's dependency set.
 2. **Genuinely deterministic tests.** Every quarantined test is rewritten to
    assert its real invariant on the event sequence — never on **wall-clock
-   budgets, real-timer polling, or the vitest pool worker count / runner load**.
-   (Disambiguation: the *in-test* `STAGE2_CONCURRENCY` pin stays — the ordering
-   invariant legitimately requires it; the enemy is the outer pool/CPU
-   contention that inflates wall-clock, not the controlled in-test concurrency.)
-   Each rewrite graduates back onto the gate. Verifiable: it passes under
-   deliberately induced CPU load (a parallel busy-loop) and at ≥2 different
-   vitest `--maxWorkers` settings.
+   budgets, real-timer polling, or real disk/network I/O in the assertion
+   path**. (Disambiguation: the *in-test* `STAGE2_CONCURRENCY` pin stays — the
+   ordering invariant legitimately requires it; the enemy is wall-clock/I/O
+   under load, not the controlled in-test concurrency.) Each rewrite graduates
+   back onto the gate. **Verifiable (strengthened per review M4):** the rewritten
+   test has **zero awaits on real disk/network in its assertion path** (only
+   deterministic events + a generous deadlock-backstop timeout) and completes in
+   a small bounded microtask-drain time; flat-across-`--maxWorkers` and
+   busy-loop-invariance are *secondary* signals only — they're insufficient on
+   their own because the production flake occurred *at* `maxWorkers=1` and is
+   driven by shared-`CACHE_DIR` I/O, not worker count.
 3. **Anti-regression.** A documented pattern + an automated guardrail so a new
-   `it.skipIf(process.env.CI)` / real-timer-poll flake cannot quietly creep
-   back in. Verifiable: the guardrail fails CI on a planted violation.
+   `it.skipIf(process.env.CI)` / budgeted-poll / `waitForTimeout` flake cannot
+   quietly creep back in. **Verifiable: the guardrail fails the `lint` step
+   (pre-push + CI) on a planted violation** — note it runs at pre-push/CI, *not*
+   pre-commit (see Layer 3 for why the hooks-tier home doesn't work).
 4. **Register reaches zero** across both classes. The quarantine lane is empty
    at the finish line (or holds only genuinely-hard cases, each with a tracking
    issue and an explicit rationale).
@@ -144,27 +163,40 @@ export const quarantinedDescribe = process.env.RUN_QUARANTINE ? describe : descr
 
 - Replaces raw `it.skipIf(process.env.CI)`. A quarantined test is `quarantinedIt('…')`
   and **must** carry a `// QUARANTINED(#NN): <symptom>` comment linking its
-  register row.
+  register row. The helper lives at `src/test/quarantine.ts` and is **imported**
+  by each test — **never** added to `setupFiles` (it must eval after vitest's
+  globals are registered; review m3).
 - Gating commands (`test`, `test:server`, `test:server-slow`) run with the flag
   unset → quarantined tests skip with a banner.
-- **Deliberate behavior change from `skipIf(process.env.CI)` (review finding
-  M1):** the old form still ran the flake **locally** (CI unset), so a local
-  pre-push could still hang on the 363 s contention timeout the user actually
-  hit. `quarantinedIt` skips in **all** gating runs, local included — that's the
-  point of "never blocked again." The lost local coverage is **not** recovered
-  by running the flake; it's recovered by the deterministic replacement test
-  (C1: the roster-folding unit test in Wave 1, then the full rewrite in Wave 2).
-- A new **non-gating** command runs them: `test:quarantine` sets
-  `RUN_QUARANTINE=1` and runs **both** vitest configs in **full** (the normal
-  config *and* `server/vitest.config.slow.ts` — `analysis-pipelining` is a slow
-  file — with no `--changed` narrowing, or the lane silently misses tests),
-  reporting pass/fail without gating anything.
+- **Deliberate behavior change from `skipIf(process.env.CI)` (review M1):** the
+  old form still ran the flake **locally** (CI unset), so a local pre-push could
+  still hang on the 363 s contention timeout. `quarantinedIt` skips in **all**
+  gating runs, local included — that's the point of "never blocked again." The
+  only coverage given up while a test sits in quarantine is the **timing-coupling
+  integration signal** (the *fold* is already unit-covered — see Problem); that
+  gap is **bounded to one wave** (Wave 1→2) and closed by Wave 2's deterministic
+  rewrite + extracted coupling unit test. Not recovered by running the flake.
+- A new **non-gating** command runs them. It **must** use `cross-env` (the
+  `RUN_QUARANTINE=1 vitest` Bash form fails on the Windows dev box — review C1)
+  and run **all three** configs in **full** (no `--changed`, or the lane
+  silently runs zero — `analysis-pipelining` lives in the *slow* config):
+  ```jsonc
+  "test:quarantine":
+    "cross-env RUN_QUARANTINE=1 npm run test &&
+     cross-env RUN_QUARANTINE=1 npm --prefix server run test &&
+     cross-env RUN_QUARANTINE=1 npm --prefix server run test:slow"
+  ```
+  `RUN_QUARANTINE` is a real process-env var (inherited by vitest forks), **not**
+  a vitest `env:` config key.
 
-**Playwright (e2e).** Use Playwright's native tag support:
+**Playwright (e2e).** Use Playwright's native tag support (`{ tag: '@quarantine' }`):
 
-- Quarantined specs/tests carry the `@quarantine` tag.
-- Gating runs add `--grep-invert=@quarantine` (alongside the existing
-  `--grep-invert="visual baselines"`).
+- Quarantined tests carry the `@quarantine` tag.
+- **Gating runs must OR both exclusions into ONE `--grep-invert` regex**
+  (review M2 — two `--grep-invert` flags are *last-wins*; a second flag silently
+  **drops** the existing `"visual baselines"` exclusion and re-races the
+  `--workers=1` visual specs into the parallel battery). So `test:e2e` becomes
+  `--grep-invert="visual baselines|@quarantine"`.
 - A non-gating `test:e2e:quarantine` runs `--grep=@quarantine`.
 
 **Register.** `docs/testing/flaky-register.md` — one table:
@@ -177,12 +209,17 @@ shrinking to zero *is* the definition of done.
 
 **CI wiring.**
 
-- `release.yml`: the `publish` job's `needs:` set is unchanged in spirit but the
-  gating legs run the quarantine-excluding commands (they already do, once the
-  tests are tagged — `test:all` / `verify` skip quarantined tests because the
-  flag is unset). Add an **optional, non-blocking** quarantine job
-  (`continue-on-error: true`, NOT in `publish`'s `needs:`) for release-time
-  visibility.
+- `release.yml`: the `publish` job's `needs:` set is unchanged; the gating legs
+  already skip quarantined tests (flag unset — verified: `verify` runs
+  `npm run verify`, `cross-os-verify` runs `verify:quick`=`test:all`, neither
+  sets `RUN_QUARANTINE`). Add an **optional, non-blocking** quarantine job
+  (`continue-on-error: true`, NOT in `publish`'s `needs:`) that runs the literal
+  `npm run test:quarantine` script (which itself runs all three configs — do
+  **not** hand-roll a `test:server`-shaped command, which runs the *fast* config
+  and exercises zero quarantined server tests, false-greening; review M3).
+  **Acceptance check:** the always-failing fixture quarantined test must appear
+  as *run-and-failed* in this job's log, never *skipped* — proving the lane
+  actually executes.
 - `verify.yml`: add a non-gating quarantine step (or accept that quarantined
   tests simply don't run on the gating path; the dedicated lane covers
   visibility). Keep it out of any required status check.
@@ -193,27 +230,35 @@ shrinking to zero *is* the definition of done.
 
 The playbook, applied to every quarantined test until the register is empty.
 
-**Class A1 — real-timer poll → event-driven.**
-1. **Kill real-timer polling.** Replace `waitFor(setTimeout…)` with event-driven
-   deferreds. Extend the existing pipeline fixture (it already has hold/release
-   barriers) with `whenDispatched(phase, chapterId): Promise<void>` that
-   resolves the instant the trace entry is pushed. Await the *event*, not the
-   clock.
-2. **Drive ordering with explicit barriers** so the sequence is deterministic
-   regardless of the vitest pool size or runner load.
-3. **Don't assert on *emergent* orderings.** Keep the *in-test*
-   `STAGE2_CONCURRENCY` pin (the invariant needs it) but gate progress on the
-   hold/release barriers, not on "what the worker pool happened to do".
-4. **Outer per-test timeout = deadlock backstop only** (generous, e.g. 30 s),
-   never a perf budget. A healthy run completes as fast as the microtask queue
-   drains; under load it's slower but still passes. A red test means a real
-   deadlock/logic break.
-5. **Eliminate real I/O that isn't under test (review finding m3).** For the
-   *scheduling* tests, the real `saveAnalysisCache`/`loadAnalysisCache` disk
-   path is NOT the invariant — under heavy fork contention its I/O can still
-   bleed into the outer timeout. Stub the cache to in-memory for these tests so
-   the only awaits are deterministic events. (Keep real disk only in the one
-   test that genuinely asserts the write path, if any.) Smaller fixtures too.
+**Class A1 — real-timer poll + real I/O → event-driven + in-memory.**
+1. **Kill the real-timer poll.** Replace `waitFor(setTimeout…)` with event-driven
+   deferreds: extend the fixture with `whenDispatched(phase, chapterId)`. **The
+   deferred must be pre-armed synchronously at fixture-build time** (resolve
+   immediately if the trace entry already exists, else on push) — otherwise an
+   awaiter registered *after* an intervening `await` misses the event and hangs
+   to the backstop (review m1). Await the *event*, not the clock.
+2. **Keep the assertions as-is** — they already use deterministic trace
+   insertion order under the pinned `STAGE2_CONCURRENCY=1`; do **not** "fix"
+   ordering assertions (there are none on wall-clock — review M1). Keep the
+   in-test concurrency pin.
+3. **Outer per-test timeout = deadlock backstop only** (generous, e.g. 30 s),
+   never a perf budget. With the poll and I/O gone, a healthy run drains in a few
+   ms; a red test means a real deadlock/logic break.
+4. **Remove real disk I/O from the assertion path (review M2 — carefully).** The
+   per-chapter `saveAnalysisCache` atomic write to the shared `CACHE_DIR` is a
+   *load-sensitive* contributor (EPERM retry/backoff under contention) — but it
+   is **also** the only integration coverage of the plan-88 concurrent
+   same-tick rename race (`tmpSeq`). So: stub/inject the cache to in-memory for
+   the *scheduling* tests **AND** add one dedicated, deterministic regression
+   test for the same-tick cache-write race so that coverage is **not** silently
+   dropped. Call this out as a named coverage trade in the Wave-2 PR. (Smaller
+   fixtures too.)
+5. **Make the watermark→snapshot coupling unit-testable (the real gap).** Extract
+   `rosterSnapshotFn` / the Phase-1 dispatch gate out of the `runMainAnalyzerJob`
+   closure into an exported, injectable function (a permitted behavior-neutral
+   test-seam), then unit-test "snapshot at watermark-release K folds exactly
+   1..K+LAG" deterministically. This — not a duplicate of the already-covered
+   fold — is the coverage Case 2 uniquely provided.
 
 **Class A2 — tmpdir / mock / server races → isolation.**
 - Give each test its own uniquely-named tmpdir and tear it down deterministically;
@@ -239,62 +284,79 @@ its register row is deleted in the same PR.
 
 ### Layer 3 — Anti-regression guardrail
 
-An automated check, wired into pre-commit/pre-push (and the hooks test tier),
-that **rejects**:
+**Home (corrected per review C2):** the guardrail runs in the **`lint` step**
+(pre-push + CI), **not** pre-commit. The hooks-tier idea doesn't work: pre-commit
+is scope-filtered (`verify:fast:scoped`) and the hooks/`test:hooks` scope never
+fires on a server-test-only or e2e-only PR — the exact PRs a violation lands in.
+`lint` (ESLint, `--max-warnings 0`) already globs all `*.ts(x)` and runs in
+pre-push + the scoped CI `lint` leg, so it actually bites. (`lint` is not in the
+fast/pre-commit tier; we accept the guardrail is a pre-push/CI gate, not
+pre-commit — adding `lint` to the fast tier is a perf cost we decline.)
 
-- New `it.skipIf(process.env.CI)` / `test.skip(... process.env.CI ...)` in
-  `*.test.ts(x)` — quarantine must go through `quarantinedIt` + a register row.
-- New **budgeted polling loops** in server `*.test.ts` — i.e. a `while (!cond)`
-  / `waitFor(…, budgetMs)` pattern that races a wall-clock deadline. **Not** a
-  blanket `setTimeout` ban: a bare single-tick yield
-  (`await new Promise(r => setTimeout(r, 0))`, as in Case 3) is legitimate and
-  must stay allowed (review finding m1). The rule targets the *deadline-racing
-  poll*, not every `setTimeout`.
-- New `page.waitForTimeout(` in `e2e/**`.
+**What ESLint can mechanically enforce (`no-restricted-syntax`):**
+- New `it.skipIf(process.env.CI)` / `test.skip(…process.env.CI…)` in
+  `*.test.ts(x)` — a tractable `CallExpression`/`MemberExpression` selector.
+- New `page.waitForTimeout(` in `e2e/**` — name-based, tractable.
+- A large **inline per-test timeout literal** (e.g. `}, 180_000)`) in server
+  `*.test.ts` — caps the budget-bump anti-pattern that a config-level backstop
+  can't (the config `testTimeout` is overridden by an inline arg; review m3).
+- The rule must be added in an ESLint override block that **includes** test files
+  and a separate `e2e/**` block (the repo already relaxes rules for `*.test.ts`).
 
-Implementation: a small Node script in the `test:hooks` tier (grep-based, same
-spirit as `validate-commit-msg.mjs`) OR an ESLint `no-restricted-syntax` rule.
-Prefer the ESLint rule if it expresses the patterns cleanly (it runs in `lint`,
-already a `verify` step); fall back to the hooks-tier script otherwise. The
-guardrail ships with a planted-violation test proving it fails closed.
+**What ESLint canNOT enforce (review M1):** a general "budgeted polling loop"
+(`while(!cond)` + `Date.now()-start > budgetMs`) is a *semantic* pattern, not an
+AST shape — and a blanket `WhileStatement`/`setTimeout` ban false-positives on
+legitimate loops and the bare `setTimeout(r,0)` single-tick yield (Case 3). So
+this arm is **demoted** to (a) a targeted grep for the banned `waitFor`-budget
+helper name in `server/src/**/*.test.ts`, plus (b) a documented review-checklist
+item — explicitly a heuristic, not a guarantee.
+
+**Ratchet (review m4):** the rule lands in **Wave 5, after every migration**, so
+zero existing violations remain — otherwise `lint --max-warnings 0` hard-fails
+the first push. Ships with a planted-violation test proving it fails closed.
 
 ## Sequencing (waves / PRs)
 
 Each wave is its own branch + PR, independently `npm run verify`-green.
 
-0. **Wave 0 — Reproduce + baseline (review finding M2).** The exact macOS-10×
-   180 s timeout isn't locally reproducible, so target the *mechanism*: show the
-   offender's runtime **scales with induced load** (run it while a parallel
-   busy-loop pins the CPU, and/or vary `--maxWorkers`) and capture baseline
-   timings. The falsifiable acceptance property is then **load-sensitivity
-   before → load-invariance after** (runtime flat across load/worker settings),
-   not "hit 180 s". This harness becomes the acceptance gate for every later
-   rewrite. Also produce the **evidence list**
-   that scopes Wave 3 (which slow files have *actually* failed a run vs. which
-   are merely precautionary). *Outcome: a repro + an evidence-ranked target
-   list.*
-1. **Wave 1 — Lane + register + coverage backfill (insurance).**
-   `quarantine.ts` helper (vitest) + Playwright tag convention +
-   `flaky-register.md` + `test:quarantine` / `test:e2e:quarantine` scripts +
-   non-gating CI job. Migrate the existing `analysis-pipelining` Case-2 `skipIf`
-   onto the helper and register it. **C1 gate:** before a test is quarantined,
-   verify its invariant is independently pinned; where it is NOT (Case 2's
-   roster-folding has no unit-level coverage), **add the deterministic
-   roster-folding unit test in this wave** so quarantining loses no coverage.
-   *Outcome: the structural guarantee exists, the ad-hoc skip is gone, and no
-   coverage was dropped.*
-2. **Wave 2 — Class A1 burn-down (proof of pattern).** Rewrite the 5-case
-   `analysis-pipelining` family deterministically (event-driven barriers,
-   in-memory cache stub); each rewrite must pass the Wave 0 repro; graduate them
-   back onto the gate; document the playbook. *Outcome: the proven
-   release-killer genuinely tests AND gates again.*
-3. **Wave 3 — Class A2 burn-down (evidence-gated, review finding M3).** Only
-   rewrite the slow files the Wave 0 evidence list shows have **actually
-   flaked**. Files that are in the slow tier purely for isolation and have never
-   failed stay serialized as-is (rewriting non-flaky tests is gold-plating).
-   Graduate any rewritten file that no longer needs the slow tier. *Outcome: the
-   genuinely-flaky server tests are deterministic; precautionary ones are left
-   alone with a one-line note.*
+0. **Wave 0 — Reproduce + baseline (review M2/M4).** The exact macOS-10× 180 s
+   timeout isn't locally reproducible, so target the *mechanism*: show the
+   offender's runtime **scales with induced load** (busy-loop pinning CPU;
+   induced `CACHE_DIR` I/O contention — **not** just `--maxWorkers`, which is
+   already pinned to 1 where it flaked). Capture baselines. The acceptance
+   property for a rewrite is **no real I/O in the assertion path + bounded
+   microtask-drain time** (load-invariance is a secondary signal). Also produce
+   the **evidence list** scoping Wave 3 (which slow files *actually* failed vs.
+   merely precautionary) **and** which of Cases 1/3/4/5 + the plan-118 case have
+   flaked on CI (they're un-quarantined today). *Outcome: a repro harness + an
+   evidence-ranked target list across all five pipelining cases and the slow
+   files.*
+1. **Wave 1 — Lane + register + quarantine the live siblings (insurance).**
+   `quarantine.ts` helper (vitest, `cross-env` lane script, all three configs) +
+   Playwright single-regex tag convention + `flaky-register.md` +
+   `test:quarantine` / `test:e2e:quarantine` + non-gating CI job. Migrate Case 2
+   off `skipIf` onto the helper. **Per-test redundancy check (review C1):** the
+   roster *fold* is already unit-covered, so no duplicate unit test is needed;
+   the only interim gap is the watermark→snapshot *timing coupling*, bounded to
+   Wave 1→2. **Also quarantine any of Cases 1/3/4/5 + plan-118 that the Wave 0
+   evidence shows flaking on CI (review M3)** — the structural guarantee is
+   incomplete if identical-shape siblings keep gating. *Outcome: no
+   timing-flake-shaped pipelining test can block a release; ad-hoc skip gone.*
+2. **Wave 2 — Class A1 burn-down (proof of pattern).** Rewrite the pipelining
+   family deterministically (pre-armed event deferreds; in-memory cache
+   injection); **extract `rosterSnapshotFn`/the dispatch gate** and add the
+   coupling unit test (Layer 2 step 5); **add the same-tick cache-write race
+   regression test** (Layer 2 step 4). Each rewrite meets the Wave 0 acceptance
+   bar; graduate them back onto the gate; document the playbook. *Outcome: the
+   release-killer + its siblings genuinely test AND gate again; no coverage
+   traded away silently.*
+3. **Wave 3 — Class A2 burn-down (evidence-gated, review M3).** Only rewrite the
+   slow files the Wave 0 evidence shows **actually flaked**; isolation-only files
+   that never failed stay serialized (rewriting them is gold-plating). Graduate
+   any rewritten file out of the slow tier. **Also fix the stale "5 hot files"
+   comments** (`vitest.config.slow.ts:3`, `verify-cache.mjs:98` — the array now
+   has 10; review m2) when touching these files. *Outcome: genuinely-flaky
+   server tests are deterministic; precautionary ones left alone with a note.*
 4. **Wave 4 — Class B (e2e) burn-down.** Audit `e2e/**` for `waitForTimeout`,
    port reuse, teardown gaps; fix or quarantine-then-fix. Prioritize the Ubuntu
    flakes (which can hit the release legs) over Windows-only proc leaks (local
@@ -311,26 +373,30 @@ Wave 1 delivers "never again" structurally on day one. Waves 2–4 deliver the
 - **The lane:** a fixture quarantined test that always fails, asserted to NOT
   fail the gating commands and to run in `test:quarantine`. (Removed or kept as
   a guarded self-test.)
-- **Deterministic rewrites:** each rewritten test must pass (a) under induced
-  CPU load — wrap the test invocation with a parallel busy-loop or run the suite
-  with `--maxWorkers` varied — and (b) at ≥2 different worker counts. This is
-  the acceptance bar that proves contention-independence.
+- **Deterministic rewrites:** the primary bar is **no real disk/network await in
+  the assertion path** + completion in a small bounded microtask-drain time
+  (with the cache injected in-memory). Induced-CPU-load and varied-`--maxWorkers`
+  runs are kept as *secondary* signals only — insufficient alone, because the
+  production flake hit *at* `maxWorkers=1` on shared-`CACHE_DIR` I/O (review M4).
 - **Guardrail:** a planted-violation test (a temp file with a banned pattern) is
   asserted to make the guardrail exit non-zero; a clean file passes.
 - Standard `npm run verify` green on every wave.
 
 ## Risks & mitigations
 
-- *Risk: quarantining hides a real regression (review finding C1).* Mitigation:
-  quarantine is gated on a **per-test redundancy check** — a test may be
-  quarantined only if its invariant is independently pinned by a deterministic
-  test, OR a deterministic replacement is added in the same wave. Case 2's
-  roster-folding is NOT independently pinned today, so Wave 1 adds the unit test
-  before relying on the lane. The non-gating lane still runs the originals for
+- *Risk: quarantining hides a real regression (review C1).* Mitigation: a
+  **per-test redundancy check** before quarantine — for the pipelining cases,
+  the roster *fold* is already unit-covered (`mergeRosterChapter`,
+  `buildInterimCast`); the only thing quarantine gives up is the
+  watermark→snapshot *timing-coupling* integration signal, for a **bounded one
+  wave** (Wave 1→2), after which the extracted coupling unit test (Wave 2)
+  restores it permanently. The non-gating lane still runs the originals for
   visibility; the register forces a tracking issue per entry.
-- *Risk: the rewrite changes what's actually asserted.* Mitigation: the
-  invariant (the `expect`s) stays identical; only the *wait mechanism* changes
-  from clock-poll to event-await. Reviewed against the original assertions.
+- *Risk: the rewrite trades away coverage (review M1/M2).* Mitigation: the
+  assertions stay identical (already deterministic insertion-order — nothing on
+  wall-clock to "fix"); the in-memory cache injection is paired with a dedicated
+  same-tick-write race regression test so the `tmpSeq` coverage isn't dropped;
+  both are called out explicitly in the Wave-2 PR.
 - *Risk: the permitted test-seam DI (C2) creeps into a real behavior change.*
   Mitigation: each seam must leave the default runtime path byte-for-byte
   unchanged and be covered by existing production tests; it's called out in its
@@ -354,3 +420,15 @@ Wave 1 delivers "never again" structurally on day one. Waves 2–4 deliver the
 - For Class A2, decide per-file at rewrite time whether it graduates out of
   `test:server-slow` entirely or stays serialized — measured against the Wave 0
   baseline, not guessed.
+
+## Provenance
+
+This spec was hardened by **two rounds of adversarial review** (an inline pass
+and two independent code-grounded subagents). The `C1`/`C2`/`M1`–`M4`/`m1`–`m4`
+labels in the text are those findings. Notable corrections the second round
+forced: the roster *fold* is already unit-covered (the real gap is the
+watermark→snapshot timing coupling, needing an extraction); the flake is
+drive-to-completion **+ real disk I/O**, not wall-clock-ordering assertions
+(there are none); the cache cannot be blanket-stubbed without dropping the
+`tmpSeq` race coverage; and Cases 1/3/4/5 share the flake shape but are
+un-quarantined today, so Wave 1 must quarantine the flaking siblings too.
