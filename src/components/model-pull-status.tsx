@@ -36,6 +36,10 @@ export interface OllamaHealthEnvelope {
   models?: string[];
   expectedModel?: string;
   modelPulled?: boolean;
+  /** Curated pull-allowlist, echoed by /api/ollama/health and /refresh. Driving
+      the rows off this (not just the redux prop) makes "Refresh available
+      models" self-healing — a refresh response repopulates an empty list. */
+  pullable?: string[];
   error?: string;
 }
 
@@ -135,9 +139,20 @@ export function ModelPullStatus({ health, pullableModels, onPulled }: ModelPullS
     }
   };
 
-  const presentTags = new Set<string>(localHealth?.models ?? []);
+  /* Curated pull-allowlist comes from the live health envelope when present (so
+     "Refresh available models" repopulates it without a reload), falling back to
+     the redux prop for callers that don't thread pullable through health. */
+  const curated = localHealth?.pullable ?? [...pullableModels];
+  const installedTags = localHealth?.models ?? [];
+  const presentTags = new Set<string>(installedTags);
   const expectedModel = localHealth?.expectedModel;
   const isReachable = localHealth?.status === 'reachable';
+  /* Installed-but-uncurated tags (e.g. a custom local Ollama model not in the
+     allowlist) are unioned in as read-only on-disk rows, so this list is a
+     complete picture of what the analyzer can run — mirroring the inventory. */
+  const coveredByCurated = (tag: string) =>
+    curated.some((m) => m === tag || isPrefixMatch(m, new Set([tag])));
+  const extraInstalled = installedTags.filter((t) => !coveredByCurated(t));
 
   return (
     <div data-testid="model-pull-status" className="space-y-4">
@@ -164,7 +179,7 @@ export function ModelPullStatus({ health, pullableModels, onPulled }: ModelPullS
       )}
 
       <ul className="divide-y divide-ink/5 rounded-xl border border-ink/10 overflow-hidden">
-        {pullableModels.map((model) => {
+        {curated.map((model) => {
           const present = presentTags.has(model) || isPrefixMatch(model, presentTags);
           const isDefault = model === expectedModel;
           const isActivePull =
@@ -201,6 +216,32 @@ export function ModelPullStatus({ health, pullableModels, onPulled }: ModelPullS
                   {present ? 'Pulled' : 'Pull'}
                 </button>
               )}
+            </li>
+          );
+        })}
+        {/* Installed tags outside the curated allowlist — read-only on-disk rows
+            so a custom local model (e.g. a renamed Gemma) still shows here. */}
+        {extraInstalled.map((model) => {
+          const isDefault = model === expectedModel;
+          return (
+            <li
+              key={model}
+              data-testid={`model-row-${model}`}
+              className="flex items-center gap-3 px-3 py-2 bg-white"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-600" aria-hidden />
+              <div className="flex-1">
+                <p className="text-sm font-mono text-ink">{model}</p>
+                <p className="text-xs text-ink/55">
+                  On disk · installed{isDefault ? ' · configured default' : ''}
+                </p>
+              </div>
+              <span
+                data-testid={`model-installed-${model}`}
+                className="px-3 py-1.5 rounded-full border border-ink/10 bg-ink/5 text-xs text-ink/50"
+              >
+                Installed
+              </span>
             </li>
           );
         })}

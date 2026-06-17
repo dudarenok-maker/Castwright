@@ -690,6 +690,69 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     expect(within(board).getByText(/^Standard$/i)).toBeInTheDocument();
     expect(within(board).getByText(/optional add-ons/i)).toBeInTheDocument();
   });
+
+  it('gives analyzer (Ollama) and ASR rows their own subheadings, not lumped under Optional add-ons', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'coqui',
+          kind: 'tts',
+          label: 'Coqui XTTS v2',
+          present: true,
+          sizeBytes: 1_800_000_000,
+          diskPath: 'voices/coqui',
+          loaded: false,
+          installState: 'ready',
+          tier: 'secondary',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+        {
+          id: 'whisper',
+          kind: 'asr',
+          label: 'Whisper ASR (faster-whisper)',
+          present: true,
+          sizeBytes: 141_000_000,
+          diskPath: 'models/whisper',
+          loaded: false,
+          installState: 'ready',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+        {
+          id: 'ollama:gemma4-e4b-8gb:latest',
+          kind: 'analyzer',
+          label: 'gemma4-e4b-8gb:latest',
+          present: true,
+          sizeBytes: 5_700_000_000,
+          diskPath: null,
+          loaded: false,
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const board = await screen.findByTestId('model-inventory');
+    /* Analyzer (Ollama) rows live under their OWN heading. */
+    const analyzerHeading = within(board).getByText(/analyzer models/i);
+    expect(analyzerHeading).toBeInTheDocument();
+    /* ASR rows get their own heading too. */
+    expect(within(board).getByText(/speech recognition/i)).toBeInTheDocument();
+    /* The Ollama row sits under the Analyzer heading, NOT the Optional add-ons
+       (Coqui) group — assert it's the analyzer group that contains the row. */
+    const analyzerGroup = analyzerHeading.closest('div');
+    expect(
+      within(analyzerGroup as HTMLElement).getByTestId('model-row-ollama:gemma4-e4b-8gb:latest'),
+    ).toBeInTheDocument();
+  });
 });
 
 describe('ModelManagerView — settings form accordion shell', () => {

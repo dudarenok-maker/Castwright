@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { MODEL_OPTIONS, buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
+  fetchAnalyzerModels,
   saveAccountSettings,
   selectAnalyzerPhase0Model,
   selectAnalyzerPhase1Model,
@@ -45,10 +46,12 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
   const [toast, setToast] = useState<string | null>(null);
 
   /* Dynamic curated ∪ live-Ollama-tag union so a pulled-but-uncurated tag is
-     selectable here. localAnalyzerModels is populated by fetchAnalyzerModels
-     dispatched from the analysing-view failure card / Model Manager — this
-     picker renders inside every phase card (cloud runs included), so it must
-     NOT itself probe Ollama (that would break the cloud-run no-probe invariant).
+     selectable here. localAnalyzerModels is seeded by fetchAnalyzerModels
+     (analysing-view failure card / Model Manager / upload) and refreshed lazily
+     when THIS picker is opened (onFocus below). The lazy refresh keeps a healthy
+     run from auto-probing Ollama — the probe fires only on an explicit user
+     interaction (opening the dropdown), so the cloud-run no-probe invariant
+     holds while a just-pulled model still becomes selectable without a reload.
      Empty (not yet fetched / offline) falls back to the curated catalog. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
   const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
@@ -99,6 +102,7 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
       <select
         value={rawValue ?? ''}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={() => void dispatch(fetchAnalyzerModels())}
         data-testid={`phase-model-swap-${phaseId}`}
         title={`Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`}
         className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"

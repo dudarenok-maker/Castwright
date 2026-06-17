@@ -25,11 +25,12 @@ describe('buildLocalModelOptions', () => {
     expect(q?.label).toBe('Qwen3.5 4B (local)');
   });
   it('appends an uncurated live tag as a bare option', () => {
-    const opts = buildLocalModelOptions([{ name: 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL' }], curated);
-    const g = opts.find((o) => o.id === 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL');
+    /* A genuinely-uncurated tag (a custom local model not in MODEL_OPTIONS). */
+    const opts = buildLocalModelOptions([{ name: 'gemma4-e4b-8gb:latest' }], curated);
+    const g = opts.find((o) => o.id === 'gemma4-e4b-8gb:latest');
     expect(g).toEqual({
-      id: 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL',
-      label: 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL',
+      id: 'gemma4-e4b-8gb:latest',
+      label: 'gemma4-e4b-8gb:latest',
       engine: 'local',
     });
   });
