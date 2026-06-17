@@ -1,4 +1,4 @@
-# Castwright v1.7.0
+# Castwright v1.8.0
 
 Draft release notes for the next version (technical register — this is the
 **GitHub release body**, fed to `bump-version.mjs` as
@@ -9,25 +9,70 @@ the tag is created.
 
 ---
 
-## Features
+**The open-beta release.** Castwright reaches more machines this cycle — an early **AMD GPU** preview and a **one-click Pinokio** install — on top of a deep round of analysis honesty, multilingual depth, and GPU-contention resilience that keeps long runs upright on an 8 GB card.
 
-- **macOS / Apple Silicon support.** Device auto-detect resolves `cuda → mps → cpu`; the sidecar spawns cross-platform via `start.sh` with a group-kill teardown. A macOS build ships in the release zip (uncodesigned; documented Gatekeeper click-through). README/INSTALL hardware guidance widened to "any Apple Silicon Mac".
-- **Bulk emotion-variant voice design (fe-32 / srv-37, plan 201).** Per-book "Design full cast" gains a scope picker (bases / variants / both); a per-character `VariantGlyphStrip` replaces the count badge; variants propagate across linked books in a series; a VRAM arbiter keeps VoiceDesign ↔ Kokoro mutually exclusive.
-- **Long-render stall protection (three waves).** Config-safety guards, safe boundary recycles, and better recovery so a full-book render rides out sidecar recycles and contention instead of stalling.
-- **Companion pairing redesign + APK distribution.** A compact `CWP1*host:port*code*fpTag` pairing payload scans reliably on real phones; the installable APK is built + attached each release and bundled into the server zip.
-- **Multi-source cover search.** OpenLibrary + Apple + Google adapters with free-text fallback, interleaved results with per-source badges.
-- **Advanced Settings (fs-42).** A new `#/advanced` view (from Admin and Account) exposes model, generation, and QA knobs via a collapsible accordion — per-knob current value, "live"/"restart" apply-mode badges, Revert-to-default, `.env`-locked read-only values, forkable analyzer prompts, and a one-click "Restart sidecar". Persisted in `config.json`.
-- **Brand moved into the product.** Export stamps, a branded on-ramp/listener, a real `/about` page, single-sourced brand strings, refreshed favicons/og image, and an in-app multi-version release-notes history at `#/release-notes`.
-- **Source-available licensing.** FSL-1.1-Apache-2.0 LICENSE + NOTICE, CLA/DCO, and a repo-opening checklist.
+---
 
-## Fixes
+## ✨ Headline features
 
-- Per-chapter re-analysis no longer drops designed voices or cross-book reuse links; missing-speaker roster-coverage guard; stage-2 loop/truncation guards.
-- Listen-section finalize + export-progress sync moved to a store-level poller (bars no longer freeze on close/nav/retry).
-- Voice-library "Series" tab scoped to the current series; narrator no longer matches across unrelated series on the confirm screen.
-- False "Generated with Kokoro" drift stamp corrected to the per-character effective engine.
+### 🟧 AMD GPU support — early preview (new)
+Castwright can reach for an AMD GPU when it finds one, with a safe net under it.
 
-## Engineering
+- **Auto-detect with CPU fallback** — ROCm / DirectML is detected on its own; if the GPU path isn't ready it quietly falls back to the processor so the app still runs (#818).
+- **Accelerator control** — an `ACCELERATOR` knob + in-app picker, with the resolved per-engine profile surfaced on `/health`. Kokoro stays on CPU under DirectML (a documented DirectML limitation, not a fault). NVIDIA and Apple Silicon remain the smoothest paths.
 
-- Per-sentence pre-assembly QA gate + auto re-record; ASR (Whisper) content-QA; golden-audio regression harness (opt-in).
-- Cross-platform launch hardening; sidecar recycle-storm diagnostics.
+### 📦 One-click install with Pinokio (new)
+A self-contained conda install (ops-16) built from the latest published release — no terminal, nothing to install by hand — landing in the same guided first-run as the desktop installers (#821).
+
+### 🧠 Pick the model that reads your book (new)
+The local analyzer is now yours to choose (plan 221).
+
+- **Installed-only model picker** — pick any Ollama model you've pulled per run; not-yet-pulled curated models install from the Model Manager (#851, #859, #860).
+- **Honest residency + label** — warm/residency and the analysing chip key to the model actually doing the reading, not the configured default; an `ANALYZER_KEEP_ALIVE` knob; per-phase model support.
+
+### 🩺 Honest engine health + one-tap Repair
+The Model Manager stops showing a hopeful green light (plan 220).
+
+- **True per-engine health** — package / weights / integrity, with a **"Needs repair"** badge and a one-click **Repair** + sidecar restart (#837).
+- **Re-tiered engines** — Qwen → standard (GPU), Coqui → opt-in, Whisper = base; fail-open readiness + diagnostics.
+
+---
+
+## 🌍 Multilingual & attribution (plan 221)
+
+- **Cyrillic, end to end** — character names, ids and cross-book keys handle non-Latin scripts (#852).
+- **Steadier non-English attribution** — a deterministic narrator-default heuristic, a Russian dash-dialogue preamble guard, and script-aware attribution + ASR normalizers (#852, #824).
+- **Localized cast review** — language-aware minor-cast fold buckets, so a Russian book's grouped roles read in Russian (e.g. _Незнакомый Парень_ / _Незнакомая Девушка_) instead of English (#856).
+
+## 📊 Analysing view — honesty & live progress
+
+- **Truthful progress** — a per-chapter section sub-bar and counts, live ETA refinement, and a model-label chip that mirrors the server-resolved analyzer model (#841, #864, #826).
+- **Reload-proof** — a reconnecting bridge so refreshing the page no longer blanks the elapsed timer (#869).
+- **Big-chapter handling** — Stage-1 chunking for oversized chapters and cast-detection name-fidelity guards (#825, #827).
+
+## 🎮 GPU residency & resilience (plan 222)
+
+- **Waits its turn instead of crashing** — `withGpuLoad` does an atomic evict+verify+load and refuses on a busy card (409) rather than OOM-crashing; a top-bar "GPU busy · N waiting" pill says why (#840, #841).
+- **Smarter residency** — a VRAM-threshold policy keeps the analyzer resident across the analysis loop on a GPU; voice-design and generation preload run through the same gated path.
+- **VRAM telemetry substrate** — passive, env-gated per-engine VRAM sampling (fs-45, record-only; MB-accounting deferred) with a clean-process gate (#861, #863).
+
+## 🎙️ Voice design & casting
+
+- **A/B compare modal fixed** — portaled out of the clip-path drawer so it no longer renders clipped; Play-current resolves the Qwen voice and shows the descriptor on Side A; play errors surface (#832, #834).
+- **Age made audible** — Qwen voice-design personas describe age acoustically, not just as a label (#831).
+
+## 🎧 Listening & companion
+
+- **Offline waveform** — downloaded chapters persist their peaks, so the phone scrubber stays drawn with no signal.
+
+## 🏗️ Under the hood
+
+- **Kokoro uses the NVIDIA GPU** — forces `onnxruntime-gpu` via an ORT swap (not `kokoro-onnx[gpu]`); a failed swap is fatal, so it can't silently run on the CPU (#828).
+- **Analyzer tolerates stray model keys** instead of failing the run (#839).
+- **Test resilience** — `test:server` auto-retries once on a vitest fork-pool worker-crash (#850); the `analysis-pipelining` rolling-roster CPU-contention timeout flake is quarantined in CI (#875).
+- **Release hygiene** — `.gitignore` now covers the renamed `castwright-workspace/` (#867); a CodeQL workflow and a pre-push commit-subject guard land (#858).
+- **Docs & Help** — CODE_OF_CONDUCT, a repo-opening-public checklist, repo legal pointers, plan-221/222 reconciliations, and new offline Help topics for analysis model-reload / "GPU busy" and an engine that reads "Needs repair".
+
+---
+
+**Full changelog:** `v1.7.0...v1.8.0`
