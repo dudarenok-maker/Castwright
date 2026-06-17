@@ -353,8 +353,14 @@ function readAllZipEntries(bytes: Buffer): Promise<Map<string, Buffer>> {
     stripped prose. Falls back to the whole input when there's no <body>. */
 function htmlBodyOnly(html: string): string {
   const m = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
-  const body = m ? m[1] : html;
-  return body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  let body = m ? m[1] : html;
+  // Replace-until-stable: a single pass can leave a reconstructed script/style tag.
+  let prev: string;
+  do {
+    prev = body;
+    body = body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  } while (body !== prev);
+  return body;
 }
 
 /** Parse the NCX navMap into a map of (normalised zip path of the content
