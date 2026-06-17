@@ -97,8 +97,11 @@ interface SidecarHealthBody {
      when reserved VRAM crosses the VRAM soft ceiling (plan 159) — the server
      can't tell the two pressures apart and doesn't need to; the boundary recycle
      is identical. `vram_reserved_mb` / `vram_total_mb` are the VRAM figures
-     behind that decision (observability). Absent on an older sidecar → false /
-     null below. */
+     behind that decision (observability). `qwen_design_ever_loaded` is true when
+     the VoiceDesign model has been resident at any point in this sidecar process —
+     used by the VRAM sampler's clean-process gate. Absent on an older sidecar →
+     false / null below. */
+  qwen_design_ever_loaded?: boolean;
   recycle_pending?: boolean;
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
@@ -195,6 +198,7 @@ export interface SidecarHealthResult {
   kokoroLoaded?: boolean;
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
+  qwenDesignEverLoaded?: boolean;
   qwenLoading?: boolean;
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
@@ -280,6 +284,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
          for an older sidecar that omits them). */
       recyclePending: body.recycle_pending === true,
       committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
+      qwenDesignEverLoaded: body.qwen_design_ever_loaded === true,
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,

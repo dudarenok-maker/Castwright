@@ -12,6 +12,7 @@
 
 import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
+import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
 import { configValue } from '../config/resolver.js';
@@ -639,6 +640,11 @@ export class OllamaAnalyzer implements Analyzer {
           `[ollama] output truncated done_reason=length bytes=${buf.length} model=${this.model}`,
         );
         throw new AnalyzerTruncatedError('ollama', 'length', buf.length);
+      }
+      // fs-45 v1: record this model's real GPU footprint while provably resident.
+      // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
+      if (process.env.CASTWRIGHT_VRAM_SAMPLE !== '0') {
+        await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
       }
       return buf;
     } finally {

@@ -1293,6 +1293,8 @@ class QwenEngine(Engine):
                 self.VOICEDESIGN_MODEL, self._device,
             )
             self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
+            global _QWEN_DESIGN_EVER_LOADED
+            _QWEN_DESIGN_EVER_LOADED = True
             log.info("Qwen VoiceDesign loaded.")
 
     def _voice_paths(self, voice_id: str) -> tuple[str, str]:
@@ -1929,6 +1931,10 @@ ENGINES: dict[str, Engine] = {
 _DESIGN_IDLE_TTL_DEFAULT = 120.0
 # Handle to the background idle watchdog task so shutdown can cancel it.
 _design_idle_task: "Optional[asyncio.Task[None]]" = None
+# fs-45 v1 — one-way, process-lifetime flag. Set the first time VoiceDesign is
+# loaded; the sticky CUDA reserved pool stays design-sized afterward, so the
+# Node telemetry only samples qwen:synth/coqui from a process where this is False.
+_QWEN_DESIGN_EVER_LOADED = False
 
 
 def _design_idle_ttl() -> float:
@@ -2868,6 +2874,7 @@ def health() -> dict[str, Any]:
         "kokoro_loaded": kokoro_loaded,
         "kokoro_loading": kokoro_loading,
         "qwen_loaded": qwen_loaded,
+        "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,

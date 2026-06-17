@@ -99,6 +99,9 @@ import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
+import { initDeviceTotalVram, getDeviceTotalVramMb } from './gpu/device-total.js';
+import { rotateStatsIfDeviceChanged } from './gpu/telemetry-fingerprint.js';
+import { initVramStats } from './analyzer/model-vram-stats.js';
 import { startBackupScheduler, stopBackupScheduler } from './workspace/auto-backup.js';
 import {
   readUserSettings,
@@ -427,6 +430,12 @@ await resetOrphanedQueueEntries()
     }
   })
   .catch((err) => console.warn('[queue] orphan reset skipped:', err));
+
+// VRAM telemetry substrate (fs-45 v1, record-only — nothing consumes this yet).
+// Order: probe device total → rotate stale stats if GPU changed → prime cache.
+await initDeviceTotalVram();
+await rotateStatsIfDeviceChanged(getDeviceTotalVramMb());
+await initVramStats();
 
 /* fs-1 — boot upgrade coordinator. On a version increase since last boot it
    backs up every workspace JSON to <WORKSPACE_ROOT>/.upgrade-backups/ BEFORE

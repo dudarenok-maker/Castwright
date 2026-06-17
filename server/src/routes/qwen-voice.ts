@@ -370,6 +370,9 @@ export async function designQwenVoiceForCharacter(
           `[qwen-voice] book=${p.bookDir} character=${p.characterId} voiceId=${voiceId} ` +
             `→ cached ${fileName} (${pcm.length} bytes @ ${sampleRate}Hz)`,
         );
+        // fs-45 v1: record the design peak (Base + VoiceDesign resident here).
+        const { maybeSampleSidecarEngine } = await import('../gpu/sidecar-vram-sample.js');
+        await maybeSampleSidecarEngine('qwen:design');
         return { voiceId, url };
       } finally {
         clearInterval(livenessTimer);

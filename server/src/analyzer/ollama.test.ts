@@ -9,7 +9,7 @@
    The Ollama daemon is mocked at global.fetch — we don't need a real
    server, just a deterministic Response object per scenario. */
 
-import { describe, it, expect, vi, beforeEach, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,6 +118,9 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
+afterAll(() => { delete process.env.CASTWRIGHT_VRAM_SAMPLE; });
 
 describe('OllamaAnalyzer — happy path streaming', () => {
   it('parses a NDJSON stream into the assembled JSON response and fires onChunk per content piece', async () => {
