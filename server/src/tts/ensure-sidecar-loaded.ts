@@ -128,6 +128,13 @@ export async function ensureSidecarEngineReady(
       await sleep(pollIntervalMs, signal);
     }
   });
+
+  // fs-45 v1: sample this engine's reserved footprint (env-gated + clean-process
+  // gate inside maybeSampleSidecarEngine). Best-effort, record-only.
+  if (engine === 'qwen' || engine === 'coqui') {
+    const { maybeSampleSidecarEngine } = await import('../gpu/sidecar-vram-sample.js');
+    await maybeSampleSidecarEngine(engine === 'qwen' ? 'qwen:synth' : 'coqui');
+  }
 }
 
 /* Abort-aware sleep — resolves after `ms`, or rejects promptly if `signal`

@@ -154,6 +154,10 @@ let qwenVoiceMod: typeof import('./qwen-voice.js');
 let ensureMod: typeof import('../tts/ensure-sidecar-loaded.js');
 let MAX_RECYCLE_RIDEOUTS: number;
 
+/* Turn VRAM sampling off so the new /health probe doesn't inflate fetch-mock call counts. */
+beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
+afterAll(() => { delete process.env.CASTWRIGHT_VRAM_SAMPLE; });
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-design-test-'));
   audioDir = mkdtempSync(join(tmpdir(), 'audiobook-cast-design-audio-'));

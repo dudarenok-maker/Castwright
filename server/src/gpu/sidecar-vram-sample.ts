@@ -11,7 +11,7 @@ const SANE_MAX_MB = 200_000;
 
 export async function recordSidecarEngineVram(
   key: SidecarVramKey,
-  reservedMb: number | null,
+  reservedMb: number | null | undefined,
 ): Promise<void> {
   if (reservedMb == null || !Number.isFinite(reservedMb)) return;
   if (reservedMb <= 0 || reservedMb > SANE_MAX_MB) return;
@@ -21,7 +21,7 @@ export async function recordSidecarEngineVram(
 /** Record from an already-probed health snapshot, applying the clean-process gate. */
 export async function sampleSidecarEngineVram(
   key: SidecarVramKey,
-  health: { vramReservedMb: number | null; qwenLoaded?: boolean; qwenDesignEverLoaded?: boolean },
+  health: { vramReservedMb?: number | null; qwenLoaded?: boolean; qwenDesignEverLoaded?: boolean },
 ): Promise<void> {
   if (key === 'qwen:design') {
     if (health.qwenLoaded !== true) return; // sanity: qwen must be resident

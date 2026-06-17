@@ -154,6 +154,10 @@ function isMp3Magic(buf: Buffer): boolean {
 
 const designBody = { sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY };
 
+/* Turn VRAM sampling off so the new /health probe doesn't inflate fetch-mock call counts. */
+beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
+afterAll(() => { delete process.env.CASTWRIGHT_VRAM_SAMPLE; });
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-qwen-voice-test-'));
   audioDir = mkdtempSync(join(tmpdir(), 'audiobook-qwen-voice-audio-'));

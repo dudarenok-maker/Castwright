@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
+
+beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
+afterAll(() => { delete process.env.CASTWRIGHT_VRAM_SAMPLE; });
 
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedSidecarUrl: () => 'http://localhost:9000',
