@@ -176,6 +176,24 @@ export default tseslint.config(
       '@typescript-eslint/no-non-null-assertion': 'off',
       /* MP3 fixtures occasionally embed NBSP / zero-width-joiner. */
       'no-irregular-whitespace': 'off',
+      /* Guardrail: block flake anti-patterns from returning (plan flaky-release-hardening W5).
+         skipIf(process.env.CI) arm: 0 existing violations at W5 land → enabled.
+         Large inline timeout arm: dropped — 60_000 exists in justified real-ffmpeg tests
+           (analysis.phase-model.test.ts, loudnorm.test.ts); a non-zero count fails
+           --max-warnings 0, so the ban would be a lint blocker, not a guardrail.
+         page.waitForTimeout in e2e: 40 justified animation/viewport-settle uses exist →
+           covered by the grep heuristic in Task W5.2, not an ESLint ban. */
+      'no-restricted-syntax': [
+        'error',
+        {
+          // Rejects `it.skipIf(process.env.CI)(...)`. Use quarantinedIt + a flaky-register row.
+          // Selector verified by running the planted-violation test (scripts/tests/eslint-guardrail.test.mjs).
+          selector:
+            "CallExpression[callee.property.name='skipIf'] > MemberExpression.arguments[object.property.name='env'][property.name='CI']",
+          message:
+            'No it.skipIf(process.env.CI). Use quarantinedIt (server/src/test-utils/quarantine.ts) + a flaky-register row.',
+        },
+      ],
     },
   },
 

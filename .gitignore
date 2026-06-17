@@ -56,6 +56,11 @@ logs/
 # Test output
 coverage/
 
+# ESLint guardrail test: planted-violation temp dirs (created inside the repo tree
+# so the flat config base path applies; cleaned up by the test's finally block, but
+# .gitignore ensures an interrupted run never stages them).
+guardrail-tmp-*/
+
 # Verify-cache (per-step input hashes for `npm run verify`; never committed).
 .verify-cache.json
 .verify-cache.json.tmp
