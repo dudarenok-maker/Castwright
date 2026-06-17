@@ -1,8 +1,9 @@
 # Flaky-test release hardening — design
 
-- **Status:** draft
+- **Status:** stable
 - **Date:** 2026-06-17
 - **Author:** Castwright maintainer + Claude
+- **Ship notes:** Shipped 2026-06-17 on branch `test/flaky-release-hardening`. All 6 waves delivered: quarantine helper + lane, deterministic rewrites of analysis-pipelining tests, ESLint guardrails, and `retry: 1` removed from the slow tier (3/3 clean passes at 239 tests).
 - **Scope:** Test infrastructure + CI wiring. No production *behavior* changes;
   minimal test-seam dependency injection in production files (an injectable
   clock / scheduler / cache) is permitted **only** where it carries zero runtime
