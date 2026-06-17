@@ -52,9 +52,12 @@ describe('analysis-cache concurrent same-tick writes (tmpSeq race)', () => {
     ]);
 
     // The two same-tick writes MUST have used different temp files (tmpSeq).
-    // A broken impl (no seq counter) would reuse the same temp path and this
-    // assertion would fail: Set.size(1) !== length(2).
-    expect(renamed.length).toBe(2);
-    expect(new Set(renamed).size).toBe(renamed.length);
+    // The invariant is DISTINCT temp paths, not an exact rename-call count:
+    // renameWithRetry re-attempts the same src on a retryable (cloud-sync)
+    // error, and the mock pushes src per attempt, so renamed.length can
+    // legitimately exceed 2 under load. Counting distinct paths is retry-proof
+    // and still red on a regression: a broken impl (no seq counter) reuses one
+    // temp path, collapsing the set to size 1.
+    expect(new Set(renamed).size).toBe(2);
   });
 });
