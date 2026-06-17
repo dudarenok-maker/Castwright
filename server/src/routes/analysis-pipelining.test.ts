@@ -110,6 +110,12 @@ interface PipelineFixture {
   /* Holds the same way for Phase 1 if a test needs it. */
   holdPhase1: Map<number, () => void>;
   releasePhase1(chapterId: number): void;
+  /* Pre-armed event hook — resolves immediately if a matching trace entry
+     already exists, else registers a waiter synchronously and resolves on
+     the push that creates it. Compose via Promise.all for multi-chapter waits. */
+  whenDispatched(phase: 0 | 1, chapterId: number): Promise<void>;
+  /* Push a trace entry and notify waiters — used by the temporary Step-1 test. */
+  record(entry: CallTrace): void;
 }
 
 /* Build a paired spy analyzer for Phase 0 and Phase 1. Each per-chapter
@@ -125,6 +131,24 @@ function makePipelineFixture(): {
   const trace: CallTrace[] = [];
   const holdPhase0 = new Map<number, () => void>();
   const holdPhase1 = new Map<number, () => void>();
+  const waiters: Array<{ match: (e: CallTrace) => boolean; resolve: () => void }> = [];
+
+  function record(entry: CallTrace): void {
+    trace.push(entry);
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].match(entry)) {
+        waiters[i].resolve();
+        waiters.splice(i, 1);
+      }
+    }
+  }
+
+  function whenDispatched(phase: 0 | 1, chapterId: number): Promise<void> {
+    if (trace.some((e) => e.phase === phase && e.chapterId === chapterId)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      waiters.push({ match: (e) => e.phase === phase && e.chapterId === chapterId, resolve });
+    });
+  }
 
   const dispatchHold = (holds: Map<number, () => void>, chapterId: number): Promise<void> =>
     new Promise<void>((resolve) => {
@@ -148,7 +172,7 @@ function makePipelineFixture(): {
       _prompt: string,
       _call: StageCall,
     ): Promise<Stage1ChapterOutput> {
-      trace.push({ phase: 0, chapterId, startedAt: Date.now() });
+      record({ phase: 0, chapterId, startedAt: Date.now() });
       /* If the test wants to hold this chapter, register a holder and
          park until releasePhase0 fires. Otherwise resolve on next tick. */
       await dispatchHold(holdPhase0, chapterId);
@@ -219,7 +243,7 @@ function makePipelineFixture(): {
           /* Best-effort; tests assert on a subset of expected ids. */
         }
       }
-      trace.push({ phase: 1, chapterId, rosterIds, startedAt: Date.now() });
+      record({ phase: 1, chapterId, rosterIds, startedAt: Date.now() });
       await dispatchHold(holdPhase1, chapterId);
       return {
         sentences: [
@@ -250,6 +274,8 @@ function makePipelineFixture(): {
         const release = holdPhase1.get(chapterId);
         if (release) release();
       },
+      whenDispatched,
+      record,
     },
     phase0Analyzer,
     phase1Analyzer,
