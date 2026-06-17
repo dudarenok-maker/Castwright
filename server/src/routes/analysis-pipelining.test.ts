@@ -30,7 +30,7 @@
    are real to keep the test honest about the actual write paths the
    pipelining touches. */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, expect, beforeEach, afterEach, vi } from 'vitest';
 import { quarantinedIt } from '../test-utils/quarantine.js';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
