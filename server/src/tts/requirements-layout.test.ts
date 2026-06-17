@@ -26,12 +26,12 @@ describe('layered requirements (base + nvidia/cpu/amd overlays)', () => {
   // (removed from the overlay, installed on demand from the Model Manager). Kokoro
   // is PLAIN (no [gpu] extra): onnxruntime-gpu is installed by the nvidia ORT swap
   // (install-ort.mjs), not the overlay — preserving the 2026-06-16 fix.
-  it('nvidia overlay: qwen-tts standard, coqui-tts opt-in, pinned torch 2.8 + plain kokoro-onnx', () => {
+  it('nvidia overlay: qwen-tts standard, coqui-tts opt-in, pinned torch 2.11 + plain kokoro-onnx', () => {
     const n = read('nvidia-cuda.txt');
     expect(n).not.toMatch(/^coqui-tts/m);   // re-tiered: Coqui is opt-in now
     expect(n).toMatch(/^qwen-tts\b/m);      // Qwen is standard on GPU profiles
-    expect(n).toMatch(/^torch==2\.8\.0/m);
-    expect(n).toMatch(/^torchaudio==2\.8\.0/m);
+    expect(n).toMatch(/^torch==2\.11\.0/m);
+    expect(n).toMatch(/^torchaudio==2\.11\.0/m);
     expect(n).toMatch(/^kokoro-onnx\b/m);
     expect(n).not.toMatch(/^kokoro-onnx\[gpu\]/m); // anchored: a requirement line, not the explanatory comment
     expect(n).not.toMatch(/^onnxruntime-gpu/m); // swap-only; never in the shared overlay
@@ -45,14 +45,14 @@ describe('layered requirements (base + nvidia/cpu/amd overlays)', () => {
   // Re-tier: cpu overlay drops Coqui (opt-in); Qwen is GPU-only standard so it is
   // absent here too. Kokoro + torch remain; plain kokoro-onnx + explicit onnxruntime
   // (no [gpu] extra), no [codec].
-  it('cpu overlay: coqui-tts opt-in (absent), qwen-tts GPU-only (absent), pinned torch 2.8 + plain kokoro-onnx', () => {
+  it('cpu overlay: coqui-tts opt-in (absent), qwen-tts GPU-only (absent), pinned torch 2.11 + plain kokoro-onnx', () => {
     const c = read('cpu.txt');
     expect(c).not.toMatch(/^coqui-tts/m);   // opt-in
     expect(c).not.toMatch(/^qwen-tts\b/m);  // Qwen is GPU-only standard
     expect(c).not.toMatch(/^kokoro-onnx\[gpu\]/m);
     expect(c).toMatch(/^kokoro-onnx/m);
     expect(c).toMatch(/^onnxruntime\b/m);
-    expect(c).toMatch(/^torch==2\.8\.0/m);
+    expect(c).toMatch(/^torch==2\.11\.0/m);
   });
 
   // Re-tier: amd overlay drops Coqui (opt-in) and adds qwen-tts (standard on GPU

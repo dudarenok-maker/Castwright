@@ -7,6 +7,6 @@
 #
 # Run tests:
 #   .\.venv\Scripts\python.exe -m pytest
-pytest>=8.0,<9.0
+pytest>=9.0.3,<10
 # FastAPI's TestClient depends on httpx — pin a recent stable line.
 httpx>=0.27,<1.0

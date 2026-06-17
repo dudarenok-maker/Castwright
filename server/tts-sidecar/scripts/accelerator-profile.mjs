@@ -145,8 +145,8 @@ export function ortProviders(profile, platform) {
 export function installRecipe(profile, platform) {
   if (profile === 'nvidia') return { torchPreinstall: null, ortPackage: 'onnxruntime-gpu' };
   if (profile === 'amd') {
-    // S0.2 desk-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4). torch 2.8
-    // < 2.9 → the amd overlay uses coqui-tts WITHOUT [codec]. Import-ability +
+    // S0.2 desk-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4). The amd
+    // overlay uses coqui-tts WITHOUT [codec] (no torchcodec). Import-ability +
     // synthesis on real AMD silicon are OWED (Wave H2). Linux ROCm wheels are
     // resolved in Wave H if/when an AMD-Linux box validates them.
     const ROCM = 'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/';
