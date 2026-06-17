@@ -614,13 +614,14 @@ Extend `src/components/analysing/phase-card.test.tsx`:
 ```tsx
 // At top of file — these imports already exist in the file; add what's missing:
 import { Provider } from 'react-redux';
-import { configureStore } from '@reduxjs/toolkit';
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { PhaseCard } from './phase-card';
 import type { AnalysisLiveChapter } from '../../lib/api';
 import type { AnalysisPhase } from '../../lib/types';
-// Reuse the file's existing accountSlice/castSlice imports + mountStore().
+import type React from 'react'; // for React.ComponentProps below
+// Reuse the file's existing accountSlice/castSlice imports + mountStore() — do
+// NOT re-import configureStore if mountStore already wraps it.
 
 const phase1: AnalysisPhase = {
   id: 1,
@@ -734,13 +735,13 @@ git commit -m "feat(frontend): sentence-count headline + bar in attribution live
 ### Task A6: E2E — mock SSE emits sentence fields; analysing spec
 
 **Files:**
-- Modify: `src/mocks/canned-data.ts` (the Phase-1 live-progress simulation — search for where it emits `kind: 'phase'` with a `live` payload and `phaseId: 1`)
+- Modify: `src/lib/api.ts` — the **mock** `analyse` simulation (around `:1328-1382`: it builds a `live` payload — already with `sectionsDone: 2` — and calls `onPhase?.({ phaseId, progress, live })`). This is the mock SSE source the e2e drives; **NOT** `canned-data.ts` (that file holds only static fixtures — verified during review).
 - Create/Modify: `e2e/analysing-progress.spec.ts` (or extend the existing analysing spec under `e2e/`)
 - Test: the spec itself
 
 - [ ] **Step 1: Add the new fields to the mock live payload**
 
-In `src/mocks/canned-data.ts`, find the Phase-1 simulated `live.chapters[]` emission and add, for an in-flight chapter, a two-section progression that crosses a boundary without snapping back, e.g. emit successive ticks with:
+In `src/lib/api.ts`, find the mock `analyse`'s Phase-1 `live.chapters[]` emission (near `:1352`) and add a two-section progression that crosses a boundary without snapping back. First read the surrounding loop to see how many `onPhase` ticks it emits and whether there are `delay(...)` calls between them (line 91 has the `delay` helper) — the e2e timing in Step 2 must match the real cadence, not assume one. Emit successive ticks with:
 
 ```ts
 // tick 1 (section 1, in-flight): committed 0, marker 6 → in sentence mode
@@ -764,13 +765,18 @@ test('attribution shows a non-snapping sentence count + chars/s', async ({ page 
   const headline = page.getByText(/Attributed ~\d+ of ~\d+ sentences/);
   await expect(headline).toBeVisible();
 
-  // Capture the count across ticks; assert it never decreases.
+  // Sample the count repeatedly and assert it never decreases. Do NOT assume a
+  // fixed tick cadence — poll faster than the mock emits and dedupe, so the
+  // test is robust to however many distinct values the mock produces before
+  // the stage advances. Tune the sample count to the cadence you read in Step 1.
   const reads: number[] = [];
-  for (let i = 0; i < 4; i += 1) {
-    const txt = await headline.textContent();
-    const n = Number(/~(\d+) of/.exec(txt ?? '')?.[1] ?? '0');
-    reads.push(n);
-    await page.waitForTimeout(600);
+  for (let i = 0; i < 8; i += 1) {
+    const txt = await headline.textContent().catch(() => null);
+    if (txt) {
+      const n = Number(/~(\d+) of/.exec(txt)?.[1] ?? '0');
+      if (reads.length === 0 || reads[reads.length - 1] !== n) reads.push(n);
+    }
+    await page.waitForTimeout(250);
   }
   for (let i = 1; i < reads.length; i += 1) expect(reads[i]).toBeGreaterThanOrEqual(reads[i - 1]);
 
@@ -789,7 +795,7 @@ Expected: PASS once the mock emits the fields.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/mocks/canned-data.ts e2e/analysing-progress.spec.ts
+git add src/lib/api.ts e2e/analysing-progress.spec.ts
 git commit -m "test(frontend): e2e for non-snapping attribution sentence count"
 ```
 
@@ -859,8 +865,14 @@ describe('clampChapterEstMs', () => {
   it('falls back to lastGood when candidate is null', () => {
     expect(clampChapterEstMs(null, 10000, 90000, 600000)).toBe(90000);
   });
-  it('never returns the whole-stage value', () => {
+  it('never returns the whole-stage value (multi-chapter)', () => {
     expect(clampChapterEstMs(600000, 10000, 0, 600000)).toBeLessThan(600000);
+  });
+  it('applies NO stage ceiling when stageEstMs<=0 (single-chapter book)', () => {
+    // A 1-chapter book: chapter estimate legitimately equals the stage estimate,
+    // so the caller passes stageEstMs=0 to disable the ceiling. The candidate
+    // survives (only the elapsed-floor applies).
+    expect(clampChapterEstMs(300000, 10000, 0, 0)).toBe(300000);
   });
 });
 ```
@@ -894,7 +906,10 @@ export function projectChapterEstMsFromSentences(
     above elapsed (never "over budget"; reuse the refineCastChapterEstMs idiom),
     a fallback to the last good value when the candidate is null, and a ceiling
     that is never the whole-stage estimate (so the stage total can't leak into a
-    chapter row). */
+    chapter row). IMPORTANT: pass `stageEstMs = 0` to DISABLE the ceiling — the
+    caller does this for a single-chapter book, where the chapter estimate
+    legitimately equals the stage estimate and a 0.9× ceiling would force it
+    permanently ~10% low. */
 export function clampChapterEstMs(
   candidate: number | null,
   elapsedMs: number,
@@ -1006,7 +1021,9 @@ Add `lastGoodEstMs: number` to `InFlight` (seed `= chapterEstMs` in the `inFligh
           bySentenceMs: projectChapterEstMsFromSentences(elapsed, prog.sentencesDone, prog.sentencesTotal),
           byBytesMs: projectChapterEstMsFromOutput(elapsed, slot.receivedBytes, ch.body.length, currentOutputRatio()),
           lastGoodMs: slot.lastGoodEstMs,
-          stageEstMs: stage2EstMs,
+          // Single-chapter book → chapter estimate == stage estimate; pass 0 to
+          // disable the "never the stage value" ceiling (else it reads ~10% low).
+          stageEstMs: totalChapters > 1 ? stage2EstMs : 0,
         });
         slot.chapterEstMs = next;
         slot.lastGoodEstMs = next;
@@ -1148,6 +1165,13 @@ Three code-grounded probes overturned four assumptions in the first draft:
 4. **Reload bug-3 murkier than stated (SHOULD-FIX).** `replayCatchUp` forwards only `lastPhase`; whether elapsed survives depends on whether live ticks refresh `lastPhase`. B4 reframed to diagnose that assignment site at the buffer level, with an explicit STOP-and-re-scope branch if the buffer is already fresh.
 
 Line-number citations in `analysis.ts` were spot-checked exact (±0).
+
+**Third pass (v3) — reviewing the v2 edits themselves:**
+
+5. **Single-chapter ceiling regression (BLOCKER, self-inflicted in v2).** The `clampChapterEstMs` "never the stage value" ceiling (0.9× stage) breaks a 1-chapter book, where the chapter estimate legitimately *equals* the stage estimate — it would read ~10% low and trip "over budget" early. Fixed: the route passes `stageEstMs = totalChapters > 1 ? stage2EstMs : 0`, and `clampChapterEstMs` treats `stageEstMs<=0` as "no ceiling" (B1 test + B2 wiring).
+6. **A6 pointed at the wrong file (SHOULD-FIX).** The mock analysis SSE stream lives in `src/lib/api.ts` (~`:1328-1382`, the mock `analyse`'s `onPhase`/`live` emission — already carries `sectionsDone`), NOT `canned-data.ts`. Repointed; commit `git add` corrected.
+7. **Brittle e2e timing (SHOULD-FIX).** The first e2e assumed a fixed 4×600ms tick cadence. Reworked to poll-and-dedupe (assert non-decreasing over whatever distinct values appear), with a Step-1 instruction to read the mock's real cadence first.
+8. **`renderCard` typecheck nits (NIT).** Added the `React` type import for `React.ComponentProps`; dropped the redundant `configureStore` import (reuse the file's `mountStore`).
 
 ## Known deviations from the spec (flagged for the user)
 
