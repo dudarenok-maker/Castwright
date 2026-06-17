@@ -9,7 +9,8 @@
    verbatim — `bookDirByDisplay` — so this only changes the slug-based id key.) */
 
 import { describe, it, expect } from 'vitest';
-import { slug, makeBookId, parseBookId } from './paths.js';
+import path from 'node:path';
+import { slug, makeBookId, parseBookId, bookDirByDisplay, BOOKS_ROOT } from './paths.js';
 
 /* The exact legacy slug (pre-219) — the oracle for ASCII parity. */
 function legacySlug(s: string): string {
@@ -59,5 +60,21 @@ describe('makeBookId', () => {
     const parsed = parseBookId(id);
     expect(parsed).not.toBeNull();
     expect(parsed?.titleSlug).toBe('война-и-мир');
+  });
+});
+
+describe('bookDirByDisplay containment', () => {
+  it('sanitizes traversal to a contained folder', () => {
+    const dir = bookDirByDisplay('..\\..\\evil', 'Series', 'Title');
+    expect(path.relative(BOOKS_ROOT, dir).startsWith('..')).toBe(false);
+  });
+  it('preserves spaces and hyphens in normal display names', () => {
+    const dir = bookDirByDisplay('Jane Doe', 'Sci-Fi', 'The Fall');
+    const parts = path.relative(BOOKS_ROOT, dir).split(path.sep);
+    expect(parts).toEqual(['Jane Doe', 'Sci-Fi', 'The Fall']);
+  });
+  it('never collapses a level when a field sanitizes to empty', () => {
+    const dir = bookDirByDisplay('...', 'Series', 'Title');
+    expect(path.relative(BOOKS_ROOT, dir).split(path.sep).length).toBe(3);
   });
 });
