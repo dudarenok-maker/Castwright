@@ -29,7 +29,9 @@
 - `docs/testing/flaky-register.md` — the live register of quarantined tests.
 - `docs/testing/flake-evidence.md` — Wave 0 output: per-test load-sensitivity + which siblings/slow-files actually flake.
 - `scripts/flake-repro.mjs` — load-induction harness (CPU + I/O contention) used to measure load-sensitivity.
-- `.github/workflows` quarantine job additions (in `release.yml` + `verify.yml`).
+- `scripts/tests/eslint-guardrail.test.mjs` — planted-violation test for the W5 ESLint guardrail.
+- `server/src/store/analysis-cache.race.test.ts` — same-tick cache-write race regression guard.
+- `.github/workflows` quarantine job addition (in `release.yml` only — NOT verify.yml; review C1/P5).
 
 **Modified:**
 - `server/src/routes/analysis-pipelining.test.ts` — migrate Case 2 to the helper (W1), then deterministic rewrite of all cases (W2).
@@ -87,15 +89,20 @@ function startCpuLoad() {
 }
 function stopCpuLoad() { cpuBurners.forEach((c) => c.kill('SIGKILL')); cpuBurners = []; }
 
-let ioTimer = null, ioDir = null;
+let ioBurner = null, ioDir = null;
 function startIoLoad() {
   ioDir = mkdtempSync(join(tmpdir(), 'flake-io-'));
-  let n = 0;
-  ioTimer = setInterval(() => {
-    try { writeFileSync(join(ioDir, `f${n % 50}.tmp`), 'x'.repeat(64 * 1024)); n++; } catch {}
-  }, 2);
+  // Run the I/O load in a SEPARATE child process. A setInterval in THIS process
+  // never fires while the blocking spawnSync vitest run holds the event loop
+  // (review C3 — verified: 0 ticks during a 300ms spawnSync), so an in-process
+  // timer induces ZERO contention during the measured window.
+  const burn =
+    "const{writeFileSync}=require('fs');const{join}=require('path');" +
+    `const d=${JSON.stringify(ioDir)};let n=0;` +
+    "setInterval(()=>{try{writeFileSync(join(d,'f'+(n%50)+'.tmp'),'x'.repeat(65536));n++;}catch{}},2);";
+  ioBurner = spawn(process.execPath, ['-e', burn], { stdio: 'ignore' });
 }
-function stopIoLoad() { if (ioTimer) clearInterval(ioTimer); if (ioDir) rmSync(ioDir, { recursive: true, force: true }); }
+function stopIoLoad() { if (ioBurner) ioBurner.kill('SIGKILL'); if (ioDir) rmSync(ioDir, { recursive: true, force: true }); }
 
 if (has('--cpu-load')) startCpuLoad();
 if (has('--io-load')) startIoLoad();
@@ -264,7 +271,7 @@ In `package.json` `scripts`, add (and change `test:e2e` to OR both exclusions in
 
 ```jsonc
 "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
-"test:e2e:quarantine": "playwright test --project=chromium --grep=@quarantine",
+"test:e2e:quarantine": "playwright test --project=chromium --grep=@quarantine --pass-with-no-tests",
 "test:quarantine": "cross-env RUN_QUARANTINE=1 npm run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test:slow"
 ```
 
@@ -272,8 +279,8 @@ In `package.json` `scripts`, add (and change `test:e2e` to OR both exclusions in
 
 Run: `npm run test:quarantine`
 Expected: completes; the quarantine helper test passes; no quarantined test errors (none migrated yet).
-Run (gating, unset flag): `cd server && npx vitest run --config vitest.config.slow.ts analysis-pipelining.test.ts`
-Expected: Case 2 still shows as skipped (still `skipIf(CI)` at this point — migrated in Task 1.4).
+Run (simulate CI so `skipIf(CI)` engages — locally `CI` is unset so it would RUN and hang ~180s; review m3): `cd server && cross-env CI=1 npx vitest run --config vitest.config.slow.ts analysis-pipelining.test.ts`
+Expected: Case 2 shows as skipped (still `skipIf(CI)` at this point — migrated in Task 1.4).
 
 - [ ] **Step 3: Commit**
 
@@ -367,9 +374,9 @@ git commit -m "test(server): migrate rolling-roster case onto quarantinedIt help
 - Modify: `server/src/routes/analysis-pipelining.test.ts`
 - Modify: `docs/testing/flaky-register.md`
 
-- [ ] **Step 1: Apply the decision rule from `flake-evidence.md`**
+- [ ] **Step 1: Quarantine the whole pipelining family BY SHAPE (review M2/P4)**
 
-For **each** of Cases 1/3/4/5 + plan-118 that Wave 0 flagged as flaking under induced load OR having failed on CI: wrap it with `quarantinedIt` + a `// QUARANTINED(#NN): …` comment, exactly as Task 1.4 did for Case 2, and add a register row. Cases that stayed flat under load are **left on the gate** (do not quarantine clean tests).
+All six cases in `analysis-pipelining.test.ts` share the **same** flake shape — drive-to-completion + real `saveAnalysisCache` write (the spec says so explicitly). The Wave 0 *local* timing can't see the macOS-only contention, so do **not** gate on local timing here: wrap **every** remaining case (1, 3, 4, 5, and the plan-118 case) with `quarantinedIt` + a `// QUARANTINED(#NN): …` comment, exactly as Task 1.4 did for Case 2, and add a register row each. This is cheap — Wave 2 rewrites and graduates them all one wave later — and it closes the W1→W2 release-exposure window completely. (Local timing measurement is reserved for Wave 3's *heterogeneous* slow files, where it actually discriminates.)
 
 - [ ] **Step 2: Verify**
 
@@ -389,7 +396,12 @@ git commit -m "test(server): quarantine load-sensitive pipelining siblings (evid
 - Modify: `.github/workflows/release.yml`
 - Modify: `.github/workflows/verify.yml`
 
-- [ ] **Step 1: Add the release-time non-gating job**
+- [ ] **Step 1: Confirm the setup composite installs server deps (review M4)**
+
+Run: `cat .github/actions/setup/action.yml`
+Expected: it runs `npm --prefix server ci` (or equivalent). `verify.yml` relies on it with no explicit server install, so it almost certainly does — but the lane runs `npm --prefix server run test`/`test:slow`, which die at module resolution without server deps. If the composite does NOT install server deps, add an explicit `- run: npm --prefix server ci` step to the job below.
+
+- [ ] **Step 2: Add the release-time non-gating job**
 
 In `release.yml`, add a job NOT referenced by `publish`'s `needs:`:
 
@@ -410,19 +422,11 @@ In `release.yml`, add a job NOT referenced by `publish`'s `needs:`:
         run: npm run test:quarantine
 ```
 
-- [ ] **Step 2: Verify it is not wired into `publish`**
+- [ ] **Step 3: Verify it is not wired into `publish`**
 
 Inspect `release.yml`: `publish.needs` must remain `[verify, cross-os-verify, mobile-e2e, companion-apk-build]` — `quarantine-lane` absent. (This is the structural guarantee.)
 
-- [ ] **Step 3: Add an optional verify.yml step (non-gating)**
-
-In `verify.yml`, after the server-tests step, add a non-failing step gated on the `server` scope:
-```yaml
-      - name: Quarantine lane (non-gating)
-        if: steps.changes.outputs.server == 'true' || steps.changes.outputs.shared == 'true'
-        continue-on-error: true
-        run: npm run test:quarantine
-```
+> **No verify.yml lane step (review C1/P5).** Adding `test:quarantine` to verify.yml re-runs the ENTIRE frontend+server+slow battery a second time on every labeled PR (the lane script is the triple-suite, not a quarantined-only subset) — a redundant multi-minute double-run against this repo's CI-cost posture. The release-tag job above already gives release-time visibility; local `npm run test:quarantine` on demand covers the rest.
 
 - [ ] **Step 4: Lane self-test (temporary, prove it executes — then revert)**
 
@@ -439,7 +443,7 @@ Then **delete** the throwaway test.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/release.yml .github/workflows/verify.yml
+git add .github/workflows/release.yml
 git commit -m "ci: add non-gating quarantine lane job (off the publish gate)"
 ```
 
@@ -453,6 +457,8 @@ git commit -m "ci: add non-gating quarantine lane job (off the publish gate)"
 # Wave 2 — Class A1 deterministic rewrite
 
 **Branch:** `test/flaky-w2-pipelining`. Make the pipelining family deterministic and graduate it back onto the gate. The key move is **mock the cache (test-only) + await events instead of polling** — no production change required.
+
+> **Sequencing note (review m4):** Tasks 2.1→2.4 all edit the *same* file (`analysis-pipelining.test.ts`) and build on 2.1's `whenDispatched`/`record` refactor. They are a **strictly sequential chain** — dispatch one subagent at a time, never in parallel, each re-reading the current file state. Tasks 2.5 (new file) and 2.6 (optional, different file) can follow.
 
 ### Task 2.1: Pre-armed `whenDispatched` on the fixture
 
@@ -528,13 +534,15 @@ Alongside the existing `vi.mock('../analyzer/select-analyzer.js', …)`, add an 
 vi.mock('../store/analysis-cache.js', () => {
   const mem = new Map<string, unknown>();
   return {
-    loadAnalysisCache: async (id: string) => mem.get(id) ?? { /* shape: empty AnalysisCache */ },
+    // Empty-cache shape MUST match the real loadAnalysisCache miss return,
+    // which is `{ chapters: {} }` (analysis-cache.ts ~L117) — NOT `{}` (review m1).
+    loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
     saveAnalysisCache: async (id: string, cache: unknown) => { mem.set(id, cache); },
     clearAnalysisCache: async (id: string) => { mem.delete(id); },
   };
 });
 ```
-Read the real `analysis-cache.ts` (`loadAnalysisCache` at L115, return type `AnalysisCache`) and mirror the empty-cache shape exactly so the route logic is unaffected.
+Read the real `analysis-cache.ts` to confirm the exact miss-return shape. Note this mock also bypasses `assertCacheChaptersShape`/`seedEmotionsFromTags` for this file — acceptable here (scheduling tests), and Task 2.5 backfills the real-cache race coverage.
 
 - [ ] **Step 2: Run the whole file (still quarantined cases skipped) — green + fast**
 
@@ -590,11 +598,24 @@ git commit -m "test(server): rewrite rolling-roster case event-driven; graduate 
 
 - [ ] **Step 1: Replace every `waitFor(...)` with `whenDispatched`/`Promise.all`**
 
-For Cases 1, 3, 4, 5, and the plan-118 case, replace each `waitFor(() => …trace.some(…), N)` with the matching `await fixture.whenDispatched(phase, id)` (or `await Promise.all([...].map((id) => fixture.whenDispatched(1, id)))` where a case waits on several). The one intentional settle in Case 3 (`await new Promise((r) => setTimeout(r, 200))`, used to prove a chapter does *not* dispatch) stays — but replace it with a deterministic "drain microtasks" helper to avoid a wall-clock dependence:
+For Cases 1, 3, 4, 5, and the plan-118 case, replace each `waitFor(() => …trace.some(…), N)` with the matching `await fixture.whenDispatched(phase, id)` (or `await Promise.all([...].map((id) => fixture.whenDispatched(1, id)))` where a case waits on several).
+
+**Case 3's negative assertion needs special care (review M1).** It proves chapter 3 does NOT dispatch while Phase 0 ch13 is held. The current `setTimeout(r, 200)` macrotask drains the *entire* pending microtask queue; a fixed `drainMicrotasks(5)` does NOT — the dispatch loop is a pure microtask chain (synchronous watermark notify + microtask release, no `setTimeout`), so 5 hops may not even reach the point where a *buggy* early dispatch would fire, giving a vacuous pass. Instead **drain to quiescence** (until the trace stops growing) and add a **positive control** so a vacuous pass is caught:
 ```ts
-async function drainMicrotasks(times = 5) { for (let i = 0; i < times; i++) await Promise.resolve(); }
+async function settle() {
+  let prev = -1;
+  // Drain microtasks until the trace length is stable across two passes.
+  while (fixture.trace.length !== prev) { prev = fixture.trace.length; for (let i = 0; i < 50; i++) await Promise.resolve(); }
+}
+// ... after positively awaiting chapters 1 AND 2 dispatched (whenDispatched):
+await settle();
+// positive control: chapters 1 and 2 DID dispatch (guards against a vacuous pass)
+expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 1)).toBeDefined();
+expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 2)).toBeDefined();
+// the actual assertion: chapter 3 is parked
+expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 3)).toBeUndefined();
 ```
-i.e. `await drainMicrotasks();` then assert `phase1Chapter3` is still `undefined`. Un-`quarantinedIt` any sibling quarantined in Task 1.5; restore `it(`.
+Un-`quarantinedIt` any sibling quarantined in Task 1.5; restore `it(`.
 
 - [ ] **Step 2: Run all cases under induced load**
 
@@ -615,33 +636,50 @@ git commit -m "test(server): event-driven rewrite of all pipelining cases; gradu
 
 **Why:** Task 2.2 mocked the real cache away in the pipelining tests. The real concurrent same-tick atomic-write race (`tmpSeq`, plan-88) must keep deterministic coverage somewhere.
 
-- [ ] **Step 1: Write the failing-first regression test (real cache, deterministic)**
+**Why a no-throw assertion is too weak (review M1/P2):** a *broken* non-atomic impl that reuses one temp filename also resolves both promises and leaves a loadable file (last-write-wins) — so `resolves.toBeDefined()` catches nothing. The real `tmpSeq` invariant is that two concurrent writes use **distinct temp paths**. Assert THAT directly, and validate the test actually fails on a regression.
+
+- [ ] **Step 1: Read the atomic-write seam**
+
+Read `server/src/store/state-io.ts` (`writeJsonAtomic` + the `tmpSeq` counter) to learn the exact temp-path scheme and which `fs` call performs the temp write + rename. The test spies on that call.
+
+- [ ] **Step 2: Write the regression test asserting distinct temp paths**
 
 ```ts
-import { describe, it, expect, afterEach } from 'vitest';
-import { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } from './analysis-cache.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import * as fsp from 'node:fs/promises';
+import { saveAnalysisCache, clearAnalysisCache } from './analysis-cache.js';
 
 describe('analysis-cache concurrent same-tick writes (tmpSeq race)', () => {
   const id = `race-${process.pid}`;
-  afterEach(async () => { await clearAnalysisCache(id); });
+  afterEach(async () => { vi.restoreAllMocks(); await clearAnalysisCache(id); });
 
-  it('two saves fired in the same tick both resolve without ENOENT/EPERM and last write wins', async () => {
-    const a = saveAnalysisCache(id, { /* minimal valid AnalysisCache A */ } as never);
-    const b = saveAnalysisCache(id, { /* minimal valid AnalysisCache B */ } as never);
-    await expect(Promise.all([a, b])).resolves.toBeDefined(); // no rename race throw
-    const final = await loadAnalysisCache(id);
-    expect(final).toBeDefined();
+  it('two saves in the same tick write to DISTINCT temp paths (no shared-temp corruption)', async () => {
+    const renamed: string[] = [];
+    const realRename = fsp.rename;
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      renamed.push(String(from)); // capture the temp source path
+      return realRename(from as never, to as never);
+    });
+    await Promise.all([
+      saveAnalysisCache(id, { chapters: {} } as never),
+      saveAnalysisCache(id, { chapters: {} } as never),
+    ]);
+    // The two same-tick writes MUST have used different temp files (tmpSeq).
+    expect(new Set(renamed).size).toBe(renamed.length);
+    expect(renamed.length).toBe(2);
   });
 });
 ```
-Read `analysis-cache.ts` for the exact `AnalysisCache` shape and fill the two literals with the smallest valid values.
+Adjust the spied call (`rename` vs the temp `writeFile`) to whatever `writeJsonAtomic` actually uses; fill `{ chapters: {} }` with the real minimal `AnalysisCache` shape.
 
-- [ ] **Step 2: Run — confirm it passes against the fixed code** (the `tmpSeq` fix is present, so this is a *regression guard*, not a red-first; note that explicitly in the commit). If it fails, the race protection regressed — stop and investigate.
+- [ ] **Step 3: Validate it goes RED on a regression, then restore**
 
-Run: `cd server && npx vitest run src/store/analysis-cache.race.test.ts`
-Expected: PASS.
+Temporarily break `tmpSeq` in `state-io.ts` (e.g. hard-code the temp suffix to a constant so both writes collide), run the test, confirm it **FAILS** (`Set.size !== length`), then **revert** the break. This proves the guard has teeth — a regression test never shown red proves nothing.
 
-- [ ] **Step 3: Commit**
+Run (broken): `cd server && npx vitest run src/store/analysis-cache.race.test.ts` → Expected: FAIL.
+Run (restored): same command → Expected: PASS.
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add server/src/store/analysis-cache.race.test.ts
@@ -698,9 +736,9 @@ Expected: PASS every run, flat runtime.
 
 If a rewritten file no longer races, remove it from `SLOW_FILES` in `server/vitest.config.slow.ts` AND from `server/vitest.config.ts`'s `test.exclude` (the mirror invariant in the config header). Re-run both configs to confirm no double-run / no-run.
 
-- [ ] **Step 4: Fix the stale comments**
+- [ ] **Step 4: Fix the stale comments (if touching these files; otherwise Wave 5 does it unconditionally)**
 
-In `server/vitest.config.slow.ts:3` and `scripts/verify-cache.mjs:~98`, change "5 hot files" → the accurate count.
+Change "5 hot files" → **10** in `server/vitest.config.slow.ts:3` AND `scripts/verify-cache.mjs:~98`, and extend the enumerated list in the config header (`vitest.config.slow.ts` ~L11–26) to include `setup-readiness.route`, `kokoro-install.route`, `venv-bootstrap.route` (review m1/m6). If Wave 0 evidence flags no slow file to rewrite, this still gets done in Wave 5 Task 5.3 (review m2 — it's a spec-required deliverable, not conditional).
 
 - [ ] **Step 5: Commit per file** (one file = one reviewable commit), e.g.:
 ```bash
@@ -766,7 +804,9 @@ In `eslint.config.js`, within the override block that targets `**/*.test.{ts,tsx
 ```js
 'no-restricted-syntax': ['error',
   {
-    selector: "CallExpression[callee.object.property.name='skipIf'] MemberExpression[object.property.name='env'][property.name='CI']",
+    // VERIFIED against `it.skipIf(process.env.CI)(...)` by running the rule (review C2):
+    // the plan's first-draft `callee.object.property.name='skipIf'` matched NOTHING.
+    selector: "CallExpression[callee.property.name='skipIf'] > MemberExpression.arguments[object.property.name='env'][property.name='CI']",
     message: 'No it.skipIf(process.env.CI). Use quarantinedIt + a flaky-register row.',
   },
   {
@@ -780,31 +820,36 @@ In `eslint.config.js`, within the override block that targets `**/*.test.{ts,tsx
   },
 ];
 ```
-Adjust the `skipIf` selector to match the repo's AST if needed (verify with `npx eslint --print-config` on a sample file). Keep the existing `no-constant-condition` relaxation untouched — this rule does NOT ban `while`/`setTimeout`.
+**Do NOT trust the selector blindly** — `--print-config` shows resolved rules, not whether a selector matches a node. Validate each selector by actually running the rule against a planted sample (Step 3 does this). Keep the existing `no-constant-condition` relaxation untouched — this rule does NOT ban `while`/`setTimeout`.
 
 - [ ] **Step 3: Write the planted-violation test**
 
+Place the test at `scripts/tests/eslint-guardrail.test.mjs` so `scripts/run-hooks-tests.mjs` (which globs `scripts/tests/*.test.mjs`) auto-discovers it (review M2 — a root-level `*.test.mjs` is NOT discovered). Write the planted file **inside the repo tree**, not `os.tmpdir()` — ESLint flat config ignores files outside its base path ("File ignored… exit 0"), which would false-pass (review C1).
+
 ```js
-// eslint.config.guardrail.test.mjs — run via node --test (test:hooks tier)
+// scripts/tests/eslint-guardrail.test.mjs — run via node --test (test:hooks tier)
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 
-test('guardrail flags it.skipIf(process.env.CI)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'guardrail-'));
+const repoRoot = process.cwd(); // test:hooks runs from repo root
+
+test('guardrail rejects a planted it.skipIf(process.env.CI)', () => {
+  // INSIDE the repo so the flat config's base path applies. *.test.ts → the
+  // test-file override block (and its TS parser) matches.
+  const dir = mkdtempSync(join(repoRoot, 'guardrail-tmp-'));
   const f = join(dir, 'planted.test.ts');
   writeFileSync(f, "import {it} from 'vitest';\nit.skipIf(process.env.CI)('x', () => {});\n");
   let failed = false;
-  try { execFileSync('npx', ['eslint', f], { stdio: 'pipe', shell: process.platform === 'win32' }); }
-  catch { failed = true; }
-  rmSync(dir, { recursive: true, force: true });
+  try { execFileSync('npx', ['eslint', f], { cwd: repoRoot, stdio: 'pipe', shell: process.platform === 'win32' }); }
+  catch { failed = true; } // eslint exits non-zero on an error-level violation
+  finally { rmSync(dir, { recursive: true, force: true }); }
   assert.equal(failed, true, 'eslint should reject the planted violation');
 });
 ```
-Wire this file into the `test:hooks` runner (`scripts/run-hooks-tests.mjs`) if it isn't auto-discovered.
+Confirm `guardrail-tmp-*` is not swept into the lint glob of a real run (it only exists during the test; add it to `.gitignore`).
 
 - [ ] **Step 4: Run — planted violation rejected, clean tree passes**
 
@@ -813,7 +858,7 @@ Run: `npm run test:hooks` (expected PASS — the guardrail rejects the planted f
 - [ ] **Step 5: Commit**
 
 ```bash
-git add eslint.config.js eslint.config.guardrail.test.mjs scripts/run-hooks-tests.mjs
+git add eslint.config.js scripts/tests/eslint-guardrail.test.mjs .gitignore
 git commit -m "ci: guardrail against skipIf(CI)/waitForTimeout/large-inline-timeout"
 ```
 
@@ -830,8 +875,10 @@ git commit -m "ci: guardrail against skipIf(CI)/waitForTimeout/large-inline-time
 ### Task 5.3: Closeout
 
 - [ ] **Step 1:** Confirm `docs/testing/flaky-register.md` is empty (or holds only documented hard cases, each with an issue + rationale).
-- [ ] **Step 2:** Add the plan to `docs/features/INDEX.md`; set the spec `status: stable` and fill its Ship notes (date + merge SHA); `git mv` the spec under `docs/features/archive/` if it’s being tracked as a feature plan, otherwise leave under `specs/`.
-- [ ] **Step 3:** `npm run verify` → green. PR `test/flaky-w5-guardrail` → `main`.
+- [ ] **Step 2 (unconditional stale-comment fix, review m2):** If Wave 3 did not already do it, change "5 hot files" → **10** in `server/vitest.config.slow.ts:3` and `scripts/verify-cache.mjs:~98`, and complete the enumerated list in the config header.
+- [ ] **Step 3 (remove the gating-path retry, review m5):** `server/vitest.config.slow.ts:62` has `retry: 1` on the **gating** slow tier — which contradicts the "no auto-retry as a gating mechanism" constraint and masks the very flakiness this work removes. Now that the slow tier is deterministic, delete `retry: 1` and run `npm run test:server-slow` 3× to confirm it stays green without it. (If anything goes red without retry, that file isn't actually deterministic yet — fix it, don't restore the retry.)
+- [ ] **Step 4:** Add the plan to `docs/features/INDEX.md`; set the spec `status: stable` and fill its Ship notes (date + merge SHA); `git mv` the spec under `docs/features/archive/` if it’s being tracked as a feature plan, otherwise leave under `specs/`.
+- [ ] **Step 5:** `npm run verify` → green. PR `test/flaky-w5-guardrail` → `main`.
 
 ---
 
