@@ -178,6 +178,15 @@ function renderCard(props: Partial<React.ComponentProps<typeof PhaseCard>>) {
   );
 }
 
+describe('LiveChapterRow time clause', () => {
+  it('hides the "of ~est" clause when estMs is missing', () => {
+    renderCard({
+      live: { totalChapters: 9, chapters: [{ chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs: 5000, estMs: 0 }] },
+    });
+    expect(screen.queryByText(/of ~/)).not.toBeInTheDocument();
+  });
+});
+
 describe('LiveChapterRow sentence headline', () => {
   it('shows "Attributed ~N of ~M sentences" in sentence mode', () => {
     renderCard({

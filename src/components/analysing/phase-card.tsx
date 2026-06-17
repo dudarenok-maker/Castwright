@@ -73,7 +73,8 @@ function LiveChapterRow({
         </span>
         <span className="text-ink/30">·</span>
         <span>
-          {humanSecondsCompact(displayMs)} of ~{humanSecondsCompact(chapter.estMs)}
+          {humanSecondsCompact(displayMs)}
+          {chapter.estMs > 0 ? ` of ~${humanSecondsCompact(chapter.estMs)}` : ''}
         </span>
         {showSections && (
           <>
