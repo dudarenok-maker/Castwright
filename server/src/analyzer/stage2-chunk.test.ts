@@ -276,3 +276,40 @@ describe('runStage2ChapterChunked', () => {
     ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
   });
 });
+
+describe('onSectionDone', () => {
+  it('fires once per section with the section sentence count (multi-chunk)', async () => {
+    const body = 'A'.repeat(50) + '\n\n' + 'B'.repeat(50); // 2 paragraphs
+    const calls: Array<[number, number]> = [];
+    await runStage2ChapterChunked({
+      body,
+      charBudget: 60, // forces a 2-section split
+      coverageRetries: 0,
+      callForBody: async (sub) => ({
+        // 2 sentences for the first span, 3 for the second — distinguishable
+        sentences: (sub.includes('A') ? [1, 2] : [1, 2, 3]).map((id) => ({
+          id,
+          chapterId: 1,
+          characterId: 'narrator',
+          text: 'x',
+        })),
+      }),
+      onSectionDone: (i, n) => calls.push([i, n]),
+    });
+    expect(calls).toEqual([[0, 2], [1, 3]]);
+  });
+
+  it('fires once with index 0 on the single-call path', async () => {
+    const calls: Array<[number, number]> = [];
+    await runStage2ChapterChunked({
+      body: 'short body',
+      charBudget: 9000,
+      coverageRetries: 0,
+      callForBody: async () => ({
+        sentences: [1, 2].map((id) => ({ id, chapterId: 1, characterId: 'narrator', text: 'x' })),
+      }),
+      onSectionDone: (i, n) => calls.push([i, n]),
+    });
+    expect(calls).toEqual([[0, 2]]);
+  });
+});

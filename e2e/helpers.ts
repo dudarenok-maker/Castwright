@@ -130,6 +130,32 @@ export async function waitForLibraryViewReady(page: Page): Promise<void> {
  * not-installed / empty state so the Account view renders identically
  * regardless of the box AND mounts without a network hop. Call in a
  * `beforeEach`, before the first navigation. */
+/* Boot a fresh book through the upload flow and land on the analysing route
+ * with the "Start analysis" button visible + enabled. Used by both the
+ * analysing-multi-model and analysing-progress specs. */
+export async function bootFreshBookIntoAnalysing(page: Page): Promise<void> {
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /Start a new book/i })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/#\/new$/);
+  await page.getByRole('button', { name: /Paste text/i }).click();
+  await page
+    .locator('textarea')
+    .fill('# The Analysing Spec Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n');
+  await page.getByRole('button', { name: /Upload pasted text/i }).click();
+  await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
+    timeout: 5_000,
+  });
+  await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('Analysing Spec Author');
+  await page.getByRole('button', { name: /Save book and start analysis/i }).click();
+  await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
+  await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
+    timeout: 5_000,
+  });
+}
+
 export async function stubAccountModelProbes(page: Page): Promise<void> {
   const json = (body: unknown) => ({
     status: 200,

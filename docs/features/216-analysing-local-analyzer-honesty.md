@@ -66,6 +66,41 @@ all want a real Ollama + a long chapter to confirm end to end).
    local engines (MIN with the configured value — only ever tightens).
    *Files:* `server/src/analyzer/stage2-chunk.ts`, `routes/analysis.ts`.
 
+6. **Per-chapter sentence progress.** During Stage-1 attribution, long chapters
+   now show a live `Attributed ~N of ~M sentences` headline + fraction bar
+   instead of only an elapsed-time row. The numerator is section-accumulated
+   (exact `sentences.length` per completed section via a new `onSectionDone`
+   chunker callback, plus a `"characterId":` marker count for the in-flight
+   section); the denominator self-calibrates from observed sentences-per-char
+   once a section completes; a server-side one-way `inSentenceMode` flag
+   (`SENTENCE_MODE_MIN_MARKERS`) gates the display; the chars/s speed pulse is
+   retained. *Files:* `server/src/analyzer/sentence-progress.ts`,
+   `server/src/analyzer/stage2-chunk.ts`, `server/src/routes/analysis.ts`,
+   `src/components/analysing/phase-card.tsx`, `src/lib/api.ts`.
+
+7. **Stable per-chapter ETA (band) + honest blank handling.** The per-chapter
+   estimate was flaky — it would blank to a bare `~`, or flip to the
+   whole-stage value (~3 h for a 9-chapter book leaking into a ~15 m chapter
+   row). Fixed with a single pure selector `selectChapterEstMs` (precedence:
+   sentence-fraction projection → byte projection → last-good) clamped by
+   `clampChapterEstMs` into a per-chapter band: a floor just above elapsed (never
+   "over budget") and a ceiling that is never the whole-stage estimate — with the
+   ceiling **disabled for single-chapter books** (`stageEstMs = totalChapters > 1
+   ? stage2EstMs : 0`), where the chapter estimate legitimately equals the stage
+   estimate. The route holds `lastGoodEstMs` so the estimate never blanks, and
+   the frontend hides the `of ~{est}` clause entirely when `estMs <= 0` rather
+   than printing a bare `~`. *Files:* `server/src/analyzer/sentence-progress.ts`,
+   `server/src/routes/analysis.ts`, `src/components/analysing/phase-card.tsx`.
+
+   **"Loses elapsed on reload" — diagnosed, NOT a server bug (re-scoped).** The
+   analysis job is sticky and the replay buffer is fresh: `sendLiveTick` emits a
+   `kind:'phase'` event every tick → `send` → `trackForReplay` overwrites
+   `job.replay.lastPhase` → `replayCatchUp` replays it on reconnect, including
+   each chapter's server-computed `elapsedMs`. Diagnostic tests pin this
+   forwarding + freshness contract (`analysis.test.ts`). The reload-reset symptom
+   is therefore a **frontend re-derivation** issue (the row recomputes a local
+   baseline per SSE event) — tracked as a follow-up, not fixed here.
+
 ## Invariants (regression guards)
 
 - A per-run override (`selectedModelExplicit`) collapses the split in the UI —

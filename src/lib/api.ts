@@ -134,6 +134,14 @@ export interface AnalysisLiveChapter {
   /** Total sections this chapter was split into.
       Absent or ≤ 1 means the chapter is a single section — no sub-bar. */
   sectionsTotal?: number;
+  /** Sentences attributed so far (committed exact + in-flight marker count).
+      Absent until the chapter enters sentence mode. */
+  sentencesDone?: number;
+  /** Self-calibrated sentence total (shown with a leading `~`). */
+  sentencesTotal?: number;
+  /** Once true, the row shows the sentence headline; one-way per chapter
+      (set server-side so a reload can't revert it). */
+  inSentenceMode?: boolean;
 }
 export interface AnalysisLiveInfo {
   totalChapters: number;
@@ -1325,7 +1333,7 @@ async function mockUploadManuscript({
 
 async function mockAnalyseManuscript(
   manuscriptId: string,
-  { onPhase }: AnalyseOpts = {},
+  { onPhase, onHeartbeat }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
   if (DEMO_CAPTURE) {
     const p = HOLLOW_TIDE_POSED.analysing;
@@ -1334,6 +1342,7 @@ async function mockAnalyseManuscript(
     return new Promise<never>(() => {});
   }
   const res = ANALYSIS_NORTHERN_STAR;
+  let heartbeatEmitted = false;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
     await new Promise<void>((resolve) => {
@@ -1343,24 +1352,48 @@ async function mockAnalyseManuscript(
            can mirror it. The mock uses qwen3.5:9b to exercise the
            "server ran a different model than the UI default" path that
            the e2e spec asserts in analysing-multi-model.spec.ts.
-           Phase 0 also emits a live payload at ~50% progress to exercise
-           the per-chapter section sub-bar (sectionsDone/sectionsTotal). */
-        const live =
-          ph.id === 0 && progress >= 0.4 && progress < 0.7
-            ? {
-                totalChapters: 2,
-                chapters: [
-                  {
-                    chapterIndex: 1,
-                    chapterTitle: 'Chapter 1',
-                    elapsedMs: Math.round(progress * ph.durationMs),
-                    estMs: ph.durationMs,
-                    sectionsDone: 2,
-                    sectionsTotal: 5,
-                  },
-                ],
-              }
-            : undefined;
+           Phase 0 emits a three-stage live payload (40–70% progress) to
+           exercise the per-chapter section sub-bar AND sentence-mode
+           headline (inSentenceMode). sentencesDone never decreases across
+           the three sub-ranges (0→1→2 sections done; 6→60→65 sentences). */
+        let live: AnalysisLiveInfo | undefined;
+        if (ph.id === 0 && progress >= 0.4 && progress < 0.7) {
+          const elapsedMs = Math.round(progress * ph.durationMs);
+          const estMs = ph.durationMs;
+          let chapter: AnalysisLiveChapter;
+          if (progress < 0.5) {
+            // tick 1 — section 1 in-flight: committed 0, marker 6
+            chapter = {
+              chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs, estMs,
+              sectionsDone: 0, sectionsTotal: 5,
+              sentencesDone: 6, sentencesTotal: 120, inSentenceMode: true,
+            };
+          } else if (progress < 0.6) {
+            // tick 2 — section 1 done: committed 60
+            chapter = {
+              chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs, estMs,
+              sectionsDone: 1, sectionsTotal: 5,
+              sentencesDone: 60, sentencesTotal: 120, inSentenceMode: true,
+            };
+          } else {
+            // tick 3 — section 2 in-flight: committed 60 + marker 5 = 65 (never < 60)
+            chapter = {
+              chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs, estMs,
+              sectionsDone: 2, sectionsTotal: 5,
+              sentencesDone: 65, sentencesTotal: 120, inSentenceMode: true,
+            };
+          }
+          live = { totalChapters: 2, chapters: [chapter] };
+          /* Emit a single heartbeat (with chars/s > 0) to exercise the
+             HeartbeatRow speed pulse alongside the sentence headline. */
+          if (!heartbeatEmitted) {
+            heartbeatEmitted = true;
+            onHeartbeat?.({
+              phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
+              elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
+            });
+          }
+        }
         onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live });
         if (progress >= 1) {
           clearInterval(t);

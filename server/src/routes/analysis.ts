@@ -40,6 +40,13 @@ import {
   type Stage2ChunkRunResult,
 } from '../analyzer/stage2-chunk.js';
 import {
+  countSentencesHeuristic,
+  countStreamedSentences,
+  sentenceProgressForTick,
+  projectChapterEstMsFromSentences,
+  selectChapterEstMs,
+} from '../analyzer/sentence-progress.js';
+import {
   runStage1WithRosterGuard,
   validateRosterCoverage,
   chapterDriftExceeded,
@@ -800,6 +807,11 @@ export function engineFallbackMsPerChar(
    elapsed, too few bytes, or sub-2% apparent completion) so the caller keeps
    the prior estimate rather than jittering. */
 export const DEFAULT_STAGE2_OUTPUT_RATIO = 1.2;
+/* Sentence-mode display threshold: show the sentence headline once at least
+   one section has completed OR this many in-flight markers have streamed.
+   One-way per chapter (hysteresis) — never revert, so the row can't flip-flop
+   between byte mode and sentence mode. */
+const SENTENCE_MODE_MIN_MARKERS = 5;
 const MIN_REFINE_ELAPSED_MS = 8_000;
 const MIN_REFINE_BYTES = 2_048;
 export function projectChapterEstMsFromOutput(
@@ -1489,6 +1501,7 @@ async function attributeChapterStage2(opts: {
   engine?: 'gemini' | 'local';
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
+  onSectionDone?: (index: number, sentenceCount: number) => void;
 }): Promise<Stage2ChunkRunResult> {
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
@@ -1516,6 +1529,7 @@ async function attributeChapterStage2(opts: {
     callForBody,
     onRetry: opts.onCoverageRetry,
     onChunk: opts.onChunk,
+    onSectionDone: opts.onSectionDone,
   });
   /* plan 221 Wave A — non-English narrator-default heuristic. The model
      mislabels third-person narration as a character on non-Latin scripts;
@@ -1824,7 +1838,7 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   }
 }
 
-function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
+export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): void {
   if (job.replay.lastPhase) send(job.replay.lastPhase);
   for (const log of job.replay.logs) send(log);
   if (job.replay.lastEta) send(job.replay.lastEta);
@@ -3333,11 +3347,26 @@ export async function runMainAnalyzerJob(
       chapterIndex: number;
       chapterTitle: string;
       chapterEstMs: number;
+      /** The last non-null estimate written to chapterEstMs, used as a fallback
+          by selectChapterEstMs when both sentence and byte projections are null. */
+      lastGoodEstMs: number;
       startedAt: number;
       elapsedMs: number;
       /** Latest streamed output bytes for this chapter (from the heartbeat) —
           drives the mid-chapter ETA projection in tickOverall. */
       receivedBytes: number;
+      /* Sentence progress (section-accumulated). committedChars/Sentences cover
+         ONLY completed sections (kept in lockstep so the rate is never diluted);
+         currentSectionChars is the in-flight section's size, stashed at section
+         start and folded into committedChars when that section completes. */
+      heuristicTotal: number;
+      committedSentences: number;
+      committedChars: number;
+      currentSectionChars: number;
+      inflightSentences: number;
+      sectionsDone: number;
+      sectionsTotal: number;
+      inSentenceMode: boolean;
     }
     const inFlight = new Map<number, InFlight>();
 
@@ -3357,12 +3386,26 @@ export async function runMainAnalyzerJob(
           running.length > 0
             ? {
                 totalChapters,
-                chapters: running.map((r) => ({
-                  chapterIndex: r.chapterIndex + 1,
-                  chapterTitle: r.chapterTitle,
-                  elapsedMs: r.elapsedMs,
-                  estMs: r.chapterEstMs,
-                })),
+                chapters: running.map((r) => {
+                  const prog = sentenceProgressForTick({
+                    committedSentences: r.committedSentences,
+                    committedChars: r.committedChars,
+                    inflightSentences: r.inflightSentences,
+                    totalChars: recordRef.chapterHints[r.chapterIndex].body.length,
+                    heuristicTotal: r.heuristicTotal,
+                  });
+                  return {
+                    chapterIndex: r.chapterIndex + 1,
+                    chapterTitle: r.chapterTitle,
+                    elapsedMs: r.elapsedMs,
+                    estMs: r.chapterEstMs,
+                    sectionsDone: r.sectionsDone,
+                    sectionsTotal: r.sectionsTotal,
+                    ...(r.inSentenceMode
+                      ? { sentencesDone: prog.sentencesDone, sentencesTotal: prog.sentencesTotal, inSentenceMode: true }
+                      : {}),
+                  };
+                }),
               }
             : undefined,
       });
@@ -3409,27 +3452,49 @@ export async function runMainAnalyzerJob(
         chapterIndex: i,
         chapterTitle: ch.title,
         chapterEstMs,
+        lastGoodEstMs: chapterEstMs,
         startedAt,
         elapsedMs: 0,
         receivedBytes: 0,
+        heuristicTotal: countSentencesHeuristic(ch.body),
+        committedSentences: 0,
+        committedChars: 0,
+        currentSectionChars: 0,
+        inflightSentences: 0,
+        sectionsDone: 0,
+        sectionsTotal: 1,
+        inSentenceMode: false,
       });
+
+      const refineEstMs = (slot: InFlight, elapsed: number) => {
+        const prog = sentenceProgressForTick({
+          committedSentences: slot.committedSentences,
+          committedChars: slot.committedChars,
+          inflightSentences: slot.inflightSentences,
+          totalChars: ch.body.length,
+          heuristicTotal: slot.heuristicTotal,
+        });
+        const next = selectChapterEstMs({
+          elapsedMs: elapsed,
+          bySentenceMs: projectChapterEstMsFromSentences(elapsed, prog.sentencesDone, prog.sentencesTotal),
+          byBytesMs: projectChapterEstMsFromOutput(elapsed, slot.receivedBytes, ch.body.length, currentOutputRatio()),
+          lastGoodMs: slot.lastGoodEstMs,
+          // Single-chapter book → chapter estimate == stage estimate; pass 0 to
+          // disable the "never the stage value" ceiling (else it reads ~10% low).
+          stageEstMs: totalChapters > 1 ? stage2EstMs : 0,
+        });
+        slot.chapterEstMs = next;
+        slot.lastGoodEstMs = next;
+      };
 
       const tickOverall = (elapsed: number) => {
         const slot = inFlight.get(i);
         if (slot) {
           slot.elapsedMs = elapsed;
-          /* Mid-chapter ETA refinement (issue 3): once enough output has
-             streamed, project the chapter's total time from live throughput so
-             the "X of ~Y" ticker tightens instead of staying pinned to the
-             start-of-chapter estimate. Returns null when the signal is too
-             weak, in which case the prior estMs is kept. */
-          const projected = projectChapterEstMsFromOutput(
-            elapsed,
-            slot.receivedBytes,
-            ch.body.length,
-            currentOutputRatio(),
-          );
-          if (projected !== null) slot.chapterEstMs = projected;
+          /* Mid-chapter ETA refinement (issue 3): sentence-aware estimate band
+             (selectChapterEstMs) prefers the sentence projection over bytes,
+             never returns the stage value, never blanks to ~. */
+          refineEstMs(slot, elapsed);
         }
         sendLiveTick();
         /* Over-budget log thresholds — fire once per chapter. */
@@ -3492,20 +3557,20 @@ export async function runMainAnalyzerJob(
              mid-chapter ETA projection has fresh data even when onWaiting is
              quiet during active streaming. */
           const liveSlot = inFlight.get(i);
-          if (liveSlot) liveSlot.receivedBytes = info.receivedBytes;
+          if (liveSlot) {
+            liveSlot.receivedBytes = info.receivedBytes;
+            liveSlot.inflightSentences = countStreamedSentences(info.receivedText);
+            if (!liveSlot.inSentenceMode && liveSlot.inflightSentences >= SENTENCE_MODE_MIN_MARKERS) {
+              liveSlot.inSentenceMode = true;
+            }
+          }
           const now = Date.now();
           if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
           chapterLastHeartbeatAt = now;
           /* Refine the displayed per-chapter estimate from live throughput on
              the throttled cadence, then push a live tick so "X of ~Y" updates. */
           if (liveSlot) {
-            const projected = projectChapterEstMsFromOutput(
-              now - liveSlot.startedAt,
-              liveSlot.receivedBytes,
-              ch.body.length,
-              currentOutputRatio(),
-            );
-            if (projected !== null) liveSlot.chapterEstMs = projected;
+            refineEstMs(liveSlot, now - liveSlot.startedAt);
             sendLiveTick();
           }
           const charsPerSec =
@@ -3553,6 +3618,31 @@ export async function runMainAnalyzerJob(
         chapter: ch,
         stageCall: stage2Call,
         engine: phase1Selection.engine,
+        // Section START: record this section's char count and total. Do NOT add
+        // it to committedChars yet — committedChars must stay in lockstep with
+        // committedSentences (completed sections only), or the rate dilutes and
+        // the denominator collapses mid-section (adversarial-review fix #1).
+        onChunk: (sec) => {
+          const slot = inFlight.get(i);
+          if (slot) {
+            slot.sectionsTotal = sec.total;
+            slot.currentSectionChars = sec.chars;
+            slot.inflightSentences = 0; // fresh section → buffer reset on the engine side
+          }
+        },
+        // Section DONE: commit BOTH chars and sentences together, so the
+        // observed sentences-per-char rate is always measured over the same
+        // completed sections.
+        onSectionDone: (_index, sentenceCount) => {
+          const slot = inFlight.get(i);
+          if (!slot) return;
+          slot.committedSentences += sentenceCount;
+          slot.committedChars = Math.min(ch.body.length, slot.committedChars + slot.currentSectionChars);
+          slot.sectionsDone += 1;
+          slot.inflightSentences = 0;
+          slot.inSentenceMode = true; // ≥1 section done always qualifies
+          sendLiveTick();
+        },
         onCoverageRetry: (attempt, verdict) =>
           log(
             1,

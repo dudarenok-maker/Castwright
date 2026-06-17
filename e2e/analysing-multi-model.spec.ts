@@ -19,6 +19,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { bootFreshBookIntoAnalysing } from './helpers';
 
 async function readAccountSlice(page: Page) {
   return await page.evaluate(() => {
@@ -35,29 +36,6 @@ async function readAnalysisStream(page: Page) {
       analysis: { activeStream: { state: string; phaseId: number } | null };
     };
     return state.analysis.activeStream;
-  });
-}
-
-async function bootFreshBookIntoAnalysing(page: Page) {
-  await page.goto('/');
-  await page
-    .getByRole('button', { name: /Start a new book/i })
-    .first()
-    .click();
-  await expect(page).toHaveURL(/#\/new$/);
-  await page.getByRole('button', { name: /Paste text/i }).click();
-  await page
-    .locator('textarea')
-    .fill('# The Plan 95 Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n');
-  await page.getByRole('button', { name: /Upload pasted text/i }).click();
-  await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
-    timeout: 5_000,
-  });
-  await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('Plan 95 Author');
-  await page.getByRole('button', { name: /Save book and start analysis/i }).click();
-  await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
-  await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
-    timeout: 5_000,
   });
 }
 
