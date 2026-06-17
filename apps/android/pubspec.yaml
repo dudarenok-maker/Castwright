@@ -21,7 +21,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 3-digit build-iteration band so successive Play uploads of the same marketing
 # version take base+1, base+2, … via `flutter build … --build-number=<N>`).
 # Plan 188.
-version: 1.7.0+10700000
+version: 1.8.0+10800000
 
 environment:
   sdk: ^3.12.1
