@@ -113,8 +113,6 @@ interface PipelineFixture {
      already exists, else registers a waiter synchronously and resolves on
      the push that creates it. Compose via Promise.all for multi-chapter waits. */
   whenDispatched(phase: 0 | 1, chapterId: number): Promise<void>;
-  /* Push a trace entry and notify waiters — used by the temporary Step-1 test. */
-  record(entry: CallTrace): void;
 }
 
 /* Build a paired spy analyzer for Phase 0 and Phase 1. Each per-chapter
@@ -274,7 +272,6 @@ function makePipelineFixture(): {
         if (release) release();
       },
       whenDispatched,
-      record,
     },
     phase0Analyzer,
     phase1Analyzer,
