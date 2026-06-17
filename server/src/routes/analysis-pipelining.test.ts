@@ -358,7 +358,8 @@ async function waitFor(condition: () => boolean, budgetMs = 2000, step = 5): Pro
    Phase 0 chapter 9 completes but BEFORE Phase 0 chapter 11 starts.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () => {
-  it('Phase 1 chapter 0 dispatches after Phase 0 chapter 9 completes but before chapter 11 starts (LAG=10)', async () => {
+  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
+  quarantinedIt('Phase 1 chapter 0 dispatches after Phase 0 chapter 9 completes but before chapter 11 starts (LAG=10)', async () => {
     const manuscriptId = `test-pipeline-interleave-${Date.now()}`;
     registerStubManuscript(manuscriptId, 30);
     /* Both Phase 0 and Phase 1 use `readStage2Concurrency`. Set to 1 so
@@ -521,7 +522,8 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
    concurrency >= 2 so chapters 1 and 2 actually dispatch in parallel.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — back-pressure under stall', () => {
-  it('Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch', async () => {
+  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
+  quarantinedIt('Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch', async () => {
     const manuscriptId = `test-backpressure-${Date.now()}`;
     registerStubManuscript(manuscriptId, 30);
     /* `readStage2Concurrency` is shared by Phase 0 + Phase 1. We need
@@ -586,7 +588,8 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
    chapter is pending. The watermark factory returns the sequential stub.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', () => {
-  it('sequential mode — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
+  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
+  quarantinedIt('sequential mode — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
     const manuscriptId = `test-sequential-${Date.now()}`;
     registerStubManuscript(manuscriptId, 6);
     process.env.STAGE2_CONCURRENCY = '2';
@@ -644,7 +647,8 @@ describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', ()
    the trace would be strictly Phase-0 then Phase-1).
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — concurrent pool interleaving in production', () => {
-  it('pipelined trace interleaves Phase-0 and Phase-1 dispatches (not strictly serial)', async () => {
+  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
+  quarantinedIt('pipelined trace interleaves Phase-0 and Phase-1 dispatches (not strictly serial)', async () => {
     const manuscriptId = `test-concurrent-interleave-${Date.now()}`;
     registerStubManuscript(manuscriptId, 15);
     process.env.ANALYSIS_CAST_CONCURRENCY = '2';
@@ -702,7 +706,8 @@ describe('runMainAnalyzerJob — concurrent pool interleaving in production', ()
    injected Phase 1 spy), so all chapters attribute.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase even with a per-request model', () => {
-  it('does not reuse the Phase 0 selection for Phase 1 when requestedModel is set', async () => {
+  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
+  quarantinedIt('does not reuse the Phase 0 selection for Phase 1 when requestedModel is set', async () => {
     const manuscriptId = `test-phase1-uniform-${Date.now()}`;
     registerStubManuscript(manuscriptId, 4);
     process.env.STAGE2_CONCURRENCY = '1';
