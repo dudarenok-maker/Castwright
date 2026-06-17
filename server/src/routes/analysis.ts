@@ -1489,6 +1489,7 @@ async function attributeChapterStage2(opts: {
   engine?: 'gemini' | 'local';
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
+  onSectionDone?: (index: number, sentenceCount: number) => void;
 }): Promise<Stage2ChunkRunResult> {
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
@@ -1516,6 +1517,7 @@ async function attributeChapterStage2(opts: {
     callForBody,
     onRetry: opts.onCoverageRetry,
     onChunk: opts.onChunk,
+    onSectionDone: opts.onSectionDone,
   });
   /* plan 221 Wave A — non-English narrator-default heuristic. The model
      mislabels third-person narration as a character on non-Latin scripts;

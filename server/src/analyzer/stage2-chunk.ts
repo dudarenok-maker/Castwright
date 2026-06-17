@@ -176,6 +176,11 @@ export interface Stage2ChunkRunOptions {
   onRetry?: (attempt: number, verdict: Stage2CoverageVerdict) => void;
   /** Fired once per chunk before it runs (large-chapter progress). */
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
+  /** Fired AFTER a section's sentences are parsed, with the section index and
+      its exact sentence count. The route accumulates these into the committed
+      (exact) numerator; the streamed marker count only ever covers the
+      in-flight section. */
+  onSectionDone?: (index: number, sentenceCount: number) => void;
 }
 
 /** Attribute a chapter's sentences, transparently chunking when the body is
@@ -239,7 +244,9 @@ export async function runStage2ChapterChunked(
     let preceding: string | null = null;
     for (let i = 0; i < chunks.length; i += 1) {
       opts.onChunk?.({ index: i, total: chunks.length, chars: chunks[i].length });
-      all.push(...(await attributeSpan(chunks[i], 0, preceding)));
+      const sectionSentences = await attributeSpan(chunks[i], 0, preceding);
+      opts.onSectionDone?.(i, sectionSentences.length);
+      all.push(...sectionSentences);
       preceding = tailParagraphs(chunks[i], contextParagraphs);
     }
     const sentences = all.map((s, i) => ({ ...s, id: i + 1 }));
@@ -268,6 +275,7 @@ export async function runStage2ChapterChunked(
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
       });
+      opts.onSectionDone?.(0, result.sentences.length);
       return { sentences: result.sentences, coverage, chunkCount: 1 };
     } catch (err) {
       if (!(err instanceof AnalyzerTruncatedError)) throw err;
