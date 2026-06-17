@@ -518,6 +518,53 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     expect(screen.queryByText(/TTS unloaded to free VRAM/i)).not.toBeInTheDocument();
   });
 
+  /* Regression (#3/#4): the view judged residency on `modelResident` — the
+     CONFIGURED DEFAULT's residency — so a run on a non-default model showed
+     "Load model" mid-analysis and auto-warmed the default behind the user's
+     back. Readiness/auto-warm now key off the RUN model's residency. */
+  it('keys readiness/auto-warm off the RUN model, not the configured default', async () => {
+    /* Run executes on llama3.1:8b (resident); the server default qwen3.5:4b is
+       NOT resident (modelResident:false). The view must read as ready and must
+       NOT auto-warm the default. */
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      models: ['llama3.1:8b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: ['llama3.1:8b'],
+      modelResident: false,
+    });
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="t"
+          wordCount={100}
+          model="llama3.1:8b"
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    /* Probe resolves → run model resident → ready: no Load button, no auto-warm
+       of the default. (Before the fix, auto-warm fired loadAnalyzer here.) */
+    await waitFor(() => expect(getOllamaHealthSpy).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /load model \(analyzer\)/i }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(loadAnalyzerSpy).not.toHaveBeenCalled();
+  });
+
   /* Regression: before the fix, loadAnalyzer returning {status:'error', …}
      was silently discarded. The pill stayed on "Loading…" until the probe
      ticked it back to idle, and the user never learned why. Surface the

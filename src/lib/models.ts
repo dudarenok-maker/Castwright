@@ -36,12 +36,6 @@ export const MODEL_OPTIONS: ModelOption[] = [
     hint: '~5 GB VRAM, stays resident across the analysis loop; stronger than the 4B on dialogue-dense edge cases',
     engine: 'local',
   },
-  {
-    id: 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL',
-    label: 'Gemma 4 E4B (local)',
-    hint: '~6 GB VRAM (UD-Q4 quant), strong on multilingual (incl. Russian) dialogue attribution',
-    engine: 'local',
-  },
   /* --- Gemini API (direct or fallback) — sorted by free-tier headroom,
         most-comfortable first. Hints carry the live RPM/TPM/RPD limits
         pulled from aistudio.google.com/app/rate-limit on 2026-05-16 so
@@ -103,21 +97,62 @@ export function engineForModelId(id: string): 'local' | 'gemini' {
   return id.includes(':') ? 'local' : 'gemini';
 }
 
+/** The local subset of a run's effective model ids — the ones that actually hit
+    Ollama. The analysing view warms / checks residency on THESE, never on the
+    server's configured default (`/health.modelResident` keys off the default,
+    which is wrong for a per-run override or per-phase pick). */
+export function localRunModelIds(effectiveModelIds: readonly string[]): string[] {
+  return effectiveModelIds.filter((id) => engineForModelId(id) === 'local');
+}
+
 const norm = (t: string) => (t.includes(':') ? t : `${t}:latest`);
 
-/** Merge-on-top: curated local entries (always shown, even offline) unioned
-    with live Ollama tags. A live tag matching a curated id keeps the curated
-    label/hint; an uncurated live tag becomes a bare option. */
+/** True when `id` is resident in the given Ollama `/api/ps` name list, tolerating
+    Ollama's tag canonicalisation (bare-name ⇄ `:latest`, family-root prefix) —
+    mirrors the server-side match in `server/src/routes/ollama-health.ts`. */
+export function isOllamaModelResident(id: string, resident: readonly string[]): boolean {
+  const target = norm(id);
+  const root = id.split(':')[0];
+  return resident.some(
+    (r) => norm(r) === target || (r.split(':')[0] === root && r.startsWith(`${root}:`)),
+  );
+}
+
+/** Whether EVERY local model the run will execute on is resident in VRAM. Empty
+    local set (a pure-cloud run) → false here; callers gate that separately with
+    the engine check (a cloud run is "ready" regardless of Ollama). */
+export function runModelsAllResident(
+  effectiveModelIds: readonly string[],
+  resident: readonly string[],
+): boolean {
+  const locals = localRunModelIds(effectiveModelIds);
+  return locals.length > 0 && locals.every((id) => isOllamaModelResident(id, resident));
+}
+
+/** Build the local-analyzer-picker options from the live Ollama tag list —
+    INSTALLED-ONLY. Each installed tag gets its curated label/hint when one
+    matches (so `qwen3.5:4b` reads "Qwen3.5 4B (local)"); an installed tag with
+    no curated entry becomes a bare option (so a custom local model still shows
+    as-is). A curated entry that is NOT installed is deliberately omitted — the
+    dropdown only lists models you can actually run. (Curated-but-not-pulled
+    models are still offered for install in the Model Manager's pull list, which
+    reads the server `pullable` allowlist, not this catalog.)
+
+    The picker is never blank: the Gemini group always renders alongside this
+    one (see buildModelOptionGroups). Replaces the older curated-∪-live union;
+    the change is intentional — see plan 221 invariant 1. */
 export function buildLocalModelOptions(
   liveTags: Array<{ name: string; size?: number }>,
   curated: ModelOption[] = MODEL_OPTIONS.filter((m) => m.engine === 'local'),
 ): ModelOption[] {
-  const out: ModelOption[] = [...curated];
-  const have = new Set(curated.map((m) => norm(m.id)));
+  const curatedByTag = new Map(curated.map((m) => [norm(m.id), m]));
+  const out: ModelOption[] = [];
+  const seen = new Set<string>();
   for (const tag of liveTags) {
-    if (have.has(norm(tag.name))) continue;
-    have.add(norm(tag.name));
-    out.push({ id: tag.name, label: tag.name, engine: 'local' });
+    const key = norm(tag.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(curatedByTag.get(key) ?? { id: tag.name, label: tag.name, engine: 'local' });
   }
   return out;
 }
