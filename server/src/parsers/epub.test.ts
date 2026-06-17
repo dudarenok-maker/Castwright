@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseEpub, UnusableEpubError } from './epub.js';
+import { parseEpub, UnusableEpubError, decodeEntities } from './epub.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '__fixtures__/sample.epub');
@@ -28,6 +28,11 @@ describe('parseEpub', () => {
     // never writing outside the mkdtemp dir.
     const out = await parseEpub(buf, { fileName: '../../evil.epub' });
     expect(out.format).toBe('epub');
+  });
+
+  it('decodeEntities decodes &amp; last (no double-unescaping)', () => {
+    expect(decodeEntities('&amp;lt;')).toBe('&lt;');
+    expect(decodeEntities('&amp;amp;lt;')).toBe('&amp;lt;');
   });
 
   it('uses dc:title from the OPF metadata', async () => {

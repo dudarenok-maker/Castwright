@@ -490,13 +490,14 @@ function readCalibreMeta(opf: string, name: string): string | null {
 }
 
 /** Decode the small entity set the parsers care about (matches stripHtml). */
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    // Decode &amp; LAST so `&amp;lt;` -> `&lt;`, not `<` (double-unescaping).
+    .replace(/&amp;/g, '&')
     .trim();
 }
