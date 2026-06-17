@@ -26,6 +26,7 @@ import {
   IconChevR,
 } from '../../lib/icons';
 import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
+import { safeImageSrc } from '../../lib/safe-url';
 import {
   SectionLabel,
   MixedHeading,
@@ -87,7 +88,7 @@ function CoverArt({
       {imageUrl && (
         <img
           data-testid="listen-cover-art-image"
-          src={imageUrl}
+          src={safeImageSrc(imageUrl)}
           alt=""
           className="absolute inset-0 w-full h-full object-cover"
           style={computeCoverStyle(framing)}

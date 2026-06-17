@@ -30,6 +30,7 @@ import { ConfirmDialog } from '../../modals/confirm-dialog';
 import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-book-meta';
 import { CoverPicker } from '../../modals/cover-picker';
 import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
+import { safeImageSrc } from '../../lib/safe-url';
 import { useAppSelector } from '../../store';
 import { selectPausedSnapshotForBook } from '../../store/library-slice';
 import type { LibraryAuthor, LibraryBook } from '../../lib/types';
@@ -204,7 +205,7 @@ function BookCard({
         {effectiveCoverUrl && !coverLoadFailed && (
           <img
             data-testid={`book-cover-${book.bookId}`}
-            src={effectiveCoverUrl}
+            src={safeImageSrc(effectiveCoverUrl)}
             alt=""
             className="absolute inset-0 w-full h-full object-cover"
             style={computeCoverStyle(effectiveFraming)}
