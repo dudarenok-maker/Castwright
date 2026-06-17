@@ -103,20 +103,25 @@ test.describe('responsive coverage (all views × all viewports)', () => {
 
   test('generation view — Solway Bay fixture', async ({ page }) => {
     await page.goto('/#/books/sb/generate');
-    /* Generation page title hydrates once chapters are loaded. */
-    await page.waitForTimeout(500);
+    /* CH 01 renders once the chapters slice has hydrated — same signal used
+       in e2e/responsive/visual.spec.ts for the generation screenshot. */
+    await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 10_000 });
     await expectNoHorizontalScroll(page);
   });
 
   test('voices (global) view', async ({ page }) => {
     await page.goto('/#/voices');
-    await page.waitForTimeout(500);
+    /* h1 "Every voice you've ever generated" mounts once the voices slice loads. */
+    await expect(page.getByRole('heading', { name: /Every voice you've ever generated/i })).toBeVisible({ timeout: 10_000 });
     await expectNoHorizontalScroll(page);
   });
 
   test('changelog (global) view', async ({ page }) => {
-    await page.goto('/#/changelog');
-    await page.waitForTimeout(500);
+    /* Route is #/log (router grammar), not #/changelog — the latter silently
+       falls back to the books library, which the old bare waitForTimeout masked. */
+    await page.goto('/#/log');
+    /* h1 "Everything that's happened" mounts once the changelog view renders. */
+    await expect(page.getByRole('heading', { name: /Everything that's happened/i })).toBeVisible({ timeout: 10_000 });
     await expectNoHorizontalScroll(page);
   });
 

@@ -2,7 +2,7 @@
    install offline: stubbed detectFn drives the install-state, stubbed spawnFn
    emits fake `[install-qwen3]` progress + an exit code. No real pip/download. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { QwenInstallBootstrap } from './qwen-install-bootstrap.js';
 import type { QwenInstallState } from '../workspace/user-settings.js';
@@ -23,12 +23,11 @@ function makeFakeChild(exitCode: number, opts: { stdout?: string; stderr?: strin
   return child;
 }
 
-async function until(pred: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!pred()) {
-    if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
-    await new Promise((r) => setTimeout(r, 5));
-  }
+/** Wait for a predicate using vi.waitFor (event-driven retries, no clock budget). */
+async function until(pred: () => boolean): Promise<void> {
+  await vi.waitFor(() => {
+    if (!pred()) throw new Error('condition not met yet');
+  });
 }
 
 /* detectFn that returns each queued state in order (last one repeats). */

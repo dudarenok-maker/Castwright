@@ -25,10 +25,10 @@
         still active), proving the limiter buckets advance in parallel.
 
    All cases use spy analyzers (no network, no Ollama / Gemini SDK) and
-   the on-disk analysis cache (per-test unique id + `clearAnalysisCache`
-   teardown). The route layer's saveAnalysisCache / loadAnalysisCache
-   are real to keep the test honest about the actual write paths the
-   pipelining touches. */
+   an in-memory analysis-cache mock (vi.mock → zero real I/O; per-test
+   unique id + `clearAnalysisCache` teardown). Event-driven
+   `whenDispatched` replaces all real-timer polling — scheduling logic
+   completes in bounded microtask time regardless of CPU/I/O load. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
@@ -109,6 +109,10 @@ interface PipelineFixture {
   /* Holds the same way for Phase 1 if a test needs it. */
   holdPhase1: Map<number, () => void>;
   releasePhase1(chapterId: number): void;
+  /* Pre-armed event hook — resolves immediately if a matching trace entry
+     already exists, else registers a waiter synchronously and resolves on
+     the push that creates it. Compose via Promise.all for multi-chapter waits. */
+  whenDispatched(phase: 0 | 1, chapterId: number): Promise<void>;
 }
 
 /* Build a paired spy analyzer for Phase 0 and Phase 1. Each per-chapter
@@ -124,6 +128,24 @@ function makePipelineFixture(): {
   const trace: CallTrace[] = [];
   const holdPhase0 = new Map<number, () => void>();
   const holdPhase1 = new Map<number, () => void>();
+  const waiters: Array<{ match: (e: CallTrace) => boolean; resolve: () => void }> = [];
+
+  function record(entry: CallTrace): void {
+    trace.push(entry);
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].match(entry)) {
+        waiters[i].resolve();
+        waiters.splice(i, 1);
+      }
+    }
+  }
+
+  function whenDispatched(phase: 0 | 1, chapterId: number): Promise<void> {
+    if (trace.some((e) => e.phase === phase && e.chapterId === chapterId)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      waiters.push({ match: (e) => e.phase === phase && e.chapterId === chapterId, resolve });
+    });
+  }
 
   const dispatchHold = (holds: Map<number, () => void>, chapterId: number): Promise<void> =>
     new Promise<void>((resolve) => {
@@ -147,7 +169,7 @@ function makePipelineFixture(): {
       _prompt: string,
       _call: StageCall,
     ): Promise<Stage1ChapterOutput> {
-      trace.push({ phase: 0, chapterId, startedAt: Date.now() });
+      record({ phase: 0, chapterId, startedAt: Date.now() });
       /* If the test wants to hold this chapter, register a holder and
          park until releasePhase0 fires. Otherwise resolve on next tick. */
       await dispatchHold(holdPhase0, chapterId);
@@ -218,7 +240,7 @@ function makePipelineFixture(): {
           /* Best-effort; tests assert on a subset of expected ids. */
         }
       }
-      trace.push({ phase: 1, chapterId, rosterIds, startedAt: Date.now() });
+      record({ phase: 1, chapterId, rosterIds, startedAt: Date.now() });
       await dispatchHold(holdPhase1, chapterId);
       return {
         sentences: [
@@ -249,6 +271,7 @@ function makePipelineFixture(): {
         const release = holdPhase1.get(chapterId);
         if (release) release();
       },
+      whenDispatched,
     },
     phase0Analyzer,
     phase1Analyzer,
@@ -314,6 +337,19 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
+/* Replace disk-backed analysis cache with an in-memory Map so that these
+   scheduling tests have zero real I/O and no shared CACHE_DIR coupling.
+   Empty-cache miss shape MUST match the real loadAnalysisCache return:
+   `{ chapters: {} }` (analysis-cache.ts ~L117). */
+vi.mock('../store/analysis-cache.js', () => {
+  const mem = new Map<string, unknown>();
+  return {
+    loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
+    saveAnalysisCache: async (id: string, cache: unknown) => { mem.set(id, cache); },
+    clearAnalysisCache: async (id: string) => { mem.delete(id); },
+  };
+});
+
 function setPipelinedMode(opts: {
   pipelined: boolean;
   phase1Selection?: AnalyzerSelection;
@@ -336,20 +372,6 @@ function clearPipelinedMode(): void {
 afterEach(() => {
   clearPipelinedMode();
 });
-
-/* Helper that polls `condition` until true or a budget elapses. Vitest
-   uses real timers here (Phase 0 / Phase 1 dispatch hops are real
-   microtasks), so polling with `setImmediate`-style waits is the
-   right call. */
-async function waitFor(condition: () => boolean, budgetMs = 2000, step = 5): Promise<void> {
-  const start = Date.now();
-  while (!condition()) {
-    if (Date.now() - start > budgetMs) {
-      throw new Error(`waitFor timed out after ${budgetMs}ms`);
-    }
-    await new Promise((r) => setTimeout(r, step));
-  }
-}
 
 /* ───────────────────────────────────────────────────────────────────
    Case 1 — Interleaved execution under default LAG=10.
@@ -422,7 +444,7 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -431,24 +453,15 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
    only the Phase 0 chapters whose watermark has caught up (K + LAG).
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — rolling roster snapshot', () => {
-  /* QUARANTINED IN CI (#875) — CPU-contention timeout flake. The watermark/
-     roster logic asserted below is correct (green on Windows + Ubuntu CI and
-     locally on a quiet box), but the test awaits a full pipelined run whose
-     wall-clock time balloons under load: it blew past its 180s budget on the
-     macOS cross-OS release gate (two cuts) and locally (363s) under
-     contention. Already bumped 30s→90s→180s; skip in CI rather than gamble
-     on a bigger number. Still runs locally. Re-enable once it's made
-     deterministic (fake timers / no full-run await) per #875. */
-  it.skipIf(process.env.CI)('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
+  it('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
     const manuscriptId = `test-rolling-roster-${Date.now()}`;
     /* 12 chapters + min-lag=5 + concurrency=1 keeps the Phase 0 grind
        short enough (11 sequential dispatches before the holding chapter
-       12 stalls the pool) that the inner `waitFor` doesn't have to span
-       a full CI-cold-start budget. The smaller fixture pins the same
-       invariant the larger one used to — "Phase 1 chapter K sees roster
-       up to K+LAG, nothing beyond". Holding chapter 12 keeps the
-       chapter-12 ch-cast OUT of the roster snapshot so the `not.toContain`
-       assertion still has teeth. */
+       12 stalls the pool). The smaller fixture pins the same invariant
+       the larger one used to — "Phase 1 chapter K sees roster up to
+       K+LAG, nothing beyond". Holding chapter 12 keeps the chapter-12
+       ch-cast OUT of the roster snapshot so the `not.toContain` assertion
+       still has teeth. */
     registerStubManuscript(manuscriptId, 12);
     process.env.STAGE2_CONCURRENCY = '1';
 
@@ -474,16 +487,9 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
         requestedModel: undefined,
       });
 
-      /* Wait until Phase 1 chapter 6 (index 5, needs watermark>=10) has
-         dispatched. Warm-cache local runs land in <600 ms; CI cold-start
-         runners are the slow leg. 840194b bumped to 30 s inner + 90 s
-         per-test for release.yml's windows-latest. PR #131 then surfaced
-         the same edge on verify.yml's ubuntu-latest (timed out at exactly
-         90 000 ms; local pre-push observed 90 347 ms). The per-test budget
-         bumps to 180 s here — well above worst-case observed CI runtime
-         on either OS; healthy runs short-circuit via the inner waitFor
-         the moment the trace lands, so no slowdown for warm caches. */
-      await waitFor(() => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 6), 30_000);
+      /* Event-driven wait — resolves the instant Phase 1 chapter 6 records
+         into the trace; no polling, no wall-clock budget. */
+      await fixture.whenDispatched(1, 6);
 
       const phase1Chapter6 = fixture.trace.find((t) => t.phase === 1 && t.chapterId === 6);
       expect(phase1Chapter6).toBeDefined();
@@ -496,14 +502,19 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
       expect(roster).toContain('ch11-char');
       expect(roster).not.toContain('ch12-char');
 
-      /* Release the rest so the run can complete. */
+      /* Wait for Phase 0 chapter 12 to actually enter its dispatchHold
+         (the spy records BEFORE the hold, so whenDispatched resolves the
+         instant ch12 is parked and ready to be released). Then release so
+         runPromise can complete. Without this guard, releasePhase0(12)
+         fires before ch12 starts and the hold is permanently stuck. */
+      await fixture.whenDispatched(0, 12);
       fixture.releasePhase0(12);
       await runPromise;
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 180_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -549,32 +560,41 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
         requestedModel: undefined,
       });
 
-      /* Wait until Phase 1 chapters 1 and 2 (ids) have dispatched.
-         Chapter id=3 (index 2) needs watermark>=12, which the held
-         chapter 13 prevents — it must NOT dispatch. */
-      await waitFor(
-        () => [1, 2].every((id) => fixture.trace.some((t) => t.phase === 1 && t.chapterId === id)),
-        10_000,
-      );
-      /* Give the watermark + queue another generous tick to make
-         absolutely sure chapter 3 isn't spuriously released. */
-      await new Promise((r) => setTimeout(r, 200));
+      /* Event-driven wait: both chapters 1 and 2 (Phase 1) must dispatch
+         before we assert chapter 3 is absent. */
+      await Promise.all([1, 2].map((id) => fixture.whenDispatched(1, id)));
 
-      /* Phase 1 chapter id=3 must NOT have dispatched yet — it needs
-         watermark >= 12 (which we're holding chapter 13 to prevent). */
-      const phase1Chapter3 = fixture.trace.find((t) => t.phase === 1 && t.chapterId === 3);
-      expect(phase1Chapter3).toBeUndefined();
+      /* Drain to quiescence — loop microtasks until the trace length is
+         stable across two passes. The dispatch loop is a pure microtask
+         chain (no setTimeout), so draining until stable is sufficient to
+         detect any spurious early dispatch of chapter 3. */
+      async function settle(): Promise<void> {
+        let prev = -1;
+        while (fixture.trace.length !== prev) {
+          prev = fixture.trace.length;
+          for (let i = 0; i < 50; i++) await Promise.resolve();
+        }
+      }
+      await settle();
+
+      /* positive control: chapters 1 and 2 DID dispatch (guards against a vacuous pass) */
+      expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 1)).toBeDefined();
+      expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 2)).toBeDefined();
+      /* the actual assertion: chapter 3 is parked */
+      expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 3)).toBeUndefined();
 
       /* Release Phase 0 chapter 13 — watermark advances to 12 once
-         chapter 13's completion folds in, releasing chapter id=3. */
+         chapter 13's completion folds in, releasing chapter id=3.
+         Guard: ensure ch13 has dispatched into the hold before releasing. */
+      await fixture.whenDispatched(0, 13);
       fixture.releasePhase0(13);
-      await waitFor(() => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 3), 10_000);
+      await fixture.whenDispatched(1, 3);
       await runPromise;
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -631,7 +651,7 @@ describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', ()
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -686,7 +706,7 @@ describe('runMainAnalyzerJob — concurrent pool interleaving in production', ()
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -730,5 +750,5 @@ describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase eve
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });

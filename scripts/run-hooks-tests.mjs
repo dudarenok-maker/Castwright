@@ -17,4 +17,17 @@ if (result.error) {
   process.stderr.write(`run-hooks-tests: failed to spawn node: ${result.error.message}\n`);
   process.exit(1);
 }
-process.exit(result.status ?? 1);
+if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+
+// Heuristic guardrail: scan server test files for budgeted-poll loops and
+// oversized inline timeouts (plan flaky-release-hardening Task 5.2).
+const check = spawnSync(
+  process.execPath,
+  ['scripts/check-no-budget-poll.mjs'],
+  { stdio: 'inherit' },
+);
+if (check.error) {
+  process.stderr.write(`run-hooks-tests: failed to spawn check-no-budget-poll: ${check.error.message}\n`);
+  process.exit(1);
+}
+process.exit(check.status ?? 1);
