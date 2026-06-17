@@ -22,6 +22,14 @@ describe('parseEpub', () => {
     expect(out.format).toBe('epub');
   });
 
+  it('neutralizes a traversal upload filename (basenamed, stays in temp dir)', async () => {
+    const buf = await readFile(fixturePath);
+    // `../../evil.epub` -> basename `evil.epub` -> safeSegment passes -> parses normally,
+    // never writing outside the mkdtemp dir.
+    const out = await parseEpub(buf, { fileName: '../../evil.epub' });
+    expect(out.format).toBe('epub');
+  });
+
   it('uses dc:title from the OPF metadata', async () => {
     const buf = await readFile(fixturePath);
     const out = await parseEpub(buf, { fileName: 'sample.epub' });

@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unicodeKebab } from '../util/safe-id.js';
+import { safeSegment } from '../util/safe-path.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -215,6 +216,7 @@ export function qwenVoicesDir(): string {
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
     persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {
+  safeSegment(name);
   return join(qwenVoicesDir(), `${name}.json`);
 }
 

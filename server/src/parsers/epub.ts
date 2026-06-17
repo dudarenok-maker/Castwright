@@ -11,7 +11,8 @@
 import { EPub } from 'epub2';
 import { writeFile, mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
+import { safeSegment } from '../util/safe-path.js';
 import { fromBuffer as yauzlFromBuffer, type ZipFile, type Entry } from 'yauzl';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
@@ -58,7 +59,7 @@ export async function parseEpub(buffer: Buffer, opts: EpubOpts): Promise<ParsedM
     filePath = opts.sourcePath;
   } else {
     tmp = await mkdtemp(join(tmpdir(), 'epub-'));
-    filePath = join(tmp, opts.fileName ?? 'book.epub');
+    filePath = join(tmp, safeSegment(basename(opts.fileName ?? 'book.epub')));
     await writeFile(filePath, buffer);
   }
   try {
