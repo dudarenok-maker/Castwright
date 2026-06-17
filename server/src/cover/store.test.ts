@@ -63,3 +63,12 @@ describe('backgroundFetchCover', () => {
     await expect(backgroundFetchCover(bookDir, 'T', 'A', 'bk1')).resolves.toBeUndefined();
   });
 });
+
+describe('downloadCover containment', () => {
+  it('rejects a destPath outside the workspace before any fetch', async () => {
+    const { downloadCover } = await import('./store.js');
+    await expect(
+      downloadCover('https://x/evil.jpg', join(workspaceRoot, '..', '..', 'evil.jpg')),
+    ).rejects.toThrow();
+  });
+});
