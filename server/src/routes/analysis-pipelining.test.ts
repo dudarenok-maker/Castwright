@@ -341,6 +341,19 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
+/* Replace disk-backed analysis cache with an in-memory Map so that these
+   scheduling tests have zero real I/O and no shared CACHE_DIR coupling.
+   Empty-cache miss shape MUST match the real loadAnalysisCache return:
+   `{ chapters: {} }` (analysis-cache.ts ~L117). */
+vi.mock('../store/analysis-cache.js', () => {
+  const mem = new Map<string, unknown>();
+  return {
+    loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
+    saveAnalysisCache: async (id: string, cache: unknown) => { mem.set(id, cache); },
+    clearAnalysisCache: async (id: string) => { mem.delete(id); },
+  };
+});
+
 function setPipelinedMode(opts: {
   pipelined: boolean;
   phase1Selection?: AnalyzerSelection;
