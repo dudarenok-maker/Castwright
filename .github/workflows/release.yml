@@ -247,6 +247,21 @@ jobs:
             apps/android/castwright-${{ github.ref_name }}.aab.sha256
           retention-days: 1
 
+  # Non-gating: runs the quarantine lane for visibility only. continue-on-error
+  # so a flaky quarantined test can NEVER block the release. NOT in publish.needs.
+  quarantine-lane:
+    name: Quarantine lane (non-gating)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Quarantine lane
+        run: npm run test:quarantine
+
   # Publish: builds the zip + SHA-256 on Ubuntu (the zip is platform-
   # independent, no need to build it three times) and uploads them to the
   # GitHub Release. Gated on the COMPLETE verification spread (Ubuntu full +
