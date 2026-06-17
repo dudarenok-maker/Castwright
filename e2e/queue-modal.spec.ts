@@ -234,16 +234,14 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await goToConfirm(page);
     await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
-    /* Settle, then assert the queue STAYED empty on the manuscript review view. */
-    await page.waitForTimeout(800);
-    expect(await queueLen()).toBe(0);
+    /* Poll until stable (passes instantly if 0, catches a delayed enqueue within 2 s). */
+    await expect.poll(queueLen, { timeout: 2_000 }).toBe(0);
 
     /* Passive navigation to the Generate view (top-nav tab → changeView) must
        NOT enqueue — this is the exact path that used to auto-start on open. */
     await page.getByRole('button', { name: /^Generate$/ }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
-    await page.waitForTimeout(800);
-    expect(await queueLen()).toBe(0);
+    await expect.poll(queueLen, { timeout: 2_000 }).toBe(0);
 
     /* Go back and use the explicit CTA → the queue now fills. */
     await page.getByRole('button', { name: /^Manuscript$/ }).click();

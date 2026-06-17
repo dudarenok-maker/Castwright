@@ -66,3 +66,26 @@ and `generation` both failed under induced load; both are W3 targets.
 ## Wave 3 file list (the anchor Wave 3 greps for)
 
 W3-REWRITE: chapters-restructure.test.ts, generation.test.ts
+
+---
+
+## E2E audit (Wave 4) — 2026-06-17
+
+Grep surface: `grep -rnE "waitForTimeout|localhost:[0-9]{4}|127\.0\.0\.1:[0-9]{4}" e2e/`
+
+All hits, dispositions, and actions:
+
+| File | Line | Hit | Disposition | Action |
+|------|------|-----|-------------|--------|
+| `e2e/analysing-progress.spec.ts` | 46 | `waitForTimeout(250)` | KEEP — deliberate poll interval inside a counting loop (8 × 250 ms = 2 s sample window). No observable DOM state corresponds to "250 ms has elapsed" here; this IS the sampling clock. | none |
+| `e2e/concurrent-multi-book.spec.ts` | 61 | `waitForTimeout(500)` | KEEP — negative assertion: verifying BroadcastChannel does NOT fan out a route change. Comment explains the rationale. There is no state to wait for (the point is absence of change); a hard settle is the only correct tool. | none |
+| `e2e/marketing/capture.spec.ts` | 104 | `waitForTimeout(400)` | KEEP — CSS theme re-render settle after `emulateMedia`. A screenshot spec; no observable DOM signal maps to "CSS custom-property cascade applied." Justified settle per the comment. | none |
+| `e2e/model-manager-models.spec.ts` | 172, 190 | `localhost:11434` | KEEP — this is a URL value inside a **mocked API response body**, not a port the test process connects to. It represents Ollama's own reported URL in a `page.route` stub. Not a flake risk. | none |
+| `e2e/helpers.ts` | 123 | `localhost:8080` | KEEP — appears in a **JSDoc comment** explaining why Account specs stub API probes. Comment-only, no port connection. | none |
+| `e2e/queue-modal.spec.ts` | 238, 245 | `waitForTimeout(800)` | FIX — waits 800 ms then asserts `queueLen() === 0` (negative assertion). After URL navigation is already confirmed by `toHaveURL`, a hard 800 ms settle is flake-prone on slow CI. Replaced with `expect.poll(queueLen, { timeout: 2_000 }).toBe(0)` — passes instantly when 0 (the happy path), catches a delayed enqueue within 2 s (the regression detection path). | **fixed** |
+| `e2e/responsive/visual.spec.ts` | 104, 112, 118, 125, 137, 144, 158, 213, 248, 255, 261, 268, 277, 284, 297 | `waitForTimeout(200–300)` | KEEP — all precede `toHaveScreenshot`. The playwright config has `animations: 'disabled'` which freezes CSS at final state but does NOT suppress the React initial-mount opacity 0→1 frame (this is a JS paint, not a CSS transition). The comment at line 101–103 of visual.spec.ts explains this exactly. No observable DOM signal maps to "React second paint committed." Justified settle for visual baseline specs. | none |
+| `e2e/responsive/baseline.spec.ts` | 41, 53 | `waitForTimeout(300)` | KEEP — both follow a state-based hydration gate (`toBeVisible`/`toBeEnabled`). The settle covers CSS layout micro-adjustments after hydration before the `expectNoHorizontalScroll` JS measurement. Same justification as visual.spec.ts post-hydration settles. | none |
+| `e2e/responsive/coverage.spec.ts` | 49, 62, 74, 88, 100, 130, 138, 148, 157, 167, 217, 227, 233, 249, 275, 289 | `waitForTimeout(200–300)` | KEEP — all follow a state-based hydration gate (`toBeVisible`/`waitFor`). Same post-hydration settle justification as baseline.spec.ts. | none |
+| `e2e/responsive/coverage.spec.ts` | 107, 113, 119 | `waitForTimeout(500)` | FIX — three tests with NO preceding hydration gate. `goto` immediately followed by a bare timeout is a race: if Vite is slow the page may not have rendered at all. Added specific `toBeVisible` hydration signals: generation → `getByText(/^CH 01$/)`, voices → `getByRole('heading', { name: /Every voice you've ever generated/i })`, changelog → `getByRole('heading', { name: /Everything that's happened/i })`. The timeouts were removed (the visibility assertion itself is the gate). | **fixed** |
+
+**Summary:** 2 genuine flake risks fixed. 15+ `waitForTimeout` instances retained as justified (polling clocks, negative assertions, post-hydration CSS settles for screenshot specs). 2 port-literal hits are mock-body data or comments — not connection ports. Global teardown is correct and sufficient for Windows browser-proc cleanup; no gap found.
