@@ -4,7 +4,9 @@
 
 **Goal:** Drive GitHub code-scanning (CodeQL) from 146 open alerts to ~0 by writing real defensive code (path containment, rate limiting, generic sidecar errors, URL guards) plus a bounded, justified dismissal set — and fold in the same-class `srv-22` write-probe hardening.
 
-**Architecture:** Three code scopes — A (server), B (sidecar), C (frontend) — are non-overlapping **across** scopes, so B and C run in their own worktrees in parallel with A. **Scope A is internally SEQUENTIAL** (A1 creates `safe-path.ts`, which A2–A5 import; A2/A4/A5 all edit `paths.ts`, A8/A9 both edit `voice-sample-cache.ts`, A10/A11 both edit `epub.ts`). A sequential Scope D (integrator-only) adds the CodeQL config, updates docs, and runs the merge→scan→dismiss→confirm sequence. CodeQL JS barriers are in-CFG branching guards that dominate the sink **in the same function** — so every path-containment guard is applied at the `fs` sink site, never buried in a returning helper.
+**Architecture:** Three code scopes — A (server), B (sidecar), C (frontend) — are non-overlapping **across** scopes, so B and C run in their own worktrees/branches in parallel with A. **Scope A is internally SEQUENTIAL** (A1 creates `safe-path.ts`, which A2–A6 import; **A3/A5** both edit `paths.ts`, **A9/A10** both edit `voice-sample-cache.ts`, **A3/A11/A12** all edit `epub.ts`). A sequential Scope D (integrator-only) adds the CodeQL config, updates docs, and runs the merge→scan→dismiss→confirm sequence. CodeQL JS barriers are in-CFG branching guards that dominate the sink **in the same function** — so every path-containment guard is applied at the `fs` sink site, never buried in a returning helper.
+
+**Branch topology (for subagent execution):** each scope commits to its own branch off `main`, reconciled by D3 — **A → `fix/server-codeql`**, **B → `fix/sidecar-codeql`**, **C → `fix/frontend-codeql`**. Each branch lives in its own git worktree (junction `node_modules` for root + `server/` before running anything). **Task A6 is an integrator/judgment task** (an audit, not a mechanical edit) — run it from the orchestrating session on the Scope-A branch, not as a blind task subagent.
 
 **Tech Stack:** Node 20 / TypeScript / Express 5.2.1, Vitest 4, Python 3.12 / FastAPI / pytest, React 18, GitHub CodeQL (`build-mode: none`), `express-rate-limit` v7.
 
@@ -239,7 +241,7 @@ it('rejects a poisoned voice name', () => {
 
 - `qwen-voice.ts:183` `qwenVoicePtPath(name)` — first line `safeSegment(name);` (export the fn for the test). Do the same inside `qwenVoiceSidecarPath(name)` in `paths.ts`.
 - `book-state.ts` — before `unlink(join(bookDir, oldFile))` (~`:1001`) **and** before the manuscript `writeFile(join(bookDir, newFile))` (~`:999`), add `safeSegment(oldFile);` / `safeSegment(newFile);` (`oldFile` is `state.manuscriptFile`, persisted/bundle-derived; `newFile` is a literal but guarding is cheap and consistent).
-- `epub.ts:61` — change `opts.fileName ?? 'book.epub'` to `path.basename(opts.fileName ?? 'book.epub')`, and add `safeSegment(path.basename(opts.fileName ?? 'book.epub'));` before the `writeFile`.
+- `epub.ts:61` — `epub.ts` currently imports only `{ join }` from `node:path`, so **add `basename` to that import** (`import { join, basename } from 'node:path'`). Change `opts.fileName ?? 'book.epub'` to `basename(opts.fileName ?? 'book.epub')`, and add `safeSegment(basename(opts.fileName ?? 'book.epub'));` before the `writeFile`.
 
 - [ ] **Step 4: Run to verify they pass** — same command → PASS.
 
@@ -278,7 +280,11 @@ describe('writeInbox', () => {
 
 - [ ] **Step 3: Add the guards in the sink functions**
 
-In `protocol.ts` `writeInbox` first line: `safeSegment(manuscriptId);`. At **both** `ollama.ts` `writeFile` sites (~`:353`, `:406`) and the `gemini.ts` `rawAttemptPath(...)` write, add `safeSegment(manuscriptId);` immediately before the `writeFile`, **in that function** (confirm `manuscriptId` is the in-scope variable name; adjust if it's named differently). Import `safeSegment` from the correct relative depth in each file.
+In `protocol.ts` `writeInbox` first line: `safeSegment(manuscriptId);`. Then guard `manuscriptId` immediately before each analyzer write, **in that function**:
+- `ollama.ts` — both `writeFile` sites (~`:353`, `:406`).
+- `gemini.ts` — before the `errorPath(manuscriptId, key)` writes (`:272-273`, `:299-300`) **and** the `outboxPath(manuscriptId, key)` write (`:1164`). (There is **no** `rawAttemptPath` in gemini.ts — that helper is sunk in ollama.ts.)
+
+`manuscriptId` is the in-scope variable name in all of these (confirmed). Import `safeSegment` at the correct relative depth in each file.
 
 - [ ] **Step 4: Run to verify it passes** — same command → PASS.
 
@@ -307,23 +313,23 @@ The sanitizer must live **inside** `bookDirByDisplay` (scan/samples/find all cal
 ```ts
 // server/src/workspace/paths.test.ts (add)
 import path from 'node:path';
-import { bookDirByDisplay, booksRootDir } from './paths.js'; // use the real root accessor name
+import { bookDirByDisplay, BOOKS_ROOT } from './paths.js'; // BOOKS_ROOT is an exported const (string), not a fn
 it('sanitizes traversal to a contained folder', () => {
   const dir = bookDirByDisplay('..\\..\\evil', 'Series', 'Title');
-  expect(path.relative(booksRootDir(), dir).startsWith('..')).toBe(false);
+  expect(path.relative(BOOKS_ROOT, dir).startsWith('..')).toBe(false);
 });
 it('preserves spaces and hyphens in normal display names', () => {
   const dir = bookDirByDisplay('Jane Doe', 'Sci-Fi', 'The Fall');
-  const parts = path.relative(booksRootDir(), dir).split(path.sep);
+  const parts = path.relative(BOOKS_ROOT, dir).split(path.sep);
   expect(parts).toEqual(['Jane Doe', 'Sci-Fi', 'The Fall']);
 });
 it('never collapses a level when a field sanitizes to empty', () => {
   const dir = bookDirByDisplay('...', 'Series', 'Title');
-  expect(path.relative(booksRootDir(), dir).split(path.sep).length).toBe(3);
+  expect(path.relative(BOOKS_ROOT, dir).split(path.sep).length).toBe(3);
 });
 ```
 
-> Confirm the real names of the books-root accessor and the standalones constant when you open the file; adjust the import.
+> `BOOKS_ROOT` (`paths.ts:33`) and `STANDALONES_SERIES` (`paths.ts:73`) are the real exported names — both verified.
 
 - [ ] **Step 2: Run to verify it fails** — `cd server && npx vitest run src/workspace/paths.test.ts` → FAIL.
 
@@ -352,7 +358,7 @@ return dir;
 ```
 (Use the file's actual `BOOKS_ROOT` / standalones identifiers.)
 
-- [ ] **Step 4: Run to verify it passes + the broader workspace suite (round-trip)** — `cd server && npx vitest run src/workspace` → PASS.
+- [ ] **Step 4: Run to verify it passes + the cross-directory callers (round-trip)** — `cd server && npx vitest run src/workspace && npm run test:server` → PASS. (`bookDirByDisplay` is called by `scan.ts`/`samples.ts`/`findBookBy…`/import; the new `assertContained` throws on escape, so run the full server suite to catch any caller that fed a weird display name expecting a path back, not a throw.)
 
 - [ ] **Step 5: Commit**
 
@@ -371,7 +377,7 @@ EOF
 
 **Files:** Modify the routes that compose paths into `workspace/state-io.ts` / `workspace/atomic-rename.ts` / `cover/store.ts` where a single-function call boundary exists; Create `docs/security/codeql-dismissal-residue.md` (this task OWNS the file; later tasks only append).
 
-This task has an audit half (reasoning) and an apply half (mechanical).
+**Integrator/judgment task — run from the orchestrating session on the `fix/server-codeql` branch, not as a blind task subagent** (the audit half requires tracing data flow and deciding guard-vs-dismiss per sink). This task has an audit half (reasoning) and an apply half (mechanical).
 
 - [ ] **Step 1: Audit (reasoning)** — for each `writeFile`/`rename`/`download` in `state-io.ts`, `atomic-rename.ts`, `cover/store.ts`, trace the path to the composing route. Classify each sink: **(G) guardable** = the route composes the path from an id in one function → add `assertContained(WORKSPACE_ROOT, composedPath)` there; **(D) dismiss** = path built from a slugged/contained id with no single-function boundary. Write the classification into the residue doc (Step 3).
 
@@ -466,7 +472,7 @@ export function makeApiLimiter(overrides: Partial<Options> = {}) {
     max: 1000,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: () => process.env.NODE_ENV === 'test',
+    skip: () => !!process.env.VITEST, // Vitest sets VITEST=true; it does NOT set NODE_ENV='test' in this repo
     ...overrides,
   });
 }
@@ -620,44 +626,56 @@ EOF
 
 ---
 
-### Task A11: Incomplete sanitization → replace-until-stable
+### Task A11: Incomplete sanitization
 
-**Files:** Modify `server/src/parsers/html-utils.ts` (tag strip, `:40`), `server/src/parsers/epub.ts` (`htmlBodyOnly` script/style strip, `:356`), `scripts/bump-version.mjs` (`:204`); test `server/src/parsers/html-utils.test.ts` (extend).
+**Files:** Modify `server/src/parsers/html-utils.ts` (tag strips at `:40` AND `:63` — `incomplete-multi-character-sanitization`), `server/src/parsers/epub.ts` (`htmlBodyOnly` script/style strip, `:356` — `incomplete-multi-character-sanitization`), `scripts/bump-version.mjs` (shell-quote escape, `:206` — `incomplete-sanitization`); test `server/src/parsers/html-utils.test.ts` (extend).
 
-This is a CodeQL-shape fix (the single-pass `<[^>]+>` is flagged regardless of a constructible bypass). The test asserts the strip reaches a **fixed point** (idempotence), which is the property replace-until-stable adds.
+Two distinct fixes: **(a)** the `<…>` tag strips → replace-until-stable; **(b)** the bump-version shell-quote escape → escape backslash **before** quote. (a) is a CodeQL-*shape* fix — the single-pass `<[^>]+>` is flagged regardless of a constructible bypass, so its test asserts behavior is preserved + idempotence, and **D3's re-scan is the alert-clearing gate** (like A9). (b) has a real fail-before.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the tests**
 
 ```ts
-// server/src/parsers/html-utils.test.ts (add)
+// server/src/parsers/html-utils.test.ts (add — behavior-preservation + idempotence)
 import { stripHtml } from './html-utils.js';
-it('tag strip is idempotent (reaches a fixed point)', () => {
-  const once = stripHtml('a<scr<script>ipt>b');
-  expect(stripHtml(once)).toBe(once);          // no second-pass change
-  expect(once).not.toMatch(/<[^>]+>/);          // no residual tag
+it('still strips tags and is idempotent', () => {
+  const once = stripHtml('<p>a <em>b</em></p>');
+  expect(once).not.toMatch(/<[^>]+>/);          // tags removed
+  expect(stripHtml(once)).toBe(once);            // fixed point (no second-pass change)
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `cd server && npx vitest run src/parsers/html-utils.test.ts` → FAIL if a residual `<…>` survives the single pass (otherwise it documents the shape; proceed to make the loop explicit).
-
-- [ ] **Step 3: Make the tag strip replace-until-stable**
-
-In `html-utils.ts` replace the single `.replace(/<[^>]+>/g, '')` with:
-```ts
-let stripped = /* prior transforms result */;
-let prev;
-do { prev = stripped; stripped = stripped.replace(/<[^>]+>/g, ''); } while (stripped !== prev);
+```js
+// scripts test: bump-version's arg-quoting must escape backslashes before quotes.
+// If bump-version.mjs has no test harness, assert inline in this task by hand
+// (node -e) — the fix is the deterministic gate:
+//   `a\"b`  must escape the backslash too, not just the quote.
 ```
-Apply the same loop-until-stable idiom to `epub.ts:356` (the `<(script|style)…>` strip) and `bump-version.mjs:204`.
 
-- [ ] **Step 4: Run to verify it passes** — same command → PASS.
+- [ ] **Step 2: Run the html-utils test** — `cd server && npx vitest run src/parsers/html-utils.test.ts` → it documents current behavior (the `<[^>]+>` shape has no constructible fail-before; proceed to add the loop, which the re-scan gates).
+
+- [ ] **Step 3a: Make the tag strips replace-until-stable**
+
+In `html-utils.ts`, replace **both** `.replace(/<[^>]+>/g, '')` (`:40`) and `.replace(/<[^>]+>/g, ' ')` (`:63`) with a loop to a fixed point, e.g.:
+```ts
+function stripTagsStable(s, repl) { let prev; do { prev = s; s = s.replace(/<[^>]+>/g, repl); } while (s !== prev); return s; }
+```
+and call `stripTagsStable(x, '')` / `stripTagsStable(x, ' ')` at the two sites. Apply the same loop to the `<(script|style)…>` strip at `epub.ts:356`.
+
+- [ ] **Step 3b: Fix the bump-version shell-quote escape**
+
+`scripts/bump-version.mjs:206` is `a.replace(/"/g, '\\"')` — incomplete (a pre-existing `\` isn't escaped). Escape backslashes **first**:
+```js
+.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : a))
+```
+
+- [ ] **Step 4: Run to verify** — `cd server && npx vitest run src/parsers/html-utils.test.ts` → PASS (tags still stripped, idempotent).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/parsers/html-utils.ts server/src/parsers/epub.ts scripts/bump-version.mjs server/src/parsers/html-utils.test.ts
 git commit -F - <<'EOF'
-fix(server,scripts): sanitize via replace-until-stable
+fix(server,scripts): replace-until-stable tag strips + backslash-first shell escape
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -753,14 +771,19 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 
-// Inline mirror of server resolveRootCaPath(): env -> mkcert -CAROOT -> per-OS default.
+// Inline mirror of server resolveRootCaPath() — keep in sync with cert-root.ts:
+// env MKCERT_CAROOT -> `mkcert -CAROOT` -> per-OS default (honoring LOCALAPPDATA / XDG_DATA_HOME).
 function findRootCa() {
   const tryDir = (dir) => (dir && existsSync(path.join(dir, 'rootCA.pem')) ? path.join(dir, 'rootCA.pem') : null);
   if (process.env.MKCERT_CAROOT) { const p = tryDir(process.env.MKCERT_CAROOT); if (p) return p; }
   try { const out = execFileSync('mkcert', ['-CAROOT'], { encoding: 'utf8' }).trim(); const p = tryDir(out); if (p) return p; } catch { /* mkcert absent */ }
-  const def = process.platform === 'win32'
-    ? path.join(os.homedir(), 'AppData', 'Local', 'mkcert')
-    : path.join(os.homedir(), '.local', 'share', 'mkcert');
+  let def;
+  if (process.platform === 'win32')
+    def = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'mkcert');
+  else if (process.platform === 'darwin')
+    def = path.join(os.homedir(), 'Library', 'Application Support', 'mkcert');
+  else
+    def = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'mkcert');
   return tryDir(def);
 }
 
@@ -890,12 +913,15 @@ def test_error_response_hides_exception_detail():
     assert body["status"] == "error"
     assert body["error"]
 
-def test_no_exception_text_in_any_response_body():
+def test_no_exception_text_reaches_a_response():
     src = open(os.path.join(SIDECAR_ROOT, "main.py"), encoding="utf-8").read()
-    # no `str(e)` / `repr(e)` may appear on a line that builds a JSONResponse/detail/error body
     for ln in src.splitlines():
-        if ("JSONResponse" in ln or '"error"' in ln or '"detail"' in ln):
-            assert "str(e)" not in ln and "repr(e)" not in ln, ln
+        code = ln.split("#", 1)[0]  # ignore comments
+        # (a) no str(e)/repr(e) directly on a response-building line …
+        if "JSONResponse" in code or '"error"' in code or '"detail"' in code:
+            assert "str(e)" not in code and "repr(e)" not in code, ln
+        # (b) … and no `err_str = str(e)` / `= repr(e)` local that later feeds a body
+        assert not re.search(r"=\s*(str|repr)\(e\)", code), ln
 ```
 
 - [ ] **Step 2: Run to verify it fails** — `npm run test:sidecar` (or the venv python `-m pytest …/test_error_responses.py -v`) → FAIL.
