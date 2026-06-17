@@ -19,6 +19,7 @@ import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
+import { safeSegment } from '../util/safe-path.js';
 import {
   stage1Schema,
   stage1ChapterSchema,
@@ -299,6 +300,7 @@ export class OllamaAnalyzer implements Analyzer {
     schema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
+    safeSegment(manuscriptId);
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);

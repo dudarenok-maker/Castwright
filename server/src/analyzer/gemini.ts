@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { GoogleGenAI } from '@google/genai';
 import type { z } from 'zod';
 import { writeInbox, outboxPath, errorPath, type HandoffKey } from '../handoff/protocol.js';
+import { safeSegment } from '../util/safe-path.js';
 import {
   stage1Schema,
   stage1ChapterSchema,
@@ -245,6 +246,7 @@ export class GeminiAnalyzer implements Analyzer {
     schema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
+    safeSegment(manuscriptId);
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
@@ -1161,5 +1163,6 @@ export async function persistResponse(
   key: HandoffKey,
   raw: string,
 ): Promise<void> {
+  safeSegment(manuscriptId);
   await writeFile(outboxPath(manuscriptId, key), raw, 'utf8');
 }
