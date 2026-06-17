@@ -13,10 +13,12 @@
 ## Setup (do first)
 
 - [ ] Create the four worktrees + branches off the latest `main`, and junction `node_modules` (root + `server/`) into each (PowerShell `New-Item -ItemType Junction`, the project pattern — git-bash `mklink` does not apply):
-  - `git worktree add <path>/codeql-server fix/server-codeql` (Scope A, driven inline)
-  - `git worktree add <path>/codeql-sidecar fix/sidecar-codeql` (Scope B subagent)
-  - `git worktree add <path>/codeql-frontend fix/frontend-codeql` (Scope C subagent)
-  - `git worktree add <path>/codeql-integration -b integration/2026-06-18-codeql` (Scope D; D1/D2/D3 all commit here)
+  - `git worktree add -b fix/server-codeql <path>/codeql-server main` (Scope A, driven inline)
+  - `git worktree add -b fix/sidecar-codeql <path>/codeql-sidecar main` (Scope B subagent)
+  - `git worktree add -b fix/frontend-codeql <path>/codeql-frontend main` (Scope C subagent)
+  - `git worktree add -b integration/2026-06-18-codeql <path>/codeql-integration main` (Scope D; D1/D2/D3 all commit here)
+
+  (All four are **new** branches, so each needs `-b <branch> <path> main` — `git worktree add <path> <branch>` without `-b` fails with `invalid reference` for a branch that doesn't exist yet.)
 - [ ] In each worktree, junction `node_modules` and `server/node_modules` from the primary checkout so `vitest`/`tsc`/`verify` resolve. (Sidecar worktree also needs the sidecar venv reachable for `npm run test:sidecar` — it falls back to a SKIP banner if absent.)
 
 **Tech Stack:** Node 20 / TypeScript / Express 5.2.1, Vitest 4, Python 3.12 / FastAPI / pytest, React 18, GitHub CodeQL (`build-mode: none`), `express-rate-limit` v7.
@@ -672,7 +674,7 @@ it('still strips tags and is idempotent', () => {
 
 - [ ] **Step 3a: Make the tag strips replace-until-stable**
 
-In `html-utils.ts`, replace **both** `.replace(/<[^>]+>/g, '')` (`:40`) and `.replace(/<[^>]+>/g, ' ')` (`:63`) with a loop to a fixed point, e.g.:
+In `html-utils.ts`, replace `.replace(/<[^>]+>/g, '')` (`:40`) — and `.replace(/<[^>]+>/g, ' ')` (`:63`) **only if the surgical check above confirms `:63` is flagged** — with a loop to a fixed point, e.g.:
 ```ts
 function stripTagsStable(s, repl) { let prev; do { prev = s; s = s.replace(/<[^>]+>/g, repl); } while (s !== prev); return s; }
 ```
