@@ -117,7 +117,9 @@ test.describe('responsive coverage (all views × all viewports)', () => {
   });
 
   test('changelog (global) view', async ({ page }) => {
-    await page.goto('/#/changelog');
+    /* Route is #/log (router grammar), not #/changelog — the latter silently
+       falls back to the books library, which the old bare waitForTimeout masked. */
+    await page.goto('/#/log');
     /* h1 "Everything that's happened" mounts once the changelog view renders. */
     await expect(page.getByRole('heading', { name: /Everything that's happened/i })).toBeVisible({ timeout: 10_000 });
     await expectNoHorizontalScroll(page);
