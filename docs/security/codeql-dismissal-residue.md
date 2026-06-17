@@ -31,3 +31,21 @@ not dismissed (the D3 "re-fix, don't dismiss" gate).
 imply these were live vulnerabilities. `voiceSampleFilePath` is traversal-safe via its
 `-<modelKey>-<hash>.mp3` filename suffix (not via `asciiFileScope`, which passes `.`);
 `auto-backup` is gated by `findBookByBookId` + `STAMP_RE`.
+
+## `js/polynomial-redos` — `text.ts` filename/title parsers (for dismissal)
+
+`FILENAME_RE` (`server/src/parsers/text.ts:140`) and `SERIES_FROM_TITLE_RE` (`:184`)
+each carry two adjacent lazy `.+?` groups whose delimiters (`-`, `(`/`)`) legitimately
+appear inside author / series / title. No parse-identity-preserving linear rewrite
+exists on Node 20 (no atomic groups), and the inputs are the **user's own uploaded
+filename / book title** — server-side, not attacker-streamed content — so the ReDoS
+is at most a self-inflicted parse stall on a pathological self-named file. Parse
+identity is locked by the existing `parseFilenameMetadata` / `parseSeriesFromTitle`
+characterization tests, so the regexes are left unchanged and dismissed. (The two
+trim ReDoS — `text-match.ts` `normaliseForMatch` and `voice-sample-cache.ts`
+`stripQuoteMarks` — WERE fixed in A10 by splitting the `^…|…$` alternation.)
+
+| file:line | rule | justification |
+|---|---|---|
+| `server/src/parsers/text.ts:140` (`FILENAME_RE`) | js/polynomial-redos | server-side filename-stem input; no parse-preserving linear rewrite (Node 20, no atomic groups); parse identity locked by characterization tests |
+| `server/src/parsers/text.ts:184` (`SERIES_FROM_TITLE_RE`) | js/polynomial-redos | server-side book-title input; same rationale |

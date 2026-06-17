@@ -54,7 +54,12 @@ export function listVoiceSampleFiles(): string[] {
 const MAX_CHARS = 320;
 
 export function stripQuoteMarks(s: string): string {
-  return s.replace(/^[“”"'‘’\s]+|[“”"'‘’\s]+$/g, '').trim();
+  // Two anchored single-sided replaces — the `^…|…$` alternation is the
+  // polynomial-redos shape.
+  return s
+    .replace(/^[“”"'‘’\s]+/, '')
+    .replace(/[“”"'‘’\s]+$/, '')
+    .trim();
 }
 
 export function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
