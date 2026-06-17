@@ -169,6 +169,7 @@ not replace them.
 - **UI-visible behaviour SHOULD land an e2e test** when the change crosses
   router/redux/layout seams (Vitest+jsdom can lie about layout, focus, and
   hashchange timing). One Playwright spec per feature surface is the bar.
+- **Flaky tests** route through `quarantinedIt` (`server/src/test-utils/quarantine.ts`) into the non-gating lane (`npm run test:quarantine`); each is logged in `docs/testing/flaky-register.md`. Never add a raw `it.skipIf(process.env.CI)`.
 
 Harnesses (five tiers):
 
