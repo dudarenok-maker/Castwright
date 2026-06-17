@@ -90,6 +90,23 @@ function LiveChapterRow({
           <div className="h-full rounded-full bg-ink/20" style={{ width: `${sectionPct}%` }} />
         </div>
       )}
+      {chapter.inSentenceMode && chapter.sentencesTotal ? (
+        <>
+          <div className="inline-flex items-center gap-2 text-[11px] font-mono tabular-nums text-ink/70">
+            <span className="font-semibold">
+              Attributed ~{chapter.sentencesDone ?? 0} of ~{chapter.sentencesTotal} sentences
+            </span>
+          </div>
+          <div className="h-0.5 w-48 rounded-full bg-ink/10 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-magenta/40"
+              style={{
+                width: `${Math.min(100, ((chapter.sentencesDone ?? 0) / chapter.sentencesTotal) * 100)}%`,
+              }}
+            />
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { Provider } from 'react-redux';
 import { accountSlice } from '../../store/account-slice';
 import { castSlice } from '../../store/cast-slice';
 import type { AnalysisPhase } from '../../lib/types';
+import type { AnalysisLiveChapter } from '../../lib/api';
+import type React from 'react';
 import { PhaseCard } from './phase-card';
 
 function mountStore() {
@@ -140,6 +142,61 @@ describe('LiveChapterRow — section sub-bar', () => {
       </Provider>,
     );
     expect(screen.queryByText(/section/i)).toBeNull();
+  });
+});
+
+const phase1: AnalysisPhase = {
+  id: 1,
+  label: 'Parsing and attribution',
+  detail: 'Splitting chapters into sentences and labelling each speaker.',
+  duration: 1000,
+};
+
+function liveChapter(over: Partial<AnalysisLiveChapter> = {}): AnalysisLiveChapter {
+  return { chapterIndex: 1, chapterTitle: 'Chapter 1', elapsedMs: 5000, estMs: 60000, ...over };
+}
+
+// Wraps PhaseCard in a real store so useAppSelector resolves. mountStore() is
+// the helper already defined in this file (account + cast reducers).
+function renderCard(props: Partial<React.ComponentProps<typeof PhaseCard>>) {
+  return render(
+    <Provider store={mountStore()}>
+      <PhaseCard
+        phase={phase1}
+        activePhaseId={1}
+        phaseProgress={0.4}
+        phaseLogs={['x']}
+        live={null}
+        isLocalAnalyzer
+        analysisStarted
+        conn="streaming"
+        bookId={null}
+        droppedQuotesRefreshKey={0}
+        {...props}
+      />
+    </Provider>,
+  );
+}
+
+describe('LiveChapterRow sentence headline', () => {
+  it('shows "Attributed ~N of ~M sentences" in sentence mode', () => {
+    renderCard({
+      live: { totalChapters: 9, chapters: [liveChapter({ sentencesDone: 247, sentencesTotal: 900, inSentenceMode: true })] },
+    });
+    expect(screen.getByText(/Attributed ~247 of ~900 sentences/)).toBeInTheDocument();
+  });
+
+  it('omits the sentence headline before sentence mode', () => {
+    renderCard({ live: { totalChapters: 9, chapters: [liveChapter()] } });
+    expect(screen.queryByText(/Attributed/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the chars/s speed pulse in the heartbeat row', () => {
+    renderCard({
+      live: { totalChapters: 9, chapters: [liveChapter({ sentencesDone: 10, sentencesTotal: 900, inSentenceMode: true })] },
+      heartbeat: { hb: { phaseId: 1, receivedBytes: 2048, charsPerSec: 145, elapsedMs: 14000, sinceLastChunkMs: 0, chapterIndex: 1 }, receivedAt: Date.now() },
+    });
+    expect(screen.getByText(/145 chars\/s/)).toBeInTheDocument();
   });
 });
 
