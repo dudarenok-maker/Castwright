@@ -13,7 +13,7 @@
 # CPU-only build the installer pre-installs the cpu-index wheel BEFORE this file
 # (install-torch.mjs, cpu profile → https://download.pytorch.org/whl/cpu); the
 # ==2.8.0 pins below then stay satisfied.
-torch==2.8.0
+torch==2.12.0
 torchaudio==2.8.0
 
 # Kokoro v1 — plain (no [gpu] extra) so the CPU/CoreML onnxruntime is used; the

@@ -10,8 +10,8 @@
 # needed). No index here — PyPI gives the cpu/mps build on macOS/CPU and a
 # CUDA-bundled wheel on Windows/Linux x86_64. For a specific CUDA build, pre-install
 # before this file, e.g. CUDA 12.8:
-#   pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-torch==2.8.0
+#   pip install torch==2.12.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+torch==2.12.0
 torchaudio==2.8.0
 
 # NOTE on DeepSpeed: not in requirements because its setup.py needs the
