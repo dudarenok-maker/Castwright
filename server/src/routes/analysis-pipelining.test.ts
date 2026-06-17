@@ -25,13 +25,12 @@
         still active), proving the limiter buckets advance in parallel.
 
    All cases use spy analyzers (no network, no Ollama / Gemini SDK) and
-   the on-disk analysis cache (per-test unique id + `clearAnalysisCache`
-   teardown). The route layer's saveAnalysisCache / loadAnalysisCache
-   are real to keep the test honest about the actual write paths the
-   pipelining touches. */
+   an in-memory analysis-cache mock (vi.mock → zero real I/O; per-test
+   unique id + `clearAnalysisCache` teardown). Event-driven
+   `whenDispatched` replaces all real-timer polling — scheduling logic
+   completes in bounded microtask time regardless of CPU/I/O load. */
 
-import { describe, expect, beforeEach, afterEach, vi } from 'vitest';
-import { quarantinedIt } from '../test-utils/quarantine.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
@@ -377,28 +376,13 @@ afterEach(() => {
   clearPipelinedMode();
 });
 
-/* Helper that polls `condition` until true or a budget elapses. Vitest
-   uses real timers here (Phase 0 / Phase 1 dispatch hops are real
-   microtasks), so polling with `setImmediate`-style waits is the
-   right call. */
-async function waitFor(condition: () => boolean, budgetMs = 2000, step = 5): Promise<void> {
-  const start = Date.now();
-  while (!condition()) {
-    if (Date.now() - start > budgetMs) {
-      throw new Error(`waitFor timed out after ${budgetMs}ms`);
-    }
-    await new Promise((r) => setTimeout(r, step));
-  }
-}
-
 /* ───────────────────────────────────────────────────────────────────
    Case 1 — Interleaved execution under default LAG=10.
    30-chapter mock book; assert Phase 1 chapter 0 dispatches AFTER
    Phase 0 chapter 9 completes but BEFORE Phase 0 chapter 11 starts.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () => {
-  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
-  quarantinedIt('Phase 1 chapter 0 dispatches after Phase 0 chapter 9 completes but before chapter 11 starts (LAG=10)', async () => {
+  it('Phase 1 chapter 0 dispatches after Phase 0 chapter 9 completes but before chapter 11 starts (LAG=10)', async () => {
     const manuscriptId = `test-pipeline-interleave-${Date.now()}`;
     registerStubManuscript(manuscriptId, 30);
     /* Both Phase 0 and Phase 1 use `readStage2Concurrency`. Set to 1 so
@@ -463,7 +447,7 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -476,12 +460,11 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
     const manuscriptId = `test-rolling-roster-${Date.now()}`;
     /* 12 chapters + min-lag=5 + concurrency=1 keeps the Phase 0 grind
        short enough (11 sequential dispatches before the holding chapter
-       12 stalls the pool) that the inner `waitFor` doesn't have to span
-       a full CI-cold-start budget. The smaller fixture pins the same
-       invariant the larger one used to — "Phase 1 chapter K sees roster
-       up to K+LAG, nothing beyond". Holding chapter 12 keeps the
-       chapter-12 ch-cast OUT of the roster snapshot so the `not.toContain`
-       assertion still has teeth. */
+       12 stalls the pool). The smaller fixture pins the same invariant
+       the larger one used to — "Phase 1 chapter K sees roster up to
+       K+LAG, nothing beyond". Holding chapter 12 keeps the chapter-12
+       ch-cast OUT of the roster snapshot so the `not.toContain` assertion
+       still has teeth. */
     registerStubManuscript(manuscriptId, 12);
     process.env.STAGE2_CONCURRENCY = '1';
 
@@ -550,8 +533,7 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
    concurrency >= 2 so chapters 1 and 2 actually dispatch in parallel.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — back-pressure under stall', () => {
-  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
-  quarantinedIt('Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch', async () => {
+  it('Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch', async () => {
     const manuscriptId = `test-backpressure-${Date.now()}`;
     registerStubManuscript(manuscriptId, 30);
     /* `readStage2Concurrency` is shared by Phase 0 + Phase 1. We need
@@ -581,32 +563,41 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
         requestedModel: undefined,
       });
 
-      /* Wait until Phase 1 chapters 1 and 2 (ids) have dispatched.
-         Chapter id=3 (index 2) needs watermark>=12, which the held
-         chapter 13 prevents — it must NOT dispatch. */
-      await waitFor(
-        () => [1, 2].every((id) => fixture.trace.some((t) => t.phase === 1 && t.chapterId === id)),
-        10_000,
-      );
-      /* Give the watermark + queue another generous tick to make
-         absolutely sure chapter 3 isn't spuriously released. */
-      await new Promise((r) => setTimeout(r, 200));
+      /* Event-driven wait: both chapters 1 and 2 (Phase 1) must dispatch
+         before we assert chapter 3 is absent. */
+      await Promise.all([1, 2].map((id) => fixture.whenDispatched(1, id)));
 
-      /* Phase 1 chapter id=3 must NOT have dispatched yet — it needs
-         watermark >= 12 (which we're holding chapter 13 to prevent). */
-      const phase1Chapter3 = fixture.trace.find((t) => t.phase === 1 && t.chapterId === 3);
-      expect(phase1Chapter3).toBeUndefined();
+      /* Drain to quiescence — loop microtasks until the trace length is
+         stable across two passes. The dispatch loop is a pure microtask
+         chain (no setTimeout), so draining until stable is sufficient to
+         detect any spurious early dispatch of chapter 3. */
+      async function settle(): Promise<void> {
+        let prev = -1;
+        while (fixture.trace.length !== prev) {
+          prev = fixture.trace.length;
+          for (let i = 0; i < 50; i++) await Promise.resolve();
+        }
+      }
+      await settle();
+
+      /* positive control: chapters 1 and 2 DID dispatch (guards against a vacuous pass) */
+      expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 1)).toBeDefined();
+      expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 2)).toBeDefined();
+      /* the actual assertion: chapter 3 is parked */
+      expect(fixture.trace.find((t) => t.phase === 1 && t.chapterId === 3)).toBeUndefined();
 
       /* Release Phase 0 chapter 13 — watermark advances to 12 once
-         chapter 13's completion folds in, releasing chapter id=3. */
+         chapter 13's completion folds in, releasing chapter id=3.
+         Guard: ensure ch13 has dispatched into the hold before releasing. */
+      await fixture.whenDispatched(0, 13);
       fixture.releasePhase0(13);
-      await waitFor(() => fixture.trace.some((t) => t.phase === 1 && t.chapterId === 3), 10_000);
+      await fixture.whenDispatched(1, 3);
       await runPromise;
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -616,8 +607,7 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
    chapter is pending. The watermark factory returns the sequential stub.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', () => {
-  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
-  quarantinedIt('sequential mode — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
+  it('sequential mode — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
     const manuscriptId = `test-sequential-${Date.now()}`;
     registerStubManuscript(manuscriptId, 6);
     process.env.STAGE2_CONCURRENCY = '2';
@@ -664,7 +654,7 @@ describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', ()
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -675,8 +665,7 @@ describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', ()
    the trace would be strictly Phase-0 then Phase-1).
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — concurrent pool interleaving in production', () => {
-  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
-  quarantinedIt('pipelined trace interleaves Phase-0 and Phase-1 dispatches (not strictly serial)', async () => {
+  it('pipelined trace interleaves Phase-0 and Phase-1 dispatches (not strictly serial)', async () => {
     const manuscriptId = `test-concurrent-interleave-${Date.now()}`;
     registerStubManuscript(manuscriptId, 15);
     process.env.ANALYSIS_CAST_CONCURRENCY = '2';
@@ -720,7 +709,7 @@ describe('runMainAnalyzerJob — concurrent pool interleaving in production', ()
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────
@@ -734,8 +723,7 @@ describe('runMainAnalyzerJob — concurrent pool interleaving in production', ()
    injected Phase 1 spy), so all chapters attribute.
    ─────────────────────────────────────────────────────────────────── */
 describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase even with a per-request model', () => {
-  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
-  quarantinedIt('does not reuse the Phase 0 selection for Phase 1 when requestedModel is set', async () => {
+  it('does not reuse the Phase 0 selection for Phase 1 when requestedModel is set', async () => {
     const manuscriptId = `test-phase1-uniform-${Date.now()}`;
     registerStubManuscript(manuscriptId, 4);
     process.env.STAGE2_CONCURRENCY = '1';
@@ -765,5 +753,5 @@ describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase eve
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
     }
-  }, 30_000);
+  });
 });

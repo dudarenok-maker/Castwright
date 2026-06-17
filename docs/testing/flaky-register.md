@@ -8,8 +8,4 @@ Empty register = done. See the rewrite playbook in
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| pipelined Phase 0/1 interleaved execution | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
-| back-pressure under stall | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — back-pressure under stall` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
-| non-pipelined mode collapses to sequential | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — non-pipelined mode collapses to sequential` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
-| concurrent pool interleaving in production | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — concurrent pool interleaving in production` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
-| Phase 1 resolves via selectAnalyzerForPhase with per-request model | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase even with a per-request model` | CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write | #878 | 2026-06-17 |
+| _(none)_ | | | | | |
