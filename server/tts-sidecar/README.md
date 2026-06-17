@@ -9,11 +9,11 @@ torch dependency tree doesn't leak into Node tooling.
 | Component | Version | Notes |
 |---|---|---|
 | **Python** | **3.12** (exactly) | bootstrap probes for 3.12 and refuses anything else; venv stamped `cp312` |
-| **PyTorch** | **`torch==2.8.0` + `torchaudio==2.8.0`** (matched pair, pinned in `requirements/nvidia-cuda.txt`) | torch **<2.9** keeps `torchaudio` audio I/O in-core (so no torchcodec); needed by Coqui + Qwen (Kokoro doesn't use torch) |
+| **PyTorch** | **`torch==2.11.0` + `torchaudio==2.11.0`** (matched pair, pinned in `requirements/nvidia-cuda.txt`) | needed by Coqui + Qwen (Kokoro doesn't use torch); the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it (no torchcodec) |
 | → NVIDIA GPU | PyPI default = CUDA-bundled wheel; or pre-install `--index-url https://download.pytorch.org/whl/cu128` for **CUDA 12.8** | ~2.5 GB |
 | → CPU / macOS | PyPI default = CPU / MPS build | |
 | coqui-tts | `>=0.24.0` (resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit); `[codec]` dropped → no torchcodec |
-| **torchcodec** | **not installed** | only needed on torch ≥2.9; its cores support FFmpeg 4–7 only (fails vs FFmpeg 8) — sidestepped by pinning torch <2.9 |
+| **torchcodec** | **not installed** | the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it — no torchcodec needed |
 | kokoro-onnx | `>=0.4.0,<0.5.0` (plain, **no `[gpu]`**) | overlay lands core `onnxruntime` (CPU); `install-ort.mjs` swaps in `onnxruntime-gpu` on the nvidia profile. `[gpu]` is avoided — it coexists with the core dep and can silently leave CPU onnxruntime winning. No torch |
 | transformers | `>=4.45,<5.0` | coqui-tts compat cap |
 
@@ -73,9 +73,10 @@ cd server\tts-sidecar
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 # Install everything, including PyTorch. torch + torchaudio are now EXPLICIT,
-# pinned to the matched 2.8.0 pair (recent coqui-tts no longer pulls torch
-# transitively; torch <2.9 keeps torchaudio audio I/O in-core so no torchcodec is
-# needed). On Windows / Linux x86_64 PyPI gives the CUDA-bundled wheel; on macOS
+# pinned to the matched 2.11.0 pair (recent coqui-tts no longer pulls torch
+# transitively; the sidecar does all audio I/O via soundfile + ffmpeg and never
+# calls torchaudio.load, so torchaudio's 2.9 backend removal doesn't affect it —
+# no torchcodec needed). On Windows / Linux x86_64 PyPI gives the CUDA-bundled wheel; on macOS
 # the CPU/MPS build. No separate torch step is needed for the common case.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
@@ -87,15 +88,15 @@ folder first: `Remove-Item -Recurse -Force .venv`.
 
 ### Forcing a specific torch build (optional)
 
-The requirements install pulls the PyPI-default `torch==2.8.0` (CUDA-bundled on
+The requirements install pulls the PyPI-default `torch==2.11.0` (CUDA-bundled on
 Windows/Linux, CPU/MPS on macOS), which is what most setups want. If you need a
 **specific** build — e.g. CPU-only torch on a GPU box, or a particular CUDA
-toolkit — pre-install the **matched 2.8.0 pair** BEFORE the requirements (pip then
-leaves the `==2.8.0` pins satisfied):
+toolkit — pre-install the **matched 2.11.0 pair** BEFORE the requirements (pip then
+leaves the `==2.11.0` pins satisfied):
 
 ```powershell
 # CPU-only (smaller; no CUDA libs):
-.\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
 # …then:
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
@@ -115,14 +116,14 @@ toolkit version.
 ### Picking a specific CUDA build (e.g. CUDA 12.8)
 
 PyTorch ships per-CUDA wheels behind `--index-url`. Pre-install the **matched
-2.8.0 pair** for your toolkit BEFORE the requirements (pip then leaves the
-`==2.8.0` pins satisfied). Run `nvidia-smi` first to confirm a GPU.
+2.11.0 pair** for your toolkit BEFORE the requirements (pip then leaves the
+`==2.11.0` pins satisfied). Run `nvidia-smi` first to confirm a GPU.
 
 ```powershell
 # Replace any default torch first if you want to switch CUDA builds:
 .\.venv\Scripts\python.exe -m pip uninstall -y torch torchaudio
 # CUDA 12.8 (the validated pair):
-.\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+.\.venv\Scripts\python.exe -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 # (for a different CUDA toolkit, swap cu128 for the matching index from pytorch.org/get-started/previous-versions)
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
