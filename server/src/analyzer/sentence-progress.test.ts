@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countSentencesHeuristic, countStreamedSentences } from './sentence-progress.js';
+import { countSentencesHeuristic, countStreamedSentences, refineSentencesTotal } from './sentence-progress.js';
 
 describe('countSentencesHeuristic', () => {
   it('counts sentence-boundary splits', () => {
@@ -25,5 +25,25 @@ describe('countStreamedSentences', () => {
   });
   it('returns 0 for empty', () => {
     expect(countStreamedSentences('')).toBe(0);
+  });
+});
+
+describe('refineSentencesTotal', () => {
+  it('returns the heuristic when no section has completed', () => {
+    expect(
+      refineSentencesTotal({ committedSentences: 0, committedChars: 0, totalChars: 9000, heuristicTotal: 300 }),
+    ).toBe(300);
+  });
+  it('projects from observed sentences-per-char once a section is done', () => {
+    // section 1: 100 sentences over 1000 chars → 0.1/char; 9000 total chars.
+    // projected = 100 + 0.1 * (9000 - 1000) = 900.
+    expect(
+      refineSentencesTotal({ committedSentences: 100, committedChars: 1000, totalChars: 9000, heuristicTotal: 300 }),
+    ).toBe(900);
+  });
+  it('never returns below the committed count', () => {
+    expect(
+      refineSentencesTotal({ committedSentences: 50, committedChars: 9000, totalChars: 9000, heuristicTotal: 10 }),
+    ).toBe(50);
   });
 });

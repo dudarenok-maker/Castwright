@@ -23,3 +23,22 @@ export function countStreamedSentences(buffer: string): number {
   if (!buffer) return 0;
   return (buffer.match(/"characterId"\s*:/g) ?? []).length;
 }
+
+/** Self-calibrate the denominator once ≥1 section is committed: the observed
+    sentences-per-char from completed sections, applied to the remaining chars.
+    Falls back to the static heuristic before any section completes (graceful
+    degradation — the headline count still works, it is just less
+    self-correcting). Never returns below the already-committed count. */
+export function refineSentencesTotal(args: {
+  committedSentences: number;
+  committedChars: number;
+  totalChars: number;
+  heuristicTotal: number;
+}): number {
+  const { committedSentences, committedChars, totalChars, heuristicTotal } = args;
+  if (committedSentences <= 0 || committedChars <= 0) return heuristicTotal;
+  const rate = committedSentences / committedChars;
+  const remainingChars = Math.max(0, totalChars - committedChars);
+  const projected = Math.round(committedSentences + rate * remainingChars);
+  return Math.max(projected, committedSentences);
+}
