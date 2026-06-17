@@ -161,8 +161,8 @@ describe('installRecipe', () => {
     expect(r.ortPackage).toBe('onnxruntime-gpu');
   });
   // S0.2 desk-pass-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4, cp312).
-  // Import-ability + synthesis are OWED on real AMD hardware (Wave H2). torch 2.8
-  // < 2.9 → coqui-tts without [codec]. ORT is plain onnxruntime (NOT directml):
+  // Import-ability + synthesis are OWED on real AMD hardware (Wave H2).
+  // coqui-tts is used WITHOUT [codec] (no torchcodec). ORT is plain onnxruntime (NOT directml):
   // S0.1 found DirectML can't run the Kokoro model, so Kokoro stays on the CPU EP.
   it('amd torchPreinstall = the pinned ROCm 6.4.4 cp312 wheels (win); plain onnxruntime (no directml)', () => {
     const r = installRecipe('amd', 'win32');

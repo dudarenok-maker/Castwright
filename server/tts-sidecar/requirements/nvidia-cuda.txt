@@ -3,16 +3,18 @@
 
 # Coqui XTTS is now opt-in — install it from the Model Manager (it pip-installs coqui-tts under base.txt's pins).
 
-# torch + torchaudio — EXPLICIT, matched, pinned. Qwen synth needs torch (~10 import
-# sites in main.py) and torchaudio is tightly version-coupled to torch. (Historically
-# coqui-tts 0.27.5 dropped its transitive torch dep, exposing this.) Pinned to 2.8.0:
-# 2.8.x is the newest line where torch < 2.9 keeps audio I/O in-core (no torchcodec
-# needed). No index here — PyPI gives the cpu/mps build on macOS/CPU and a
-# CUDA-bundled wheel on Windows/Linux x86_64. For a specific CUDA build, pre-install
-# before this file, e.g. CUDA 12.8:
-#   pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-torch==2.8.0
-torchaudio==2.8.0
+# torch + torchaudio — EXPLICIT, matched, pinned. Qwen synth needs torch (~10
+# import sites in main.py); torchaudio is tightly version-coupled to torch.
+# (coqui-tts 0.27.5 declares torch only under its [cuda]/[cpu] extras, so an
+# explicit line is required — see test_requirements.py.) Pinned to 2.11.0:
+# clears CVE-2025-2999 (unpack_sequence) + CVE-2025-3001 (lstm_cell); highest
+# line with a cu128 wheel (2.12 is cu130-only → driver bump). torchaudio 2.9
+# removed the in-core soundfile backend (load/save now need torchcodec) — this
+# is fine because the sidecar NEVER calls torchaudio.load: audio I/O is
+# soundfile + ffmpeg, and Coqui uses manifest speakers, not speaker_wav.
+#   pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0
+torchaudio==2.11.0
 
 # NOTE on DeepSpeed: not in requirements because its setup.py needs the
 # standalone NVIDIA CUDA Toolkit (with nvcc) at install time — the CUDA

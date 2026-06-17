@@ -8,6 +8,7 @@
 - **The default voices use your NVIDIA card again.** A quiet setup slip could leave the everyday voice engine running on your processor; it now reaches for the graphics card as intended, so generating is back to full pace.
 - **Installed in a single click, with Pinokio.** If you run [Pinokio](https://pinokio.computer), Castwright now sets itself up from one click — no terminal, nothing to install by hand. It fetches what it needs, gets everything ready, and launches straight into the same guided first run as the desktop installers.
 - **The waveform comes with you.** Downloaded chapters now carry their soundwave, so on your phone the scrubber stays drawn and you can see where you are at a glance — no signal needed.
+- **A newer, safer engine under the hood.** The voice engine now runs on a freshly updated, security-patched core — nothing changes in how it sounds, just steadier ground beneath it.
 
 # Castwright 1.7.0
 

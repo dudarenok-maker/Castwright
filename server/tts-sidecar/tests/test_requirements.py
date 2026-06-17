@@ -87,8 +87,14 @@ def test_torch_is_explicit():
 
 def test_torch_and_torchaudio_are_a_matched_pair():
     """torchaudio is tightly coupled to torch's exact version, so both must be
-    pinned to the SAME version. We pin the 2.8.0 pair (torch <2.9 keeps audio I/O
-    in-core, so no torchcodec is needed)."""
+    pinned to the SAME version. The old 2.8.0 "<2.9 keeps in-core I/O" rationale
+    no longer applies: the sidecar never calls torchaudio.load (Kokoro is ONNX,
+    Qwen uses soundfile, Coqui uses pre-computed manifest-speaker latents), so
+    torchaudio's 2.9 backend removal doesn't touch us. We assert a matched pair
+    at or above the CVE-patched floor — torch >=2.10 clears CVE-2025-2999
+    (unpack_sequence) and CVE-2025-3001 (lstm_cell). The "we never call
+    torchaudio.load" invariant is enforced separately in
+    test_audio_io_invariant.py."""
     lines = _lines()
     torch_pin = next((_pin(l) for l in lines if _pkg(l) == "torch"), None)
     audio_pin = next((_pin(l) for l in lines if _pkg(l) == "torchaudio"), None)
@@ -96,14 +102,19 @@ def test_torch_and_torchaudio_are_a_matched_pair():
     assert audio_pin == torch_pin, \
         f"torch ({torch_pin}) and torchaudio ({audio_pin}) must be the same pinned version"
     major, minor = (int(x) for x in torch_pin.split(".")[:2])
-    assert (major, minor) < (2, 9), \
-        "torch must stay <2.9 so torchaudio keeps in-core audio I/O (no torchcodec)"
+    assert (major, minor) >= (2, 10), \
+        "torch must stay >=2.10 (clears CVE-2025-2999 unpack_sequence + CVE-2025-3001 lstm_cell)"
 
 
 def test_no_torchcodec():
-    """We dropped coqui-tts's `[codec]` extra, so torchcodec must NOT be pulled —
-    it only ships cores for FFmpeg 4–7 and fails against the FFmpeg 8 on PATH, and
-    is only needed on torch >=2.9 anyway."""
+    """torchcodec must NOT be a manifest requirement. NOTE: this inspects the
+    requirements-manifest TEXT (_lines()), not the installed venv — it guards
+    against re-adding `coqui-tts[codec]` or a bare `torchcodec` line. The runtime
+    guarantee that torchcodec is absent comes separately from torchaudio 2.11's
+    empty Requires-Dist (a plain `pip install torchaudio==2.11.0` pulls no
+    torchcodec). torchcodec ships cores for FFmpeg 4–7 only (fails against the
+    FFmpeg 8 on PATH) and is reached only if you call torchaudio.load — we never
+    do (see test_audio_io_invariant.py)."""
     assert not any(_pkg(l) == "torchcodec" for l in _lines()), \
         "torchcodec must not be a requirement (dropped with the [codec] extra)"
     assert not any("coqui-tts[codec]" in l for l in _lines()), \
