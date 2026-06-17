@@ -14,6 +14,14 @@ import type { VoiceLike } from './voice-mapping.js';
 
 const VOICE: VoiceLike = { id: 'v_x', character: 'Halloran', attributes: ['Male', 'Gruff'] };
 
+describe('djb2', () => {
+  it('is stable for realistic ids (the clamp never affects short inputs)', () => {
+    expect(djb2('qwen-wren__angry')).toBe(djb2('qwen-wren__angry'));
+    expect(typeof djb2('x')).toBe('number');
+    expect(djb2('a')).not.toBe(djb2('b'));
+  });
+});
+
 describe('buildSampleText', () => {
   it('returns the longest evidence quote, smart-quotes stripped', () => {
     const short = 'Aye.';
