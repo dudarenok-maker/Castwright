@@ -227,6 +227,39 @@ host an in-function guard. The v1 "cleared centrally" framing is dropped.
    CA is impractical in the prod-start flow, **dismiss** with the localhost-own-cert
    justification.
 
+**A4. `srv-22` — `sync-folder/test` arbitrary-path write (scope expansion, NOT a
+CodeQL alert).** Folded in because it is the **same vulnerability class** as the
+`import` write-primitive (§A1) the reviewers escalated — an unauthenticated
+arbitrary-path FS operation reachable on a hostile LAN — and fixing one while
+leaving the other is inconsistent. `POST /api/user/settings/sync-folder/test`
+(`server/src/routes/user-settings.ts:129-153`) takes `path` validated only as
+`z.string().min(1).max(2000)`, then does `mkdir(path, {recursive:true})` +
+`writeFile(join(path,'.audiobook-write-probe'),'ok')` + `unlink`. So it is an
+**arbitrary-directory-creation + fixed-name limited-clobber** primitive (the content
+is a constant `'ok'`, immediately unlinked — not arbitrary-content).
+
+**Key difference from the import sink: the path is arbitrary _by design_.** The
+feature exists to test whether an *external* sync folder (a Google Drive path,
+outside `WORKSPACE_ROOT`) is writable, so workspace-containment (the §A1 fix) is
+**wrong here** — it would break the feature. The fix is to remove the
+*arbitrary-mkdir* primitive while preserving the writability probe:
+- **Do not `mkdir(recursive)` an arbitrary tree.** `stat` the path first; if it is
+  not an existing directory, return `{ ok:false, code:'ENOENT', message:'Folder
+  does not exist.' }` **without creating anything**. Probe writability only of a
+  directory the user has already set up. *(This is also better UX — it tells the
+  user their path is wrong instead of silently materializing a folder tree.)*
+- Keep the fixed probe filename + constant content + unlink (already limited).
+- The residual exposure (writing/deleting a `.audiobook-write-probe` in an existing
+  attacker-named dir on a hostile LAN) is genuine but small; the real control is
+  auth (`srv-20`, parked) — the rate limiter (§A2) only blunts repetition. Document
+  this honestly; do not claim the probe is fully closed.
+
+**Behavior-change note:** previously the probe *created* the folder; after this it
+*requires* the folder to exist. This is a deliberate UX + security improvement, but
+it changes the "Test" button's behavior — flag it in the PR so the user can veto if
+plan-79's intent was to create-on-test. Update plan 79's doc if it asserts the old
+behavior. Close `srv-22` (and its issue) on merge.
+
 ### Scope B — Sidecar (Python), `py/stack-trace-exposure` (14)
 
 `server/tts-sidecar/main.py` returns `str(e)` / traceback text to the client at 14
@@ -292,6 +325,10 @@ Keep `scripts/**` in scope (real-ish) — fix `bump-version.mjs` and
   entity sequences, `text-match.ts`); sanitizer idempotent (replace-until-stable);
   exact-host check; loop clamps reach the loop condition; `audio-tags` untouched
   (no truncation).
+- **A4 (`srv-22`):** `user-settings` route test — `sync-folder/test` on a
+  non-existent path returns `{ok:false, code:'ENOENT'}` and creates **nothing**
+  (assert no `mkdir`); on an existing temp dir returns `{ok:true}` and leaves no
+  probe file behind.
 - **B:** `server/tts-sidecar/tests/` — a pytest asserting an error response body
   carries the generic message and contains **no** traceback / `str(e)` substring,
   across a representative sample of the 14 sites.
@@ -331,11 +368,10 @@ Everything else is a code fix expected to auto-clear on re-scan.
 
 - **Authentication** (`fe-11`, `srv-10`, `srv-9`) — single-user by design; the only
   real LAN control, deliberately parked.
-- **`srv-21` (SSRF via `sidecarUrl`)** and **`srv-22` (`sync-folder/test`
-  arbitrary mkdir/clobber)** — *not* CodeQL-flagged, tracked separately. **Noted
-  adjacency:** the `sync-folder/test` write (`user-settings.ts:138-142`) is the
-  **same arbitrary-write class** as the `import` sink this spec hardens; fixing one
-  and not the other is inconsistent. **Recommend folding `srv-22`'s path-containment
-  into Scope A** (same `safeJoin` pattern) — flagged for the user's call. `srv-21`
-  (host allowlist) is a separate shape; leave as a follow-up.
+- **`srv-22` (`sync-folder/test` arbitrary mkdir/clobber)** is now **IN scope** —
+  see §A4. (It needs the no-arbitrary-mkdir fix, *not* the §A1 containment pattern,
+  because its path is external by design.)
+- **`srv-21` (SSRF via `sidecarUrl`)** — *not* CodeQL-flagged, a different shape
+  (host allowlist on an outbound fetch, not a filesystem sink). Leave as a separate
+  follow-up.
 - `side-12/13`, `ops-7` (sidecar pickle / download checksums) — separate backlog.
