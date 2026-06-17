@@ -109,6 +109,16 @@ function overlayPath(profile) {
   return join(SIDECAR_DIR, 'requirements', overlayFileForProfile(profile));
 }
 
+/** The exact `torch==X` / `torchaudio==X` pins from a profile's overlay — the
+ *  single source of truth for the version, so an index pre-install never drifts
+ *  from the pin the overlay then re-satisfies. Returns [] if none are pinned. */
+function readTorchSpecs(profile) {
+  return readFileSync(overlayPath(profile), 'utf8')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^(torch|torchaudio)==/.test(l));
+}
+
 /** Record an accelerator fallback (amd→cpu) next to the venv stamp so the runtime
     / UI can explain "AMD GPU detected but acceleration unavailable — on CPU".
     Best-effort; a write failure never blocks the (already-degraded) install. */
@@ -172,6 +182,22 @@ export function installForProfile(
       throw new Error('CPU fallback install also failed (check network + the sidecar venv)');
     }
     return 'cpu';
+  }
+
+  // Some profiles need torch pre-installed from a dedicated index BEFORE the
+  // overlay (nvidia: cu128, because PyPI's default torch is CPU-only on Windows).
+  // Isolated `--index-url` for torch/torchaudio only — the overlay's pinned
+  // `torch==X` is then already satisfied by the +cu128 build. A failure here is
+  // fatal: better to fail loudly than ship a GPU box quietly synthesising on CPU.
+  const torch = planTorchPreinstall(profile, platform);
+  if (torch.action === 'install-index') {
+    const specs = readTorchSpecs(profile);
+    if (specs.length > 0) {
+      log(`pre-installing torch from the ${profile} index (${torch.url})`);
+      if (!runPip(['install', ...specs, '--index-url', torch.url])) {
+        throw new Error(`torch index pre-install failed for the ${profile} overlay (${torch.url})`);
+      }
+    }
   }
 
   log(`installing requirements (${profile} overlay; this can take several minutes)`);

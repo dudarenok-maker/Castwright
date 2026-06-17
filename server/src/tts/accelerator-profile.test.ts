@@ -153,11 +153,15 @@ describe('ortProviders', () => {
 });
 
 describe('installRecipe', () => {
-  // Verified against the ACTUAL current install (P1): no cu124 index exists today;
-  // torch is transitive from PyPI; onnxruntime-gpu via kokoro-onnx[gpu].
-  it('nvidia == TODAY: NO explicit torch preinstall + onnxruntime-gpu (regression fence)', () => {
+  // PyPI's default torch wheel is CPU-only on Windows, so the nvidia profile
+  // pre-installs torch/torchaudio from the cu128 index before the overlay (else a
+  // GPU box silently synthesises on the CPU). onnxruntime-gpu via the ORT swap.
+  it('nvidia pre-installs torch from the cu128 index + onnxruntime-gpu', () => {
     const r = installRecipe('nvidia', 'win32');
-    expect(r.torchPreinstall).toBeNull(); // engine packages pull torch from PyPI, unchanged
+    expect(r.torchPreinstall).toEqual({
+      source: 'index',
+      url: 'https://download.pytorch.org/whl/cu128',
+    });
     expect(r.ortPackage).toBe('onnxruntime-gpu');
   });
   // S0.2 desk-pass-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4, cp312).
@@ -176,10 +180,11 @@ describe('installRecipe', () => {
     expect(l.torchPreinstall.wheels).toEqual([]);
     expect(l.ortPackage).toBe('onnxruntime');
   });
-  it('cpu is a Phase-2 IMPROVEMENT (not today): cpu torch preinstall + plain onnxruntime', () => {
-    const r = installRecipe('cpu', 'linux');
-    expect(r.torchPreinstall).toEqual({ source: 'index', url: 'https://download.pytorch.org/whl/cpu' });
-    expect(r.ortPackage).toBe('onnxruntime');
+  it('cpu/apple → torch from the overlay (no index pre-install); cu128-style cpu-index DEFERRED', () => {
+    expect(installRecipe('cpu', 'linux').torchPreinstall).toBeNull();
+    expect(installRecipe('cpu', 'win32').torchPreinstall).toBeNull();
+    expect(installRecipe('apple', 'darwin').torchPreinstall).toBeNull();
+    expect(installRecipe('cpu', 'linux').ortPackage).toBe('onnxruntime');
   });
 });
 

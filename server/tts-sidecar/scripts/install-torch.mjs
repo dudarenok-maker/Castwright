@@ -17,19 +17,28 @@ import { pathToFileURL } from 'node:url';
 import { installRecipe } from './accelerator-profile.mjs';
 
 /**
- * Decide whether torch must be pre-installed from explicit wheels for this
- * (profile, platform). Only the AMD profile's `{wheels:[…]}` recipe needs it;
- * every other profile gets torch from PyPI via its requirements overlay, so the
- * plan is a skip. Pure — no I/O.
- * @returns {{action:'skip', reason:string} | {action:'install', wheels:string[]}}
+ * Decide whether torch must be pre-installed BEFORE the requirements overlay for
+ * this (profile, platform), and how:
+ *   - AMD: from explicit `{wheels:[…]}` (alpha ROCm previews) → `install`.
+ *   - NVIDIA: from a torch-only `{source:'index', url}` (cu128) → `install-index`,
+ *     because PyPI's default torch wheel is CPU-only on Windows. The exact specs
+ *     are read from the overlay by the caller (single source of truth).
+ *   - cpu/apple: torch comes from PyPI via the overlay → `skip`.
+ * Pure — no I/O.
+ * @returns {{action:'skip', reason:string}
+ *   | {action:'install', wheels:string[]}
+ *   | {action:'install-index', url:string}}
  */
 export function planTorchPreinstall(profile, platform) {
   const recipe = installRecipe(profile, platform);
-  const wheels = recipe.torchPreinstall && recipe.torchPreinstall.wheels;
-  if (!wheels || wheels.length === 0) {
-    return { action: 'skip', reason: 'torch comes from the overlay / PyPI for this profile' };
+  const pre = recipe.torchPreinstall;
+  if (pre && Array.isArray(pre.wheels) && pre.wheels.length > 0) {
+    return { action: 'install', wheels: pre.wheels };
   }
-  return { action: 'install', wheels };
+  if (pre && pre.source === 'index' && pre.url) {
+    return { action: 'install-index', url: pre.url };
+  }
+  return { action: 'skip', reason: 'torch comes from the overlay / PyPI for this profile' };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

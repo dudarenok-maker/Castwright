@@ -39,16 +39,21 @@ describe('bootstrap-venv helpers', () => {
 });
 
 describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
-  it('nvidia installs its overlay then swaps onnxruntime → onnxruntime-gpu', () => {
+  it('nvidia pre-installs cu128 torch, then the overlay, then swaps onnxruntime → onnxruntime-gpu', () => {
     const pip = fakePip();
     expect(installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toBe('nvidia');
     const joined = pip.calls.map((c) => c.join(' '));
-    // overlay first (pulls plain onnxruntime via kokoro-onnx), then the GPU swap —
+    // cu128 torch FIRST (PyPI default torch is CPU-only on Windows) — the exact
+    // pins are read from the overlay, so the overlay's torch==X is then satisfied.
+    expect(joined[0]).toMatch(
+      /^install torch==\S+ torchaudio==\S+ --index-url https:\/\/download\.pytorch\.org\/whl\/cu128$/,
+    );
+    // overlay next (pulls plain onnxruntime via kokoro-onnx), then the GPU swap —
     // so onnxruntime-gpu unambiguously owns the shared onnxruntime/ namespace.
-    expect(joined[0]).toMatch(/install -r .*nvidia-cuda\.txt/);
-    expect(joined[1]).toBe('uninstall -y onnxruntime');
-    expect(joined[2]).toBe('install onnxruntime-gpu');
-    expect(pip.calls).toHaveLength(3);
+    expect(joined[1]).toMatch(/install -r .*nvidia-cuda\.txt/);
+    expect(joined[2]).toBe('uninstall -y onnxruntime');
+    expect(joined[3]).toBe('install onnxruntime-gpu');
+    expect(pip.calls).toHaveLength(4);
   });
 
   it('nvidia: a failed ORT swap is fatal (no silent CPU-only Kokoro)', () => {

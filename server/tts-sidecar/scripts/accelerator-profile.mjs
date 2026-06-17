@@ -143,7 +143,19 @@ export function ortProviders(profile, platform) {
  * @returns {{torchPreinstall: null | {wheels:string[]} | {source:string,url:string}, ortPackage: string}}
  */
 export function installRecipe(profile, platform) {
-  if (profile === 'nvidia') return { torchPreinstall: null, ortPackage: 'onnxruntime-gpu' };
+  if (profile === 'nvidia')
+    return {
+      // PyPI's default `torch` wheel is CPU-only on Windows (the CUDA build lives
+      // only on the cu128 index), so a plain `pip install torch==X` silently lands
+      // a CPU build and drops GPU acceleration. Pre-install torch/torchaudio from
+      // the cu128 index BEFORE the overlay — an ISOLATED `--index-url` scoped to
+      // torch only (NOT `--extra-index-url` on the whole overlay, which PyTorch
+      // warns invites dependency confusion). The overlay's pinned `torch==X` is
+      // then already satisfied by the +cu128 build (versions stay single-sourced
+      // in the overlay; bootstrap reads the exact specs from there).
+      torchPreinstall: { source: 'index', url: 'https://download.pytorch.org/whl/cu128' },
+      ortPackage: 'onnxruntime-gpu',
+    };
   if (profile === 'amd') {
     // S0.2 desk-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4). The amd
     // overlay uses coqui-tts WITHOUT [codec] (no torchcodec). Import-ability +
@@ -166,9 +178,14 @@ export function installRecipe(profile, platform) {
       ortPackage: 'onnxruntime',
     };
   }
-  // cpu / apple — Phase-2 improvement, not today's behavior
+  // cpu / apple — torch comes from the overlay / PyPI (unchanged). A cu128-style
+  // cpu-index pre-install is DEFERRED: it would help a Linux cpu box (PyPI's
+  // default torch on Linux is the CUDA wheel, wrong for a cpu profile), but the
+  // apple profile shares this branch and the whl/cpu index lacks mac/MPS wheels,
+  // so enabling it needs Linux + macOS validation first. planTorchPreinstall
+  // already understands the `{source:'index'}` shape, so it's a one-line flip then.
   return {
-    torchPreinstall: { source: 'index', url: 'https://download.pytorch.org/whl/cpu' },
+    torchPreinstall: null,
     ortPackage: 'onnxruntime',
   };
 }
