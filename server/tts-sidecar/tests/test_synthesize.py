@@ -163,8 +163,10 @@ def test_synthesize_rejects_non_json_body(client: TestClient) -> None:
 
 def test_synthesize_returns_500_when_engine_raises(monkeypatch) -> None:
     """If the engine itself blows up (model load failed, OOM, whatever),
-    /synthesize must return 500 with the exception message — otherwise the
-    Node side has no signal to flip the chapter to chapter_failed."""
+    /synthesize must return 500 so the Node side has a signal to flip the
+    chapter to chapter_failed. The body stays GENERIC — the exception text
+    (which can leak server paths) is logged server-side only, never returned
+    (CodeQL py/stack-trace-exposure)."""
 
     class _ExplodingEngine(_FakeEngine):
         def synthesize(self, model: str, voice: str, text: str):
@@ -177,7 +179,8 @@ def test_synthesize_returns_500_when_engine_raises(monkeypatch) -> None:
             json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
         )
     assert r.status_code == 500
-    assert "model load went sideways" in r.json()["detail"]
+    assert "model load went sideways" not in r.json()["detail"]
+    assert r.json()["detail"] == "Internal error."
 
 
 # ── CUDA poison fence ────────────────────────────────────────────────────
@@ -270,7 +273,9 @@ def test_synthesize_flags_engine_as_poisoned_on_cuda_assert(monkeypatch) -> None
     must (a) return 503 (not 500) with `"poisoned": true` in the body so
     the Node classifier can surface a "restart" banner, and (b) set the
     engine's _poisoned flag so subsequent /synthesize calls fast-fail
-    without re-triggering the failing inference."""
+    without re-triggering the failing inference. The body `detail` stays
+    GENERIC (exception text is logged server-side only); the actual
+    CUDA-poison reason lives in the internal `_process_poison_reason`."""
 
     class _CudaPoisonedEngine(_FakeEngine):
         def synthesize(self, model: str, voice: str, text: str):
@@ -289,7 +294,8 @@ def test_synthesize_flags_engine_as_poisoned_on_cuda_assert(monkeypatch) -> None
     assert r.status_code == 503
     body = r.json()
     assert body.get("poisoned") is True
-    assert "device-side assert" in body["detail"].lower()
+    assert body["detail"] == "Internal error."
+    assert "device-side assert" not in body["detail"].lower()
     # Process must self-flag so the cross-request fence works on call #2.
     assert main._process_poisoned is True
     assert (

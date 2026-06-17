@@ -719,10 +719,11 @@ def test_design_voice_route_requires_voiceid_and_instruct(fake_qwen_runtime) -> 
 
 
 def test_design_voice_route_500_detail_never_empty(fake_qwen_runtime, monkeypatch) -> None:
-    """A design failure whose str(e) is empty (some torch/CUDA errors raise with
-    no message) must still surface a non-empty detail. The server proxies this
-    detail to the UI, so a blank 500 leaves the user with no reason the model
-    failed — the route falls back to repr(e)."""
+    """A design failure must still surface a non-empty detail even when the
+    exception has no message (some torch/CUDA errors raise empty). The body is
+    a GENERIC constant ("Internal error.") — the exception text is logged
+    server-side only (CodeQL py/stack-trace-exposure) — so the UI always has a
+    non-blank reason and no server detail ever leaks."""
     engine = fake_qwen_runtime["engine"]
 
     class _Empty(Exception):
