@@ -15,32 +15,8 @@
  * A single heartbeat with charsPerSec: 320 is emitted once at tick 1.
  */
 
-import { test, expect, type Page } from '@playwright/test';
-
-async function bootFreshBookIntoAnalysing(page: Page) {
-  await page.goto('/');
-  await page
-    .getByRole('button', { name: /Start a new book/i })
-    .first()
-    .click();
-  await expect(page).toHaveURL(/#\/new$/);
-  await page.getByRole('button', { name: /Paste text/i }).click();
-  await page
-    .locator('textarea')
-    .fill(
-      '# The Progress Test Book\n\n# Chapter 1\n\nA tiny chapter.\n\n# Chapter 2\n\nAnother.\n',
-    );
-  await page.getByRole('button', { name: /Upload pasted text/i }).click();
-  await expect(page.getByRole('button', { name: /Save book and start analysis/i })).toBeVisible({
-    timeout: 5_000,
-  });
-  await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('Progress Author');
-  await page.getByRole('button', { name: /Save book and start analysis/i }).click();
-  await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
-  await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
-    timeout: 5_000,
-  });
-}
+import { test, expect } from '@playwright/test';
+import { bootFreshBookIntoAnalysing } from './helpers';
 
 test('attribution shows a non-snapping sentence count + chars/s', async ({ page }) => {
   await bootFreshBookIntoAnalysing(page);
