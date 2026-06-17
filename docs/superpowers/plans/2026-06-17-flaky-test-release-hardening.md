@@ -16,7 +16,7 @@
 - **The quarantine lane must never be in `publish`'s `needs:`** and must be `continue-on-error: true`.
 - **Acceptance bar for any rewritten Class-A1 test:** zero awaits on real disk/network in the assertion path; completes in a small bounded microtask-drain time. Worker-count/busy-loop invariance is a *secondary* signal only.
 - **The guardrail lands LAST (Wave 5), after every migration** — `lint --max-warnings 0` hard-fails on any un-migrated straggler.
-- Every wave is its own branch + PR, independently `npm run verify`-green. All work stays in the `flaky-release-hardening` worktree; nothing on `main` until the user confirms v1.8.0 shipped.
+- **Execution branch strategy (review: branch-base BLOCKER).** v1.8.0 is shipped, so the merge gate is lifted. All waves land **sequentially on the single branch `test/flaky-release-hardening`** in the `flaky-release-hardening` worktree — NOT separate per-wave branches. This is deliberate: dependent waves (1.5, 3, 4) read artifacts created earlier (`flake-evidence.md`, `quarantine.ts`, `flaky-register.md`), which only exist on the same branch. The per-wave "PR `test/flaky-wN…` → main" steps in each wave are therefore **superseded** — they collapse into **ONE integration PR** opened after Wave 5 is green. Each wave still ends with `npm run verify` green before the next begins; the wave boundaries are commit groups, not branches.
 - Commit subjects follow `<type>(<scope>): <subject>`; allowed scopes include `server`, `e2e`, `scripts`, `ci`, `docs`. End commit bodies with the `Co-Authored-By` trailer.
 
 ---
@@ -155,7 +155,7 @@ cd server && npx vitest run --config vitest.config.slow.ts -t "rolling roster" a
 
 - [ ] **Step 2: Measure each remaining slow file under induced load** (to scope Wave 3)
 
-For each of the 9 non-pipelining slow files in `server/vitest.config.slow.ts`'s `SLOW_FILES`, run:
+The 9 non-pipelining slow files are: `gemini`, `book-state`, `chapters-restructure`, `generation`, `generation-boundary-recycle`, `pdf-real`, `setup-readiness.route`, `kokoro-install.route`, `venv-bootstrap.route` (`server/src/...test.ts`). For each, run:
 ```bash
 node scripts/flake-repro.mjs --file server/src/routes/book-state.test.ts --runs 3 --cpu-load --io-load
 ```
@@ -190,7 +190,18 @@ its per-test budget OR has failed a CI/pre-push run.
 
 Decision rule: rewrite in Wave 3 ONLY files that actually flake; isolation-only
 files that stay flat are left serialized.
+
+## Wave 3 file list (the anchor Wave 3 greps for)
+W3-REWRITE: <comma-separated files that flaked, OR the literal word `none`>
 ```
+
+**CI-history honesty (review):** you measure on a fast local box; the production
+flake is macOS-only contention. For the "flakes on CI today?" column, record
+known facts only — the pipelining family + the `retry:1`-masked slow tier are the
+documented flakers; if you have no CI history for a file and it stays flat
+locally, write `unknown — local-only` rather than guessing `no`. The
+`W3-REWRITE:` anchor must list every file that flaked under induced load OR is a
+known CI flaker; if none qualify, write `W3-REWRITE: none`.
 
 - [ ] **Step 4: Commit**
 
@@ -267,7 +278,7 @@ git commit -m "test(server): add quarantinedIt lane helper (frontend + server)"
 
 - [ ] **Step 1: Add the scripts**
 
-In `package.json` `scripts`, add (and change `test:e2e` to OR both exclusions into one regex):
+The current `test:e2e` is exactly `playwright test --project=chromium --grep-invert="visual baselines"` — keep `--project=chromium`, only widen the regex to `"visual baselines|@quarantine"`. In `package.json` `scripts`, set:
 
 ```jsonc
 "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
@@ -355,11 +366,16 @@ Expected: the rolling-roster case **runs** (may be slow locally — that's fine,
 
 - [ ] **Step 3: Register the row**
 
-Replace the `_(none yet)_` row with:
+First file the tracking issue and capture its number:
+```bash
+gh issue create --title "analysis-pipelining flaky tests — quarantined, deterministic rewrite owed" \
+  --label bug --body "Quarantined per docs/testing/flaky-register.md; rewrite in the flaky-test-release-hardening Wave 2."
+```
+The command prints the issue URL ending in the number — use it as `<NN>`. Then replace the `_(none yet)_` row with (substitute `<NN>` here AND in the code comment from Step 1):
 ```markdown
 | rolling roster snapshot | server/src/routes/analysis-pipelining.test.ts | A1 | CPU+I/O contention timeout (drive-to-completion + real cache write) | #<NN> | 2026-06-17 |
 ```
-(File the tracking issue first; substitute its number for `<NN>` here and in the code comment.)
+(All six pipelining cases share one tracking issue — reuse this `<NN>` for the Task 1.5 rows too.)
 
 - [ ] **Step 4: Commit**
 
@@ -378,6 +394,13 @@ git commit -m "test(server): migrate rolling-roster case onto quarantinedIt help
 
 All six cases in `analysis-pipelining.test.ts` share the **same** flake shape — drive-to-completion + real `saveAnalysisCache` write (the spec says so explicitly). The Wave 0 *local* timing can't see the macOS-only contention, so do **not** gate on local timing here: wrap **every** remaining case (1, 3, 4, 5, and the plan-118 case) with `quarantinedIt` + a `// QUARANTINED(#NN): …` comment, exactly as Task 1.4 did for Case 2, and add a register row each. This is cheap — Wave 2 rewrites and graduates them all one wave later — and it closes the W1→W2 release-exposure window completely. (Local timing measurement is reserved for Wave 3's *heterogeneous* slow files, where it actually discriminates.)
 
+Each case is a separate `describe` with one `it` — wrap the inner `it(` of each. The five remaining (Case 2 already done in Task 1.4):
+- Case 1 — `describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution')`
+- Case 3 — `describe('runMainAnalyzerJob — back-pressure under stall')`
+- Case 4 — `describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential')`
+- Case 5 — `describe('runMainAnalyzerJob — concurrent pool interleaving in production')`
+- plan-118 — `describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase even with a per-request model')`
+
 - [ ] **Step 2: Verify**
 
 Run (gating): `cd server && npx vitest run --config vitest.config.slow.ts analysis-pipelining.test.ts`
@@ -393,8 +416,7 @@ git commit -m "test(server): quarantine load-sensitive pipelining siblings (evid
 ### Task 1.6: Non-gating CI quarantine job
 
 **Files:**
-- Modify: `.github/workflows/release.yml`
-- Modify: `.github/workflows/verify.yml`
+- Modify: `.github/workflows/release.yml` (only — NOT verify.yml; review C1/P5)
 
 - [ ] **Step 1: Confirm the setup composite installs server deps (review M4)**
 
@@ -466,7 +488,7 @@ git commit -m "ci: add non-gating quarantine lane job (off the publish gate)"
 - Modify: `server/src/routes/analysis-pipelining.test.ts` (the `makePipelineFixture` factory + `PipelineFixture` interface)
 
 **Interfaces:**
-- Produces: `fixture.whenDispatched(phase: 0 | 1, chapterId: number): Promise<void>` — resolves immediately if a matching trace entry already exists, else on the push that creates it. Pre-armed: calling it registers a waiter synchronously.
+- Produces: `fixture.whenDispatched(phase: 0 | 1, chapterId: number): Promise<void>` — resolves immediately if a matching trace entry already exists, else on the push that creates it. Pre-armed: calling it registers a waiter synchronously. No batch variant — for multi-chapter waits, callers compose `Promise.all([...ids].map((id) => fixture.whenDispatched(phase, id)))`.
 
 - [ ] **Step 1: Write the failing fixture test**
 
@@ -598,7 +620,7 @@ git commit -m "test(server): rewrite rolling-roster case event-driven; graduate 
 
 - [ ] **Step 1: Replace every `waitFor(...)` with `whenDispatched`/`Promise.all`**
 
-For Cases 1, 3, 4, 5, and the plan-118 case, replace each `waitFor(() => …trace.some(…), N)` with the matching `await fixture.whenDispatched(phase, id)` (or `await Promise.all([...].map((id) => fixture.whenDispatched(1, id)))` where a case waits on several).
+For Cases 1, 3, 4, 5, and the plan-118 case, replace each `waitFor(...)` with an event await. **Recipe:** read each `waitFor`'s `trace.some((t) => t.phase === X && t.chapterId === Y)` predicate — `X` and `Y` ARE the `whenDispatched(X, Y)` arguments. So `waitFor(() => trace.some((t) => t.phase === 1 && t.chapterId === 6), 30_000)` becomes `await fixture.whenDispatched(1, 6)`. Where a predicate tests several ids (e.g. `[1,2].every((id) => trace.some(...))`), use `await Promise.all([1, 2].map((id) => fixture.whenDispatched(1, id)))`. Quote each predicate from the current file as you go; don't guess the ids.
 
 **Case 3's negative assertion needs special care (review M1).** It proves chapter 3 does NOT dispatch while Phase 0 ch13 is held. The current `setTimeout(r, 200)` macrotask drains the *entire* pending microtask queue; a fixed `drainMicrotasks(5)` does NOT — the dispatch loop is a pure microtask chain (synchronous watermark notify + microtask release, no `setTimeout`), so 5 hops may not even reach the point where a *buggy* early dispatch would fire, giving a vacuous pass. Instead **drain to quiescence** (until the trace stops growing) and add a **positive control** so a vacuous pass is caught:
 ```ts
@@ -638,9 +660,9 @@ git commit -m "test(server): event-driven rewrite of all pipelining cases; gradu
 
 **Why a no-throw assertion is too weak (review M1/P2):** a *broken* non-atomic impl that reuses one temp filename also resolves both promises and leaves a loadable file (last-write-wins) — so `resolves.toBeDefined()` catches nothing. The real `tmpSeq` invariant is that two concurrent writes use **distinct temp paths**. Assert THAT directly, and validate the test actually fails on a regression.
 
-- [ ] **Step 1: Read the atomic-write seam**
+- [ ] **Step 1: Read the atomic-write seam (verified locations)**
 
-Read `server/src/store/state-io.ts` (`writeJsonAtomic` + the `tmpSeq` counter) to learn the exact temp-path scheme and which `fs` call performs the temp write + rename. The test spies on that call.
+The atomic write lives at **`server/src/workspace/state-io.ts`** (NOT `store/` — review BLOCKER). `writeJsonAtomic` builds the temp path as `${path}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}` (state-io.ts ~L110, where `seq` is the module `tmpSeq` counter — that's the distinct-temp invariant) and renames via `renameWithRetry(tmp, path)` imported from `./atomic-rename.js` (state-io.ts:24, :113). The actual `fs` rename happens INSIDE `atomic-rename.ts` — read it to find the binding the test must spy on (spying `fs/promises.rename` only works if `atomic-rename.ts` calls it through the module namespace; if it destructures, spy the writeFile/temp call instead, or assert on the temp paths another way).
 
 - [ ] **Step 2: Write the regression test asserting distinct temp paths**
 
@@ -714,6 +736,13 @@ git commit -m "test(server): regression-guard the same-tick cache-write race (tm
 **Files:**
 - Modify: each flagged `server/src/**/*.test.ts` from `flake-evidence.md`
 - Modify: `server/vitest.config.slow.ts`, `scripts/verify-cache.mjs` (stale-comment fix)
+
+- [ ] **Step 0: Read the file list from the Wave 0 evidence anchor**
+
+```bash
+grep "W3-REWRITE:" docs/testing/flake-evidence.md
+```
+This is the authoritative list (review BLOCKER — the evidence hand-off). **If it says `W3-REWRITE: none`, skip Steps 1–3 entirely and do ONLY Step 4 (the unconditional stale-comment fix), then Step 5/6.** Otherwise, the listed files are your exact targets.
 
 - [ ] **Step 1: For each flagged file, apply the matching recipe**
 
@@ -868,7 +897,7 @@ git commit -m "ci: guardrail against skipIf(CI)/waitForTimeout/large-inline-time
 - Create: `scripts/check-no-budget-poll.mjs` (grep heuristic)
 - Modify: `CONTRIBUTING.md` (review checklist line)
 
-- [ ] **Step 1:** Write a grep heuristic that flags the `Date.now() - <start> > <budget>` poll shape and any reintroduced `waitFor(` budget helper in `server/src/**/*.test.ts`; exit non-zero on a hit. Wire into `test:hooks`.
+- [ ] **Step 1:** Write a grep heuristic (`scripts/check-no-budget-poll.mjs`) that scans `server/src/**/*.test.ts` for the `Date.now() - <ident> > <ident|number>` poll shape and exits non-zero on a hit. **Acceptance (add a planted-sample assertion like Task 5.1's, in `scripts/tests/`):** the script exits **non-zero** when run against a temp file containing `if (Date.now() - start > 5000) throw new Error()`, and exits **0** against the current tree. Wire the script into `test:hooks`.
 - [ ] **Step 2:** Add a CONTRIBUTING.md review-checklist bullet: "No budgeted polling loops in tests — await an event or use a microtask drain."
 - [ ] **Step 3:** Commit `ci: heuristic check + review checklist for budgeted-poll loops`.
 
