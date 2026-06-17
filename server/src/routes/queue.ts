@@ -122,7 +122,7 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
           input.multiTts = stamp.multiTts;
         }
       } catch (e) {
-        console.warn(`[queue] engine-stamp failed for "${input.id}"`, e);
+        console.warn('[queue] engine-stamp failed for "%s"', input.id, e);
       }
     }),
   );

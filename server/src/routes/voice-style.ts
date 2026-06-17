@@ -116,7 +116,7 @@ voiceStyleRouter.post(
         voiceStyles[c.id] = voiceStyle;
       } catch (e) {
         failures[c.id] = (e as Error).message || 'Voice-style generation failed.';
-        console.error(`[voice-style] book=${bookId} character=${c.id} failed`, e);
+        console.error('[voice-style] book=%s character=%s failed', bookId, c.id, e);
       }
     }
 
