@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countSentencesHeuristic, countStreamedSentences, refineSentencesTotal, sentenceProgressForTick, projectChapterEstMsFromSentences, clampChapterEstMs } from './sentence-progress.js';
+import { countSentencesHeuristic, countStreamedSentences, refineSentencesTotal, sentenceProgressForTick, projectChapterEstMsFromSentences, clampChapterEstMs, selectChapterEstMs } from './sentence-progress.js';
 
 describe('countSentencesHeuristic', () => {
   it('counts sentence-boundary splits', () => {
@@ -95,5 +95,23 @@ describe('clampChapterEstMs', () => {
     // so the caller passes stageEstMs=0 to disable the ceiling. The candidate
     // survives (only the elapsed-floor applies).
     expect(clampChapterEstMs(300000, 10000, 0, 0)).toBe(300000);
+  });
+});
+
+describe('selectChapterEstMs (estimate-band invariants — bugs 1 & 2)', () => {
+  const stage = 600_000; // whole-stage value that must NEVER appear in a chapter row
+  it('prefers the sentence projection over bytes', () => {
+    const r = selectChapterEstMs({ elapsedMs: 10_000, bySentenceMs: 40_000, byBytesMs: 99_000, lastGoodMs: 50_000, stageEstMs: stage });
+    expect(r).toBe(40_000);
+  });
+  it('falls back to bytes, then last-good, when earlier signals are null', () => {
+    expect(selectChapterEstMs({ elapsedMs: 10_000, bySentenceMs: null, byBytesMs: 70_000, lastGoodMs: 50_000, stageEstMs: stage })).toBe(70_000);
+    expect(selectChapterEstMs({ elapsedMs: 10_000, bySentenceMs: null, byBytesMs: null, lastGoodMs: 50_000, stageEstMs: stage })).toBe(50_000);
+  });
+  it('never returns null/blank, never the stage value, always > elapsed', () => {
+    const r = selectChapterEstMs({ elapsedMs: 120_000, bySentenceMs: stage, byBytesMs: null, lastGoodMs: 0, stageEstMs: stage });
+    expect(r).toBeGreaterThan(120_000);
+    expect(r).toBeLessThan(stage);
+    expect(r).toBeTypeOf('number');
   });
 });

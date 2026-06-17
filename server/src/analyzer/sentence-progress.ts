@@ -99,3 +99,18 @@ export function clampChapterEstMs(
   const ceiling = stageEstMs > 0 ? stageEstMs * 0.9 : base;
   return Math.max(floor, Math.min(base, ceiling));
 }
+
+/** Choose the per-chapter estimate for a tick and clamp it to the band.
+    Precedence: sentence projection → byte projection → last-good. Pure: the
+    projection results are computed by the caller and passed in (the byte
+    projector lives in analysis.ts), so this stays free of route state. */
+export function selectChapterEstMs(args: {
+  elapsedMs: number;
+  bySentenceMs: number | null;
+  byBytesMs: number | null;
+  lastGoodMs: number;
+  stageEstMs: number;
+}): number {
+  const candidate = args.bySentenceMs ?? args.byBytesMs;
+  return clampChapterEstMs(candidate, args.elapsedMs, args.lastGoodMs, args.stageEstMs);
+}

@@ -43,6 +43,8 @@ import {
   countSentencesHeuristic,
   countStreamedSentences,
   sentenceProgressForTick,
+  projectChapterEstMsFromSentences,
+  selectChapterEstMs,
 } from '../analyzer/sentence-progress.js';
 import {
   runStage1WithRosterGuard,
@@ -3345,6 +3347,9 @@ export async function runMainAnalyzerJob(
       chapterIndex: number;
       chapterTitle: string;
       chapterEstMs: number;
+      /** The last non-null estimate written to chapterEstMs, used as a fallback
+          by selectChapterEstMs when both sentence and byte projections are null. */
+      lastGoodEstMs: number;
       startedAt: number;
       elapsedMs: number;
       /** Latest streamed output bytes for this chapter (from the heartbeat) —
@@ -3447,6 +3452,7 @@ export async function runMainAnalyzerJob(
         chapterIndex: i,
         chapterTitle: ch.title,
         chapterEstMs,
+        lastGoodEstMs: chapterEstMs,
         startedAt,
         elapsedMs: 0,
         receivedBytes: 0,
@@ -3460,22 +3466,35 @@ export async function runMainAnalyzerJob(
         inSentenceMode: false,
       });
 
+      const refineEstMs = (slot: InFlight, elapsed: number) => {
+        const prog = sentenceProgressForTick({
+          committedSentences: slot.committedSentences,
+          committedChars: slot.committedChars,
+          inflightSentences: slot.inflightSentences,
+          totalChars: ch.body.length,
+          heuristicTotal: slot.heuristicTotal,
+        });
+        const next = selectChapterEstMs({
+          elapsedMs: elapsed,
+          bySentenceMs: projectChapterEstMsFromSentences(elapsed, prog.sentencesDone, prog.sentencesTotal),
+          byBytesMs: projectChapterEstMsFromOutput(elapsed, slot.receivedBytes, ch.body.length, currentOutputRatio()),
+          lastGoodMs: slot.lastGoodEstMs,
+          // Single-chapter book → chapter estimate == stage estimate; pass 0 to
+          // disable the "never the stage value" ceiling (else it reads ~10% low).
+          stageEstMs: totalChapters > 1 ? stage2EstMs : 0,
+        });
+        slot.chapterEstMs = next;
+        slot.lastGoodEstMs = next;
+      };
+
       const tickOverall = (elapsed: number) => {
         const slot = inFlight.get(i);
         if (slot) {
           slot.elapsedMs = elapsed;
-          /* Mid-chapter ETA refinement (issue 3): once enough output has
-             streamed, project the chapter's total time from live throughput so
-             the "X of ~Y" ticker tightens instead of staying pinned to the
-             start-of-chapter estimate. Returns null when the signal is too
-             weak, in which case the prior estMs is kept. */
-          const projected = projectChapterEstMsFromOutput(
-            elapsed,
-            slot.receivedBytes,
-            ch.body.length,
-            currentOutputRatio(),
-          );
-          if (projected !== null) slot.chapterEstMs = projected;
+          /* Mid-chapter ETA refinement (issue 3): sentence-aware estimate band
+             (selectChapterEstMs) prefers the sentence projection over bytes,
+             never returns the stage value, never blanks to ~. */
+          refineEstMs(slot, elapsed);
         }
         sendLiveTick();
         /* Over-budget log thresholds — fire once per chapter. */
@@ -3551,13 +3570,7 @@ export async function runMainAnalyzerJob(
           /* Refine the displayed per-chapter estimate from live throughput on
              the throttled cadence, then push a live tick so "X of ~Y" updates. */
           if (liveSlot) {
-            const projected = projectChapterEstMsFromOutput(
-              now - liveSlot.startedAt,
-              liveSlot.receivedBytes,
-              ch.body.length,
-              currentOutputRatio(),
-            );
-            if (projected !== null) liveSlot.chapterEstMs = projected;
+            refineEstMs(liveSlot, now - liveSlot.startedAt);
             sendLiveTick();
           }
           const charsPerSec =
