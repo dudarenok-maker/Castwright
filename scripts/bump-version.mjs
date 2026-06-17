@@ -45,6 +45,7 @@ function parseArgs(argv) {
     dryRun: false,
     force: false,
     skipCrossOs: false,
+    allowPlaceholder: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -53,6 +54,7 @@ function parseArgs(argv) {
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--force') out.force = true;
     else if (a === '--skip-cross-os') out.skipCrossOs = true;
+    else if (a === '--allow-placeholder') out.allowPlaceholder = true;
     else if (a === '--help' || a === '-h') {
       printHelpAndExit(0);
     } else {
@@ -65,7 +67,7 @@ function parseArgs(argv) {
 function printHelpAndExit(code) {
   process.stdout.write(
     'Usage: node scripts/bump-version.mjs --level patch|minor|major ' +
-      '[--notes-file <path>] [--dry-run] [--force] [--skip-cross-os]\n',
+      '[--notes-file <path>] [--allow-placeholder] [--dry-run] [--force] [--skip-cross-os]\n',
   );
   process.exit(code);
 }
@@ -325,6 +327,30 @@ function refreshCodeStats() {
   }
 }
 
+// The canonical in-repo technical release notes (the GitHub release body).
+// Defaulting to this means the tag annotation is never a silent placeholder —
+// the v1.8.0 cut shipped an empty body because --notes-file was omitted.
+export const DEFAULT_NOTES_FILE = 'docs/release-notes-next.md';
+
+/** Which notes file to use: an explicit --notes-file wins; otherwise the
+ *  canonical in-repo file when it exists; otherwise null (placeholder
+ *  territory, which main() refuses unless --allow-placeholder). */
+export function resolveNotesFile(explicit, fileExists) {
+  if (explicit) return explicit;
+  if (fileExists(DEFAULT_NOTES_FILE)) return DEFAULT_NOTES_FILE;
+  return null;
+}
+
+/** The stale version string if the notes file declares a
+ *  `release-notes-next-version: X.Y.Z` marker that doesn't match `version`,
+ *  else null. No marker → null (can't verify, so don't block). Reading an
+ *  explicit marker (not the first version token) avoids false positives from
+ *  the `vA.B.C...vX.Y.Z` changelog footer. */
+export function staleNotesVersion(notesText, version) {
+  const m = /release-notes-next-version:\s*v?(\d+\.\d+\.\d+)/i.exec(notesText ?? '');
+  return m && m[1] !== version ? m[1] : null;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.level) {
@@ -333,6 +359,9 @@ async function main() {
   if (args.notesFile && !existsSync(args.notesFile)) {
     die(`--notes-file does not exist: ${args.notesFile}`);
   }
+  // Default to the canonical in-repo notes so a release can't ship a silent
+  // placeholder body (the refusal is enforced after the cheap pre-flights).
+  args.notesFile = resolveNotesFile(args.notesFile, existsSync);
 
   // Pre-flight 1: clean working tree (unless dry-run).
   const status = git(['status', '--porcelain'], { capture: true });
@@ -399,6 +428,34 @@ async function main() {
         die(
           `Release-notes gate: ${notesCheck.reason} Update RELEASE_NOTES.md ` +
             `(top entry = the new version, brand voice) before tagging, or pass --force.`,
+        );
+    }
+  }
+
+  // Pre-flight 5b: refuse a silent placeholder body. A release can't ship empty
+  // technical notes; --allow-placeholder opts in on purpose, --dry-run warns.
+  if (!args.notesFile) {
+    const msg =
+      `No release notes. Author ${DEFAULT_NOTES_FILE} (technical register — the ` +
+      `GitHub release body), or pass --notes-file <path>. To ship a placeholder ` +
+      `body on purpose, pass --allow-placeholder.`;
+    if (args.allowPlaceholder) info('[WARN] --allow-placeholder: tag annotation will be a placeholder.');
+    else if (args.dryRun) info(`[DRY-RUN][WARN] ${msg}`);
+    else die(msg);
+  }
+
+  // Pre-flight 6: the technical notes file must be current for THIS version.
+  // Catches the "release-notes-next.md still holds the last release" trap —
+  // a stale marker would otherwise become the GitHub release body verbatim.
+  if (args.notesFile) {
+    const stale = staleNotesVersion(readFileSync(resolve(args.notesFile), 'utf8'), newVersion);
+    if (stale) {
+      if (args.force) info(`[WARN] notes-file gate (--force): ${args.notesFile} declares ${stale}, cutting ${newVersion}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] notes-file gate: ${args.notesFile} declares ${stale}, cutting ${newVersion}`);
+      else
+        die(
+          `${args.notesFile} declares release-notes-next-version: ${stale} but you're ` +
+            `cutting ${newVersion}. Refresh it for this release (or pass --force).`,
         );
     }
   }

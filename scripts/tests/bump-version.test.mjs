@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE } from '../bump-version.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -141,7 +141,7 @@ test('bump-version --dry-run prints the plan and does not mutate', () => {
 test('bump-version --level patch advances both versions, commits, tags', () => {
   const dir = setupRepo('1.2.3');
   try {
-    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readVersion(dir, 'package.json'), '1.2.4');
     assert.equal(readVersion(dir, 'server/package.json'), '1.2.4');
@@ -170,7 +170,7 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
 test('bump-version --level minor zeros the patch field', () => {
   const dir = setupRepo('2.4.7');
   try {
-    const out = runBump(dir, ['--level', 'minor', '--skip-cross-os']);
+    const out = runBump(dir, ['--level', 'minor', '--skip-cross-os', '--allow-placeholder']);
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readVersion(dir, 'package.json'), '2.5.0');
     assert.equal(readVersion(dir, 'server/package.json'), '2.5.0');
@@ -182,7 +182,7 @@ test('bump-version --level minor zeros the patch field', () => {
 test('bump-version --level major zeros minor + patch', () => {
   const dir = setupRepo('3.4.5');
   try {
-    const out = runBump(dir, ['--level', 'major', '--skip-cross-os']);
+    const out = runBump(dir, ['--level', 'major', '--skip-cross-os', '--allow-placeholder']);
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readVersion(dir, 'package.json'), '4.0.0');
     assert.equal(readVersion(dir, 'server/package.json'), '4.0.0');
@@ -203,7 +203,7 @@ test('bump-version refuses lockstep drift', () => {
     gitExec( ['add', 'server/package.json'], { cwd: dir });
     gitExec( ['commit', '-q', '-m', 'drift'], { cwd: dir });
 
-    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
     assert.notEqual(out.status, 0);
     assert.match(out.stderr, /Lockstep invariant violated/);
   } finally {
@@ -346,7 +346,7 @@ test('bump-version preserves ## section headers in the tag annotation', () => {
 test('bump-version --skip-cross-os skips the gate and still bumps + tags', () => {
   const dir = setupRepo('1.0.0');
   try {
-    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /\[SKIP\] cross-OS gate skipped/);
     assert.equal(readVersion(dir, 'package.json'), '1.0.1');
@@ -376,7 +376,7 @@ test('bump-version reports code-stats skipped in --dry-run when the script is ab
 test('bump-version skips the code-stats refresh (script absent) but still bumps + tags', () => {
   const dir = setupRepo('1.0.0');
   try {
-    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /\[SKIP\] code-stats: scripts\/code-stats\.mjs not found/);
     assert.equal(readVersion(dir, 'package.json'), '1.0.1');
@@ -500,6 +500,62 @@ test('readPubspecVersion returns null when pubspec is absent', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bump-pubspec-none-'));
   try {
     assert.equal(readPubspecVersion(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Release-notes safeguards (so a cut can't ship a placeholder body) ──
+
+test('resolveNotesFile: explicit --notes-file always wins', () => {
+  assert.equal(
+    resolveNotesFile('custom/notes.md', () => true),
+    'custom/notes.md',
+  );
+  // wins even if the default also exists
+  assert.equal(
+    resolveNotesFile('custom/notes.md', (p) => p === DEFAULT_NOTES_FILE),
+    'custom/notes.md',
+  );
+});
+
+test('resolveNotesFile: defaults to the canonical file when present', () => {
+  assert.equal(
+    resolveNotesFile(null, (p) => p === DEFAULT_NOTES_FILE),
+    DEFAULT_NOTES_FILE,
+  );
+});
+
+test('resolveNotesFile: null when nothing supplied and the default is absent', () => {
+  // null is the "placeholder territory" main() refuses without --allow-placeholder
+  assert.equal(
+    resolveNotesFile(null, () => false),
+    null,
+  );
+});
+
+test('staleNotesVersion: flags a marker that does not match the cut version', () => {
+  const notes = '<!--\nrelease-notes-next-version: 1.7.0\n-->\n# body';
+  assert.equal(staleNotesVersion(notes, '1.8.0'), '1.7.0');
+});
+
+test('staleNotesVersion: null when the marker matches (v-prefix tolerated)', () => {
+  assert.equal(staleNotesVersion('release-notes-next-version: v1.8.0', '1.8.0'), null);
+});
+
+test('staleNotesVersion: null when no marker is present (cannot verify, do not block)', () => {
+  // The `vA.B.C...vX.Y.Z` changelog footer must NOT be mistaken for the marker.
+  assert.equal(staleNotesVersion('body\n\n**Full changelog:** `v1.7.0...v1.8.0`', '1.8.0'), null);
+});
+
+test('bump-version refuses to cut without notes (no placeholder by default)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    // No docs/release-notes-next.md in the fixture, no --notes-file, no
+    // --allow-placeholder → it must refuse rather than ship an empty body.
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /No release notes/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
