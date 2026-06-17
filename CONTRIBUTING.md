@@ -27,17 +27,20 @@ the model in one paragraph. The Castwright name and brand assets are **not**
 covered by the code licence and are not part of this repository — see
 [`docs/legal/brand-and-trademarks.md`](docs/legal/brand-and-trademarks.md).
 
-**Posture today: issues welcome, PRs by invitation.** Until the CLA tooling is in
-place, please open an issue to discuss a change before sending a PR.
+**Posture today: issues welcome, PRs by invitation.** Please open an issue to
+discuss a change before sending a PR.
 
-**When external PRs open up,** two things will be required on every contribution:
+**Two things are required on every contribution:**
 
 - **DCO sign-off** — add `Signed-off-by: Your Name <you@example.com>` to each
   commit (`git commit -s`), certifying you wrote the change and may submit it
   under the project licence.
 - **A lightweight CLA** — so the maintainer retains the right to relicense (the
-  FSL future-grant and any relicensing depend on owning the copyright). This will
-  be collected by a CLA bot; see [`docs/legal/licensing.md`](docs/legal/licensing.md).
+  FSL future-grant and any relicensing depend on owning the copyright). The full
+  text is [`docs/legal/CLA.md`](docs/legal/CLA.md); the `CLA Assistant` GitHub
+  Action comments on each PR and records your one-time signature when you reply
+  `I have read the CLA Document and I hereby sign the CLA`. See
+  [`docs/legal/licensing.md`](docs/legal/licensing.md).
 
 ## Branching model
 
@@ -305,7 +308,7 @@ live. Regression plan: [docs/features/166-github-issues-backlog-integration.md](
 
 - **One backlog item ↔ one issue.** The issue title leads with the permanent
   `<prefix>-<n>` ID: `<prefix>-<n> — <one-line what>` (e.g. `srv-1 — Merge
-  journal for alias un-link`). The ID stays the durable cross-reference in
+journal for alias un-link`). The ID stays the durable cross-reference in
   code/commits/plans; the issue `#NN` is just the auto-close hook.
 - **The issue body is canonical** — What / Acceptance / Key files / Depends on /
   Benefit. `docs/BACKLOG.md` keeps a thin summary + the issue link for
@@ -334,7 +337,8 @@ Three axes + two helpers, version-controlled in `scripts/gh-labels.mjs` (run
 Substantial / cross-cutting issues still get a numbered `docs/features/NN-*.md`
 regression plan (label the issue `needs-plan`; the plan cites the issue, the
 issue links the plan). Small / localized issues skip the plan — the issue body
-+ a paired test is the spec, and the work goes straight issue → PR.
+
+- a paired test is the spec, and the work goes straight issue → PR.
 
 ### Linking from PRs
 
@@ -352,9 +356,10 @@ the durable reference, `#NN` is the GitHub hook.
 ### Server-side enforcement
 
 Issue templates + labels are a **soft convention** (the same posture as the
-commit/PR-title rules). On the Free plan there's no Actions budget to spend on
-label-lint or required-field enforcement beyond the forms themselves; the
-`blank_issues_enabled: false` config funnels every issue through a template.
+commit/PR-title rules). CI is opt-in (plan 215), so we deliberately don't spend
+Actions minutes on label-lint or required-field enforcement beyond the forms
+themselves; the `blank_issues_enabled: false` config funnels every issue through
+a template.
 
 ## Pull requests
 
@@ -481,7 +486,7 @@ A PR whose changed-file set lives entirely under `docs/**`, root-level
 The PR still requires a valid title (`pr-title-lint.yml` runs on every
 PR) and GitHub's native `mergeable` status still surfaces conflicts —
 the gate stays "PR required + title valid + no conflicts", just without
-the 10–15 min full battery. Since plan 215 CI is opt-in for *every* PR, this
+the 10–15 min full battery. Since plan 215 CI is opt-in for _every_ PR, this
 `paths-ignore` is now a second layer — it additionally ensures that even a
 `run-ci`-labeled PR whose files are all docs won't spin up the battery.
 Rationale and the exact glob list:
@@ -531,7 +536,8 @@ can't ship — without re-paying the matrix on every PR. `release.yml` then runs
 `verify:quick` on Ubuntu against the tagged commit and publishes the
 platform-independent zip + SHA-256 using the tag annotation as the body. Full spec:
 [`docs/features/archive/127-release-cross-os-gate.md`](docs/features/archive/127-release-cross-os-gate.md)
-+ [`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
+
+- [`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
 
 **Invariants the bumper enforces** — read these before you bypass it:
 
@@ -542,7 +548,7 @@ platform-independent zip + SHA-256 using the tag annotation as the body. Full sp
 - `package.json` and `server/package.json` versions MUST stay in lockstep
   (the bumper refuses to run if they've drifted).
 - Every `vX.Y.Z` tag is an annotated tag pointing at a `chore: bump version
-  to X.Y.Z` commit. Lightweight tags do NOT fire the workflow.
+to X.Y.Z` commit. Lightweight tags do NOT fire the workflow.
 - Release notes live in the tag annotation, not the GitHub Release UI. The
   workflow reads `git tag -l --format='%(contents)' vX.Y.Z` and uses that
   verbatim as the body.
@@ -611,7 +617,7 @@ a new emoji per release — consistency across the releases index is the point.
 
 The four old buckets (Features / Fixes / Retirements / Engineering) are no
 longer top-level sections — their content is distributed across the headline
-block and the themed sections — but the writing rules for each *kind* of line
+block and the themed sections — but the writing rules for each _kind_ of line
 still hold:
 
 - **Feature lines** (headline sub-bullets + most themed bullets). A functional
@@ -625,7 +631,7 @@ still hold:
   what the listener / deployer / operator saw and couldn't do — then close with
   the new behaviour (`Now legible`, `Now self-heals`, `Now stacks correctly`)
   and the plan / PR ref. Internal vocabulary (`bg-amber-50/60`,
-  `BookStateJson.description`) is fine *inside* the line to disambiguate the
+  `BookStateJson.description`) is fine _inside_ the line to disambiguate the
   surface, never as the leading words.
 - **Retirements.** Behaviour that **shipped in a previous release** and is now
   removed or downgraded — surface it loudly (the `⚠️ Upgrade note` blockquote,
@@ -672,7 +678,7 @@ still hold:
    note → `## ✨ Headline features` → themed sections → `**Full changelog:**`
    footer. Reference plan / PR numbers in parens throughout.
 6. **Draft in the GitHub Release UI first.** `gh release create vX.Y.Z --draft
-   --target main --notes-file <path>` (a draft is collaborator-only — nothing
+--target main --notes-file <path>` (a draft is collaborator-only — nothing
    public changes) so the user can review the rendered body. Iterate with
    `gh release edit vX.Y.Z --notes-file <path>`.
 7. Once approved, the same body becomes the annotated-tag message for the bump

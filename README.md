@@ -132,6 +132,8 @@ the branching model, and the commit convention are documented in
 - **[`apps/android/README.md`](apps/android/README.md)** — the Android companion.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — building from source, branching, and
   the commit convention.
+- **[SECURITY.md](SECURITY.md)** — supported versions and how to report a
+  vulnerability privately.
 
 ## License
 
