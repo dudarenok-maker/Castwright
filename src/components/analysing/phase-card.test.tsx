@@ -281,3 +281,26 @@ describe('PhaseCard layout', () => {
     expect(wrapper.className).toMatch(/overflow-hidden/);
   });
 });
+
+describe('PhaseCard resume indicator (reload re-attach)', () => {
+  it('shows "Reconnecting to the running analysis…" while resuming with no live data yet', () => {
+    renderCard({ isResuming: true, live: null });
+    expect(screen.getByText(/Reconnecting to the running analysis/)).toBeInTheDocument();
+  });
+
+  it('hides the reconnecting line once live chapter data arrives', () => {
+    renderCard({
+      isResuming: true,
+      live: {
+        totalChapters: 9,
+        chapters: [liveChapter({ sentencesDone: 5, sentencesTotal: 100, inSentenceMode: true })],
+      },
+    });
+    expect(screen.queryByText(/Reconnecting to the running analysis/)).not.toBeInTheDocument();
+  });
+
+  it('does not show the reconnecting line on a normal (non-resume) start', () => {
+    renderCard({ isResuming: false, live: null });
+    expect(screen.queryByText(/Reconnecting to the running analysis/)).not.toBeInTheDocument();
+  });
+});
