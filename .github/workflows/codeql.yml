@@ -1,0 +1,43 @@
+name: CodeQL
+
+# Static security analysis (CodeQL) for the JS/TS frontend+server and the
+# Python TTS sidecar. Scheduled weekly + manual only — deliberately NOT on
+# push/pull_request, to stay within the opt-in CI cost posture (plan 215).
+# Free for public repos. Each run scans the whole codebase from the default
+# branch and uploads results to the Security → Code scanning tab.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # JS/TS + Python are interpreted — no compilation step needed.
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
