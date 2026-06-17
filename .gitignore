@@ -111,10 +111,15 @@ __pycache__/
 server/audio/
 
 # On-disk book workspace (manuscripts + .audiobook/ state + audio output).
-# Lives at <repo>/audiobook-workspace/ by default; override via WORKSPACE_DIR.
-# Belongs-to-the-user data — never sent to GitHub.
+# Default landed at <repo>/audiobook-workspace/ historically; the Castwright
+# rebrand renamed the default to <repo>/castwright-workspace/ (server/src/
+# workspace/paths.ts). Override via WORKSPACE_DIR. Both are ignored so running
+# the app from the repo never stages a user's library (and never trips the
+# release clean-tree pre-flight). Belongs-to-the-user data — never sent to GitHub.
 audiobook-workspace/
 /audiobook-workspace/
+castwright-workspace/
+/castwright-workspace/
 
 # Local revert-safety backups of cast.json, written before a data-repair run
 # (scripts/repair-series-reuse.mjs). Belongs-to-the-user data — local only,
