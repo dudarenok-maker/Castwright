@@ -385,6 +385,11 @@ interface PhaseCardProps {
   isLocalAnalyzer: boolean;
   analysisStarted: boolean;
   conn: ConnState;
+  /** True while re-attaching to an already-running analysis after a page
+      reload, until the first replayed event arrives. Drives the
+      "Reconnecting…" bridge so the live row never reads as a blank/lost
+      elapsed during the sub-second resume window (issue #865). */
+  isResuming?: boolean;
   bookId: string | null | undefined;
   droppedQuotesRefreshKey: number;
 }
@@ -405,6 +410,7 @@ export function PhaseCard({
   isLocalAnalyzer,
   analysisStarted,
   conn,
+  isResuming,
   bookId,
   droppedQuotesRefreshKey,
 }: PhaseCardProps) {
@@ -481,6 +487,18 @@ export function PhaseCard({
             {p.id === 0 && phaseLogs.length === 0 && analysisStarted && conn === 'connecting' && (
               <p className="mt-3 text-xs font-mono text-ink/50 italic">
                 Reading the manuscript (parsing chapters)…
+              </p>
+            )}
+            {/* Reload re-attach bridge (issue #865). After a page reload the
+                view re-subscribes to the still-running sticky job; the elapsed
+                ticker has no `live` data until the first replayed phase event
+                lands (sub-second). Show a "Reconnecting…" line in that gap so
+                the elapsed never reads as blank/lost — the real rows replace it
+                the moment the replay arrives. */}
+            {isResuming && (!live || live.chapters.length === 0) && (
+              <p className="mt-3 inline-flex items-center gap-2 text-xs font-mono text-ink/50 italic">
+                <IconSpinner className="w-3 h-3 text-magenta" />
+                Reconnecting to the running analysis…
               </p>
             )}
             {throttleActive && throttle ? (

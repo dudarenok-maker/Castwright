@@ -223,6 +223,13 @@ export function AnalysingView({
      an explicit click the user controls when the analysis kicks off,
      and the server log shows exactly one [analysis] entry per click. */
   const [analysisStarted, setAnalysisStarted] = useState(false);
+  /* True only while re-attaching to an already-running job after a page
+     reload — set when the cold-boot rehydrate finds a `running` snapshot,
+     cleared on the first replayed event (markEvent) or any explicit
+     start/retry. Drives PhaseCard's "Reconnecting…" bridge so the elapsed
+     ticker never reads as a blank/lost during the sub-second resume window
+     before the SSE replay lands (issue #865). */
+  const [resuming, setResuming] = useState(false);
 
   /* Marketing capture (VITE_DEMO_CAPTURE): auto-start so a deep-link to the
      analysing screen poses a live run. The analyzer is Gemini in mock mode
@@ -267,6 +274,7 @@ export function AnalysingView({
     hasStartedOnceRef.current = true;
     if (activeStreamSnapshot.state === 'running') {
       setAnalysisStarted(true);
+      setResuming(true);
     }
   }, [manuscriptId, activeStreamSnapshot]);
 
@@ -393,7 +401,12 @@ export function AnalysingView({
        succeeds (banner stays cleared) or hits the gate again and the
        catch below re-sets it with fresh counts. */
     setStage1ShrinkInfo(null);
-    const markEvent = () => setLastEventAt(Date.now());
+    const markEvent = () => {
+      setLastEventAt(Date.now());
+      /* First event of any run means we're re-attached — drop the
+         "Reconnecting…" bridge (issue #865). No-op when not resuming. */
+      setResuming(false);
+    };
     /* Seed the cross-navigation analysis snapshot so the AnalysisPill
        (B3) can read live progress from Redux even after the user
        navigates away from this view. The snapshot updates on every
@@ -715,7 +728,12 @@ export function AnalysingView({
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
-    const markEvent = () => setLastEventAt(Date.now());
+    const markEvent = () => {
+      setLastEventAt(Date.now());
+      /* First event of any run means we're re-attached — drop the
+         "Reconnecting…" bridge (issue #865). No-op when not resuming. */
+      setResuming(false);
+    };
     /* Snapshot whether the main run is in flight RIGHT NOW. If yes,
        abort it before firing subset (avoids the cache-write race) and
        remember to resume it after subset settles.
@@ -878,6 +896,7 @@ export function AnalysingView({
             }),
           );
           setAnalysisStarted(true);
+          setResuming(false);
           setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
         } else {
           /* Main wasn't running — retry was a standalone (cast_incomplete
@@ -1050,6 +1069,7 @@ export function AnalysingView({
       setConn('idle');
     } else {
       setAnalysisStarted(true);
+      setResuming(false);
       setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
     }
   };
@@ -1346,6 +1366,7 @@ export function AnalysingView({
               isLocalAnalyzer={isLocalAnalyzer}
               analysisStarted={analysisStarted}
               conn={conn}
+              isResuming={resuming}
               bookId={bookId}
               droppedQuotesRefreshKey={droppedQuotesRefreshKey}
             />
