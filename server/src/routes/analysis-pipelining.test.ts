@@ -31,6 +31,7 @@
    pipelining touches. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { quarantinedIt } from '../test-utils/quarantine.js';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
@@ -439,7 +440,8 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
      contention. Already bumped 30s→90s→180s; skip in CI rather than gamble
      on a bigger number. Still runs locally. Re-enable once it's made
      deterministic (fake timers / no full-run await) per #875. */
-  it.skipIf(process.env.CI)('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
+  // QUARANTINED(#878): CPU+I/O contention timeout — drive-to-completion + real CACHE_DIR write. See docs/testing/flaky-register.md
+  quarantinedIt('Phase 1 chapter K dispatches with a roster snapshot containing only Phase 0 chapters 1..K+LAG', async () => {
     const manuscriptId = `test-rolling-roster-${Date.now()}`;
     /* 12 chapters + min-lag=5 + concurrency=1 keeps the Phase 0 grind
        short enough (11 sequential dispatches before the holding chapter

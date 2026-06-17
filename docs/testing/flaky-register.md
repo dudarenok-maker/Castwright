@@ -8,4 +8,4 @@ Empty register = done. See the rewrite playbook in
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| _(none yet)_ | | | | | |
+| Phase 1 chapter K rolling-roster snapshot | `server/src/routes/analysis-pipelining.test.ts` | `runMainAnalyzerJob — rolling roster snapshot` | CPU+I/O contention timeout (blew 180s budget under load; also 363s locally under contention) | #878 | 2026-06-17 |
