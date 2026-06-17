@@ -2,7 +2,7 @@
    detectVenvFn / findPythonFn drive the detect inputs; stubbed spawnFn emits
    fake `[bootstrap-venv]` lines + an exit code. No real Python spawn. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { VenvBootstrap } from './venv-bootstrap.js';
 
@@ -22,12 +22,11 @@ function makeFakeChild(exitCode: number, opts: { stdout?: string; stderr?: strin
   return child;
 }
 
-async function until(pred: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!pred()) {
-    if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
-    await new Promise((r) => setTimeout(r, 5));
-  }
+/** Wait for a predicate using vi.waitFor (event-driven retries, no clock budget). */
+async function until(pred: () => boolean): Promise<void> {
+  await vi.waitFor(() => {
+    if (!pred()) throw new Error('condition not met yet');
+  });
 }
 
 describe('VenvBootstrap', () => {

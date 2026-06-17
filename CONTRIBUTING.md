@@ -502,6 +502,10 @@ The compact version:
 3. Update `docs/features/INDEX.md` and `docs/BACKLOG.md` if relevant.
 4. Run `npm run verify` locally.
 5. Surface the user-visible delta in the end-of-turn summary.
+6. No budgeted polling loops in tests (await an event or drain to quiescence);
+   no `page.waitForTimeout` in new e2e (use state-based waits); no oversized
+   inline test timeouts. (`scripts/check-no-budget-poll.mjs` is the automated
+   gate; run it locally with `node scripts/check-no-budget-poll.mjs`.)
 
 ## Releasing
 
