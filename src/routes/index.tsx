@@ -28,6 +28,7 @@ import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
 import { fetchAnalyzerModels } from '../store/account-slice';
 import { Layout, type LayoutContext } from '../components/layout';
+import { PairShell } from '../views/pair';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 /* Plan 89 C5 — route-leaf views are lazy-loaded so the initial library route
    bundle no longer pulls in the manuscript editor / generation / listen /
@@ -1115,6 +1116,7 @@ function NotFound() {
 }
 
 export const router = createHashRouter([
+  { path: '/pair', element: <PairShell /> },
   {
     path: '/',
     element: <Layout />,
