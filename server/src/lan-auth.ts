@@ -27,6 +27,21 @@ export function isLoopbackRequest(req: Request): boolean {
   return LOOPBACK.has(ip);
 }
 
+/* Loopback + RFC1918 IPv4 — the LAN reachability the phone uses to redeem.
+   NOTE: relies on `req.ip` being the real socket peer — do NOT enable Express
+   `trust proxy`, or `X-Forwarded-For` could forge this (same invariant the
+   loopback gate depends on; keep them consistent).
+   Coupling: this IPv4-only allowlist mirrors `enumerateLanUrls` (IPv4-only, no
+   link-local) and Task 8's client-side `_isPrivateIpv4Host` — the two layers
+   share this assumption, so if LAN URLs ever gain IPv6/CGNAT both must widen. */
+const PRIVATE_V4 = [/^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^127\./];
+export function isPrivateNetworkRequest(req: Request): boolean {
+  let ip = req.ip ?? req.socket?.remoteAddress ?? '';
+  if (ip.startsWith('::ffff:')) ip = ip.slice('::ffff:'.length);
+  if (ip === '::1') return true;
+  return PRIVATE_V4.some((re) => re.test(ip));
+}
+
 /* Pull the token from `Authorization: Bearer …`, the `X-Lan-Token`
    header, or a `?token=` query param (the QR can carry it either way). */
 export function extractToken(req: Request): string | undefined {

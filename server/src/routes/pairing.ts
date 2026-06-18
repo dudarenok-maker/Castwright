@@ -1,7 +1,7 @@
 /* Companion pairing routes (QR redesign).
 
    POST /api/pair/session  — loopback-only (the desktop UI). Mints an ephemeral
-     code, computes the 80-bit CA fingerprint tag, returns the compact QR
+     code, computes the 128-bit CA fingerprint tag, returns the compact QR
      payload string the modal renders. Mints NO device token.
    POST /api/pair/redeem   — guard-exempt (an unpaired device holds only the
      code). Gated by the code; mints a per-device token over the caller's
@@ -18,7 +18,7 @@ import { resolveRootCaPath } from './cert-root.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
 import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
 import { createDevice } from '../workspace/device-tokens.js';
-import { isLoopbackRequest } from '../lan-auth.js';
+import { isLoopbackRequest, isPrivateNetworkRequest } from '../lan-auth.js';
 
 /** First 16 bytes (128 bits) of the CA cert's SHA-256, Crockford-base32. */
 export function caFingerprintTag(): string | undefined {
@@ -60,6 +60,10 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
 export const pairRedeemRouter = Router();
 
 pairRedeemRouter.post('/redeem', async (req: Request, res: Response) => {
+  if (!isPrivateNetworkRequest(req)) {
+    res.status(403).json({ error: 'Pairing can only be redeemed from the local network.' });
+    return;
+  }
   const body = (req.body ?? {}) as { code?: unknown; label?: unknown };
   const code = typeof body.code === 'string' ? body.code : '';
   const label = typeof body.label === 'string' ? body.label : 'Device';
