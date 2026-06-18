@@ -8,12 +8,15 @@ describe('planOrtSwap', () => {
   // keyed on installRecipe.ortPackage. Any package other than plain 'onnxruntime'
   // (today: nvidia → onnxruntime-gpu; a future DirectML re-enable → -directml) is a
   // swap; 'onnxruntime' itself is a no-op.
-  it('nvidia → swap plain onnxruntime → onnxruntime-gpu', () => {
+  it('nvidia → swap: uninstall BOTH then force-reinstall onnxruntime-gpu (skew-proof namespace)', () => {
     const plan = planOrtSwap('nvidia', 'win32');
     expect(plan.action).toBe('swap');
+    // Uninstall plain onnxruntime AND any cached onnxruntime-gpu so the shared
+    // namespace is cleared, then --force-reinstall lays it fresh (a plain install
+    // is a no-op when onnxruntime-gpu is cached at a skewed version → broken import).
     expect(plan.steps).toEqual([
-      ['uninstall', '-y', 'onnxruntime'],
-      ['install', 'onnxruntime-gpu'],
+      ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
+      ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu'],
     ]);
   });
 

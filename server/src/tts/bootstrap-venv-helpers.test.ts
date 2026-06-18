@@ -51,8 +51,8 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // overlay next (pulls plain onnxruntime via kokoro-onnx), then the GPU swap —
     // so onnxruntime-gpu unambiguously owns the shared onnxruntime/ namespace.
     expect(joined[1]).toMatch(/install -r .*nvidia-cuda\.txt/);
-    expect(joined[2]).toBe('uninstall -y onnxruntime');
-    expect(joined[3]).toBe('install onnxruntime-gpu');
+    expect(joined[2]).toBe('uninstall -y onnxruntime onnxruntime-gpu');
+    expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu');
     expect(pip.calls).toHaveLength(4);
   });
 
