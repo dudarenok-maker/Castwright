@@ -105,6 +105,16 @@ Define success criteria, then loop until verified.
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
 - `npm run verify:fast` — fast tests only (alias for `test:fast`) — pre-commit gate.
 - `npm run build` — production build into `dist/`.
+- `npm run apk:companion` — build the Android companion APK and drop it at
+  `companion/castwright-companion.apk` (the path `GET /api/companion/apk` serves;
+  set `COMPANION_APK_PATH` to drop elsewhere). Stamps an **auto-incrementing
+  timestamp `versionCode`** (minutes since epoch) via `flutter build --build-number`,
+  so every build's code strictly increases and it **update-installs** over the prior
+  one — never the "same versionCode → won't update / had to uninstall" trap. It also
+  **verifies the built APK's signer cert** == the upload key (`ba7b147d…`) and refuses
+  to drop a debug-/wrong-key build (which would fail `INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+  Run from a checkout that has `apps/android/android/key.properties` + `upload-keystore.jks`
+  (git-ignored). Pure helpers unit-tested in `scripts/tests/build-companion-apk.test.mjs`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep).
