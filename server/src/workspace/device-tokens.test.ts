@@ -12,10 +12,7 @@ beforeEach(async () => {
   vi.resetModules();                       // re-read WORKSPACE_ROOT at module load
   dt = await import('./device-tokens.js');
 });
-afterEach(async () => {
-  // Drain pending microtasks so fire-and-forget persists from isValidDeviceToken
-  // complete before the temp dir is removed, avoiding an unhandled ENOENT rejection.
-  await new Promise((r) => setTimeout(r, 0));
+afterEach(() => {
   delete process.env.WORKSPACE_DIR;
   rmSync(dir, { recursive: true, force: true });
 });

@@ -123,8 +123,8 @@ export function isValidDeviceToken(rawToken: string): boolean {
   const now = Date.now();
   const device = findValidDevice(loadSync(), rawToken, now);
   if (!device) return false;
-  // Best-effort, fire-and-forget: a raced/failed persist is harmless.
-  if (shouldTouchLastSeen(device, now)) void touchLastSeen(device.id, now);
+  // Best-effort touch — must not throw on the sync guard path; swallow any rejection.
+  if (shouldTouchLastSeen(device, now)) void touchLastSeen(device.id, now).catch(() => {});
   return true;
 }
 
