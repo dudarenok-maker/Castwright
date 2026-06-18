@@ -106,7 +106,7 @@ export async function createDevice(
   const token = randomBytes(32).toString('hex');
   const record: DeviceTokenRecord = {
     id: randomBytes(8).toString('hex'),
-    label: label.trim() || 'Device',
+    label: label.trim().slice(0, 64) || 'Device',
     tokenHash: hashToken(token),
     createdAt: new Date().toISOString(),
   };
