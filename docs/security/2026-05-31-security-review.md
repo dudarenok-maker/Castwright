@@ -61,6 +61,13 @@ its own merits.
 ### Worth fixing
 
 **#1 — No auth + server binds all interfaces by default.**
+> **UPDATE (2026-06-18): the "binds all interfaces by default" framing is now
+> STALE.** Since `srv-19` shipped (`server/src/bind-host.ts`), the **default**
+> bind is **loopback-only** (`127.0.0.1`); all-interface bind requires the opt-in
+> `npm run start:lan` flow or an explicit `BIND_HOST=0.0.0.0`. The text below
+> describes the pre-`srv-19` world and is retained for history. The residual
+> exposure is therefore the *opt-in* LAN flow, not the default.
+
 `server/src/index.ts:362` — plain `app.listen(PORT)` with no host binds to
 `0.0.0.0`, not `127.0.0.1` (the file's own comment at `:231` confirms this).
 LAN HTTPS mode (`:360`) is *meant* to be reachable, but the **default HTTP dev
@@ -172,3 +179,43 @@ validation), `srv-22` (sync-folder path constraint), `side-12`
 (download checksum pinning) under Ops. Each fix ships its paired test per the
 project's testing discipline (server vitest, sidecar pytest, Pester for the
 install-script hashes).
+
+---
+
+## 2026-06 — CodeQL remediation pass
+
+A maximal/defense-in-depth pass clearing the 146 open GitHub code-scanning
+(CodeQL) alerts. Spec + plan:
+[`docs/superpowers/specs/2026-06-17-codeql-remediation-design.md`](../superpowers/specs/2026-06-17-codeql-remediation-design.md)
+and [`docs/superpowers/plans/2026-06-17-codeql-remediation.md`](../superpowers/plans/2026-06-17-codeql-remediation.md).
+
+**Code-fixed (with paired tests):**
+
+- **Path-injection** — new `server/src/util/safe-path.ts` containment helper
+  (`safeSegment`/`assertContained`/`safeJoin`), applied at each `fs` sink in its
+  own function (samples slug, analysis cache id, qwen-voice + book-state +
+  epub-upload, analyzer handoff writes, cover-download). `bookDirByDisplay`
+  sanitizes path-hostile chars at the single chokepoint (preserving spaces/
+  hyphens) and asserts containment — closing the unauthenticated arbitrary-file
+  **write** primitive via `POST /api/books`.
+- **Rate limiting** — global `express-rate-limit` (`apiLimiter`), mounted before
+  every route so it dominates the API surface (anti-DoS + scanner-clearing; **not**
+  an auth control — auth stays parked as `srv-20`).
+- **Sidecar stack-trace exposure** — all error responses return a generic body
+  and log the traceback server-side (no exception text reaches the client).
+- **Misc** — tainted-format-string → `%s`; loop-bound clamps; ReDoS trim splits;
+  replace-until-stable HTML/entity sanitizers; `&amp;`-decoded-last; Gemini stream
+  accumulator cap; frontend `safeImageSrc` cover-URL guard + crypto session id;
+  the LAN health probe now validates the self-signed cert against the mkcert root
+  CA instead of disabling TLS.
+- **`srv-22`** — `sync-folder/test` now requires an existing directory
+  (`lstat`-first, symlink-rejecting) rather than `mkdir`-creating an arbitrary
+  tree, removing an unauthenticated arbitrary-directory-creation primitive.
+
+**Dismissed (with justification)** — see
+[`docs/security/codeql-dismissal-residue.md`](codeql-dismissal-residue.md): the 4
+cover `<img src>` (server-controlled provenance; not a script sink), the 2
+`cover.test.ts` test-file alerts, the `audio-tags` manuscript-scan loop, the
+`state-io`/`atomic-rename` composed-path sinks (no single containment root), and
+the `text.ts` filename/title ReDoS regexes (no parse-preserving rewrite;
+server-side input). CodeQL config now excludes `**/*.test.ts(x)` going forward.
