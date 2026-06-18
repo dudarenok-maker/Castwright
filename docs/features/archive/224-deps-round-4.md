@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-18
 owner: null
 ---
 
@@ -93,8 +93,8 @@ Six commits on `chore/deps-round-4`, each gated by its own full `npm run verify`
   — drive real `sharp(...).jpeg().toBuffer()` and assert JPEG SOI bytes; locked
   sharp 0.35 (38/38).
 - Flutter (`apps/android/test/data/network_info_test.dart`) — five-case
-  connectivity mapping; locked connectivity_plus 7's `List<ConnectivityResult>`
-  shape (5/5). Full Flutter suite: 306/306.
+  connectivity mapping; `List<ConnectivityResult>` shape (5/5), held at
+  connectivity_plus 6.1.0 (see app-18). Full Flutter suite: 306/306.
 - Full `npm run verify` (frontend + server + e2e + build) green on the JS
   surfaces after each commit; final clean-room `verify -- --no-cache` before the PR.
 
@@ -115,4 +115,14 @@ n/a — dependency round, no UI surface. Acceptance is the green automated batte
 
 ## Ship notes
 
-(Filled in when status flips to `stable`: shipped date, merge SHA.)
+Shipped **2026-06-18** via PR **#894**, merge commit **`094f3738`**.
+
+Behaviour delta vs. the original spec: **connectivity_plus 6→7 was reverted.**
+The Android toolchain floor was met, but 7.1.1's iOS Swift calls
+`NWPath.isUltraConstrained` (an iOS-26-era SDK API the CI Xcode lacks), which
+failed `app.yml`'s `ios-compile` guard — caught in CI because no local gate
+builds iOS. Held at 6.1.0; re-bump tracked as `app-18` (#895). Also added
+mid-round: a `chore(deps)` **server in-range refresh** (the fresh-tree baseline
+revealed five in-range bumps the drifted dev checkout had hidden) and a
+**js-yaml `^4.2.0` override** (Dependabot GHSA-h67p-54hq-rp68). All three
+Dependabot alerts (2× `multer`, 1× `js-yaml`) close on merge.
