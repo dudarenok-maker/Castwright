@@ -64,7 +64,7 @@ vi.mock('../workspace/device-tokens.js', () => ({
   clampTtlDays: (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : 30),
 }));
 
-import { pairSessionRouter, pairRedeemRouter, browserRedeemLimiter } from './pairing.js';
+import { pairSessionRouter, pairRedeemRouter, redeemLimiter } from './pairing.js';
 import { _resetPairingSessionsForTests, createPairingSession } from '../workspace/pairing-sessions.js';
 import { isLoopbackRequest, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 
@@ -78,7 +78,7 @@ function appWith(router: express.Router) {
 describe('pairing routes', () => {
   beforeEach(() => {
     _resetPairingSessionsForTests();
-    browserRedeemLimiter.resetKey('::ffff:127.0.0.1');
+    redeemLimiter.resetKey('::ffff:127.0.0.1');
   });
 
   it('POST /session returns a qrPayload + code + fpTag', async () => {
@@ -155,6 +155,23 @@ describe('pairing routes', () => {
     const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
     expect(res.status).toBe(403);
   });
+
+  // Follow-up (#900): the companion /redeem now shares the dedicated redeemLimiter
+  // (the global apiLimiter never covered these pre-guard routes).
+  it('redeem rate-limits after 5/min', async () => {
+    for (let i = 0; i < 5; i++) await request(appWith(pairRedeemRouter)).post('/api/pair/redeem').send({ code: 'WRONGWRONGWRONG1' });
+    const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem').send({ code: 'WRONGWRONGWRONG1' });
+    expect(res.status).toBe(429);
+  });
+
+  // Follow-up (#900): the redeem-browser consumed/expired (410) branch was untested.
+  it('redeem-browser returns 410 for an already-consumed code', async () => {
+    const { code } = createPairingSession('x', undefined, 10);
+    const first = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(first.status).toBe(201);
+    const second = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(second.status).toBe(410);
+  });
 });
 
 // Body-size enforcement tests — reproduce the parser-order bug by building a
@@ -182,7 +199,7 @@ function appWithPreGuardRouterFirst() {
 describe('pairing body-size cap — parser-order regression', () => {
   beforeEach(() => {
     _resetPairingSessionsForTests();
-    browserRedeemLimiter.resetKey('::ffff:127.0.0.1');
+    redeemLimiter.resetKey('::ffff:127.0.0.1');
   });
 
   // These two tests FAIL before the fix (global parser accepts the body, no 413)

@@ -34,7 +34,7 @@ Design of record: [`../superpowers/specs/2026-06-18-lan-browser-device-auth-desi
 4. **`persist()` writes then sets the cache** (`device-tokens.ts`): `await writeJsonAtomic(...); cache = devices;` — never cache-before-write (else a failed write leaves a phantom device or resurrects a revoked one on restart). `persist` writes `{ schema: 2 }`.
 5. **CSRF: cookie-bearing writes are Origin-gated** (`server/src/csrf-origin.ts`, `requireSameOrigin`): only state-changing methods carrying `__Host-cw_lan` are checked, via the SAME `readCwLanCookie` parser as the guard (no parser divergence). Allow-list = `enumerateLanUrls(port,'https').urls` + explicit loopback origins, recomputed per request, **fails closed** to loopback-only if enumeration throws, and 403s when Origin+Referer are both absent.
 6. **All token-minting paths are loopback-gated** (`devices.ts`: `POST /api/devices` admin mint + `POST /api/devices/pair-session`) — a stolen browser cookie cannot mint a fresh durable token that survives revocation.
-7. **`/redeem-browser` is pre-guard, code-gated, and LAN-only** (`server/src/routes/pairing.ts` + mount order in `app.ts`): mounted on `pairRedeemRouter` **before** `requireLanToken`; `isPrivateNetworkRequest` 403 + `isLanTokenEnforced` 409 + dedicated 5/min `browserRedeemLimiter` + its own `express.json({ limit: '1kb' })`. Sets `__Host-cw_lan` (`HttpOnly; Secure; SameSite=Strict; Path=/`) and **never returns the raw token in the body**.
+7. **`/redeem-browser` is pre-guard, code-gated, and LAN-only** (`server/src/routes/pairing.ts` + mount order in `app.ts`): mounted on `pairRedeemRouter` **before** `requireLanToken`; `isPrivateNetworkRequest` 403 + `isLanTokenEnforced` 409 + the shared 5/min `redeemLimiter` + its own `express.json({ limit: '1kb' })`. Sets `__Host-cw_lan` (`HttpOnly; Secure; SameSite=Strict; Path=/`) and **never returns the raw token in the body**. The companion `/redeem` shares the same `redeemLimiter` (the global `apiLimiter` never covered these pre-guard routes).
 8. **`app.ts` middleware order** (`server/src/app.ts`): `pairRedeemRouter` (pre-guard, before the global `express.json({limit:'20mb'})` so the 1 KB caps engage) → `requireLanToken` → `requireSameOrigin` → routers. `assertNoTrustProxy(app)` runs at assembly; `trust proxy` stays unset (loopback gate would be spoofable otherwise).
 9. **`#/pair` is a top-level, Layout-free route** (`src/routes/index.tsx`): a second `createHashRouter` entry (NOT under `Layout.children`), so an unauthorized phone doesn't fire Layout's boot effects (no 401-storm). `PairShell` reads `c` via `useSearchParams`.
 10. **Library scan failure is recoverable** (`src/store/library-slice.ts` `error`/`hydrateError`; `src/components/layout.tsx` catch; `src/views/book-library.tsx`): a failed `/api/library` shows "Couldn't load — Retry", not an eternal skeleton. `hydrate` clears `error`.
@@ -47,7 +47,7 @@ Design of record: [`../superpowers/specs/2026-06-18-lan-browser-device-auth-desi
 - `server/src/lan-auth.test.ts` — cookie-auth pass/reject through the guard; header/Bearer/query paths intact; loopback bypass.
 - `server/src/csrf-origin.test.ts` — allowed/loopback origin pass, foreign origin 403, no-Origin+no-Referer 403, header-token bypass, parser-agreement (a cookie `cookie.parse` accepts still gates).
 - `server/src/routes/devices.test.ts` — `pair-session` loopback-only URL payload + 409; admin mint 403 from non-loopback; label cap.
-- `server/src/routes/pairing.test.ts` — `/redeem-browser` cookie-set + no-raw-token + 409 + 5/min 429 + **403 off-network**; `/redeem` **403 off-network**; body-size 413 caps on both routes (parser-order regression anchor).
+- `server/src/routes/pairing.test.ts` — `/redeem-browser` cookie-set + no-raw-token + 409 + 5/min 429 + **403 off-network** + **410 (already-consumed code)**; `/redeem` **403 off-network** + **5/min 429** (shared `redeemLimiter`); body-size 413 caps on both routes (parser-order regression anchor).
 - `server/src/routes/lan-cookie-integration.test.ts` — **the real chain**: redeem-browser → capture `Set-Cookie` → replay on a guarded `GET /api/library` (not 401) + foreign-Origin write → 403. No mocks, temp workspace, real `app`.
 - `server/src/lan-safety.test.ts` + `server/src/lan-auth.invariants.test.ts` — `assertNoTrustProxy` throws when set; `lanExposureWarning` fires only when bound-LAN + token-unset; `app.ts` mount order (`requireSameOrigin` after `requireLanToken`) + no `trust proxy` in source.
 - `server/src/config/registry.test.ts` — `lan.deviceTokenTtlDays` knob (default 30, integer, `apply: live`) + the `lan-access` group.
@@ -70,8 +70,8 @@ Real device, the real backend (`npm run start:lan` with `LAN_HTTPS=1` + `LAN_AUT
 
 - Per-user accounts / roles, or a read-only token tier — any valid token grants the full `/api` surface (single-owner LAN tool). See the design's "Defense-in-depth notes".
 - The shared-secret `LAN_AUTH_TOKEN` remains an unexpiring, unrevocable, CSRF-exempt superuser (companion bootstrap; exposed in the LAN QR) — device tokens are the revocable/expiring tier.
-- Global `apiLimiter` does not cover the pre-guard pair routes (pre-existing; `/redeem-browser` has its own limiter, `/redeem` is single-use code-gated) — follow-up on #900.
-- A direct unit test for the `/redeem-browser` 410 path — follow-up on #900.
+
+(The two #900 follow-ups are **resolved**: the global `apiLimiter` doesn't cover the pre-guard pair routes, so `/redeem` now shares the dedicated `redeemLimiter` with `/redeem-browser`; and the `/redeem-browser` 410 consumed-code path now has a direct unit test.)
 
 ## Ship notes
 

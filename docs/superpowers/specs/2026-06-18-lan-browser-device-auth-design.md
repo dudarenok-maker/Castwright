@@ -461,10 +461,11 @@ cross-origin write is 403. (A legacy companion token, if any, re-pairs once.)
 
 Filed as `srv-42` (#900, `area:fs`/`type:feature`) and **delivered in the same
 PR** (`Closes #900`), so it never sits on `docs/BACKLOG.md` (the backlog tracks
-outstanding work). Two follow-ups noted on #900: global `apiLimiter` doesn't
-cover the pre-guard pair routes (pre-existing; `/redeem-browser` has its own
-limiter, `/redeem` is single-use code-gated); add a direct unit test for the
-`/redeem-browser` 410 path.
+outstanding work). The two #900 follow-ups were **resolved** in a fast-follow
+(`fix/server-redeem-hardening`): the global `apiLimiter` doesn't cover the
+pre-guard pair routes, so `/redeem` now shares the dedicated `redeemLimiter`
+with `/redeem-browser`; and the `/redeem-browser` 410 consumed-code path got a
+direct unit test.
 
 ## Decisions locked (after three review rounds)
 

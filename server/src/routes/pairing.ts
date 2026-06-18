@@ -65,7 +65,20 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
 
 export const pairRedeemRouter = Router();
 
-pairRedeemRouter.post('/redeem', express.json({ limit: '1kb' }), async (req: Request, res: Response) => {
+// Dedicated per-IP rate limiter shared by BOTH pre-guard mint endpoints
+// (/redeem + /redeem-browser). The global apiLimiter does NOT cover pre-guard
+// routes (the router responds before it runs), so without this the code-gated
+// mints had no rate cap. NOT skipped under Vitest (the global apiLimiter is).
+// Exported so tests can reset its store between cases (shared IP under supertest).
+export const redeemLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip ?? 'unknown',
+});
+
+pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), async (req: Request, res: Response) => {
   if (!isPrivateNetworkRequest(req)) {
     res.status(403).json({ error: 'Pairing can only be redeemed from the local network.' });
     return;
@@ -83,19 +96,9 @@ pairRedeemRouter.post('/redeem', express.json({ limit: '1kb' }), async (req: Req
   res.status(201).json({ token });
 });
 
-// dedicated limiter — NOT skipped under Vitest (the global apiLimiter is).
-// Exported so tests can reset its store between cases (shared IP under supertest).
-export const browserRedeemLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => req.ip ?? 'unknown',
-});
-
 pairRedeemRouter.post(
   '/redeem-browser',
-  browserRedeemLimiter,
+  redeemLimiter,
   express.json({ limit: '1kb' }),
   async (req: Request, res: Response) => {
     // Same local-network restriction app-17 applies to /redeem: this sibling
