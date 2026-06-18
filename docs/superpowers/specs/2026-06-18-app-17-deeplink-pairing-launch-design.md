@@ -223,6 +223,13 @@ strict regression on this axis:
   pre-installed + user tap; code is single-use/5-min; the in-app scanner remains the
   recommended path on these versions.
 
+> **Boundary statement (defence-in-depth):** stock-camera deep-link auto-open is a
+> *convenience*, not a security boundary, on API < 31 — there is no per-app
+> verification precedence there, so the OS, not the app, decides who receives the
+> Intent. The **trusted pairing path** is the in-app ML Kit scanner (bytes never
+> leave the scanner; no Intent routing). app-17 does not advertise auto-open as a
+> security feature; it is best-effort convenience that is fully safe only on API 31+.
+
 **assetlinks integrity (operational).** `assetlinks.json` is an unsigned static file on
 the CDN; whoever can deploy to `www` controls which package/cert Android trusts for
 `/pair`. A site compromise → deep-link hijack for all API-31+ users (HIGH impact /
@@ -235,8 +242,9 @@ reviewed, alerting-worthy change.
 an attacker-controlled `h`+`f` makes the app pin and trust an attacker's LAN server.
 app-17 does not create this, but a `https://www.castwright.ai/pair?…` URL is far more
 credible to scan than an opaque blob and (on a verified device) opens **silently** — so
-exploitability rises. Candidate hardening (see "Suggested security follow-ups"): the app
-should constrain `h` to RFC1918/link-local and surface it on the pairing-confirm screen.
+exploitability rises. Hardened in app-17: the app **constrains `h` to RFC1918/link-local**
+(Task 8) and **surfaces the target host prominently** on the pairing-confirm screen for
+deep-link opens (Task 8) so a swapped host is visible before the user taps Pair.
 
 ### Security hardening (FOLDED INTO app-17)
 
@@ -253,6 +261,32 @@ harden pre-existing issues that the URL flip amplifies):
 intentionally NOT added** — for a cryptographically-infeasible brute it would be
 speculative complexity (CLAUDE.md "no error handling for impossible scenarios"). The
 private-network redeem guard (item 3) is the meaningful additional control.
+
+### Defence-in-depth review outcome
+
+A DiD pass mapped layers per threat and found two structural single points of failure,
+both now addressed by the items above (Tasks 8 + 10 add the *independent* "LAN-only"
+layer at both the client-parse and server-endpoint, which the fp-tag never provided
+against an actively-controlled QR) plus two process/doc closures:
+
+- **A — API 24–30 boundary** is stated explicitly above ("Boundary statement").
+- **B — process gate:** the app-side security controls (Tasks 5, 8, 9) are not run by
+  `npm run verify`, so they get a **second independent gate** — `app.yml` CI on
+  `apps/android/**` — which should be a required status check before the app-bearing PR
+  merges (plan Tasks 5 + 12).
+- **C — confirm-screen host visibility** is folded into Task 8 (prominent host banner on
+  deep-link opens), turning a weak layer into a real one against same-LAN phishing.
+- **D — device-token TTL + scope (reviewed, deliberately NOT folded as code).** The
+  minted device token has no expiry and no scope (full `/api`), so it is a single layer
+  post-mint — the existing control is per-device **revocation**. Adding a TTL would force
+  periodic re-pairing, which **breaks the offline-first companion UX** (the token is
+  meant to work forever offline); adding *scope* requires a new authorization model
+  (enumerating exactly what the companion may call — it legitimately needs broad read +
+  listen-progress write), which is a **design sub-project, not a payload-flip fold**.
+  Decision: keep **revocation** as the appropriate control for a single-user offline LAN
+  token; track TTL/scope as a separate hardening item with its own brainstorm if the
+  threat model ever widens beyond single-user-LAN. Folding a naive TTL/scope here would
+  be the wrong change.
 
 ## Rollout ordering (load-bearing)
 

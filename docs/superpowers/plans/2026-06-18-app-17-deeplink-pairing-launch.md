@@ -684,18 +684,20 @@ git commit -m "feat: /pair fallback page, analytics-suppressed for scan privacy 
 
 ---
 
-## Task 8: Reject non-private QR hosts (anti-phishing-QR, app)
+## Task 8: Host trust — reject non-private QR hosts + surface the host on confirm (app)
 
 **Repo:** Castwright (this repo, `apps/android`)
 
-**Why:** the app trusts the QR's `h` as the server to pair with (`pairing_service.dart:54-81` fetches the CA from `https://<h>/cert/root.crt` over a validation-bypassing client, then redeems). A phishing `https://www.castwright.ai/pair?h=<public-IP>&…` could point the app at an attacker's internet server. Constrain `h` to private/loopback IPv4 so a QR can't aim the app off-LAN. (The host is already *shown* to the user — `pairing_screen.dart` pre-fills the editable `field-host` — so this adds the missing *rejection*.) Validating in `PairingQr` covers all three entry paths: scan, deep link, and manual entry (`pairing_screen.dart:_pair` constructs a `PairingQr`).
+**Why:** the app trusts the QR's `h` as the server to pair with (`pairing_service.dart:54-81` fetches the CA from `https://<h>/cert/root.crt` over a validation-bypassing client, then redeems), and the fp-tag gives no protection when an attacker controls the whole QR. Two independent layers: (1) **reject** non-private `h` so a phishing QR can't aim the app at an internet server; (2) **surface** the target host prominently on the pairing-confirm screen for deep-link opens (DiD rec C) so a swapped same-LAN host is visible before the user taps Pair. Validating in `PairingQr` covers all three entry paths: scan, deep link, manual.
 
 **Files:**
 - Modify: `apps/android/lib/src/domain/pairing_qr.dart` (`_checked` gains a private-host check)
 - Modify: `apps/android/test/domain/pairing_qr_test.dart`
+- Modify: `apps/android/lib/src/ui/pairing_screen.dart` (prominent host banner on deep-link opens)
+- Create: `apps/android/test/ui/pairing_screen_test.dart` (banner widget test)
 
 **Interfaces:**
-- Produces: `PairingQr.parse`/constructor throws `FormatException` when `hostPort`'s host is not RFC1918 / loopback / link-local IPv4.
+- Produces: `PairingQr.parse`/constructor throws `FormatException` when `hostPort`'s host is not RFC1918 / loopback / link-local IPv4; the pairing screen shows a `Key('pair-host-banner')` naming the target host when opened from a deep link.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -767,11 +769,80 @@ In `_checked`, after the empty-field guard, add:
 Run: `cd apps/android && flutter test test/domain/pairing_qr_test.dart`
 Expected: PASS (existing private-host cases stay green).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Write the failing host-banner test (DiD rec C)**
+
+Create `apps/android/test/ui/pairing_screen_test.dart`:
+
+```dart
+import 'package:castwright/src/data/pairing_service.dart';
+import 'package:castwright/src/data/pairing_store.dart';
+import 'package:castwright/src/domain/paired_server.dart';
+import 'package:castwright/src/domain/pairing_qr.dart';
+import 'package:castwright/src/ui/pairing_screen.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+class _NoopStore implements PairingStore {
+  @override Future<void> clear() async {}
+  @override Future<PairedServer?> load() async => null;
+  @override Future<String?> loadCaPem() async => null;
+  @override Future<void> save(PairedServer s) async {}
+  @override Future<void> saveCaPem(String c) async {}
+}
+
+void main() {
+  testWidgets('deep-link open shows a prominent host banner', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: PairingScreen(
+        service: PairingService(),
+        store: _NoopStore(),
+        initialQr: const PairingQr(
+            hostPort: '192.168.1.5:8443', code: 'K7QF3M2P', fpTag: '1CR5AYMZRKMGWCTRFPHCFV0H6R'),
+      ),
+    ));
+    final banner = find.byKey(const Key('pair-host-banner'));
+    expect(banner, findsOneWidget);
+    expect(find.descendant(of: banner, matching: find.textContaining('192.168.1.5:8443')), findsOneWidget);
+  });
+}
+```
+
+- [ ] **Step 6: Run to verify it fails**
+
+Run: `cd apps/android && flutter test test/ui/pairing_screen_test.dart`
+Expected: FAIL — no `pair-host-banner` widget yet.
+
+- [ ] **Step 7: Add the banner to `pairing_screen.dart`**
+
+In `apps/android/lib/src/ui/pairing_screen.dart`, in `build`, when `widget.initialQr != null` render a prominent read-only banner above the form (it sits before the existing intro `Text`):
+
+```dart
+            if (widget.initialQr != null)
+              Container(
+                key: const Key('pair-host-banner'),
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Pairing with ${widget.initialQr!.hostPort} — confirm this is your computer before continuing.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+```
+
+- [ ] **Step 8: Run to verify pass**
+
+Run: `cd apps/android && flutter test test/ui/pairing_screen_test.dart`
+Expected: PASS.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add apps/android/lib/src/domain/pairing_qr.dart apps/android/test/domain/pairing_qr_test.dart
-git commit -m "feat(app): reject non-private pairing-QR hosts (anti-phishing) (app-17)"
+git add apps/android/lib/src/domain/pairing_qr.dart apps/android/test/domain/pairing_qr_test.dart apps/android/lib/src/ui/pairing_screen.dart apps/android/test/ui/pairing_screen_test.dart
+git commit -m "feat(app): reject non-private hosts + surface pairing host on confirm (app-17)"
 ```
 
 ---
@@ -1019,6 +1090,7 @@ Start the desktop server in LAN HTTPS mode (`npm run dev:lan` or `start:lan`), o
 - `Closes #729` in the website PR or the app PR; remove its row from `docs/BACKLOG.md`.
 - Set the spec `status:` to `stable`, fill Ship notes (date + SHAs).
 - Update `docs/features/INDEX.md` if the spec/plan is indexed there.
+- **(DiD rec B — process gate)** The app-side security controls (Tasks 5, 8, 9) are NOT run by `npm run verify` — `app.yml` CI on `apps/android/**` is their only independent automated gate. Confirm `app.yml` is green on the app-bearing PR, and make it a **required status check** in branch protection so an app-side security regression can't merge unguarded.
 - (Optional honesty edit) `docs/features/208-pairing-qr-mlkit-decoder.md` mentions the host-agnostic parser accepting `castwright.ai/pair?…` (lines ~11/32/41/63) — these describe what the parser *accepts*, not a hosted assetlinks URL, so they need no change unless you want them to read `www` for consistency.
 - Note in the BACKLOG/issue that the **Play App Signing SHA-256** is still owed when Play distribution lands (append to the `assetlinks.json` array).
 
@@ -1040,7 +1112,8 @@ If `assetlinks.json` ships with a wrong fingerprint, fixing it isn't enough — 
 - assetlinks.json (upload-key cert, array) + content-type → Task 6 ✓
 - /pair fallback page (no `/download` CTA) + analytics-beacon suppression for scan privacy + build-grep lock → Task 7 ✓
 - Security delta (unverified-scan leak: bounded, beacon/referrer mitigated, edge-log residual accepted) → spec "Security delta" + Task 7 ✓
-- Anti-phishing-QR: reject non-private hosts → Task 8 ✓
+- Anti-phishing-QR: reject non-private hosts + prominent host banner on confirm (DiD rec C) → Task 8 ✓
+- DiD recs A (API 24–30 boundary statement) + B (app.yml required gate) + D (token TTL/scope reviewed → kept as revocation, documented why not folded) → spec "Defence-in-depth review outcome" + Tasks 5/12 ✓
 - Deep-link re-entrancy guard (no stacked pairing screens) → Task 9 ✓
 - Redeem private-network guard (LAN-only redeem, bounds edge-log leak) → Task 10 ✓
 - Redeem label cap; runtime brute-lockout intentionally omitted (40-bit single-use already test-locked) → Task 11 ✓
