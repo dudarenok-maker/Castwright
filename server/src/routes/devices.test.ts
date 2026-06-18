@@ -134,4 +134,9 @@ describe('devices route (srv-33)', () => {
     );
     expect(sharedPassed).toBe(true);
   });
+
+  it('caps an over-long device label at 64 chars', async () => {
+    const { device } = await deviceTokens.createDevice('x'.repeat(200));
+    expect(device.label.length).toBe(64);
+  });
 });

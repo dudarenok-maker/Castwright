@@ -4,8 +4,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/pairing_service.dart';
 import 'package:castwright/src/data/pairing_store.dart';
 import 'package:castwright/src/domain/paired_server.dart';
+import 'package:castwright/src/domain/pairing_qr.dart';
 import 'package:castwright/src/ui/pairing_screen.dart';
 import 'package:castwright/src/brand.dart';
+
+class _NoopStore implements PairingStore {
+  @override Future<void> clear() async {}
+  @override Future<PairedServer?> load() async => null;
+  @override Future<String?> loadCaPem() async => null;
+  @override Future<void> save(PairedServer s) async {}
+  @override Future<void> saveCaPem(String c) async {}
+}
 
 class FakeStore implements PairingStore {
   PairedServer? saved;
@@ -81,5 +90,44 @@ void main() {
     final tagline = find.byKey(const Key('pair-tagline'));
     expect(tagline, findsOneWidget);
     expect(tester.widget<Text>(tagline).data, brandTaglineShort);
+  });
+
+  testWidgets('deep-link open shows a prominent host banner', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: PairingScreen(
+        service: PairingService(),
+        store: _NoopStore(),
+        initialQr: const PairingQr(
+            hostPort: '192.168.1.5:8443', code: 'K7QF3M2P', fpTag: '1CR5AYMZRKMGWCTRFPHCFV0H6R'),
+      ),
+    ));
+    final banner = find.byKey(const Key('pair-host-banner'));
+    expect(banner, findsOneWidget);
+    expect(find.descendant(of: banner, matching: find.textContaining('192.168.1.5:8443')), findsOneWidget);
+  });
+
+  testWidgets('host field is read-only on a deep-link open (banner cannot diverge)', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: PairingScreen(
+        service: PairingService(),
+        store: _NoopStore(),
+        initialQr: const PairingQr(
+            hostPort: '192.168.1.5:8443', code: 'K7QF3M2P', fpTag: '1CR5AYMZRKMGWCTRFPHCFV0H6R'),
+      ),
+    ));
+    final field = tester.widget<TextField>(find.byKey(const Key('field-host')));
+    expect(field.readOnly, isTrue);
+  });
+
+  testWidgets('manual entry of a public host is rejected (validator on _pair)', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: PairingScreen(service: PairingService(), store: _NoopStore()),
+    ));
+    await tester.enterText(find.byKey(const Key('field-host')), '8.8.8.8:8443');
+    await tester.enterText(find.byKey(const Key('field-code')), 'K7QF3M2P');
+    await tester.enterText(find.byKey(const Key('field-fptag')), '1CR5AYMZRKMGWCTRFPHCFV0H6R');
+    await tester.tap(find.text('Pair'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pair-error')), findsOneWidget);
   });
 }

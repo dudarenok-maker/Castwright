@@ -5565,13 +5565,13 @@ async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
   };
 }
 
-async function mockCreatePairSession(): Promise<PairSessionInfo> {
+export async function mockCreatePairSession(): Promise<PairSessionInfo> {
   await wait(20);
   const hostPort = '192.168.1.42:8443';
   const code = 'K7QF3M2P';
-  const fpTag = 'J4XQ2A7BWZ9K3M5R';
+  const fpTag = '1CR5AYMZRKMGWCTRFPHCFV0H6R';
   return {
-    qrPayload: `CWP1*${hostPort}*${code}*${fpTag}`,
+    qrPayload: `https://www.castwright.ai/pair?${new URLSearchParams({ h: hostPort, c: code, f: fpTag }).toString()}`,
     hostPort,
     port: 8443,
     code,

@@ -33,7 +33,7 @@ void main() {
     await tester.pumpAndSettle();
 
     links.add(Uri.parse(
-        'https://castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
     await tester.pumpAndSettle();
 
     expect(find.text('192.168.1.5:8443'), findsOneWidget);
@@ -55,5 +55,33 @@ void main() {
 
     expect(find.byKey(const Key('home-status')), findsOneWidget);
     expect(find.text('192.168.1.5:8443'), findsNothing);
+  });
+
+  testWidgets('a second deep link does not stack a second pairing screen',
+      (tester) async {
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+    await tester.pumpWidget(AudiobookCompanionApp(
+      store: _NoopStore(), service: PairingService(), deepLinks: links.stream));
+    await tester.pumpAndSettle();
+
+    // Link 1 — opens PairingScreen with code K7QF3M2P.
+    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'));
+    await tester.pumpAndSettle();
+
+    // Link 2 — a different pairing link with code ZZZZZZZZ.
+    // With the re-entrancy guard (_pairingOpen): the push is suppressed; the
+    // first PairingScreen remains on top with its original code K7QF3M2P.
+    // Without the guard: a second PairingScreen is pushed onto the stack; the
+    // second screen becomes the active (built) route and shows ZZZZZZZZ.
+    // Flutter only builds the top route, so find.text() reliably distinguishes
+    // these two cases without needing a NavigatorObserver.
+    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.9:8443&c=ZZZZZZZZ&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'));
+    await tester.pumpAndSettle();
+
+    // Guard active → second link ignored; first screen's code still visible.
+    expect(find.text('K7QF3M2P'), findsOneWidget);
+    // Guard active → second screen never pushed; its code is absent.
+    expect(find.text('ZZZZZZZZ'), findsNothing);
   });
 }

@@ -24,7 +24,7 @@ YnfkDgmHygMhGW3R2KBwRjyVnnbUz4Flys3JKquOG+QXQeAnTWrbJymzHa/USSjs
 mXs+glZrizT6pLoIQQucbslLc15G85a7tw==
 -----END CERTIFICATE-----`;
 
-vi.mock('../lan-auth.js', () => ({ isLoopbackRequest: vi.fn(() => true) }));
+vi.mock('../lan-auth.js', () => ({ isLoopbackRequest: vi.fn(() => true), isPrivateNetworkRequest: vi.fn(() => true) }));
 vi.mock('./export-lan.js', async (orig) => {
   const real = await orig<typeof import('./export-lan.js')>();
   return {
@@ -45,7 +45,7 @@ vi.mock('../workspace/device-tokens.js', () => ({
 
 import { pairSessionRouter, pairRedeemRouter } from './pairing.js';
 import { _resetPairingSessionsForTests } from '../workspace/pairing-sessions.js';
-import { isLoopbackRequest } from '../lan-auth.js';
+import { isLoopbackRequest, isPrivateNetworkRequest } from '../lan-auth.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -61,9 +61,11 @@ describe('pairing routes', () => {
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
     expect(res.status).toBe(200);
     expect(res.body.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
-    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JX');
+    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JXTB2C9QD4JW');
     expect(res.body.hostPort).toBe('192.168.1.5:8443');
-    expect(res.body.qrPayload).toBe(`CWP1*192.168.1.5:8443*${res.body.code}*5CEE77RAKV3EN9JX`);
+    expect(res.body.qrPayload).toBe(
+      `https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${res.body.code}&f=5CEE77RAKV3EN9JXTB2C9QD4JW`,
+    );
     expect(res.body.expiresAt).toBeGreaterThan(0);
   });
 
@@ -85,6 +87,14 @@ describe('pairing routes', () => {
   it('POST /session 403s a non-loopback caller', async () => {
     vi.mocked(isLoopbackRequest).mockReturnValueOnce(false);
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /redeem 403s a non-private caller', async () => {
+    vi.mocked(isPrivateNetworkRequest).mockReturnValueOnce(false);
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    const res = await request(appWith(pairRedeemRouter))
+      .post('/api/pair/redeem').send({ code: session.body.code });
     expect(res.status).toBe(403);
   });
 });

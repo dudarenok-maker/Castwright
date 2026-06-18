@@ -26,7 +26,7 @@ class PairingQr {
     return PairingQr._checked(parts[1], parts[2], parts[3]);
   }
 
-  /// Deep-link form: `https://castwright.ai/pair?h=host:port&c=code&f=fpTag`.
+  /// Deep-link form: `https://www.castwright.ai/pair?h=host:port&c=code&f=fpTag`.
   factory PairingQr._fromUrl(String raw) {
     final uri = Uri.tryParse(raw);
     if (uri == null) throw const FormatException('unparseable pairing URL');
@@ -38,6 +38,31 @@ class PairingQr {
     if (hostPort.isEmpty || code.isEmpty || fpTag.isEmpty) {
       throw const FormatException('pairing payload has an empty field');
     }
+    if (!_isPrivateIpv4Host(hostPort)) {
+      throw const FormatException('pairing host is not a private/LAN address');
+    }
     return PairingQr(hostPort: hostPort, code: code, fpTag: fpTag);
+  }
+
+  /// Public validating constructor — same checks as the QR factories, for the
+  /// manual-entry / edited-field path in the pairing screen.
+  factory PairingQr.checked(String hostPort, String code, String fpTag) =>
+      PairingQr._checked(hostPort, code, fpTag);
+
+  static bool _isPrivateIpv4Host(String hostPort) {
+    final lastColon = hostPort.lastIndexOf(':');
+    final host = lastColon >= 0 ? hostPort.substring(0, lastColon) : hostPort;
+    final octets = host.split('.');
+    if (octets.length != 4) return false;
+    final n = <int>[];
+    for (final o in octets) {
+      final v = int.tryParse(o);
+      if (v == null || v < 0 || v > 255) return false;
+      n.add(v);
+    }
+    return n[0] == 10 ||
+        (n[0] == 172 && n[1] >= 16 && n[1] <= 31) ||
+        (n[0] == 192 && n[1] == 168) ||
+        n[0] == 127;
   }
 }

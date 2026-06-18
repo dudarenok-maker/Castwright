@@ -56,10 +56,8 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
     });
     try {
-      final qr = PairingQr(
-          hostPort: _host.text.trim(),
-          code: _code.text.trim(),
-          fpTag: _fpTag.text.trim());
+      final qr = PairingQr.checked(
+          _host.text.trim(), _code.text.trim(), _fpTag.text.trim());
       final conn = await widget.service.pair(qr, label: 'Companion');
       final stamped =
           conn.server.copyWith(pairedAt: DateTime.now().toIso8601String());
@@ -110,6 +108,20 @@ class _PairingScreenState extends State<PairingScreen> {
                     ),
               ),
             ),
+            if (widget.initialQr != null)
+              Container(
+                key: const Key('pair-host-banner'),
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Pairing with ${widget.initialQr!.hostPort} — confirm this is your computer before continuing.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
             const Text('Scan the pairing QR shown on the desktop, or enter the '
                 'details manually.'),
             const SizedBox(height: 12),
@@ -123,6 +135,7 @@ class _PairingScreenState extends State<PairingScreen> {
             TextField(
                 key: const Key('field-host'),
                 controller: _host,
+                readOnly: widget.initialQr != null,
                 decoration:
                     const InputDecoration(labelText: 'Server (host:port)')),
             TextField(

@@ -28,13 +28,13 @@ void main() {
       expect(fingerprintsMatch('', 'abcd'), isFalse);
     });
 
-    test('fingerprintTagMatches accepts the first-10-byte tag, case-insensitive', () {
+    test('fingerprintTagMatches accepts the first-16-byte tag, case-insensitive', () {
       final digest = sha256.convert(pemToDer(_testPem)).bytes;
-      final tag = crockfordBase32(digest.sublist(0, 10));
-      expect(tag.length, 16);
+      final tag = crockfordBase32(digest.sublist(0, 16));
+      expect(tag.length, 26);
       expect(fingerprintTagMatches(_testPem, tag), isTrue);
       expect(fingerprintTagMatches(_testPem, tag.toLowerCase()), isTrue);
-      expect(fingerprintTagMatches(_testPem, 'Z' * 16), isFalse);
+      expect(fingerprintTagMatches(_testPem, 'Z' * 26), isFalse);
     });
 
     test('verifyCaFingerprint round-trips: matches its own fingerprint, rejects others', () {
