@@ -4,7 +4,7 @@ date: 2026-06-18
 status: draft
 area: server + frontend
 issue: srv-NN (to be filed)
-revision: 4 (three adversarial review rounds — security + architecture + coherency — folded in)
+revision: 5 (three review rounds folded in; grandfather dropped — legacy re-pairs; lastSeenAt populated)
 ---
 
 # Authorize a browser over LAN via Admin device-linking
@@ -53,8 +53,9 @@ already exist — built for the companion. This feature extends them so a
   `isLanHttpsEnabled() && getLanAuthToken() !== undefined` (`lan-auth.ts:53`).
   The Admin card must **surface** this state (§Security).
 - Changing the companion's `POST /api/pair/redeem` request/response contract.
-  Existing companion tokens are **grandfathered** (§Migration) so paired phones
-  keep working.
+  Legacy device tokens predating this change require a one-time **re-pair** (see
+  §Legacy tokens) — companion pairing was not reliably in use, so there is no
+  install base to grandfather.
 - Per-user accounts / roles. Minting is gated by physical desktop (loopback) access.
 - Editing the device label on the phone (decided: **desktop-only** label).
 
@@ -75,8 +76,8 @@ already exist — built for the companion. This feature extends them so a
    cookie**. The page `history.replaceState`s the code away and navigates to
    `#/`; Layout mounts there and fetches the library (now carrying the cookie).
 
-**Desktop** card then lists the device (label · added · expires) with **Revoke**
-(immediate on next request; rename in v1 = revoke + re-authorize).
+**Desktop** card then lists the device (label · added · last seen · expires) with
+**Revoke** (immediate on next request; rename in v1 = revoke + re-authorize).
 
 *Prerequisite (already true on the user's box):* the phone trusts the mkcert
 root CA, so HTTPS opens cleanly and the `Secure` cookie is honored. Card links to
@@ -88,42 +89,49 @@ the cert-install steps.
 
 **`server/src/workspace/device-tokens.ts`**
 
-- `DeviceTokenRecord` gains `expiresAt?: string` (ISO; optional so pre-migration
-  files type-check).
+- `DeviceTokenRecord` gains `expiresAt?: string` (ISO; optional so an existing
+  legacy file type-checks before any record carries it).
 - `createDevice(label, ttlDays)` — `ttlDays` is **required**; stamps `expiresAt =
   now + ttlDays·86400s`. Every caller passes it (callers below), so every
   newly-minted token always has an `expiresAt`.
 - **Expiry is checked in exactly one place:** `findValidDevice(devices, rawToken,
   now = Date.now())` (the pure fn gains a defaulted, injected clock — stays
   deterministic/testable). Rejects when `revoked`, OR `expiresAt === undefined`
-  (post-migration this means corruption — fail safe), OR `now >
-  Date.parse(expiresAt)`. `isValidDeviceToken(rawToken)` keeps its **single-arg**
+  (a legacy/never-stamped token → forces re-pair; for a freshly-minted token this
+  would be a bug — fail safe either way), OR `now > Date.parse(expiresAt)`.
+  `isValidDeviceToken(rawToken)` keeps its **single-arg**
   signature and calls `findValidDevice(loadSync(), rawToken)` (default `now`).
 - `redactDevice`/`PublicDevice` expose `expiresAt` via a **conditional spread**
   (mirroring the existing `lastSeenAt` pattern) so a record without it doesn't
   emit `expiresAt: undefined`.
+- **`lastSeenAt` touch-on-use (new — done properly from the start).** Today
+  `lastSeenAt` is declared but never written. Add a throttled `touchLastSeen(id,
+  now)` that updates the matched record's `lastSeenAt` in the cache and persists
+  **fire-and-forget**, but only when `now − lastSeenAt > LASTSEEN_THROTTLE_MS`
+  (hardcoded ~1 h — not a user knob), so the hot guard path writes disk at most
+  ~hourly per active device. `isValidDeviceToken(rawToken)` performs the touch on
+  a successful match (it already has the matched record from `findValidDevice`,
+  which returns the record); `findValidDevice` stays pure (the side-effect lives
+  in the IO caller). Best-effort: a failed/raced persist is harmless (last-writer-
+  wins on a timestamp; the atomic write keeps the file intact). This populates the
+  device list's "last seen" for browser **and** companion tokens going forward.
 - `DeviceTokensFile.schema` is currently the literal `1` and `persist()`
-  hardcodes `{schema: 1, …}` (`device-tokens.ts:39-42,92`). **Widen to `1 | 2`
-  and make `persist()` write `schema: 2`**, else an ordinary mutation after
-  migration reverts the file to schema 1 and re-arms the migration each boot.
-- This module **imports `configValue`** from `config/resolver.ts` (for the
-  migration only — no circular import: resolver imports registry + user-settings,
-  not device-tokens).
+  hardcodes `{schema: 1, …}` (`device-tokens.ts:39-42,92`). **Widen the type to
+  `1 | 2` and make `persist()` write `schema: 2`** so files this version writes
+  are tagged correctly (readers ignore the field regardless).
+- This module imports **nothing** from `config/` — `ttlDays` is supplied by each
+  route caller (callers below), so `device-tokens.ts` stays a leaf module.
 
-**Migration — `migrateLegacyDeviceTokens()`, `await`ed at startup before
-`listen()`** (alongside the other awaited init slots, e.g. near
-`resetOrphanedQueueEntries`/`initVramStats` in `index.ts`, **not** fire-and-
-forget). On a `schema: 1` file (records with no `expiresAt`): stamp each
-`expiresAt = migrationTime + configValue('lan.deviceTokenTtlDays')·86400s`, bump
-to `{schema: 2}`, and **persist once** (atomic temp+rename via `writeJsonAtomic`).
-Anchoring on **migration time** (not `createdAt`) gives every already-paired
-companion device a fresh full-TTL window post-upgrade — it can never be
-*retroactively* expired, honoring the "paired phones keep working" guarantee —
-and persisting once makes the value **immutable**, so later `LAN_DEVICE_TTL_DAYS`
-changes affect only new tokens (no resurrection of an expired/revoked token). The
-migration warms the cache with the stamped records, so the first guarded request
-sees migrated tokens, not unmigrated `undefined`-expiry ones. Gated on `schema
-!== 2` so a re-run is a no-op.
+**Legacy tokens — no migration pass.** Companion pairing was not reliably in use,
+so there is **no install base to preserve**. Any pre-existing `schema: 1` record
+has no `expiresAt`, so `findValidDevice` rejects it (the `expiresAt === undefined`
+branch) → that device does a one-time **re-pair**. This deliberately avoids the
+grandfather migration's resurrection/anchor pitfalls the review flagged (no
+startup migration, no `configValue` in `device-tokens.ts`, no clock-anchor
+debate). `persist()` writes `{schema: 2}` going forward and the type widens to
+`schema: 1 | 2`; readers ignore the `schema` field (they always have), so a stale
+schema-1 file on disk is read fine and rewritten as schema 2 on the next mutation
+(or `lastSeenAt` touch).
 
 **`server/src/workspace/pairing-sessions.ts`**
 
@@ -246,9 +254,9 @@ resolves), so the subsequent `getLibrary()` carries it. Errors: invalid / expire
 
 **`src/components/lan-access-card.tsx` (new, in `src/views/admin.tsx`)** —
 "Authorize a device" → label → QR + countdown + Regenerate, plus the device list
-(**label · added · expires** · **Revoke**). *(No "last-seen" column in v1:
-`lastSeenAt` exists on the record but is never written anywhere — a touch-on-use
-updater is a follow-up.)* Detects not-enforced (warn + disable mint) and
+(**label · added · last seen · expires** · **Revoke**); "last seen" reads the
+now-populated `lastSeenAt` (renders "—" until the device's first throttled touch).
+Detects not-enforced (warn + disable mint) and
 401-on-phone (show "manage from desktop") via a **typed `ApiError.status`** on the
 new api fns (a new pattern — today's idiom is message-regex; the four new fns are
 the first to throw it).
@@ -339,10 +347,12 @@ GET /api/devices ─► list ;  DELETE /api/devices/:id ─► revoke
 - `device-tokens.pure.test.ts` (**update**): reseed **all** fixtures with
   `expiresAt`; fix the `redactDevice` `toEqual` (conditional `expiresAt`); add
   `findValidDevice` cases — expired, `expiresAt===undefined`, injected `now`.
-- `device-tokens.test.ts`: `createDevice` stamps `expiresAt`;
-  `migrateLegacyDeviceTokens` stamps `migrationTime + ttl`, persists `{schema:2}`
-  once, is a no-op on re-run, and **raising `LAN_DEVICE_TTL_DAYS` after migration
-  does not move a migrated record**; revoke still works.
+- `device-tokens.test.ts`: `createDevice` stamps `expiresAt`; a legacy record
+  with no `expiresAt` is rejected (forces re-pair); `persist()` writes
+  `{schema: 2}`; revoke still works. **`lastSeenAt` touch:** first valid use stamps
+  `lastSeenAt` (fire-and-forget persist); a second use within `LASTSEEN_THROTTLE_MS`
+  does **not** re-persist; a use after the throttle updates it; `findValidDevice`
+  stays pure (no write).
 - `devices.test.ts` (**update**): the direct `createDevice('Phone')` calls
   (`:98,111`) pass a ttl; the mint-then-guard-accepts test still passes with a
   stamped `expiresAt`.
@@ -369,8 +379,9 @@ GET /api/devices ─► list ;  DELETE /api/devices/:id ─► revoke
   mount pre-guard.
 
 **Frontend**
-- `lan-access-card.test.tsx`: authorize→label→QR; device list (label·added·expires)
-  + Revoke; 401→desktop-only note; not-enforced→warn + mint disabled.
+- `lan-access-card.test.tsx`: authorize→label→QR; device list
+  (label·added·last-seen·expires, "—" before first touch) + Revoke;
+  401→desktop-only note; not-enforced→warn + mint disabled.
 - `pair.test.tsx`: renders confirm from `useSearchParams` `c`; Authorize POSTs,
   strips code, `navigate('/')`; **no Layout boot effects fire** (sibling shell);
   expired / rate-limited errors; re-hydrate GET runs **after** redeem resolves
@@ -388,9 +399,9 @@ chain is the supertest integration test + manual acceptance.
 
 **Manual acceptance (real device)** — `npm run start:lan`, `LAN_HTTPS=1` +
 `LAN_AUTH_TOKEN`: desktop Admin → Authorize → scan on phone → library loads +
-survives reload; revoke on desktop → phone 401s next nav; a previously-paired
-**companion** device still works (grandfathering); a phone write passes the Origin
-check, a forged cross-origin write is 403.
+survives reload; revoke on desktop → phone 401s next nav; the device's "last seen"
+updates in the list after use; a phone write passes the Origin check, a forged
+cross-origin write is 403. (A legacy companion token, if any, re-pairs once.)
 
 ## Dependencies
 
@@ -415,14 +426,18 @@ Nothing covers browser-over-LAN auth today.
   burn-on-miss as defense-in-depth.
 - **Every** `createDevice` caller (companion, admin, browser) passes
   `configValue('lan.deviceTokenTtlDays')`; expiry enforced once in
-  `findValidDevice` (single-arg `isValidDeviceToken` calls it with default `now`);
-  legacy tokens grandfathered by a **one-time persisted** schema 1→2 migration
-  anchored at migration-time (no retroactive expiry, no resurrection); `persist()`
-  bumps schema to 2 and the type widens to `1 | 2`.
+  `findValidDevice` (single-arg `isValidDeviceToken` calls it with default `now`).
+  **No grandfather migration** — companion pairing wasn't reliably in use, so a
+  legacy `schema: 1` token (no `expiresAt`) is rejected → one-time re-pair;
+  `persist()` writes `schema: 2`, type widens to `1 | 2`. `device-tokens.ts`
+  imports nothing from `config/`.
+- `lastSeenAt` is **populated** via a throttled (~1 h) touch-on-use in
+  `isValidDeviceToken`, so the device list shows real "last seen" for browser and
+  companion tokens.
 - `#/pair` is a **second top-level `createHashRouter` entry** (Layout-free,
   effect-free, URL-driven via `useSearchParams`); no `parseHash`. Re-hydrate is
   implicit via Layout mounting on `/` (no dispatch).
-- `cookie@^1.1.1` declared. Managed device list (label·added·expires, no
-  last-seen in v1) + per-device revoke; desktop-only label; 30-day default in
-  Advanced config. Library resilience fix bundled.
+- `cookie@^1.1.1` declared. Managed device list (label·added·last-seen·expires) +
+  per-device revoke; desktop-only label; 30-day default in Advanced config.
+  Library resilience fix bundled.
 ```
