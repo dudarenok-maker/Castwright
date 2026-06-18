@@ -794,6 +794,16 @@ export interface PromptState {
   defaultText: string;
 }
 
+/** A paired browser or companion device visible to the Admin panel. */
+export interface PublicDevice {
+  id: string;
+  label: string;
+  createdAt: string;
+  expiresAt?: string;
+  lastSeenAt?: string;
+  revoked: boolean;
+}
+
 /** Result of POST /api/pair/session — the companion pairing QR payload + the
     fields the modal also shows for manual entry. */
 export interface PairSessionInfo {

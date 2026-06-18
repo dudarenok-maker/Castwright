@@ -50,6 +50,7 @@ import type {
   ConfigValues,
   PromptState,
   PairSessionInfo,
+  PublicDevice,
   LibraryStats,
   ContinueListeningItem,
 } from './types';
@@ -5373,6 +5374,42 @@ async function realCreatePairSession(): Promise<PairSessionInfo> {
   return res.json();
 }
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
+}
+
+async function realCreateDevicePairSession(body: { label: string }) {
+  const res = await fetch('/api/devices/pair-session', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(`pair-session failed (${res.status})`, res.status);
+  return res.json() as Promise<{ url: string; code: string; expiresAt: number }>;
+}
+async function realListDevices() {
+  const res = await fetch('/api/devices');
+  if (!res.ok) throw new ApiError(`list devices failed (${res.status})`, res.status);
+  return res.json() as Promise<{ devices: PublicDevice[] }>;
+}
+async function realRevokeDevice(id: string) {
+  const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new ApiError(`revoke failed (${res.status})`, res.status);
+  return res.json() as Promise<{ ok: true }>;
+}
+async function realRedeemBrowserPair(body: { code: string }) {
+  const res = await fetch('/api/pair/redeem-browser', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(`redeem failed (${res.status})`, res.status);
+  return res.json() as Promise<{ label: string; expiresAt: string }>;
+}
+
+const mockCreateDevicePairSession = async (_b: { label: string }) =>
+  ({ url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`, code: 'MOCKCODEMOCKCODE', expiresAt: Date.now() + 300_000 });
+const mockListDevices = async () => ({ devices: [] as PublicDevice[] });
+const mockRevokeDevice = async (_id: string) => ({ ok: true as const });
+const mockRedeemBrowserPair = async (_b: { code: string }) =>
+  ({ label: 'This browser', expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
+
 /* Plan 75 — portable book bundle (single .zip with state + manuscript +
    audio + cover + change-log for one book). The export returns the
    bundle as a Blob the caller can save via URL.createObjectURL + an
@@ -6629,6 +6666,10 @@ const real = {
   importPortable: realImportPortable,
   getExportLanUrls: realGetExportLanUrls,
   createPairSession: realCreatePairSession,
+  createDevicePairSession: realCreateDevicePairSession,
+  listDevices: realListDevices,
+  revokeDevice: realRevokeDevice,
+  redeemBrowserPair: realRedeemBrowserPair,
   getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
@@ -6882,6 +6923,10 @@ const mock = {
   importPortable: mockImportPortable,
   getExportLanUrls: mockGetExportLanUrls,
   createPairSession: mockCreatePairSession,
+  createDevicePairSession: mockCreateDevicePairSession,
+  listDevices: mockListDevices,
+  revokeDevice: mockRevokeDevice,
+  redeemBrowserPair: mockRedeemBrowserPair,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
   acceptChapterRevision: mockAcceptChapterRevision,
@@ -6993,6 +7038,8 @@ const mock = {
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
 export type { ResourceTelemetryRecord } from './types';
+/* Device-auth — re-export so consumers import from one surface. */
+export type { PublicDevice } from './types';
 /* Re-export config types so the config slice + view import from a single source. */
 export type {
   ConfigResponse,
