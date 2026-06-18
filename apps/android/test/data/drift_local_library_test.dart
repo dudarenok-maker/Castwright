@@ -278,6 +278,28 @@ void main() {
     });
   });
 
+  group('DriftLocalLibrary (player cues)', () {
+    test('finishedChapterUuids returns only chapters flagged finished', () async {
+      final lib = DriftLocalLibrary(
+          LibraryDatabase(NativeDatabase.memory()), InMemoryFileStore(),
+          root: '/t');
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'demo|10', urlSuffix: 'audio.mp3', durationSec: 100);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u2', chapterId: 2, title: 'Two',
+          fingerprint: 'demo|10', urlSuffix: 'audio.mp3', durationSec: 100);
+      await lib.recordChapterMeta(
+          bookId: 'b2', uuid: 'u3', chapterId: 1, title: 'Other',
+          fingerprint: 'demo|10', urlSuffix: 'audio.mp3', durationSec: 100);
+
+      await lib.setChapterFinished('u1', true);
+      await lib.setChapterFinished('u3', true); // different book
+
+      expect(await lib.finishedChapterUuids('b1'), {'u1'});
+    });
+  });
+
   group('DriftLocalLibrary legacy JSON import', () {
     test('imports an app-3 sync-state.json then deletes it', () async {
       final fs = InMemoryFileStore();
