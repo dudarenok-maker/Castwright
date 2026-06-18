@@ -67,6 +67,7 @@ function makeStore(opts: {
       },
       library: {
         loaded: true,
+        error: null,
         authors: [],
         books: opts.libraryBooks ?? [],
         pausedSnapshots: {},

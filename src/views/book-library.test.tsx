@@ -61,6 +61,7 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
     preloadedState: {
       library: {
         loaded,
+        error: null,
         authors,
         books: authors.flatMap((a) => a.series.flatMap((s) => s.books)),
         pausedSnapshots: {},
@@ -288,6 +289,7 @@ describe('BookLibraryView — loading affordance', () => {
       preloadedState: {
         library: {
           loaded: true,
+          error: null,
           authors: [oneAuthor],
           books: [oneBook],
           pausedSnapshots: { b1: pausedSnap },
@@ -332,6 +334,7 @@ describe('BookLibraryView — loading affordance', () => {
       preloadedState: {
         library: {
           loaded: true,
+          error: null,
           authors: [oneAuthor],
           books: [oneBook],
           pausedSnapshots: { b1: haltedSnap },
@@ -378,6 +381,7 @@ describe('BookLibraryView — loading affordance', () => {
       preloadedState: {
         library: {
           loaded: true,
+          error: null,
           authors: [oneAuthor],
           books: [oneBook],
           pausedSnapshots: { b1: pausedSnap },
@@ -419,6 +423,7 @@ describe('BookLibraryView — loading affordance', () => {
       preloadedState: {
         library: {
           loaded: true,
+          error: null,
           authors: [],
           books: [],
           pausedSnapshots: { a: snapA, b: snapB },
@@ -436,7 +441,7 @@ describe('BookLibraryView — loading affordance', () => {
     const store = configureStore({
       reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: {
-        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
       },
     });
     render(
@@ -499,7 +504,7 @@ describe('BookLibraryView — loading affordance', () => {
           continueListening: continueListeningSlice.reducer,
         },
         preloadedState: {
-          library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+          library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
         },
       });
 
@@ -721,6 +726,36 @@ describe('BookLibraryView — loading affordance', () => {
     });
   });
 
+  it('shows Retry button when library.error is set (task-11)', () => {
+    const store = configureStore({
+      reducer: {
+        account: accountSlice.reducer,
+        library: librarySlice.reducer,
+        tour: tourSlice.reducer,
+        continueListening: continueListeningSlice.reducer,
+      },
+      preloadedState: {
+        library: { loaded: true, error: 'Network', authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[]}
+          activeBookId={null}
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load your library")).toBeInTheDocument();
+  });
+
   it('swaps skeleton → populated grid when hydrate dispatches', () => {
     /* The view's `authors` is a prop, not a selector — the parent route
        (routes/index.tsx) reads `library.authors` from the store and passes
@@ -729,7 +764,7 @@ describe('BookLibraryView — loading affordance', () => {
        on slice changes. */
     const store = configureStore({
       reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
-      preloadedState: { library: { loaded: false, authors: [], books: [], pausedSnapshots: {} } },
+      preloadedState: { library: { loaded: false, error: null, authors: [], books: [], pausedSnapshots: {} } },
     });
     const handlers = {
       onOpenBook: vi.fn(),

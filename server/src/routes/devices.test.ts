@@ -12,6 +12,30 @@ import express from 'express';
 import request from 'supertest';
 import type { Express } from 'express';
 
+vi.mock('./export-lan.js', async (orig) => ({
+  ...(await orig<typeof import('./export-lan.js')>()),
+  enumerateLanUrls: () => ({ urls: ['https://192.168.1.7:8443'], port: 8443, protocol: 'https' }),
+}));
+
+/* Spread the real lan-auth module and override only the two gate functions with
+   vi.fn so we can mock them per-test. requireLanToken is exposed as a forwarding
+   wrapper so it always calls through to the freshly-imported REAL requireLanToken
+   (which shares the same device-tokens module as deviceTokens, keeping
+   isValidDeviceToken in sync with created device tokens). */
+let _requireLanToken: typeof import('../lan-auth.js')['requireLanToken'] | null = null;
+vi.mock('../lan-auth.js', async (o) => {
+  const real = await o<typeof import('../lan-auth.js')>();
+  return {
+    ...real,
+    isLoopbackRequest: vi.fn((req: Parameters<typeof real.isLoopbackRequest>[0]) =>
+      real.isLoopbackRequest(req),
+    ),
+    isLanTokenEnforced: vi.fn(() => real.isLanTokenEnforced()),
+    requireLanToken: (...args: Parameters<typeof real.requireLanToken>) =>
+      (_requireLanToken ?? real.requireLanToken)(...args),
+  };
+});
+
 let workspaceRoot: string;
 let app: Express;
 let deviceTokens: typeof import('../workspace/device-tokens.js');
@@ -45,9 +69,14 @@ beforeEach(async () => {
   process.env.WORKSPACE_DIR = workspaceRoot;
   process.env.LAN_HTTPS = '1';
   process.env.LAN_AUTH_TOKEN = 'shared-secret';
+  _requireLanToken = null;
   vi.resetModules();
   deviceTokens = await import('../workspace/device-tokens.js');
   lanAuth = await import('../lan-auth.js');
+  // Load the real (un-mocked) lan-auth so requireLanToken shares the same
+  // device-tokens instance as deviceTokens, keeping isValidDeviceToken in sync.
+  const realLanAuth = await vi.importActual<typeof import('../lan-auth.js')>('../lan-auth.js');
+  _requireLanToken = realLanAuth.requireLanToken;
   const { devicesRouter } = await import('./devices.js');
   app = express();
   app.use(express.json());
@@ -55,9 +84,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  _requireLanToken = null;
   delete process.env.WORKSPACE_DIR;
   delete process.env.LAN_HTTPS;
   delete process.env.LAN_AUTH_TOKEN;
+  delete process.env.LAN_HTTPS_PORT;
   await rm(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -95,7 +126,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
-    const { token } = await deviceTokens.createDevice('Phone');
+    const { token } = await deviceTokens.createDevice('Phone', 30);
     let passed = false;
     lanAuth.requireLanToken(
       mkReq({ headers: { authorization: `Bearer ${token}` } }),
@@ -108,7 +139,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard rejects a revoked device token (but the shared secret still works)', async () => {
-    const { device, token } = await deviceTokens.createDevice('Phone');
+    const { device, token } = await deviceTokens.createDevice('Phone', 30);
     await deviceTokens.revokeDevice(device.id);
 
     const revokedRes = mkRes();
@@ -135,8 +166,33 @@ describe('devices route (srv-33)', () => {
     expect(sharedPassed).toBe(true);
   });
 
+  it('pair-session returns a #/pair URL payload from loopback when enforced', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
+    expect(res.status).toBe(200);
+    expect(res.body.url).toMatch(/^https:\/\/192\.168\.1\.7:8443\/#\/pair\?c=[0-9A-HJKMNP-TV-Z]{16}$/);
+    expect(typeof res.body.expiresAt).toBe('number');
+  });
+
+  it('pair-session 409s when LAN auth is not enforced', async () => {
+    delete process.env.LAN_AUTH_TOKEN;
+    process.env.LAN_HTTPS = '1';
+    vi.mocked(lanAuth.isLanTokenEnforced).mockReturnValueOnce(false);
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'x' });
+    expect(res.status).toBe(409);
+  });
+
+  it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {
+    // Under supertest req.ip is loopback, so mock the gate to simulate a LAN client.
+    vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);
+    const res = await request(app).post('/api/devices').send({ label: 'x' });
+    expect(res.status).toBe(403);
+  });
+
   it('caps an over-long device label at 64 chars', async () => {
-    const { device } = await deviceTokens.createDevice('x'.repeat(200));
+    const { device } = await deviceTokens.createDevice('x'.repeat(200), 30);
     expect(device.label.length).toBe(64);
   });
 });

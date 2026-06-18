@@ -35,7 +35,7 @@ import {
 import { LibraryGrid } from '../components/library/library-grid';
 import { LibraryTable } from '../components/library/library-table';
 import { ContinueListeningRail } from '../components/library/continue-listening-rail';
-import { filterBooks, selectAllTags, selectPresentLanguages } from '../store/library-slice';
+import { filterBooks, libraryActions, selectAllTags, selectPresentLanguages } from '../store/library-slice';
 import { PrimaryButton } from '../components/primitives';
 import { IconClose } from '../lib/icons';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
@@ -206,6 +206,17 @@ export function BookLibraryView({
      the api.getLibrary() round-trip — reads as "library wiped." Skeleton stays
      up until libraryActions.hydrate fires (set by src/components/layout.tsx). */
   const loaded = useAppSelector((s) => s.library.loaded);
+  const error = useAppSelector((s) => s.library.error);
+
+  const retry = () => {
+    api
+      .getLibrary()
+      .then((res) => dispatch(libraryActions.hydrate(res)))
+      .catch((e) =>
+        dispatch(libraryActions.hydrateError(e instanceof Error ? e.message : String(e))),
+      );
+  };
+
   /* Plan 73 — union of all tags across the library. We read the raw
      books array from the slice and derive the sorted tag union with
      useMemo so React 18 doesn't warn about a selector returning a
@@ -213,7 +224,7 @@ export function BookLibraryView({
      exported for direct unit testing in library-slice.test.ts. */
   const libraryBooksForTags = useAppSelector((s) => s.library.books);
   const allTags = useMemo(
-    () => selectAllTags({ library: { loaded: true, authors: [], books: libraryBooksForTags, pausedSnapshots: {} } }),
+    () => selectAllTags({ library: { loaded: true, error: null, authors: [], books: libraryBooksForTags, pausedSnapshots: {} } }),
     [libraryBooksForTags],
   );
   /* fe-16 — distinct languages across the library (English first). The chrome
@@ -359,7 +370,15 @@ export function BookLibraryView({
         onFinish={handleFinishContinue}
         onHide={handleHideContinue}
       />
-      {showNoResults ? (
+      {loaded && error ? (
+        <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center" role="alert">
+          <h3 className="font-serif text-2xl font-bold text-ink">Couldn&apos;t load your library</h3>
+          <p className="mt-2 text-sm text-ink/60">{error}</p>
+          <div className="mt-6">
+            <PrimaryButton variant="dark" onClick={retry} icon={false}>Retry</PrimaryButton>
+          </div>
+        </div>
+      ) : showNoResults ? (
         <NoResults onClear={clearFilters} />
       ) : effectiveViewMode === 'card' ? (
         <LibraryGrid

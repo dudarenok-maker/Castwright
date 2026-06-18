@@ -10,6 +10,7 @@
    the companion fetches over the untrusted bootstrap channel *before* it
    can pin + present a token) and `/audio` are deliberately NOT guarded. */
 import { timingSafeEqual } from 'node:crypto';
+import { parse as parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
 import { isValidDeviceToken } from './workspace/device-tokens.js';
@@ -22,9 +23,25 @@ export function getLanAuthToken(): string | undefined {
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
+/* Assumes a direct (un-proxied) bind — `req.ip` is the real remote address. */
 export function isLoopbackRequest(req: Request): boolean {
   const ip = req.ip ?? req.socket?.remoteAddress ?? '';
   return LOOPBACK.has(ip);
+}
+
+/** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
+ *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
+ *  would 500 the entire API. cookie@0.7.x doesn't throw, but the catch is cheap
+ *  insurance for the hottest path. The same helper also backs the CSRF guard's
+ *  cookie detection, so auth and CSRF agree on whether a request carries the cookie. */
+export function readCwLanCookie(cookieHeader: unknown): string | undefined {
+  if (typeof cookieHeader !== 'string' || cookieHeader.length === 0) return undefined;
+  try {
+    const v = parseCookie(cookieHeader)['__Host-cw_lan'];
+    return typeof v === 'string' && v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /* Loopback + RFC1918 IPv4 — the LAN reachability the phone uses to redeem.
@@ -42,9 +59,12 @@ export function isPrivateNetworkRequest(req: Request): boolean {
   return PRIVATE_V4.some((re) => re.test(ip));
 }
 
-/* Pull the token from `Authorization: Bearer …`, the `X-Lan-Token`
-   header, or a `?token=` query param (the QR can carry it either way). */
+/* Pull the token from the `__Host-cw_lan` cookie (first), then
+   `Authorization: Bearer …`, the `X-Lan-Token` header, or a `?token=`
+   query param (the QR can carry it either way). */
 export function extractToken(req: Request): string | undefined {
+  const c = readCwLanCookie(req.headers['cookie']);
+  if (c !== undefined) return c;
   const auth = req.headers['authorization'];
   if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
     const t = auth.slice('Bearer '.length).trim();

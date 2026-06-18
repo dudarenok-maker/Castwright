@@ -52,6 +52,7 @@ function renderTable(opts: {
     preloadedState: {
       library: {
         loaded: opts.loaded ?? true,
+        error: null,
         authors: opts.authors,
         books: opts.authors.flatMap((a) => a.series.flatMap((s) => s.books)),
         pausedSnapshots: {},

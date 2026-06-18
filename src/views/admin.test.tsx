@@ -18,6 +18,7 @@ vi.mock('../lib/api', () => ({
     getGenerationStats: vi.fn(),
     getDiagnostics: vi.fn(),
     getResourceTelemetry: vi.fn(),
+    listDevices: vi.fn().mockResolvedValue({ devices: [] }),
   },
 }));
 

@@ -18,6 +18,7 @@
     "@google/genai": "^2.7.0",
     "@lingo-reader/mobi-parser": "^0.4.6",
     "@types/yazl": "^3.3.1",
+    "cookie": "^0.7.2",
     "epub2": "^3.0.2",
     "express": "^5.1.0",
     "express-rate-limit": "^8.5.2",

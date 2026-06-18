@@ -13,6 +13,7 @@ const TTL_MS = 5 * 60 * 1000; // 5 minutes
 interface Session {
   expiresAt: number;
   consumed: boolean;
+  label?: string;
 }
 
 const sessions = new Map<string, Session>();
@@ -26,19 +27,23 @@ function sweep(now: number): void {
 export interface NewPairingSession {
   code: string;
   expiresAt: number;
+  label?: string;
 }
 
-export function createPairingSession(now: number = Date.now()): NewPairingSession {
+export function createPairingSession(
+  label?: string,
+  now: number = Date.now(),
+  bytes = 5,
+): NewPairingSession {
   sweep(now);
-  // 5 bytes = 40 bits => 8 Crockford chars.
-  const code = crockfordBase32(randomBytes(5));
+  const code = crockfordBase32(randomBytes(bytes)); // 5→8 chars (companion), 10→16 chars (browser)
   const expiresAt = now + TTL_MS;
-  sessions.set(code, { expiresAt, consumed: false });
-  return { code, expiresAt };
+  sessions.set(code, { expiresAt, consumed: false, label });
+  return { code, expiresAt, label };
 }
 
 export type RedeemResult =
-  | { ok: true }
+  | { ok: true; label?: string }
   | { ok: false; reason: 'unknown' | 'expired' | 'consumed' };
 
 export function redeemPairingSession(code: string, now: number = Date.now()): RedeemResult {
@@ -50,7 +55,7 @@ export function redeemPairingSession(code: string, now: number = Date.now()): Re
     return { ok: false, reason: 'expired' };
   }
   s.consumed = true;
-  return { ok: true };
+  return { ok: true, label: s.label };
 }
 
 export function _resetPairingSessionsForTests(): void {

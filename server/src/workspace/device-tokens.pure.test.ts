@@ -8,12 +8,16 @@ import {
   type DeviceTokenRecord,
 } from './device-tokens.js';
 
+const future = new Date(Date.now() + 86_400_000).toISOString();
+const past = new Date(Date.now() - 1000).toISOString();
+
 function rec(over: Partial<DeviceTokenRecord> & { tokenHash: string }): DeviceTokenRecord {
   return {
     id: over.id ?? 'id1',
     label: over.label ?? 'Phone',
     tokenHash: over.tokenHash,
     createdAt: over.createdAt ?? '2026-06-07T00:00:00.000Z',
+    expiresAt: over.expiresAt ?? future,
     lastSeenAt: over.lastSeenAt,
     revoked: over.revoked,
   };
@@ -52,7 +56,24 @@ describe('device-tokens (pure)', () => {
       id: 'a',
       label: 'Phone',
       createdAt: '2026-06-07T00:00:00.000Z',
+      expiresAt: future,
       revoked: false,
     });
+  });
+
+  it('rejects an expired record', () => {
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: past };
+    expect(findValidDevice([d], 'tok')).toBeNull();
+  });
+
+  it('rejects a record with no expiresAt (legacy → re-pair)', () => {
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future };
+    expect(findValidDevice([d], 'tok')).toBeNull();
+  });
+
+  it('honours an injected now', () => {
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: future };
+    expect(findValidDevice([d], 'tok', Date.parse(future) + 1)).toBeNull();
+    expect(findValidDevice([d], 'tok', Date.parse(future) - 1)).not.toBeNull();
   });
 });

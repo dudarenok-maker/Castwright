@@ -9,6 +9,10 @@ import type { ActiveAnalysisSummary, LibraryBook, LibraryResponse } from '../lib
 
 export interface LibraryState {
   loaded: boolean;
+  /** Non-null when the most recent library fetch failed. Cleared on a
+   *  successful hydrate so a manual Retry that succeeds dismisses the
+   *  error panel. */
+  error: string | null;
   authors: LibraryResponse['authors'];
   /** Flat denormalised list for quick lookup by bookId. */
   books: LibraryBook[];
@@ -23,6 +27,7 @@ export interface LibraryState {
 
 const initialState: LibraryState = {
   loaded: false,
+  error: null,
   authors: [],
   books: [],
   pausedSnapshots: {},
@@ -40,8 +45,16 @@ export const librarySlice = createSlice({
   reducers: {
     hydrate: (s, a: PayloadAction<LibraryResponse>) => {
       s.loaded = true;
+      s.error = null;
       s.authors = a.payload.authors;
       s.books = flattenAuthors(a.payload.authors);
+    },
+    /** Sets loaded = true and records the error message so the books view
+     *  can render a "Couldn't load — Retry" panel instead of an eternal
+     *  skeleton. Cleared by the next successful `hydrate`. */
+    hydrateError: (s, a: PayloadAction<string>) => {
+      s.loaded = true;
+      s.error = a.payload;
     },
     /** Optimistically add a book after import. Server scan on next refresh
         is authoritative. */
