@@ -130,6 +130,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   bool _isFinished(String uuid) => _finished.contains(uuid);
 
+  /// `Ch. <id> · <title>` for the loaded chapter, or empty when none.
+  String _currentChapterLabel(PlayerController player) {
+    final uuid = player.currentChapterUuid;
+    if (uuid == null) return '';
+    final match = _chapters.where((c) => c.uuid == uuid);
+    if (match.isEmpty) return '';
+    final c = match.first;
+    final title = c.title.isEmpty ? 'Chapter ${c.id}' : c.title;
+    return 'Ch. ${c.id} · $title';
+  }
+
   String _fmt(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -249,6 +260,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          _currentChapterLabel(player),
+                          key: const Key('player-current-chapter'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                    ),
                     Builder(builder: (context) {
                       final uuid = player.currentChapterUuid;
                       final peaks = uuid != null ? _peaks[uuid] : null;

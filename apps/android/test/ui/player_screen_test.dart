@@ -24,4 +24,16 @@ void main() {
     // so assert on the bar's own key — NOT find.descendant of the chapter tile.
     expect(find.byKey(const Key('progress-ht1-c2')), findsOneWidget);
   });
+
+  testWidgets('bottom transport names the current chapter', (tester) async {
+    final rt = await buildDemoRuntime(fs: InMemoryFileStore(), root: '/demo');
+    await tester.pumpWidget(MaterialApp(
+      home: PlayerScreen(
+          runtime: rt, bookId: 'hollow-tide-1', title: 'The Drowning Bell'),
+    ));
+    await tester.pumpAndSettle();
+
+    // Resume point is ht1-c2 = id 2, title "Bells Beneath".
+    expect(find.text('Ch. 2 · Bells Beneath'), findsOneWidget);
+  });
 }
