@@ -36,6 +36,8 @@ jobs:
           languages: ${{ matrix.language }}
           # JS/TS + Python are interpreted — no compilation step needed.
           build-mode: none
+          # Excludes test/spec files from analysis (prevents future test-file noise).
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
