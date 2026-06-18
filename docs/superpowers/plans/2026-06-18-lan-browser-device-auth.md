@@ -196,12 +196,26 @@ export function redactDevice(d: DeviceTokenRecord): PublicDevice {
 }
 ```
 
-Update `persist` to write schema 2:
+Update `persist` to write schema 2 **and set the cache AFTER a successful write**
+(defense-in-depth: a failed write leaves cache and disk consistent — no phantom
+unpaired device, no revocation silently resurrected on restart):
 
 ```ts
 async function persist(devices: DeviceTokenRecord[]): Promise<void> {
-  cache = devices;
   await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices });
+  cache = devices; // only after the write durably succeeds
+}
+```
+
+Add a pure TTL clamp (a second validation boundary — `configValue` does NOT
+enforce the knob's `min:1` on the override/default paths, so a bad override could
+otherwise mint instantly-dead tokens or throw `Invalid Date`). Keep it config-free
+(it takes the raw value; the route reads `configValue` and passes it in):
+
+```ts
+/** Clamp a configured TTL to a sane positive integer; fall back to the 30-day default. */
+export function clampTtlDays(raw: unknown): number {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : 30;
 }
 ```
 
@@ -525,12 +539,24 @@ Expected: FAIL — `extractToken` ignores cookies.
 ```ts
 import { parse as parseCookie } from 'cookie';
 
-export function extractToken(req: Request): string | undefined {
-  const cookies = req.headers['cookie'];
-  if (typeof cookies === 'string') {
-    const c = parseCookie(cookies)['__Host-cw_lan'];
-    if (typeof c === 'string' && c.length > 0) return c;
+/** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
+ *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
+ *  would 500 the entire API. cookie@0.7.x doesn't throw, but the catch is cheap
+ *  insurance for the hottest path. The same helper backs the CSRF guard's
+ *  cookie detection (Task 6) so auth and CSRF agree on "is this a cookie request". */
+export function readCwLanCookie(cookieHeader: unknown): string | undefined {
+  if (typeof cookieHeader !== 'string' || cookieHeader.length === 0) return undefined;
+  try {
+    const v = parseCookie(cookieHeader)['__Host-cw_lan'];
+    return typeof v === 'string' && v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
   }
+}
+
+export function extractToken(req: Request): string | undefined {
+  const c = readCwLanCookie(req.headers['cookie']);
+  if (c !== undefined) return c;
   const auth = req.headers['authorization'];
   if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
     const t = auth.slice('Bearer '.length).trim();
@@ -615,6 +641,14 @@ it('passes a header-token POST (companion) with no cookie', () => {
   requireSameOrigin(mk('POST', { 'x-lan-token': 'tok' }), res(), next);
   expect(next).toHaveBeenCalled();
 });
+
+it('still gates a cookie that cookie.parse accepts but a naive regex might miss', () => {
+  // Leading whitespace + other pairs first — cookie.parse handles it; assert CSRF still fires.
+  const next = vi.fn(); const r = res();
+  requireSameOrigin(mk('POST', { cookie: 'foo=bar; __Host-cw_lan=x', origin: 'https://evil.example:8443' }), r, next);
+  expect(next).not.toHaveBeenCalled();
+  expect(r.statusCode).toBe(403);
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -633,18 +667,25 @@ Expected: FAIL — module does not exist.
    for state-changing methods. */
 import type { Request, Response, NextFunction } from './http.js';
 import { enumerateLanUrls } from './routes/export-lan.js';
+import { readCwLanCookie } from './lan-auth.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function allowedOrigins(): Set<string> {
   const port = Number(process.env.LAN_HTTPS_PORT ?? 8443);
-  const { urls } = enumerateLanUrls(port, 'https'); // ['https://192.168.x.y:8443', ...]
-  return new Set<string>([
-    ...urls,
+  const loopback = [
     `https://localhost:${port}`,
     `https://127.0.0.1:${port}`,
     `https://[::1]:${port}`,
-  ]);
+  ];
+  try {
+    const { urls } = enumerateLanUrls(port, 'https'); // ['https://192.168.x.y:8443', ...]
+    return new Set<string>([...urls, ...loopback]);
+  } catch {
+    // Fail closed: if NIC enumeration ever throws, still allow loopback only —
+    // never let an exception turn every cookie-bearing write into a 500.
+    return new Set<string>(loopback);
+  }
 }
 
 function originOf(req: Request): string | undefined {
@@ -658,8 +699,10 @@ function originOf(req: Request): string | undefined {
 }
 
 function hasCwLanCookie(req: Request): boolean {
-  const c = req.headers['cookie'];
-  return typeof c === 'string' && /(?:^|;\s*)__Host-cw_lan=/.test(c);
+  // Use the SAME parser as the auth guard (readCwLanCookie → cookie.parse), so a
+  // cookie that authenticates the request is never treated as "no cookie" here —
+  // a regex/parse divergence would silently drop CSRF protection.
+  return readCwLanCookie(req.headers['cookie']) !== undefined;
 }
 
 export function requireSameOrigin(req: Request, res: Response, next: NextFunction): void {
@@ -723,9 +766,18 @@ it('pair-session 409s when LAN auth is not enforced', async () => {
   const res = await request(app).post('/api/devices/pair-session').send({ label: 'x' });
   expect(res.status).toBe(409);
 });
+
+it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {
+  // Under supertest req.ip is loopback, so mock the gate to simulate a LAN client.
+  // Add at top of file: vi.mock('../lan-auth.js', async (o) => ({ ...(await o()),
+  //   isLoopbackRequest: vi.fn(() => true), isLanTokenEnforced: vi.fn(() => true) }));
+  vi.mocked(isLoopbackRequest).mockReturnValueOnce(false);
+  const res = await request(app).post('/api/devices').send({ label: 'x' });
+  expect(res.status).toBe(403);
+});
 ```
 
-(Note: `devices.test.ts` uses the **real** `createDevice` against its temp workspace — there is no `createDevice` mock to update here.)
+(Note: `devices.test.ts` uses the **real** `createDevice` against its temp workspace — there is no `createDevice` mock to update here. The loopback-gate test needs `isLoopbackRequest` mockable; spread the real module and override just `isLoopbackRequest`/`isLanTokenEnforced` as shown, so `requireLanToken` stays real for the existing guard tests.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -735,17 +787,23 @@ Expected: FAIL — route does not exist.
 - [ ] **Step 3: Implement** — in `server/src/routes/devices.ts`:
 
 ```ts
-import { createDevice, listDevices, revokeDevice } from '../workspace/device-tokens.js';
+import { createDevice, listDevices, revokeDevice, clampTtlDays } from '../workspace/device-tokens.js';
 import { createPairingSession } from '../workspace/pairing-sessions.js';
 import { isLanTokenEnforced, isLoopbackRequest } from '../lan-auth.js';
 import { enumerateLanUrls } from './export-lan.js';
 import { configValue } from '../config/resolver.js';
 
-// admin mint — now stamps the configured TTL
+// admin mint — LOOPBACK-ONLY (defense-in-depth: a stolen browser cookie must NOT
+// be able to mint a fresh, durable device token that survives revoking the stolen
+// one — minting stays a physical-desktop capability), and clamps the TTL.
 devicesRouter.post('/devices', async (req: Request, res: Response) => {
+  if (!isLoopbackRequest(req)) {
+    res.status(403).json({ error: 'Devices can only be minted from the host UI.' });
+    return;
+  }
   const raw = (req.body as { label?: unknown } | undefined)?.label;
   const label = typeof raw === 'string' ? raw : 'Device';
-  const ttl = configValue<number>('lan.deviceTokenTtlDays');
+  const ttl = clampTtlDays(configValue('lan.deviceTokenTtlDays'));
   const { device, token } = await createDevice(label, ttl);
   res.status(201).json({ ...device, token });
 });
@@ -868,9 +926,11 @@ import rateLimit from 'express-rate-limit';
 import express from 'express';
 import { configValue } from '../config/resolver.js';
 import { isLanTokenEnforced } from '../lan-auth.js';
+import { clampTtlDays } from '../workspace/device-tokens.js';
 
-// companion redeem — now stamps the configured TTL (contract unchanged)
-const ttl = () => configValue<number>('lan.deviceTokenTtlDays');
+// companion redeem — now stamps the configured TTL (contract unchanged).
+// clampTtlDays guards a bad override: NaN→Invalid Date→500, or 0/negative→instantly-dead token.
+const ttl = () => clampTtlDays(configValue('lan.deviceTokenTtlDays'));
 // ...inside pairRedeemRouter.post('/redeem', ...): replace createDevice(label)
 //    with createDevice(label, ttl())
 
@@ -984,23 +1044,54 @@ git commit -m "feat(server): POST /api/pair/redeem-browser sets HttpOnly cookie;
 ### Task 9: Wire CSRF guard + invariant tests
 
 **Files:**
-- Modify: `server/src/index.ts` (mount `requireSameOrigin` after `requireLanToken`)
-- Test: `server/src/lan-auth.invariants.test.ts` (new)
+- Create: `server/src/lan-safety.ts` (runtime trust-proxy assertion + exposure warning)
+- Modify: `server/src/index.ts` (mount `requireSameOrigin` after `requireLanToken`; call the two runtime guards at assembly/startup)
+- Test: `server/src/lan-auth.invariants.test.ts` (new) + `server/src/lan-safety.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `requireSameOrigin` (Task 6); existing middleware order in `index.ts`.
+- Consumes: `requireSameOrigin` (Task 6); `isLanTokenEnforced`, `isLanHttpsEnabled`.
+- Produces:
+  - `assertNoTrustProxy(app)` — throws at assembly if `trust proxy` is ever set (a **runtime** layer that survives test deletion; the loopback gate is single-tier on this).
+  - `lanExposureWarning(): string | null` — the WARN to log when bound non-loopback but unauthenticated.
 
-- [ ] **Step 1: Write the failing test** — `server/src/lan-auth.invariants.test.ts`:
+- [ ] **Step 1: Write the failing tests** — `server/src/lan-safety.test.ts`:
+
+```ts
+import { describe, it, expect, beforeEach } from 'vitest';
+import express from 'express';
+import { assertNoTrustProxy, lanExposureWarning } from './lan-safety.js';
+
+it('assertNoTrustProxy throws when trust proxy is set', () => {
+  const a = express(); a.set('trust proxy', true);
+  expect(() => assertNoTrustProxy(a)).toThrow(/trust proxy/i);
+});
+it('assertNoTrustProxy passes by default', () => {
+  expect(() => assertNoTrustProxy(express())).not.toThrow();
+});
+
+beforeEach(() => { delete process.env.LAN_HTTPS; delete process.env.LAN_AUTH_TOKEN; });
+it('warns when bound to LAN but token unset', () => {
+  process.env.LAN_HTTPS = '1';
+  expect(lanExposureWarning()).toMatch(/unauthenticated/i);
+});
+it('is silent when enforced or loopback-only', () => {
+  process.env.LAN_HTTPS = '1'; process.env.LAN_AUTH_TOKEN = 'secret';
+  expect(lanExposureWarning()).toBeNull();
+  delete process.env.LAN_HTTPS; delete process.env.LAN_AUTH_TOKEN;
+  expect(lanExposureWarning()).toBeNull();
+});
+```
+
+And `server/src/lan-auth.invariants.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 const idx = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
-it('never enables trust proxy (loopback gate integrity)', () => {
+it('never enables trust proxy in source (early-catch layer; the runtime assert is the real gate)', () => {
   expect(idx).not.toMatch(/trust proxy/);
 });
-
 it('mounts requireSameOrigin after requireLanToken', () => {
   const csrf = idx.indexOf('requireSameOrigin');
   const guard = idx.indexOf('requireLanToken');
@@ -1009,29 +1100,61 @@ it('mounts requireSameOrigin after requireLanToken', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd server && npx vitest run src/lan-auth.invariants.test.ts`
-Expected: FAIL — `requireSameOrigin` not yet mounted.
+Run: `cd server && npx vitest run src/lan-safety.test.ts src/lan-auth.invariants.test.ts`
+Expected: FAIL — `lan-safety.ts` missing; `requireSameOrigin` not yet mounted.
 
-- [ ] **Step 3: Implement** — in `server/src/index.ts`, immediately after the `app.use(['/api','/workspace'], requireLanToken)` line, add:
+- [ ] **Step 3: Implement**
+
+`server/src/lan-safety.ts`:
+
+```ts
+import type { Express } from 'express';
+import { getLanAuthToken } from './lan-auth.js';      // already exported (lan-auth.ts:18)
+import { isLanHttpsEnabled } from './routes/export-lan.js';
+
+/** The loopback gate (isLoopbackRequest) is spoofable if trust proxy honours
+ *  X-Forwarded-For. This is the runtime layer that survives a deleted test. */
+export function assertNoTrustProxy(app: Express): void {
+  if (app.get('trust proxy')) {
+    throw new Error('LAN auth requires `trust proxy` unset — the loopback gate would be spoofable.');
+  }
+}
+
+/** WARN text when the server is bound to the LAN but the guard is a no-op. */
+export function lanExposureWarning(): string | null {
+  if (isLanHttpsEnabled() && getLanAuthToken() === undefined) {
+    return 'WARN: LAN HTTPS is bound to all interfaces but LAN_AUTH_TOKEN is unset — the API is reachable UNAUTHENTICATED from the LAN.';
+  }
+  return null;
+}
+```
+
+In `server/src/index.ts` (or `app.ts` if extracted per Task 8 Step 4b): call `assertNoTrustProxy(app)` right after `const app = express()`, mount the CSRF guard after the LAN guard, and log the exposure warning at startup:
 
 ```ts
 import { requireSameOrigin } from './csrf-origin.js';
-// ...
-app.use('/api', requireSameOrigin); // after requireLanToken, before route handlers
+import { assertNoTrustProxy, lanExposureWarning } from './lan-safety.js';
+// after `const app = express()`:
+assertNoTrustProxy(app);
+// after `app.use(['/api','/workspace'], requireLanToken)`:
+app.use('/api', requireSameOrigin);
+// near listen():
+const warn = lanExposureWarning();
+if (warn) console.warn(warn);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd server && npx vitest run src/lan-auth.invariants.test.ts && npm run test:server`
+Run: `cd server && npx vitest run src/lan-safety.test.ts src/lan-auth.invariants.test.ts && npm run test:server`
 Expected: PASS; full server suite green.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/src/index.ts server/src/lan-auth.invariants.test.ts
-git commit -m "feat(server): mount Origin CSRF guard + trust-proxy/mount-order invariants"
+git add server/src/lan-safety.ts server/src/index.ts server/src/lan-safety.test.ts server/src/lan-auth.invariants.test.ts
+git commit -m "feat(server): mount CSRF guard + runtime trust-proxy assert + unauth-LAN exposure warning"
 ```
 
 ---

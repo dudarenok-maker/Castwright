@@ -4,7 +4,7 @@ date: 2026-06-18
 status: draft
 area: server + frontend
 issue: srv-NN (to be filed)
-revision: 5 (three review rounds folded in; grandfather dropped — legacy re-pairs; lastSeenAt populated)
+revision: 6 (defense-in-depth pass: loopback-gate all mints, runtime trust-proxy assert, exposure warning, TTL clamp, persist write-then-cache, shared cookie parser, fail-closed allow-list; documented single-tier boundaries)
 ---
 
 # Authorize a browser over LAN via Admin device-linking
@@ -336,11 +336,59 @@ GET /api/devices ─► list ;  DELETE /api/devices/:id ─► revoke
   mint + single-use burn + the device showing up in the list (detectable, revocable).
 - **Loopback gate invariant:** the only `/api` mounts **before** `requireLanToken`
   are the two redeem routes (both code-gated mints) and read-only `/audio`; a test
-  asserts that set doesn't grow. `trust proxy` is unset (verified) so
-  `X-Forwarded-For` can't spoof loopback; a test asserts it stays unset.
-- **Footgun surfaced:** unset `LAN_AUTH_TOKEN` → guard no-ops → the Admin card
-  refuses to mint and warns; the server mint endpoints `409` on
-  `!isLanTokenEnforced()` too.
+  asserts that set doesn't grow. `trust proxy` is unset so `X-Forwarded-For` can't
+  spoof loopback — backed by **both** a source grep test **and** a runtime
+  `assertNoTrustProxy(app)` that throws at assembly (a layer that survives test
+  deletion; the loopback gate is otherwise single-tier on this).
+- **Minting is physical-desktop-only:** **all** token-minting paths are
+  loopback-gated — `pair-session`, **and `POST /api/devices`** (the admin direct
+  mint). A stolen browser cookie therefore **cannot mint a fresh device token**,
+  so it can't manufacture a durable credential that survives revoking the stolen
+  one. (Defense-in-depth for the revocation layer.)
+- **Footgun surfaced at two layers:** the Admin card refuses to mint + warns when
+  `!isLanTokenEnforced()`, the mint endpoints `409`, **and** the server logs a
+  startup WARN (`lanExposureWarning()`) when bound to the LAN with `LAN_AUTH_TOKEN`
+  unset — an always-fires signal independent of the user opening Admin.
+
+### Defense-in-depth notes (accepted single-tier / documented boundaries)
+
+- **The shared secret `LAN_AUTH_TOKEN` is the always-full-compromise tier.** It is
+  unexpiring, has no per-secret revoke (rotating it re-pairs every device), is
+  CSRF-exempt (header/Bearer, never a cookie), and **is exposed in the LAN export
+  QR / `/api/export/lan` body**. The new expiry/revocation/CSRF machinery applies
+  to **device tokens**, not the shared secret. Treat a shared-secret leak as total
+  compromise; it exists for the companion bootstrap, not as a revocable per-device
+  credential.
+- **Authorization is read+write undifferentiated:** any valid token grants the
+  full `/api` surface (no read-only tier). Accepted for the single-owner LAN model.
+- **The Origin allow-list is every non-loopback IPv4 NIC** (plus loopback). On a
+  multi-homed host (VPN tap, Docker bridge), a hostile **co-resident** origin on
+  one of those IP:ports would pass the Origin check. Accepted; documented. (The
+  list source is `os.networkInterfaces()`, never request input — so it cannot be
+  poisoned via `Host`/`X-Forwarded-Host`.)
+- **The pairing code is a transient secret:** it rides only the URL **fragment**
+  (never sent to the server / logs / Referer), lives only in component state on
+  the desktop (never dispatched to a persisted redux slice), and the loopback-only
+  `pair-session` response body carrying it must not be captured by response-body
+  logging.
+
+### Fail-safe / robustness layers
+
+- **TTL is clamped at every mint site** (`clampTtlDays`): `configValue` enforces
+  the knob's `min:1` only on the env path, not on overrides/defaults — so a
+  malformed override (`0`/negative/`NaN`) could otherwise mint instantly-dead
+  tokens or throw `Invalid Date` → **500 on the unauthenticated pre-guard
+  endpoint**. The clamp is a second validation boundary that fails to the 30-day
+  default.
+- **`persist()` writes-then-sets-cache** so a failed disk write leaves cache and
+  disk consistent — no phantom unpaired device in the list, no revocation
+  silently resurrected on the next restart.
+- **`extractToken`/`hasCwLanCookie` share one defensive `readCwLanCookie`** (a
+  try/catch'd `cookie.parse`): auth and CSRF agree on "is this a cookie request"
+  (no parser divergence that drops CSRF while auth passes), and a future `cookie`
+  version that threw couldn't 500 the hot guard path.
+- **`allowedOrigins()` fails closed** to the loopback set if NIC enumeration ever
+  throws — a cookie write never 500s the API from a CSRF-layer exception.
 
 ## Testing plan
 
