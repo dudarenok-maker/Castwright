@@ -33,12 +33,16 @@ deep-link parser (`PairingQr._fromUrl`), the `app_links` handler, and an
    without a DNS re-home. Accepts **one app rebuild** (fine — the open beta
    redistributes anyway).
 
-2. **Manifest declares BOTH `www.castwright.ai` and `castwright.ai`.** Per-host
-   verification (API 31+) means a host that fails to verify doesn't break the
-   others. We generate + verify only `www` at launch; the `castwright.ai` entry
-   sits dormant (it can't verify while the apex 301-forwards) and costs nothing.
-   This future-proofs a "user types the bare domain" case without a *second*
-   rebuild if the apex is ever moved to serve directly.
+2. **Manifest declares `www.castwright.ai` ONLY.** The app's effective
+   **`minSdkVersion` is 24** (merged manifest), so it runs on API 24–30 devices.
+   On **pre-Android-12 (API < 31)**, `autoVerify` is **all-or-nothing across every
+   host** in the app's auto-verified filters — a single host that can't verify
+   fails verification for *all* of them. The apex `castwright.ai` 301-forwards and
+   serves no `assetlinks.json`, so declaring it (even "dormantly") would **sink
+   `www` verification too** on the ~24–30 install base. Per-host verification only
+   arrived at API 31+. Net: declaring both hosts is **not** free — it's a
+   pre-31 regression. Declare only `www`; revisit the apex if/when minSdk ≥ 31 or
+   the apex is moved to serve directly.
 
 3. **Pin the upload-key cert only** (`upload-keystore.jks`), in an **array** so
    the Play App Signing SHA-256 can be appended later. The project uses **Google
@@ -85,7 +89,8 @@ const qrPayload = `https://www.castwright.ai/pair?${q}`;
 ### Surface 2 — App manifest host (this repo, `apps/android`)
 
 `apps/android/android/app/src/main/AndroidManifest.xml` — the `autoVerify`
-intent-filter gains `www.castwright.ai` and keeps `castwright.ai`:
+intent-filter's single host changes from the apex to `www.castwright.ai` (the
+apex is removed entirely — see decision 2, pre-31 all-or-nothing verification):
 
 ```xml
 <intent-filter android:autoVerify="true">
@@ -93,7 +98,6 @@ intent-filter gains `www.castwright.ai` and keeps `castwright.ai`:
   <category android:name="android.intent.category.DEFAULT"/>
   <category android:name="android.intent.category.BROWSABLE"/>
   <data android:scheme="https" android:host="www.castwright.ai" android:pathPrefix="/pair"/>
-  <data android:scheme="https" android:host="castwright.ai"     android:pathPrefix="/pair"/>
 </intent-filter>
 ```
 
@@ -132,8 +136,14 @@ intent-filter gains `www.castwright.ai` and keeps `castwright.ai`:
   ```
 
 - **`src/pages/pair.astro`** — minimal static fallback (mirrors `download.astro`'s
-  `Base` layout): "To pair, install the Castwright companion app, then scan from
-  inside it," linking `/download`. No JS, no query-param handling.
+  `Base` layout): "Open the Castwright companion app and scan the code from inside
+  it." No JS, no query-param handling. **CTA caveat:** `/download` is the *desktop*
+  app page and there is **no public companion-APK download** on the site today
+  (companion ships sideloaded / Play-internal). So the page must NOT promise "get
+  the companion app → /download" (wrong install flow). It frames the in-app-scan
+  path as primary and, if it links anywhere, links `/download` only as "where
+  Castwright lives" with honest wording — or omits the link until a companion
+  download target exists.
 
 ## Data flow
 
@@ -179,11 +189,15 @@ desktop server still receives `CWP1*…`.
 - `server/src/routes/pairing.test.ts:66` — **update** the exact-payload assertion
   to the new URL form (`https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${code}&f=…`).
   This *is* the paired regression test for the flip.
-- **Frontend mock + its consumers** (all hard-assert `CWP1*` today): flip the mock
-  in `src/lib/api.ts` and update `src/lib/api-pair-session.test.ts` (wire-contract,
-  exact equality), `src/modals/pair-device.test.tsx`, and
-  `src/components/listen/companion-app-banner.test.tsx`. Without these, `npm run
-  verify` is red and the mock-mode app shows the old QR.
+- **Frontend mock flip + paired coverage.** `mockCreatePairSession` in
+  `src/lib/api.ts` builds the QR string for mock mode (default dev/e2e/screenshots)
+  — flip it to the same `URLSearchParams` URL, or the running app shows the old QR.
+  The mock is currently un-exported and has **no** direct test, so add one: export
+  it and assert the URL shape (paired coverage per CLAUDE.md). The three existing
+  `CWP1*` literals (`api-pair-session.test.ts` — a `fetch`-stubbed pass-through wire
+  test; `pair-device.test.tsx` and `companion-app-banner.test.tsx` — which inject
+  `qrPayload` into a mocked api and never assert it) do **not** go red on the flip;
+  update them only for representativeness so no stale `CWP1*` literal lingers.
 - **e2e** `e2e/download-tiles.spec.ts` — update the stale "compact CWP1" comment and
   add an assertion that the rendered pairing payload is the verified
   `https://www.castwright.ai/pair?…` URL (the only browser-level lock on the
@@ -215,9 +229,15 @@ desktop server still receives `CWP1*…`.
 3. Fresh-install the rebuilt signed release APK; reboot or
    `adb shell pm verify-app-links --re-verify ai.castwright`.
 4. `adb shell pm get-app-links ai.castwright` → `www.castwright.ai` shows
-   `verified`. (`castwright.ai` may show non-verified — expected, dormant.)
+   `verified` (the only declared host).
 5. Scan the QR with the **stock camera** → app opens → pairs end-to-end. Record
    the `pm get-app-links` output in the issue.
+
+**Rollback / recovery:** a wrong fingerprint shipped to `www` then corrected still
+leaves already-installed APKs stuck (Android caches verification failure). Recover:
+fix `assetlinks.json` → redeploy → on each test device `adb shell pm
+verify-app-links --re-verify ai.castwright` (production installs self-heal on the
+next periodic re-verify or app update).
 
 ## Out of scope
 
@@ -231,7 +251,10 @@ desktop server still receives `CWP1*…`.
   rebuild — rejected: requires re-homing the DNS zone (and email) the runbook
   deliberately kept at Porkbun; higher risk for a cosmetic host preference, and a
   rebuild is needed anyway for the open beta.
-- **www-only manifest host** — rejected in favour of declaring both, since the
-  second host is free during the rebuild and saves a future rebuild.
+- **Declare both `www` + apex hosts** (to future-proof bare-domain auto-open) —
+  rejected: the app's minSdk is 24, and on pre-API-31 Android `autoVerify` is
+  all-or-nothing across hosts, so the unverifiable apex would fail `www`
+  verification on the API 24–30 install base. Not free; `www`-only is the safe
+  choice (see decision 2).
 - **Smart `/pair` page** that re-renders the scan flow — rejected as
   over-engineered for a rare unverified-scan path.

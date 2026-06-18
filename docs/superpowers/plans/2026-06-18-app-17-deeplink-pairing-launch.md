@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Verified host = `www.castwright.ai`** (the served host; apex `castwright.ai` is a Porkbun 301-forward and cannot host `assetlinks.json` at 200/no-redirect).
-- **Manifest declares BOTH** `www.castwright.ai` and `castwright.ai` (per-host verify, API 31+); only `www` is generated + verified at launch, apex sits dormant.
+- **Manifest declares `www.castwright.ai` ONLY.** Effective `minSdkVersion` is **24** (merged manifest), so the app runs on API 24–30, where `autoVerify` is **all-or-nothing across hosts** — declaring the unverifiable apex `castwright.ai` would fail `www` verification too on those devices. Per-host verify is API 31+ only. Do NOT add the apex host.
 - **`assetlinks.json` pins the UPLOAD-key SHA-256 only** (`upload-keystore.jks`), in an **array**. The project uses **Google Play App Signing** (`apps/android/README.md`, plan 188): the upload key signs **sideloaded** APKs (today's beta), so acceptance must use a sideloaded install; the Play app-signing SHA is a *different* cert appended later.
 - **Package name = `ai.castwright`** (matches release `applicationId`, no suffix).
 - **Both the server (`pairing.ts`) AND the frontend mock (`src/lib/api.ts`) emit the payload.** Mock mode (`VITE_USE_MOCKS`, default in dev/e2e/screenshots) renders the **mock** string — both must flip identically or the shipped app keeps the old QR.
@@ -73,53 +73,73 @@ git commit -m "feat(server): emit verified deep-link pairing URL (app-17)"
 
 ---
 
-## Task 2: Frontend mock flip + consumer tests
+## Task 2: Frontend mock flip + paired test
 
 **Repo:** Castwright (this repo, frontend)
 
-**Why:** In mock mode (`VITE_USE_MOCKS`, the default for dev / e2e / marketing screenshots) the modal renders `mockCreatePairSession`'s payload, **not** the server's. Three existing tests hard-assert the old `CWP1*` string and go red after this flip; they are the paired coverage.
+**Why:** In mock mode (`VITE_USE_MOCKS`, the default for dev / e2e / marketing screenshots) the modal renders `mockCreatePairSession`'s payload, **not** the server's. So the mock must flip too, or the running/demoed app keeps the old QR. The mock is currently un-exported and has **no** direct test — so the flip needs *new* paired coverage (export it + assert the URL). The three pre-existing `CWP1*` literals do **not** go red on the flip (verified): `api-pair-session.test.ts` is a `fetch`-stubbed pass-through wire test (its own fixture in → same value asserted out), and `pair-device.test.tsx` / `companion-app-banner.test.tsx` inject `qrPayload` into a *mocked* api and never assert it. Update those three only so no stale `CWP1*` literal lingers.
 
 **Files:**
-- Modify: `src/lib/api.ts:5574` (`mockCreatePairSession`)
-- Test: `src/lib/api-pair-session.test.ts:19,42` (wire-contract, exact equality)
-- Test: `src/modals/pair-device.test.tsx:11,36`
-- Test: `src/components/listen/companion-app-banner.test.tsx:11`
+- Modify: `src/lib/api.ts:5568,5574` (export + flip `mockCreatePairSession`)
+- Create: `src/lib/api-pair-session-mock.test.ts` (paired coverage for the flip)
+- Modify (representativeness, not red): `src/lib/api-pair-session.test.ts:19,42`, `src/modals/pair-device.test.tsx:11,36`, `src/components/listen/companion-app-banner.test.tsx:11`
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `api.createPairSession()` resolves `qrPayload` of the same URL shape as Task 1.
+- Produces: exported `mockCreatePairSession(): Promise<PairSessionInfo>` whose `qrPayload` is `https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R`.
 
-- [ ] **Step 1: Update the failing wire-contract test**
+- [ ] **Step 1: Write the failing paired test**
 
-In `src/lib/api-pair-session.test.ts`, change both `CWP1*…` literals (the input fixture at line 19 and the assertion at line 42) to:
+Create `src/lib/api-pair-session-mock.test.ts`:
 
 ```ts
-'https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'
-```
+import { describe, it, expect } from 'vitest';
+import { mockCreatePairSession } from './api';
 
-(The mock's host is `192.168.1.42:8443`, code `K7QF3M2P`, fpTag `J4XQ2A7BWZ9K3M5R`.)
+// app-17: the pairing mock must emit the verified deep-link URL (mock mode drives
+// the modal in dev / e2e / marketing screenshots), not the retired CWP1 string.
+describe('mockCreatePairSession qrPayload', () => {
+  it('is the verified www.castwright.ai deep-link URL carrying h/c/f', async () => {
+    const info = await mockCreatePairSession();
+    const url = new URL(info.qrPayload);
+    expect(url.origin + url.pathname).toBe('https://www.castwright.ai/pair');
+    expect(url.searchParams.get('h')).toBe(info.hostPort);
+    expect(url.searchParams.get('c')).toBe(info.code);
+    expect(url.searchParams.get('f')).toBe(info.fpTag);
+  });
+});
+```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `npx vitest run src/lib/api-pair-session.test.ts`
-Expected: FAIL — mock still returns `CWP1*192.168.1.42:8443*…`.
+Run: `npx vitest run src/lib/api-pair-session-mock.test.ts`
+Expected: FAIL — `mockCreatePairSession` is not exported (import error), and the payload is still `CWP1*…`.
 
-- [ ] **Step 3: Flip the mock**
+- [ ] **Step 3: Export + flip the mock**
 
-In `src/lib/api.ts`, replace the `qrPayload` line in `mockCreatePairSession` (line 5574):
+In `src/lib/api.ts`, add `export` to the function (line 5568) and replace the `qrPayload` line (5574):
 
+```ts
+export async function mockCreatePairSession(): Promise<PairSessionInfo> {
+```
 ```ts
     qrPayload: `https://www.castwright.ai/pair?${new URLSearchParams({ h: hostPort, c: code, f: fpTag }).toString()}`,
 ```
 
 - [ ] **Step 4: Run it to verify it passes**
 
-Run: `npx vitest run src/lib/api-pair-session.test.ts`
+Run: `npx vitest run src/lib/api-pair-session-mock.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Update the two other consumer tests**
+- [ ] **Step 5: Refresh the three stale `CWP1*` literals (representativeness — these stay green)**
 
-In `src/modals/pair-device.test.tsx`, change both `qrPayload` literals (lines 11 and 36) from `'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R'` to:
+In `src/lib/api-pair-session.test.ts`, change both `CWP1*…` literals (fetch fixture at line 19 and its pass-through assertion at line 42) to:
+
+```ts
+'https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'
+```
+
+In `src/modals/pair-device.test.tsx`, change both `qrPayload` literals (lines 11, 36) from `'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R'` to:
 
 ```ts
 'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'
@@ -131,16 +151,16 @@ In `src/components/listen/companion-app-banner.test.tsx`, change the `qrPayload`
 'https://www.castwright.ai/pair?h=192.168.86.20%3A8443&c=ABCD1234&f=TAGABC123'
 ```
 
-- [ ] **Step 6: Run both suites to verify they pass**
+- [ ] **Step 6: Run all touched suites to verify green**
 
-Run: `npx vitest run src/modals/pair-device.test.tsx src/components/listen/companion-app-banner.test.tsx`
-Expected: PASS.
+Run: `npx vitest run src/lib/api-pair-session.test.ts src/lib/api-pair-session-mock.test.ts src/modals/pair-device.test.tsx src/components/listen/companion-app-banner.test.tsx`
+Expected: PASS (all).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/lib/api.ts src/lib/api-pair-session.test.ts src/modals/pair-device.test.tsx src/components/listen/companion-app-banner.test.tsx
-git commit -m "feat(frontend): flip pairing mock to deep-link URL + update consumers (app-17)"
+git add src/lib/api.ts src/lib/api-pair-session-mock.test.ts src/lib/api-pair-session.test.ts src/modals/pair-device.test.tsx src/components/listen/companion-app-banner.test.tsx
+git commit -m "feat(frontend): flip pairing mock to deep-link URL + paired test (app-17)"
 ```
 
 ---
@@ -260,7 +280,7 @@ git commit -m "test(e2e): refresh stale CWP1 comment in pairing e2e (app-17)"
 
 ---
 
-## Task 5: Android manifest dual-host + coverage
+## Task 5: Android manifest www-only host + coverage
 
 **Repo:** Castwright (this repo, `apps/android`)
 
@@ -268,11 +288,11 @@ git commit -m "test(e2e): refresh stale CWP1 comment in pairing e2e (app-17)"
 - Modify: `apps/android/android/app/src/main/AndroidManifest.xml:42-50` (comment + the `autoVerify` intent-filter `<data>` element)
 - Modify: `apps/android/test/domain/pairing_qr_test.dart` (add www URL case; update literals)
 - Modify: `apps/android/test/main_deep_link_test.dart:35-36` (update apex literal for honesty)
-- Create: `apps/android/test/android_manifest_test.dart` (lock both hosts)
+- Create: `apps/android/test/android_manifest_test.dart` (lock www host present, apex absent)
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: a manifest whose `/pair` `autoVerify` filter declares `www.castwright.ai` and `castwright.ai`.
+- Produces: a manifest whose `/pair` `autoVerify` filter declares **only** `www.castwright.ai` (apex removed — minSdk 24, pre-31 all-or-nothing verification).
 
 - [ ] **Step 1: Write the failing manifest guard test**
 
@@ -283,12 +303,15 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('manifest declares both pairing deep-link hosts with autoVerify', () {
+  test('pairing autoVerify filter declares www host only (apex would sink pre-31 verify)', () {
     final xml = File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
     expect(xml.contains('android:autoVerify="true"'), isTrue);
     expect(xml.contains('android:host="www.castwright.ai"'), isTrue);
-    expect(xml.contains('android:host="castwright.ai"'), isTrue);
     expect(xml.contains('android:pathPrefix="/pair"'), isTrue);
+    // The bare apex must NOT be declared: on minSdk 24 (pre-API-31) autoVerify is
+    // all-or-nothing, and the apex 301-forwards (no assetlinks) so it can't verify.
+    // (host="castwright.ai" with a leading quote won't match host="www.castwright.ai".)
+    expect(xml.contains('android:host="castwright.ai"'), isFalse);
   });
 }
 ```
@@ -298,30 +321,19 @@ void main() {
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/android && flutter test test/android_manifest_test.dart`
-Expected: FAIL — `www.castwright.ai` host not present.
+Expected: FAIL — manifest declares `castwright.ai`, not `www.castwright.ai`.
 
-- [ ] **Step 3: Add the `www` host to the manifest**
+- [ ] **Step 3: Repoint the host to `www` in the manifest**
 
-In `apps/android/android/app/src/main/AndroidManifest.xml`, the `autoVerify` intent-filter currently holds a **single 3-line `<data>` element** (`:48-50`):
-
-```xml
-                <data android:scheme="https"
-                      android:host="castwright.ai"
-                      android:pathPrefix="/pair"/>
-```
-
-Replace that 3-line element with two elements (www first):
+In `apps/android/android/app/src/main/AndroidManifest.xml`, the `autoVerify` intent-filter holds a **single 3-line `<data>` element** (`:48-50`). Change only its host:
 
 ```xml
                 <data android:scheme="https"
                       android:host="www.castwright.ai"
                       android:pathPrefix="/pair"/>
-                <data android:scheme="https"
-                      android:host="castwright.ai"
-                      android:pathPrefix="/pair"/>
 ```
 
-Then update the comment above the intent-filter (`:42`) so its assetlinks URL reads `https://www.castwright.ai/.well-known/assetlinks.json` and add: `castwright.ai is a dormant second host (apex 301-forwards today; per-host verify means it can't break www).`
+Then update the comment above the intent-filter (`:40-43`) so its assetlinks URL reads `https://www.castwright.ai/.well-known/assetlinks.json` (it currently says the apex). Do NOT add a second `<data>` host — the apex is intentionally absent (minSdk 24 / pre-31 all-or-nothing).
 
 - [ ] **Step 4: Run the manifest guard to verify it passes**
 
@@ -344,10 +356,12 @@ In `apps/android/test/domain/pairing_qr_test.dart`, add this test after the exis
 
 Change the two existing `https://castwright.ai/pair?…` literals (the "raw colon" and "percent-encoded colon" cases) to `https://www.castwright.ai/pair?…`. Leave the "rejects a URL missing a pairing field" case as-is (host irrelevant). Also update the apex literal in `apps/android/test/main_deep_link_test.dart:36` (`https://castwright.ai/pair?…`) to `https://www.castwright.ai/pair?…` for the same honesty rationale.
 
-- [ ] **Step 6: Run the parser + deep-link suites to verify they pass**
+- [ ] **Step 6: Run the full app gate (Dart tests + analyze)**
 
-Run: `cd apps/android && flutter test test/domain/pairing_qr_test.dart test/main_deep_link_test.dart`
-Expected: PASS (all cases).
+`npm run verify` does NOT run any Flutter tests (CLAUDE.md: "no local hook runs `flutter analyze`/`test`" — only the `app.yml` CI on `apps/android/**` pushes). So this is the gate for all Task 5 changes:
+
+Run: `cd apps/android && flutter analyze && flutter test`
+Expected: analyze clean; all tests PASS (manifest guard + `pairing_qr_test.dart` + `main_deep_link_test.dart`). Pushing the app branch also triggers `app.yml` as a second check.
 
 - [ ] **Step 7: Commit**
 
@@ -457,6 +471,14 @@ Append to `public/_headers` (mirrors the existing `/llms.txt` content-type block
   Content-Type: application/json
 ```
 
+**Sanity check `_headers` is honored by the assets-only Worker** (it's a Pages
+convention; this site is a plain assets Worker per `wrangler.jsonc`): the existing
+`/llms.txt` charset rule is the proof case. Confirm in prod with
+`curl -sI https://www.castwright.ai/llms.txt | grep -i content-type` → it should
+show `charset=utf-8`. If `_headers` is a no-op here, the JSON content-type instead
+comes from Cloudflare's `.json` extension inference (still served correctly) — note
+that and don't block on the header.
+
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run src/lib/assetlinks.test.ts`
@@ -485,8 +507,14 @@ git commit -m "feat: host assetlinks.json for companion deep-link pairing (app-1
 - Modify: `e2e/pages.spec.ts` (add `/pair` to the route table)
 
 **Interfaces:**
-- Consumes: existing `Base` layout + `SectionHeading` component (mirrors `download.astro`; no `URLS` import needed — the download link is a literal `/download`).
+- Consumes: existing `Base` layout + `SectionHeading` component (mirrors `download.astro`; no `URLS` import needed).
 - Produces: a static `/pair` page rendering an `<h1>` "Pair your phone".
+
+**CTA caveat:** `/download` is the **desktop** app page, and the site has **no
+public companion-APK download** today (companion ships sideloaded / Play-internal).
+So the page must NOT say "get the companion app → /download" (wrong install flow).
+It frames the in-app-scan path as primary; it does not link to a companion
+download that doesn't exist.
 
 - [ ] **Step 1: Add the failing e2e route assertion**
 
@@ -518,19 +546,18 @@ import SectionHeading from '@/components/SectionHeading.astro'
   <div class="max-w-2xl">
     <SectionHeading as="h1">Pair your phone</SectionHeading>
     <p class="mt-4">
-      To pair, install the <b class="text-magenta">Castwright</b> companion app, then
-      open it and scan the pairing code from inside the app.
+      Pairing happens inside the <b class="text-magenta">Castwright</b> companion app.
+      Open the app on your phone and scan this code from its built-in scanner.
     </p>
     <p class="mt-4">
-      Scanning from your phone's normal camera only works once the app is installed and
-      its link is verified — until then, use the in-app scanner.
+      Your phone's normal camera can open the app directly once it's installed and its
+      link is verified — until then, scan from inside the app.
     </p>
-    <a class="mt-6 inline-block underline" href="/download">Get the companion app →</a>
   </div>
 </Base>
 ```
 
-(`SectionHeading` renders `<Tag>` from its `as` prop, so `as="h1"` emits a real `<h1>`. No JS, no query-param handling — the LAN host + ephemeral code are useless on the public web.)
+(`SectionHeading` renders `<Tag>` from its `as` prop, so `as="h1"` emits a real `<h1>`. No JS, no query-param handling — the LAN host + ephemeral code are useless on the public web. No `/download` link: that's the desktop app, and there is no public companion-APK download to point at.)
 
 - [ ] **Step 4: Run the e2e to verify it passes**
 
@@ -564,17 +591,17 @@ Expected: `HTTP/2 200`, **no** `3xx`, `content-type: application/json`. Confirm 
 - [ ] **Step 3: Run the full local battery in this repo**
 
 Run: `npm run verify`
-Expected: green (typecheck + all tests + e2e + build). Then merge `feat/app-17-deeplink-pairing-launch`.
+Expected: green (typecheck + frontend/server tests + e2e + build). **Note:** this covers Tasks 1–4 only — it does NOT run any Flutter test, so Task 5's Dart gate (`cd apps/android && flutter analyze && flutter test`, plus the `app.yml` CI on the app-branch push) is the coverage for the manifest change. Then merge `feat/app-17-deeplink-pairing-launch`.
 
 - [ ] **Step 4: Rebuild + SIDELOAD the signed release APK**
 
-Build the release APK signed with `upload-keystore.jks` (whose SHA-256 is in `assetlinks.json`), **sideload-install** it on an Android 16 / API 36 device (NOT a Play-track install — Play re-signs), then reboot or:
+Build the release APK signed with `upload-keystore.jks` (whose SHA-256 is in `assetlinks.json`), **sideload-install** it on an Android device (NOT a Play-track install — Play re-signs with a different cert that won't match the pin), then reboot or:
 
 ```bash
 adb shell pm verify-app-links --re-verify ai.castwright
 adb shell pm get-app-links ai.castwright
 ```
-Expected: `www.castwright.ai → verified`. (`castwright.ai` may show non-verified — expected/dormant.)
+Expected: `www.castwright.ai → verified` (the only declared host).
 
 - [ ] **Step 5: End-to-end stock-camera pair**
 
@@ -585,8 +612,12 @@ Start the desktop server in LAN HTTPS mode (`npm run dev:lan` or `start:lan`), o
 - `Closes #729` in the website PR or the app PR; remove its row from `docs/BACKLOG.md`.
 - Set the spec `status:` to `stable`, fill Ship notes (date + SHAs).
 - Update `docs/features/INDEX.md` if the spec/plan is indexed there.
-- Fix the stale apex assetlinks URLs in `docs/features/208-pairing-qr-mlkit-decoder.md` (lines ~18, ~32) to `www.castwright.ai`.
+- (Optional honesty edit) `docs/features/208-pairing-qr-mlkit-decoder.md` mentions the host-agnostic parser accepting `castwright.ai/pair?…` (lines ~11/32/41/63) — these describe what the parser *accepts*, not a hosted assetlinks URL, so they need no change unless you want them to read `www` for consistency.
 - Note in the BACKLOG/issue that the **Play App Signing SHA-256** is still owed when Play distribution lands (append to the `assetlinks.json` array).
+
+- [ ] **Step 7: Rollback note (keep handy)**
+
+If `assetlinks.json` ships with a wrong fingerprint, fixing it isn't enough — Android caches the failure. Recover: correct the file → `npx wrangler deploy` → on each test device `adb shell pm verify-app-links --re-verify ai.castwright`. Production installs self-heal on the next periodic re-verify or app update.
 
 ---
 
@@ -594,10 +625,10 @@ Start the desktop server in LAN HTTPS mode (`npm run dev:lan` or `start:lan`), o
 
 **Spec coverage:**
 - Server payload flip → Task 1 ✓
-- Frontend mock flip + 3 red consumer tests → Task 2 ✓
+- Frontend mock flip + new paired test (mock was un-exported/untested); 3 stale `CWP1*` literals refreshed (verified NOT red) → Task 2 ✓
 - Density re-anchor (measured v5/v9) → Task 3 ✓
 - e2e stale-comment refresh; URL prefix locked by Task 2 unit test (QR is opaque PNG) → Task 4 ✓
-- Manifest dual-host + Dart host-agnostic lock + main_deep_link literal → Task 5 ✓
+- Manifest **www-only** (apex removed — minSdk 24 / pre-31 all-or-nothing) + Dart host-agnostic lock + main_deep_link literal + explicit `flutter analyze`/`test` gate → Task 5 ✓
 - assetlinks.json (upload-key cert, array) + content-type → Task 6 ✓
 - /pair fallback page → Task 7 ✓
 - Rollout ordering + sideloaded on-device acceptance + curl/pm + doc close-out → Task 8 ✓
@@ -605,4 +636,4 @@ Start the desktop server in LAN HTTPS mode (`npm run dev:lan` or `start:lan`), o
 
 **Placeholder scan:** The only fill-at-build value is the SHA-256 in Task 6 Step 3, with an explicit derivation command (Step 1) and a format-validating test (Step 2); the dummy fingerprint is replaced in the same step. No conditional/deferred steps remain (the Task 4 `alt`-attribute branch was resolved away — the QR is an opaque PNG, so the URL prefix is locked by Task 2's unit test instead).
 
-**Type/name consistency:** `qrPayload` URL shape identical across Task 1 (server impl + test), Task 2 (mock + 3 tests), and Task 3 (density). `package_name: "ai.castwright"` matches the manifest `applicationId` and the Dart guard. Host literals `www.castwright.ai` consistent across Tasks 1–7. Mock host `192.168.1.42` / `pair-device` host `192.168.1.5` / banner host `192.168.86.20` each preserved per their own fixture.
+**Type/name consistency:** `qrPayload` URL shape identical across Task 1 (server impl + test), Task 2 (mock + paired test + 3 refreshed literals), and Task 3 (density). `package_name: "ai.castwright"` matches the manifest `applicationId` and the Dart guard. Host literal `www.castwright.ai` consistent across Tasks 1–7, and is the **only** manifest host (apex removed). Mock host `192.168.1.42` / `pair-device` host `192.168.1.5` / banner host `192.168.86.20` each preserved per their own fixture. Note the differing local-var names: `host` in the server (Task 1) vs `hostPort` in the mock (Task 2) — both correct in context.
