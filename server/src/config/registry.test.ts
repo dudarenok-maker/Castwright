@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { GROUPS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
+import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
 
 describe('config registry', () => {
-  it('declares the ten groups', () => {
+  it('declares the eleven groups', () => {
     expect(GROUPS.map((g) => g.id)).toEqual([
       'analyzer-sampling',
       'analyzer-chunking',
@@ -14,6 +14,7 @@ describe('config registry', () => {
       'audio-loudness',
       'gpu-lifecycle',
       'rate-limits',
+      'lan-access',
     ]);
   });
 
@@ -72,5 +73,23 @@ describe('config registry', () => {
     expect(k?.env).toBe('ANALYZER_KEEP_ALIVE');
     expect(k?.default).toBe('5m');
     expect(k?.apply).toBe('live');
+  });
+
+  it('registers the lan-access group', () => {
+    const g = GROUPS.find((x) => x.id === 'lan-access');
+    expect(g).toBeDefined();
+    expect(g!.collapsedByDefault).toBe(false);
+  });
+
+  it('registers the device-token TTL knob with a 30-day default', () => {
+    const k = KNOBS.find((x) => x.key === 'lan.deviceTokenTtlDays');
+    expect(k).toMatchObject({
+      env: 'LAN_DEVICE_TTL_DAYS',
+      group: 'lan-access',
+      type: 'integer',
+      default: 30,
+      min: 1,
+      apply: 'live',
+    });
   });
 });

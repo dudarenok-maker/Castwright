@@ -11,6 +11,7 @@ export const GROUPS: ConfigGroup[] = [
   { id: 'audio-loudness', label: 'Audio loudness targets', help: 'EBU R128 normalization targets.', risk: 'low', collapsedByDefault: false },
   { id: 'gpu-lifecycle', label: 'GPU arbitration, memory & lifecycle', help: 'GPU concurrency, VRAM budgets, and sidecar recycling. Footguns live here.', risk: 'high', collapsedByDefault: true },
   { id: 'rate-limits', label: 'Gemini rate limits', help: 'Per-model request/token/day caps for the Gemini API.', risk: 'low', collapsedByDefault: false },
+  { id: 'lan-access', label: 'LAN access & device tokens', help: 'Lifetime of browser/device authorizations minted from Admin.', risk: 'low', collapsedByDefault: false },
 ];
 
 export const KNOBS: ConfigKnob[] = [
@@ -774,6 +775,18 @@ export const KNOBS: ConfigKnob[] = [
     type: 'string', isPrompt: true,
     default: 'skills/audiobook-voice-style.md', // ← shipped skill file (extracted from voice-style.ts)
     apply: 'live', risk: 'high',
+  },
+
+  // ── lan-access ───────────────────────────────────────────────────────────
+  {
+    key: 'lan.deviceTokenTtlDays',
+    env: 'LAN_DEVICE_TTL_DAYS',
+    group: 'lan-access',
+    label: 'Device authorization lifetime (days)',
+    help: 'How long a browser/device authorization stays valid before it must be re-paired.',
+    type: 'integer', min: 1,
+    default: 30,
+    apply: 'live', risk: 'low',
   },
 ];
 
