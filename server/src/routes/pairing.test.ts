@@ -61,9 +61,11 @@ describe('pairing routes', () => {
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
     expect(res.status).toBe(200);
     expect(res.body.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
-    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JX');
+    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JXTB2C9QD4JW');
     expect(res.body.hostPort).toBe('192.168.1.5:8443');
-    expect(res.body.qrPayload).toBe(`CWP1*192.168.1.5:8443*${res.body.code}*5CEE77RAKV3EN9JX`);
+    expect(res.body.qrPayload).toBe(
+      `https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${res.body.code}&f=5CEE77RAKV3EN9JXTB2C9QD4JW`,
+    );
     expect(res.body.expiresAt).toBeGreaterThan(0);
   });
 

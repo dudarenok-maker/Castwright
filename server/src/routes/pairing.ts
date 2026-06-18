@@ -20,14 +20,14 @@ import { createPairingSession, redeemPairingSession } from '../workspace/pairing
 import { createDevice } from '../workspace/device-tokens.js';
 import { isLoopbackRequest } from '../lan-auth.js';
 
-/** First 10 bytes (80 bits) of the CA cert's SHA-256, Crockford-base32. */
+/** First 16 bytes (128 bits) of the CA cert's SHA-256, Crockford-base32. */
 export function caFingerprintTag(): string | undefined {
   try {
     const ca = resolveRootCaPath();
     if (!ca) return undefined;
     const hex = new X509Certificate(readFileSync(ca.path)).fingerprint256; // "AB:CD:.."
     const bytes = Buffer.from(hex.replace(/:/g, ''), 'hex');
-    return crockfordBase32(bytes.subarray(0, 10));
+    return crockfordBase32(bytes.subarray(0, 16));
   } catch {
     return undefined;
   }
@@ -52,7 +52,8 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
     return;
   }
   const { code, expiresAt } = createPairingSession();
-  const qrPayload = `CWP1*${host}*${code}*${fpTag}`;
+  const q = new URLSearchParams({ h: host, c: code, f: fpTag });
+  const qrPayload = `https://www.castwright.ai/pair?${q.toString()}`;
   res.json({ qrPayload, hostPort: host, port, code, fpTag, expiresAt });
 });
 
