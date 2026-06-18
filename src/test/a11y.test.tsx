@@ -193,6 +193,7 @@ describe('a11y — book library view', () => {
       preloadedState: {
         library: {
           loaded: true,
+          error: null,
           authors: libraryAuthors,
           books: libraryAuthors.flatMap((a) => a.series.flatMap((s) => s.books)),
           pausedSnapshots: {},

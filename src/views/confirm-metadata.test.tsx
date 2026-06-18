@@ -53,7 +53,7 @@ function renderView(libraryBooks: LibraryBook[] = []) {
     },
     preloadedState: {
       manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidate },
-      library: { loaded: true, authors: [], books: libraryBooks, pausedSnapshots: {} },
+      library: { loaded: true, error: null, authors: [], books: libraryBooks, pausedSnapshots: {} },
     },
   });
   return {
@@ -154,7 +154,7 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
           ...manuscriptSlice.getInitialState(),
           importCandidate: candidateOverride,
         },
-        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
       },
     });
     return render(
@@ -216,7 +216,7 @@ describe('ConfirmMetadataView — fs-2 language selector', () => {
       },
       preloadedState: {
         manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidateOverride },
-        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
       },
     });
     return render(

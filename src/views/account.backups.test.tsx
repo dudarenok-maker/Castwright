@@ -80,6 +80,7 @@ const SB_BOOK = {
 
 const LIBRARY_FIXTURE: LibraryState = {
   loaded: true,
+  error: null,
   authors: [
     {
       name: 'Marin Vale',

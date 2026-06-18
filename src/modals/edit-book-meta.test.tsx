@@ -42,6 +42,7 @@ function renderModal(
     preloadedState: {
       library: {
         loaded: true,
+        error: null,
         authors: [],
         books: libraryBooks,
         pausedSnapshots: {},

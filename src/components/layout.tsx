@@ -528,6 +528,7 @@ export function Layout() {
       })
       .catch((err) => {
         console.error('[library] hydrate failed', err);
+        dispatch(libraryActions.hydrateError(err instanceof Error ? err.message : String(err)));
       });
     return () => {
       cancelled = true;

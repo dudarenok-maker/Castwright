@@ -42,6 +42,7 @@ describe('librarySlice — initial state', () => {
   it('starts empty and not loaded', () => {
     expect(librarySlice.getInitialState()).toEqual({
       loaded: false,
+      error: null,
       authors: [],
       books: [],
       pausedSnapshots: {},
@@ -113,6 +114,7 @@ describe('librarySlice — selectAllTags (plan 73)', () => {
     return {
       library: {
         loaded: true,
+        error: null,
         authors: [],
         books,
         pausedSnapshots: {},
@@ -174,6 +176,19 @@ describe('librarySlice — filterBooks (plan 73)', () => {
   });
   it('returns [] when an active tag matches no book', () => {
     expect(filterBooks(books, '', ['nonexistent'])).toEqual([]);
+  });
+});
+
+describe('librarySlice — hydrateError (task-11)', () => {
+  const reducer = librarySlice.reducer;
+  const initialState = librarySlice.getInitialState();
+
+  it('hydrateError sets loaded + error; hydrate clears error', () => {
+    let s = reducer(initialState, libraryActions.hydrateError('boom'));
+    expect(s.loaded).toBe(true);
+    expect(s.error).toBe('boom');
+    s = reducer(s, libraryActions.hydrate({ authors: [] }));
+    expect(s.error).toBeNull();
   });
 });
 
