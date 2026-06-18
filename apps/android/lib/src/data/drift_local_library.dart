@@ -296,6 +296,15 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
         .write(ChaptersCompanion(finished: Value(finished)));
   }
 
+  /// The uuids of [bookId]'s chapters the user has played to the end
+  /// (the persisted `finished` flag). Drives the chapter-list "done" check.
+  Future<Set<String>> finishedChapterUuids(String bookId) async {
+    final rows = await (_db.select(_db.chapters)
+          ..where((c) => c.bookId.equals(bookId) & c.finished.equals(true)))
+        .get();
+    return {for (final r in rows) r.uuid};
+  }
+
   /// Apply a [planStorageEviction] result: drop finished chapter files (keep the
   /// row, clear fingerprint + bytes) and evict whole books.
   Future<void> applyEviction(EvictionPlan plan) async {
