@@ -18,7 +18,7 @@ import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
-import { safeSegment, assertContained } from '../util/safe-path.js';
+import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
 import { getResolvedBackupConfig } from './user-settings.js';
@@ -52,7 +52,7 @@ export async function listBackups(bookId: string): Promise<BackupSnapshot[]> {
   const names = (await readdir(dir)).filter((n) => STAMP_RE.test(n));
   const out: BackupSnapshot[] = [];
   for (const file of names) {
-    const snap = join(dir, safeSegment(file));
+    const snap = join(dir, sanitizeIdSegment(safeSegment(file)));
     assertContained(dir, snap);
     const s = await stat(snap);
     out.push({ file, sizeBytes: s.size, createdAt: s.mtime.toISOString() });
@@ -69,7 +69,7 @@ export async function pruneBackups(bookId: string, keep: number): Promise<number
   const stale = (await listBackups(bookId)).slice(keep); // newest-first
   const dir = bookBackupsDir(bookId);
   for (const s of stale) {
-    const snap = join(dir, safeSegment(s.file));
+    const snap = join(dir, sanitizeIdSegment(safeSegment(s.file)));
     assertContained(dir, snap);
     await unlink(snap).catch(() => {});
   }
@@ -119,7 +119,7 @@ export async function backupBook(
   const dir = bookBackupsDir(book.bookId);
   await mkdir(dir, { recursive: true });
   const file = `${backupStamp(opts.now)}.json`;
-  const snap = join(dir, safeSegment(file));
+  const snap = join(dir, sanitizeIdSegment(safeSegment(file)));
   assertContained(dir, snap);
   await writeJsonAtomic(snap, value);
   await pruneBackups(book.bookId, opts.keep);
@@ -202,7 +202,7 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
   if (!found) throw new BackupRestoreError('book not found');
   const bookDir = found.bookDir;
   const backupsDir = bookBackupsDir(bookId);
-  const snapPath = join(backupsDir, safeSegment(file));
+  const snapPath = join(backupsDir, sanitizeIdSegment(safeSegment(file)));
   assertContained(backupsDir, snapPath);
   if (!existsSync(snapPath)) throw new BackupRestoreError('backup not found');
   const raw = await readFile(snapPath, 'utf8');

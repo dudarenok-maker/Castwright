@@ -25,6 +25,19 @@ export function safeSegment(seg: string): string {
   return seg;
 }
 
+/** TRANSFORMING sanitizer for an id used as a single path segment. Unlike the
+    validating `safeSegment` (which throws), this REPLACES path separators / NUL
+    and collapses any `..` run, so the RETURN VALUE is a guaranteed-contained
+    component. CodeQL models a separator/`..`-stripping `.replace()` as a path
+    sanitizer and — crucially — propagates it across function boundaries (a
+    throwing guard does not), so wrapping an id in `sanitizeIdSegment(...)` inside
+    a path builder clears that builder's callers too. Legitimate ids (slugs,
+    nanoids, `qwen-<id>`, Cyrillic) contain none of these, so they pass through
+    unchanged. */
+export function sanitizeIdSegment(seg: string): string {
+  return seg.replace(/[/\\\x00]/g, '_').replace(/\.\.+/g, '_');
+}
+
 /** Throw unless `resolved` is inside `root`. CodeQL-recognized barrier
     (RelativePathStartsWithSanitizer) — keep the raw relative string. */
 export function assertContained(root: string, resolved: string): void {
