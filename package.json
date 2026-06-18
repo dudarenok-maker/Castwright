@@ -112,6 +112,7 @@
     "vitest": "^4.1.8"
   },
   "overrides": {
+    "js-yaml": "^4.2.0",
     "openapi-typescript": {
       "typescript": "$typescript"
     }
