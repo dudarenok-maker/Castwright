@@ -2830,7 +2830,6 @@ def health() -> dict[str, Any]:
     # Process-wide — a CUDA context is shared by every engine, so poison is not
     # Coqui-specific (a Qwen / Kokoro CUDA error corrupts it just the same).
     poisoned = _process_poisoned
-    poison_reason = _process_poison_reason
     if isinstance(coqui, CoquiEngine):
         model_loaded = coqui._tts is not None
         loading = coqui._loading
@@ -2902,7 +2901,10 @@ def health() -> dict[str, Any]:
         "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
-        "poison_reason": poison_reason,
+        # `poison_reason` (raw exception text) is deliberately NOT surfaced here —
+        # it would leak a stack-trace fragment to any /health caller (CodeQL
+        # py/stack-trace-exposure). The trigger lives in the server-side log +
+        # the internal `_process_poison_reason` global only.
         # side-11 item 2 — SOFT recycle signal. `recycle_pending` flips True once
         # committed crosses SIDECAR_RECYCLE_SOFT_MB OR reserved VRAM crosses the
         # VRAM soft ceiling (below either hard ceiling); the generation worker
@@ -3290,13 +3292,15 @@ async def synthesize(req: Request) -> Response:
     # we fail fast and give the Node side a single fatal classification
     # that surfaces a clear "restart the sidecar" banner.
     if _process_poisoned:
+        # The poison trigger (raw exception text) is logged server-side via
+        # _mark_cuda_poisoned's caller; it is NEVER echoed into the response
+        # body (CodeQL py/stack-trace-exposure).
         return JSONResponse(
             {
                 "detail": (
                     "Voice engine is in a poisoned CUDA state from a prior CUDA "
                     "error and must be restarted. A fresh process is being "
                     "respawned automatically; retry once /health responds again."
-                    + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
                 ),
                 "poisoned": True,
             },
@@ -3399,11 +3403,11 @@ async def transcribe(req: Request) -> Response:
     Offloaded to a worker thread like /synthesize so /health stays sub-50 ms
     while a transcribe runs. Honours the same poison + recycle-drain fences."""
     if _process_poisoned:
+        # Trigger text is server-side log only — never echoed to the response.
         return JSONResponse(
             {
                 "detail": (
                     "Voice engine is in a poisoned CUDA state and must be restarted."
-                    + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
                 ),
                 "poisoned": True,
             },
@@ -3500,7 +3504,6 @@ async def synthesize_batch(req: Request) -> Response:
                     "Voice engine is in a poisoned CUDA state from a prior CUDA "
                     "error and must be restarted. A fresh process is being "
                     "respawned automatically; retry once /health responds again."
-                    + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
                 ),
                 "poisoned": True,
             },

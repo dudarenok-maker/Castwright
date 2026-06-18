@@ -10,6 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unicodeKebab } from '../util/safe-id.js';
 import { safeSegment, assertContained } from '../util/safe-path.js';
+import { stripEdges } from '../util/text-match.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -94,10 +95,7 @@ export function parseBookId(
    scan.ts/samples.ts/findBookBy all compose through bookDirByDisplay, so the
    on-disk name they compute always matches what import wrote. */
 function sanitizeDisplaySegment(s: string): string {
-  const cleaned = s
-    .replace(/[/\\:*?"<>|\x00]/g, '_')
-    .replace(/\.{2,}/g, '_')
-    .replace(/[. ]+$/g, '')
+  const cleaned = stripEdges(s.replace(/[/\\:*?"<>|\x00]/g, '_').replace(/\.{2,}/g, '_'), /[. ]/)
     .trim()
     .slice(0, 120);
   return cleaned.length > 0 ? cleaned : '_';
@@ -240,8 +238,7 @@ export function qwenVoicesDir(): string {
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
     persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {
-  safeSegment(name);
-  return join(qwenVoicesDir(), `${name}.json`);
+  return join(qwenVoicesDir(), `${safeSegment(name)}.json`);
 }
 
 /** Plan 102 — workspace-level chapter-generation queue. ONE file holds the
@@ -271,7 +268,7 @@ export function backupsRootDir(): string {
 }
 
 export function bookBackupsDir(bookId: string): string {
-  return join(backupsRootDir(), bookId);
+  return join(backupsRootDir(), safeSegment(bookId));
 }
 
 /** fs-20 — workspace-level telemetry jail. Per-run resource telemetry (RTF,

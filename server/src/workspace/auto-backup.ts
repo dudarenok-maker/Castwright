@@ -18,6 +18,7 @@ import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
+import { safeSegment } from '../util/safe-path.js';
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
 import { getResolvedBackupConfig } from './user-settings.js';
@@ -51,7 +52,7 @@ export async function listBackups(bookId: string): Promise<BackupSnapshot[]> {
   const names = (await readdir(dir)).filter((n) => STAMP_RE.test(n));
   const out: BackupSnapshot[] = [];
   for (const file of names) {
-    const s = await stat(join(dir, file));
+    const s = await stat(join(dir, safeSegment(file)));
     out.push({ file, sizeBytes: s.size, createdAt: s.mtime.toISOString() });
   }
   /* Zero-padded stamp ⇒ filename sort is chronological; newest first. */
@@ -66,7 +67,7 @@ export async function pruneBackups(bookId: string, keep: number): Promise<number
   const stale = (await listBackups(bookId)).slice(keep); // newest-first
   const dir = bookBackupsDir(bookId);
   for (const s of stale) {
-    await unlink(join(dir, s.file)).catch(() => {});
+    await unlink(join(dir, safeSegment(s.file))).catch(() => {});
   }
   return stale.length;
 }
@@ -194,7 +195,7 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
   const found = await findBookByBookId(bookId);
   if (!found) throw new BackupRestoreError('book not found');
   const bookDir = found.bookDir;
-  const snapPath = join(bookBackupsDir(bookId), file);
+  const snapPath = join(bookBackupsDir(bookId), safeSegment(file));
   if (!existsSync(snapPath)) throw new BackupRestoreError('backup not found');
   const raw = await readFile(snapPath, 'utf8');
   let value: unknown;

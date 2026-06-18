@@ -110,8 +110,7 @@ export interface AnalysisCache {
 }
 
 export function cachePath(manuscriptId: string): string {
-  safeSegment(manuscriptId);
-  return join(CACHE_DIR, `${manuscriptId}.json`);
+  return join(CACHE_DIR, `${safeSegment(manuscriptId)}.json`);
 }
 
 export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisCache> {
