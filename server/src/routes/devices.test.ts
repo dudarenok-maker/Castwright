@@ -22,9 +22,6 @@ vi.mock('./export-lan.js', async (orig) => ({
    wrapper so it always calls through to the freshly-imported REAL requireLanToken
    (which shares the same device-tokens module as deviceTokens, keeping
    isValidDeviceToken in sync with created device tokens). */
-/* Spread the real lan-auth module and override only the two gate functions with vi.fn.
-   requireLanToken is re-pointed each beforeEach to a fresh real import (via
-   vi.importActual) that shares device-tokens with deviceTokens. */
 let _requireLanToken: typeof import('../lan-auth.js')['requireLanToken'] | null = null;
 vi.mock('../lan-auth.js', async (o) => {
   const real = await o<typeof import('../lan-auth.js')>();
