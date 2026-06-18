@@ -364,7 +364,7 @@ git commit -m "feat(server): throttled lastSeenAt touch-on-use for device tokens
 
 ---
 
-### Task 4: Pairing sessions — label + ≥80-bit browser code + burn-on-miss
+### Task 4: Pairing sessions — label + ≥80-bit browser code
 
 **Files:**
 - Modify: `server/src/workspace/pairing-sessions.ts`
@@ -404,12 +404,12 @@ it('reports unknown for a code never minted', () => {
 });
 ```
 
-> Note for the implementer: a *correct* code redeems on first call and is then `consumed` (single-use). The `misses` field is reserved defense-in-depth — a wrong code isn't in the map (`unknown`), so it can't burn anything; the **dominant brute-force control is the 80-bit entropy + the route rate limiter (Task 8)**, not the session counter. Carry `misses` on the `Session` type for a future guess-tracking path, but it needs no behavior in this task.
+> Note for the implementer: a *correct* code redeems on first call and is then `consumed` (single-use). A wrong code isn't in the `sessions` map, so it returns `unknown` and burns nothing — the brute-force control is the **80-bit entropy + the route rate limiter (Task 8)**, not a session counter. Do NOT add a `misses` field — it would be dead code.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd server && npx vitest run src/workspace/pairing-sessions.test.ts`
-Expected: FAIL — signature is `(now)`, no label, no `bytes`, no miss counter.
+Expected: FAIL — signature is `(now)`, no label, no `bytes`.
 
 - [ ] **Step 3: Implement** — rewrite the body of `server/src/workspace/pairing-sessions.ts`:
 
@@ -418,7 +418,6 @@ interface Session {
   expiresAt: number;
   consumed: boolean;
   label?: string;
-  misses: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -437,7 +436,7 @@ export function createPairingSession(
   sweep(now);
   const code = crockfordBase32(randomBytes(bytes)); // 5→8 chars (companion), 10→16 chars (browser)
   const expiresAt = now + TTL_MS;
-  sessions.set(code, { expiresAt, consumed: false, label, misses: 0 });
+  sessions.set(code, { expiresAt, consumed: false, label });
   return { code, expiresAt, label };
 }
 
@@ -458,7 +457,7 @@ export function redeemPairingSession(code: string, now: number = Date.now()): Re
 }
 ```
 
-(`sweep`, `TTL_MS`, `_resetPairingSessionsForTests` unchanged. The `misses` field is reserved for the burn path; since a correct code is single-use the practical control is the route limiter — keep `misses` on the type for the route to increment if you later add a guess-tracking path. For this task, the `consumed` semantics already satisfy the test.)
+(`sweep`, `TTL_MS`, `_resetPairingSessionsForTests` unchanged. The `consumed` single-use semantics already satisfy the test; the brute-force control is entropy + the Task 8 route limiter, so no session-level counter is needed.)
 
 - [ ] **Step 4: Run test to verify it passes**
 

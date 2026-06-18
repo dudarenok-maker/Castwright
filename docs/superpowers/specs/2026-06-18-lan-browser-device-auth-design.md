@@ -135,7 +135,7 @@ schema-1 file on disk is read fine and rewritten as schema 2 on the next mutatio
 
 **`server/src/workspace/pairing-sessions.ts`**
 
-- `Session` gains `label?: string` and a `misses: number` counter.
+- `Session` gains `label?: string`.
 - Signature becomes `createPairingSession(label?, now?, bytes = 5)` (label first
   so the browser path reads naturally). **The 3 existing positional callers in
   `pairing-sessions.test.ts` (`createPairingSession(now)`) must change to
@@ -146,11 +146,9 @@ schema-1 file on disk is read fine and rewritten as schema 2 on the next mutatio
   compact `CWP1` payload and the `pairing.test.ts` 8-char assertion are untouched.
 - `redeemPairingSession(code, now?)` returns `{ ok: true; label?: string }` on
   success (companion caller reads only `ok`/`reason` → backward-compatible).
-  **Burn-on-miss is per-code**: sessions are keyed by the code, so a wrong guess
-  hits `undefined` and burns nothing — the `misses++`-then-consume only applies
-  to repeated misses against a *known live* code. Defense-in-depth only (entropy +
-  rate-limit + 5-min TTL are the real controls); cannot become a victim-burn
-  vector because sessions are code-keyed, not id-keyed.
+  **Single-use**: first redeem sets `consumed`; a wrong code isn't in the map
+  (`unknown`) so it burns nothing. The brute-force control is entropy +
+  rate-limit + 5-min TTL — no session-level miss counter (it'd be dead code).
   `_resetPairingSessionsForTests` already clears the whole map.
 
 **`server/src/lan-auth.ts`**
@@ -204,7 +202,7 @@ schema-1 file on disk is read fine and rewritten as schema 2 on the next mutatio
   - Scoped `express.json({ limit: '1kb' })` + a **dedicated** rate limiter
     (5/min, `keyGenerator: req => req.ip`, in-memory single-process store) that is
     **NOT skipped under Vitest** (the global `apiLimiter` is) and is tested.
-  - Body `{ code }` → `redeemPairingSession(code)` (single-use, per-code burn) →
+  - Body `{ code }` → `redeemPairingSession(code)` (single-use) →
     `ttl = configValue('lan.deviceTokenTtlDays')` (read **once**) →
     `createDevice(label, ttl)` → `res.cookie('__Host-cw_lan', token, { httpOnly:
     true, secure: true, sameSite: 'strict', path: '/', maxAge: ttl·86400_000 /*
@@ -300,7 +298,7 @@ Desktop Admin                  Server                              Phone browser
                                                        tap Authorize
                         POST /api/pair/redeem-browser {code}
                           (pre-guard; 5/min limiter; 1kb; 409 if !isLanTokenEnforced)
-                          └ redeemPairingSession(code) → label  (single-use, per-code burn)
+                          └ redeemPairingSession(code) → label  (single-use)
                           └ ttl = configValue('lan.deviceTokenTtlDays')   (read once)
                           └ createDevice(label, ttl) → expiresAt = now + ttl·86400 s
                           └ Set-Cookie __Host-cw_lan=<token>
@@ -329,8 +327,8 @@ GET /api/devices ─► list ;  DELETE /api/devices/:id ─► revoke
 - **Unauth mint hardening:** `redeem-browser` is necessarily pre-guard (the phone
   has no cookie yet — CSRF N/A there; a forged cross-site POST would still need a
   live 80-bit single-use code). Gated by `isLanTokenEnforced()`, a dedicated
-  **tested** 5/min/IP limiter, a 1 KB body cap, an 80-bit code, 5-min TTL, per-code
-  burn-on-miss. Brute force ≈ 25 guesses / 2^80 ≈ 2×10⁻²³ per window. The code
+  **tested** 5/min/IP limiter, a 1 KB body cap, an 80-bit single-use code, 5-min
+  TTL. Brute force ≈ 25 guesses / 2^80 ≈ 2×10⁻²³ per window. The code
   rides only in the URL **fragment** (no Referer/log leak) and is stripped from
   history post-redeem. A shoulder-surf redeem race is bounded by the loopback-only
   mint + single-use burn + the device showing up in the list (detectable, revocable).
@@ -421,7 +419,7 @@ GET /api/devices ─► list ;  DELETE /api/devices/:id ─► revoke
   control).
 - `pairing-sessions.test.ts` (**update**): the 3 `createPairingSession(now)` calls
   → `(undefined, now)`; label stash + return; `bytes=10` code = 16 chars; companion
-  `bytes=5` code still 8 chars; per-code burn-on-miss.
+  `bytes=5` code still 8 chars; single-use consume.
 - `config/registry.test.ts` (**update**): knob present (default 30, integer,
   `apply:live`); group count → eleven incl. `lan-access`.
 - Invariant tests: `trust proxy` never set; only the two redeem routes + `/audio`
@@ -472,8 +470,7 @@ Nothing covers browser-over-LAN auth today.
   documented limitations).
 - QR URL with code in the **fragment**; 80-bit / 16-char browser code via a
   **separate** `createPairingSession(label, _, 10)` (companion 40-bit/8-char
-  untouched); 5/min tested limiter; `isLanTokenEnforced()` mint gate; per-code
-  burn-on-miss as defense-in-depth.
+  untouched); 5/min tested limiter; `isLanTokenEnforced()` mint gate; single-use code.
 - **Every** `createDevice` caller (companion, admin, browser) passes
   `configValue('lan.deviceTokenTtlDays')`; expiry enforced once in
   `findValidDevice` (single-arg `isValidDeviceToken` calls it with default `now`).
