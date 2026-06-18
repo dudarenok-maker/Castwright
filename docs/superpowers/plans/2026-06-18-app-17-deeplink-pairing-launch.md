@@ -252,7 +252,7 @@ describe('pairing QR density (scan-failure regression)', () => {
 - [ ] **Step 2: Run the test to verify it passes**
 
 Run: `npx vitest run src/modals/pairing-qr-density.test.ts`
-Expected: PASS (both cases; worst case measures v5 ≤ 7, and 5 < 9). If `version` is > 7, stop — the payload regressed.
+Expected: PASS (both cases; worst case measures v6 ≤ 7, and 6 < 9). If `version` is > 7, stop — the payload regressed.
 
 - [ ] **Step 3: Commit**
 
@@ -328,7 +328,7 @@ git commit -m "test(e2e): refresh stale CWP1 comment in pairing e2e (app-17)"
 - Consumes: the 128-bit tag emitted by the server (Task 1) — the app's `fingerprintTagMatches` must compare the same 16 bytes or pairing fails.
 - Produces: a manifest whose `/pair` `autoVerify` filter declares **only** `www.castwright.ai` (apex removed — minSdk 24, pre-31 all-or-nothing verification); `fingerprintTagMatches` validates the first 16 bytes (128 bits).
 
-- [ ] **Step 0: Widen the app-side fp-tag (paired with Task 1's server change)**
+- [ ] **Step 1: Widen the app-side fp-tag (paired with Task 1's server change)**
 
 In `apps/android/test/data/cert_pinning_test.dart`, the `fingerprintTagMatches` test asserts `expect(tag.length, 16)` and uses `'Z' * 16` as the wrong-tag. Change both to the 128-bit width (26 Crockford chars from 16 bytes):
 
@@ -341,7 +341,7 @@ In `apps/android/test/data/cert_pinning_test.dart`, the `fingerprintTagMatches` 
 
 (The test computes `tag = crockfordBase32(digest.sublist(0, 16))` itself — update that `sublist(0, 10)` → `sublist(0, 16)` in the test too.) Run `cd apps/android && flutter test test/data/cert_pinning_test.dart` → FAIL (impl still slices 10 bytes → 16-char tag). Then in `apps/android/lib/src/data/cert_pinning.dart`, change `fingerprintTagMatches`'s `digest.sublist(0, 10)` → `digest.sublist(0, 16)` and update its doc comment ("first 10 bytes (80 bits)" → "first 16 bytes (128 bits)"). Re-run → PASS. (Commit this with the rest of Task 5 in Step 7.)
 
-- [ ] **Step 1: Write the failing manifest guard test**
+- [ ] **Step 2: Write the failing manifest guard test**
 
 Create `apps/android/test/android_manifest_test.dart`:
 
@@ -365,12 +365,12 @@ void main() {
 
 (`flutter test` runs with the package root `apps/android` as CWD — confirmed by the existing `brand_test.dart`, which reads `Directory('lib')` the same way.)
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 3: Run it to verify it fails**
 
 Run: `cd apps/android && flutter test test/android_manifest_test.dart`
 Expected: FAIL — manifest declares `castwright.ai`, not `www.castwright.ai`.
 
-- [ ] **Step 3: Repoint the host to `www` in the manifest**
+- [ ] **Step 4: Repoint the host to `www` in the manifest**
 
 In `apps/android/android/app/src/main/AndroidManifest.xml`, the `autoVerify` intent-filter holds a **single 3-line `<data>` element** (`:48-50`). Change only its host:
 
@@ -387,7 +387,7 @@ Then update the comment above the intent-filter (`:40-43`): change its assetlink
 Run: `cd apps/android && flutter test test/android_manifest_test.dart`
 Expected: PASS.
 
-- [ ] **Step 5: Add a `www` parser case + update literals (host-agnostic lock)**
+- [ ] **Step 6: Add a `www` parser case + update literals (host-agnostic lock)**
 
 In `apps/android/test/domain/pairing_qr_test.dart`, add this test after the existing percent-encoded case:
 
@@ -403,14 +403,14 @@ In `apps/android/test/domain/pairing_qr_test.dart`, add this test after the exis
 
 Change the two existing `https://castwright.ai/pair?…` literals (the "raw colon" and "percent-encoded colon" cases) to `https://www.castwright.ai/pair?…`. Leave the "rejects a URL missing a pairing field" case as-is (host irrelevant). Also update the apex literal in `apps/android/test/main_deep_link_test.dart:36` (`https://castwright.ai/pair?…`) to `https://www.castwright.ai/pair?…` for the same honesty rationale.
 
-- [ ] **Step 6: Run the full app gate (Dart tests + analyze)**
+- [ ] **Step 7: Run the full app gate (Dart tests + analyze)**
 
 `npm run verify` does NOT run any Flutter tests (CLAUDE.md: "no local hook runs `flutter analyze`/`test`" — only the `app.yml` CI on `apps/android/**` pushes). So this is the gate for all Task 5 changes:
 
 Run: `cd apps/android && flutter analyze && flutter test`
 Expected: analyze clean; all tests PASS (manifest guard + `pairing_qr_test.dart` + `main_deep_link_test.dart`). Pushing the app branch also triggers `app.yml` as a second check.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add apps/android/android/app/src/main/AndroidManifest.xml apps/android/lib/src/data/cert_pinning.dart apps/android/test/data/cert_pinning_test.dart apps/android/test/domain/pairing_qr_test.dart apps/android/test/main_deep_link_test.dart apps/android/test/android_manifest_test.dart
