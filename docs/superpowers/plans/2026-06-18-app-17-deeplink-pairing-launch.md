@@ -333,7 +333,7 @@ In `apps/android/android/app/src/main/AndroidManifest.xml`, the `autoVerify` int
                       android:pathPrefix="/pair"/>
 ```
 
-Then update the comment above the intent-filter (`:40-43`) so its assetlinks URL reads `https://www.castwright.ai/.well-known/assetlinks.json` (it currently says the apex). Do NOT add a second `<data>` host — the apex is intentionally absent (minSdk 24 / pre-31 all-or-nothing).
+Then update the comment above the intent-filter (`:40-43`): change its assetlinks URL to `https://www.castwright.ai/.well-known/assetlinks.json` (it currently names the apex), AND fix the stale "Dormant (no auto-verify) until then" phrasing — the filter already carries `android:autoVerify="true"`, so reword to e.g. "Auto-verified against www's assetlinks.json once hosted." Do NOT add a second `<data>` host — the apex is intentionally absent (minSdk 24 / pre-31 all-or-nothing).
 
 - [ ] **Step 4: Run the manifest guard to verify it passes**
 
@@ -367,7 +367,7 @@ Expected: analyze clean; all tests PASS (manifest guard + `pairing_qr_test.dart`
 
 ```bash
 git add apps/android/android/app/src/main/AndroidManifest.xml apps/android/test/domain/pairing_qr_test.dart apps/android/test/main_deep_link_test.dart apps/android/test/android_manifest_test.dart
-git commit -m "feat(app): verify both www + apex pairing deep-link hosts (app-17)"
+git commit -m "feat(app): point pairing deep-link autoVerify host to www-only (app-17)"
 ```
 
 ---
@@ -503,18 +503,27 @@ git commit -m "feat: host assetlinks.json for companion deep-link pairing (app-1
 **Repo:** Castwright-Website (branch `feat/app-17-assetlinks-pair-page`)
 
 **Files:**
+- Modify: `src/layouts/Base.astro` (add an optional `noAnalytics` prop)
 - Create: `src/pages/pair.astro`
 - Modify: `e2e/pages.spec.ts` (add `/pair` to the route table)
+- Create: `src/lib/pair-page-privacy.test.ts` (lock: no beacon in the built `/pair`)
 
 **Interfaces:**
 - Consumes: existing `Base` layout + `SectionHeading` component (mirrors `download.astro`; no `URLS` import needed).
-- Produces: a static `/pair` page rendering an `<h1>` "Pair your phone".
+- Produces: `Base.astro` gains `noAnalytics?: boolean` (default `false` — no change for any other page); a static `/pair` page rendering an `<h1>` "Pair your phone" with the analytics beacon suppressed.
 
 **CTA caveat:** `/download` is the **desktop** app page, and the site has **no
 public companion-APK download** today (companion ships sideloaded / Play-internal).
 So the page must NOT say "get the companion app → /download" (wrong install flow).
 It frames the in-app-scan path as primary; it does not link to a companion
 download that doesn't exist.
+
+**Privacy requirement (round-3 review):** an unverified scan *navigates* to
+`/pair?h=<LAN-IP>&c=<live code>&f=<tag>`. `Base.astro` injects the Cloudflare Web
+Analytics beacon when `CF_PAGES=1`, which would feed those params to the
+third-party beacon + referrer. So `/pair` must render **without** the beacon and
+with `<meta name="referrer" content="no-referrer">`. (The edge *request log* still
+sees the URL — inherent and low-risk; see the spec's "Security delta".)
 
 - [ ] **Step 1: Add the failing e2e route assertion**
 
@@ -529,7 +538,31 @@ In `e2e/pages.spec.ts`, add to the `pages` array (generates the test title `"/pa
 Run: `npx playwright test e2e/pages.spec.ts --project=chromium -g "/pair renders"`
 Expected: FAIL — `/pair` 404s (page doesn't exist yet).
 
-- [ ] **Step 3: Create the page**
+- [ ] **Step 3: Add a `noAnalytics` opt-out to `Base.astro`**
+
+`Base.astro` currently injects the beacon unconditionally when `CF_PAGES=1` (lines ~7-16 declare `Props { title?, description? }` and `cfWebAnalytics = process.env.CF_PAGES === '1'`; lines ~55-62 render the `<script ... cloudflareinsights ...>`). Add an opt-out prop, default off so no other page changes:
+
+In the frontmatter, extend `Props` and gate the flag:
+
+```ts
+interface Props {
+  title?: string
+  description?: string
+  noAnalytics?: boolean
+}
+const { title, description, noAnalytics = false } = Astro.props
+const cfWebAnalytics = process.env.CF_PAGES === '1' && !noAnalytics
+```
+
+In `<head>`, when `noAnalytics` is set, also emit a no-referrer meta. Add near the top of `<head>`:
+
+```astro
+{noAnalytics && <meta name="referrer" content="no-referrer" />}
+```
+
+(The existing `{cfWebAnalytics && (<script .../>)}` block now skips automatically when `noAnalytics` is true, because `cfWebAnalytics` folds in `!noAnalytics`.)
+
+- [ ] **Step 4: Create the page (analytics suppressed)**
 
 Create `src/pages/pair.astro`:
 
@@ -540,8 +573,9 @@ import SectionHeading from '@/components/SectionHeading.astro'
 ---
 
 <Base
+  noAnalytics
   title="Pair your phone — Castwright"
-  description="Pair the Castwright companion app with your library. Install the app, then scan the pairing code from inside it."
+  description="Pair the Castwright companion app with your library. Open the app, then scan the pairing code from inside it."
 >
   <div class="max-w-2xl">
     <SectionHeading as="h1">Pair your phone</SectionHeading>
@@ -557,18 +591,48 @@ import SectionHeading from '@/components/SectionHeading.astro'
 </Base>
 ```
 
-(`SectionHeading` renders `<Tag>` from its `as` prop, so `as="h1"` emits a real `<h1>`. No JS, no query-param handling — the LAN host + ephemeral code are useless on the public web. No `/download` link: that's the desktop app, and there is no public companion-APK download to point at.)
+(`SectionHeading` renders `<Tag>` from its `as` prop, so `as="h1"` emits a real `<h1>`. `noAnalytics` suppresses the beacon + sets `no-referrer` so the scanned `?h=…&c=…` params aren't fed to the third-party beacon/referrer. No JS, no query-param handling, no `/download` link — that's the desktop app, and there's no public companion-APK download to point at.)
 
-- [ ] **Step 4: Run the e2e to verify it passes**
+- [ ] **Step 5: Run the e2e to verify it passes**
 
 Run: `npx playwright test e2e/pages.spec.ts --project=chromium -g "/pair renders"`
 Expected: PASS (the webServer config rebuilds + previews).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Lock the beacon-suppression with a prod-style build check**
+
+The beacon only renders when `CF_PAGES=1`, so prove the opt-out against a prod-style build. Create `src/lib/pair-page-privacy.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+// app-17: an unverified pairing scan navigates to /pair?h=<LAN-IP>&c=<code>&f=<tag>.
+// /pair must NOT load the Cloudflare Web Analytics beacon (it would feed the live
+// code to the third-party beacon/referrer). Build with CF_PAGES=1 and assert the
+// beacon is present site-wide but absent on /pair.
+describe('/pair suppresses the analytics beacon', () => {
+  it('omits the cloudflareinsights beacon while the home page keeps it', () => {
+    execFileSync('npm', ['run', 'build'], { env: { ...process.env, CF_PAGES: '1' }, stdio: 'inherit' })
+    const pair = resolve(process.cwd(), 'dist/pair/index.html')
+    const home = resolve(process.cwd(), 'dist/index.html')
+    expect(existsSync(pair)).toBe(true)
+    expect(readFileSync(pair, 'utf8')).not.toContain('cloudflareinsights')
+    expect(readFileSync(pair, 'utf8')).toContain('referrer')
+    expect(readFileSync(home, 'utf8')).toContain('cloudflareinsights')
+  })
+})
+```
+
+Run: `npx vitest run src/lib/pair-page-privacy.test.ts`
+Expected: PASS. (Slow — it runs a full build; this single test is the privacy gate. If the project prefers not to build inside vitest, instead run the `CF_PAGES=1 npm run build` manually and `grep -L cloudflareinsights dist/pair/index.html` as an acceptance step — but the automated form is preferred per CLAUDE.md.)
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/pages/pair.astro e2e/pages.spec.ts
-git commit -m "feat: minimal /pair fallback page for unverified scans (app-17)"
+git add src/layouts/Base.astro src/pages/pair.astro src/lib/pair-page-privacy.test.ts e2e/pages.spec.ts
+git commit -m "feat: /pair fallback page, analytics-suppressed for scan privacy (app-17)"
 ```
 
 ---
@@ -630,7 +694,8 @@ If `assetlinks.json` ships with a wrong fingerprint, fixing it isn't enough — 
 - e2e stale-comment refresh; URL prefix locked by Task 2 unit test (QR is opaque PNG) → Task 4 ✓
 - Manifest **www-only** (apex removed — minSdk 24 / pre-31 all-or-nothing) + Dart host-agnostic lock + main_deep_link literal + explicit `flutter analyze`/`test` gate → Task 5 ✓
 - assetlinks.json (upload-key cert, array) + content-type → Task 6 ✓
-- /pair fallback page → Task 7 ✓
+- /pair fallback page (no `/download` CTA) + analytics-beacon suppression for scan privacy + build-grep lock → Task 7 ✓
+- Security delta (unverified-scan leak: bounded, beacon/referrer mitigated, edge-log residual accepted) → spec "Security delta" + Task 7 ✓
 - Rollout ordering + sideloaded on-device acceptance + curl/pm + doc close-out → Task 8 ✓
 - Out-of-scope (Play SHA, apex move) → Global Constraints + Task 8 ✓
 

@@ -143,7 +143,13 @@ apex is removed entirely — see decision 2, pre-31 all-or-nothing verification)
   the companion app → /download" (wrong install flow). It frames the in-app-scan
   path as primary and, if it links anywhere, links `/download` only as "where
   Castwright lives" with honest wording — or omits the link until a companion
-  download target exists.
+  download target exists. **Privacy:** because an unverified scan *navigates* here
+  carrying `h`/`c`/`f`, `/pair` must render **without** the Cloudflare Web Analytics
+  beacon (`Base.astro` injects it when `CF_PAGES=1`) and set `<meta name="referrer"
+  content="no-referrer">` — so the live code isn't fed to the third-party beacon or
+  leaked as a referrer. (Note: page JS already does nothing with the params; this is
+  about the *platform* — browser + beacon — acting on the URL, which page JS can't
+  prevent.)
 
 ## Data flow
 
@@ -151,10 +157,13 @@ apex is removed entirely — see decision 2, pre-31 all-or-nothing verification)
   `https://www.castwright.ai/pair?h=…&c=…&f=…` → OS matches the verified
   intent-filter → opens the app **with no network request** (the URL is never
   fetched) → `PairingQr.parse` → redeem over the already-cert-pinned LAN channel.
-- **No app / unverified:** the URL opens in a browser → `/pair` "get the app"
-  page renders directly on `www` (no redirect — the QR targets `www`, not the
-  apex). A user who *manually types* the bare `castwright.ai/pair` gets the
-  Porkbun 301 → `www/pair`; that 301 is irrelevant to QR scans.
+- **No app / unverified:** the URL **actually navigates** in a browser to `/pair`
+  on `www` — so the platform sends `h`/`c`/`f` (LAN IP + live code + tag) to
+  Cloudflare's edge in the request line (privacy row below; the old inert `CWP1*`
+  string hit no network). The `/pair` page renders directly on `www` (no redirect
+  — the QR targets `www`, not the apex). A user who *manually types* the bare
+  `castwright.ai/pair` gets the Porkbun 301 → `www/pair`; that 301 is irrelevant
+  to QR scans.
 - **Old installed app + new QR:** stock-camera auto-open won't fire (old build
   verified `castwright.ai`, not `www`) → falls back to the in-app ML Kit scanner,
   which is host-agnostic and pairs normally. **No regression.**
@@ -168,6 +177,31 @@ apex is removed entirely — see decision 2, pre-31 all-or-nothing verification)
 | Early installs cache a failed verify | APK distributed **before** `assetlinks.json` was live (verification caches failure) | **Rollout ordering** (below): assetlinks live first |
 | Debug build won't auto-open | Debug-signed; assetlinks pins the release key | Expected — documented; testers use the signed release APK |
 | Play-delivered install won't verify (future) | Play App Signing re-signs with Google's cert, not pinned | Append Play app-signing SHA to the array when Play goes live (out of scope now) |
+| **Privacy: unverified scan leaks LAN IP + live code to the edge** | A non-app/unverified scan navigates to `www/pair?h=…&c=…&f=…`; the platform sends the query to Cloudflare's edge + (default) the CF Web Analytics beacon | Render `/pair` **without** the analytics beacon + `<meta name="referrer" content="no-referrer">` (kills the third-party + referrer leak). The **edge request log** still sees it — inherent to any request to `www`, and **low-risk**: the code is 40-bit, single-use, 5-min TTL, and redeem requires same-LAN reachability, so a remote log-reader can't pair. See "Security delta" below. |
+
+## Security delta vs. the CWP1 redesign
+
+The parent redesign (`2026-06-10-pairing-qr-redesign-design.md`) sold the compact
+`CWP1*` payload partly on "the code/token is never visible to a MitM or
+shoulder-surfer — it stays out of any observable channel." **app-17 weakens that on
+the unverified-scan path only:** turning the payload into a real URL means a scan by
+a phone *without* the verified app navigates the browser, depositing the LAN IP +
+live pairing code into Cloudflare's edge request log (and, by default, the CF Web
+Analytics beacon). This is an accepted, bounded tradeoff:
+
+- It's the price of the feature — stock-camera auto-open *requires* a verifiable URL
+  the OS recognizes; the LAN host + code must travel in that URL with **no server
+  round-trip** (the verified happy path opens the app with zero network), so they
+  can't be swapped for an opaque server-minted token without breaking offline LAN
+  pairing.
+- Exposure is bounded: 40-bit, single-use, 5-min code; redeem needs same-LAN
+  reachability and races the legitimate consumer → a remote log-reader gains no
+  pairing capability.
+- Mitigated where cheap: `/pair` drops the analytics beacon + sets `no-referrer`
+  (above). The residual edge-request-log visibility is inherent to the user's own
+  Cloudflare account and is not further reducible.
+- On the **verified** path (the common case) there is **no leak** — the OS opens the
+  app without fetching the URL.
 
 ## Rollout ordering (load-bearing)
 
