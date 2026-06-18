@@ -2,9 +2,18 @@
 
 **Date:** 2026-06-17
 **Branch:** `fix/security-codeql-remediation`
-**Status:** draft
+**Status:** stable — **SHIPPED 2026-06-18** (fs-46 #886, srv-22 #427).
 **Disposition chosen:** Maximal / defense-in-depth (drive open alerts to ~0 + real
 hardening of the genuine LAN-exposed surface)
+
+> **Ship notes (2026-06-18):** 146 → **0 open** (149 fixed in code, 17 dismissed with
+> justification). Merged to `main` via PRs **#887** (`Closes #886`/`Closes #427`),
+> **#889**, **#890**, **#891**. Key correction the re-scan loop surfaced: CodeQL
+> `js/path-injection` only propagates a **transforming `.replace()` sanitizer**
+> (`sanitizeIdSegment` in `server/src/util/safe-path.ts`) across the builder→caller
+> boundary — a throwing validator (`safeSegment`) or an in-function guard
+> (`assertContained`) sanitizes only its own function. Dismissal rationale:
+> `docs/security/codeql-dismissal-residue.md`.
 
 > **Revised twice after two adversarial-review passes** (six reviews total:
 > CodeQL-efficacy ×2, correctness/regression ×2, threat-model, spec-consistency).

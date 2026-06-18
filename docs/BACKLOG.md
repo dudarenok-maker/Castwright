@@ -355,12 +355,6 @@ Source for the whole sub-group: the [2026-05-31 security review](security/2026-0
 - _Benefit (technical):_ removes a local RCE-on-untrusted-file footgun; aligns with torch's `weights_only` default direction.
 _Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/AudioBook-Generator/issues/428).
 
-#### `srv-22` — Constrain / document the `sync-folder/test` write-probe path ([#427](https://github.com/dudarenok-maker/AudioBook-Generator/issues/427))
-
-- _What:_ the probe is a legitimate "is this folder writable" UX check, so the fix is proportionate: keep the feature but (a) refuse obviously-dangerous targets (system roots), and/or (b) document the trust boundary explicitly and lean on `srv-19`/`srv-20` to remove the unauth-LAN reachability. Decide between hard-constraint vs. document-and-gate when the item opens.
-- _Benefit (technical):_ removes a small unauthenticated filesystem-touch primitive without breaking the Test button.
-_Full detail + acceptance:_ [#427](https://github.com/dudarenok-maker/AudioBook-Generator/issues/427).
-
 ### Ops, CI & distribution
 
 #### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))
