@@ -203,6 +203,49 @@ Analytics beacon). This is an accepted, bounded tradeoff:
 - On the **verified** path (the common case) there is **no leak** — the OS opens the
   app without fetching the URL.
 
+**On-device intent-interception (the vector the leak analysis above misses).** Turning
+the payload into an Android Intent means the OS routes the scanned URL — carrying the
+live code + LAN IP — through intent resolution, where any installed app with a matching
+`https www.castwright.ai /pair` filter is a candidate recipient. The old `CWP1*` bytes
+were decoded *inside* the camera app and never crossed an IPC boundary, so app-17 is a
+strict regression on this axis:
+- **API 31+ (verified):** a *verified* App Link takes strict precedence; a competing
+  unverified app cannot intercept and no chooser appears. Safe.
+- **API 24–30 (this app's minSdk floor):** there is **no per-app verification
+  precedence** pre-31 — `assetlinks` governs default-without-prompt, not exclusivity. A
+  malicious co-installed app declaring the same filter can still surface in a chooser
+  (or be the user's default) and receive the URL if tapped. Since that app is on the
+  same LAN, it could then redeem the code itself. Bounded by: needs malware
+  pre-installed + user tap; code is single-use/5-min; the in-app scanner remains the
+  recommended path on these versions.
+
+**assetlinks integrity (operational).** `assetlinks.json` is an unsigned static file on
+the CDN; whoever can deploy to `www` controls which package/cert Android trusts for
+`/pair`. A site compromise → deep-link hijack for all API-31+ users (HIGH impact /
+deploy-credential-gated). Inherent to Digital Asset Links; mitigation is operational —
+protect the Cloudflare deploy credentials and treat `assetlinks.json` edits as a
+reviewed, alerting-worthy change.
+
+**Phishing-QR → attacker server (pre-existing, amplified).** The app trusts the QR's
+`h` as the server to pair with (this was equally true for `CWP1*`), so a crafted QR with
+an attacker-controlled `h`+`f` makes the app pin and trust an attacker's LAN server.
+app-17 does not create this, but a `https://www.castwright.ai/pair?…` URL is far more
+credible to scan than an opaque blob and (on a verified device) opens **silently** — so
+exploitability rises. Candidate hardening (see "Suggested security follow-ups"): the app
+should constrain `h` to RFC1918/link-local and surface it on the pairing-confirm screen.
+
+### Suggested security follow-ups (NOT in app-17 scope unless folded in)
+
+These harden the *pairing protocol* (mostly pre-existing, independent of the payload
+format). They are listed for a scope decision; default home is a separate
+security-hardening issue:
+1. Constrain `h` to RFC1918/link-local + show it on the pairing-confirm screen (app) — caps the phishing-QR vector app-17 amplifies.
+2. RFC1918/loopback guard on `POST /api/pair/redeem` (server) — makes redeem structurally LAN-only even under accidental port-forward, bounding the edge-log code leak.
+3. Per-code failed-redeem lockout + a guard that the code never drops below 40 bits (server) — so brute-resistance isn't solely entropy-dependent.
+4. Re-entrancy guard on the app's `_openPairing` so a warm-start link can't stack pairing screens (app).
+5. Cap the redeem `label` length; add a code comment locking the "no Express `trust proxy`" invariant on the loopback gate (server).
+6. (Optional) widen the `f` tag from 80→128 bits — sound today vs second-preimage (2⁸⁰), but cheap defense-in-depth; note it changes the pairing crypto + QR and breaks old-QR compat, so it is a deliberate, separate change.
+
 ## Rollout ordering (load-bearing)
 
 Verification **caches failure**, so order matters:
