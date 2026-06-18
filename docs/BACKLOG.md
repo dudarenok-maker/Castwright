@@ -367,6 +367,12 @@ Source for the whole sub-group: the [2026-05-31 security review](security/2026-0
 - _Benefit (technical):_ removes a local RCE-on-untrusted-file footgun; aligns with torch's `weights_only` default direction.
 _Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/AudioBook-Generator/issues/428).
 
+#### `srv-41` — Pairing device-token hardening: TTL + scoped access ([#898](https://github.com/dudarenok-maker/Castwright/issues/898))
+
+- _What:_ Give the companion device token a second post-mint layer — a scope (no authorization-scope model exists today; full `/api` access) and a refreshable TTL that doesn't break offline-first playback. Surfaced by the app-17 defence-in-depth review (rec D), deliberately NOT folded into app-17 because a naive TTL/scope is the wrong change (offline UX + new authz model). Needs its own brainstorm.
+- _Benefit (architectural):_ turns the only post-mint control (manual revocation, one layer) into defence-in-depth — a leaked companion token can't do everything.
+_Full detail + acceptance:_ [#898](https://github.com/dudarenok-maker/Castwright/issues/898).
+
 ### Ops, CI & distribution
 
 #### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))

@@ -284,9 +284,8 @@ against an actively-controlled QR) plus two process/doc closures:
   (enumerating exactly what the companion may call — it legitimately needs broad read +
   listen-progress write), which is a **design sub-project, not a payload-flip fold**.
   Decision: keep **revocation** as the appropriate control for a single-user offline LAN
-  token; track TTL/scope as a separate hardening item with its own brainstorm if the
-  threat model ever widens beyond single-user-LAN. Folding a naive TTL/scope here would
-  be the wrong change.
+  token; TTL/scope is tracked as its own hardening item — **srv-41 / [#898](https://github.com/dudarenok-maker/Castwright/issues/898)** — to be brainstormed if the threat model widens
+  beyond single-user-LAN. Folding a naive TTL/scope here would be the wrong change.
 
 ## Rollout ordering (load-bearing)
 
