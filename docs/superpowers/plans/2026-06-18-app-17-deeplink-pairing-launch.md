@@ -20,6 +20,30 @@
 - **Rollout ordering is load-bearing:** `assetlinks.json` must be live on `www` *before* the rebuilt APK is installed (verification caches failure). Tasks 6–7 (website) deploy before Task 12 acceptance.
 - Commit convention: `<type>(<scope>): <subject>`. This-repo branch: `feat/app-17-deeplink-pairing-launch`. Website-repo branch: `feat/app-17-assetlinks-pair-page`.
 
+## Execution order (for the orchestrator / subagent-driven run)
+
+Two repos → two branches/worktrees. **Four files are edited by more than one task and MUST be serialized** (never dispatch their tasks to parallel agents): `pairing.ts` + `pairing.test.ts` (Tasks 1→10), `apps/android/test/domain/pairing_qr_test.dart` (Tasks 5→8), `apps/android/test/main_deep_link_test.dart` (Tasks 5→9). Each agent edits its own task's files only after the prior task in its group has committed.
+
+**Group A — Castwright server + frontend** (branch `feat/app-17-deeplink-pairing-launch`):
+1. **Task 1** first (owns `pairing.ts`/`pairing.test.ts` baseline).
+2. **Task 10** after Task 1 (same `pairing.ts`/`pairing.test.ts`; extends Task 1's `vi.mock('../lan-auth.js')`).
+3. **Task 11** — independent file; any time in Group A.
+4. **Tasks 2, 3, 4** — after Task 1 (so URL/tag literals match); 2/3/4 are parallel-safe with each other (distinct files).
+   Gate: `npm run verify` (covers Group A only).
+
+**Group B — Castwright Android** (same branch; after Group A or independent, but the three shared test files serialize *within* the group):
+5. **Task 5** first (owns the manifest + `cert_pinning` + the two shared Dart test files' baseline).
+6. **Task 8** after Task 5 (shares `pairing_qr_test.dart`).
+7. **Task 9** after Task 5 (shares `main_deep_link_test.dart`); independent of Task 8's files, so 8 and 9 may run in parallel *only if* each re-reads its file post-Task-5.
+   Gate (NOT in `npm run verify`): `cd apps/android && flutter analyze && flutter test`.
+
+**Group C — Castwright-Website** (branch `feat/app-17-assetlinks-pair-page`, separate worktree):
+8. **Task 6** (assetlinks) + **Task 7** (/pair page) — parallel-safe (disjoint files). Supply the upload-key SHA-256 to Task 6.
+
+**Then Task 12** (delivery): deploy Group C, `curl` live assetlinks BEFORE the APK, run Group A `npm run verify` + Group B Flutter gate, sideload + on-device acceptance.
+
+Groups A, B, C are independent and may run concurrently across the two repos; the serialization rules apply only *within* the noted file-sharing chains.
+
 ---
 
 ## Task 1: Server — widen fp-tag to 128-bit + emit the deep-link URL
@@ -421,7 +445,7 @@ git commit -m "feat(app): www-only autoVerify host + 128-bit fp-tag compare (app
 
 ## Task 6: Host `assetlinks.json` (+ content-type header + test)
 
-**Repo:** Castwright-Website (branch `feat/app-17-assetlinks-pair-page`)
+**Repo:** Castwright-Website (branch `feat/app-17-assetlinks-pair-page`) — **run all commands from the `Castwright-Website` repo root** (`C:\Claude\Projects\Castwright-Website`), NOT the Castwright repo. Its `npx vitest` / `npm run build` / `npx playwright` use the website's own configs.
 
 **Files:**
 - Create: `public/.well-known/assetlinks.json`
@@ -547,7 +571,7 @@ git commit -m "feat: host assetlinks.json for companion deep-link pairing (app-1
 
 ## Task 7: `/pair` fallback page (+ e2e smoke)
 
-**Repo:** Castwright-Website (branch `feat/app-17-assetlinks-pair-page`)
+**Repo:** Castwright-Website (branch `feat/app-17-assetlinks-pair-page`) — **run all commands from the `Castwright-Website` repo root** (`C:\Claude\Projects\Castwright-Website`), NOT the Castwright repo. Its `npx vitest` / `npm run build` / `npx playwright` use the website's own configs.
 
 **Files:**
 - Modify: `src/layouts/Base.astro` (add an optional `noAnalytics` prop)
@@ -688,16 +712,16 @@ git commit -m "feat: /pair fallback page, analytics-suppressed for scan privacy 
 
 **Repo:** Castwright (this repo, `apps/android`)
 
-**Why:** the app trusts the QR's `h` as the server to pair with (`pairing_service.dart:54-81` fetches the CA from `https://<h>/cert/root.crt` over a validation-bypassing client, then redeems), and the fp-tag gives no protection when an attacker controls the whole QR. Two independent layers: (1) **reject** non-private `h` so a phishing QR can't aim the app at an internet server; (2) **surface** the target host prominently on the pairing-confirm screen for deep-link opens (DiD rec C) so a swapped same-LAN host is visible before the user taps Pair. Validating in `PairingQr` covers all three entry paths: scan, deep link, manual.
+**Why:** the app trusts the QR's `h` as the server to pair with (`pairing_service.dart:54-81` fetches the CA from `https://<h>/cert/root.crt` over a validation-bypassing client, then redeems), and the fp-tag gives no protection when an attacker controls the whole QR. Three layers: (1) **reject** non-private `h` so a QR/typed host can't aim the app at an internet server; (2) close the **manual/edit bypass** — `pairing_screen.dart:_pair()` builds the `PairingQr` via the *plain constructor* (which skips validation), and the host field is editable, so scan/deep-link validation alone does NOT cover the typed/edited path; route `_pair()` through the validating factory and make the host field **read-only on deep-link opens**; (3) **surface** the target host prominently on the pairing-confirm screen (DiD rec C) — and since the field is read-only on deep-link opens, the banner can't diverge from what's redeemed.
 
 **Files:**
-- Modify: `apps/android/lib/src/domain/pairing_qr.dart` (`_checked` gains a private-host check)
+- Modify: `apps/android/lib/src/domain/pairing_qr.dart` (validating check + expose a public `checked` factory)
 - Modify: `apps/android/test/domain/pairing_qr_test.dart`
-- Modify: `apps/android/lib/src/ui/pairing_screen.dart` (prominent host banner on deep-link opens)
-- Create: `apps/android/test/ui/pairing_screen_test.dart` (banner widget test)
+- Modify: `apps/android/lib/src/ui/pairing_screen.dart` (host banner; route `_pair()` through `PairingQr.checked`; host read-only on deep-link opens)
+- Create: `apps/android/test/ui/pairing_screen_test.dart` (banner + read-only + manual-reject widget tests)
 
 **Interfaces:**
-- Produces: `PairingQr.parse`/constructor throws `FormatException` when `hostPort`'s host is not RFC1918 / loopback / link-local IPv4; the pairing screen shows a `Key('pair-host-banner')` naming the target host when opened from a deep link.
+- Produces: `PairingQr.parse` AND the new public `PairingQr.checked(hostPort, code, fpTag)` factory throw `FormatException` when the host is not RFC1918/loopback IPv4; the pairing screen shows a `Key('pair-host-banner')` naming the target host on deep-link opens, with the host field read-only there; manual `_pair()` validates via `checked`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -749,10 +773,11 @@ In `apps/android/lib/src/domain/pairing_qr.dart`, add a pure helper (no `dart:io
     return n[0] == 10 ||
         (n[0] == 172 && n[1] >= 16 && n[1] <= 31) ||
         (n[0] == 192 && n[1] == 168) ||
-        n[0] == 127 ||
-        (n[0] == 169 && n[1] == 254);
+        n[0] == 127;
   }
 ```
+
+(Allowlist = RFC1918 + loopback only. `169.254` link-local is deliberately NOT accepted, to match `enumerateLanUrls` which filters it out — keeping the client check aligned with what the server actually emits. **Coupling note:** this IPv4-only allowlist is the *same* assumption Task 10's server guard makes; the two layers are correlated, not orthogonal — safe today only because `enumerateLanUrls` is IPv4-only. If LAN URLs ever gain IPv6/CGNAT, both must widen in lockstep.)
 
 In `_checked`, after the empty-field guard, add:
 
@@ -760,6 +785,15 @@ In `_checked`, after the empty-field guard, add:
     if (!_isPrivateIpv4Host(hostPort)) {
       throw const FormatException('pairing host is not a private/LAN address');
     }
+```
+
+Also **expose a public validating factory** so the manual/edit path (Step 7) can reuse the same checks (add next to `_checked`):
+
+```dart
+  /// Public validating constructor — same checks as the QR factories, for the
+  /// manual-entry / edited-field path in the pairing screen.
+  factory PairingQr.checked(String hostPort, String code, String fpTag) =>
+      _checked(hostPort, code, fpTag);
 ```
 
 (Tradeoff to note in the commit: this rejects exotic LAN setups — CGNAT `100.64/10`, Tailscale `100.x`, raw hostnames/mDNS. `enumerateLanUrls` only emits RFC1918 IPv4 today, so legit pairing is unaffected; widen the allowlist if a real setup needs it.)
@@ -804,17 +838,44 @@ void main() {
     expect(banner, findsOneWidget);
     expect(find.descendant(of: banner, matching: find.textContaining('192.168.1.5:8443')), findsOneWidget);
   });
+
+  testWidgets('host field is read-only on a deep-link open (banner cannot diverge)', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: PairingScreen(
+        service: PairingService(),
+        store: _NoopStore(),
+        initialQr: const PairingQr(
+            hostPort: '192.168.1.5:8443', code: 'K7QF3M2P', fpTag: '1CR5AYMZRKMGWCTRFPHCFV0H6R'),
+      ),
+    ));
+    final field = tester.widget<TextField>(find.byKey(const Key('field-host')));
+    expect(field.readOnly, isTrue);
+  });
+
+  testWidgets('manual entry of a public host is rejected (validator on _pair)', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: PairingScreen(service: PairingService(), store: _NoopStore()),
+    ));
+    await tester.enterText(find.byKey(const Key('field-host')), '8.8.8.8:8443');
+    await tester.enterText(find.byKey(const Key('field-code')), 'K7QF3M2P');
+    await tester.enterText(find.byKey(const Key('field-fptag')), '1CR5AYMZRKMGWCTRFPHCFV0H6R');
+    await tester.tap(find.text('Pair'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pair-error')), findsOneWidget);
+  });
 }
 ```
 
 - [ ] **Step 6: Run to verify it fails**
 
 Run: `cd apps/android && flutter test test/ui/pairing_screen_test.dart`
-Expected: FAIL — no `pair-host-banner` widget yet.
+Expected: FAIL — no `pair-host-banner` widget, host field isn't read-only, and `_pair()` (plain constructor) doesn't reject the public host.
 
-- [ ] **Step 7: Add the banner to `pairing_screen.dart`**
+- [ ] **Step 7: Banner + read-only host + validating `_pair()` in `pairing_screen.dart`**
 
-In `apps/android/lib/src/ui/pairing_screen.dart`, in `build`, when `widget.initialQr != null` render a prominent read-only banner above the form (it sits before the existing intro `Text`):
+Three edits to `apps/android/lib/src/ui/pairing_screen.dart`:
+
+(a) In `build`, when `widget.initialQr != null` render a prominent banner above the form (before the existing intro `Text`):
 
 ```dart
             if (widget.initialQr != null)
@@ -833,10 +894,28 @@ In `apps/android/lib/src/ui/pairing_screen.dart`, in `build`, when `widget.initi
               ),
 ```
 
+(b) Make the host `TextField` read-only on deep-link opens so the banner can't diverge from what's redeemed — add `readOnly: widget.initialQr != null,` to the `field-host` `TextField`:
+
+```dart
+            TextField(
+                key: const Key('field-host'),
+                controller: _host,
+                readOnly: widget.initialQr != null,
+                decoration:
+                    const InputDecoration(labelText: 'Server (host:port)')),
+```
+
+(c) Route `_pair()` through the **validating** factory so manual/edited hosts get the same RFC1918 check (it already catches `FormatException` → shows `pair-error`). Replace the plain `PairingQr(...)` constructor in `_pair()`:
+
+```dart
+      final qr = PairingQr.checked(
+          _host.text.trim(), _code.text.trim(), _fpTag.text.trim());
+```
+
 - [ ] **Step 8: Run to verify pass**
 
 Run: `cd apps/android && flutter test test/ui/pairing_screen_test.dart`
-Expected: PASS.
+Expected: PASS (banner present; host read-only on deep-link; manual public host → `pair-error`).
 
 - [ ] **Step 9: Commit**
 
@@ -966,9 +1045,14 @@ Expected: FAIL — redeem currently 201s (no network guard).
 In `server/src/lan-auth.ts`, add (and note the trust-proxy invariant):
 
 ```ts
-/* Loopback + RFC1918 IPv4. NOTE: relies on `req.ip` being the real socket peer —
-   do NOT enable Express `trust proxy`, or `X-Forwarded-For` could forge this. */
-const PRIVATE_V4 = [/^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^127\./, /^169\.254\./];
+/* Loopback + RFC1918 IPv4 — the LAN reachability the phone uses to redeem.
+   NOTE: relies on `req.ip` being the real socket peer — do NOT enable Express
+   `trust proxy`, or `X-Forwarded-For` could forge this (same invariant the
+   loopback gate depends on; keep them consistent).
+   Coupling: this IPv4-only allowlist mirrors `enumerateLanUrls` (IPv4-only, no
+   link-local) and Task 8's client-side `_isPrivateIpv4Host` — the two layers
+   share this assumption, so if LAN URLs ever gain IPv6/CGNAT both must widen. */
+const PRIVATE_V4 = [/^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^127\./];
 export function isPrivateNetworkRequest(req: Request): boolean {
   let ip = req.ip ?? req.socket?.remoteAddress ?? '';
   if (ip.startsWith('::ffff:')) ip = ip.slice('::ffff:'.length);
@@ -1004,34 +1088,34 @@ git commit -m "feat(server): restrict pair redeem to the local network (app-17)"
 
 **Repo:** Castwright (this repo, server)
 
-**Why:** the redeem `label` is attacker-controllable body input (`pairing.ts` passes it to `createDevice`); it's persisted unbounded. Cap it. (Brute-force note: a runtime per-code lockout is **intentionally not added** — the code is 40-bit single-use with a 5-min TTL, already locked by `pairing.test.ts:63`'s `/^[0-9A-HJKMNP-TV-Z]{8}$/` assertion; a lockout for a cryptographically-infeasible brute would be speculative complexity. Revisit only if the code ever shrinks.)
+**Why:** the redeem `label` is **untrusted redeem-body input** — the legit client sends the phone's hostname (`pairing_service.dart`: `label: Platform.localHostname`), but a direct caller could send anything, and it's persisted unbounded. Cap it (defensive bound; the redeem path is already gated by the single-use code + Task 10's LAN guard). (Brute-force note: a runtime per-code lockout is **intentionally not added** — the code is 40-bit single-use with a 5-min TTL, already locked by `pairing.test.ts:63`'s `/^[0-9A-HJKMNP-TV-Z]{8}$/` assertion; a lockout for a cryptographically-infeasible brute would be speculative complexity. Revisit only if the code ever shrinks.)
 
 **Files:**
 - Modify: `server/src/workspace/device-tokens.ts` (`createDevice` label cap)
-- Modify: `server/src/workspace/device-tokens.test.ts` (or the nearest existing test for `createDevice`)
+- Modify: `server/src/routes/devices.test.ts` (existing `createDevice` harness — **NOTE:** `server/src/workspace/device-tokens.test.ts` does NOT exist; `createDevice` is exercised here via a temp-workspace harness, so add the test to this file, not a new one)
 
 **Interfaces:**
 - Produces: stored `label` is `.trim().slice(0, 64) || 'Device'`.
 
 - [ ] **Step 1: Write the failing test**
 
-In the device-tokens test, add:
+In `server/src/routes/devices.test.ts`, inside the existing `describe('devices route (srv-33)', …)` block, add a case using the file's already-set-up `deviceTokens` dynamic import + temp-workspace `beforeEach` (it calls `deviceTokens.createDevice('Phone')` elsewhere, so reuse that):
 
 ```ts
-  it('caps an over-long label at 64 chars', async () => {
-    const { device } = await createDevice('x'.repeat(200));
+  it('caps an over-long device label at 64 chars', async () => {
+    const { device } = await deviceTokens.createDevice('x'.repeat(200));
     expect(device.label.length).toBe(64);
   });
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd server && npx vitest run src/workspace/device-tokens.test.ts -t "caps an over-long label"`
+Run: `cd server && npx vitest run src/routes/devices.test.ts -t "caps an over-long device label"`
 Expected: FAIL — label is 200 chars.
 
 - [ ] **Step 3: Implement**
 
-In `server/src/workspace/device-tokens.ts`, change the `label` line in `createDevice`:
+In `server/src/workspace/device-tokens.ts`, change the `label` line in `createDevice` (currently `label: label.trim() || 'Device',`):
 
 ```ts
     label: label.trim().slice(0, 64) || 'Device',
@@ -1039,13 +1123,13 @@ In `server/src/workspace/device-tokens.ts`, change the `label` line in `createDe
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `cd server && npx vitest run src/workspace/device-tokens.test.ts`
+Run: `cd server && npx vitest run src/routes/devices.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/src/workspace/device-tokens.ts server/src/workspace/device-tokens.test.ts
+git add server/src/workspace/device-tokens.ts server/src/routes/devices.test.ts
 git commit -m "feat(server): cap pairing device label length (app-17)"
 ```
 
