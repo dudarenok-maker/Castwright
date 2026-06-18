@@ -234,17 +234,24 @@ credible to scan than an opaque blob and (on a verified device) opens **silently
 exploitability rises. Candidate hardening (see "Suggested security follow-ups"): the app
 should constrain `h` to RFC1918/link-local and surface it on the pairing-confirm screen.
 
-### Suggested security follow-ups (NOT in app-17 scope unless folded in)
+### Security hardening (FOLDED INTO app-17 — Tasks 8–11)
 
-These harden the *pairing protocol* (mostly pre-existing, independent of the payload
-format). They are listed for a scope decision; default home is a separate
-security-hardening issue:
-1. Constrain `h` to RFC1918/link-local + show it on the pairing-confirm screen (app) — caps the phishing-QR vector app-17 amplifies.
-2. RFC1918/loopback guard on `POST /api/pair/redeem` (server) — makes redeem structurally LAN-only even under accidental port-forward, bounding the edge-log code leak.
-3. Per-code failed-redeem lockout + a guard that the code never drops below 40 bits (server) — so brute-resistance isn't solely entropy-dependent.
-4. Re-entrancy guard on the app's `_openPairing` so a warm-start link can't stack pairing screens (app).
-5. Cap the redeem `label` length; add a code comment locking the "no Express `trust proxy`" invariant on the loopback gate (server).
-6. (Optional) widen the `f` tag from 80→128 bits — sound today vs second-preimage (2⁸⁰), but cheap defense-in-depth; note it changes the pairing crypto + QR and breaks old-QR compat, so it is a deliberate, separate change.
+Per the round-3 security review, these pairing-hardening items are now part of app-17
+(several harden pre-existing issues that the URL flip amplifies):
+1. **Constrain `h` to RFC1918/link-local** at parse (covers scan/deep-link/manual) — Task 8. (The host is already *shown* on the pairing-confirm screen via the editable `field-host`, so only rejection was missing.)
+2. **RFC1918/loopback guard on `POST /api/pair/redeem`** — Task 10; makes redeem structurally LAN-only even under accidental port-forward, bounding the edge-log code leak. Includes the "no Express `trust proxy`" invariant comment.
+3. **Deep-link re-entrancy guard** on `_openPairing` so a second link can't stack pairing screens — Task 9.
+4. **Cap the redeem `label` length** — Task 11.
+
+**Code-entropy / brute-force:** the 40-bit single-use 5-min code is already locked by
+`pairing.test.ts:63` (`/^[0-9A-HJKMNP-TV-Z]{8}$/`). A **runtime per-code lockout is
+intentionally NOT added** — for a cryptographically-infeasible brute it would be
+speculative complexity (CLAUDE.md "no error handling for impossible scenarios"). The
+private-network redeem guard (item 2) is the meaningful additional control.
+
+**Deferred (deliberate, separate change):** widen the `f` tag 80→128 bits. Sound today
+vs second-preimage (2⁸⁰); bumping changes the pairing crypto **and** breaks
+already-issued-QR compatibility, so it does not belong in a payload-format flip.
 
 ## Rollout ordering (load-bearing)
 
@@ -320,7 +327,10 @@ next periodic re-verify or app update).
 
 - Play App Signing SHA-256 (additive to the array when Play distribution lands).
 - Moving the apex to Cloudflare / serving `castwright.ai` directly.
-- Any change to the in-app scanner, the redeem protocol, or pairing crypto.
+- No change to the in-app scanner, the redeem **protocol** (code/token semantics,
+  single-use, TTL), or the pairing **crypto** (token entropy, the `f`-tag width).
+  app-17 *does* add hardening *around* redeem — a private-network reachability guard
+  and a label cap (Tasks 10–11) — but the code→token exchange itself is unchanged.
 
 ## Alternatives considered
 
