@@ -80,6 +80,17 @@ logging.basicConfig(
 log = logging.getLogger("sidecar")
 
 
+def error_response(e: Exception, log, status: int = 500):
+    """Log the full traceback server-side and return a GENERIC error body.
+
+    The response references the exception object zero times — no stringified
+    exception, repr, type name or args ever reaches the client (CodeQL
+    py/stack-trace-exposure). The reason lives only in the server log.
+    """
+    log.exception("request failed")
+    return JSONResponse({"status": "error", "error": "Internal error."}, status_code=status)
+
+
 class _DropSubstringLogFilter(logging.Filter):
     """Drop log records whose rendered message contains ``needle``.
 
@@ -3020,8 +3031,7 @@ async def load_model(req: Request) -> JSONResponse:
             try:
                 await asyncio.to_thread(kokoro._ensure_loaded, "v1")
             except Exception as e:
-                log.exception("/load failed (engine=kokoro)")
-                return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+                return error_response(e, log, status=500)
             finally:
                 kokoro._loading = False
         return JSONResponse({"status": "ready"})
@@ -3043,8 +3053,7 @@ async def load_model(req: Request) -> JSONResponse:
                 # VoiceDesign model loads transiently during design_voice.
                 await asyncio.to_thread(qwen._ensure_base_loaded)
             except Exception as e:
-                log.exception("/load failed (engine=qwen)")
-                return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+                return error_response(e, log, status=500)
             finally:
                 qwen._loading = False
         return JSONResponse({"status": "ready"})
@@ -3069,8 +3078,7 @@ async def load_model(req: Request) -> JSONResponse:
         try:
             await asyncio.to_thread(coqui._ensure_loaded, model)
         except Exception as e:
-            log.exception("/load failed (model=%s)", model)
-            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+            return error_response(e, log, status=500)
         finally:
             coqui._loading = False
     return JSONResponse({"status": "ready"})
@@ -3205,12 +3213,9 @@ async def qwen_design_voice(req: Request) -> Response:
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
         )
-    except Exception as e:
+    except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
-        # `str(e)` is empty for some exception types (a bare raise, certain
-        # torch/CUDA errors), which would surface to the UI as a blank 500.
-        # Fall back to repr so the reason is never empty.
-        return JSONResponse({"detail": str(e) or repr(e)}, status_code=500)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
 
     return Response(
         content=result.pcm,
@@ -3325,7 +3330,9 @@ async def synthesize(req: Request) -> Response:
         # synthesis. This is the single biggest UX fix in the sidecar.
         result = await asyncio.to_thread(engine.synthesize, model, voice, text)
     except Exception as e:
-        err_str = str(e)
+        # Internal-only — feeds CUDA-poison detection + the server-side log,
+        # never a response body (the body stays generic below).
+        err_str = f"{e}"
         # Forensic log: the offending text + speaker + language make a
         # post-mortem possible. Without these, "synth failed" with no
         # context means we keep hitting the same input bug blind. Truncated
@@ -3357,11 +3364,11 @@ async def synthesize(req: Request) -> Response:
             )
             _mark_cuda_poisoned(err_str)
             return JSONResponse(
-                {"detail": err_str, "poisoned": True},
+                {"detail": "Internal error.", "poisoned": True},
                 status_code=503,
             )
 
-        return JSONResponse({"detail": err_str}, status_code=500)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
     finally:
         _inflight_synth -= 1  # srv-17c: clears the recycle drain regardless of outcome
 
@@ -3422,14 +3429,15 @@ async def transcribe(req: Request) -> Response:
     try:
         result = await asyncio.to_thread(ASR.transcribe, pcm, sample_rate, language)
     except Exception as e:
-        err_str = str(e)
+        # Internal-only — CUDA-poison detection + server-side log, never a body.
+        err_str = f"{e}"
         log.exception("transcribe failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
         # Same CUDA-poison fence as /synthesize — a device-side assert here
         # corrupts the shared context just the same.
         if _CUDA_POISON_RE.search(err_str):
             _mark_cuda_poisoned(err_str)
-            return JSONResponse({"detail": err_str, "poisoned": True}, status_code=503)
-        return JSONResponse({"detail": err_str}, status_code=500)
+            return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
     return JSONResponse(result)
 
 
@@ -3515,7 +3523,8 @@ async def synthesize_batch(req: Request) -> Response:
         # (potentially multi-second) batched forward runs on a worker thread.
         result = await asyncio.to_thread(engine.synthesize_batch, model, items)
     except Exception as e:
-        err_str = str(e)
+        # Internal-only — forensic log + CUDA-poison detection, never a body.
+        err_str = f"{e}"
         # Forensic beacon: model + item count + the failing message.
         log.exception(
             "batch synth failed (engine=qwen model=%s items=%d): %s",
@@ -3526,8 +3535,8 @@ async def synthesize_batch(req: Request) -> Response:
         # left the Qwen batch path wedging the whole run).
         if _CUDA_POISON_RE.search(err_str):
             _mark_cuda_poisoned(err_str)
-            return JSONResponse({"detail": err_str, "poisoned": True}, status_code=503)
-        return JSONResponse({"detail": err_str}, status_code=500)
+            return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
     finally:
         _inflight_synth -= 1  # srv-17c: clears the recycle drain regardless of outcome
 
