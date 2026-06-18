@@ -4,7 +4,7 @@
 - **Status:** approved design (pre-implementation)
 - **Branch:** `chore/deps-round-4` (single branch; JS + Flutter land as separately-scoped commits in one PR)
 - **Implementation plan:** `docs/features/224-deps-round-4.md` (to be authored by writing-plans)
-- **Backlog items touched:** `srv-4` (#431), `ops-14` (#711), `ops-17` (#790) + one new `area:side` item filed for the deferred sidecar spike.
+- **Backlog items touched:** `srv-4` (#431), `ops-14` (#711), `ops-17` (#790) re-confirmed/corrected + one new `area:side` item filed (issue + BACKLOG row) for the deferred sidecar spike.
 
 ## 1. Goal & success criteria
 
@@ -117,8 +117,9 @@ change worth pinning a deliberate note to) plus the **backlog reconciliation +
 sidecar-spike filing**. The 8 in-range root bumps ride along (a future
 `npm install` would re-apply them anyway); they're hygiene, not the point.
 
-All of it lands in **one PR** on `chore/deps-round-4`, as separately-scoped
-commits — `chore(deps): …` for the JS surfaces, `chore(app): …` for Flutter.
+All of it lands in **one PR** on `chore/deps-round-4`, as three separately-scoped
+commit groups — `chore(deps): …` (JS surfaces), `chore(app): …` (Flutter), and
+`docs(deps): …` (plan doc + backlog reconciliation).
 This matches the repo's "one integration PR" default; squash/rebase are disabled
 so the per-commit scopes survive in history, which is where the granularity the
 scope table cares about actually lives. A second PR would add a verify run, a
@@ -144,10 +145,13 @@ revertable commit.
    Commit: `chore(deps): express-rate-limit 7→8 (server)`.
 2. `cd server && npm install sharp@^0.35` → edit `server/package.json` to `^0.35`.
    **Verify the full `@img/sharp-*` + `@img/sharp-libvips-*` platform matrix is
-   present in `server/package-lock.json`** (esp. `linux-x64`, `linuxmusl-x64`
-   for CI/release, `win32-x64` dev box, `darwin-arm64` Mac deployer) — a pruned
-   matrix is a release blocker, not just a CI annoyance. Run `npm test` (cover
-   routes exercise sharp). Commit: `chore(deps): sharp 0.34→0.35 (server)`.
+   present in `server/package-lock.json`** — concretely, `grep -c '@img/sharp-'
+   server/package-lock.json` and confirm the per-triple entries are all listed:
+   `linux-x64`, `linuxmusl-x64` (CI/release), `win32-x64` (dev box),
+   `darwin-arm64`, `darwin-x64` (Mac deployer), `linux-arm64`. A pruned matrix
+   (Windows-authoring dropping a non-win32 entry) is a **release blocker**, not
+   just a CI annoyance. Run `npm test` (cover routes exercise sharp).
+   Commit: `chore(deps): sharp 0.34→0.35 (server)`.
 3. Full `npm run verify` from root. **No cloud CI run is needed for the sharp
    matrix.** A `run-ci` Ubuntu run only exercises `linux-x64` and would _not_
    catch a pruned `darwin-arm64`/`linuxmusl-x64` entry — the lockfile-content
@@ -175,23 +179,52 @@ commit keeps the diff legible without forking the PR.
    standing step; `schemaVersion` 5 has a real migration ladder a stale
    generated shape could desync from.)
 3. Edit `pubspec.yaml` → `connectivity_plus: ^7.1.1`; `flutter pub get`.
-4. Gate: `flutter analyze` + `flutter test` locally; confirm `checkConnectivity()`
-   still returns `List<ConnectivityResult>`. `app.yml` is the CI gate.
-   Open as **draft**, `gh pr ready` once green.
+4. Gate: `flutter analyze` + `flutter test` **locally — mandatory, not
+   belt-and-suspenders.** Pre-commit (`verify:fast:scoped`) and pre-push run **no**
+   Flutter leg, so `app.yml` (which runs only after push) is the _only_ automated
+   Flutter coverage — a red Flutter tree slips through every local gate otherwise.
+   Confirm `checkConnectivity()` still returns `List<ConnectivityResult>`.
 
-### Docs & deferral (same PR, scope `docs`)
+### Docs & deferral (`docs(deps): …` commit)
 
-1. **Author `docs/features/224-deps-round-4.md`** (status frontmatter, the three
-   majors' migration notes, Key files, `Refs #431 #711 #790`) + an `INDEX.md`
-   entry. (Every prior round — 167/170/202 — shipped a plan doc; the brainstorming
-   spec lives under `specs/` and is a design artifact, not the regression home.)
-2. **Correct + re-date the blocked-item notes** in `docs/BACKLOG.md`: fix
-   `srv-4`'s root cause (gaxios→node-fetch, genai already at 2.8.0), re-confirm
-   `ops-14` / `ops-17`, stamp 2026-06-18.
-3. **File a new `area:side` `needs-plan` Backlog issue** for the deferred sidecar
-   engine-dep spike (torch/transformers/hf-hub/etc., GPU + golden-audio
-   validated) **and add its thin `docs/BACKLOG.md` row** — same round, per the
-   backlog rule.
+1. **Author `docs/features/224-deps-round-4.md`** from `docs/features/TEMPLATE.md`
+   — the template's required sections are `Benefit/Rationale`, `Architectural
+   impact`, `Test plan`; mark the thin ones "n/a — hygiene round" _explicitly_
+   rather than omitting them. Include the three majors' migration notes, Key
+   files, and `Refs #431 #711 #790`. **Lifecycle:** author as `status: active`;
+   on merge flip to `status: stable`, fill Ship notes (date + merge SHA),
+   `git mv` it under `docs/features/archive/`, and place its `INDEX.md` entry
+   under **`## Shipped (archive)`** — matching rounds 167/170/202, which all live
+   in `archive/` (a deps round has no active life after it merges).
+2. **Rewrite + re-date the blocked-item rows** in `docs/BACKLOG.md`:
+   - `srv-4` (≈ line 138, "Maintenance & upkeep") — the existing _What_ ("bump
+     `@google/genai` 2.8+") is now **wrong** and must be **replaced**, not just
+     dated: genai is already 2.8.0; the culprit is `gaxios@7.1.5 →
+     node-fetch@^3.3.2` and no published gaxios drops it (don't chase `fetch-blob`
+     4.x either — it still pins node-domexception).
+   - `ops-17` (≈ line 144, same section) — re-confirm "still latest, no migrated
+     release," stamp 2026-06-18.
+   - `ops-14` (≈ line 372, a **different** section) — re-confirm the plugin peer
+     caps (`eslint-plugin-react ^9.7`, `eslint-plugin-jsx-a11y ^9`), stamp 2026-06-18.
+3. **File the deferred sidecar spike** as a new Backlog item, full recipe:
+   - Issue title `side-<n> — sidecar engine-dep major bump (torch / transformers
+     / huggingface_hub / …)`, where `<n>` is the next free `side-` ID; labels
+     `area:side` + `moscow:could` + `type:chore` + `needs-plan`; body notes it
+     needs a GPU box + the golden-audio gate to validate.
+   - Add the thin `docs/BACKLOG.md` row under the Could "Reliability &
+     observability" sub-group: a `#### side-<n> — … (#NN)` header + the
+     `_What:_` / `_Benefit (technical):_` / `_Full detail + acceptance:_` triplet,
+     linking the issue.
+4. **PR body** uses `Refs #431 #711 #790 #<sidecar-issue>` — everything this round
+   touches is deferred or re-confirmed; **nothing is `Closes`d.**
+
+### PR lifecycle
+
+Open the PR once commit group A is pushed (draft is fine — CI is opt-in and bills
+0 minutes by default). `gh pr ready` only after all three commit groups are in and
+both `npm run verify` and `flutter analyze`/`flutter test` are green locally. Merge
+via the "Create a merge commit" button (squash/rebase are disabled at the repo
+level); the head branch auto-deletes on merge.
 
 ## 5. Testing & verification
 
