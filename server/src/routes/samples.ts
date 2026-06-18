@@ -12,7 +12,7 @@ import { readFile, mkdir, copyFile, readdir } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
-import { safeSegment } from '../util/safe-path.js';
+import { safeSegment, assertContained } from '../util/safe-path.js';
 import {
   WORKSPACE_ROOT,
   bookDirByDisplay,
@@ -52,6 +52,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     let src: string;
     try {
       src = join(SAMPLES_ROOT, safeSegment(slug));
+      assertContained(SAMPLES_ROOT, src);
     } catch {
       return res.status(400).json({ error: 'Invalid sample slug.' });
     }
@@ -79,12 +80,20 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     await mkdir(dotAudiobook(bookDir), { recursive: true });
 
     // 1. Manuscript.
-    await copyFile(join(src, safeManuscriptFile), join(bookDir, safeManuscriptFile));
+    const srcManuscript = join(src, safeManuscriptFile);
+    const dstManuscript = join(bookDir, safeManuscriptFile);
+    assertContained(src, srcManuscript);
+    assertContained(bookDir, dstManuscript);
+    await copyFile(srcManuscript, dstManuscript);
 
     // 2. .audiobook/{cast,manuscript-edits}.
     for (const f of ['cast.json', 'manuscript-edits.json']) {
-      if (existsSync(join(src, '.audiobook', f))) {
-        await copyFile(join(src, '.audiobook', f), join(dotAudiobook(bookDir), f));
+      const srcAudiobookFile = join(src, '.audiobook', f);
+      assertContained(src, srcAudiobookFile);
+      if (existsSync(srcAudiobookFile)) {
+        const dstAudiobookFile = join(dotAudiobook(bookDir), f);
+        assertContained(bookDir, dstAudiobookFile);
+        await copyFile(srcAudiobookFile, dstAudiobookFile);
       }
     }
 
@@ -102,22 +111,27 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
 
     // 4. Merge bundle voices into workspace voices/qwen (no clobber).
     const srcVoices = join(src, 'voices', 'qwen');
+    assertContained(src, srcVoices);
     if (existsSync(srcVoices)) {
       const dstVoices = join(WORKSPACE_ROOT, 'voices', 'qwen');
       await mkdir(dstVoices, { recursive: true });
       for (const f of await readdir(srcVoices)) {
-        if (!existsSync(join(dstVoices, f))) {
-          await copyFile(join(srcVoices, f), join(dstVoices, f));
+        const srcVoiceFile = join(srcVoices, safeSegment(f));
+        const dstVoiceFile = join(dstVoices, safeSegment(f));
+        assertContained(srcVoices, srcVoiceFile);
+        assertContained(dstVoices, dstVoiceFile);
+        if (!existsSync(dstVoiceFile)) {
+          await copyFile(srcVoiceFile, dstVoiceFile);
         }
       }
     }
 
     // 5. Register the ManuscriptRecord so the analysis/generation pipeline is wired.
-    const buffer = await readFile(join(bookDir, safeManuscriptFile));
+    const buffer = await readFile(dstManuscript);
     const parsed = await parseManuscript({
       buffer,
       fileName: safeManuscriptFile,
-      sourcePath: join(bookDir, safeManuscriptFile),
+      sourcePath: dstManuscript,
     });
     const record: ManuscriptRecord = {
       manuscriptId,

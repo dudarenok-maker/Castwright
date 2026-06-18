@@ -238,7 +238,9 @@ export function qwenVoicesDir(): string {
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
     persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {
-  return join(qwenVoicesDir(), `${safeSegment(name)}.json`);
+  const p = join(qwenVoicesDir(), `${safeSegment(name)}.json`);
+  assertContained(qwenVoicesDir(), p);
+  return p;
 }
 
 /** Plan 102 — workspace-level chapter-generation queue. ONE file holds the
@@ -268,7 +270,9 @@ export function backupsRootDir(): string {
 }
 
 export function bookBackupsDir(bookId: string): string {
-  return join(backupsRootDir(), safeSegment(bookId));
+  const p = join(backupsRootDir(), safeSegment(bookId));
+  assertContained(backupsRootDir(), p);
+  return p;
 }
 
 /** fs-20 — workspace-level telemetry jail. Per-run resource telemetry (RTF,

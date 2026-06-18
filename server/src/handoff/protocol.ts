@@ -8,7 +8,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { safeSegment } from '../util/safe-path.js';
+import { safeSegment, assertContained } from '../util/safe-path.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
@@ -33,15 +33,21 @@ async function ensureDirs(): Promise<void> {
 }
 
 export function inboxPath(manuscriptId: string, key: HandoffKey): string {
-  return join(INBOX, `${safeSegment(manuscriptId)}-stage${key}.md`);
+  const p = join(INBOX, `${safeSegment(manuscriptId)}-stage${key}.md`);
+  assertContained(INBOX, p);
+  return p;
 }
 
 export function outboxPath(manuscriptId: string, key: HandoffKey): string {
-  return join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.json`);
+  const p = join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.json`);
+  assertContained(OUTBOX, p);
+  return p;
 }
 
 export function errorPath(manuscriptId: string, key: HandoffKey): string {
-  return join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.errors.json`);
+  const p = join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.errors.json`);
+  assertContained(OUTBOX, p);
+  return p;
 }
 
 /* Forensic record of a model response that failed parse/validation. Lives
@@ -51,7 +57,9 @@ export function errorPath(manuscriptId: string, key: HandoffKey): string {
    they fail, so a partial-success retry preserves the first attempt's text
    for comparison. */
 export function rawAttemptPath(manuscriptId: string, key: HandoffKey, attempt: 1 | 2): string {
-  return join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.attempt${attempt}.raw.txt`);
+  const p = join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.attempt${attempt}.raw.txt`);
+  assertContained(OUTBOX, p);
+  return p;
 }
 
 export async function writeInbox(

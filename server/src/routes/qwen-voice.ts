@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoicesDir } from '../workspace/paths.js';
-import { safeSegment } from '../util/safe-path.js';
+import { safeSegment, assertContained } from '../util/safe-path.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -182,7 +182,9 @@ function previewVoiceIdFor(realVoiceId: string): string {
   return `${realVoiceId}${PREVIEW_SUFFIX}`;
 }
 export function qwenVoicePtPath(name: string): string {
-  return join(qwenVoicesDir(), `${safeSegment(name)}.pt`);
+  const p = join(qwenVoicesDir(), `${safeSegment(name)}.pt`);
+  assertContained(qwenVoicesDir(), p);
+  return p;
 }
 
 /* GET /api/books/:bookId/cast/:characterId/designed-persona

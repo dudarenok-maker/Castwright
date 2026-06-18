@@ -683,11 +683,14 @@ function describeStatus(err: unknown): string {
    structured `error: aborted` event the UI uses to distinguish pause
    from a real failure. */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  /* Bind the clamp to a const that feeds setTimeout directly so the bound is
+     provable at the sink (js/resource-exhaustion barrier). */
+  const delay = Math.min(ms, 60_000);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
       resolve();
-    }, Math.min(ms, 60_000));
+    }, delay);
     const onAbort = () => {
       clearTimeout(timer);
       reject(new AnalysisAbortedError('Aborted during gemini retry backoff.'));
