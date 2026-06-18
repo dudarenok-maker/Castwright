@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unicodeKebab } from '../util/safe-id.js';
+import { safeSegment, assertContained } from '../util/safe-path.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -86,11 +87,35 @@ export function parseBookId(
   return { authorSlug: parts[0], seriesSlug: parts[1], titleSlug: parts[2] };
 }
 
+/* Strip only path-hostile characters from a display segment — keep spaces,
+   hyphens, casing, and Unicode so folders stay human-readable. Collapses any
+   `..` run, trims trailing dots/spaces (Windows), caps length, and never
+   yields an empty (level-collapsing) segment. This is the single chokepoint —
+   scan.ts/samples.ts/findBookBy all compose through bookDirByDisplay, so the
+   on-disk name they compute always matches what import wrote. */
+function sanitizeDisplaySegment(s: string): string {
+  const cleaned = s
+    .replace(/[/\\:*?"<>|\x00]/g, '_')
+    .replace(/\.{2,}/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 120);
+  return cleaned.length > 0 ? cleaned : '_';
+}
+
 /** Path to the book folder on disk, given the display strings the user confirmed.
-    Uses the display strings verbatim — directories preserve original casing/spaces
-    so the user sees readable folder names, while bookId stays slug-based. */
+    Preserves original casing/spaces/hyphens so the user sees readable folder
+    names (while bookId stays slug-based), but sanitizes path-hostile characters
+    and asserts containment so a crafted display string can't escape BOOKS_ROOT. */
 export function bookDirByDisplay(author: string, series: string, title: string): string {
-  return join(BOOKS_ROOT, author, series || STANDALONES_SERIES, title);
+  const dir = join(
+    BOOKS_ROOT,
+    sanitizeDisplaySegment(author),
+    sanitizeDisplaySegment(series || STANDALONES_SERIES),
+    sanitizeDisplaySegment(title),
+  );
+  assertContained(BOOKS_ROOT, dir);
+  return dir;
 }
 
 export function dotAudiobook(bookDir: string): string {
@@ -215,6 +240,7 @@ export function qwenVoicesDir(): string {
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
     persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {
+  safeSegment(name);
   return join(qwenVoicesDir(), `${name}.json`);
 }
 

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { extractInlineEmotion } from '../handoff/emotion-from-tags.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { safeSegment } from '../util/safe-path.js';
 
 /* fs-25 — absorb any legacy inline audio-tag in a freshly-analysed sentence
    into the structured `emotion` field and strip the bracket from the stored
@@ -108,7 +109,8 @@ export interface AnalysisCache {
   updatedAt?: string;
 }
 
-function cachePath(manuscriptId: string): string {
+export function cachePath(manuscriptId: string): string {
+  safeSegment(manuscriptId);
   return join(CACHE_DIR, `${manuscriptId}.json`);
 }
 

@@ -8,6 +8,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { safeSegment } from '../util/safe-path.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
@@ -58,6 +59,7 @@ export async function writeInbox(
   key: HandoffKey,
   body: string,
 ): Promise<string> {
+  safeSegment(manuscriptId);
   await ensureDirs();
   const path = inboxPath(manuscriptId, key);
   // Clean any stale outbox so a stale dropped file can't masquerade as fresh.

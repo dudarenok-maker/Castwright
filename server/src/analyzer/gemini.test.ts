@@ -629,3 +629,11 @@ afterAll(async () => {
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_retry_5xx-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'), { force: true });
 });
+
+describe('appendBounded — stream accumulator cap', () => {
+  it('throws past the ceiling, accumulates under it', async () => {
+    const { appendBounded } = await import('./gemini.js');
+    expect(appendBounded('a', 'b')).toBe('ab');
+    expect(() => appendBounded('x'.repeat(8 * 1024 * 1024), 'y')).toThrow(/maximum size/);
+  });
+});

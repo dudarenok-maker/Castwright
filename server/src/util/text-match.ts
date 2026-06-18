@@ -10,7 +10,10 @@ export function normaliseForMatch(s: string): string {
     .replace(/[“”]/g, '"')
     .replace(/[—–]/g, '-')
     .replace(/…/g, '...')
-    .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+    // Split the two-sided trim into two anchored single-sided replaces — the
+    // `^…|…$` alternation is the polynomial-redos shape.
+    .replace(/^[\s"'`]+/, '')
+    .replace(/[\s"'`]+$/, '')
     .replace(/\s+/g, ' ');
 }
 

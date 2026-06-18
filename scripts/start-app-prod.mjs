@@ -12,11 +12,14 @@
 // actually bind, or it false-FAILs waiting on :8080 while the server is up on
 // :8443. resolveLaunchTarget() mirrors the server's selection so the two agree.
 
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
+import os from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -109,26 +112,67 @@ async function waitForListen(port, timeoutMs) {
   return false;
 }
 
-// Probe /api/health on an already-listening server and return the parsed JSON,
-// or null if the request fails. Temporarily disables TLS verification so the
-// self-signed LAN HTTPS cert doesn't abort the probe.
-async function probeServed(port, https) {
-  const scheme = https ? 'https' : 'http';
-  const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  if (https) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  try {
-    const res = await fetch(`${scheme}://localhost:${port}/api/health`, {
-      signal: AbortSignal.timeout(4000),
-    });
-    return await res.json();
-  } catch {
-    return null;
-  } finally {
-    if (https) {
-      if (prev === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
-    }
+// Inline mirror of server resolveRootCaPath() (the script is plain ESM and can't
+// import the compiled server module): env MKCERT_CAROOT -> `mkcert -CAROOT` ->
+// per-OS default (honoring LOCALAPPDATA / XDG_DATA_HOME). Returns the rootCA.pem
+// path or null when mkcert isn't installed.
+function findRootCa() {
+  const tryDir = (dir) => (dir && existsSync(join(dir, 'rootCA.pem')) ? join(dir, 'rootCA.pem') : null);
+  if (process.env.MKCERT_CAROOT) {
+    const p = tryDir(process.env.MKCERT_CAROOT);
+    if (p) return p;
   }
+  try {
+    const out = execFileSync('mkcert', ['-CAROOT'], { encoding: 'utf8', windowsHide: true }).trim();
+    const p = tryDir(out);
+    if (p) return p;
+  } catch {
+    /* mkcert absent */
+  }
+  let def;
+  if (process.platform === 'win32')
+    def = join(process.env.LOCALAPPDATA || join(os.homedir(), 'AppData', 'Local'), 'mkcert');
+  else if (process.platform === 'darwin')
+    def = join(os.homedir(), 'Library', 'Application Support', 'mkcert');
+  else def = join(process.env.XDG_DATA_HOME || join(os.homedir(), '.local', 'share'), 'mkcert');
+  return tryDir(def);
+}
+
+function getJson(scheme, port, agent) {
+  const lib = scheme === 'https' ? https : http;
+  return new Promise((resolveP) => {
+    const req = lib.get(
+      { host: 'localhost', port, path: '/api/health', agent, timeout: 4000, servername: 'localhost' },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => {
+          try {
+            resolveP(JSON.parse(body));
+          } catch {
+            resolveP(null);
+          }
+        });
+      },
+    );
+    req.on('error', () => resolveP(null));
+    req.on('timeout', () => {
+      req.destroy();
+      resolveP(null);
+    });
+  });
+}
+
+// Probe /api/health and return the parsed JSON, or null on failure. For the LAN
+// HTTPS flow we validate the self-signed cert properly against the mkcert root CA
+// (NO TLS bypass); if mkcert isn't installed, fall back to a plain-HTTP loopback
+// probe rather than disabling verification.
+async function probeServed(port, useHttps) {
+  if (!useHttps) return getJson('http', port);
+  const ca = findRootCa();
+  if (!ca) return getJson('http', port); // mkcert absent -> plain HTTP loopback, never TLS-disable
+  const agent = new https.Agent({ ca: readFileSync(ca), rejectUnauthorized: true });
+  return getJson('https', port, agent);
 }
 
 async function main() {

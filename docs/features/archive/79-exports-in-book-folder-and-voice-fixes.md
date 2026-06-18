@@ -55,6 +55,13 @@ the same files.
 - **New endpoint** `POST /api/user/settings/sync-folder/test` —
   `mkdir + writeFile probe + unlink`, returns `{ ok: true }` or
   `{ ok: false, code, message }`. Pure probe; no persistence.
+  - **srv-22 (2026-06-18) behavior change:** the probe now **requires an
+    existing directory** — it `lstat`s the path (rejecting symlinks) and
+    returns `{ ok: false, code: 'ENOENT' }` for a missing/non-dir path
+    instead of `mkdir({recursive:true})`-creating it. This removes an
+    unauthenticated arbitrary-directory-creation primitive; "is the path I
+    typed writable?" is still answered, but a bogus path is now a clear
+    `ok:false` rather than a silently-created tree.
 - **Invariants preserved:** the API contract (`BookExportJob` shape,
   `downloadUrl` route, `syncPath` semantic) is unchanged. The
   destination-tab UX (download vs sync-folder) is unchanged. The

@@ -15,6 +15,7 @@ import { mkdir, readFile, readdir, rm, rmdir, writeFile, unlink } from 'node:fs/
 import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { safeSegment } from '../util/safe-path.js';
 import {
   STANDALONES_SERIES,
   audioDir,
@@ -144,7 +145,7 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
   const currentVersion = state.chapterTitleParserVersion ?? 1;
   if (currentVersion >= CHAPTER_TITLE_PARSER_VERSION) return state;
 
-  const manuscriptPath = join(bookDir, state.manuscriptFile);
+  const manuscriptPath = join(bookDir, safeSegment(state.manuscriptFile));
   if (!existsSync(manuscriptPath)) return state;
 
   try {
@@ -909,7 +910,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
 
-    const manuscriptPath = join(bookDir, state.manuscriptFile);
+    const manuscriptPath = join(bookDir, safeSegment(state.manuscriptFile));
     if (!existsSync(manuscriptPath)) {
       return res
         .status(409)
@@ -996,8 +997,9 @@ bookStateRouter.post(
       const newFile = `manuscript.${REPLACE_EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
       const oldFile = state.manuscriptFile;
 
+      safeSegment(newFile);
       await writeFile(join(bookDir, newFile), req.file.buffer);
-      if (oldFile && oldFile !== newFile && existsSync(join(bookDir, oldFile))) {
+      if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
         await unlink(join(bookDir, oldFile)).catch(() => {});
       }
       state.manuscriptFile = newFile;

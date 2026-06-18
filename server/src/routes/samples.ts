@@ -12,6 +12,7 @@ import { readFile, mkdir, copyFile, readdir } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
+import { safeSegment } from '../util/safe-path.js';
 import {
   WORKSPACE_ROOT,
   bookDirByDisplay,
@@ -48,6 +49,11 @@ samplesRouter.get('/', async (_req: Request, res: Response) => {
 samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
   try {
     const slug = req.params.slug;
+    try {
+      safeSegment(slug);
+    } catch {
+      return res.status(400).json({ error: 'Invalid sample slug.' });
+    }
     const src = join(SAMPLES_ROOT, slug);
     if (!existsSync(join(src, '.audiobook', 'state.json'))) {
       return res.status(404).json({ error: `Sample not found: ${slug}` });
@@ -56,6 +62,11 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
 
     const bundleState = JSON.parse(await readFile(join(src, '.audiobook', 'state.json'), 'utf8'));
     const { author, series, title, manuscriptFile } = bundleState;
+    try {
+      safeSegment(manuscriptFile);
+    } catch {
+      return res.status(400).json({ error: 'Invalid bundle manuscript file.' });
+    }
     const bookDir = bookDirByDisplay(author, series, title);
     const bookId = makeBookId(author, series, title);
 

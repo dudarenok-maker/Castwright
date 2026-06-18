@@ -1,0 +1,11 @@
+name: castwright-codeql
+
+# Exclude test/spec files from CodeQL analysis. Test fixtures routinely trip
+# redos / sanitization / hardcoded-credential queries with no production impact,
+# producing standing noise on the Security tab. This prevents FUTURE test-file
+# alerts; it is NOT retroactive (pre-existing test-file alerts are dismissed
+# explicitly — see docs/security/2026-05-31-security-review.md).
+paths-ignore:
+  - '**/*.test.ts'
+  - '**/*.test.tsx'
+  - 'e2e/**'

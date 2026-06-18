@@ -33,17 +33,22 @@ function codePointOr(original: string, codePoint: number): string {
    `[emphasis]…[/emphasis]` tags via tagHtmlEmphasis before stripping so the
    audio-tag information survives the strip. */
 export function stripHtml(html: string): string {
-  return decodeNumericEntities(
-    tagHtmlEmphasis(html)
-      .replace(/<\s*br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, '&'),
-  )
+  let s = tagHtmlEmphasis(html)
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n');
+  // Replace-until-stable: a single `<[^>]+>` pass can leave a reconstructed tag.
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/<[^>]+>/g, '');
+  } while (s !== prev);
+  s = s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
+  return decodeNumericEntities(s)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

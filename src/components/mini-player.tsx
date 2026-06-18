@@ -60,6 +60,21 @@ function formatRate(rate: number): string {
   return `${Number.isInteger(rate) ? rate.toFixed(1) : rate}×`;
 }
 
+/* fs-16 — mint a stable session id without Math.random (CodeQL
+   js/insecure-randomness). Prefers crypto.randomUUID, then
+   getRandomValues; the final fallback is non-random but
+   collision-resistant enough for a per-tab dedup key. */
+export function makeSessionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const b = new Uint8Array(8);
+    crypto.getRandomValues(b);
+    return 'ss_' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  }
+  return 'ss_' + Date.now().toString(36); // final fallback: NO Math.random
+}
+
 export function MiniPlayer({
   chapter,
   bookId,
@@ -96,11 +111,7 @@ export function MiniPlayer({
      server can deduplicate within a session. The accumulator measures real
      elapsed time between play/pause using Date.now(), independent of
      playback rate or seeks. */
-  const sessionId = useRef(
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `ss_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-  ).current;
+  const sessionId = useRef(makeSessionId()).current;
   const accRef = useRef(
     new StatsAccumulator(
       bookId,

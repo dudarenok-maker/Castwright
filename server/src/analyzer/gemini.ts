@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { GoogleGenAI } from '@google/genai';
 import type { z } from 'zod';
 import { writeInbox, outboxPath, errorPath, type HandoffKey } from '../handoff/protocol.js';
+import { safeSegment } from '../util/safe-path.js';
 import {
   stage1Schema,
   stage1ChapterSchema,
@@ -40,6 +41,18 @@ import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
    the window (driving the 3-attempt retry exhaustion in ~1 s instead of
    ~2 min) and prod can tune without a rebuild. */
 export const STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+/* Hard cap on the streamed-response accumulator. Bounds attacker/model-influenced
+   memory growth in the same function as the `buf += text` sink (an in-CFG guard).
+   The runtime `resolveMaxOutputTokens` cap is NOT visible to static analysis. */
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+export function appendBounded(buf: string, text: string, max = MAX_RESPONSE_BYTES): string {
+  if (buf.length + text.length > max) {
+    throw new Error('Analyzer response exceeded the maximum size.');
+  }
+  return buf + text;
+}
+
 export function resolveStreamIdleTimeoutMs(): number {
   const raw = process.env.GEMINI_STREAM_IDLE_MS;
   if (!raw) return STREAM_IDLE_TIMEOUT_MS;
@@ -245,6 +258,7 @@ export class GeminiAnalyzer implements Analyzer {
     schema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
+    safeSegment(manuscriptId);
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
@@ -556,7 +570,7 @@ export class GeminiAnalyzer implements Analyzer {
         const chunkBlock = chunk.promptFeedback?.blockReason;
         if (chunkBlock) blockReason = chunkBlock;
         if (!text) continue;
-        buf += text;
+        buf = appendBounded(buf, text);
         const now = Date.now();
         onChunk?.({
           receivedBytes: buf.length,
@@ -1161,5 +1175,6 @@ export async function persistResponse(
   key: HandoffKey,
   raw: string,
 ): Promise<void> {
+  safeSegment(manuscriptId);
   await writeFile(outboxPath(manuscriptId, key), raw, 'utf8');
 }

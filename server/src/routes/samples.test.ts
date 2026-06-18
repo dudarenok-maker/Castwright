@@ -34,6 +34,11 @@ describe('samples router', () => {
     expect(res.status).toBe(404);
   });
 
+  it('rejects a traversal slug with 400 before the existsSync precheck', async () => {
+    const res = await request(app).post('/api/samples/..%2f..%2fevil/load');
+    expect(res.status).toBe(400);
+  });
+
   it('loads the bundled sample into the workspace with voices merged', async () => {
     if (!bundleReady()) {
       console.warn(`[samples.test] bundle ${SLUG} not captured yet — skipping load assertion.`);

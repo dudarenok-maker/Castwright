@@ -119,11 +119,16 @@ import {
 } from './tts/sidecar-supervisor.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 import { errorHandler } from './error-handler.js';
+import { apiLimiter } from './middleware/rate-limit.js';
 
 const app = express();
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+// Global anti-DoS limiter — mounted before every route/static mount so it
+// dominates the whole API surface (no-op under test; see rate-limit.ts).
+app.use(apiLimiter);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUDIO_DIR = resolve(__dirname, '..', 'audio');

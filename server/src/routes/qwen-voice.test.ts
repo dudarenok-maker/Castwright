@@ -821,3 +821,10 @@ describe('evaluateDesignLiveness', () => {
     ).toEqual({ action: 'abort', reason: 'unreachable' });
   });
 });
+
+describe('qwenVoicePtPath containment', () => {
+  it('rejects a poisoned voice name', async () => {
+    const { qwenVoicePtPath } = await import('./qwen-voice.js');
+    expect(() => qwenVoicePtPath('../../evil')).toThrow();
+  });
+});
