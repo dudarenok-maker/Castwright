@@ -32,8 +32,8 @@ export function isLoopbackRequest(req: Request): boolean {
 /** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
  *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
  *  would 500 the entire API. cookie@0.7.x doesn't throw, but the catch is cheap
- *  insurance for the hottest path. The same helper backs the CSRF guard's
- *  cookie detection (Task 6) so auth and CSRF agree on "is this a cookie request". */
+ *  insurance for the hottest path. The same helper also backs the CSRF guard's
+ *  cookie detection, so auth and CSRF agree on whether a request carries the cookie. */
 export function readCwLanCookie(cookieHeader: unknown): string | undefined {
   if (typeof cookieHeader !== 'string' || cookieHeader.length === 0) return undefined;
   try {
