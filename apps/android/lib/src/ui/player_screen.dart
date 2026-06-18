@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
@@ -31,6 +33,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _playing = false;
   String? _error;
   List<SyncManifestChapter> _chapters = const [];
+  Set<String> _finished = {};
+  final List<StreamSubscription<Object?>> _subs = [];
   final Map<String, List<double>> _peaks = {}; // chapter uuid -> RMS peaks
 
   /// Fetch + cache a chapter's waveform peaks. Local-first (survives offline +
@@ -70,13 +74,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await widget.runtime.player.openBook(widget.bookId,
           bookTitle: widget.title, artPath: art); // loads + restores resume
       // feeds the lock-screen/notification metadata via nowPlayingStream
+      final chapters = widget.runtime.sync.chaptersOf(widget.bookId);
+      final finished =
+          await widget.runtime.library.finishedChapterUuids(widget.bookId);
       if (mounted) {
         setState(() {
-          _chapters = widget.runtime.sync.chaptersOf(widget.bookId);
+          _chapters = chapters;
+          _finished = finished;
           _ready = true;
         });
         _ensureCurrentPeaks();
       }
+      // Move the highlight + progress as chapters change (incl. auto-advance).
+      _subs.add(widget.runtime.player.nowPlayingStream.listen((_) {
+        if (mounted) setState(() {});
+      }));
+      // Tick a chapter to "done" the moment it finishes, no reopen needed.
+      _subs.add(widget.runtime.player.chapterCompletedStream.listen((uuid) {
+        if (mounted) setState(() => _finished = {..._finished, uuid});
+      }));
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     }
@@ -84,6 +100,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
     // Save locally, then push the latest position to the server (app-6),
     // best-effort + offline-safe.
     widget.runtime.player
@@ -108,6 +127,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     if (mounted) setState(() => _playing = !_playing);
   }
+
+  bool _isFinished(String uuid) => _finished.contains(uuid);
 
   String _fmt(Duration d) {
     final h = d.inHours;
@@ -146,20 +167,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
               itemBuilder: (_, i) {
                 final c = _chapters[i];
                 final current = c.uuid == player.currentChapterUuid;
-                return ListTile(
-                  key: Key('chapter-${c.uuid}'),
-                  leading: CircleAvatar(child: Text('${c.id}')),
-                  title: Text(c.title.isEmpty ? 'Chapter ${c.id}' : c.title),
-                  subtitle: c.durationSec != null
-                      ? Text(formatDuration(c.durationSec))
-                      : null,
-                  trailing: current
-                      ? Icon(_playing ? Icons.volume_up : Icons.pause,
-                          color: Theme.of(context).colorScheme.primary)
-                      : null,
-                  selected: current,
-                  onTap: c.hasAudio ? () => _playChapter(c.uuid) : null,
-                  enabled: c.hasAudio,
+                final finished = _isFinished(c.uuid);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      key: Key('chapter-${c.uuid}'),
+                      leading: CircleAvatar(child: Text('${c.id}')),
+                      title: Text(
+                        c.title.isEmpty ? 'Chapter ${c.id}' : c.title,
+                        style: finished && !current
+                            ? TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant)
+                            : null,
+                      ),
+                      subtitle: c.durationSec != null
+                          ? Text(formatDuration(c.durationSec))
+                          : null,
+                      trailing: current
+                          ? Icon(_playing ? Icons.volume_up : Icons.pause,
+                              color: Theme.of(context).colorScheme.primary)
+                          : (finished
+                              ? Icon(Icons.check_circle,
+                                  color:
+                                      Theme.of(context).colorScheme.primary)
+                              : null),
+                      selected: current,
+                      onTap: c.hasAudio ? () => _playChapter(c.uuid) : null,
+                      enabled: c.hasAudio,
+                    ),
+                    if (current) _currentProgressBar(c),
+                  ],
                 );
               },
             ),
@@ -168,6 +208,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _transport(player),
         ],
       ),
+    );
+  }
+
+  /// A 2px progress bar under the current chapter row, position / duration.
+  Widget _currentProgressBar(SyncManifestChapter c) {
+    final durMs = (c.durationSec ?? 0) * 1000;
+    if (durMs <= 0) return const SizedBox.shrink();
+    return StreamBuilder<Duration>(
+      stream: widget.runtime.player.positionStream,
+      builder: (_, snap) {
+        final posMs = (snap.data ?? Duration.zero).inMilliseconds.toDouble();
+        final value = (posMs / durMs).clamp(0.0, 1.0);
+        return LinearProgressIndicator(
+          minHeight: 2,
+          value: value,
+          key: Key('progress-${c.uuid}'),
+        );
+      },
     );
   }
 
