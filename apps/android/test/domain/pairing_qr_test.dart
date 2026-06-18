@@ -25,6 +25,11 @@ void main() {
     expect(() => PairingQr.parse('CWP1*h:1*c*'), throwsFormatException);
   });
 
+  test('CWP1 path also rejects a non-private host', () {
+    expect(() => PairingQr.parse('CWP1*8.8.8.8:8443*K7QF3M2P*1CR5AYMZRKMGWCTRFPHCFV0H6R'),
+        throwsFormatException);
+  });
+
   test('parses the deep-link URL form (raw colon)', () {
     final qr = PairingQr.parse(
         'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R');

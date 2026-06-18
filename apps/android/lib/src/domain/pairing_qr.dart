@@ -26,7 +26,7 @@ class PairingQr {
     return PairingQr._checked(parts[1], parts[2], parts[3]);
   }
 
-  /// Deep-link form: `https://castwright.ai/pair?h=host:port&c=code&f=fpTag`.
+  /// Deep-link form: `https://www.castwright.ai/pair?h=host:port&c=code&f=fpTag`.
   factory PairingQr._fromUrl(String raw) {
     final uri = Uri.tryParse(raw);
     if (uri == null) throw const FormatException('unparseable pairing URL');
