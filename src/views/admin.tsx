@@ -20,6 +20,7 @@ import {
   type DiagnosticsStatus,
   type ResourceTelemetryRecord,
 } from '../lib/api';
+import { LanAccessCard } from '../components/lan-access-card';
 import { formatDuration } from '../lib/time';
 import { useAppDispatch } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -119,6 +120,9 @@ export function AdminView() {
       <AboutLink />
       <ModelManagerLink />
       <AdvancedConfigLink />
+      <div className="mb-6">
+        <LanAccessCard />
+      </div>
       <HealthBoard />
       <GenerationThroughput stats={stats} />
       <ResourceTrends />
