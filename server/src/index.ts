@@ -31,6 +31,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app } from './app.js';
+import { lanExposureWarning } from './lan-safety.js';
 import { enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
@@ -292,6 +293,9 @@ await runUpgradeCoordinator({
     }
   })
   .catch((err) => console.warn('[upgrade] coordinator skipped:', err));
+
+const warn = lanExposureWarning();
+if (warn) console.warn(warn);
 
 if (lanHttps) {
   if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {

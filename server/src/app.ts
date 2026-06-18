@@ -78,8 +78,10 @@ import { WORKSPACE_ROOT } from './workspace/paths.js';
 import { buildHealthPayload } from './health-payload.js';
 import { errorHandler } from './error-handler.js';
 import { apiLimiter } from './middleware/rate-limit.js';
+import { assertNoTrustProxy } from './lan-safety.js';
 
 export const app = express();
+assertNoTrustProxy(app);
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
