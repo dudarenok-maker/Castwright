@@ -12,7 +12,7 @@ import { readFile, mkdir, copyFile, readdir } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
-import { safeSegment, assertContained } from '../util/safe-path.js';
+import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import {
   WORKSPACE_ROOT,
   bookDirByDisplay,
@@ -51,7 +51,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const slug = req.params.slug;
     let src: string;
     try {
-      src = join(SAMPLES_ROOT, safeSegment(slug));
+      src = join(SAMPLES_ROOT, sanitizeIdSegment(safeSegment(slug)));
       assertContained(SAMPLES_ROOT, src);
     } catch {
       return res.status(400).json({ error: 'Invalid sample slug.' });
@@ -65,7 +65,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const { author, series, title, manuscriptFile } = bundleState;
     let safeManuscriptFile: string;
     try {
-      safeManuscriptFile = safeSegment(manuscriptFile);
+      safeManuscriptFile = sanitizeIdSegment(safeSegment(manuscriptFile));
     } catch {
       return res.status(400).json({ error: 'Invalid bundle manuscript file.' });
     }
@@ -116,8 +116,8 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
       const dstVoices = join(WORKSPACE_ROOT, 'voices', 'qwen');
       await mkdir(dstVoices, { recursive: true });
       for (const f of await readdir(srcVoices)) {
-        const srcVoiceFile = join(srcVoices, safeSegment(f));
-        const dstVoiceFile = join(dstVoices, safeSegment(f));
+        const srcVoiceFile = join(srcVoices, sanitizeIdSegment(safeSegment(f)));
+        const dstVoiceFile = join(dstVoices, sanitizeIdSegment(safeSegment(f)));
         assertContained(srcVoices, srcVoiceFile);
         assertContained(dstVoices, dstVoiceFile);
         if (!existsSync(dstVoiceFile)) {

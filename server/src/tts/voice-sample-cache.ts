@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import type { TtsModelKey } from './index.js';
 import type { CharacterHint, VoiceLike } from './voice-mapping.js';
 import { stripEdges } from '../util/text-match.js';
-import { assertContained } from '../util/safe-path.js';
+import { assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -125,7 +125,7 @@ export function voiceSamplePublicUrl(fileName: string): string {
 
 /* Absolute on-disk path for a cached sample file. */
 export function voiceSampleFilePath(fileName: string): string {
-  const p = resolve(voiceSampleAudioDir(), fileName);
+  const p = resolve(voiceSampleAudioDir(), sanitizeIdSegment(fileName));
   assertContained(voiceSampleAudioDir(), p);
   return p;
 }

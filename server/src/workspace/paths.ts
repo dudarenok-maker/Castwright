@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unicodeKebab } from '../util/safe-id.js';
-import { safeSegment, assertContained } from '../util/safe-path.js';
+import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { stripEdges } from '../util/text-match.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -238,7 +238,7 @@ export function qwenVoicesDir(): string {
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
     persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {
-  const p = join(qwenVoicesDir(), `${safeSegment(name)}.json`);
+  const p = join(qwenVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.json`);
   assertContained(qwenVoicesDir(), p);
   return p;
 }
@@ -270,7 +270,7 @@ export function backupsRootDir(): string {
 }
 
 export function bookBackupsDir(bookId: string): string {
-  const p = join(backupsRootDir(), safeSegment(bookId));
+  const p = join(backupsRootDir(), sanitizeIdSegment(safeSegment(bookId)));
   assertContained(backupsRootDir(), p);
   return p;
 }
