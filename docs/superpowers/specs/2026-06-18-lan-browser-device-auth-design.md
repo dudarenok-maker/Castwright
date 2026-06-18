@@ -280,9 +280,10 @@ sites** — default `credentials: 'same-origin'` attaches the cookie.
 - `src/components/layout.tsx` library-hydrate effect (`:529-531`): on
   `getLibrary()` failure dispatch `hydrateError(message)` (instead of only
   `console.error`).
-- `src/views/book-library.tsx` **and** `src/components/library/library-grid.tsx`:
-  when `loaded && error`, render "Couldn't load your library — Retry" (Retry
-  re-runs the hydrate).
+- `src/views/book-library.tsx` (the orchestrator): when `loaded && error`, render
+  "Couldn't load your library — Retry" before the grid/table/empty branches, so
+  `library-grid.tsx` stays a pure render (no new props). Retry re-fetches via
+  `api.getLibrary()` → `hydrate`/`hydrateError`.
 
 ## Data flow
 
@@ -405,14 +406,15 @@ cross-origin write is 403. (A legacy companion token, if any, re-pairs once.)
 
 ## Dependencies
 
-- Declare **`cookie@^1.1.1`** in `server/package.json` (currently only transitive
-  via Express 5 — pin the installed version to avoid a duplicate in the tree;
-  `cookie` ships its own types, no `@types/cookie`).
+- Declare **`cookie@^0.7.2`** in `server/package.json` to match Express 5's own
+  `cookie@^0.7.1` (resolved `0.7.2`) so it **dedupes** to a single copy (declaring
+  `^1.x` would add a second top-level copy). Both majors export `{ parse }`;
+  `cookie` ships its own types, no `@types/cookie`.
 
 ## Backlog
 
 File `srv-NN` ("Authorize a browser over LAN via Admin device-linking",
-`area:server`/`area:frontend`, `type:feature`) + a thin `docs/BACKLOG.md` row.
+`area:fs`, `type:feature`) + a thin `docs/BACKLOG.md` row.
 Nothing covers browser-over-LAN auth today.
 
 ## Decisions locked (after three review rounds)
@@ -437,7 +439,7 @@ Nothing covers browser-over-LAN auth today.
 - `#/pair` is a **second top-level `createHashRouter` entry** (Layout-free,
   effect-free, URL-driven via `useSearchParams`); no `parseHash`. Re-hydrate is
   implicit via Layout mounting on `/` (no dispatch).
-- `cookie@^1.1.1` declared. Managed device list (label·added·last-seen·expires) +
+- `cookie@^0.7.2` declared (dedupes with Express 5). Managed device list (label·added·last-seen·expires) +
   per-device revoke; desktop-only label; 30-day default in Advanced config.
   Library resilience fix bundled.
 ```

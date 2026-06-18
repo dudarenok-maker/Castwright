@@ -247,62 +247,98 @@ git commit -m "feat(server): device-token expiry (expiresAt, ttlDays, schema 2)"
 ### Task 3: `lastSeenAt` touch-on-use (throttled)
 
 **Files:**
-- Modify: `server/src/workspace/device-tokens.ts` (`isValidDeviceToken` + a throttled touch)
-- Test: `server/src/workspace/device-tokens.test.ts`
+- Modify: `server/src/workspace/device-tokens.ts` (`isValidDeviceToken` + an awaitable touch + a pure throttle predicate)
+- Create: `server/src/workspace/device-tokens.test.ts` (**does not exist today** — create it with a temp-workspace harness)
 
 **Interfaces:**
 - Consumes: `findValidDevice` (Task 2), the in-memory `cache`, `persist`.
-- Produces: `isValidDeviceToken(rawToken)` unchanged signature but now updates `lastSeenAt` at most once per `LASTSEEN_THROTTLE_MS`.
+- Produces:
+  - `shouldTouchLastSeen(record: DeviceTokenRecord, now: number): boolean` (pure — testable).
+  - `touchLastSeen(id: string, now: number): Promise<void>` (awaitable — updates cache + persists).
+  - `isValidDeviceToken(rawToken)` keeps its sync signature; it calls `touchLastSeen` **fire-and-forget** (`void`) when `shouldTouchLastSeen` is true.
 
-- [ ] **Step 1: Write the failing test** — add to `server/src/workspace/device-tokens.test.ts` (this is the IO-backed suite; it uses a temp workspace + `_resetDeviceTokenCacheForTests`):
+> Why a separate file + harness: `WORKSPACE_ROOT` is read once at module load (`server/src/workspace/paths.ts`), so the only IO-backed device-token tests today live in `routes/devices.test.ts`. There is **no** `device-tokens.test.ts`. We must create it and point the workspace at a temp dir **before importing** the module, or `persist()` writes to the real `castwright-workspace`.
+
+- [ ] **Step 1: Write the failing test** — create `server/src/workspace/device-tokens.test.ts`. Mirror the harness `routes/devices.test.ts` uses (temp `WORKSPACE_DIR` + `vi.resetModules()` + dynamic import). The deterministic assertion uses the **awaitable** `touchLastSeen`, not a timer:
 
 ```ts
-it('stamps lastSeenAt on first valid use and throttles re-persist', async () => {
-  const { token } = await createDevice('Phone', 30);
-  expect(isValidDeviceToken(token)).toBe(true);
-  // Touch is fire-and-forget; allow the microtask + write to settle.
-  await new Promise((r) => setTimeout(r, 20));
-  _resetDeviceTokenCacheForTests();
-  const seen1 = listDevices()[0].lastSeenAt;
-  expect(seen1).toBeDefined();
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-  // Second use within the throttle window must NOT change lastSeenAt.
-  expect(isValidDeviceToken(token)).toBe(true);
-  await new Promise((r) => setTimeout(r, 20));
-  _resetDeviceTokenCacheForTests();
-  expect(listDevices()[0].lastSeenAt).toBe(seen1);
+let dir: string;
+let dt: typeof import('./device-tokens.js');
+
+beforeEach(async () => {
+  dir = mkdtempSync(join(tmpdir(), 'cw-devtok-'));
+  process.env.WORKSPACE_DIR = dir;
+  vi.resetModules();                       // re-read WORKSPACE_ROOT at module load
+  dt = await import('./device-tokens.js');
+});
+afterEach(() => {
+  delete process.env.WORKSPACE_DIR;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+it('shouldTouchLastSeen is throttled (pure)', async () => {
+  const now = 1_000_000_000_000;
+  const fresh = { id: '1', label: 'P', tokenHash: 'h', createdAt: '', lastSeenAt: new Date(now - 1000).toISOString() };
+  const stale = { ...fresh, lastSeenAt: new Date(now - 2 * 60 * 60 * 1000).toISOString() };
+  const never = { id: '1', label: 'P', tokenHash: 'h', createdAt: '' };
+  expect(dt.shouldTouchLastSeen(fresh, now)).toBe(false);
+  expect(dt.shouldTouchLastSeen(stale, now)).toBe(true);
+  expect(dt.shouldTouchLastSeen(never, now)).toBe(true);
+});
+
+it('touchLastSeen persists lastSeenAt; isValidDeviceToken triggers it', async () => {
+  const { device } = await dt.createDevice('Phone', 30);
+  await dt.touchLastSeen(device.id, Date.now());      // awaitable → deterministic
+  dt._resetDeviceTokenCacheForTests();
+  expect(dt.listDevices()[0].lastSeenAt).toBeDefined();
+
+  const { token } = await dt.createDevice('Phone2', 30);
+  expect(dt.isValidDeviceToken(token)).toBe(true);     // fire-and-forget touch path still returns true
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/workspace/device-tokens.test.ts -t "lastSeenAt"`
-Expected: FAIL — `lastSeenAt` stays undefined (never written today).
+Run: `cd server && npx vitest run src/workspace/device-tokens.test.ts`
+Expected: FAIL — `shouldTouchLastSeen` / `touchLastSeen` not exported.
 
 - [ ] **Step 3: Implement** — in `server/src/workspace/device-tokens.ts`:
 
 ```ts
 const LASTSEEN_THROTTLE_MS = 60 * 60 * 1000; // ~1h — bounds disk writes on the hot guard path
 
+/** Pure: has it been long enough since lastSeenAt to be worth a write? */
+export function shouldTouchLastSeen(record: DeviceTokenRecord, now: number): boolean {
+  const last = record.lastSeenAt ? Date.parse(record.lastSeenAt) : 0;
+  return now - last > LASTSEEN_THROTTLE_MS;
+}
+
+/** Awaitable: stamp lastSeenAt for one device and persist. */
+export async function touchLastSeen(id: string, now: number): Promise<void> {
+  const next = loadSync().map((d) =>
+    d.id === id ? { ...d, lastSeenAt: new Date(now).toISOString() } : d,
+  );
+  await persist(next);
+}
+
 export function isValidDeviceToken(rawToken: string): boolean {
   const now = Date.now();
   const device = findValidDevice(loadSync(), rawToken, now);
   if (!device) return false;
-  const last = device.lastSeenAt ? Date.parse(device.lastSeenAt) : 0;
-  if (now - last > LASTSEEN_THROTTLE_MS) {
-    // Best-effort, fire-and-forget: a raced/failed persist is harmless.
-    const next = loadSync().map((d) =>
-      d.id === device.id ? { ...d, lastSeenAt: new Date(now).toISOString() } : d,
-    );
-    void persist(next);
-  }
+  // Best-effort, fire-and-forget: a raced/failed persist is harmless.
+  if (shouldTouchLastSeen(device, now)) void touchLastSeen(device.id, now);
   return true;
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd server && npx vitest run src/workspace/device-tokens.test.ts -t "lastSeenAt"`
+Run: `cd server && npx vitest run src/workspace/device-tokens.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -437,21 +473,27 @@ git commit -m "feat(server): pairing sessions carry a label + support an 80-bit 
 
 - [ ] **Step 1: Declare the dependency**
 
-Run: `cd server && npm pkg get dependencies.cookie` (expect empty), then:
-`cd server && npm install cookie@^1.1.1 --save-exact=false`
-Confirm: `cd server && node -e "console.log(require('cookie/package.json').version)"` prints `1.1.x`.
+Run: `cd server && npm pkg get dependencies.cookie` (expect empty), then declare
+the version Express 5 already resolves, so it **dedupes** (declaring `^1.x` would
+add a second copy):
+`cd server && npm install cookie@^0.7.2 --save-exact=false`
+Confirm: `cd server && node -e "console.log(require('cookie/package.json').version)"` prints `0.7.x`, and `npm ls cookie` shows a single deduped entry.
 
-- [ ] **Step 2: Write the failing test** — add to `server/src/lan-auth.test.ts`:
+- [ ] **Step 2: Write the failing test** — add to `server/src/lan-auth.test.ts`. **Mock `device-tokens` so the guard test does no workspace IO** (this file has no temp-workspace harness and must not touch the real `castwright-workspace`). Put the mock at the top of the file with the other imports:
 
 ```ts
-import { parse as _p } from 'cookie'; // sanity: dep resolvable
+vi.mock('./workspace/device-tokens.js', () => ({
+  isValidDeviceToken: (t: string) => t === 'goodtoken',
+}));
+```
 
-it('accepts a valid device token from the __Host-cw_lan cookie', async () => {
-  // enforce the guard
+Then:
+
+```ts
+it('accepts a valid device token from the __Host-cw_lan cookie', () => {
   process.env.LAN_HTTPS = '1';
   process.env.LAN_AUTH_TOKEN = 'secret';
-  const { token } = await createDevice('Phone', 30); // from device-tokens
-  const req = mkReq({ headers: { cookie: `__Host-cw_lan=${token}` }, ip: '192.168.1.9' });
+  const req = mkReq({ headers: { cookie: '__Host-cw_lan=goodtoken' }, ip: '192.168.1.9' });
   const res = mkRes();
   const next = vi.fn();
   requireLanToken(req, res, next);
@@ -471,7 +513,7 @@ it('rejects a garbage cookie', () => {
 });
 ```
 
-(Reuse this file's existing `mkReq`/`mkRes` helpers; if absent, mirror the existing tests' request/response stubs in this file.)
+(Reuse this file's existing `mkReq`/`mkRes` helpers — they exist near the top of `lan-auth.test.ts`. If the file already imports `device-tokens` indirectly, ensure the `vi.mock` is hoisted above that import.)
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -653,18 +695,25 @@ git commit -m "feat(server): Origin allow-list CSRF guard for cookie-authed writ
 - Consumes: `createPairingSession(label, undefined, 10)` (Task 4), `isLanTokenEnforced`/`isLoopbackRequest` (`lan-auth.ts`), `enumerateLanUrls` (`export-lan.ts`), `configValue` (`config/resolver.ts`).
 - Produces: `POST /api/devices/pair-session` → `{ url, code, expiresAt }`; admin `POST /api/devices` now mints a 30-day token.
 
-- [ ] **Step 1: Write the failing test** — add to `server/src/routes/devices.test.ts` (this suite drives the router with supertest or the project's app harness — mirror the existing `/devices` tests):
+- [ ] **Step 1: Write the failing test** — add to `server/src/routes/devices.test.ts` (this suite uses **supertest against a real `app`** — `request(app)`; under supertest `req.ip === '::ffff:127.0.0.1'`, which is in the `LOOPBACK` set, so loopback-only routes pass). **Mock `enumerateLanUrls`** so the 200 case doesn't depend on a live LAN NIC (a no-NIC box would otherwise return `409 no-lan-url`). Add at the top of the file:
+
+```ts
+vi.mock('./export-lan.js', async (orig) => ({
+  ...(await orig<typeof import('./export-lan.js')>()),
+  enumerateLanUrls: () => ({ urls: ['https://192.168.1.7:8443'], port: 8443, protocol: 'https' }),
+}));
+```
+
+Then:
 
 ```ts
 it('pair-session returns a #/pair URL payload from loopback when enforced', async () => {
   process.env.LAN_HTTPS = '1';
   process.env.LAN_AUTH_TOKEN = 'secret';
   process.env.LAN_HTTPS_PORT = '8443';
-  const res = await request(app).post('/api/devices/pair-session')
-    .set('X-Forwarded-For', '') // ensure loopback in harness
-    .send({ label: 'Mike phone' });
+  const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
   expect(res.status).toBe(200);
-  expect(res.body.url).toMatch(/\/#\/pair\?c=[0-9A-HJKMNP-TV-Z]{16}$/);
+  expect(res.body.url).toMatch(/^https:\/\/192\.168\.1\.7:8443\/#\/pair\?c=[0-9A-HJKMNP-TV-Z]{16}$/);
   expect(typeof res.body.expiresAt).toBe('number');
 });
 
@@ -676,7 +725,7 @@ it('pair-session 409s when LAN auth is not enforced', async () => {
 });
 ```
 
-(If the existing devices tests assert `createDevice` was called — they mock it — keep the mock but make it accept `(label, ttlDays)`.)
+(Note: `devices.test.ts` uses the **real** `createDevice` against its temp workspace — there is no `createDevice` mock to update here.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -749,13 +798,37 @@ git commit -m "feat(server): admin mint stamps TTL + POST /api/devices/pair-sess
 - Consumes: `redeemPairingSession` (Task 4), `createDevice` (Task 2), `configValue`, `isLanTokenEnforced`, a dedicated rate limiter.
 - Produces: `POST /api/pair/redeem-browser` — sets `__Host-cw_lan`, returns `{ label, expiresAt }`; mounted on the pre-guard `pairRedeemRouter`.
 
-- [ ] **Step 1: Write the failing test** — add to `server/src/routes/pairing.test.ts`:
+- [ ] **Step 1: Extend the existing mocks** in `server/src/routes/pairing.test.ts`. This file mocks `../lan-auth.js` (currently exporting only `isLoopbackRequest`) and `../workspace/device-tokens.js` (mock `createDevice(label)` returning no `expiresAt`). Both must change or Task 8 throws/asserts wrong:
+
+```ts
+// lan-auth mock — add isLanTokenEnforced (default true; per-test override for the 409 case)
+vi.mock('../lan-auth.js', () => ({
+  isLoopbackRequest: () => true,
+  isLanTokenEnforced: vi.fn(() => true),
+}));
+import { isLanTokenEnforced } from '../lan-auth.js';
+
+// device-tokens mock — accept (label, ttlDays), return a device WITH expiresAt
+vi.mock('../workspace/device-tokens.js', () => ({
+  createDevice: vi.fn(async (label: string, ttlDays: number) => ({
+    device: { id: 'd1', label, createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + ttlDays * 86_400_000).toISOString(), revoked: false },
+    token: 'tok_test',
+  })),
+}));
+```
+
+Reset the dedicated limiter between tests so the 5/min budget doesn't bleed (under supertest every request keys to `::ffff:127.0.0.1`). Task 8 Step 3 **exports** `browserRedeemLimiter`; reset it here:
+
+```ts
+import { browserRedeemLimiter } from './pairing.js';
+beforeEach(() => { browserRedeemLimiter.resetKey('::ffff:127.0.0.1'); });
+```
+
+Then add the tests:
 
 ```ts
 it('redeem-browser sets the __Host-cw_lan cookie and returns no raw token', async () => {
-  process.env.LAN_HTTPS = '1';
-  process.env.LAN_AUTH_TOKEN = 'secret';
-  // mint a code first via the (loopback) device pair-session, or call createPairingSession directly:
   const { code } = createPairingSession('Mike phone', undefined, 10);
   const res = await request(app).post('/api/pair/redeem-browser').send({ code });
   expect(res.status).toBe(201);
@@ -763,28 +836,25 @@ it('redeem-browser sets the __Host-cw_lan cookie and returns no raw token', asyn
   expect(res.body).toHaveProperty('expiresAt');
   expect(res.body).not.toHaveProperty('token');
   const setCookie = String(res.headers['set-cookie'] ?? '');
-  expect(setCookie).toMatch(/__Host-cw_lan=/);
+  expect(setCookie).toMatch(/__Host-cw_lan=tok_test/);
   expect(setCookie).toMatch(/HttpOnly/i);
   expect(setCookie).toMatch(/SameSite=Strict/i);
   expect(setCookie).toMatch(/Secure/i);
 });
 
 it('redeem-browser 409s when LAN auth not enforced', async () => {
-  delete process.env.LAN_AUTH_TOKEN;
+  vi.mocked(isLanTokenEnforced).mockReturnValueOnce(false); // env won't reach the mocked module
   const { code } = createPairingSession('x', undefined, 10);
   const res = await request(app).post('/api/pair/redeem-browser').send({ code });
   expect(res.status).toBe(409);
 });
 
 it('redeem-browser rate-limits after 5/min', async () => {
-  process.env.LAN_HTTPS = '1'; process.env.LAN_AUTH_TOKEN = 'secret';
   for (let i = 0; i < 5; i++) await request(app).post('/api/pair/redeem-browser').send({ code: 'WRONGWRONGWRONG1' });
   const res = await request(app).post('/api/pair/redeem-browser').send({ code: 'WRONGWRONGWRONG1' });
   expect(res.status).toBe(429);
 });
 ```
-
-Also update the companion-redeem mock expectations so `createDevice` is called as `(label, <number>)`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -804,8 +874,9 @@ const ttl = () => configValue<number>('lan.deviceTokenTtlDays');
 // ...inside pairRedeemRouter.post('/redeem', ...): replace createDevice(label)
 //    with createDevice(label, ttl())
 
-// dedicated limiter — NOT skipped under Vitest (the global apiLimiter is)
-const browserRedeemLimiter = rateLimit({
+// dedicated limiter — NOT skipped under Vitest (the global apiLimiter is).
+// Exported so tests can reset its store between cases (shared IP under supertest).
+export const browserRedeemLimiter = rateLimit({
   windowMs: 60_000,
   limit: 5,
   standardHeaders: true,
@@ -848,10 +919,63 @@ pairRedeemRouter.post(
 Run: `cd server && npx vitest run src/routes/pairing.test.ts`
 Expected: PASS (existing companion redeem + session tests stay green).
 
+- [ ] **Step 4b: Write the END-TO-END integration test (the spec's promised cookie→guarded-GET chain).** `pairing.test.ts` mocks the guard + device-tokens, so it can't prove the real chain. Create a dedicated file with **no mocks** + a temp workspace + the real app, exercising redeem → capture `Set-Cookie` → replay on a guarded GET → assert it passes; and a foreign-Origin write → 403. Create `server/src/routes/lan-cookie-integration.test.ts`:
+
+```ts
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import request from 'supertest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+let dir: string;
+let app: import('express').Express;
+let createPairingSession: typeof import('../workspace/pairing-sessions.js').createPairingSession;
+
+beforeEach(async () => {
+  dir = mkdtempSync(join(tmpdir(), 'cw-lan-int-'));
+  process.env.WORKSPACE_DIR = dir;
+  process.env.LAN_HTTPS = '1';
+  process.env.LAN_AUTH_TOKEN = 'secret';
+  process.env.LAN_HTTPS_PORT = '8443';
+  vi.resetModules();
+  ({ createPairingSession } = await import('../workspace/pairing-sessions.js'));
+  ({ app } = await import('../app.js')); // the assembled Express app (real guard + csrf + redeem-browser)
+});
+afterEach(() => {
+  delete process.env.WORKSPACE_DIR; delete process.env.LAN_AUTH_TOKEN; delete process.env.LAN_HTTPS;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+it('a redeem-browser cookie authorizes a subsequent guarded GET from a LAN IP', async () => {
+  const { code } = createPairingSession('Phone', undefined, 10);
+  const redeem = await request(app).post('/api/pair/redeem-browser').send({ code });
+  expect(redeem.status).toBe(201);
+  const cookie = redeem.headers['set-cookie'];
+  // From a NON-loopback IP the guard would 401 without the cookie; with it, it passes.
+  const guarded = await request(app).get('/api/library')
+    .set('Cookie', cookie).set('X-Forwarded-For', '10.0.0.9');
+  expect(guarded.status).not.toBe(401);
+});
+
+it('a cookie-bearing write with a foreign Origin is 403 (CSRF)', async () => {
+  const { code } = createPairingSession('Phone', undefined, 10);
+  const cookie = (await request(app).post('/api/pair/redeem-browser').send({ code })).headers['set-cookie'];
+  const res = await request(app).post('/api/devices') // a guarded state-changing route
+    .set('Cookie', cookie).set('Origin', 'https://evil.example:8443').send({ label: 'x' });
+  expect(res.status).toBe(403);
+});
+```
+
+> If the app isn't exported from a `server/src/app.ts` (it may be assembled inline in `index.ts`), first check `index.ts`: if `app` is not separately importable, extract the app assembly into `app.ts` and have `index.ts` import + `listen()` on it (a small, mechanical refactor) so the integration test can import the wired app without binding a port. Note `req.ip` is `::ffff:127.0.0.1` under supertest regardless of `X-Forwarded-For` (trust proxy is unset), so the guard sees loopback for the redeem (fine — redeem is pre-guard) but the **guarded GET must be tested with the cookie**, which is what proves the chain.
+
+Run: `cd server && npx vitest run src/routes/lan-cookie-integration.test.ts`
+Expected: PASS.
+
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/src/routes/pairing.ts server/src/routes/pairing.test.ts
+git add server/src/routes/pairing.ts server/src/routes/pairing.test.ts server/src/routes/lan-cookie-integration.test.ts
 git commit -m "feat(server): POST /api/pair/redeem-browser sets HttpOnly cookie; companion mint stamps TTL"
 ```
 
@@ -1008,20 +1132,22 @@ git commit -m "feat(frontend): api client for device pairing + typed ApiError"
 ### Task 11: Library resilience — error state + Retry
 
 **Files:**
-- Modify: `src/store/library-slice.ts`, `src/components/layout.tsx`, `src/views/book-library.tsx`, `src/components/library/library-grid.tsx`
+- Modify: `src/store/library-slice.ts`, `src/components/layout.tsx`, `src/views/book-library.tsx`
 - Test: `src/store/library-slice.test.ts`, `src/views/book-library.test.tsx`
+
+> The error panel is rendered by the **orchestrator** (`book-library.tsx`), short-circuiting before the grid/table/empty branches — so `library-grid.tsx` stays a pure render and needs no new props.
 
 **Interfaces:**
 - Produces: `libraryActions.hydrateError(message: string)`; slice field `error: string | null`; `hydrate(...)` clears `error`.
 
-- [ ] **Step 1: Write the failing test** — in `src/store/library-slice.test.ts`:
+- [ ] **Step 1: Write the failing test** — in `src/store/library-slice.test.ts` (`hydrate` takes a `LibraryResponse`, which is `{ authors }` only — `books` is derived, so don't pass it):
 
 ```ts
 it('hydrateError sets loaded + error; hydrate clears error', () => {
   let s = reducer(initialState, libraryActions.hydrateError('boom'));
   expect(s.loaded).toBe(true);
   expect(s.error).toBe('boom');
-  s = reducer(s, libraryActions.hydrate({ authors: [], books: [] } as any));
+  s = reducer(s, libraryActions.hydrate({ authors: [] }));
   expect(s.error).toBeNull();
 });
 ```
@@ -1046,17 +1172,29 @@ Expected: FAIL — no `error` field / no `hydrateError` / no Retry UI.
 });
 ```
 
-`src/views/book-library.tsx`: read `const error = useAppSelector((s) => s.library.error);` and, when `loaded && error`, render (before the grid/empty branches):
+`src/views/book-library.tsx`: read `const error = useAppSelector((s) => s.library.error);`, define a concrete retry that re-fetches (the orchestrator has `useAppDispatch` + imports `api`), and short-circuit the render before the `showNoResults`/card/table branches:
 
 ```tsx
-<div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center" role="alert">
-  <h3 className="font-serif text-2xl font-bold text-ink">Couldn't load your library</h3>
-  <p className="mt-2 text-sm text-ink/60">{error}</p>
-  <PrimaryButton variant="dark" onClick={() => dispatch(libraryActions.hydrateError(''))} icon={false}>Retry</PrimaryButton>
-</div>
+const retry = () => {
+  api
+    .getLibrary()
+    .then((res) => dispatch(libraryActions.hydrate(res)))
+    .catch((e) => dispatch(libraryActions.hydrateError(e instanceof Error ? e.message : String(e))));
+};
+
+// ...in the returned JSX, immediately inside the outer wrapper, before <ContinueListeningRail/>/grid:
+{loaded && error ? (
+  <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center" role="alert">
+    <h3 className="font-serif text-2xl font-bold text-ink">Couldn't load your library</h3>
+    <p className="mt-2 text-sm text-ink/60">{error}</p>
+    <div className="mt-6"><PrimaryButton variant="dark" onClick={retry} icon={false}>Retry</PrimaryButton></div>
+  </div>
+) : (
+  /* existing showNoResults / card / table branches unchanged */
+)}
 ```
 
-Wire Retry to re-run the hydrate: simplest is to expose an `onRetry` from the orchestrator that calls `api.getLibrary().then(hydrate).catch(hydrateError)`; thread the same handler into `library-grid.tsx`'s loaded+error branch so the grid path also offers Retry.
+(`library-grid.tsx` is **not** modified — the orchestrator owns the error branch.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1066,7 +1204,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/store/library-slice.ts src/components/layout.tsx src/views/book-library.tsx src/components/library/library-grid.tsx src/store/library-slice.test.ts src/views/book-library.test.tsx
+git add src/store/library-slice.ts src/components/layout.tsx src/views/book-library.tsx src/store/library-slice.test.ts src/views/book-library.test.tsx
 git commit -m "fix(frontend): library scan failure shows Retry instead of an eternal skeleton"
 ```
 
@@ -1116,7 +1254,7 @@ git commit -m "refactor(frontend): extract shared PairingQr component"
 - Consumes: `api.redeemBrowserPair` (Task 10), `useSearchParams`, `useNavigate`.
 - Produces: a route at `/pair` rendering `<PairShell/>` outside `<Layout>`.
 
-- [ ] **Step 1: Write the failing test** — `pair.test.tsx`: render `<PairShell/>` inside a `MemoryRouter` (hash) with `?c=ABC`; assert the "Authorize this browser" confirm screen renders from the query param; click Authorize → assert `api.redeemBrowserPair` was called with `{ code: 'ABC' }` and that on resolve it navigates to `/`. Assert no `getLibrary`/`getSetupReadiness` calls fire from this component (it mounts none of Layout's effects).
+- [ ] **Step 1: Write the failing test** — `pair.test.tsx`. Mount under `MemoryRouter` with a **plain** location carrying the query (NOT a hash fragment — `useSearchParams` reads `?c=` from the location's search): `<MemoryRouter initialEntries={['/pair?c=ABC']}><Routes><Route path="/pair" element={<PairShell/>}/><Route path="/" element={<div>home</div>}/></Routes></MemoryRouter>`. Mock `api.redeemBrowserPair` (resolve). Assert the "Authorize this browser" screen renders; click Authorize → assert `api.redeemBrowserPair` was called with `{ code: 'ABC' }` and the rendered tree navigates to `/` (the `home` div appears). (PairShell imports none of Layout's effects, so "no `getLibrary` fires" is structurally guaranteed — no need to assert it.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1173,7 +1311,7 @@ export function PairShell() {
 }
 ```
 
-`src/routes/index.tsx`: change the `createHashRouter([...])` argument to a **two-element** array — add `{ path: '/pair', element: <PairShell /> }` **before** the existing `{ path: '/', element: <Layout/>, children: [...] }`. Import `PairShell`. Leave the `{ path: '*', element: <NotFound/> }` catch-all where it is (inside Layout's `children`).
+`src/routes/index.tsx`: this file exports `const router = createHashRouter([...])` (imported + mounted by `main.tsx`). Change that single-element array to a **two-element** array — add `{ path: '/pair', element: <PairShell /> }` **before** the existing `{ path: '/', element: <Layout/>, children: [...] }`. Import `PairShell` from `../views/pair`. Leave the `{ path: '*', element: <NotFound/> }` catch-all where it is (inside Layout's `children`, so it doesn't swallow `/pair`).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1209,7 +1347,80 @@ git commit -m "feat(frontend): #/pair Layout-free route to authorize a browser"
 Run: `npx vitest run src/components/lan-access-card.test.tsx`
 Expected: FAIL — component does not exist.
 
-- [ ] **Step 3: Implement** — `src/components/lan-access-card.tsx`: a card matching the existing Admin card styling with: a label input + "Authorize a device" button (calls `createDevicePairSession`, shows `<PairingQr payload={url} .../>`); a device list (`label · added · last seen · expires`, "—" when `lastSeenAt` absent) each with Revoke; a 401 catch → render "Manage devices from the desktop." Render it inside `src/views/admin.tsx` alongside the existing cards. Use `time.ts` helpers for date formatting and design-token classes (no hex).
+- [ ] **Step 3: Implement** — `src/components/lan-access-card.tsx`. Match the existing Admin card shell (`bg-white rounded-3xl border border-ink/10 shadow-card`, per `admin.tsx`). **`time.ts` has no date formatter** (only duration helpers) — format ISO dates inline with `new Date(iso).toLocaleDateString()`. Design-token classes only (no hex):
+
+```tsx
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../lib/api';
+import type { PublicDevice } from '../lib/types';
+import { PairingQr } from './pairing/pairing-qr';
+import { PrimaryButton } from './primitives';
+
+const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
+
+export function LanAccessCard() {
+  const [devices, setDevices] = useState<PublicDevice[] | null>(null);
+  const [manageHint, setManageHint] = useState(false); // true on 401 (viewing from a phone)
+  const [label, setLabel] = useState('');
+  const [session, setSession] = useState<{ url: string; expiresAt: number } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = () => {
+    api.listDevices()
+      .then((r) => setDevices(r.devices))
+      .catch((e) => { if (e instanceof ApiError && e.status === 401) setManageHint(true); else setErr(String(e)); });
+  };
+  useEffect(refresh, []);
+
+  const authorize = async () => {
+    setErr(null);
+    try { setSession(await api.createDevicePairSession({ label: label.trim() || 'Device' })); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  const revoke = async (id: string) => { await api.revokeDevice(id); refresh(); };
+
+  return (
+    <section className="bg-white rounded-3xl border border-ink/10 shadow-card p-6">
+      <h2 className="font-serif text-xl font-bold text-ink">LAN access</h2>
+      {manageHint ? (
+        <p className="mt-2 text-sm text-ink/60">Manage devices from the desktop app.</p>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <input
+              value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Device name"
+              className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink min-h-[44px] sm:min-h-0"
+            />
+            <PrimaryButton variant="dark" onClick={authorize} icon={false}>Authorize a device</PrimaryButton>
+          </div>
+          {err && <p className="mt-2 text-sm text-rose-700">{err}</p>}
+          {session && (
+            <div className="mt-4">
+              <PairingQr payload={session.url} expiresAt={session.expiresAt} onRegenerate={authorize} />
+            </div>
+          )}
+          <ul className="mt-6 divide-y divide-ink/8">
+            {(devices ?? []).map((d) => (
+              <li key={d.id} className="py-3 flex items-center justify-between gap-3 text-sm">
+                <span className="text-ink">
+                  <span className="font-medium">{d.label}</span>
+                  <span className="text-ink/55"> · added {fmt(d.createdAt)} · last seen {fmt(d.lastSeenAt)} · expires {fmt(d.expiresAt)}</span>
+                </span>
+                <button
+                  type="button" onClick={() => revoke(d.id)}
+                  className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] sm:min-h-0"
+                >Revoke</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+```
+
+Render `<LanAccessCard/>` inside `src/views/admin.tsx` alongside the existing cards.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1245,7 +1456,7 @@ Expected: PASS.
 
 ```bash
 gh issue create --title "srv-NN — Authorize a browser over LAN via Admin device-linking" \
-  --label "area:server,area:frontend,type:feature" \
+  --label "area:fs,type:feature" \
   --body "Implements docs/superpowers/specs/2026-06-18-lan-browser-device-auth-design.md. See PR."
 ```
 
@@ -1278,6 +1489,6 @@ git commit -m "test(e2e): LAN device-auth UI flow + backlog row"
 ## Implementation traps (carry into review)
 
 - `persist()` must write `{schema: 2}` (Task 2) — else an ordinary mutation reverts the file to schema 1.
-- Pin `cookie@^1.1.1` (Task 5) — it's currently only transitive via Express 5.
+- Pin `cookie@^0.7.2` (Task 5) to match Express 5's resolved version so it dedupes — `^1.x` would add a second copy.
 - Document the IPv6-LAN / hostname-`.local` Origin limitation (both fail *closed*) near `csrf-origin.ts` (Task 6).
 - The dedicated redeem limiter must NOT inherit the global `apiLimiter`'s Vitest skip (Task 8).
