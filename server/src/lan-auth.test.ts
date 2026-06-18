@@ -1,6 +1,11 @@
 /* srv-20 — LAN shared-secret token guard. Unit-tests the middleware
    against mocked req/res so no HTTP server is needed. */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('./workspace/device-tokens.js', () => ({
+  isValidDeviceToken: (t: string) => t === 'goodtoken',
+}));
+
 import {
   requireLanToken,
   isLanTokenEnforced,
@@ -135,5 +140,27 @@ describe('lan-auth (srv-20)', () => {
     expect(extractToken(mkReq({ headers: { 'x-lan-token': 'xyz' } }))).toBe('xyz');
     expect(extractToken(mkReq({ query: { token: 'qqq' } }))).toBe('qqq');
     expect(extractToken(mkReq())).toBeUndefined();
+  });
+
+  it('accepts a valid device token from the __Host-cw_lan cookie', () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    const req = mkReq({ headers: { cookie: '__Host-cw_lan=goodtoken' }, ip: '192.168.1.9' });
+    const res = mkRes();
+    const next = vi.fn();
+    requireLanToken(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(res._res.statusCode).not.toBe(401);
+  });
+
+  it('rejects a garbage cookie', () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    const req = mkReq({ headers: { cookie: '__Host-cw_lan=not-a-token' }, ip: '192.168.1.9' });
+    const res = mkRes();
+    const next = vi.fn();
+    requireLanToken(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res._res.statusCode).toBe(401);
   });
 });
