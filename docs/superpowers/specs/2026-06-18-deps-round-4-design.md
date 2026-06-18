@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-18
 - **Status:** approved design (pre-implementation)
-- **Branch:** `chore/deps-round-4` (JS) + `chore/app-flutter-deps` (Flutter)
+- **Branch:** `chore/deps-round-4` (single branch; JS + Flutter land as separately-scoped commits in one PR)
 - **Implementation plan:** `docs/features/224-deps-round-4.md` (to be authored by writing-plans)
 - **Backlog items touched:** `srv-4` (#431), `ops-14` (#711), `ops-17` (#790) + one new `area:side` item filed for the deferred sidecar spike.
 
@@ -22,6 +22,11 @@ blind.
 - `npm run verify` green; `cd server && npm run test:slow` green; `flutter analyze` + `flutter test` green.
 - The three blocked-item notes carry a 2026-06-18 re-confirmation; the sidecar
   spike has a `needs-plan` issue **and** a `docs/BACKLOG.md` row.
+- The `node-domexception` deprecation warning **persists** (upstream-pinned via
+  gaxios→node-fetch, `srv-4`) — expected, not a regression. It never appears in
+  `npm outdated` (it's a deprecated _transitive_, not an out-of-date direct dep),
+  so "outdated is clean" and "the warning is gone" are different things; only the
+  former is a done-criterion here.
 
 ## 2. The dependency surfaces (load-bearing — this drove a design correction)
 
@@ -105,9 +110,22 @@ surface, deliberately **out of scope** for this round (see §6).
 `fastapi`/`starlette`/`uvicorn` majors. Each needs a GPU box + the golden-audio
 gate to validate. **Not hygiene — its own spike.**
 
-## 4. Work plan — three surfaces, two PRs, one deferral
+## 4. Work plan — three surfaces, one PR, one deferral
 
-### PR 1 — `chore/deps-round-4` (JS: frontend + server, scope `deps`)
+The spine of the round is the **three majors** (each carries a behavior/floor
+change worth pinning a deliberate note to) plus the **backlog reconciliation +
+sidecar-spike filing**. The 8 in-range root bumps ride along (a future
+`npm install` would re-apply them anyway); they're hygiene, not the point.
+
+All of it lands in **one PR** on `chore/deps-round-4`, as separately-scoped
+commits — `chore(deps): …` for the JS surfaces, `chore(app): …` for Flutter.
+This matches the repo's "one integration PR" default; squash/rebase are disabled
+so the per-commit scopes survive in history, which is where the granularity the
+scope table cares about actually lives. A second PR would add a verify run, a
+merge, and a doc-allocation/merge-order problem for zero mechanical benefit
+(`app.yml` triggers on `apps/android/**` _paths_, not PR boundaries).
+
+### Commit group A — JS (frontend + server, scope `deps`)
 
 **Wave 1 — frontend in-range (root).**
 1. `npm update` → the 8 Tier-1 pkgs (lockfile-only; no manifest edit needed —
@@ -130,16 +148,22 @@ revertable commit.
    for CI/release, `win32-x64` dev box, `darwin-arm64` Mac deployer) — a pruned
    matrix is a release blocker, not just a CI annoyance. Run `npm test` (cover
    routes exercise sharp). Commit: `chore(deps): sharp 0.34→0.35 (server)`.
-3. Full `npm run verify` from root. **Add the `run-ci` label** for one clean-room
-   Ubuntu run (sharp lockfile-matrix insurance, since the bump is authored on Windows).
+3. Full `npm run verify` from root. **No cloud CI run is needed for the sharp
+   matrix.** A `run-ci` Ubuntu run only exercises `linux-x64` and would _not_
+   catch a pruned `darwin-arm64`/`linuxmusl-x64` entry — the lockfile-content
+   check in step 2 is the real, OS-independent assertion (sharp's per-platform
+   `@img/*` packages are `optionalDependencies` npm writes to the lockfile on any
+   OS; the failure mode is _absent lockfile entries_, not a Linux runtime error),
+   and `release.yml` already exercises the full cross-OS matrix at tag time for free.
 
-### PR 2 — `chore/app-flutter-deps` (scope `app`, gated by `app.yml`)
+### Commit group B — Flutter (scope `app`)
 
-Split out because `apps/android/**` is the `app` scope (not `deps`), and
-`app.yml` auto-runs `flutter analyze`/`test`/build on those paths — it's the
-**only** automated Flutter coverage and no local hook runs it. Folding it into
-PR 1 mis-scopes the commit and buries the `connectivity_plus` change under
-"lockfile hygiene."
+A separate, correctly-scoped `chore(app): …` commit on the **same branch/PR** —
+not a second PR. `apps/android/**` is the `app` scope, and `app.yml` triggers on
+those **paths** (not on PR boundaries), so one PR containing this commit fires the
+Flutter CI (`flutter analyze`/`test`/build — the only automated Flutter coverage,
+no local hook runs it) identically. Keeping `connectivity_plus`/codegen as its own
+commit keeps the diff legible without forking the PR.
 
 1. `flutter pub upgrade` (non-major) → app_links/drift/drift_dev/path_provider +
    transitives.
@@ -155,7 +179,7 @@ PR 1 mis-scopes the commit and buries the `connectivity_plus` change under
    still returns `List<ConnectivityResult>`. `app.yml` is the CI gate.
    Open as **draft**, `gh pr ready` once green.
 
-### Docs & deferral (in PR 1)
+### Docs & deferral (same PR, scope `docs`)
 
 1. **Author `docs/features/224-deps-round-4.md`** (status frontmatter, the three
    majors' migration notes, Key files, `Refs #431 #711 #790`) + an `INDEX.md`
@@ -177,12 +201,14 @@ PR 1 mis-scopes the commit and buries the `connectivity_plus` change under
 - **Server (Wave 2):** existing suites are the regression net, and each major's
   seam is named:
   - express-rate-limit 8 → `server/src/middleware/rate-limit.test.ts` (exercises
-    the limiter; asserts `ratelimit-limit` + 429). Re-run after the bump; pin the
-    header assertion to the draft surface v8 emits (`standardHeaders: true` is
-    unchanged, so no flip expected).
+    the limiter via a `skip: () => false` override; asserts `ratelimit-limit` +
+    429). Re-run after the bump (`standardHeaders: true` is unchanged, so no flip
+    expected). _Fallback if it flips:_ if v8 maps `standardHeaders: true` to a
+    draft that drops the individual `ratelimit-limit` header, pin the test to
+    `standardHeaders: 'draft-6'` or assert the combined `RateLimit` header instead.
   - sharp 0.35 → the cover routes' tests (`cover.test.ts`, `upload.test.ts`)
     exercise `sharp(...).jpeg().toBuffer()` end-to-end.
-- **Flutter (PR 2):** `flutter analyze` + `flutter test` (the pure
+- **Flutter (commit group B):** `flutter analyze` + `flutter test` (the pure
   `network_info_test.dart` locks the connectivity mapping); `app.yml` re-runs in CI.
 - **Skipped legs (stated explicitly per the checklist):** sidecar pytest and
   golden-audio are **not** run — this round touches no sidecar code (deferral is
@@ -211,11 +237,16 @@ PR 1 mis-scopes the commit and buries the `connectivity_plus` change under
   major as its own follow-up issue — ship the rest (mirrors the
   reconciliation-pattern "drop the offending branch, ship the rest" discipline).
 - **sharp platform-matrix pruning** (Windows-dev authoring → Linux-CI/macOS
-  release). Mitigated by the post-bump matrix check + the `run-ci` Ubuntu run.
+  release). Mitigated by the post-bump lockfile-matrix grep (OS-independent) +
+  `release.yml`'s existing cross-OS verify at tag time — not a cloud CI run (an
+  Ubuntu runner only validates `linux-x64`).
 - **Playwright browser boundary.** Mitigated by `npx playwright install chromium`
-  in Wave 1; consider pinning `@playwright/test` to `~1.60.0` to keep the
-  browser-binary boundary out of routine `npm update` churn (open question for
-  the plan).
+  in Wave 1. **Decision: do _not_ pin `@playwright/test`.** Pinning `~1.60.0`
+  would both conflict with this round's own 1.61.0 bump and freeze Playwright out
+  of all future minors — a worse trade than the cheap, idempotent, already-
+  documented install step (the e2e harness errors with a clear hint when chromium
+  is missing). The durable fix is "run `playwright install` when the lockfile's
+  playwright version changes," not a version freeze.
 
 ## 8. Known non-issues (do not re-flag in future audits)
 
@@ -225,3 +256,7 @@ PR 1 mis-scopes the commit and buries the `connectivity_plus` change under
   `drift_dev`'s codegen toolchain; never imported in `apps/android/lib`, never
   shipped. Ignore.
 - Sidecar deferral — verified decoupled from every npm/Flutter bump in this round.
+- vitest "version skew" (root vs server) — a non-issue: server vitest already
+  floated to 4.1.9 while root sits at 4.1.8, so `npm outdated --prefix server` is
+  already clean of vitest and the root `npm update` simply converges both to
+  4.1.9. No server-side vitest step is needed; the §1 done-criterion holds.
