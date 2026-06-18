@@ -68,6 +68,6 @@ pairRedeemRouter.post('/redeem', async (req: Request, res: Response) => {
     res.status(status).json({ error: result.reason });
     return;
   }
-  const { token } = await createDevice(label);
+  const { token } = await createDevice(label, 30);
   res.status(201).json({ token });
 });

@@ -95,7 +95,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
-    const { token } = await deviceTokens.createDevice('Phone');
+    const { token } = await deviceTokens.createDevice('Phone', 30);
     let passed = false;
     lanAuth.requireLanToken(
       mkReq({ headers: { authorization: `Bearer ${token}` } }),
@@ -108,7 +108,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard rejects a revoked device token (but the shared secret still works)', async () => {
-    const { device, token } = await deviceTokens.createDevice('Phone');
+    const { device, token } = await deviceTokens.createDevice('Phone', 30);
     await deviceTokens.revokeDevice(device.id);
 
     const revokedRes = mkRes();

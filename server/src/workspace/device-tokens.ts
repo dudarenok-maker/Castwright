@@ -23,6 +23,7 @@ export interface DeviceTokenRecord {
   /** SHA-256 hex of the raw token. The raw token is never stored. */
   tokenHash: string;
   createdAt: string;
+  expiresAt?: string;        // ISO; absent on legacy schema-1 records → rejected
   lastSeenAt?: string;
   revoked?: boolean;
 }
@@ -32,12 +33,13 @@ export interface PublicDevice {
   id: string;
   label: string;
   createdAt: string;
+  expiresAt?: string;
   lastSeenAt?: string;
   revoked: boolean;
 }
 
 interface DeviceTokensFile {
-  schema: 1;
+  schema: 1 | 2;
   devices: DeviceTokenRecord[];
 }
 
@@ -45,15 +47,17 @@ export function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
 }
 
-/** Find the non-revoked device whose token hash matches `rawToken`, comparing
- *  hashes with a timing-safe equal. Pure — no IO. */
+/** Find the non-revoked, non-expired device whose token hash matches `rawToken`,
+ *  comparing hashes with a timing-safe equal. Pure — no IO. */
 export function findValidDevice(
   devices: readonly DeviceTokenRecord[],
   rawToken: string,
+  now: number = Date.now(),
 ): DeviceTokenRecord | null {
   const h = Buffer.from(hashToken(rawToken));
   for (const d of devices) {
     if (d.revoked) continue;
+    if (d.expiresAt === undefined || now > Date.parse(d.expiresAt)) continue;
     const dh = Buffer.from(d.tokenHash);
     if (dh.length === h.length && timingSafeEqual(dh, h)) return d;
   }
@@ -65,9 +69,15 @@ export function redactDevice(d: DeviceTokenRecord): PublicDevice {
     id: d.id,
     label: d.label,
     createdAt: d.createdAt,
+    ...(d.expiresAt !== undefined ? { expiresAt: d.expiresAt } : {}),
     ...(d.lastSeenAt !== undefined ? { lastSeenAt: d.lastSeenAt } : {}),
     revoked: d.revoked === true,
   };
+}
+
+/** Clamp a configured TTL to a sane positive integer; fall back to the 30-day default. */
+export function clampTtlDays(raw: unknown): number {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : 30;
 }
 
 /* --- IO + in-memory cache ------------------------------------------------- */
@@ -88,8 +98,8 @@ function loadSync(): DeviceTokenRecord[] {
 }
 
 async function persist(devices: DeviceTokenRecord[]): Promise<void> {
-  cache = devices;
-  await writeJsonAtomic(deviceTokensJsonPath(), { schema: 1, devices });
+  await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices });
+  cache = devices; // only after the write durably succeeds
 }
 
 /** Sync token check used by the LAN guard (cache-backed). */
@@ -101,14 +111,17 @@ export function isValidDeviceToken(rawToken: string): boolean {
  *  stored); callers must surface it to the user immediately. */
 export async function createDevice(
   label: string,
+  ttlDays: number,
 ): Promise<{ device: PublicDevice; token: string }> {
   const devices = [...loadSync()];
   const token = randomBytes(32).toString('hex');
+  const now = Date.now();
   const record: DeviceTokenRecord = {
     id: randomBytes(8).toString('hex'),
     label: label.trim() || 'Device',
     tokenHash: hashToken(token),
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + ttlDays * 86_400_000).toISOString(),
   };
   devices.push(record);
   await persist(devices);

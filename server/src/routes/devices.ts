@@ -24,7 +24,7 @@ devicesRouter.get('/devices', (_req: Request, res: Response) => {
 devicesRouter.post('/devices', async (req: Request, res: Response) => {
   const raw = (req.body as { label?: unknown } | undefined)?.label;
   const label = typeof raw === 'string' ? raw : 'Device';
-  const { device, token } = await createDevice(label);
+  const { device, token } = await createDevice(label, 30);
   // The raw token is shown exactly once — only its hash is persisted.
   res.status(201).json({ ...device, token });
 });
