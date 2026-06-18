@@ -16,41 +16,72 @@
 - **Package name = `ai.castwright`** (matches release `applicationId`, no suffix).
 - **Both the server (`pairing.ts`) AND the frontend mock (`src/lib/api.ts`) emit the payload.** Mock mode (`VITE_USE_MOCKS`, default in dev/e2e/screenshots) renders the **mock** string — both must flip identically or the shipped app keeps the old QR.
 - **QR query params unchanged:** `h` = LAN `host:port`, `c` = code, `f` = fpTag. Built with `URLSearchParams` (encodes `:` → `%3A`).
+- **fp-tag widened 80→128 bits** (16 bytes → 26 Crockford chars). Server (`caFingerprintTag`, Task 1) and app (`fingerprintTagMatches`, Task 5) MUST ship together — a width mismatch fails every pair. Deliberate compat break (tiny user base, ephemeral QRs).
 - **Rollout ordering is load-bearing:** `assetlinks.json` must be live on `www` *before* the rebuilt APK is installed (verification caches failure). Tasks 6–7 (website) deploy before Task 12 acceptance.
 - Commit convention: `<type>(<scope>): <subject>`. This-repo branch: `feat/app-17-deeplink-pairing-launch`. Website-repo branch: `feat/app-17-assetlinks-pair-page`.
 
 ---
 
-## Task 1: Server payload flip (`/session` emits the deep-link URL)
+## Task 1: Server — widen fp-tag to 128-bit + emit the deep-link URL
 
 **Repo:** Castwright (this repo)
 
+Two cohesive changes to the server's pairing-QR output, in one file/test (`pairing.ts` + `pairing.test.ts`): widen the CA fingerprint tag from 80→128 bits (security hardening — see spec "Security hardening"), then flip the payload to the verified deep-link URL. The widening lands **first** so the URL assertion is written once against the 26-char tag. **Compat note:** widening the tag is a deliberate break — server + rebuilt app must ship together; an old app (80-bit compare) can no longer pair against a new server. Accepted: tiny user base, ephemeral QRs (no persistent QRs in flight), new pairing path.
+
 **Files:**
-- Modify: `server/src/routes/pairing.ts:55` (the `qrPayload` line)
-- Test: `server/src/routes/pairing.test.ts:66` (existing exact-payload assertion — paired regression test)
+- Modify: `server/src/routes/pairing.ts` (`caFingerprintTag` 10→16 bytes; the `qrPayload` line)
+- Test: `server/src/routes/pairing.test.ts` (the `fpTag` assertion at line 64 + the exact-payload assertion at line 66 — the paired regression tests)
 
 **Interfaces:**
-- Consumes: `host` (`"192.168.1.5:8443"`), `code`, `fpTag` already computed in the handler.
-- Produces: `res.body.qrPayload` = `https://www.castwright.ai/pair?h=<urlenc host>&c=<code>&f=<fpTag>`. `hostPort`, `code`, `fpTag` fields unchanged.
+- Consumes: `host` (`"192.168.1.5:8443"`), `code`, `fpTag` (now 26 Crockford chars) computed in the handler.
+- Produces: `caFingerprintTag()` returns the Crockford-base32 of the **first 16 bytes (128 bits)** of the CA SHA-256; `res.body.qrPayload` = `https://www.castwright.ai/pair?h=<urlenc host>&c=<code>&f=<fpTag>`.
 
-- [ ] **Step 1: Update the failing test assertion**
+- [ ] **Step 1: Update the fp-tag assertion (failing)**
+
+In `server/src/routes/pairing.test.ts`, the `fpTag` assertion (line 64) currently expects the 16-char tag. Change it to the 128-bit value:
+
+```ts
+    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JXTB2C9QD4JW');
+```
+
+(This 26-char value is the Crockford-base32 of the first 16 bytes of the embedded `TEST_CERT_PEM`'s SHA-256 — verified by computing it against the real test cert. It is a prefix-extension of the old 16-char `5CEE77RAKV3EN9JX`.)
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd server && npx vitest run src/routes/pairing.test.ts -t "returns a qrPayload"`
+Expected: FAIL — `fpTag` is still the 16-char `5CEE77RAKV3EN9JX` (10-byte tag).
+
+- [ ] **Step 3: Widen `caFingerprintTag`**
+
+In `server/src/routes/pairing.ts`, in `caFingerprintTag()` change the truncation from 10 to 16 bytes and update its doc comment ("first 10 bytes (80 bits)" → "first 16 bytes (128 bits)"):
+
+```ts
+    return crockfordBase32(bytes.subarray(0, 16));
+```
+
+- [ ] **Step 4: Run to verify the fp-tag assertion passes**
+
+Run: `cd server && npx vitest run src/routes/pairing.test.ts -t "returns a qrPayload"`
+Expected: the `fpTag` assertion now passes; the `qrPayload` assertion (next step) still fails (still `CWP1*…`).
+
+- [ ] **Step 5: Update the failing payload assertion**
 
 In `server/src/routes/pairing.test.ts`, replace the `qrPayload` assertion (line 66):
 
 ```ts
     expect(res.body.qrPayload).toBe(
-      `https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${res.body.code}&f=5CEE77RAKV3EN9JX`,
+      `https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${res.body.code}&f=5CEE77RAKV3EN9JXTB2C9QD4JW`,
     );
 ```
 
-(The mock makes `enumerateLanUrls` return `192.168.1.5:8443`; the test cert's fpTag is `5CEE77RAKV3EN9JX`. `URLSearchParams` encodes `:` → `%3A`. Verified: this exact string is what the impl produces.)
+(The mock makes `enumerateLanUrls` return `192.168.1.5:8443`; the test cert's fpTag is `5CEE77RAKV3EN9JXTB2C9QD4JW`. `URLSearchParams` encodes `:` → `%3A`. Verified: this exact string is what the impl produces.)
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 6: Run to verify it fails**
 
 Run: `cd server && npx vitest run src/routes/pairing.test.ts -t "returns a qrPayload"`
 Expected: FAIL — actual is `CWP1*192.168.1.5:8443*…`, expected is the `https://…` URL.
 
-- [ ] **Step 3: Implement the payload flip**
+- [ ] **Step 7: Implement the payload flip**
 
 In `server/src/routes/pairing.ts`, replace line 55 (`` const qrPayload = `CWP1*${host}*${code}*${fpTag}`; ``):
 
@@ -59,16 +90,16 @@ In `server/src/routes/pairing.ts`, replace line 55 (`` const qrPayload = `CWP1*$
   const qrPayload = `https://www.castwright.ai/pair?${q.toString()}`;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 8: Run the test to verify it passes**
 
 Run: `cd server && npx vitest run src/routes/pairing.test.ts`
-Expected: PASS (all cases in the file).
+Expected: PASS (all cases in the file — both the 128-bit `fpTag` and the URL `qrPayload`).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add server/src/routes/pairing.ts server/src/routes/pairing.test.ts
-git commit -m "feat(server): emit verified deep-link pairing URL (app-17)"
+git commit -m "feat(server): 128-bit fp-tag + verified deep-link pairing URL (app-17)"
 ```
 
 ---
@@ -86,7 +117,7 @@ git commit -m "feat(server): emit verified deep-link pairing URL (app-17)"
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: exported `mockCreatePairSession(): Promise<PairSessionInfo>` whose `qrPayload` is `https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R`.
+- Produces: exported `mockCreatePairSession(): Promise<PairSessionInfo>` whose `qrPayload` is `https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R`.
 
 - [ ] **Step 1: Write the failing paired test**
 
@@ -136,13 +167,13 @@ Expected: PASS.
 In `src/lib/api-pair-session.test.ts`, change both `CWP1*…` literals (fetch fixture at line 19 and its pass-through assertion at line 42) to:
 
 ```ts
-'https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'
+'https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'
 ```
 
-In `src/modals/pair-device.test.tsx`, change both `qrPayload` literals (lines 11, 36) from `'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R'` to:
+In `src/modals/pair-device.test.tsx`, change both `qrPayload` literals (lines 11, 36) from `'CWP1*192.168.1.5:8443*K7QF3M2P*1CR5AYMZRKMGWCTRFPHCFV0H6R'` to:
 
 ```ts
-'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'
+'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'
 ```
 
 In `src/components/listen/companion-app-banner.test.tsx`, change the `qrPayload` literal (line 11) from `'CWP1*192.168.86.20:8443*ABCD1234*TAGABC123'` to:
@@ -176,7 +207,7 @@ git commit -m "feat(frontend): flip pairing mock to deep-link URL + paired test 
 - Consumes: the URL payload shape from Tasks 1–2 (worst case).
 - Produces: nothing (regression lock).
 
-**Note:** Regression-guard test (written green; fails only if the payload bloats). The worst-case URL (`https://www.castwright.ai/pair?h=255.255.255.255%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R`, 85 bytes) was **measured** to encode to QR **version 5 (37×37)** at EC-M; the retired JSON measures **version 9**. The guard allows ≤ v7 (two versions of headroom) and asserts it stays below the retired payload.
+**Note:** Regression-guard test (written green; fails only if the payload bloats). The worst-case URL (`https://www.castwright.ai/pair?h=255.255.255.255%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R`, 95 bytes — with the **128-bit, 26-char** fp-tag from Task 1) was **measured** to encode to QR **version 6 (41×41)** at EC-M; the retired JSON measures **version 9**. The guard allows ≤ v7 (one version of headroom) and asserts it stays below the retired payload.
 
 - [ ] **Step 1: Rewrite the test body**
 
@@ -189,15 +220,16 @@ Replace the whole `describe(...)` block in `src/modals/pairing-qr-density.test.t
    auto-open the app. The bound is no longer zxing-cpp's ≤ v4 ceiling — stock-
    camera / in-app ML Kit decode far denser codes — but we still lock the
    density so the payload can never silently bloat back toward the unscannable
-   JSON that broke the original (measured v9). The worst-case URL measures v5
-   (37×37); ≤ v7 leaves headroom. QRCode options (errorCorrectionLevel 'M')
-   mirror the modal's QRCode.toDataURL in pair-device.tsx.
+   JSON that broke the original (measured v9). The worst-case URL measures v6
+   (41×41) with the 128-bit (26-char) fp-tag; ≤ v7 leaves headroom. QRCode
+   options (errorCorrectionLevel 'M') mirror the modal's QRCode.toDataURL in
+   pair-device.tsx.
    Spec: docs/superpowers/specs/2026-06-18-app-17-deeplink-pairing-launch-design.md */
 describe('pairing QR density (scan-failure regression)', () => {
   // Worst-case realistic payload: longest IPv4 + port (LAN host is IPv4-only,
-  // enumerateLanUrls filters family !== 'IPv4'), 8-char code, 16-char fpTag.
+  // enumerateLanUrls filters family !== 'IPv4'), 8-char code, 26-char fpTag.
   const urlPayload =
-    'https://www.castwright.ai/pair?h=255.255.255.255%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R';
+    'https://www.castwright.ai/pair?h=255.255.255.255%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R';
 
   it('encodes to a stock-camera-comfortable QR (≤ v7) at EC-M', () => {
     const qr = QRCode.create(urlPayload, { errorCorrectionLevel: 'M' });
@@ -280,19 +312,34 @@ git commit -m "test(e2e): refresh stale CWP1 comment in pairing e2e (app-17)"
 
 ---
 
-## Task 5: Android manifest www-only host + coverage
+## Task 5: Android manifest www-only host + 128-bit fp-tag + coverage
 
 **Repo:** Castwright (this repo, `apps/android`)
 
 **Files:**
 - Modify: `apps/android/android/app/src/main/AndroidManifest.xml:42-50` (comment + the `autoVerify` intent-filter `<data>` element)
+- Modify: `apps/android/lib/src/data/cert_pinning.dart` (`fingerprintTagMatches` 10→16 bytes — the app side of Task 1's 128-bit tag; both must ship together)
+- Modify: `apps/android/test/data/cert_pinning_test.dart` (tag length 16→26)
 - Modify: `apps/android/test/domain/pairing_qr_test.dart` (add www URL case; update literals)
 - Modify: `apps/android/test/main_deep_link_test.dart:35-36` (update apex literal for honesty)
 - Create: `apps/android/test/android_manifest_test.dart` (lock www host present, apex absent)
 
 **Interfaces:**
-- Consumes: nothing new.
-- Produces: a manifest whose `/pair` `autoVerify` filter declares **only** `www.castwright.ai` (apex removed — minSdk 24, pre-31 all-or-nothing verification).
+- Consumes: the 128-bit tag emitted by the server (Task 1) — the app's `fingerprintTagMatches` must compare the same 16 bytes or pairing fails.
+- Produces: a manifest whose `/pair` `autoVerify` filter declares **only** `www.castwright.ai` (apex removed — minSdk 24, pre-31 all-or-nothing verification); `fingerprintTagMatches` validates the first 16 bytes (128 bits).
+
+- [ ] **Step 0: Widen the app-side fp-tag (paired with Task 1's server change)**
+
+In `apps/android/test/data/cert_pinning_test.dart`, the `fingerprintTagMatches` test asserts `expect(tag.length, 16)` and uses `'Z' * 16` as the wrong-tag. Change both to the 128-bit width (26 Crockford chars from 16 bytes):
+
+```dart
+      expect(tag.length, 26);
+      expect(fingerprintTagMatches(_testPem, tag), isTrue);
+      expect(fingerprintTagMatches(_testPem, tag.toLowerCase()), isTrue);
+      expect(fingerprintTagMatches(_testPem, 'Z' * 26), isFalse);
+```
+
+(The test computes `tag = crockfordBase32(digest.sublist(0, 16))` itself — update that `sublist(0, 10)` → `sublist(0, 16)` in the test too.) Run `cd apps/android && flutter test test/data/cert_pinning_test.dart` → FAIL (impl still slices 10 bytes → 16-char tag). Then in `apps/android/lib/src/data/cert_pinning.dart`, change `fingerprintTagMatches`'s `digest.sublist(0, 10)` → `digest.sublist(0, 16)` and update its doc comment ("first 10 bytes (80 bits)" → "first 16 bytes (128 bits)"). Re-run → PASS. (Commit this with the rest of Task 5 in Step 7.)
 
 - [ ] **Step 1: Write the failing manifest guard test**
 
@@ -347,10 +394,10 @@ In `apps/android/test/domain/pairing_qr_test.dart`, add this test after the exis
 ```dart
   test('parses the deep-link URL form on the www host', () {
     final qr = PairingQr.parse(
-        'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R');
+        'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R');
     expect(qr.hostPort, '192.168.1.5:8443');
     expect(qr.code, 'K7QF3M2P');
-    expect(qr.fpTag, 'J4XQ2A7BWZ9K3M5R');
+    expect(qr.fpTag, '1CR5AYMZRKMGWCTRFPHCFV0H6R');
   });
 ```
 
@@ -366,8 +413,8 @@ Expected: analyze clean; all tests PASS (manifest guard + `pairing_qr_test.dart`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/android/android/app/src/main/AndroidManifest.xml apps/android/test/domain/pairing_qr_test.dart apps/android/test/main_deep_link_test.dart apps/android/test/android_manifest_test.dart
-git commit -m "feat(app): point pairing deep-link autoVerify host to www-only (app-17)"
+git add apps/android/android/app/src/main/AndroidManifest.xml apps/android/lib/src/data/cert_pinning.dart apps/android/test/data/cert_pinning_test.dart apps/android/test/domain/pairing_qr_test.dart apps/android/test/main_deep_link_test.dart apps/android/test/android_manifest_test.dart
+git commit -m "feat(app): www-only autoVerify host + 128-bit fp-tag compare (app-17)"
 ```
 
 ---
@@ -658,20 +705,20 @@ Add to `apps/android/test/domain/pairing_qr_test.dart`:
   test('rejects a non-private (public) host', () {
     expect(
         () => PairingQr.parse(
-            'https://www.castwright.ai/pair?h=8.8.8.8:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'),
+            'https://www.castwright.ai/pair?h=8.8.8.8:8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'),
         throwsFormatException);
   });
 
   test('rejects a non-IP host', () {
     expect(
         () => PairingQr.parse(
-            'https://www.castwright.ai/pair?h=evil.example.com:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'),
+            'https://www.castwright.ai/pair?h=evil.example.com:8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'),
         throwsFormatException);
   });
 
   test('accepts the three RFC1918 ranges + loopback', () {
     for (final h in ['10.0.0.4:8443', '172.16.5.6:8443', '192.168.1.5:8443', '127.0.0.1:8443']) {
-      expect(PairingQr.parse('https://www.castwright.ai/pair?h=$h&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R').hostPort, h);
+      expect(PairingQr.parse('https://www.castwright.ai/pair?h=$h&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R').hostPort, h);
     }
   });
 ```
@@ -755,9 +802,9 @@ Add to `apps/android/test/main_deep_link_test.dart`:
       store: _NoopStore(), service: PairingService(), deepLinks: links.stream));
     await tester.pumpAndSettle();
 
-    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'));
     await tester.pumpAndSettle();
-    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.9:8443&c=ZZZZZZZZ&f=J4XQ2A7BWZ9K3M5R'));
+    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.9:8443&c=ZZZZZZZZ&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'));
     await tester.pumpAndSettle();
 
     expect(find.text('Pair a device'), findsOneWidget); // AppBar title — exactly one screen
@@ -986,7 +1033,8 @@ If `assetlinks.json` ships with a wrong fingerprint, fixing it isn't enough — 
 **Spec coverage:**
 - Server payload flip → Task 1 ✓
 - Frontend mock flip + new paired test (mock was un-exported/untested); 3 stale `CWP1*` literals refreshed (verified NOT red) → Task 2 ✓
-- Density re-anchor (measured v5/v9) → Task 3 ✓
+- 128-bit fp-tag widening (server `caFingerprintTag` + app `fingerprintTagMatches`, ship together) → Task 1 + Task 5 ✓
+- Density re-anchor (measured v6/v9 with the 128-bit tag) → Task 3 ✓
 - e2e stale-comment refresh; URL prefix locked by Task 2 unit test (QR is opaque PNG) → Task 4 ✓
 - Manifest **www-only** (apex removed — minSdk 24 / pre-31 all-or-nothing) + Dart host-agnostic lock + main_deep_link literal + explicit `flutter analyze`/`test` gate → Task 5 ✓
 - assetlinks.json (upload-key cert, array) + content-type → Task 6 ✓
@@ -997,7 +1045,7 @@ If `assetlinks.json` ships with a wrong fingerprint, fixing it isn't enough — 
 - Redeem private-network guard (LAN-only redeem, bounds edge-log leak) → Task 10 ✓
 - Redeem label cap; runtime brute-lockout intentionally omitted (40-bit single-use already test-locked) → Task 11 ✓
 - Rollout ordering + sideloaded on-device acceptance + curl/pm + doc close-out → Task 12 ✓
-- Out-of-scope (Play SHA, apex move, 128-bit fp tag) → Global Constraints + spec follow-ups + Task 12 ✓
+- Out-of-scope (Play SHA, apex move) → Global Constraints + Task 12 ✓
 
 **Placeholder scan:** The only fill-at-build value is the SHA-256 in Task 6 Step 3, with an explicit derivation command (Step 1) and a format-validating test (Step 2); the dummy fingerprint is replaced in the same step. No conditional/deferred steps remain (the Task 4 `alt`-attribute branch was resolved away — the QR is an opaque PNG, so the URL prefix is locked by Task 2's unit test instead).
 

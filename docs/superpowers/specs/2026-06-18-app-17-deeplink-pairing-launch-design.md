@@ -165,8 +165,12 @@ apex is removed entirely — see decision 2, pre-31 all-or-nothing verification)
   `castwright.ai/pair` gets the Porkbun 301 → `www/pair`; that 301 is irrelevant
   to QR scans.
 - **Old installed app + new QR:** stock-camera auto-open won't fire (old build
-  verified `castwright.ai`, not `www`) → falls back to the in-app ML Kit scanner,
-  which is host-agnostic and pairs normally. **No regression.**
+  verified `castwright.ai`, not `www`), AND the in-app scanner can no longer pair
+  either — the old build compares an **80-bit** fp-tag against the server's new
+  **128-bit** tag and refuses (`fingerprintMismatch`). So old installs must update
+  to pair against an updated server. **Deliberate** (the fp-tag widening is a
+  compat break) and **accepted**: tiny user base, the rebuild ships anyway, and
+  pairing codes are ephemeral so nothing persistent is stranded.
 
 ## Failure modes & mitigations
 
@@ -234,24 +238,21 @@ credible to scan than an opaque blob and (on a verified device) opens **silently
 exploitability rises. Candidate hardening (see "Suggested security follow-ups"): the app
 should constrain `h` to RFC1918/link-local and surface it on the pairing-confirm screen.
 
-### Security hardening (FOLDED INTO app-17 — Tasks 8–11)
+### Security hardening (FOLDED INTO app-17)
 
-Per the round-3 security review, these pairing-hardening items are now part of app-17
-(several harden pre-existing issues that the URL flip amplifies):
-1. **Constrain `h` to RFC1918/link-local** at parse (covers scan/deep-link/manual) — Task 8. (The host is already *shown* on the pairing-confirm screen via the editable `field-host`, so only rejection was missing.)
-2. **RFC1918/loopback guard on `POST /api/pair/redeem`** — Task 10; makes redeem structurally LAN-only even under accidental port-forward, bounding the edge-log code leak. Includes the "no Express `trust proxy`" invariant comment.
-3. **Deep-link re-entrancy guard** on `_openPairing` so a second link can't stack pairing screens — Task 9.
-4. **Cap the redeem `label` length** — Task 11.
+Per the security review, these pairing-hardening items are now part of app-17 (several
+harden pre-existing issues that the URL flip amplifies):
+1. **Widen the `f` tag 80→128 bits** (16 bytes → 26 Crockford chars) — Tasks 1 (server `caFingerprintTag`) + 5 (app `fingerprintTagMatches`). Defense-in-depth on the cert-bootstrap pin (2¹²⁸ vs 2⁸⁰ second-preimage). **Deliberate compat break:** server + app ship lockstep; an old app can no longer pair against an updated server. Accepted — tiny user base, ephemeral QRs (no persistent QRs in flight), brand-new pairing path. Worst-case QR stays **v6 (41×41) ≤ v7** (measured).
+2. **Constrain `h` to RFC1918/link-local** at parse (covers scan/deep-link/manual) — Task 8. (The host is already *shown* on the pairing-confirm screen via the editable `field-host`, so only rejection was missing.)
+3. **RFC1918/loopback guard on `POST /api/pair/redeem`** — Task 10; makes redeem structurally LAN-only even under accidental port-forward, bounding the edge-log code leak. Includes the "no Express `trust proxy`" invariant comment.
+4. **Deep-link re-entrancy guard** on `_openPairing` so a second link can't stack pairing screens — Task 9.
+5. **Cap the redeem `label` length** — Task 11.
 
 **Code-entropy / brute-force:** the 40-bit single-use 5-min code is already locked by
 `pairing.test.ts:63` (`/^[0-9A-HJKMNP-TV-Z]{8}$/`). A **runtime per-code lockout is
 intentionally NOT added** — for a cryptographically-infeasible brute it would be
 speculative complexity (CLAUDE.md "no error handling for impossible scenarios"). The
-private-network redeem guard (item 2) is the meaningful additional control.
-
-**Deferred (deliberate, separate change):** widen the `f` tag 80→128 bits. Sound today
-vs second-preimage (2⁸⁰); bumping changes the pairing crypto **and** breaks
-already-issued-QR compatibility, so it does not belong in a payload-format flip.
+private-network redeem guard (item 3) is the meaningful additional control.
 
 ## Rollout ordering (load-bearing)
 
@@ -287,10 +288,10 @@ desktop server still receives `CWP1*…`.
   `https://www.castwright.ai/pair?…` URL (the only browser-level lock on the
   UI-visible flip).
 - `src/modals/pairing-qr-density.test.ts` — re-anchor: assert the worst-case URL
-  payload (longest IPv4 + port + 8-char code + 16-char tag = 85 bytes) encodes to
-  **≤ v7 (45×45)** at EC-M (measured worst case is **v5, 37×37**; ≤ v7 leaves two
-  versions of headroom so an added param can't silently regress), and that it
-  stays **strictly smaller than the retired JSON** (measured **v9**). Rewrite the
+  payload (longest IPv4 + port + 8-char code + **26-char 128-bit tag** = 95 bytes)
+  encodes to **≤ v7 (45×45)** at EC-M (measured worst case is **v6, 41×41**; ≤ v7
+  leaves headroom so an added param can't silently regress), and that it stays
+  **strictly smaller than the retired JSON** (measured **v9**). Rewrite the
   rationale comment (the bound is now ML-Kit / stock-camera headroom, not
   zxing-cpp's ≤ v4 ceiling).
 - `apps/android/test/domain/pairing_qr_test.dart` — add/confirm a case that a
@@ -327,10 +328,11 @@ next periodic re-verify or app update).
 
 - Play App Signing SHA-256 (additive to the array when Play distribution lands).
 - Moving the apex to Cloudflare / serving `castwright.ai` directly.
-- No change to the in-app scanner, the redeem **protocol** (code/token semantics,
-  single-use, TTL), or the pairing **crypto** (token entropy, the `f`-tag width).
-  app-17 *does* add hardening *around* redeem — a private-network reachability guard
-  and a label cap (Tasks 10–11) — but the code→token exchange itself is unchanged.
+- No change to the in-app scanner or the redeem **protocol** (code/token semantics,
+  single-use, TTL) or token entropy. app-17 *does* harden *around* it: the `f`-tag
+  widens 80→128 bits (Tasks 1, 5), redeem gains a private-network guard + label cap
+  (Tasks 10–11), and the QR host is constrained (Task 8) — but the code→token
+  exchange itself is unchanged.
 
 ## Alternatives considered
 
