@@ -45,12 +45,12 @@ bool fingerprintsMatch(String a, String b) {
 bool verifyCaFingerprint(String pem, String expected) =>
     fingerprintsMatch(caFingerprintFromPem(pem), expected);
 
-/// True when [tag] equals the Crockford-base32 of the first 10 bytes (80 bits)
+/// True when [tag] equals the Crockford-base32 of the first 16 bytes (128 bits)
 /// of the certificate's SHA-256 — the QR's compact integrity tag. Normalised to
 /// upper-case alphanumerics so case differences never cause a false mismatch.
 bool fingerprintTagMatches(String pem, String tag) {
   final digest = sha256.convert(pemToDer(pem)).bytes;
-  final expected = crockfordBase32(digest.sublist(0, 10));
+  final expected = crockfordBase32(digest.sublist(0, 16));
   String norm(String s) => s.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
   return norm(expected) == norm(tag);
 }

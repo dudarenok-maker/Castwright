@@ -33,7 +33,7 @@ void main() {
     await tester.pumpAndSettle();
 
     links.add(Uri.parse(
-        'https://castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
     await tester.pumpAndSettle();
 
     expect(find.text('192.168.1.5:8443'), findsOneWidget);

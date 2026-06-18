@@ -27,7 +27,7 @@ void main() {
 
   test('parses the deep-link URL form (raw colon)', () {
     final qr = PairingQr.parse(
-        'https://castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R');
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R');
     expect(qr.hostPort, '192.168.1.5:8443');
     expect(qr.baseUrl, 'https://192.168.1.5:8443');
     expect(qr.code, 'K7QF3M2P');
@@ -36,8 +36,16 @@ void main() {
 
   test('parses the deep-link URL form (percent-encoded colon)', () {
     final qr = PairingQr.parse(
-        'https://castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R');
+        'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R');
     expect(qr.hostPort, '192.168.1.5:8443');
+  });
+
+  test('parses the deep-link URL form on the www host', () {
+    final qr = PairingQr.parse(
+        'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R');
+    expect(qr.hostPort, '192.168.1.5:8443');
+    expect(qr.code, 'K7QF3M2P');
+    expect(qr.fpTag, '1CR5AYMZRKMGWCTRFPHCFV0H6R');
   });
 
   test('rejects a URL missing a pairing field', () {

@@ -39,14 +39,17 @@
             </intent-filter>
             <!-- app-2 deep-link readiness (app-17 lights it up at launch): the
                  phone's stock camera auto-opens the app from the pairing QR once
-                 https://castwright.ai/.well-known/assetlinks.json pins this app's
-                 release-signing SHA-256. Dormant (no auto-verify) until then. -->
+                 https://www.castwright.ai/.well-known/assetlinks.json pins this app's
+                 release-signing SHA-256. Auto-verified against www's assetlinks.json
+                 once hosted. Apex (castwright.ai) intentionally absent: minSdk 24
+                 (pre-API-31) autoVerify is all-or-nothing, and the apex 301-forwards
+                 with no assetlinks, so declaring it would block verification. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="https"
-                      android:host="castwright.ai"
+                      android:host="www.castwright.ai"
                       android:pathPrefix="/pair"/>
             </intent-filter>
         </activity>
