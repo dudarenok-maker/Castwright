@@ -27,6 +27,7 @@ mXs+glZrizT6pLoIQQucbslLc15G85a7tw==
 vi.mock('../lan-auth.js', () => ({
   isLoopbackRequest: vi.fn(() => true),
   isLanTokenEnforced: vi.fn(() => true),
+  isPrivateNetworkRequest: vi.fn(() => true),
   // requireLanToken must be present so app.ts can mount it; the body-size tests
   // use pairRedeemRouter (pre-guard), so the guard never fires for them.
   requireLanToken: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
@@ -65,7 +66,7 @@ vi.mock('../workspace/device-tokens.js', () => ({
 
 import { pairSessionRouter, pairRedeemRouter, browserRedeemLimiter } from './pairing.js';
 import { _resetPairingSessionsForTests, createPairingSession } from '../workspace/pairing-sessions.js';
-import { isLoopbackRequest, isLanTokenEnforced } from '../lan-auth.js';
+import { isLoopbackRequest, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -84,9 +85,11 @@ describe('pairing routes', () => {
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
     expect(res.status).toBe(200);
     expect(res.body.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
-    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JX');
+    expect(res.body.fpTag).toBe('5CEE77RAKV3EN9JXTB2C9QD4JW');
     expect(res.body.hostPort).toBe('192.168.1.5:8443');
-    expect(res.body.qrPayload).toBe(`CWP1*192.168.1.5:8443*${res.body.code}*5CEE77RAKV3EN9JX`);
+    expect(res.body.qrPayload).toBe(
+      `https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${res.body.code}&f=5CEE77RAKV3EN9JXTB2C9QD4JW`,
+    );
     expect(res.body.expiresAt).toBeGreaterThan(0);
   });
 
@@ -136,6 +139,21 @@ describe('pairing routes', () => {
     for (let i = 0; i < 5; i++) await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code: 'WRONGWRONGWRONG1' });
     const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code: 'WRONGWRONGWRONG1' });
     expect(res.status).toBe(429);
+  });
+
+  it('POST /redeem 403s a non-private caller', async () => {
+    vi.mocked(isPrivateNetworkRequest).mockReturnValueOnce(false);
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    const res = await request(appWith(pairRedeemRouter))
+      .post('/api/pair/redeem').send({ code: session.body.code });
+    expect(res.status).toBe(403);
+  });
+
+  it('redeem-browser 403s a non-private caller', async () => {
+    vi.mocked(isPrivateNetworkRequest).mockReturnValueOnce(false);
+    const { code } = createPairingSession('x', undefined, 10);
+    const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(res.status).toBe(403);
   });
 });
 

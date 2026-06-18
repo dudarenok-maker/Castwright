@@ -100,8 +100,10 @@ test.describe('plan 57 — download tiles', () => {
     await expect(qr).toBeVisible();
     await expect(qr).toHaveAttribute('src', /^data:image\/png/);
 
-    // Manual-entry fallback (collapsed <details>) carries the compact CWP1
-    // values: host:port, the pairing code, and the fingerprint tag.
+    // Manual-entry fallback (collapsed <details>) carries the LAN host:port and
+    // the pairing code — the deep-link URL's h/c params. (app-17: the QR now
+    // encodes https://www.castwright.ai/pair?h=…&c=…&f=… ; the exact URL string
+    // is locked by the api-pair-session unit test, since the QR is an opaque PNG.)
     await modal.getByText(/enter these manually/i).click();
     await expect(modal.getByText('192.168.1.42:8443')).toBeVisible();
     await expect(modal.getByText('K7QF3M2P')).toBeVisible();

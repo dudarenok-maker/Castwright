@@ -19,6 +19,7 @@
     "start:lan": "cross-env LAN_HTTPS=1 node scripts/start-app-prod.mjs",
     "install:cert-mobile": "node scripts/print-cert-install-instructions.mjs",
     "tts:sidecar": "node scripts/launch-sidecar.mjs",
+    "apk:companion": "node scripts/build-companion-apk.mjs",
     "build": "tsc -b && vite build && npm --prefix server run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && npm --prefix server run typecheck",

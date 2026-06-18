@@ -8,7 +8,7 @@ describe('PairDeviceModal (QR redesign)', () => {
 
   it('renders the compact QR + manual fields from the session payload', async () => {
     vi.spyOn(api, 'createPairSession').mockResolvedValue({
-      qrPayload: 'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R',
+      qrPayload: 'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R',
       hostPort: '192.168.1.5:8443', port: 8443,
       code: 'K7QF3M2P', fpTag: 'J4XQ2A7BWZ9K3M5R', expiresAt: Date.now() + 300000,
     });
@@ -33,7 +33,7 @@ describe('PairDeviceModal (QR redesign)', () => {
 
   it('renders a countdown for the pairing code', async () => {
     vi.spyOn(api, 'createPairSession').mockResolvedValue({
-      qrPayload: 'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R',
+      qrPayload: 'https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R',
       hostPort: '192.168.1.5:8443', port: 8443,
       code: 'K7QF3M2P', fpTag: 'J4XQ2A7BWZ9K3M5R', expiresAt: Date.now() + 300000,
     });

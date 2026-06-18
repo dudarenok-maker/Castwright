@@ -1,7 +1,7 @@
 /* Companion pairing routes (QR redesign).
 
    POST /api/pair/session  — loopback-only (the desktop UI). Mints an ephemeral
-     code, computes the 80-bit CA fingerprint tag, returns the compact QR
+     code, computes the 128-bit CA fingerprint tag, returns the compact QR
      payload string the modal renders. Mints NO device token.
    POST /api/pair/redeem   — guard-exempt (an unpaired device holds only the
      code). Gated by the code; mints a per-device token over the caller's
@@ -20,20 +20,20 @@ import { resolveRootCaPath } from './cert-root.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
 import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
 import { createDevice, clampTtlDays } from '../workspace/device-tokens.js';
-import { isLoopbackRequest, isLanTokenEnforced } from '../lan-auth.js';
+import { isLoopbackRequest, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 import { configValue } from '../config/resolver.js';
 
 /** Effective TTL for device tokens — clamped to a sane positive integer. */
 const ttl = () => clampTtlDays(configValue('lan.deviceTokenTtlDays'));
 
-/** First 10 bytes (80 bits) of the CA cert's SHA-256, Crockford-base32. */
+/** First 16 bytes (128 bits) of the CA cert's SHA-256, Crockford-base32. */
 export function caFingerprintTag(): string | undefined {
   try {
     const ca = resolveRootCaPath();
     if (!ca) return undefined;
     const hex = new X509Certificate(readFileSync(ca.path)).fingerprint256; // "AB:CD:.."
     const bytes = Buffer.from(hex.replace(/:/g, ''), 'hex');
-    return crockfordBase32(bytes.subarray(0, 10));
+    return crockfordBase32(bytes.subarray(0, 16));
   } catch {
     return undefined;
   }
@@ -58,13 +58,18 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
     return;
   }
   const { code, expiresAt } = createPairingSession();
-  const qrPayload = `CWP1*${host}*${code}*${fpTag}`;
+  const q = new URLSearchParams({ h: host, c: code, f: fpTag });
+  const qrPayload = `https://www.castwright.ai/pair?${q.toString()}`;
   res.json({ qrPayload, hostPort: host, port, code, fpTag, expiresAt });
 });
 
 export const pairRedeemRouter = Router();
 
 pairRedeemRouter.post('/redeem', express.json({ limit: '1kb' }), async (req: Request, res: Response) => {
+  if (!isPrivateNetworkRequest(req)) {
+    res.status(403).json({ error: 'Pairing can only be redeemed from the local network.' });
+    return;
+  }
   const body = (req.body ?? {}) as { code?: unknown; label?: unknown };
   const code = typeof body.code === 'string' ? body.code : '';
   const label = typeof body.label === 'string' ? body.label : 'Device';
@@ -93,6 +98,12 @@ pairRedeemRouter.post(
   browserRedeemLimiter,
   express.json({ limit: '1kb' }),
   async (req: Request, res: Response) => {
+    // Same local-network restriction app-17 applies to /redeem: this sibling
+    // mint endpoint must not be redeemable from off-LAN either.
+    if (!isPrivateNetworkRequest(req)) {
+      res.status(403).json({ error: 'Pairing can only be redeemed from the local network.' });
+      return;
+    }
     if (!isLanTokenEnforced()) {
       res.status(409).json({ error: 'lan-auth-not-enforced' });
       return;

@@ -117,6 +117,8 @@ class _HomePageState extends State<HomePage> {
   /// capture it before offline mode works.
   String? _bootstrapError;
 
+  bool _pairingOpen = false;
+
   StreamSubscription<Uri>? _deepLinkSub;
 
   /// Cold-start initial link first, then the live warm stream. Injected in tests.
@@ -249,15 +251,21 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _openPairing({PairingQr? initialQr}) async {
-    final result = await Navigator.of(context).push<PairedServer>(
-      MaterialPageRoute(
-        builder: (_) => PairingScreen(
-            service: widget.service, store: widget.store, initialQr: initialQr),
-      ),
-    );
-    if (result != null && mounted) {
-      _paired = result;
-      await _boot();
+    if (_pairingOpen) return;
+    _pairingOpen = true;
+    try {
+      final result = await Navigator.of(context).push<PairedServer>(
+        MaterialPageRoute(
+          builder: (_) => PairingScreen(
+              service: widget.service, store: widget.store, initialQr: initialQr),
+        ),
+      );
+      if (result != null && mounted) {
+        _paired = result;
+        await _boot();
+      }
+    } finally {
+      _pairingOpen = false;
     }
   }
 

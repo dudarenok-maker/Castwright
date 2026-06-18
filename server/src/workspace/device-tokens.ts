@@ -139,7 +139,7 @@ export async function createDevice(
   const now = Date.now();
   const record: DeviceTokenRecord = {
     id: randomBytes(8).toString('hex'),
-    label: label.trim() || 'Device',
+    label: label.trim().slice(0, 64) || 'Device',
     tokenHash: hashToken(token),
     createdAt: new Date(now).toISOString(),
     expiresAt: new Date(now + ttlDays * 86_400_000).toISOString(),

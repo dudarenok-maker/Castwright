@@ -16,7 +16,7 @@ afterEach(() => {
 describe('api.createPairSession — wire contract', () => {
   it('POSTs to /api/pair/session and returns a well-formed PairSessionInfo', async () => {
     const payload = {
-      qrPayload: 'CWP1*192.168.1.42:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R',
+      qrPayload: 'https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R',
       hostPort: '192.168.1.42:8443',
       port: 8443,
       code: 'K7QF3M2P',
@@ -39,7 +39,7 @@ describe('api.createPairSession — wire contract', () => {
     );
     expect(info.code).toBe('K7QF3M2P');
     expect(info.fpTag).toBe('J4XQ2A7BWZ9K3M5R');
-    expect(info.qrPayload).toBe('CWP1*192.168.1.42:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R');
+    expect(info.qrPayload).toBe('https://www.castwright.ai/pair?h=192.168.1.42%3A8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R');
     expect(info.hostPort).toBe('192.168.1.42:8443');
     expect(info.port).toBe(8443);
     expect(info.expiresAt).toBeGreaterThan(0);

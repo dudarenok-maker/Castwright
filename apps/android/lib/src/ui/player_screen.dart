@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
 import '../data/player_controller.dart';
+import '../domain/chapter_scroll.dart';
 import '../domain/listen_progress.dart';
 import '../domain/resume_reconcile.dart';
 import '../domain/sync_manifest.dart';
@@ -31,7 +34,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _playing = false;
   String? _error;
   List<SyncManifestChapter> _chapters = const [];
+  Set<String> _finished = {};
+  final List<StreamSubscription<Object?>> _subs = [];
   final Map<String, List<double>> _peaks = {}; // chapter uuid -> RMS peaks
+  final ScrollController _scroll = ScrollController();
+  static const double _kRowHeight = 72;
 
   /// Fetch + cache a chapter's waveform peaks. Local-first (survives offline +
   /// screen recreation + restart); falls back to a live fetch (and persists)
@@ -48,6 +55,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (uuid == null) return;
     final ch = _chapters.where((c) => c.uuid == uuid);
     if (ch.isNotEmpty) _ensurePeaks(uuid, ch.first.id);
+  }
+
+  void _scrollToCurrent({required bool animate}) {
+    if (!_scroll.hasClients) return;
+    final uuid = widget.runtime.player.currentChapterUuid;
+    if (uuid == null) return;
+    final i = _chapters.indexWhere((c) => c.uuid == uuid);
+    if (i < 0) return;
+    final target = chapterScrollOffset(
+      index: i,
+      rowHeight: _kRowHeight,
+      maxExtent: _scroll.position.maxScrollExtent,
+    );
+    if (animate) {
+      _scroll.animateTo(target,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    } else {
+      _scroll.jumpTo(target);
+    }
   }
 
   @override
@@ -70,13 +96,31 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await widget.runtime.player.openBook(widget.bookId,
           bookTitle: widget.title, artPath: art); // loads + restores resume
       // feeds the lock-screen/notification metadata via nowPlayingStream
+      final chapters = widget.runtime.sync.chaptersOf(widget.bookId);
+      final finished =
+          await widget.runtime.library.finishedChapterUuids(widget.bookId);
       if (mounted) {
         setState(() {
-          _chapters = widget.runtime.sync.chaptersOf(widget.bookId);
+          _chapters = chapters;
+          _finished = finished;
           _ready = true;
         });
         _ensureCurrentPeaks();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToCurrent(animate: false);
+        });
       }
+      // Move the highlight + progress as chapters change (incl. auto-advance).
+      _subs.add(widget.runtime.player.nowPlayingStream.listen((_) {
+        if (mounted) {
+          setState(() {});
+          _scrollToCurrent(animate: true);
+        }
+      }));
+      // Tick a chapter to "done" the moment it finishes, no reopen needed.
+      _subs.add(widget.runtime.player.chapterCompletedStream.listen((uuid) {
+        if (mounted) setState(() => _finished = {..._finished, uuid});
+      }));
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     }
@@ -84,6 +128,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _scroll.dispose();
     // Save locally, then push the latest position to the server (app-6),
     // best-effort + offline-safe.
     widget.runtime.player
@@ -107,6 +155,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await p.play();
     }
     if (mounted) setState(() => _playing = !_playing);
+  }
+
+  bool _isFinished(String uuid) => _finished.contains(uuid);
+
+  /// `Ch. <id> · <title>` for the loaded chapter, or empty when none.
+  String _currentChapterLabel(PlayerController player) {
+    final uuid = player.currentChapterUuid;
+    if (uuid == null) return '';
+    final match = _chapters.where((c) => c.uuid == uuid);
+    if (match.isEmpty) return '';
+    final c = match.first;
+    final title = c.title.isEmpty ? 'Chapter ${c.id}' : c.title;
+    return 'Ch. ${c.id} · $title';
   }
 
   String _fmt(Duration d) {
@@ -142,24 +203,44 @@ class _PlayerScreenState extends State<PlayerScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              controller: _scroll,
               itemCount: _chapters.length,
               itemBuilder: (_, i) {
                 final c = _chapters[i];
                 final current = c.uuid == player.currentChapterUuid;
-                return ListTile(
-                  key: Key('chapter-${c.uuid}'),
-                  leading: CircleAvatar(child: Text('${c.id}')),
-                  title: Text(c.title.isEmpty ? 'Chapter ${c.id}' : c.title),
-                  subtitle: c.durationSec != null
-                      ? Text(formatDuration(c.durationSec))
-                      : null,
-                  trailing: current
-                      ? Icon(_playing ? Icons.volume_up : Icons.pause,
-                          color: Theme.of(context).colorScheme.primary)
-                      : null,
-                  selected: current,
-                  onTap: c.hasAudio ? () => _playChapter(c.uuid) : null,
-                  enabled: c.hasAudio,
+                final finished = _isFinished(c.uuid);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      key: Key('chapter-${c.uuid}'),
+                      leading: CircleAvatar(child: Text('${c.id}')),
+                      title: Text(
+                        c.title.isEmpty ? 'Chapter ${c.id}' : c.title,
+                        style: finished && !current
+                            ? TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant)
+                            : null,
+                      ),
+                      subtitle: c.durationSec != null
+                          ? Text(formatDuration(c.durationSec))
+                          : null,
+                      trailing: current
+                          ? Icon(_playing ? Icons.volume_up : Icons.pause,
+                              color: Theme.of(context).colorScheme.primary)
+                          : (finished
+                              ? Icon(Icons.check_circle,
+                                  color:
+                                      Theme.of(context).colorScheme.primary)
+                              : null),
+                      selected: current,
+                      onTap: c.hasAudio ? () => _playChapter(c.uuid) : null,
+                      enabled: c.hasAudio,
+                    ),
+                    if (current) _currentProgressBar(c),
+                  ],
                 );
               },
             ),
@@ -168,6 +249,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _transport(player),
         ],
       ),
+    );
+  }
+
+  /// A 2px progress bar under the current chapter row, position / duration.
+  Widget _currentProgressBar(SyncManifestChapter c) {
+    final durMs = (c.durationSec ?? 0) * 1000;
+    if (durMs <= 0) return const SizedBox.shrink();
+    return StreamBuilder<Duration>(
+      stream: widget.runtime.player.positionStream,
+      builder: (_, snap) {
+        final posMs = (snap.data ?? Duration.zero).inMilliseconds.toDouble();
+        final value = (posMs / durMs).clamp(0.0, 1.0);
+        return LinearProgressIndicator(
+          minHeight: 2,
+          value: value,
+          key: Key('progress-${c.uuid}'),
+        );
+      },
     );
   }
 
@@ -191,6 +290,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: InkWell(
+                          onTap: () => _scrollToCurrent(animate: true),
+                          child: Text(
+                            _currentChapterLabel(player),
+                            key: const Key('player-current-chapter'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                      ),
+                    ),
                     Builder(builder: (context) {
                       final uuid = player.currentChapterUuid;
                       final peaks = uuid != null ? _peaks[uuid] : null;

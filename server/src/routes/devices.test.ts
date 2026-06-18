@@ -190,4 +190,9 @@ describe('devices route (srv-33)', () => {
     const res = await request(app).post('/api/devices').send({ label: 'x' });
     expect(res.status).toBe(403);
   });
+
+  it('caps an over-long device label at 64 chars', async () => {
+    const { device } = await deviceTokens.createDevice('x'.repeat(200), 30);
+    expect(device.label.length).toBe(64);
+  });
 });
