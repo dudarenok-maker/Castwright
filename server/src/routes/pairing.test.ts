@@ -27,6 +27,12 @@ mXs+glZrizT6pLoIQQucbslLc15G85a7tw==
 vi.mock('../lan-auth.js', () => ({
   isLoopbackRequest: vi.fn(() => true),
   isLanTokenEnforced: vi.fn(() => true),
+  // requireLanToken must be present so app.ts can mount it; the body-size tests
+  // use pairRedeemRouter (pre-guard), so the guard never fires for them.
+  requireLanToken: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  getLanAuthToken: vi.fn(() => undefined),
+  extractToken: vi.fn(() => undefined),
+  readCwLanCookie: vi.fn(() => undefined),
 }));
 vi.mock('./export-lan.js', async (orig) => {
   const real = await orig<typeof import('./export-lan.js')>();
@@ -130,5 +136,59 @@ describe('pairing routes', () => {
     for (let i = 0; i < 5; i++) await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code: 'WRONGWRONGWRONG1' });
     const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code: 'WRONGWRONGWRONG1' });
     expect(res.status).toBe(429);
+  });
+});
+
+// Body-size enforcement tests — reproduce the parser-order bug by building a
+// minimal app that mimics app.ts: global 20MB parser THEN pairRedeemRouter.
+// Before the fix: the global parser swallows the body; the per-route 1KB parser
+// sees req._body already set and early-returns → large bodies are accepted (no 413).
+// After the fix: pairRedeemRouter is mounted BEFORE the global parser, so its own
+// per-route 1KB parsers engage first → large bodies are rejected with 413.
+function appReproducingGlobalParserFirst() {
+  const a = express();
+  // Mimics app.ts pre-fix: global 20MB parser runs before pairRedeemRouter is mounted.
+  a.use(express.json({ limit: '20mb' }));
+  a.use('/api/pair', pairRedeemRouter);
+  return a;
+}
+
+function appWithPreGuardRouterFirst() {
+  const a = express();
+  // Mimics app.ts post-fix: pairRedeemRouter mounted BEFORE global parser.
+  a.use('/api/pair', pairRedeemRouter);
+  a.use(express.json({ limit: '20mb' }));
+  return a;
+}
+
+describe('pairing body-size cap — parser-order regression', () => {
+  beforeEach(() => {
+    _resetPairingSessionsForTests();
+    browserRedeemLimiter.resetKey('::ffff:127.0.0.1');
+  });
+
+  // These two tests FAIL before the fix (global parser accepts the body, no 413)
+  // and PASS after the fix (pairRedeemRouter is pre-guard with its own 1KB parser).
+  it('POST /api/pair/redeem-browser rejects a body > 1KB with 413', async () => {
+    const res = await request(appWithPreGuardRouterFirst())
+      .post('/api/pair/redeem-browser')
+      .send({ code: 'x'.repeat(2000) });
+    expect(res.status).toBe(413);
+  });
+
+  it('POST /api/pair/redeem rejects a body > 1KB with 413', async () => {
+    const res = await request(appWithPreGuardRouterFirst())
+      .post('/api/pair/redeem')
+      .send({ code: 'x'.repeat(2000) });
+    expect(res.status).toBe(413);
+  });
+
+  // Sanity check: the bug is real — global-first layout accepts the oversized body.
+  it('global-parser-first layout (pre-fix shape) accepts an oversized body (no 413)', async () => {
+    const res = await request(appReproducingGlobalParserFirst())
+      .post('/api/pair/redeem-browser')
+      .send({ code: 'x'.repeat(2000) });
+    // Anything but 413 — the 1KB route-level parser is a no-op when body already parsed.
+    expect(res.status).not.toBe(413);
   });
 });

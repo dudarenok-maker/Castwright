@@ -64,7 +64,7 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
 
 export const pairRedeemRouter = Router();
 
-pairRedeemRouter.post('/redeem', async (req: Request, res: Response) => {
+pairRedeemRouter.post('/redeem', express.json({ limit: '1kb' }), async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { code?: unknown; label?: unknown };
   const code = typeof body.code === 'string' ? body.code : '';
   const label = typeof body.label === 'string' ? body.label : 'Device';

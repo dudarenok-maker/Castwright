@@ -83,6 +83,14 @@ import { assertNoTrustProxy } from './lan-safety.js';
 export const app = express();
 assertNoTrustProxy(app);
 
+/* QR pairing redeem routes are code-gated and intentionally pre-guard. Mounted
+   BEFORE the global body parser so the per-route express.json({ limit: '1kb' })
+   on each redeem handler engages first — placing them after the 20MB global
+   parser would make those per-route caps a no-op (Express skips re-parsing when
+   req._body is already set). Both /redeem and /redeem-browser carry their own
+   1KB parser; see pairing.ts. */
+app.use('/api/pair', pairRedeemRouter);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -98,7 +106,6 @@ app.use('/audio', express.static(AUDIO_DIR, { fallthrough: true, maxAge: '1h' })
 /* srv-20 — optional shared-secret token guard for the LAN exposure surface.
    Scoped to /api + /workspace; /cert/root.crt + /audio stay open. OFF unless
    LAN HTTPS mode is on AND LAN_AUTH_TOKEN is set; loopback always bypasses. */
-app.use('/api/pair', pairRedeemRouter); // QR pairing — code-gated, intentionally pre-guard
 app.use(['/api', '/workspace'], requireLanToken);
 /* CSRF guard — only triggers on cookie-bearing state-changing requests (Task 6).
    Mounted after the LAN token guard so it only applies to authenticated sessions. */
