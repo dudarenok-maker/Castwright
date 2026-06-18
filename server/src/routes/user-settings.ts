@@ -14,7 +14,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { z } from 'zod';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { lstat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   readUserSettings,
@@ -136,9 +136,21 @@ userSettingsRouter.post('/sync-folder/test', async (req: Request, res: Response)
     }
     throw err;
   }
+  /* srv-22 — require an existing directory and probe its writability; do NOT
+     `mkdir(recursive)` an arbitrary tree (that was an unauthenticated
+     arbitrary-directory-creation primitive). `lstat` (not `stat`) so a symlink
+     at an existing path can't redirect the probe outside the dir the user typed. */
+  let st;
+  try {
+    st = await lstat(parsed.path);
+  } catch {
+    return res.json({ ok: false, code: 'ENOENT' });
+  }
+  if (!st.isDirectory()) {
+    return res.json({ ok: false, code: 'ENOENT' });
+  }
   const probePath = join(parsed.path, '.audiobook-write-probe');
   try {
-    await mkdir(parsed.path, { recursive: true });
     await writeFile(probePath, 'ok');
     await unlink(probePath).catch(() => {});
     return res.json({ ok: true });

@@ -9,6 +9,14 @@
 import { describe, it, expect } from 'vitest';
 import { stripHtml, extractFirstHeading } from './html-utils.js';
 
+describe('stripHtml — tag stripping', () => {
+  it('still strips tags and reaches a fixed point (replace-until-stable)', () => {
+    const once = stripHtml('<p>a <em>b</em></p>');
+    expect(once).not.toMatch(/<[^>]+>/); // all tags removed
+    expect(stripHtml(once)).toBe(once); // idempotent — no second-pass change
+  });
+});
+
 describe('stripHtml — numeric character references', () => {
   it('decodes the hex apostrophe &#x27; (the Coalfall regression)', () => {
     expect(stripHtml('<p>You&#x27;ll have to make do with the second.</p>')).toBe(

@@ -203,7 +203,7 @@ function npm(args, opts = {}) {
   const isWindows = process.platform === 'win32';
   if (isWindows) {
     const quoted = args
-      .map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a))
+      .map((a) => (/[\s"]/.test(a) ? `"${a.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : a))
       .join(' ');
     return execFileSync(`npm.cmd ${quoted}`, {
       cwd: opts.cwd ?? repoRoot,

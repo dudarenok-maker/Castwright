@@ -11,7 +11,8 @@
 import { EPub } from 'epub2';
 import { writeFile, mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
+import { safeSegment } from '../util/safe-path.js';
 import { fromBuffer as yauzlFromBuffer, type ZipFile, type Entry } from 'yauzl';
 import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
@@ -58,7 +59,7 @@ export async function parseEpub(buffer: Buffer, opts: EpubOpts): Promise<ParsedM
     filePath = opts.sourcePath;
   } else {
     tmp = await mkdtemp(join(tmpdir(), 'epub-'));
-    filePath = join(tmp, opts.fileName ?? 'book.epub');
+    filePath = join(tmp, safeSegment(basename(opts.fileName ?? 'book.epub')));
     await writeFile(filePath, buffer);
   }
   try {
@@ -352,8 +353,14 @@ function readAllZipEntries(bytes: Buffer): Promise<Map<string, Buffer>> {
     stripped prose. Falls back to the whole input when there's no <body>. */
 function htmlBodyOnly(html: string): string {
   const m = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
-  const body = m ? m[1] : html;
-  return body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  let body = m ? m[1] : html;
+  // Replace-until-stable: a single pass can leave a reconstructed script/style tag.
+  let prev: string;
+  do {
+    prev = body;
+    body = body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  } while (body !== prev);
+  return body;
 }
 
 /** Parse the NCX navMap into a map of (normalised zip path of the content
@@ -483,13 +490,14 @@ function readCalibreMeta(opf: string, name: string): string | null {
 }
 
 /** Decode the small entity set the parsers care about (matches stripHtml). */
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   return s
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    // Decode &amp; LAST so `&amp;lt;` -> `&lt;`, not `<` (double-unescaping).
+    .replace(/&amp;/g, '&')
     .trim();
 }

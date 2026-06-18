@@ -378,40 +378,32 @@ describe('user-settings router', () => {
      write here right now", failure carries the underlying errno so the
      modal can show a Drive-specific hint. */
   describe('POST /sync-folder/test', () => {
-    it('returns { ok: true } for a writable temp dir', async () => {
-      const probeDir = join(workspaceRoot, 'probe-ok');
+    it('returns { ok: true } for an existing writable dir (no probe straggler)', async () => {
+      /* srv-22: the probe requires an existing directory (it no longer
+         mkdir-creates the path). Create one, then probe it. */
+      const probeDir = mkdtempSync(join(tmpdir(), 'probe-ok-'));
       const res = await request(app)
         .post('/api/user/settings/sync-folder/test')
         .send({ path: probeDir });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true });
-      /* Probe file is cleaned up — no .audiobook-write-probe straggler. */
       const stragglers = readdirSync(probeDir).filter((n) => n.includes('write-probe'));
       expect(stragglers).toEqual([]);
+      rmSync(probeDir, { recursive: true, force: true });
     });
 
-    it('returns { ok: false, code } when the path cannot be created (parent is a file)', async () => {
-      /* Cross-platform unwritable path: plant a regular file at
-         <workspaceRoot>/blocking-file then ask the probe to write
-         "below" it. mkdir({recursive:true}) on a path whose parent is
-         a file surfaces ENOTDIR (POSIX + Windows alike) — the route
-         echoes the code back unchanged. The earlier version used a
-         bogus drive letter, but on Linux CI 'Z:\\foo' is just a weird
-         filename mkdir happily creates.
-
-         A Windows-only bogus-drive test would also be valuable for the
-         Voice → Google Drive failure mode, but it isn't necessary for
-         contract coverage and skipping per-platform adds harness drift
-         the test isn't worth. */
+    it('returns { ok: false, code: ENOENT } for a non-existent / non-dir path (no auto-create)', async () => {
+      /* srv-22: a path whose parent is a file (or that simply does not
+         exist) is reported ENOENT without creating anything — the old
+         mkdir({recursive:true}) arbitrary-directory-creation primitive
+         is gone. */
       const blocking = join(workspaceRoot, 'blocking-file');
       writeFileSync(blocking, 'not a directory');
       const res = await request(app)
         .post('/api/user/settings/sync-folder/test')
         .send({ path: join(blocking, 'cannot-mkdir-here') });
       expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(false);
-      expect(typeof res.body.code).toBe('string');
-      expect(typeof res.body.message).toBe('string');
+      expect(res.body).toEqual({ ok: false, code: 'ENOENT' });
     });
 
     it('rejects with 400 when the body is missing the path field', async () => {
@@ -426,4 +418,5 @@ describe('user-settings router', () => {
       expect(res.status).toBe(400);
     });
   });
+
 });

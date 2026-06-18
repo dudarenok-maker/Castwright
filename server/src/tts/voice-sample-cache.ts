@@ -54,7 +54,12 @@ export function listVoiceSampleFiles(): string[] {
 const MAX_CHARS = 320;
 
 export function stripQuoteMarks(s: string): string {
-  return s.replace(/^[“”"'‘’\s]+|[“”"'‘’\s]+$/g, '').trim();
+  // Two anchored single-sided replaces — the `^…|…$` alternation is the
+  // polynomial-redos shape.
+  return s
+    .replace(/^[“”"'‘’\s]+/, '')
+    .replace(/[“”"'‘’\s]+$/, '')
+    .trim();
 }
 
 export function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
@@ -81,7 +86,10 @@ export function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string 
    so repeat clicks hit cache, and any change to either bust it. */
 export function djb2(s: string): number {
   let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  // Constant loop bound (ids/scopes/sample-text are all far under 4096) so the
+  // iteration count never derives from a request-controlled length.
+  const n = Math.min(s.length, 4096);
+  for (let i = 0; i < n; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
 

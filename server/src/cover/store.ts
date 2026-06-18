@@ -9,7 +9,8 @@ import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
-import { coverImagePath, stateJsonPath } from '../workspace/paths.js';
+import { coverImagePath, stateJsonPath, WORKSPACE_ROOT } from '../workspace/paths.js';
+import { assertContained } from '../util/safe-path.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import type { CoverCandidate } from './sources/types.js';
 import { firstAvailableCover } from './search.js';
@@ -30,6 +31,7 @@ export class CoverDownloadError extends Error {
 }
 
 export async function downloadCover(url: string, destPath: string): Promise<{ bytes: number }> {
+  assertContained(WORKSPACE_ROOT, destPath);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), DOWNLOAD_TIMEOUT_MS);
   let res: Response;
