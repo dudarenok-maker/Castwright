@@ -12,13 +12,19 @@
 import { readFileSync } from 'node:fs';
 import { X509Certificate } from 'node:crypto';
 import { Router } from 'express';
+import express from 'express';
+import rateLimit from 'express-rate-limit';
 import type { Request, Response } from '../http.js';
 import { isLanHttpsEnabled, enumerateLanUrls } from './export-lan.js';
 import { resolveRootCaPath } from './cert-root.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
 import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
-import { createDevice } from '../workspace/device-tokens.js';
-import { isLoopbackRequest } from '../lan-auth.js';
+import { createDevice, clampTtlDays } from '../workspace/device-tokens.js';
+import { isLoopbackRequest, isLanTokenEnforced } from '../lan-auth.js';
+import { configValue } from '../config/resolver.js';
+
+/** Effective TTL for device tokens — clamped to a sane positive integer. */
+const ttl = () => clampTtlDays(configValue('lan.deviceTokenTtlDays'));
 
 /** First 10 bytes (80 bits) of the CA cert's SHA-256, Crockford-base32. */
 export function caFingerprintTag(): string | undefined {
@@ -68,6 +74,45 @@ pairRedeemRouter.post('/redeem', async (req: Request, res: Response) => {
     res.status(status).json({ error: result.reason });
     return;
   }
-  const { token } = await createDevice(label, 30);
+  const { token } = await createDevice(label, ttl());
   res.status(201).json({ token });
 });
+
+// dedicated limiter — NOT skipped under Vitest (the global apiLimiter is).
+// Exported so tests can reset its store between cases (shared IP under supertest).
+export const browserRedeemLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip ?? 'unknown',
+});
+
+pairRedeemRouter.post(
+  '/redeem-browser',
+  browserRedeemLimiter,
+  express.json({ limit: '1kb' }),
+  async (req: Request, res: Response) => {
+    if (!isLanTokenEnforced()) {
+      res.status(409).json({ error: 'lan-auth-not-enforced' });
+      return;
+    }
+    const code = typeof (req.body as { code?: unknown })?.code === 'string'
+      ? (req.body as { code: string }).code : '';
+    const result = redeemPairingSession(code);
+    if (!result.ok) {
+      res.status(result.reason === 'unknown' ? 401 : 410).json({ error: result.reason });
+      return;
+    }
+    const ttlDays = ttl();
+    const { device, token } = await createDevice(result.label ?? 'Device', ttlDays);
+    res.cookie('__Host-cw_lan', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'strict',
+      path: '/',
+      maxAge: ttlDays * 86_400_000,
+    });
+    res.status(201).json({ label: device.label, expiresAt: device.expiresAt });
+  },
+);
