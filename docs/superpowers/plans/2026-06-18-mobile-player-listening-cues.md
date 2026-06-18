@@ -217,13 +217,10 @@ void main() {
     // Chapter 1 (finished, not current) → a check icon.
     expect(find.byIcon(Icons.check_circle), findsOneWidget);
 
-    // The current chapter (ht1-c2, the resume point) → a LinearProgressIndicator.
-    expect(
-        find.descendant(
-          of: find.byKey(const Key('chapter-ht1-c2')),
-          matching: find.byType(LinearProgressIndicator),
-        ),
-        findsOneWidget);
+    // The current chapter (ht1-c2, the resume point) → its progress bar.
+    // The bar is a SIBLING of the ListTile in the row Column, not a descendant,
+    // so assert on the bar's own key — NOT find.descendant of the chapter tile.
+    expect(find.byKey(const Key('progress-ht1-c2')), findsOneWidget);
   });
 }
 ```
@@ -239,11 +236,10 @@ Expected: FAIL — no `check_circle` icon / no `LinearProgressIndicator` under t
 
 In `apps/android/lib/src/ui/player_screen.dart`:
 
-Add imports at the top:
+Add the async import at the top (the `chapter_scroll.dart` import is added in Task 5, where `chapterScrollOffset` is first used — keeping this commit's imports all used):
 
 ```dart
 import 'dart:async';
-import '../domain/chapter_scroll.dart';
 ```
 
 Add state fields to `_PlayerScreenState` (alongside `_chapters`):
