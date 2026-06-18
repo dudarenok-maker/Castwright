@@ -8,7 +8,7 @@ vi.mock('../../lib/api', () => ({
   api: {
     checkCompanionApk: vi.fn(async () => ({ available: false, sizeBytes: null })),
     createPairSession: vi.fn(async () => ({
-      qrPayload: 'CWP1*192.168.86.20:8443*ABCD1234*TAGABC123',
+      qrPayload: 'https://www.castwright.ai/pair?h=192.168.86.20%3A8443&c=ABCD1234&f=TAGABC123',
       hostPort: '192.168.86.20:8443',
       port: 8443,
       code: 'ABCD1234',
