@@ -9,6 +9,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { safeSegment } from '../util/safe-path.js';
 import {
   engineForModelKey,
   isTtsModelKey,
@@ -117,7 +118,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     cacheScope = voiceId;
   }
   const fileName = voiceSampleFileName({ cacheScope, modelKey: effectiveModelKey, text, voiceName });
-  const filePath = voiceSampleFilePath(fileName);
+  const filePath = voiceSampleFilePath(safeSegment(fileName));
   const publicUrl = voiceSamplePublicUrl(fileName);
 
   if (existsSync(filePath)) {

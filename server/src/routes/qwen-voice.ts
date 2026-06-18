@@ -182,8 +182,7 @@ function previewVoiceIdFor(realVoiceId: string): string {
   return `${realVoiceId}${PREVIEW_SUFFIX}`;
 }
 export function qwenVoicePtPath(name: string): string {
-  safeSegment(name);
-  return join(qwenVoicesDir(), `${name}.pt`);
+  return join(qwenVoicesDir(), `${safeSegment(name)}.pt`);
 }
 
 /* GET /api/books/:bookId/cast/:characterId/designed-persona

@@ -13,6 +13,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TtsModelKey } from './index.js';
 import type { CharacterHint, VoiceLike } from './voice-mapping.js';
+import { stripEdges } from '../util/text-match.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -54,12 +55,9 @@ export function listVoiceSampleFiles(): string[] {
 const MAX_CHARS = 320;
 
 export function stripQuoteMarks(s: string): string {
-  // Two anchored single-sided replaces — the `^…|…$` alternation is the
-  // polynomial-redos shape.
-  return s
-    .replace(/^[“”"'‘’\s]+/, '')
-    .replace(/[“”"'‘’\s]+$/, '')
-    .trim();
+  // Linear two-pointer edge strip — the trailing-anchored `[…]+$` form is
+  // polynomial-redos (per-start-position backtracking).
+  return stripEdges(s, /[“”"'‘’\s]/).trim();
 }
 
 export function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {

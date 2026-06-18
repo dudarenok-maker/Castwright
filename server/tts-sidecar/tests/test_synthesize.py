@@ -9,6 +9,7 @@ the env-var → flag decision tree lives in test_smoke.py's
 test_resolve_runtime_options_* cases."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -355,7 +356,11 @@ def test_health_reports_poisoned_flag(monkeypatch) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["poisoned"] is True
-    assert "device-side assert" in body["poison_reason"]
+    # The raw poison trigger (exception text) must NOT leak into the response —
+    # it lives only in the server-side log + internal global (stack-trace-exposure).
+    assert "poison_reason" not in body
+    assert "device-side assert" not in json.dumps(body)
+    assert "device-side assert" in main._process_poison_reason
 
 
 def test_synthesize_poison_fence_fires_for_non_coqui_engine(monkeypatch) -> None:

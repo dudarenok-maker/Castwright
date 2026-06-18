@@ -33,15 +33,15 @@ async function ensureDirs(): Promise<void> {
 }
 
 export function inboxPath(manuscriptId: string, key: HandoffKey): string {
-  return join(INBOX, `${manuscriptId}-stage${key}.md`);
+  return join(INBOX, `${safeSegment(manuscriptId)}-stage${key}.md`);
 }
 
 export function outboxPath(manuscriptId: string, key: HandoffKey): string {
-  return join(OUTBOX, `${manuscriptId}-stage${key}.json`);
+  return join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.json`);
 }
 
 export function errorPath(manuscriptId: string, key: HandoffKey): string {
-  return join(OUTBOX, `${manuscriptId}-stage${key}.errors.json`);
+  return join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.errors.json`);
 }
 
 /* Forensic record of a model response that failed parse/validation. Lives
@@ -51,7 +51,7 @@ export function errorPath(manuscriptId: string, key: HandoffKey): string {
    they fail, so a partial-success retry preserves the first attempt's text
    for comparison. */
 export function rawAttemptPath(manuscriptId: string, key: HandoffKey, attempt: 1 | 2): string {
-  return join(OUTBOX, `${manuscriptId}-stage${key}.attempt${attempt}.raw.txt`);
+  return join(OUTBOX, `${safeSegment(manuscriptId)}-stage${key}.attempt${attempt}.raw.txt`);
 }
 
 export async function writeInbox(

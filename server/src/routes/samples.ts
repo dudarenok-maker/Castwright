@@ -49,12 +49,12 @@ samplesRouter.get('/', async (_req: Request, res: Response) => {
 samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
   try {
     const slug = req.params.slug;
+    let src: string;
     try {
-      safeSegment(slug);
+      src = join(SAMPLES_ROOT, safeSegment(slug));
     } catch {
       return res.status(400).json({ error: 'Invalid sample slug.' });
     }
-    const src = join(SAMPLES_ROOT, slug);
     if (!existsSync(join(src, '.audiobook', 'state.json'))) {
       return res.status(404).json({ error: `Sample not found: ${slug}` });
     }
@@ -62,8 +62,9 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
 
     const bundleState = JSON.parse(await readFile(join(src, '.audiobook', 'state.json'), 'utf8'));
     const { author, series, title, manuscriptFile } = bundleState;
+    let safeManuscriptFile: string;
     try {
-      safeSegment(manuscriptFile);
+      safeManuscriptFile = safeSegment(manuscriptFile);
     } catch {
       return res.status(400).json({ error: 'Invalid bundle manuscript file.' });
     }
@@ -78,7 +79,7 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     await mkdir(dotAudiobook(bookDir), { recursive: true });
 
     // 1. Manuscript.
-    await copyFile(join(src, manuscriptFile), join(bookDir, manuscriptFile));
+    await copyFile(join(src, safeManuscriptFile), join(bookDir, safeManuscriptFile));
 
     // 2. .audiobook/{cast,manuscript-edits}.
     for (const f of ['cast.json', 'manuscript-edits.json']) {
@@ -112,11 +113,11 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     }
 
     // 5. Register the ManuscriptRecord so the analysis/generation pipeline is wired.
-    const buffer = await readFile(join(bookDir, manuscriptFile));
+    const buffer = await readFile(join(bookDir, safeManuscriptFile));
     const parsed = await parseManuscript({
       buffer,
-      fileName: manuscriptFile,
-      sourcePath: join(bookDir, manuscriptFile),
+      fileName: safeManuscriptFile,
+      sourcePath: join(bookDir, safeManuscriptFile),
     });
     const record: ManuscriptRecord = {
       manuscriptId,

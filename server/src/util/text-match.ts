@@ -3,18 +3,28 @@
    typography drift (smart quotes, em-dashes, ellipses) is handled the same
    way everywhere. */
 
+/** Strip leading and trailing characters matching `edge` (a single-char class)
+    via a linear two-pointer scan. The trailing-anchored `[…]+$` regex form is
+    polynomial-redos (per-start-position backtracking); a single-char `.test`
+    per edge has no backtracking, so this is O(n). */
+export function stripEdges(s: string, edge: RegExp): string {
+  let a = 0,
+    b = s.length;
+  while (a < b && edge.test(s[a])) a++;
+  while (b > a && edge.test(s[b - 1])) b--;
+  return s.slice(a, b);
+}
+
 export function normaliseForMatch(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[—–]/g, '-')
-    .replace(/…/g, '...')
-    // Split the two-sided trim into two anchored single-sided replaces — the
-    // `^…|…$` alternation is the polynomial-redos shape.
-    .replace(/^[\s"'`]+/, '')
-    .replace(/[\s"'`]+$/, '')
-    .replace(/\s+/g, ' ');
+  return stripEdges(
+    s
+      .toLowerCase()
+      .replace(/[‘’]/g, "'")
+      .replace(/[“”]/g, '"')
+      .replace(/[—–]/g, '-')
+      .replace(/…/g, '...'),
+    /[\s"'`]/,
+  ).replace(/\s+/g, ' ');
 }
 
 /** Strip trailing terminal-sentence punctuation (`.,;:!?`) from an already-
