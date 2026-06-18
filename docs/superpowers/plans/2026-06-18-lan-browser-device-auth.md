@@ -1562,8 +1562,7 @@ git commit -m "feat(frontend): Admin LAN access card (authorize + device list + 
 
 **Files:**
 - Create: `e2e/lan-device-auth.spec.ts`
-- Modify: `docs/BACKLOG.md`
-- Create (GitHub): a `srv-NN` issue
+- Create (GitHub): `srv-42` issue (#900) — delivered in-PR, no `docs/BACKLOG.md` row
 
 **Interfaces:** none (closeout).
 
@@ -1574,15 +1573,12 @@ git commit -m "feat(frontend): Admin LAN access card (authorize + device list + 
 Run: `npm run test:e2e -- lan-device-auth`
 Expected: PASS.
 
-- [ ] **Step 3: File the backlog issue + row**
+- [ ] **Step 3: File the issue (delivered-in-PR, no backlog row)**
 
-```bash
-gh issue create --title "srv-NN — Authorize a browser over LAN via Admin device-linking" \
-  --label "area:fs,type:feature" \
-  --body "Implements docs/superpowers/specs/2026-06-18-lan-browser-device-auth-design.md. See PR."
-```
-
-Add a thin row under the appropriate MoSCoW bucket in `docs/BACKLOG.md` linking the issue, then replace `srv-NN` with the real number throughout the spec + plan.
+Filed as **`srv-42` (#900)** with `area:fs,type:feature`. Because the feature is
+delivered in this same PR, it is auto-closed via `Closes #900` and gets **no
+`docs/BACKLOG.md` row** (the backlog is for outstanding work only). The `srv-NN`
+placeholders in the spec + plan were replaced with `srv-42`/`#900`.
 
 - [ ] **Step 4: Full battery**
 

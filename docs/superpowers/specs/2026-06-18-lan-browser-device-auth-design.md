@@ -3,7 +3,7 @@ title: Authorize a browser over LAN via Admin device-linking
 date: 2026-06-18
 status: draft
 area: server + frontend
-issue: srv-NN (to be filed)
+issue: srv-42 (#900)
 revision: 6 (defense-in-depth pass: loopback-gate all mints, runtime trust-proxy assert, exposure warning, TTL clamp, persist write-then-cache, shared cookie parser, fail-closed allow-list; documented single-tier boundaries)
 ---
 
@@ -459,9 +459,12 @@ cross-origin write is 403. (A legacy companion token, if any, re-pairs once.)
 
 ## Backlog
 
-File `srv-NN` ("Authorize a browser over LAN via Admin device-linking",
-`area:fs`, `type:feature`) + a thin `docs/BACKLOG.md` row.
-Nothing covers browser-over-LAN auth today.
+Filed as `srv-42` (#900, `area:fs`/`type:feature`) and **delivered in the same
+PR** (`Closes #900`), so it never sits on `docs/BACKLOG.md` (the backlog tracks
+outstanding work). Two follow-ups noted on #900: global `apiLimiter` doesn't
+cover the pre-guard pair routes (pre-existing; `/redeem-browser` has its own
+limiter, `/redeem` is single-use code-gated); add a direct unit test for the
+`/redeem-browser` 410 path.
 
 ## Decisions locked (after three review rounds)
 
