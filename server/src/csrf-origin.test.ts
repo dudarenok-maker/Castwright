@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { it, expect, vi, beforeEach } from 'vitest';
 import { requireSameOrigin } from './csrf-origin.js';
 
 function mk(method: string, headers: Record<string, string>, ip = '192.168.1.9') {

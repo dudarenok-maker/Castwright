@@ -148,7 +148,7 @@ describe('lan-auth (srv-20)', () => {
     const req = mkReq({ headers: { cookie: '__Host-cw_lan=goodtoken' }, ip: '192.168.1.9' });
     const res = mkRes();
     const next = vi.fn();
-    requireLanToken(req, res, next);
+    requireLanToken(req, res as never, next);
     expect(next).toHaveBeenCalled();
     expect(res._res.statusCode).not.toBe(401);
   });
@@ -159,7 +159,7 @@ describe('lan-auth (srv-20)', () => {
     const req = mkReq({ headers: { cookie: '__Host-cw_lan=not-a-token' }, ip: '192.168.1.9' });
     const res = mkRes();
     const next = vi.fn();
-    requireLanToken(req, res, next);
+    requireLanToken(req, res as never, next);
     expect(next).not.toHaveBeenCalled();
     expect(res._res.statusCode).toBe(401);
   });
