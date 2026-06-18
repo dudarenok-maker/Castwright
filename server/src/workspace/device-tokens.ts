@@ -102,9 +102,30 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   cache = devices; // only after the write durably succeeds
 }
 
+const LASTSEEN_THROTTLE_MS = 60 * 60 * 1000; // ~1h — bounds disk writes on the hot guard path
+
+/** Pure: has it been long enough since lastSeenAt to be worth a write? */
+export function shouldTouchLastSeen(record: DeviceTokenRecord, now: number): boolean {
+  const last = record.lastSeenAt ? Date.parse(record.lastSeenAt) : 0;
+  return now - last > LASTSEEN_THROTTLE_MS;
+}
+
+/** Awaitable: stamp lastSeenAt for one device and persist. */
+export async function touchLastSeen(id: string, now: number): Promise<void> {
+  const next = loadSync().map((d) =>
+    d.id === id ? { ...d, lastSeenAt: new Date(now).toISOString() } : d,
+  );
+  await persist(next);
+}
+
 /** Sync token check used by the LAN guard (cache-backed). */
 export function isValidDeviceToken(rawToken: string): boolean {
-  return findValidDevice(loadSync(), rawToken) !== null;
+  const now = Date.now();
+  const device = findValidDevice(loadSync(), rawToken, now);
+  if (!device) return false;
+  // Best-effort, fire-and-forget: a raced/failed persist is harmless.
+  if (shouldTouchLastSeen(device, now)) void touchLastSeen(device.id, now);
+  return true;
 }
 
 /** Mint a new per-device token. Returns the raw token ONCE (only its hash is
