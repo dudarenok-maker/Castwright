@@ -40,11 +40,14 @@ deep-link parser (`PairingQr._fromUrl`), the `app_links` handler, and an
    This future-proofs a "user types the bare domain" case without a *second*
    rebuild if the apex is ever moved to serve directly.
 
-3. **Pin the sideload release-signing cert only**, in an **array** so the Play
-   App Signing SHA-256 can be appended later (it only exists after the first Play
-   Console upload). All beta installs today are the directly-installed signed
-   release APK, so this is the cert users actually run. Play distribution is a
-   later, additive change to the same file.
+3. **Pin the upload-key cert only** (`upload-keystore.jks`), in an **array** so
+   the Play App Signing SHA-256 can be appended later. The project uses **Google
+   Play App Signing** (`apps/android/README.md`, plan 188), so the upload key is
+   the cert that signs **directly-installed** APKs — which is exactly today's
+   beta-tester install path. A Play-track install is re-signed by Google's
+   app-signing key (a *different* SHA) and would NOT verify against this pin —
+   hence on-device acceptance must use a **sideloaded** APK, and the Play SHA is
+   appended to the array when Play distribution lands.
 
 4. **Ship a minimal `/pair` fallback page** on `www` for unverified / no-app
    scans, so they land on "install the app" rather than a 404. It ignores the
@@ -71,8 +74,13 @@ const qrPayload = `https://www.castwright.ai/pair?${q}`;
 - `URLSearchParams` URL-encodes `host:port` → `h=…%3A8443`; the Dart parser
   decodes it via `uri.queryParameters` (already covered by
   `pairing_qr_test.dart:39`, the `%3A` round-trip case).
-- The modal (`src/modals/pair-device.tsx`) renders whatever string `/session`
+- The modal (`src/modals/pair-device.tsx`) renders whatever string the API
   returns via `QRCode.toDataURL` — **no modal change**.
+- **The frontend mock must flip too.** `src/lib/api.ts` (`mockCreatePairSession`)
+  emits its own `CWP1*…` string, and with `VITE_USE_MOCKS` on (the default for
+  dev, e2e, and marketing screenshots) the **mock** — not the server — is what the
+  modal renders. It must build the identical `URLSearchParams` URL, or the
+  shipped/demoed app keeps the old QR while only the server changes.
 
 ### Surface 2 — App manifest host (this repo, `apps/android`)
 
@@ -171,12 +179,22 @@ desktop server still receives `CWP1*…`.
 - `server/src/routes/pairing.test.ts:66` — **update** the exact-payload assertion
   to the new URL form (`https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${code}&f=…`).
   This *is* the paired regression test for the flip.
+- **Frontend mock + its consumers** (all hard-assert `CWP1*` today): flip the mock
+  in `src/lib/api.ts` and update `src/lib/api-pair-session.test.ts` (wire-contract,
+  exact equality), `src/modals/pair-device.test.tsx`, and
+  `src/components/listen/companion-app-banner.test.tsx`. Without these, `npm run
+  verify` is red and the mock-mode app shows the old QR.
+- **e2e** `e2e/download-tiles.spec.ts` — update the stale "compact CWP1" comment and
+  add an assertion that the rendered pairing payload is the verified
+  `https://www.castwright.ai/pair?…` URL (the only browser-level lock on the
+  UI-visible flip).
 - `src/modals/pairing-qr-density.test.ts` — re-anchor: assert the worst-case URL
-  payload (longest IPv4 + port + 8-char code + 16-char tag ≈ 85 bytes) encodes to
-  **≤ v7 (45×45)** at EC-M (byte-mode worst case is v6 = capacity 106; v7 gives
-  headroom so an added param can't silently regress), and that it stays **strictly
-  smaller than the retired v10 JSON**. Rewrite the rationale comment (the bound is
-  now ML-Kit / stock-camera headroom, not zxing-cpp's ≤ v4 ceiling).
+  payload (longest IPv4 + port + 8-char code + 16-char tag = 85 bytes) encodes to
+  **≤ v7 (45×45)** at EC-M (measured worst case is **v5, 37×37**; ≤ v7 leaves two
+  versions of headroom so an added param can't silently regress), and that it
+  stays **strictly smaller than the retired JSON** (measured **v9**). Rewrite the
+  rationale comment (the bound is now ML-Kit / stock-camera headroom, not
+  zxing-cpp's ≤ v4 ceiling).
 - `apps/android/test/domain/pairing_qr_test.dart` — add/confirm a case that a
   `https://www.castwright.ai/pair?h=…&c=…&f=…` URL parses (locks host-agnosticism,
   the property that keeps old installs working); update existing literals
@@ -188,10 +206,11 @@ desktop server still receives `CWP1*…`.
 - Smoke: `/pair` renders (matches the repo's existing Astro/Playwright patterns).
 
 **On-device acceptance (manual — Android 16 / API 36):**
-1. Get the release fingerprint:
-   `keytool -list -v -keystore <release-keystore> -alias <alias>` (or
+1. Get the **upload-key** fingerprint (the cert on a *sideloaded* APK):
+   `keytool -list -v -keystore upload-keystore.jks -alias <alias>` (or
    `apksigner verify --print-certs app-release.apk`) → copy the **SHA-256**
-   (colon-hex, uppercase) into `assetlinks.json`.
+   (colon-hex, uppercase) into `assetlinks.json`. Acceptance must install this
+   **sideloaded** APK — a Play-track install is Google-re-signed and won't match.
 2. Deploy website; `curl -sI` the assetlinks URL (expect 200/json/no-redirect).
 3. Fresh-install the rebuilt signed release APK; reboot or
    `adb shell pm verify-app-links --re-verify ai.castwright`.
