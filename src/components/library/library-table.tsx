@@ -34,6 +34,7 @@ import { ConfirmDialog } from '../../modals/confirm-dialog';
 import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-book-meta';
 import { CoverPicker } from '../../modals/cover-picker';
 import { computeCoverStyle } from '../../lib/cover-framing';
+import { safeImageSrc } from '../../lib/safe-url';
 import type { LibraryAuthor, LibraryBook } from '../../lib/types';
 import { STATUS_UI } from './library-status-ui';
 import { EmptyLibrary, LibrarySkeleton, NoFilterMatch } from './library-empty-states';
@@ -300,7 +301,7 @@ function BookRow({
           {effectiveCoverUrl && !coverLoadFailed && (
             <img
               data-testid={`book-table-cover-${book.bookId}`}
-              src={effectiveCoverUrl}
+              src={safeImageSrc(effectiveCoverUrl)}
               alt=""
               className="absolute inset-0 w-full h-full object-cover"
               style={computeCoverStyle(book.coverFraming)}

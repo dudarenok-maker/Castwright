@@ -20,6 +20,7 @@ import {
   clampFraming,
   computeCoverStyle,
 } from '../lib/cover-framing';
+import { safeImageSrc } from '../lib/safe-url';
 
 interface Props {
   open: boolean;
@@ -450,7 +451,7 @@ function SearchPanel({
               className={`group relative rounded-2xl overflow-hidden border bg-canvas aspect-2/3 focus:outline-hidden transition-shadow ${submitting === c.id ? 'border-magenta ring-2 ring-magenta/30' : 'border-ink/10 hover:shadow-card hover:border-ink/20'} disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <img
-                src={c.coverUrl}
+                src={safeImageSrc(c.coverUrl)}
                 alt={c.edition ? `${bookTitle} — ${c.edition}` : bookTitle}
                 className="absolute inset-0 w-full h-full object-cover"
                 loading="lazy"
@@ -600,7 +601,7 @@ function FramePanel({
           className="relative aspect-square w-full max-w-sm rounded-2xl overflow-hidden bg-canvas border border-ink/10 cursor-grab active:cursor-grabbing select-none touch-none"
         >
           <img
-            src={coverUrl}
+            src={safeImageSrc(coverUrl)}
             alt=""
             draggable={false}
             className="absolute inset-0 w-full h-full object-cover pointer-events-none"
