@@ -56,4 +56,20 @@ void main() {
     expect(find.byKey(const Key('home-status')), findsOneWidget);
     expect(find.text('192.168.1.5:8443'), findsNothing);
   });
+
+  testWidgets('a second deep link does not stack a second pairing screen',
+      (tester) async {
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+    await tester.pumpWidget(AudiobookCompanionApp(
+      store: _NoopStore(), service: PairingService(), deepLinks: links.stream));
+    await tester.pumpAndSettle();
+
+    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'));
+    await tester.pumpAndSettle();
+    links.add(Uri.parse('https://www.castwright.ai/pair?h=192.168.1.9:8443&c=ZZZZZZZZ&f=1CR5AYMZRKMGWCTRFPHCFV0H6R'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pair a device'), findsOneWidget); // AppBar title — exactly one screen
+  });
 }
