@@ -3,8 +3,14 @@ import { describe, it, expect } from 'vitest';
 import { planTorchPreinstall } from '../../tts-sidecar/scripts/install-torch.mjs';
 
 describe('planTorchPreinstall', () => {
-  it('nvidia/cpu/apple → skip (torch comes from the overlay / PyPI, not a wheel pre-install)', () => {
-    expect(planTorchPreinstall('nvidia', 'win32').action).toBe('skip');
+  it('nvidia → install-index from the cu128 index (PyPI default torch is CPU-only on Windows)', () => {
+    expect(planTorchPreinstall('nvidia', 'win32')).toEqual({
+      action: 'install-index',
+      url: 'https://download.pytorch.org/whl/cu128',
+    });
+  });
+
+  it('cpu/apple → skip (torch comes from the overlay / PyPI, not a pre-install)', () => {
     expect(planTorchPreinstall('cpu', 'linux').action).toBe('skip');
     expect(planTorchPreinstall('apple', 'darwin').action).toBe('skip');
   });

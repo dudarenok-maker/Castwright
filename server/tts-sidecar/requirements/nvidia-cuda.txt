@@ -12,6 +12,12 @@
 # removed the in-core soundfile backend (load/save now need torchcodec) — this
 # is fine because the sidecar NEVER calls torchaudio.load: audio I/O is
 # soundfile + ffmpeg, and Coqui uses manifest speakers, not speaker_wav.
+#
+# These plain pins do NOT carry a CUDA build by themselves: PyPI's default torch
+# wheel is CPU-only on Windows. bootstrap-venv pre-installs torch/torchaudio from
+# the cu128 index (installRecipe('nvidia').torchPreinstall) BEFORE this overlay,
+# so the +cu128 build is already present and these `==2.11.0` lines just confirm
+# it. To pin a specific CUDA build by hand, pre-install before the requirements:
 #   pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 torch==2.11.0
 torchaudio==2.11.0

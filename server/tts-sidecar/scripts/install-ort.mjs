@@ -44,8 +44,18 @@ export function planOrtSwap(profile, platform) {
   return {
     action: 'swap',
     steps: [
-      ['uninstall', '-y', 'onnxruntime'],
-      ['install', ortPackage],
+      // Uninstall BOTH the plain `onnxruntime` the overlay landed AND any cached
+      // `ortPackage` first, so the shared `onnxruntime/` namespace directory is
+      // fully cleared — then `--force-reinstall` lays ortPackage's files fresh.
+      // A plain `install ortPackage` is a NO-OP when ortPackage is already cached
+      // (at a skewed version — e.g. the overlay pulls onnxruntime 1.27.0 but
+      // onnxruntime-gpu 1.26.0 is in pip's cache): pip reports "already
+      // satisfied" and skips, leaving the namespace half-overwritten by the
+      // just-uninstalled onnxruntime → `import onnxruntime` breaks (no
+      // __version__/get_available_providers) and Kokoro silently fails to load.
+      // `--no-deps` keeps the overlay's numpy/protobuf/etc. pins untouched.
+      ['uninstall', '-y', 'onnxruntime', ortPackage],
+      ['install', '--force-reinstall', '--no-deps', ortPackage],
     ],
   };
 }
