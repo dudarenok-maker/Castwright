@@ -36,4 +36,22 @@ void main() {
     // Resume point is ht1-c2 = id 2, title "Bells Beneath".
     expect(find.text('Ch. 2 · Bells Beneath'), findsOneWidget);
   });
+
+  testWidgets('chapter list has a scroll controller and the label is tappable',
+      (tester) async {
+    final rt = await buildDemoRuntime(fs: InMemoryFileStore(), root: '/demo');
+    await tester.pumpWidget(MaterialApp(
+      home: PlayerScreen(
+          runtime: rt, bookId: 'hollow-tide-1', title: 'The Drowning Bell'),
+    ));
+    await tester.pumpAndSettle();
+
+    final listView = tester.widget<ListView>(find.byType(ListView));
+    expect(listView.controller, isNotNull);
+
+    // Tapping the current-chapter label must not throw (scrolls to current).
+    await tester.tap(find.byKey(const Key('player-current-chapter')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('player-current-chapter')), findsOneWidget);
+  });
 }

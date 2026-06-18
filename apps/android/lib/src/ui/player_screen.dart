@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
 import '../data/player_controller.dart';
+import '../domain/chapter_scroll.dart';
 import '../domain/listen_progress.dart';
 import '../domain/resume_reconcile.dart';
 import '../domain/sync_manifest.dart';
@@ -36,6 +37,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Set<String> _finished = {};
   final List<StreamSubscription<Object?>> _subs = [];
   final Map<String, List<double>> _peaks = {}; // chapter uuid -> RMS peaks
+  final ScrollController _scroll = ScrollController();
+  static const double _kRowHeight = 72;
 
   /// Fetch + cache a chapter's waveform peaks. Local-first (survives offline +
   /// screen recreation + restart); falls back to a live fetch (and persists)
@@ -52,6 +55,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (uuid == null) return;
     final ch = _chapters.where((c) => c.uuid == uuid);
     if (ch.isNotEmpty) _ensurePeaks(uuid, ch.first.id);
+  }
+
+  void _scrollToCurrent({required bool animate}) {
+    if (!_scroll.hasClients) return;
+    final uuid = widget.runtime.player.currentChapterUuid;
+    if (uuid == null) return;
+    final i = _chapters.indexWhere((c) => c.uuid == uuid);
+    if (i < 0) return;
+    final target = chapterScrollOffset(
+      index: i,
+      rowHeight: _kRowHeight,
+      maxExtent: _scroll.position.maxScrollExtent,
+    );
+    if (animate) {
+      _scroll.animateTo(target,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    } else {
+      _scroll.jumpTo(target);
+    }
   }
 
   @override
@@ -84,10 +106,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _ready = true;
         });
         _ensureCurrentPeaks();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToCurrent(animate: false);
+        });
       }
       // Move the highlight + progress as chapters change (incl. auto-advance).
       _subs.add(widget.runtime.player.nowPlayingStream.listen((_) {
-        if (mounted) setState(() {});
+        if (mounted) {
+          setState(() {});
+          _scrollToCurrent(animate: true);
+        }
       }));
       // Tick a chapter to "done" the moment it finishes, no reopen needed.
       _subs.add(widget.runtime.player.chapterCompletedStream.listen((uuid) {
@@ -103,6 +131,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     for (final s in _subs) {
       s.cancel();
     }
+    _scroll.dispose();
     // Save locally, then push the latest position to the server (app-6),
     // best-effort + offline-safe.
     widget.runtime.player
@@ -174,6 +203,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              controller: _scroll,
               itemCount: _chapters.length,
               itemBuilder: (_, i) {
                 final c = _chapters[i];
@@ -264,12 +294,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: Text(
-                          _currentChapterLabel(player),
-                          key: const Key('player-current-chapter'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleSmall,
+                        child: InkWell(
+                          onTap: () => _scrollToCurrent(animate: true),
+                          child: Text(
+                            _currentChapterLabel(player),
+                            key: const Key('player-current-chapter'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
                         ),
                       ),
                     ),
