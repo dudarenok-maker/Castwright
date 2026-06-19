@@ -204,6 +204,11 @@ export interface AppInfo {
   } | null;
   devicesState?: 'pending' | 'ready' | 'error' | null;
   activeEngine?: string;
+  /* fe-27 — in-app update notifier. Server-sourced (cached GitHub-Releases
+     check, non-blocking). updateAvailable is null while the check is cold or
+     the source is unreachable; absent on an older server. */
+  updateAvailable?: boolean | null;
+  latestVersion?: string | null;
 }
 
 /* Result of the "is a newer release available?" check for the Account →

@@ -5124,10 +5124,30 @@ let mockAppInfo: AppInfo = {
   devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
   devicesState: 'ready',
   activeEngine: 'kokoro',
+  updateAvailable: false,
+  latestVersion: null,
 };
+/* fe-27 — e2e seam: `?e2eUpdate=<version>` forces an "update available" mock so
+   the Playwright notifier spec has a deterministic trigger (mock mode is
+   in-process, so page.route can't intercept). Pure + exported so it's unit-
+   tested directly (no `api` indirection / window stub). */
+export function readE2eUpdateOverride(search: string): {
+  updateAvailable: boolean;
+  latestVersion: string | null;
+} {
+  try {
+    const v = new URLSearchParams(search).get('e2eUpdate');
+    if (v) return { updateAvailable: true, latestVersion: v };
+  } catch {
+    /* swallow — fall through to defaults */
+  }
+  return { updateAvailable: false, latestVersion: null };
+}
+
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
-  return { ...mockAppInfo };
+  const ov = readE2eUpdateOverride(typeof window !== 'undefined' ? window.location.search : '');
+  return { ...mockAppInfo, updateAvailable: ov.updateAvailable, latestVersion: ov.latestVersion };
 }
 /* Mock has no release source — report "up to date" on the running version so the
    card renders its steady state under VITE_USE_MOCKS=true. */
