@@ -64,6 +64,28 @@ describe('LanAccessCard', () => {
     await waitFor(() => expect(api.revokeDevice).toHaveBeenCalledWith('1'));
   });
 
+  it('does not render a revoked device', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [{ ...DEVICE, revoked: true }] });
+
+    render(<LanAccessCard />);
+
+    await waitFor(() => screen.getByText('LAN access'));
+    expect(screen.queryByText('Mike phone')).not.toBeInTheDocument();
+  });
+
+  it('Revoke removes the row (the re-fetch returns it revoked)', async () => {
+    vi.mocked(api.listDevices)
+      .mockResolvedValueOnce({ devices: [DEVICE] })
+      .mockResolvedValueOnce({ devices: [{ ...DEVICE, revoked: true }] });
+    vi.mocked(api.revokeDevice).mockResolvedValue({ ok: true });
+
+    render(<LanAccessCard />);
+
+    await waitFor(() => screen.getByText('Mike phone'));
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    await waitFor(() => expect(screen.queryByText('Mike phone')).not.toBeInTheDocument());
+  });
+
   it('Authorize a device: type label → createDevicePairSession called → QR img appears', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
     vi.mocked(api.createDevicePairSession).mockResolvedValue(PAIR_SESSION);
