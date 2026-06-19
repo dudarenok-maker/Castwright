@@ -244,6 +244,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     const sent = JSON.parse(init.body);
     expect(sent).toEqual({
       voiceId: 'qwen-v_maerin',
+      voiceUuid: 'v_maerin',
       instruct: 'a poised, confident teenage girl, clear and warm',
       language: 'English',
       calibrationText: MAERIN_LINE,
