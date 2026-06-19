@@ -1546,6 +1546,26 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   });
 });
 
+describe('buildStage1ChapterInbox — #938 byline-author guidance', () => {
+  const chapter = { id: 1, title: 'Chapter 1', body: 'Эскалатор полз медленно.' };
+
+  it('renders a "book author is not a character" block when an author is provided', () => {
+    const md = buildStage1ChapterInbox('m1', 'Ночной дозор', chapter, [], [], 'Сергей Лукьяненко');
+    expect(md).toMatch(/Сергей Лукьяненко/);
+    expect(md).toMatch(/not a character/i);
+  });
+
+  it('omits the block when no author is provided (back-compat)', () => {
+    const md = buildStage1ChapterInbox('m1', 'Ночной дозор', chapter, [], []);
+    expect(md).not.toMatch(/not a character/i);
+  });
+
+  it('narrows the first-person-document rule to framed embedded documents', () => {
+    const md = buildStage1ChapterInbox('m1', 'X', chapter, [], [], 'Author');
+    expect(md).toMatch(/first-person novel is NOT/i);
+  });
+});
+
 /* buildInterimCast underpins the mid-run cast.json writes — the helper
    must produce a deduped, palette-coloured roster with lines:0/scenes:0
    placeholders so the file shape matches the post-Phase-1 end-of-run

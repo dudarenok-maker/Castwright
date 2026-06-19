@@ -1251,6 +1251,7 @@ export function buildStage1ChapterInbox(
   chapter: { id: number; title: string; body: string },
   runningRoster: CharacterOutput[],
   seriesPrior: SeriesPriorCharacter[] = [],
+  author = '',
 ): string {
   /* Compact roster format — only the identity fields the model needs to
      reuse ids verbatim. Skipping evidence/tone/description keeps each
@@ -1299,6 +1300,15 @@ ${priorJson}
 \`\`\`
 `;
 
+  /* #938 — the book's byline author is NOT a character. Rendered only when known. */
+  const authorBlock = author.trim()
+    ? `
+## Book author — NOT a character
+
+The byline author of this book is **${author.trim()}**. This is the real-world author printed on the cover — they are NOT a character in the story. Do NOT add them to the roster, and never assign the narrator's prose or the protagonist's first-person lines to them — UNLESS this chapter is an explicitly-framed author's note/letter in which the author speaks in the first person about the book.
+`
+    : '';
+
   return `---
 manuscriptId: ${manuscriptId}
 stage: 1-ch${chapter.id}
@@ -1324,6 +1334,9 @@ true:
    the *author* is the character, with their \`id\` set to their name,
    and the document's prose becomes their evidence. \`narrator\` is
    reserved for omniscient third-person prose with no in-fiction author.
+   A whole **first-person novel is NOT** such a document — its first-person
+   voice is the protagonist/narrator, NOT the book's author; never roster the
+   byline author as that voice.
 
 **An explicit \`<Name> <speech-verb>\` dialogue tag is binding** — \`"…,"
 Lessom repeated.\`, \`"Fine," Sela agreed.\`, \`"Where?" Wren asked.\`
@@ -1371,7 +1384,7 @@ For any character below who appears in this chapter, use the existing \`id\`
 duplicate roster entry.
 
 ${rosterBlock}
-${priorBlock}
+${priorBlock}${authorBlock}
 ## Chapter
 
 ${chapter.body}
@@ -2794,6 +2807,7 @@ export async function runMainAnalyzerJob(
                       { ...ch, body: subBody },
                       Array.from(rebuildRoster().values()),
                       seriesPrior,
+                      bookAuthor,
                     ),
                     {
                       signal: abortController.signal,
@@ -4574,6 +4588,7 @@ async function runSubsetAnalyzerJob(
                     { ...ch, body: subBody },
                     Array.from(rebuildRoster().values()),
                     subsetSeriesPrior,
+                    bookAuthor,
                   ),
                   {
                     signal: abortController.signal,
