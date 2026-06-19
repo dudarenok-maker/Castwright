@@ -1,0 +1,54 @@
+# .github/workflows/app-deps-watch.yml
+name: app-deps-watch
+
+# ops-17 / #790 — monthly pub-dependency watch for the Flutter companion.
+# A1: red when any DIRECT/DEV apps/android dep is behind `latest` (catch-up nudge).
+# A2: a dedicated KGP-migration channel — a ⚠️ banner + a one-off @mention on #790
+# when audio_session / flutter_foreground_task / mobile_scanner first show a newer
+# version (the rare event ops-17 exists to catch), so it is never buried under A1.
+# All logic is the unit-tested scripts/deps-watch.mjs; this just runs it.
+on:
+  workflow_dispatch:
+  schedule:
+    # 1st of the month, 03:00 UTC — off-peak, mirrors cross-os.yml. Monthly
+    # (not weekly): these plugins move on a multi-month cadence.
+    - cron: '0 3 1 * *'
+
+permissions:
+  contents: read
+  issues: write
+
+# Serialize a manual fire that overlaps the cron so the sticky comment is never
+# double-created. cancel-in-progress:false => queue, never cancel mid-PATCH.
+concurrency:
+  group: app-deps-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          # KEEP IN LOCKSTEP with app.yml — app.yml's Trip-B step asserts equality.
+          flutter-version: 3.44.1
+          cache: true
+      - name: Resolve deps
+        working-directory: apps/android
+        run: flutter pub get
+      - name: Deps watch (A1 nudge + A2 KGP channel)
+        working-directory: apps/android
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # Capture pub-outdated's own exit deliberately: 65/69 = tooling fault,
+          # which must surface as exit 2, NOT be conflated with A1's "behind" (1).
+          if ! flutter pub outdated --json --show-all > outdated.json; then
+            echo "::error::flutter pub outdated failed (tooling fault, not a deps signal)"
+            exit 2
+          fi
+          node ../../scripts/deps-watch-run.mjs outdated.json
