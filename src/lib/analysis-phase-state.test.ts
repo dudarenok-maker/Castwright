@@ -43,6 +43,15 @@ describe('derivePhaseState', () => {
     ).toBe('done');
   });
 
+  /* Live payloads are sticky (we never blank a phase's last live), so a
+     completed phase can still carry stale live chapters. Completion (progress
+     1) must win over that stale live → done, so its ticker stops rendering. */
+  it('is done at completion even if a stale live payload lingers', () => {
+    expect(
+      derivePhaseState(0, { progressByPhase: { 0: 1 }, liveByPhase: { 0: live(1) }, maxPhase: 1 }),
+    ).toBe('done');
+  });
+
   it('is done when a later phase has advanced past it and it has no live left', () => {
     expect(
       derivePhaseState(0, { progressByPhase: { 0: 0.4, 1: 0.2 }, liveByPhase: {}, maxPhase: 1 }),

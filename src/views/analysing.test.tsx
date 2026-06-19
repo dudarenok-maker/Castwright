@@ -201,7 +201,44 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     expect(screen.getByText('ATTRIB CH1')).toBeInTheDocument();
   });
 
-  it('clears a phase ticker when that phase reports no live, without disturbing the other phase', async () => {
+  it('keeps a phase headline STICKY across a mid-phase tick that carries no live payload', async () => {
+    await renderViewWaitingForAnalysis();
+
+    /* Regression for the e2e timeout (#930 follow-up): the server (and the
+       mock) emit `live` only while a chapter is in flight; a later same-phase
+       tick can arrive with no `live` (progress still < 1). The ticker MUST
+       persist that phase's last live rather than blanking — otherwise the
+       headline flickers out mid-phase and a poller waiting on it hangs. */
+    act(() => {
+      capturedOpts?.onPhase?.({
+        phaseId: 0,
+        progress: 0.5,
+        live: {
+          totalChapters: 2,
+          chapters: [
+            {
+              chapterIndex: 1,
+              chapterTitle: 'Chapter 1',
+              elapsedMs: 1000,
+              estMs: 2000,
+              sentencesDone: 60,
+              sentencesTotal: 120,
+              inSentenceMode: true,
+            },
+          ],
+        },
+      });
+    });
+    expect(screen.getByText(/Attributed ~60 of ~120 sentences/)).toBeInTheDocument();
+
+    // A later mid-phase tick with NO live (progress still < 1) must NOT blank it.
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.8 });
+    });
+    expect(screen.getByText(/Attributed ~60 of ~120 sentences/)).toBeInTheDocument();
+  });
+
+  it('stops showing a phase ticker once that phase completes (progress 1), without disturbing the other phase', async () => {
     await renderViewWaitingForAnalysis();
 
     act(() => {
@@ -218,8 +255,8 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     });
     expect(screen.getByText('CAST CH8')).toBeInTheDocument();
 
-    // Phase 0 finishes (emits a phase event with no live) — its ticker clears,
-    // but Phase 1's ticker is untouched.
+    // Phase 0 completes (progress 1) — it reads as done, so its ticker is no
+    // longer rendered, but Phase 1's ticker is untouched.
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
     });

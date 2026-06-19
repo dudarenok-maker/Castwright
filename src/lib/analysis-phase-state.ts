@@ -25,9 +25,11 @@ const DONE_THRESHOLD = 0.999;
  * per-phase data lets both pipelined phases stay active at once.
  *
  * Rules, in order:
+ *  - progress at completion → done (checked FIRST: live payloads are sticky —
+ *    we never blank a phase's last live — so a finished phase can still carry
+ *    stale live chapters; completion must win or its ticker would never clear);
  *  - live chapters present  → active (a phase that's streaming work is active,
  *    even when a later phase has also started — pipelining);
- *  - progress at completion → done;
  *  - a later phase has advanced past it (and no live remains) → done;
  *  - it IS the frontier (the highest phase reached, incl. the initial phase 0
  *    before any event) → active — mirrors the legacy `activePhaseId === id`;
@@ -38,8 +40,8 @@ export function derivePhaseState(phaseId: number, inputs: PhaseStateInputs): Pha
   const liveInfo = inputs.liveByPhase[phaseId];
   const hasLive = !!liveInfo && liveInfo.chapters.length > 0;
 
-  if (hasLive) return 'active';
   if (prog !== undefined && prog >= DONE_THRESHOLD) return 'done';
+  if (hasLive) return 'active';
   if (phaseId < inputs.maxPhase) return 'done';
   if (phaseId === inputs.maxPhase) return 'active';
   return 'pending';

@@ -454,12 +454,14 @@ export function AnalysingView({
             }
             /* Per-phase state: each phase owns its progress + live payload so
                pipelined cast (Phase 0) and attribution (Phase 1) ticks don't
-               overwrite one another. A phase event with no `live` clears that
-               phase's ticker (it's finished a chapter / the whole phase) while
-               leaving the other phase untouched. A done phase's stale heartbeat
-               never renders because PhaseCard gates it on isActive. */
+               overwrite one another. Live is STICKY — only replaced when a tick
+               carries a fresh `live`, never blanked on a no-live tick. The
+               server/mock emit `live` only while a chapter is in flight, so a
+               mid-phase no-live tick must not flicker the ticker out. A phase's
+               ticker stops rendering once it reads as done (progress 1 →
+               derivePhaseState), which also hides its now-stale live + heartbeat. */
             setProgressByPhase((prev) => ({ ...prev, [phaseId]: progress }));
-            setLiveByPhase((prev) => ({ ...prev, [phaseId]: live ?? null }));
+            if (live) setLiveByPhase((prev) => ({ ...prev, [phaseId]: live }));
             const prevMax = maxPhaseRef.current;
             const newMax = Math.max(prevMax, phaseId);
             maxPhaseRef.current = newMax;
@@ -801,7 +803,7 @@ export function AnalysingView({
           markEvent();
           setConn('streaming');
           setProgressByPhase((prev) => ({ ...prev, [phaseId]: progress }));
-          setLiveByPhase((prev) => ({ ...prev, [phaseId]: live ?? null }));
+          if (live) setLiveByPhase((prev) => ({ ...prev, [phaseId]: live }));
           const newMax = Math.max(maxPhaseRef.current, phaseId);
           maxPhaseRef.current = newMax;
           setPhase(newMax);
