@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/audio_engine.dart';
 import 'package:castwright/src/data/playback_store.dart';
 import 'package:castwright/src/data/player_controller.dart';
-import 'package:castwright/src/domain/skip_behavior.dart';
 
 /// Engine whose playing state is driven by the test, so we can assert the
 /// controller re-broadcasts out-of-band stops (audio-focus loss / headset
