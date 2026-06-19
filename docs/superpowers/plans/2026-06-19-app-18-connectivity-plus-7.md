@@ -51,7 +51,7 @@ Change `apps/android/pubspec.yaml:66`:
 - connectivity_plus: 6.1.0
 + connectivity_plus: 7.1.1
 ```
-(Exact pin, no caret — match the surrounding deps.)
+(Keep it **exact-pinned**, as `6.1.0` already was — connectivity_plus is the one deliberately exact-pinned dep in this block; its neighbours like `rxdart: ^0.28.0` use carets, so do **not** copy their `^` style here.)
 
 - [ ] **Step 3: Resolve and refresh the lockfile**
 
@@ -60,6 +60,8 @@ Run (from `apps/android`):
 flutter pub get
 ```
 Expected: `Got dependencies!` (or `Changed N dependencies!`), exit 0, and `pubspec.lock` now shows `connectivity_plus 7.1.1`. If it errors with a Dart/Flutter SDK constraint, STOP — the spec verified 7.1.1's floor is Dart ≥3.3 / Flutter ≥3.19, which 3.44.1 clears, so a failure here means an unexpected newer version; reassess before proceeding.
+
+Then **review the `pubspec.lock` diff** (`git diff apps/android/pubspec.lock`). Expect the `connectivity_plus` subtree to change; `pub get` may **also** float caret-permitted transitives (e.g. its `*_platform_interface` packages) — that's normal, and the `git add pubspec.lock` in Step 5 commits them atomically. If the diff is broader than the connectivity_plus subtree, note it in the PR body so it doesn't surprise review.
 
 - [ ] **Step 4: Verify the Dart side is green (the existing regression net)**
 
@@ -139,20 +141,20 @@ git commit -m "ci(app): run ios-compile on macos-26 for the iOS 26 SDK (#895)"
 
 - [ ] **Step 1: Remove the app-18 row from the backlog**
 
-Open `docs/BACKLOG.md` and delete the **entire `app-18` block at lines 138–142** — that is the `#### \`app-18\` — connectivity_plus 6→7 …` heading (138) plus its `_What:_` (140), `_Benefit (technical):_` (141), and `_Full detail:_` (142) lines and the block's own blank line(s). Don't leave an orphaned bullet behind. Then confirm:
+Open `docs/BACKLOG.md` and delete the **`app-18` block plus its trailing blank — lines 138–143**: the `#### \`app-18\` — connectivity_plus 6→7 …` heading (138), its inner blank (139), the `_What:_` (140), `_Benefit (technical):_` (141), and `_Full detail:_` (142) lines, and the trailing blank (143). Deleting 138–143 (not 138–142) leaves exactly one separator blank (137) between the `ops-17` item above and `srv-40` below — no double-blank orphan. Then confirm:
 ```bash
 grep -n 'app-18' docs/BACKLOG.md
 ```
 Expected: no matches.
 
-(Note: `grep -rn app-18 docs/` will still show **intentional historical** mentions in `docs/features/INDEX.md` (round-4 archive summary), `docs/features/archive/224-deps-round-4.md`, and this item's own spec/plan. Those are records of what happened and **stay** — only `BACKLOG.md` loses its live row.)
+(Note: `grep -rn app-18 docs/` will still show **intentional historical** mentions in `docs/features/INDEX.md` (round-4 archive summary), `docs/features/archive/224-deps-round-4.md`, and this item's own spec/plan — and `grep connectivity_plus docs/features/archive/224-deps-round-4.md` returns **more than five** hits (lines 20 and 73 are extra round-4 history). All of those are records of what happened and **stay** — only `BACKLOG.md` loses its live row, and only archive lines 51 + 97 get edited.)
 
 - [ ] **Step 2: Update the round-4 archive behaviour-delta note**
 
 `docs/features/archive/224-deps-round-4.md` has **five** `app-18`/"6.1.0" mentions (lines 51, 77, 97, 114, 124). It is the historical record of round 4, which genuinely *reverted* the bump — **do not falsify that history.** Disposition by line:
 
 - **Line 51** (`## Invariants to preserve` → `network_info.dart` row): present-tense invariant `… held at connectivity_plus 6.1.0 — see app-18`. This goes stale after the re-bump → change `held at connectivity_plus 6.1.0 — see app-18` to `bumped to connectivity_plus 7.1.1 in app-18/#895`.
-- **Line 97** (`### Automated coverage` → Flutter row): present-tense `held at connectivity_plus 6.1.0 (see app-18).` → append a forward note so it reads `held at connectivity_plus 6.1.0 at round-4 ship (since re-bumped to 7.1.1 in app-18/#895).`
+- **Line 97** (`### Automated coverage` → Flutter row): the phrase **wraps across lines 96–97** — `…shape (5/5), held at` ends line 96, and `connectivity_plus 6.1.0 (see app-18).` begins line 97. So match **only the on-line-97 fragment** `connectivity_plus 6.1.0 (see app-18).` and replace it with `connectivity_plus 6.1.0 at round-4 ship (since re-bumped to 7.1.1 in app-18/#895).` Do **not** put `held at` in the find-string — it's on line 96, and a literal match spanning the newline + 2-space indent will fail.
 - **Lines 77, 114, 124** (the `What shipped` reverted-bullet, the `Out of scope` bullet, and the `Ship notes` behaviour-delta): these accurately describe **what round 4 did** ("attempted 6→7, reverted … tracked as `app-18` (#895)"). **Leave them as-is** — they are correct history and the `#895` pointer now resolves to a closed issue.
 
 Keep the `status: stable` frontmatter unchanged. The edit is two stale present-tense lines (51, 97); the three historical lines stay.
