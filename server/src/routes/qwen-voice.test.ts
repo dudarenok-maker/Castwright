@@ -940,28 +940,78 @@ describe('srv-43 mint + collision regression', () => {
   });
 
   it('two same-named characters in different standalone books get distinct .pt paths (collision regression)', async () => {
-    /* This is the marquee regression test: on pre-srv-43 code, both books
-       would design to qwen-wren.pt (colliding). After srv-43 each gets a
-       unique voiceUuid, so their .pt paths diverge. We drive the design
-       route for each book (mocked sidecar) and capture the voiceId the
-       sidecar was asked to design — that is the .pt name. */
+    /* Marquee regression: on pre-srv-43 code both books design to qwen-wren.pt
+       (colliding). After srv-43 each book mints a unique voiceUuid so the sidecar
+       receives distinct storage keys. We drive the REAL design route for each book
+       and capture the voiceId the sidecar fetch body carries — that is the .pt
+       name. A passing test on pre-srv-43 code would see both equal 'qwen-wren'. */
 
-    /* Book A needs a valid book on disk in the workspace for findBookByBookId.
-       Instead of using the route (which requires bookId resolution), we directly
-       test at the level that matters: ensureCharacterVoiceUuid gives each book
-       a distinct uuid, so qwenStorageKey produces distinct paths. */
-    const uuidA = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
-    const uuidB = await ensureCharacterVoiceUuidFn(bookDirB, 'wren');
+    /* Create two standalone books inside the shared workspace so findBookByBookId
+       can locate them. Different titles → different bookIds. Both carry 'wren'
+       with no voiceUuid so ensureCharacterVoiceUuid mints fresh for each. */
+    const { makeBookId } = await import('../workspace/paths.js');
+    const wrenChar = {
+      id: 'wren',
+      voiceId: 'wren',
+      voiceStyle: 'a bright voice',
+      evidence: [{ quote: '"Hello."' }],
+    };
+    const designWrenBody = { sampleVoiceId: 'wren', modelKey: QWEN_KEY };
 
-    /* Each book's uuid is unique — so the derived .pt paths differ. */
-    expect(uuidA).toMatch(/.+/);
-    expect(uuidB).toMatch(/.+/);
-    expect(uuidA).not.toBe(uuidB);
+    function writeStandaloneBook(title: string, chars: object[]): string {
+      const bId = makeBookId(AUTHOR, 'Standalones', title);
+      const dir = join(workspaceRoot, 'books', AUTHOR, 'Standalones', title);
+      mkdirSync(join(dir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(dir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: bId,
+          manuscriptId: `m_${bId}`,
+          title,
+          author: AUTHOR,
+          series: 'Standalones',
+          seriesPosition: 0,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+      writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: chars }));
+      return bId;
+    }
 
-    /* The actual .pt paths (what qwenStorageKey returns) differ. */
-    const ptA = `qwen-${uuidA}.pt`;
-    const ptB = `qwen-${uuidB}.pt`;
-    expect(ptA).not.toBe(ptB);
-    expect(ptA).toMatch(/qwen-.+\.pt$/);
+    const bookIdA = writeStandaloneBook('Collision Alpha', [wrenChar]);
+    const bookIdB = writeStandaloneBook('Collision Beta', [wrenChar]);
+
+    /* Design Book A — capture what voiceId the sidecar was asked for. */
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(okSidecarResponse());
+    const resA = await request(app)
+      .post(`/api/books/${bookIdA}/cast/wren/design-voice`)
+      .send(designWrenBody);
+    expect(resA.status).toBe(200);
+    const sentA = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    /* Design Book B — reset the mock so call[0] belongs to Book B. */
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(okSidecarResponse());
+    const resB = await request(app)
+      .post(`/api/books/${bookIdB}/cast/wren/design-voice`)
+      .send(designWrenBody);
+    expect(resB.status).toBe(200);
+    const sentB = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    /* The two sidecar storage keys must diverge (the whole point of srv-43). */
+    expect(sentA.voiceId).toMatch(/^qwen-.+/);
+    expect(sentB.voiceId).toMatch(/^qwen-.+/);
+    expect(sentA.voiceId).not.toBe(sentB.voiceId);
+
+    /* Clean up the two extra books from the workspace. */
+    rmSync(join(workspaceRoot, 'books', AUTHOR, 'Standalones'), { recursive: true, force: true });
   });
 });
