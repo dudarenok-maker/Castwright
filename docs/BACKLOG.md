@@ -113,6 +113,12 @@ _Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
 
+#### `srv-43` — Stable per-voice identity (`voiceUuid`) to prevent cross-series name collisions ([#934](https://github.com/dudarenok-maker/Castwright/issues/934))
+
+- _What:_ Mint an immutable workspace-wide `voiceUuid` at voice-design time and use it (not the derived `qwen-${id}` name) as the internal linker for series-reuse, cross-book dedup, and on-disk voice storage. Lazily backfill existing voices; `name` becomes a renamable mirror.
+- _Benefit (technical/correctness):_ eliminates a latent cross-series voice collision (two same-named characters silently overwrite each other's `.pt`) and gives future cross-book features a stable id to match on.
+_Full detail + acceptance:_ [#934](https://github.com/dudarenok-maker/Castwright/issues/934).
+
 ### UI & accessibility
 
 #### `fs-14` — Russian UI localization (interface strings, react-i18next) ([#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396))
