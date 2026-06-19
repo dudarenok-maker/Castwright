@@ -98,7 +98,7 @@ Define success criteria, then loop until verified.
   Cross-engine sanity needs `GOLDEN_COQUI=1` / `GOLDEN_QWEN_VOICE=<id>`.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
-- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Lands in pre-push `verify`.
+- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Lands in pre-push `verify` AND label-gated PR CI (`verify.yml`, Ubuntu → `e2e/linux` baselines), so visual regressions surface at PR time rather than only at release.
 - `npm run test:fast` — frontend + server only (matches the pre-commit hook).
 - `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
 - `npm run verify` — full battery: typecheck + all tests + e2e + build (matches the pre-push hook).

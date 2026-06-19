@@ -212,6 +212,16 @@ jobs:
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
         run: npm run test:e2e
 
+      # Visual snapshots run as their own serial step (workers=1) so they can't
+      # race the parallel test:e2e battery for the Vite dev server — mirrors the
+      # local `verify` (verify-cache.mjs). CI is Ubuntu, so this validates the
+      # committed `e2e/linux/**` baselines; without it, visual regressions slip
+      # past every PR and only surface at release time (release.yml runs the full
+      # `npm run verify`, which includes this leg, on Ubuntu).
+      - name: E2E visual baselines (chromium)
+        if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run test:e2e:visual
+
       - name: Build
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.server == 'true' || steps.changes.outputs.shared == 'true'
         run: npm run build
