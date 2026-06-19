@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-19 (rev 2 — after two adversarial reviews)
 - **Backlog item:** `ops-17` ([#790](https://github.com/dudarenok-maker/Castwright/issues/790))
-- **Status:** design approved; ready for implementation plan
+- **Status:** implemented on `feat/app-ops-17-kgp-guardrail`; #790 stays open (blocked upstream)
 - **Branch:** `feat/app-ops-17-kgp-guardrail`
 
 > **Rev 2 changes (adversarial review):** the monthly red trip is split into two
