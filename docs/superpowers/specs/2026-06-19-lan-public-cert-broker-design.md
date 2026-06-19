@@ -136,8 +136,10 @@ repoll without holding a request or burning subrequests):
 **valid, unexpired cert for this exact `installId`+CSR** already exists, the broker
 returns it and **consumes zero budget** (a re-submitted identical CSR).
 
-**`GET /provision/:jobId`** — install polls; returns `pending` | `ready
-{ certChainPem, notAfter }` | `failed { code }`.
+**`GET /provision/:jobId?installId=‹id›`** — install polls; returns `pending` |
+`ready { certChainPem, notAfter }` | `failed { code }`. The `installId` query is
+required so the Worker can address the installId-keyed Durable Object; the broker
+matches the stored job's `jobId` against the path and 404s a mismatch.
 
 **`POST /dns`** — cheap, **A-only, no ACME, no budget** (for mid-session LAN-IP
 changes). Body `{ installId, lanIp, jws }` (`op:"dns"`, no `csrHash`). Upserts the A
@@ -225,8 +227,9 @@ LE limits are per *registered domain* = **`castwright.ai`** (~50 new certs/week,
 
 On `start:lan`: read/generate persistent `installId` (UUIDv4) + **auth keypair** +
 **TLS keypair**; build CSR; sign a JWS (`op:"provision"`, `csrHash`, the auth pubkey
-in the header); `POST /provision`; **poll `GET /provision/:jobId`** starting after
-`retryAfter`, backing off to an **overall deadline of 120s**; on `ready`, write the
+in the header); `POST /provision`; **poll `GET /provision/:jobId?installId=‹id›`**
+starting after `retryAfter`, backing off to an **overall deadline of 120s**; on
+`ready`, write the
 chain + the local TLS key to the existing `.run/certs/` files. **On LAN-IP change
 mid-session: call the cheap `POST /dns`** (`op:"dns"`, no re-issue). Two existing
 URL-builders — **`export-lan.ts enumerateLanUrls` AND `pairing.ts`** — switch from
