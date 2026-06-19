@@ -463,14 +463,25 @@ git commit -m "feat(server): strip front-matter from chapter bodies at analysis 
 
 ---
 
-### Task 5: Wire Layer B — drop the byline author at per-chapter roster capture (both entrypoints)
+### Task 5: Wire Layer B — guard the roster build (covers cached + fresh chapters)
+
+> **Adversarial-review correction (2026-06-20):** the guard must NOT sit at the
+> `chapterCast[ch.id] = result.characters` write (it runs only for *freshly-detected*
+> chapters — on a resume, or on an already-analyzed book like the user's *Ночной
+> дозор*, `chapterCast` is loaded from cache at `const chapterCast = cache.chapterCast ?? {}`
+> ~line 2538 and would bypass the guard). The guard goes inside **`rebuildRoster()`** —
+> the choke point that turns `chapterCast` into the running roster, the final roster
+> (~3044), and the live "Cast so far" SSE view (~2572→2578). Guarding on *read* there
+> covers cached AND fresh, in both entrypoints. `buildInterimCast` is guarded too so
+> the on-disk interim cast.json the user watches never shows the author.
 
 **Files:**
-- Modify: `server/src/routes/analysis.ts` — the two `chapterCast[ch.id] = result.characters;` assignments (~2880 full, ~4546 subset).
-- Test: `server/src/routes/analysis.test.ts` (integration in Task 7; this task verified by suite + typecheck).
+- Modify: `server/src/routes/analysis.ts` — `rebuildRoster` in `runMainAnalyzerJob` (~2556) and in the subset entrypoint (~4476); `buildInterimCast` (~650) + its two callers (~2921, ~4561).
+- Test: `server/src/routes/analysis.test.ts` (Task 7 integration covers this; verified here by suite + typecheck).
 
 **Interfaces:**
-- Consumes: `dropBylineAuthorFromChapter` (Task 2), `bookAuthor` (Task 4 — in scope in both entrypoints), `ch.title` (chapter hint), `log`.
+- Consumes: `dropBylineAuthorFromChapter` (Task 2), `bookAuthor` (Task 4 — in scope in both entrypoints), `ch.title` (chapter hint).
+- Produces: `buildInterimCast(chapterCast, chapterOrder, language, author?)` — new trailing optional `author` param.
 
 - [ ] **Step 1: Add the import**
 
@@ -480,46 +491,100 @@ At the top of `server/src/routes/analysis.ts`, add:
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 ```
 
-- [ ] **Step 2: Replace the full-entrypoint assignment (~2880)**
+- [ ] **Step 2: Guard the full-entrypoint `rebuildRoster` (~2556)**
 
 Find:
 
 ```ts
-        chapterCast[ch.id] = result.characters;
+      const rebuildRoster = (): Map<string, CharacterOutput> => {
+        const r = new Map<string, CharacterOutput>();
+        for (const ch of recordRef.chapterHints) {
+          const cast = chapterCast[ch.id];
+          if (cast?.length) mergeRosterChapter(r, cast);
+        }
+        return r;
+      };
 ```
 
-(in `runMainAnalyzerJob`, inside the cast-detection loop) and replace with:
+Replace the loop body so each chapter's cast is filtered before merge:
 
 ```ts
-        {
-          /* #938 Layer B — drop the byline author from this chapter's roster
-             (unless a framed author's-note) so stage-2 can't attribute the
-             protagonist's dialogue to the real-world author. */
-          const guarded = dropBylineAuthorFromChapter(result.characters, {
-            author: bookAuthor,
-            chapterTitle: ch.title,
-          });
-          chapterCast[ch.id] = guarded.characters;
-          if (guarded.dropped.length > 0) {
-            log(0, `Excluded byline author from cast (${guarded.dropped.join(', ')}) — ${ch.title}.`);
+      const rebuildRoster = (): Map<string, CharacterOutput> => {
+        const r = new Map<string, CharacterOutput>();
+        for (const ch of recordRef.chapterHints) {
+          const cast = chapterCast[ch.id];
+          if (cast?.length) {
+            /* #938 Layer B — keep the byline author out of every roster build
+               (covers cached chapterCast too, unlike guarding only fresh writes).
+               Framed author's-note chapters keep the author. */
+            const guarded = dropBylineAuthorFromChapter(cast, {
+              author: bookAuthor,
+              chapterTitle: ch.title,
+            });
+            mergeRosterChapter(r, guarded.characters);
           }
         }
+        return r;
+      };
 ```
 
-- [ ] **Step 3: Replace the subset-entrypoint assignment (~4546)**
+- [ ] **Step 3: Guard the subset-entrypoint `rebuildRoster` (~4476)**
 
-Find the subset loop's `chapterCast[ch.id] = result.characters;` and apply the same replacement (same code; `bookAuthor`, `ch.title`, `log` are all in scope there — confirm the `log` helper name used in that function).
+Find the subset entrypoint's identical `rebuildRoster` (iterates `record.chapterHints`) and apply the same filter-before-merge change (use that function's record local — `record` — and its in-scope `bookAuthor` from Task 4).
 
-- [ ] **Step 4: Run the route suite + typecheck**
+- [ ] **Step 4: Guard `buildInterimCast` so the on-disk interim cast.json is clean too**
+
+In `buildInterimCast` (signature ~650), add a trailing optional `author` param and filter each chapter's cast inside its merge loop (~657). It has no per-chapter title in scope, so it drops the author unconditionally — acceptable for the transient interim write; the authoritative final cast.json is produced from the title-aware `rebuildRoster` above:
+
+```ts
+export function buildInterimCast(
+  chapterCast: Record<number, CharacterOutput[]>,
+  chapterOrder: number[],
+  language?: string,
+  author = '',
+): CharacterOutput[] {
+```
+
+At its merge loop, change:
+
+```ts
+    const cast = chapterCast[chapterId];
+    if (cast?.length) mergeRosterChapter(roster, cast);
+```
+
+to:
+
+```ts
+    const cast = chapterCast[chapterId];
+    if (cast?.length) {
+      const guarded = dropBylineAuthorFromChapter(cast, { author }); // #938 — no title here (transient interim)
+      mergeRosterChapter(roster, guarded.characters);
+    }
+```
+
+Then pass `bookAuthor` at the two `buildInterimCast(...)` call sites (~2921 full, ~4561 subset) as the new 4th argument:
+
+```ts
+          const interim = buildInterimCast(
+            chapterCast,
+            recordRef.chapterHints.map((h) => h.id),
+            bookLanguage,
+            bookAuthor,
+          );
+```
+
+(Use the matching record/language locals at each call site.)
+
+- [ ] **Step 5: Run the route suite + typecheck**
 
 Run: `cd server && npx vitest run src/routes/analysis.test.ts && cd .. && npm run typecheck`
-Expected: PASS + clean.
+Expected: PASS + clean. (Existing `buildInterimCast` tests still pass — the new param is optional and a book with no author is a no-op.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add server/src/routes/analysis.ts
-git commit -m "feat(server): drop byline author from per-chapter roster (#938 Layer B wiring)"
+git commit -m "feat(server): guard byline author out of roster builds incl. cached cast (#938 Layer B wiring)"
 ```
 
 ---
@@ -658,7 +723,7 @@ git commit -m "feat(server): clarify byline-author + first-person rule in detect
 
 - [ ] **Step 1: Write the failing test**
 
-Add a case that drives the analysis route/job with a stub analyzer whose stage-1 returns a roster containing the byline author (with `role: "Protagonist"`) plus the real protagonist, on a book whose `author` is that same name. Assert the final roster/cast contains the protagonist and the narrator but NOT the byline author. Mirror the existing harness in the file (book fixture creation, stub `Analyzer` wiring, how the test reads the resulting `stage1.characters` / cast.json). Skeleton:
+Add a case that drives the analysis route/job with a stub analyzer whose stage-1 returns a roster containing the byline author (with `role: "Protagonist"`) plus the real protagonist, on a book whose `author` is that same name. **Critically, also cover the cached path** — seed `cache.chapterCast` (or run twice so the second run reads the cache) so the test would catch the adversarial-review bug where only fresh chapters were guarded. Assert the final roster/cast contains the protagonist and the narrator but NOT the byline author. Mirror the existing harness in the file (book fixture creation, stub `Analyzer` wiring, how the test reads the resulting `stage1.characters` / cast.json). Skeleton:
 
 ```ts
 it('#938 — excludes the byline author from the final cast on a story chapter', async () => {
@@ -743,4 +808,13 @@ gh pr create --base main --title "fix(server): stop the byline author being cast
 
 **Type consistency:** `dropBylineAuthorFromChapter` / `isFramedAuthorNote` / `stripFrontMatterBoilerplate` / `resolveBookAuthorForManuscript` signatures are identical across their defining task and their call sites. `buildStage1ChapterInbox` gains a trailing optional `author` param (back-compatible with existing callers and tests).
 
-**Known implementation checks called out inline:** confirm `findBookByManuscriptId(...).state.author` field path (Task 3); confirm the subset entrypoint's local names (`record` vs `recordRef`, its `log` helper) (Tasks 4-6); confirm the route-test harness shape (Task 7).
+**Known implementation checks called out inline:** `findBookByManuscriptId(...)` returns BOTH `.author` and `.state` (verified — `server/src/workspace/scan.ts:636`), so `located.state.author` is valid (Task 3); confirm the subset entrypoint's local names (`record` vs `recordRef`) (Tasks 4-6); confirm the route-test harness shape (Task 7).
+
+**Adversarial-review correction (applied):** Layer B was moved from the per-chapter
+`chapterCast[ch.id] = result.characters` write to `rebuildRoster()` (+ `buildInterimCast`)
+so it covers **cached** chapterCast entries, not just freshly-detected ones — otherwise
+the fix silently no-ops on a resume or on an already-analyzed book (the exact case the
+user will test). Verified: `rebuildRoster` (full ~2556, subset ~4476) is the single
+choke point feeding the running roster, final roster (~3044), and live SSE view
+(~2572). `chapterHints.body` is read-only (never persisted), so Layer A's in-place
+strip is safe.
