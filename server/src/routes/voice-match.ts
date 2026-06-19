@@ -87,6 +87,7 @@ function projectLibraryVoice(rec: LibraryCharacterRecord): LibraryVoice | null {
   if (!voiceId) return null;
   return {
     voiceId,
+    voiceUuid: c.voiceUuid,
     bookId: rec.bookId,
     bookTitle: rec.bookTitle,
     characterId: c.id,

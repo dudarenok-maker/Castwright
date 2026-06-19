@@ -107,6 +107,7 @@ export async function resolveReusedVoiceFields(
         ttsEngine: source.ttsEngine ?? 'qwen',
         overrideTtsVoices: source.overrideTtsVoices ?? {},
         voiceStyle: source.voiceStyle,
+        voiceUuid: source.voiceUuid,
       };
     }
 
