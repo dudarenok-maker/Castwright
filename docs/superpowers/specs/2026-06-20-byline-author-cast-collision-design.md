@@ -240,3 +240,11 @@ Per the project's testing discipline (paired automated tests for every change):
    extend on real corpus data — same discipline as `GENERIC_ROLE_RU`).
 3. Whether to emit a one-line analysing-view log when the guard drops an author, and
    whether to surface it in the change-log so a user can see why the author isn't cast.
+
+## Shipped
+
+- **Date:** 2026-06-20 · **Branch:** `fix/server-byline-author-cast-collision` · **Closes #938.**
+- **Commits:** plan/spec `27a4c69b`, `e9d3f47b`, `5589a433`, `cd6a909d`; implementation `f8049ac7` (Layer A module) → `eff34609` (integration regression + review fix), 7 TDD tasks.
+- **Build via subagent-driven execution:** adversarial plan review caught (and fixed) a cache-bypass bug — the guard was moved from the fresh-detection write to `rebuildRoster` + `buildInterimCast` so it covers a resumed / already-analyzed book. Empirically grounded on real `gemma4-e4b` + *Ночной дозор* (the byline author stole 8 of Anton's dialogue lines; removing it from the roster returned them to `anton`).
+- **Open questions resolved in implementation:** (1) guard rides `rebuildRoster` (both entrypoints) + `buildInterimCast`, on the read path; (2) author-note pattern set seeded bilingual (`AUTHOR_NOTE_TITLE_RX` in `byline-author-guard.ts`); (3) a one-line analysing-view log is emitted when the guard drops an author.
+- `npm run verify` green (typecheck + all tests + e2e + build); final whole-branch review (opus): ready to merge.
