@@ -34,6 +34,8 @@ type OverrideMap = Partial<Record<TtsEngine, OverrideSlot>>;
 export interface ReuseHydratable {
   id: string;
   ttsEngine?: TtsEngine | null;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   overrideTtsVoices?: OverrideMap | null;
   /** The Qwen voice-design persona (plan 108). Like the override, it lives on
       the SOURCE book's character; reuse paths denormalise it onto the reused
@@ -62,6 +64,8 @@ function hasOwnQwenVoice(c: ReuseHydratable): boolean {
     still resolves. Guards against cycles + a sane depth cap. */
 export interface ResolvedReusedVoice {
   ttsEngine?: TtsEngine | null;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   overrideTtsVoices: OverrideMap;
   voiceStyle?: string;
 }

@@ -69,6 +69,8 @@ export interface Candidate {
    re-walking the books tree. */
 export interface LibraryVoice {
   voiceId: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   bookId: string;
   bookTitle: string;
   characterId: string;

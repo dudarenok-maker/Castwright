@@ -33,6 +33,8 @@ export function pickEmotionVariantVoice(
 
 export interface VoiceLike {
   id: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   character?: string;
   attributes?: string[];
   /** Per-engine user-set voice overrides. The synth engine reads its own

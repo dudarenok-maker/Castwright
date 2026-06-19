@@ -45,6 +45,8 @@ type Engine = 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
    the round-trip read/write preserves them. */
 type PersistedCharacter = CharacterOutput & {
   voiceId?: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   overrideTtsVoices?: Partial<Record<Engine, { name: string }>>;
   overrideTtsVoice?: unknown; // legacy singular field — dropped on write
   ttsEngine?: Engine | null;

@@ -197,6 +197,10 @@ export interface CastCharacter {
   name?: string;
   role?: string;
   voiceId?: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time.
+      The Qwen storage key derives from it (qwen-<voiceUuid>); absent on
+      voices designed before srv-43 (legacy name-keyed fallback). */
+  voiceUuid?: string;
   attributes?: string[];
   /** Alternate names from cast.json. Not used by synthesis, but the voice
       library (routes/voices.ts) copies it onto each derived Voice so the

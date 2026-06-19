@@ -52,6 +52,8 @@ export interface LinkableCharacter {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   attributes?: string[];
   voiceId?: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   voiceState?: 'generated' | 'tuned' | 'reused' | 'locked';
   ttsEngine?: TtsEngine | null;
   overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;

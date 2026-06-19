@@ -2924,6 +2924,8 @@ export interface components {
         Voice: {
             /** @description Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id. */
             id: string;
+            /** @description srv-43 — the designed voice's immutable identity, copied from the source Character. Optional; absent for catalog voices and pre-srv-43 designs. */
+            voiceUuid?: string;
             character: string;
             bookTitle: string;
             bookId: string;
@@ -3280,6 +3282,8 @@ export interface components {
                 emotion?: number;
             };
             voiceId?: string;
+            /** @description Immutable per-voice identity (nanoid) minted at design time (srv-43). The on-disk/sidecar storage key derives from it (qwen-<voiceUuid>); overrideTtsVoices.qwen.name stays the human display label. Absent on voices designed before srv-43 (legacy name-keyed fallback). */
+            voiceUuid?: string;
             /** @enum {string} */
             voiceState?: "generated" | "tuned" | "reused" | "locked";
             /**
