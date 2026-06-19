@@ -56,8 +56,8 @@ describe('renameWithRetry', () => {
       throw makeErr('EBUSY');
     });
     await expect(renameWithRetry('src', 'dest')).rejects.toThrow(/EBUSY/);
-    /* 1 initial + 4 retry delays = 5 attempts total. */
-    expect(renameMock).toHaveBeenCalledTimes(5);
+    /* 1 initial + 5 retry delays = 6 attempts total (RENAME_RETRY_DELAYS_MS grew to 5 in #921). */
+    expect(renameMock).toHaveBeenCalledTimes(6);
   });
 
   it('throws when the error has no `code` field (defensive — never retry an unknown shape)', async () => {
