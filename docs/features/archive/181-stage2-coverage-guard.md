@@ -130,6 +130,38 @@ fix makes the WER gate actually function on Russian (Whisper transcribes it fine
 collapse Cyrillic names to empty/colliding ids/keys. That touches persisted ids +
 on-disk filenames, so it is its own plan (see `docs/features/`), not this fix.
 
+## Follow-up — word-free chunk stuck loop (2026-06-19)
+
+The 9-chapter Russian book *Ночной дозор* stalled on Chapter 7 with
+`Low coverage — attributed 1303 words vs ~0 source (ratio 0.00 below 0.6)` re-run
+to the retry budget on one section. **Same failure class as the Cyrillic fix
+above (zero-word source → permanent false "truncated"), different trigger** — and
+this time the source word count really *was* 0 for that span.
+
+Root cause: the chapter has a lone `***` scene-break paragraph sitting between two
+**over-budget** paragraphs (11.5k + 9.8k chars). `splitBodyIntoChunks` flushed on
+both, isolating `"***\n\n"` as its own ~5-char section. `words("***")` = 0 (no
+`\p{L}\p{N}`), so the guard forced `coverageRatio = 0` and flagged "truncated" on
+every attempt; meanwhile the model attributed the huge preceding-context paragraph
+it was handed (the 1303 words), wasting ~4 min/attempt and producing garbage
+sentences. A source-side word count can't change on retry → effectively stuck.
+
+Two-layer fix (`stage2-coverage.ts` + `stage2-chunk.ts`):
+
+1. **Skip word-free chunks before attribution** (`runStage2ChapterChunked` →
+   `attributeSpan`): a span with no attributable words (`hasAttributableContent`)
+   has nothing to attribute — no model call, no sentences. A `***` scene break
+   isn't spoken anyway.
+2. **Guard treats a zero-word source as un-evaluable** (`validateStage2Coverage`):
+   `truncated`/`excess` only fire when `bodyWords.length > 0`. An empty *output* is
+   now gated by an explicit `noSentences` check (previously it failed only as a
+   side effect of the forced-zero ratio, which a word-free source no longer
+   produces). Defense-in-depth for the single-call path.
+
+Paired tests: `stage2-chunk.test.ts` "skips a word-free chunk (a *** scene break)
+without calling the model"; `stage2-coverage.test.ts` "does NOT flag a word-free
+source as truncated" + the existing empty-input invariant still holds.
+
 ## Ship notes
 
 Shipped 2026-06-06 (merge 1e93419, PR #516, closes #515). Live acceptance

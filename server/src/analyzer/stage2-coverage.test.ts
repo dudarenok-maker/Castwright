@@ -131,6 +131,18 @@ describe('validateStage2Coverage', () => {
     expect(v.endingPresent).toBe(false);
   });
 
+  it('does NOT flag a word-free source (e.g. a *** scene break) as truncated', () => {
+    // Regression (2026-06-19 Ночной дозор ch7): a lone scene-break paragraph
+    // ("***") normalises to ZERO words, so the ratio was forced to 0.00 and the
+    // span was flagged "truncated" on every retry — a permanent stuck loop. A
+    // zero-word source is un-evaluable (nothing to under-cover): with attributed
+    // output present it must PASS, not report dropped/truncated content. Same
+    // failure class as the Cyrillic case above, different trigger.
+    const v = validateStage2Coverage('***\n\n', [{ text: '***' }]);
+    expect(v.ok).toBe(true);
+    expect(v.issues.some((i) => /truncat|dropped|cover|loop|excess/i.test(i))).toBe(false);
+  });
+
   it('does NOT false-positive a short-but-complete chapter (e.g. a preface)', () => {
     const body = 'PREFACE. A short opening note. For the future.';
     const sentences = [sent('PREFACE.'), sent('A short opening note.'), sent('For the future.')];
