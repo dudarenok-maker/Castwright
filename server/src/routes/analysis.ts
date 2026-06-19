@@ -2124,6 +2124,18 @@ export async function resolveBookLanguageForManuscript(manuscriptId: string): Pr
   }
 }
 
+/* #938 — the book's byline author (cover/byline name), for the Layer A front-matter
+   strip + the Layer B roster guard. Mirrors resolveBookLanguageForManuscript's
+   fail-open shape: "" on any miss so the guard/strip degrade to no-ops. */
+export async function resolveBookAuthorForManuscript(manuscriptId: string): Promise<string> {
+  try {
+    const located = await findBookByManuscriptId(manuscriptId);
+    return located?.state?.author ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,

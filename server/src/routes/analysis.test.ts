@@ -25,6 +25,7 @@ import {
   trackForReplay,
   replayCatchUp,
   castInFlightEntryToLiveChapter,
+  resolveBookAuthorForManuscript,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -1959,5 +1960,11 @@ describe('castInFlightEntryToLiveChapter — live tick chapter map (Phase-0a cas
     expect(result.chapterTitle).toBe('Chapter Three');
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(typeof result.estMs).toBe('number');
+  });
+});
+
+describe('resolveBookAuthorForManuscript', () => {
+  it('returns "" for an unknown manuscript (no throw)', async () => {
+    await expect(resolveBookAuthorForManuscript('mns_does_not_exist')).resolves.toBe('');
   });
 });
