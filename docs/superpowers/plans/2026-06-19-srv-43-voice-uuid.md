@@ -109,10 +109,13 @@ Make the synth path produce `qwen-<voiceUuid>` (falling back to the stored name)
 
 **Files:**
 - Modify: `server/src/tts/voice-mapping.ts` (`pickVoiceForEngine` ~`:243-269`, `pickEmotionVariantVoice` ~`:17-32`)
-- Test: `server/src/tts/voice-mapping.test.ts`
+- Modify: `server/src/tts/synthesise-chapter.ts` (`toVoiceLike` ~`:623-631`) — **load-bearing: see Step 4a**
+- Test: `server/src/tts/voice-mapping.test.ts`, `server/src/tts/synthesise-chapter.test.ts`
 
 **Interfaces:**
-- Produces: `pickVoiceForEngine('qwen', voice)` returns `qwen-${voice.voiceUuid}` when `voiceUuid` is set and the voice is designed; the stored `overrideTtsVoices.qwen.name` when designed without a uuid (legacy); `''` when undesigned. `pickEmotionVariantVoice` derives the variant key as `${baseVoice}__${emotion}` from the (already resolved) base storage key.
+- Produces: `pickVoiceForEngine('qwen', voice)` returns `qwen-${voice.voiceUuid}` when `voiceUuid` is set and the voice is designed; the stored `overrideTtsVoices.qwen.name` (or the legacy singular `overrideTtsVoice.name`) when designed without a uuid; `''` when undesigned. `pickEmotionVariantVoice` derives the variant key as `${baseVoice}__${emotion}` from the (already resolved) base storage key. `toVoiceLike` now carries `voiceUuid` through to the resolver.
+
+> **BLOCKER caught in plan review:** `toVoiceLike` (`synthesise-chapter.ts:623`) builds the `VoiceLike` that EVERY synth-time `pickVoiceForEngine` call consumes (generation `:730/:807/:874`, `applyQwenFallback`, and `character-snapshots.ts:33`). It currently copies `id`/`character`/`attributes`/`overrideTtsVoices`/`overrideTtsVoice` but **not** `voiceUuid`. Without Step 4a, the resolver below sees `undefined` in production → falls back to the legacy name → loads the wrong `.pt` → **every newly-designed voice plays nothing**, while the unit tests (which construct `VoiceLike` directly) stay green. Step 4a is mandatory.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -145,6 +148,24 @@ describe('srv-43 qwen storage key', () => {
       pickEmotionVariantVoice('qwen', { angry: { name: 'ignored-legacy-name' } }, 'angry', 'qwen-V1StGXR8Z5'),
     ).toBe('qwen-V1StGXR8Z5__angry');
   });
+
+  it('resolves a uuid-backed qwen designed voice via the legacy singular field too', () => {
+    const voice = {
+      id: 'wren',
+      voiceUuid: 'V1StGXR8Z5',
+      overrideTtsVoice: { engine: 'qwen' as const, name: 'qwen-wren' },
+    };
+    expect(pickVoiceForEngine('qwen', voice)).toBe('qwen-V1StGXR8Z5');
+  });
+});
+```
+
+Add to `server/src/tts/synthesise-chapter.test.ts` a SYNTH-PATH test (this is the one that would catch the `toVoiceLike` blocker — the unit tests above never exercise `toVoiceLike`):
+
+```typescript
+it('toVoiceLike carries voiceUuid so generation resolves qwen-<uuid>', () => {
+  const c = { id: 'wren', voiceUuid: 'V1StGXR8Z5', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+  expect(pickVoiceForEngine('qwen', toVoiceLike(c as never))).toBe('qwen-V1StGXR8Z5');
 });
 ```
 
@@ -169,7 +190,12 @@ export function pickVoiceForEngine(
      → '' (cast view shows "no voice designed yet"). Handle before the generic
      slot return so the uuid path wins. */
   if (engine === 'qwen') {
-    const designedName = voice.overrideTtsVoices?.qwen?.name;
+    /* Preserve the legacy singular `overrideTtsVoice` fallback too — a qwen
+       voice carrying only the un-normalised singular field must still count as
+       designed (matches the generic path's :250-256 behavior). */
+    const designedName =
+      voice.overrideTtsVoices?.qwen?.name ??
+      (voice.overrideTtsVoice?.engine === 'qwen' ? voice.overrideTtsVoice.name : undefined);
     if (!designedName) return '';
     return voice.voiceUuid ? `qwen-${voice.voiceUuid}` : designedName;
   }
@@ -179,7 +205,24 @@ export function pickVoiceForEngine(
   // ... (unchanged: legacy overrideTtsVoice, then profile inference)
 ```
 
-Delete the now-dead `if (engine === 'qwen') return '';` line further down (`:263`).
+Delete the now-dead `if (engine === 'qwen') return '';` line further down (`:263`). (Verified safe in plan review: the early branch returns for all qwen cases, so the catalog path — which would otherwise fall through to Coqui's table — is unreachable for qwen; non-qwen engines bypass the new branch entirely.)
+
+- [ ] **Step 4a (BLOCKER fix): Populate `voiceUuid` in `toVoiceLike`**
+
+In `server/src/tts/synthesise-chapter.ts`, the `toVoiceLike` return (~`:623-631`) lists fields explicitly. Add `voiceUuid`:
+
+```typescript
+  return {
+    id: c.voiceId ?? c.id,
+    character: c.name,
+    attributes: c.attributes,
+    overrideTtsVoices: c.overrideTtsVoices,
+    overrideTtsVoice: c.overrideTtsVoice,
+    voiceUuid: c.voiceUuid,
+  };
+```
+
+(Match the real field list in the file — the point is adding `voiceUuid: c.voiceUuid`.) Without this, generation, `applyQwenFallback`, and `character-snapshots.ts:33` all resolve the wrong key for uuid-backed voices.
 
 - [ ] **Step 4: Derive the variant key from the base in `pickEmotionVariantVoice`**
 
@@ -213,7 +256,8 @@ Route every file/key consumer in the routes through a `qwenStorageKey(character,
 
 **Files:**
 - Modify: `server/src/routes/qwen-voice.ts` (`deriveQwenVoiceId` stays; add `qwenStorageKey`; `designQwenVoiceForCharacter:265`, `persistEmotionVariant:141`, `designed-persona:224`, `promote-voice:548`, `discard-voice:642`, `delete-variant:703`)
-- Test: `server/src/routes/qwen-voice.test.ts`
+- Modify: `server/src/tts/verify-designed-voice-language.ts` (~`:30-33`) — **BLOCKER, see Step 4b**
+- Test: `server/src/routes/qwen-voice.test.ts`, `server/src/tts/verify-designed-voice-language.test.ts`
 
 **Interfaces:**
 - Produces: `export function qwenStorageKey(character: CastCharacter, characterId: string): string` → `character.voiceUuid ? 'qwen-' + character.voiceUuid : deriveQwenVoiceId(character, characterId)`.
@@ -267,6 +311,19 @@ Replace `deriveQwenVoiceId(character, characterId)` / `deriveQwenVoiceId(p.chara
 - `promote-voice:548` — `const realVoiceId = qwenStorageKey(character, characterId);`
 - `discard-voice:642` — `const expectedPreview = previewVoiceIdFor(qwenStorageKey(character, characterId));`
 - `delete-variant:703` — `const designedId = `${qwenStorageKey(character, characterId)}__${emotion}`;`
+
+- [ ] **Step 4b (BLOCKER fix): Route `verify-designed-voice-language.ts` through `qwenStorageKey`**
+
+`server/src/tts/verify-designed-voice-language.ts` `clearMismatchedDesignedVoices` (~`:30-33`) reads the manifest by the **human name** — `const designedName = c.overrideTtsVoices?.qwen?.name;` then `qwenVoiceSidecarPath(designedName)`. For a uuid-backed voice the manifest lives at `qwen-<uuid>.json`, so this reads `qwen-wren.json` → miss → it concludes "language mismatch" and **deletes `c.overrideTtsVoices.qwen`** (treats a correctly-designed voice as undesigned), and the `forbidKokoroFallback` gate then blocks generation. Runs on full-generate AND fs-26 splice re-record for every non-English book. Fix: resolve the manifest path via the storage key.
+
+```typescript
+// import { qwenStorageKey } from '../routes/qwen-voice.js';
+const designedName = qwenStorageKey(c, c.id);          // was: c.overrideTtsVoices?.qwen?.name
+if (!designedName) continue;                           // keep the existing undesigned guard
+const manifest = await readJson<{ language?: string }>(qwenVoiceSidecarPath(designedName)).catch(() => null);
+```
+
+Confirm the existing "no qwen voice → skip" guard still holds: `qwenStorageKey` returns a non-empty string even for undesigned characters, so gate the language check on the character actually having a qwen override (`if (!c.overrideTtsVoices?.qwen?.name && !c.voiceUuid) continue;`) before resolving the path — preserve the current "only check designed voices" behavior. Add a regression case to `verify-designed-voice-language.test.ts`: a uuid-backed voice with a matching-language manifest at `qwen-<uuid>.json` is NOT cleared.
 
 - [ ] **Step 5: Write a route-level fallback test**
 
@@ -329,15 +386,20 @@ describe('srv-43 mint + collision regression', () => {
     expect(b).toBe(a);
   });
 
-  it('two same-named characters in different series get distinct uuids and distinct .pt paths', async () => {
-    // arrange two standalone books each with character {id:'wren', voiceId:'wren'}
-    const u1 = await ensureCharacterVoiceUuid(bookDirA, 'wren');
-    const u2 = await ensureCharacterVoiceUuid(bookDirB, 'wren');
-    expect(u1).not.toBe(u2);
-    // after designing each (mocked fetch), assert the two written .pt paths differ
+  it('two same-named characters in different series get distinct .pt paths (collision regression)', async () => {
+    // arrange two standalone books each with character {id:'wren', voiceId:'wren'}.
+    // Spy on torch-save / the .pt write (the mocked-fetch harness already intercepts
+    // the sidecar PCM response and the file write — see :54-66,110,177). DESIGN BOTH
+    // characters end-to-end and capture the .pt path each design writes.
+    const ptA = await designAndCapturePtPath(bookDirA, 'wren'); // helper: runs the design route, returns qwenVoicePtPath written
+    const ptB = await designAndCapturePtPath(bookDirB, 'wren');
+    expect(ptA).not.toBe(ptB);                 // <-- the real regression assertion (fails on main: both 'qwen-wren.pt')
+    expect(ptA).toMatch(/qwen-.+\.pt$/);
   });
 });
 ```
+
+> **Plan-review note:** the earlier draft of this test only asserted `u1 !== u2`, which merely proves `nanoid()` is random — it does NOT exercise `qwenStorageKey` or the `.pt` write, so it would pass on `main` and catch nothing. The marquee regression MUST design both characters and assert the two written `.pt` paths differ (on `main` both resolve to `qwen-wren.pt` → the assertion fails, proving the regression is real).
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -396,7 +458,9 @@ export async function ensureCharacterVoiceUuid(
 }
 ```
 
-(`CastFile`/`readJson`/`writeJsonAtomic`/`castJsonPath` are already imported; confirm `CastFile` is in scope — `persistEmotionVariant` uses it.)
+(`CastFile`/`readJson`/`writeJsonAtomic`/`castJsonPath` are already imported, `forEachMatchingCastCharacter` is imported at `:45`, and `nanoid@^5.0.7` is in `server/package.json`.)
+
+> **Do NOT move this call inside `designQwenVoiceForCharacter`.** That function already runs inside `withDesignLock(p.bookDir, …)`, and `withDesignLock` is a per-book promise chain (not re-entrant) — minting inside it would self-deadlock. The plan correctly mints in the route/bulk caller *before* invoking the design core (two sequential lock acquisitions, never nested).
 
 - [ ] **Step 4: Wire into the single-design route**
 
@@ -415,7 +479,7 @@ In the design-voice route, before the `designQwenVoiceForCharacter(...)` call (~
         // ...rest unchanged
 ```
 
-(Reuse `seriesInfo` for the existing variant `persistEmotionVariant` call rather than recomputing it.)
+**Hoist explicitly:** `isStandalone`/`seriesInfo` are currently declared *inside* the `if (emotion && body.preview !== true)` block (`:498-499`). Move both declarations up to here (before the design call) and **delete the inner declarations**, so the variant `persistEmotionVariant` call reuses these — not a recompute. (Inner-block scoping means leaving them wouldn't fail to compile, but it's a redundant second `findAuthorSeriesForBookId` call.)
 
 - [ ] **Step 5: Wire into the `cast-design.ts` bulk job**
 
@@ -451,8 +515,8 @@ git commit -m "fix(server): mint+persist voiceUuid at design time, both entry po
 So two books in a series share ONE voice (one uuid, one `.pt`): copy the source voice's `voiceUuid` onto the reused character. Requires the reuse candidate to expose it.
 
 **Files:**
-- Modify: `server/src/routes/voice-match.ts` (`LibraryVoice` already got the field in Task 1; `projectLibraryVoice:82` copies it)
-- Modify: `server/src/workspace/series-reuse-link.ts` (its `projectVoice` ~`:96-113` copies `voiceUuid`; the link stamp at `:309`)
+- Modify: `server/src/workspace/series-reuse-link.ts` — **its OWN `projectVoice` (~`:96-113`) is the REQUIRED edit** (it builds the `priorVoices`/`best.voice` the `:309` stamp reads); the link stamp at `:309`; the `clearStaleLink` revert at `:156-166`
+- Modify: `server/src/routes/voice-match.ts` (`projectLibraryVoice:82`) — separate path (the voice-match route); update for that route's consistency, but it is NOT what makes the `:309` test pass
 - Modify: `server/src/tts/hydrate-reused-voice.ts` (`resolveReusedVoiceFields` carries `voiceUuid` for the denormalise path)
 - Test: `server/src/workspace/series-reuse-link.test.ts`
 
@@ -481,7 +545,7 @@ In `voice-match.ts` `projectLibraryVoice` (`:86-98`), add to the returned object
   };
 ```
 
-Apply the identical `voiceUuid: c.voiceUuid` addition to the `projectVoice` function inside `series-reuse-link.ts` (~`:96-113`) that builds `priorVoices`.
+Apply the identical `voiceUuid: c.voiceUuid` addition to the `projectVoice` function inside `series-reuse-link.ts` (~`:96-113`) that builds `priorVoices` — **this is the one the `:309` stamp actually reads**, so it's required for Step 1's test to pass. The `voice-match.ts` edit is for the separate voice-match route.
 
 - [ ] **Step 4: Stamp the uuid on the reused character**
 
@@ -519,6 +583,19 @@ And in `series-reuse-link.ts`'s `resolveReusedVoiceFields` consumer (`:335-338`)
         c.voiceUuid = c.voiceUuid ?? resolved.voiceUuid;
       }
 ```
+
+- [ ] **Step 5b (MAJOR fix): Clear `voiceUuid` on a stale-link revert**
+
+`series-reuse-link.ts` `clearStaleLink` (~`:156-166`) deletes `voiceId`/`overrideTtsVoices`/`voiceStyle`/`ttsEngine` when a prior link no longer holds — but **not `voiceUuid`**. A reverted character would keep the old shared uuid, and the next design hits `ensureCharacterVoiceUuid`'s idempotent "already has uuid → reuse" path → writes into the OLD shared `.pt` → re-introduces the exact cross-identity collision srv-43 prevents. Add the delete alongside the others:
+
+```typescript
+    delete c.voiceId;
+    delete c.voiceUuid;          // srv-43 — drop the inherited identity on unlink
+    delete c.overrideTtsVoices;
+    // ...rest unchanged
+```
+
+Add a test: a character whose link is cleared loses `voiceUuid`, and a subsequent `ensureCharacterVoiceUuid` mints a FRESH one (not the old shared value).
 
 - [ ] **Step 6: Run the tests**
 
@@ -578,9 +655,9 @@ export const PRESERVED_VOICE_FIELDS = [
 
 Add `voiceUuid?: string;` to the `CharacterSnapshot` type if it explicitly lists fields.
 
-- [ ] **Step 5: If the override-save test failed, preserve in `applyOverrideToCastFiles`**
+- [ ] **Step 5: Confirm `applyOverrideToCastFiles` preserves `voiceUuid` (regression guard — plan review verified it already does)**
 
-Only if Step 2 showed stripping: confirm `normaliseCastCharacter` carries unknown fields; the `replacement: CastCharacter = { ...normalised }` at `voices.ts:614` preserves `voiceUuid` as long as `normaliseCastCharacter` returns it. If `normaliseCastCharacter` uses an explicit allowlist, add `voiceUuid` there.
+Plan review confirmed `normaliseCastCharacter` (`:130-143`) returns either `c` or a `{ ...c, ... }` **spread** (not an allowlist), and `applyOverrideToCastFiles`'s `replacement: CastCharacter = { ...normalised }` (`:614`) preserves the field. So the override-save test from Step 1 should PASS as-is — keep it as a regression guard. **No code change expected here**; only if the test unexpectedly fails, check whether `normaliseCastCharacter` was changed to an allowlist and add `voiceUuid` there.
 
 - [ ] **Step 6: Run the tests**
 
@@ -625,7 +702,7 @@ Add a `canonicalVoiceUuid: string | undefined` parameter to `applyToBook` and se
     if (canonicalVoiceUuid) next.voiceUuid = canonicalVoiceUuid;
 ```
 
-At the call site(s) of `applyToBook`, resolve the canonical character's `voiceUuid` (read it from the canonical book's cast.json by `canonicalVoiceId`) and pass it through.
+At the call site, the canonical character is **already in hand** — `voice-override-linked.ts` reads `source` (~`:92`) and derives `canonicalVoiceId = source.voiceId ?? source.id` (~`:99`). So pass `source.voiceUuid` straight into `applyToBook`; no new cast.json read is needed. (`PersistedCharacter` gained `voiceUuid` in Task 1.)
 
 - [ ] **Step 4: Run the test**
 
@@ -673,11 +750,27 @@ Expected: FAIL (descriptor has no `voiceUuid`).
             }),
 ```
 
-- [ ] **Step 4: Write it in the sidecar descriptor**
+- [ ] **Step 4: Write it in the sidecar descriptor (THREE spots — `design_voice` is a typed positional method, NOT a `payload` dict)**
 
-`main.py` `design_voice` — accept `voiceUuid` from the request payload (mirror how `voiceId`/`instruct` are read) and add it to the dumped dict (`:1571-1578`):
+In `main.py`, `QwenEngine.design_voice` (`:1493`) has the signature `(voice_id, instruct, language, calibration_text)` — there is **no `payload`** in scope. The HTTP route `qwen_design_voice` (`:3172`) parses the request dict and calls the method **positionally** via `asyncio.to_thread(...)` (`:3211-3217`). So make three coordinated changes:
+
+(a) In the route `qwen_design_voice` (~`:3186`, where it does `body.get("voiceId")`), extract the new field:
 
 ```python
+    voice_uuid = body.get("voiceUuid")
+```
+
+(b) Pass it as a new positional/keyword arg in the `asyncio.to_thread` call (`:3211-3217`):
+
+```python
+    await asyncio.to_thread(qwen.design_voice, voice_id, instruct, language, calibration_text, voice_uuid)
+```
+
+(c) Add the parameter to the method signature (`:1493`) and write it into the descriptor dict (`:1571-1578`):
+
+```python
+    def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None):
+        # ...
                     {
                         "voiceId": voice_id,
                         "voiceUuid": voice_uuid,
@@ -689,7 +782,7 @@ Expected: FAIL (descriptor has no `voiceUuid`).
                     },
 ```
 
-where `voice_uuid = payload.get("voiceUuid")` (defaults to `None`).
+(Default `voice_uuid=None` keeps any other caller / older request body working — the field is inert.)
 
 - [ ] **Step 5: Run the pytest**
 
@@ -744,7 +837,52 @@ git commit -m "fix(server): surface voiceUuid on the derived Voice (srv-43)"
 
 ---
 
-### Task 10: Docs, verify, and close-out
+### Task 10: Carry `voiceUuid` into the "Play 12s" audition path (frontend + design response)
+
+**Plan-review MAJOR.** The audition player resolves the qwen voice via `pickVoiceForEngine(body.voice, …)` (`server/src/routes/voice-sample.ts:114-118`), which returns `qwen-<uuid>` **only if `body.voice.voiceUuid` is set**. The design route caches its one-pass audition under the storage key (`qwen-<uuid>`). So if the Profile Drawer's in-memory voice (especially right after a design, before any refetch) lacks `voiceUuid`, the player both misses that cache and synthesises from the legacy `qwen-<name>.pt` (which no longer exists for a uuid voice) → wrong/no preview audio. The server resolver is already correct (Task 2); this task makes the frontend actually send the uuid.
+
+**Files:**
+- Modify: `server/src/routes/qwen-voice.ts` — the design route's response `{ voiceId, url }` gains `voiceUuid` (and `promote-voice`'s response) so the drawer can seed it without a refetch
+- Modify: `openapi.yaml` — the design-voice / promote-voice response schema + the `/sample` request `voice` shape gain `voiceUuid` (then `npm run openapi:types`)
+- Modify: the Profile Drawer + voice-compare drawer (frontend) — put `voiceUuid` on the in-memory voice after design and include it in the `/sample` request body's `voice`
+- Test: `server/src/routes/voice-sample.test.ts` (a qwen `/sample` whose `voice` carries `voiceUuid` resolves `voiceName === qwen-<uuid>`); a frontend test if the drawer logic crosses a testable seam
+
+- [ ] **Step 1: Write the failing server test**
+
+`voice-sample.test.ts`: POST `/sample` with a qwen `voice` carrying `{ voiceUuid:'U1', overrideTtsVoices:{qwen:{name:'qwen-wren'}} }` → the resolved `voiceName` handed to the sidecar/cache is `qwen-U1` (not `qwen-wren`). Fails before the field flows through.
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd server && npm run test -- voice-sample.test.ts -t "voiceUuid"`
+Expected: FAIL (resolves `qwen-wren` because `body.voice` carries no uuid / `VoiceLike` mapping drops it).
+
+- [ ] **Step 3: Return `voiceUuid` from the design + promote responses**
+
+In `qwen-voice.ts`, the design route returns `res.status(200).json({ voiceId, url })` (`:508`) and promote returns `{ voiceId, url }` (`:614`). Add `voiceUuid` (the value `ensureCharacterVoiceUuid` returned / `qwenStorageKey`'s source) so the drawer can stamp it locally:
+
+```typescript
+      return res.status(200).json({ voiceId, url, voiceUuid });
+```
+
+- [ ] **Step 4: Plumb `voiceUuid` through OpenAPI + frontend**
+
+Add `voiceUuid` to the design/promote response schema and to the `/sample` request `voice` object in `openapi.yaml`; `npm run openapi:types`. In the Profile Drawer (and the A/B voice-compare drawer), after a successful design/promote set `voiceUuid` on the in-memory voice from the response, and include `voiceUuid` on the `voice` sent to `/sample`. (Confirm `pickVoiceForEngine`'s `VoiceLike` input on the server side already reads it — Task 2.)
+
+- [ ] **Step 5: Run the tests**
+
+Run: `cd server && npm run test -- voice-sample.test.ts` and the relevant frontend test (`npm run test -- <drawer>.test.tsx`).
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add server/src/routes/qwen-voice.ts server/src/routes/voice-sample.test.ts openapi.yaml src/lib/api-types.ts src/
+git commit -m "fix(server,frontend): carry voiceUuid into the audition/sample path (srv-43)"
+```
+
+---
+
+### Task 11: Docs, verify, and close-out
 
 **Files:**
 - Create: `docs/features/<n>-srv-43-voice-uuid.md` (from `docs/features/TEMPLATE.md`) — or fold into an existing Qwen-voice plan if one fits; set frontmatter `status: stable` with Ship notes after merge.
@@ -780,13 +918,24 @@ Push the branch; open a PR titled `fix(server): stable per-voice voiceUuid to pr
 
 **Spec coverage:**
 - Split storage/name (`voiceUuid` = storage, `name` = human) → Tasks 1–3. ✓
-- `qwenStorageKey` resolver + legacy fallback → Tasks 2 (synth), 3 (routes). ✓
-- Mint/propagate lifecycle table: fresh single design + bulk → Task 4; `applyOverrideToCastFiles` preserve → Task 6; series reuse (`:308`/`:309` + candidate scan + `resolveReusedVoiceFields`) → Task 5; manual unify converge → Task 7; reparse preserve → Task 6; snapshot → Task 6; import (none) → no task (intentional). ✓
+- `qwenStorageKey` resolver + legacy fallback → Tasks 2 (synth + `toVoiceLike`), 3 (routes + `verify-designed-voice-language`). ✓
+- Mint/propagate lifecycle table: fresh single design + bulk → Task 4; `applyOverrideToCastFiles` preserve → Task 6; series reuse (`:309` + `projectVoice` + `resolveReusedVoiceFields`) → Task 5; stale-link revert clears uuid → Task 5b; manual unify converge → Task 7; reparse preserve → Task 6; snapshot → Task 6; import (none) → no task (intentional). ✓
 - Field plumbing (OpenAPI + api-types + aggregator) → Tasks 1, 9. ✓
+- Audition/`/sample` resolution (frontend carries `voiceUuid`) → Task 10. ✓
 - Sidecar inert descriptor → Task 8. ✓
 - Out of scope (dedup re-bucket, display, migration) → no tasks (correct — explicitly excluded). ✓
-- Tests: collision regression (Task 4), resolver units (Tasks 2/3), display-unchanged guard (implicit — `qwen.name` is never written by any task; add an explicit assertion in Task 4 that `qwen.name` stays human if desired), reuse/preserve/converge (Tasks 5–7), api-types (Task 9), sidecar (Task 8). ✓
+- Tests: collision regression that designs both + asserts distinct `.pt` (Task 4), resolver units + the `toVoiceLike` synth-path test (Task 2), reuse/revert/preserve/converge (Tasks 5–7), `/sample` (Task 10), api-types (Task 9), sidecar (Task 8). ✓
 
-**Placeholder scan:** route-level test bodies in Tasks 3–4 describe arrange/assert without full harness boilerplate — acceptable because they reuse the documented mocked-fetch pattern already in `qwen-voice.test.ts` (`:54-66,110,177`); the implementer copies that pattern. No `TODO`/`TBD`.
+**Round-4 adversarial-review fixes folded in (3-reviewer plan pass):**
+- BLOCKER `toVoiceLike` drops `voiceUuid` → Task 2 Step 4a + synth-path test.
+- BLOCKER `verify-designed-voice-language.ts` reads the human name → Task 3 Step 4b.
+- MAJOR `clearStaleLink` keeps the old uuid (re-collision) → Task 5 Step 5b.
+- MAJOR Task 8 sidecar snippet (no `payload`; positional typed method) → Task 8 Step 4 rewritten (3 spots).
+- MAJOR collision test was tautological → Task 4 Step 1 now designs both + asserts distinct `.pt`.
+- MAJOR `/sample` audition needs frontend `voiceUuid` → new Task 10.
+- MAJOR qwen branch dropped legacy singular `overrideTtsVoice` → Task 2 Step 3 fixed.
+- Minors: `seriesInfo` hoist deletion explicit (Task 4); self-deadlock warning (Task 4); `projectVoice` (not `projectLibraryVoice`) is the required edit (Task 5); Task 7 canonical uuid already in hand (no new read); `normaliseCastCharacter` confirmed a spread (Task 6 Step 5 = regression guard, no code change).
 
-**Type consistency:** `qwenStorageKey(character, characterId)` (Task 3) is used consistently in Tasks 3–4. `ensureCharacterVoiceUuid(bookDir, characterId, seriesFilter?)` (Task 4) signature matches both call sites. `voiceUuid?: string` optional everywhere (Task 1) — consistent with the OpenAPI `voiceUuid` being non-required.
+**Placeholder scan:** route-level test bodies describe arrange/assert without full harness boilerplate — acceptable because they reuse the documented mocked-fetch pattern in `qwen-voice.test.ts` (`:54-66,110,177`). No `TODO`/`TBD`.
+
+**Type consistency:** `qwenStorageKey(character, characterId)` consistent across Tasks 3/4. `ensureCharacterVoiceUuid(bookDir, characterId, seriesFilter?)` matches both call sites. `voiceUuid?: string` optional everywhere — consistent with the non-required OpenAPI field.
