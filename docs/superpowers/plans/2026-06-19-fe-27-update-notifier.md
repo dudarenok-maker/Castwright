@@ -11,6 +11,9 @@
 ## Global Constraints
 
 - **No backend network change to the hot path:** `/api/info` MUST NOT `await` the GitHub fetch. It reads the cache synchronously and kicks a fire-and-forget refresh. Cold cache → `updateAvailable: null`.
+- **No latent network in tests:** the `/api/info` handler's background kick MUST be gated `if (!process.env.VITEST)` (vitest sets `VITEST`), so server tests that hit `/api/info` never make a real GitHub call. Tests that need a populated cache call `refreshUpdateStatusInBackground()` directly with a stubbed `fetch`.
+- **Mock indirection is real in tests:** the vitest env runs with `USE_MOCKS=false`, so `api.getAppInfo()` binds the REAL fetch. Never unit-test through `api.*`; test the exported `mock*`/pure functions directly, and mock `useAppInfo` via `vi.mock('../lib/use-app-info', …)` + `vi.hoisted` (never `vi.spyOn`).
+- **Execution order:** run Tasks 1→8 in sequence. Do NOT parallelize Tasks 3–6: Task 4 consumes Task 3's types; Tasks 5 and 6 both consume Task 4's `update-notice.ts`.
 - **Fail-open everywhere:** any unreachable/parse failure → notifier dark, never an error or a thrown handler.
 - **Equality dismissal, no client semver:** hide only when `latestVersion === dismissedVersion`. Do NOT port/duplicate the server's `compareSemver`.
 - **Guarded `localStorage`:** reads/writes wrapped in `typeof localStorage !== 'undefined'` + try/catch (pattern: `src/views/book-library.tsx:51-71`). Reads fail **safe** (notifier shows).
@@ -67,7 +70,7 @@ describe('cache accessors (fe-27)', () => {
       })),
     );
     refreshUpdateStatusInBackground();
-    await new Promise((r) => setImmediate(r)); // let the fire-and-forget settle
+    await vi.waitFor(() => expect(getCachedUpdateStatus()).not.toBeNull());
     const status = getCachedUpdateStatus();
     expect(status?.latestVersion).toBe('999.0.0');
     expect(status?.updateAvailable).toBe(true);
@@ -81,9 +84,8 @@ describe('cache accessors (fe-27)', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
     refreshUpdateStatusInBackground();
-    await new Promise((r) => setImmediate(r));
+    await vi.waitFor(() => expect(getCachedUpdateStatus()).not.toBeNull());
     refreshUpdateStatusInBackground(); // cache now fresh → no second fetch
-    await new Promise((r) => setImmediate(r));
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -166,6 +168,7 @@ Append to `server/src/routes/info.test.ts` (note: the existing `beforeEach` stub
 
 ```ts
 import {
+  getCachedUpdateStatus,
   refreshUpdateStatusInBackground,
   __resetUpdateCacheForTests,
 } from './updates.js';
@@ -194,7 +197,7 @@ describe('GET /api/info — update fields (fe-27)', () => {
       }),
     );
     refreshUpdateStatusInBackground();
-    await new Promise((r) => setImmediate(r));
+    await vi.waitFor(() => expect(getCachedUpdateStatus()).not.toBeNull());
     const res = await request(app).get('/api/info');
     expect(res.body.latestVersion).toBe('999.0.0');
     expect(res.body.updateAvailable).toBe(true);
@@ -219,7 +222,9 @@ In the `infoRouter.get('/', …)` handler, before `res.json({…})`:
 
 ```ts
   const upd = getCachedUpdateStatus();
-  refreshUpdateStatusInBackground(); // fire-and-forget; never awaited
+  // fire-and-forget; never awaited. Gated off under vitest so /api/info tests
+  // (and the full-app server suites that mount this route) make no real GitHub call.
+  if (!process.env.VITEST) refreshUpdateStatusInBackground();
 ```
 
 Add to the `res.json({ … })` object:
@@ -255,43 +260,38 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Test: `src/lib/api.test.ts` (append; create if absent — check first with `ls src/lib/api.test.ts`)
 
 **Interfaces:**
-- Produces: `AppInfo.updateAvailable?: boolean | null`, `AppInfo.latestVersion?: string | null`; `mockGetAppInfo` honours a `?e2eUpdate=<version>` query param (sets `updateAvailable:true` + `latestVersion`).
+- Produces:
+  - `AppInfo.updateAvailable?: boolean | null`, `AppInfo.latestVersion?: string | null`.
+  - **Exported pure** `readE2eUpdateOverride(search: string): { updateAvailable: boolean; latestVersion: string | null }` — parses a `?e2eUpdate=<version>` query string. `mockGetAppInfo` calls it with `window.location.search`.
+- **Why a pure function:** the vitest env runs `USE_MOCKS=false`, so `api.getAppInfo()` is the REAL fetch (throws in jsdom). The unit test imports `readE2eUpdateOverride` directly and passes the string — no `api` indirection, no `window` stub, no `resetModules`. (Mirrors how `src/lib/api.test.ts` already imports `mockGetSetupReadiness` et al. by name.)
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/lib/api.test.ts`:
+Append to `src/lib/api.test.ts` (it already imports `mock*` helpers by name — add `readE2eUpdateOverride` to that import or add a fresh one):
 
 ```ts
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import { readE2eUpdateOverride } from './api';
 
-describe('mockGetAppInfo update override (fe-27)', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('defaults update fields off', async () => {
-    vi.stubGlobal('window', { location: { search: '' } } as unknown as Window);
-    const { api } = await import('./api');
-    const info = await api.getAppInfo();
-    expect(info.updateAvailable ?? false).toBe(false);
-    expect(info.latestVersion ?? null).toBeNull();
+describe('readE2eUpdateOverride (fe-27 update override)', () => {
+  it('defaults update fields off when the param is absent', () => {
+    expect(readE2eUpdateOverride('')).toEqual({ updateAvailable: false, latestVersion: null });
+    expect(readE2eUpdateOverride('?foo=bar')).toEqual({ updateAvailable: false, latestVersion: null });
   });
 
-  it('honours ?e2eUpdate=<version>', async () => {
-    vi.stubGlobal('window', { location: { search: '?e2eUpdate=9.9.9' } } as unknown as Window);
-    vi.resetModules();
-    const { api } = await import('./api');
-    const info = await api.getAppInfo();
-    expect(info.updateAvailable).toBe(true);
-    expect(info.latestVersion).toBe('9.9.9');
+  it('honours ?e2eUpdate=<version>', () => {
+    expect(readE2eUpdateOverride('?e2eUpdate=9.9.9')).toEqual({
+      updateAvailable: true,
+      latestVersion: '9.9.9',
+    });
   });
 });
 ```
 
-> Note for the implementer: this suite runs with `VITE_USE_MOCKS` on (the frontend test env). If `api.test.ts` already exists with different import conventions, match them; the assertions above are the contract.
-
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/lib/api.test.ts -t "update override"`
-Expected: FAIL — `e2eUpdate` not read; `latestVersion` undefined.
+Expected: FAIL — `readE2eUpdateOverride` is not exported.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -312,19 +312,20 @@ In `src/lib/api.ts`, add the two defaults to the `mockAppInfo` literal (after `a
   latestVersion: null,
 ```
 
-Replace `mockGetAppInfo` (line ~5128) with:
+Replace `mockGetAppInfo` (line ~5128) with the pure helper (exported for the unit test) + the call:
 
 ```ts
 /* fe-27 — e2e seam: `?e2eUpdate=<version>` forces an "update available" mock so
    the Playwright notifier spec has a deterministic trigger (mock mode is
-   in-process, so page.route can't intercept). Guarded; no-op outside a browser
-   / when the param is absent. */
-function readE2eUpdateOverride(): { updateAvailable: boolean; latestVersion: string | null } {
+   in-process, so page.route can't intercept). Pure + exported so it's unit-
+   tested directly (no `api` indirection / window stub). */
+export function readE2eUpdateOverride(search: string): {
+  updateAvailable: boolean;
+  latestVersion: string | null;
+} {
   try {
-    if (typeof window !== 'undefined' && window.location) {
-      const v = new URLSearchParams(window.location.search).get('e2eUpdate');
-      if (v) return { updateAvailable: true, latestVersion: v };
-    }
+    const v = new URLSearchParams(search).get('e2eUpdate');
+    if (v) return { updateAvailable: true, latestVersion: v };
   } catch {
     /* swallow — fall through to defaults */
   }
@@ -333,10 +334,14 @@ function readE2eUpdateOverride(): { updateAvailable: boolean; latestVersion: str
 
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
-  const ov = readE2eUpdateOverride();
+  const ov = readE2eUpdateOverride(typeof window !== 'undefined' ? window.location.search : '');
   return { ...mockAppInfo, updateAvailable: ov.updateAvailable, latestVersion: ov.latestVersion };
 }
 ```
+
+> The e2e URL `/?e2eUpdate=9.9.9#/books` (Task 7) puts the param in the real
+> search string (`window.location.search === '?e2eUpdate=9.9.9'`), leaving the
+> hash router's `#/books` clean — verified correct in a real browser.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -347,7 +352,7 @@ Expected: PASS.
 
 ```bash
 git add src/lib/types.ts src/lib/api.ts src/lib/api.test.ts
-git commit -m "feat(frontend,mocks): AppInfo update fields + e2eUpdate mock seam (fe-27)
+git commit -m "feat(frontend): AppInfo update fields + e2eUpdate mock seam (fe-27)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -556,10 +561,19 @@ Create `src/components/update-notifier-banner.test.tsx`:
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { UpdateNotifierBanner } from './update-notifier-banner';
-import * as useAppInfoMod from '../lib/use-app-info';
-import { __resetForTests, getDismissedVersion } from '../lib/update-notice';
 import type { AppInfo } from '../lib/types';
+
+// Hoisted mutable handle so the vi.mock factory reads live values per test.
+// (Pattern copied verbatim from whats-new-banner.test.tsx — the codebase's
+// established way to drive useAppInfo; vi.spyOn does NOT reliably intercept the
+// ESM named import.)
+const h = vi.hoisted(() => ({ info: null as AppInfo | null, refresh: vi.fn(async () => {}) }));
+vi.mock('../lib/use-app-info', () => ({
+  useAppInfo: () => ({ info: h.info, error: null, refresh: h.refresh }),
+}));
+
+import { UpdateNotifierBanner } from './update-notifier-banner';
+import { __resetForTests, getDismissedVersion } from '../lib/update-notice';
 
 const info = (over: Partial<AppInfo>): AppInfo => ({
   appVersion: '1.8.0',
@@ -571,18 +585,10 @@ const info = (over: Partial<AppInfo>): AppInfo => ({
   ...over,
 });
 
-function stubInfo(value: AppInfo | null) {
-  vi.spyOn(useAppInfoMod, 'useAppInfo').mockReturnValue({
-    info: value,
-    error: null,
-    refresh: async () => {},
-  });
-}
-
 beforeEach(() => {
   localStorage.clear();
   __resetForTests();
-  vi.restoreAllMocks();
+  h.info = null;
 });
 
 const renderBanner = () =>
@@ -594,7 +600,7 @@ const renderBanner = () =>
 
 describe('UpdateNotifierBanner', () => {
   it('renders the version and release-notes link when behind', () => {
-    stubInfo(info({ updateAvailable: true, latestVersion: '1.9.0' }));
+    h.info = info({ updateAvailable: true, latestVersion: '1.9.0' });
     renderBanner();
     expect(screen.getByTestId('update-notifier-banner')).toBeInTheDocument();
     expect(screen.getByText(/Update available — v1\.9\.0/)).toBeInTheDocument();
@@ -602,13 +608,13 @@ describe('UpdateNotifierBanner', () => {
   });
 
   it('does not render when up to date', () => {
-    stubInfo(info({ updateAvailable: false, latestVersion: null }));
+    h.info = info({ updateAvailable: false, latestVersion: null });
     renderBanner();
     expect(screen.queryByTestId('update-notifier-banner')).not.toBeInTheDocument();
   });
 
   it('dismiss records the version and hides the banner', () => {
-    stubInfo(info({ updateAvailable: true, latestVersion: '1.9.0' }));
+    h.info = info({ updateAvailable: true, latestVersion: '1.9.0' });
     renderBanner();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(getDismissedVersion()).toBe('1.9.0');
@@ -704,7 +710,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `src/components/top-bar.tsx:513-532` (`VersionPill`)
-- Test: `src/components/top-bar.test.tsx` (existing — check with `ls`; append, or create a focused `version-pill.test.tsx` if `top-bar.test.tsx` is absent)
+- Test: `src/components/top-bar.test.tsx` (existing, ~684 lines — append). Add a top-of-file `vi.mock('../lib/use-app-info', …)` with a hoisted handle defaulting **`info: null`**: the file currently lets the real `useAppInfo` run (it fetches in jsdom → resolves to `info: null`), so the null default preserves all existing tests. `VersionPill` is NOT exported — assert through a `<TopBar>` render using the file's existing `renderWithStore` + `makeProps` harness.
 
 **Interfaces:**
 - Consumes: `useAppInfo`, `useDismissedVersion`, `shouldShowUpdateNotice` (Task 4).
@@ -712,58 +718,54 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/components/top-bar.test.tsx` (adapt imports to the file's existing render harness; the contract is the dot's presence/absence):
+At the TOP of `src/components/top-bar.test.tsx`, alongside the existing `vi.mock('../lib/api', …)` (before the component imports), add the use-app-info mock, and add `beforeEach` to the vitest import:
 
 ```tsx
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import * as useAppInfoMod from '../lib/use-app-info';
-import { __resetForTests } from '../lib/update-notice';
 import type { AppInfo } from '../lib/types';
 
-// NOTE: VersionPill is not exported. Assert via the rendered TopBar, or export
-// VersionPill for test if the harness needs it. The contract:
-//   updateAvailable + undismissed  → dot present
-//   up to date                     → dot absent
+const appInfoH = vi.hoisted(() => ({ info: null as AppInfo | null, refresh: vi.fn(async () => {}) }));
+vi.mock('../lib/use-app-info', () => ({
+  useAppInfo: () => ({ info: appInfoH.info, error: null, refresh: appInfoH.refresh }),
+}));
+```
 
-const baseInfo: AppInfo = {
+Then append this describe (reuses the file's existing `renderWithStore` + `makeProps`):
+
+```tsx
+import { __resetForTests } from '../lib/update-notice';
+
+const infoWith = (over: Partial<AppInfo>): AppInfo => ({
   appVersion: '1.8.0',
   sidecarVersion: '1.8.0',
   schemas: {},
   lastSeenAppVersion: null,
   showWhatsNew: false,
   releaseNotes: '',
-};
-
-beforeEach(() => {
-  localStorage.clear();
-  __resetForTests();
-  vi.restoreAllMocks();
+  ...over,
 });
 
 describe('VersionPill update dot (fe-27)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetForTests();
+    appInfoH.info = null;
+  });
+
   it('shows a dot when an undismissed update is available', () => {
-    vi.spyOn(useAppInfoMod, 'useAppInfo').mockReturnValue({
-      info: { ...baseInfo, updateAvailable: true, latestVersion: '1.9.0' },
-      error: null,
-      refresh: async () => {},
-    });
-    // render the top bar (use the file's existing renderTopBar helper)
-    // expect(screen.getByTestId('version-pill-dot')).toBeInTheDocument();
+    appInfoH.info = infoWith({ updateAvailable: true, latestVersion: '1.9.0' });
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.getByTestId('version-pill-dot')).toBeInTheDocument();
   });
 
   it('hides the dot when up to date', () => {
-    vi.spyOn(useAppInfoMod, 'useAppInfo').mockReturnValue({
-      info: { ...baseInfo, updateAvailable: false },
-      error: null,
-      refresh: async () => {},
-    });
-    // expect(screen.queryByTestId('version-pill-dot')).not.toBeInTheDocument();
+    appInfoH.info = infoWith({ updateAvailable: false, latestVersion: null });
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.queryByTestId('version-pill-dot')).not.toBeInTheDocument();
   });
 });
 ```
 
-> Implementer: wire these two assertions to `top-bar.test.tsx`'s existing render harness (the file already renders `TopBar` for the pill). If no such harness exists, export `VersionPill` and render it directly inside a `MemoryRouter`. Keep the two behaviors as the contract.
+> After adding the use-app-info mock, run the WHOLE file once (`npx vitest run src/components/top-bar.test.tsx`) to confirm the existing tests still pass — they relied on the real hook's `info: null`, which the mock default reproduces.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -953,3 +955,16 @@ Design: docs/superpowers/specs/2026-06-19-fe-27-update-notifier-design.md
 **Placeholder scan:** no TBD/TODO; every code step shows full code. The two test files with existing-harness adaptation notes (Tasks 6) state the exact behavioral contract and provide the assertions. ✓
 
 **Type consistency:** `shouldShowUpdateNotice(info, dismissed)`, `dismissUpdate(version)`, `useDismissedVersion()`, `getCachedUpdateStatus()`, `refreshUpdateStatusInBackground()` used identically across Tasks 1–7. `AppInfo.updateAvailable?: boolean | null` / `latestVersion?: string | null` consistent in types, mock, predicate, tests. ✓
+
+---
+
+## Adversarial-review revisions (2026-06-19)
+
+Three independent review passes hardened the test mechanics (production code was confirmed sound). What changed from the first draft:
+
+- **Test env runs `USE_MOCKS=false`** → never unit-test through `api.*`. Task 3 now tests an exported **pure `readE2eUpdateOverride(search)`** directly; component tests mock `useAppInfo` via **`vi.mock` + `vi.hoisted`** (the codebase idiom — `whats-new-banner.test.tsx`), never `vi.spyOn`.
+- **`/api/info` must not make a real GitHub call in tests** → the handler's background kick is gated `if (!process.env.VITEST)`; cache-populating tests call `refreshUpdateStatusInBackground()` directly with a stubbed `fetch`.
+- **`top-bar.test.tsx`** gets a top-of-file `useAppInfo` mock defaulting `info: null` (preserves its existing tests); the dot is asserted through `<TopBar>` via the file's `renderWithStore`/`makeProps` (VersionPill isn't exported).
+- **`vi.waitFor`** replaces fragile `setImmediate` settles (Tasks 1–2).
+- Task 3 commit scope corrected to **`feat(frontend)`** (all edits live in `src/lib`).
+- e2e keeps `/?e2eUpdate=9.9.9#/books` (real `location.search`; confirmed correct in-browser, hash route stays clean).
