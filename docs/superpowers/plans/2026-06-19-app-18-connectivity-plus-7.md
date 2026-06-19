@@ -15,7 +15,9 @@
 - **Do NOT change the Flutter pin.** It stays `3.44.1` in **both** `app.yml` jobs. The Trip-B lockstep guard (`app.yml` lines 84–101) greps `flutter-version:` across `app.yml` + `app-deps-watch.yml` and fails on any drift.
 - **Do NOT add a `setup-xcode` step.** `macos-26`'s default Xcode (26.4.1) already has the iOS 26 SDK; a select step is redundant and hard-fails if the match is absent.
 - **Do NOT touch:** the Android job, `android/gradle.properties` (KGP escape-hatch flags), `app-deps-watch.yml`, or `ios/Runner.xcodeproj/project.pbxproj` (`IPHONEOS_DEPLOYMENT_TARGET = 13.0` stays — 7.x's iOS podspec floor is 12.0).
-- **Verification reality:** the Dart/Android side is locally verifiable on this Windows box (`flutter pub get` / `analyze` / `test`). The **iOS compile is CI-only** — `app.yml` runs it on the PR push; that green run is the acceptance gate. On Windows/PowerShell the binary is `flutter.bat`; under the Bash tool / git-bash use `flutter` if on PATH.
+- **Verification reality:** the Dart/Android side is locally verifiable on this Windows box (`flutter pub get` / `analyze` / `test`). The **iOS compile is CI-only** — `app.yml` runs it on the **PR (the `pull_request` event)**, not on the feature-branch push (its `push` trigger is `branches: [main]` only). That green `ios-compile` run is the acceptance gate.
+- **`flutter` binary name:** on this box the binary is **`flutter.bat`** under PowerShell; under the Bash tool `flutter` resolves only if it's on PATH. **If a bare `flutter …` step errors with "command not found," re-run it as `flutter.bat …`.** Every `flutter` command below applies this rule.
+- **`gh pr create` must run from the Bash tool**, not PowerShell — the heredoc body is a PowerShell parse error (PS here-strings differ). Keep it in a single Bash invocation.
 - **Spec:** `docs/superpowers/specs/2026-06-19-app-18-connectivity-plus-7-design.md`.
 
 ---
@@ -86,7 +88,7 @@ git commit -m "chore(app): bump connectivity_plus 6.1.0 -> 7.1.1 (#895)"
 - Consumes: the 7.1.1 dep from Task 1 (so the iOS build compiles the 7.x Swift that calls `NWPath.isUltraConstrained`).
 - Produces: an `ios-compile` job that runs on the iOS-26-SDK image — the CI gate Task 3 confirms green.
 
-> This change is **CI-only verifiable** — there is no macOS/Xcode on the dev box. Correctness is checked by the PR's `app.yml` run in Task 3.
+> This change is **CI-only verifiable** — there is no macOS/Xcode on the dev box, and `app.yml` runs `ios-compile` on the **PR (`pull_request` event)**, not on the branch push. Correctness is checked by the PR's `app.yml` run in Task 3.
 
 - [ ] **Step 1: Switch the runner**
 
@@ -94,7 +96,7 @@ Change `.github/workflows/app.yml:104` (inside the `ios-compile:` job — **not*
 ```diff
    ios-compile:
 -    runs-on: macos-latest
-+    runs-on: macos-26          # iOS 26 SDK (Xcode 26.4.1 default); was macos-latest (mid-migration, nondeterministic). #895
++    runs-on: macos-26          # was macos-latest; macos-26 ships the iOS 26 SDK (#895)
      steps:
        - uses: actions/checkout@v6
        - uses: subosito/flutter-action@v2
@@ -137,19 +139,23 @@ git commit -m "ci(app): run ios-compile on macos-26 for the iOS 26 SDK (#895)"
 
 - [ ] **Step 1: Remove the app-18 row from the backlog**
 
-Open `docs/BACKLOG.md`, find the `app-18` block (the `#### \`app-18\` — connectivity_plus 6→7 …` heading and its `_What:_` bullet, ~5 lines) and delete the whole block. Verify nothing else references `app-18`:
+Open `docs/BACKLOG.md` and delete the **entire `app-18` block at lines 138–142** — that is the `#### \`app-18\` — connectivity_plus 6→7 …` heading (138) plus its `_What:_` (140), `_Benefit (technical):_` (141), and `_Full detail:_` (142) lines and the block's own blank line(s). Don't leave an orphaned bullet behind. Then confirm:
 ```bash
-grep -rn 'app-18' docs/BACKLOG.md
+grep -n 'app-18' docs/BACKLOG.md
 ```
-Expected: no matches after deletion.
+Expected: no matches.
+
+(Note: `grep -rn app-18 docs/` will still show **intentional historical** mentions in `docs/features/INDEX.md` (round-4 archive summary), `docs/features/archive/224-deps-round-4.md`, and this item's own spec/plan. Those are records of what happened and **stay** — only `BACKLOG.md` loses its live row.)
 
 - [ ] **Step 2: Update the round-4 archive behaviour-delta note**
 
-In `docs/features/archive/224-deps-round-4.md`, update the three spots that say connectivity_plus was reverted/held to record the re-bump. Replace the "Held at 6.1.0; re-bump tracked as `app-18` (#895)" phrasing in the **Ship notes** section (lines ~120–124) and the **Out of scope** bullet (lines ~113–114) with a forward pointer, e.g.:
+`docs/features/archive/224-deps-round-4.md` has **five** `app-18`/"6.1.0" mentions (lines 51, 77, 97, 114, 124). It is the historical record of round 4, which genuinely *reverted* the bump — **do not falsify that history.** Disposition by line:
 
-> connectivity_plus was reverted in round 4 (iOS SDK gap) and **re-bumped to 7.1.1 in app-18 / #895** once GitHub's `macos-26` runner (iOS 26 SDK) shipped.
+- **Line 51** (`## Invariants to preserve` → `network_info.dart` row): present-tense invariant `… held at connectivity_plus 6.1.0 — see app-18`. This goes stale after the re-bump → change `held at connectivity_plus 6.1.0 — see app-18` to `bumped to connectivity_plus 7.1.1 in app-18/#895`.
+- **Line 97** (`### Automated coverage` → Flutter row): present-tense `held at connectivity_plus 6.1.0 (see app-18).` → append a forward note so it reads `held at connectivity_plus 6.1.0 at round-4 ship (since re-bumped to 7.1.1 in app-18/#895).`
+- **Lines 77, 114, 124** (the `What shipped` reverted-bullet, the `Out of scope` bullet, and the `Ship notes` behaviour-delta): these accurately describe **what round 4 did** ("attempted 6→7, reverted … tracked as `app-18` (#895)"). **Leave them as-is** — they are correct history and the `#895` pointer now resolves to a closed issue.
 
-Leave the `network_info.dart` invariant line (line ~51) accurate — update "held at connectivity_plus 6.1.0 — see app-18" to "bumped to connectivity_plus 7.1.1 in app-18". Keep the archive's `status: stable` frontmatter unchanged (it's a historical record; this is a one-line accuracy fix).
+Keep the `status: stable` frontmatter unchanged. The edit is two stale present-tense lines (51, 97); the three historical lines stay.
 
 - [ ] **Step 3: Commit the docs**
 
@@ -160,12 +166,17 @@ git commit -m "docs(app): retire app-18 backlog row, note connectivity_plus re-b
 
 - [ ] **Step 4: Push and open the PR**
 
+Make sure **both** the Task 1 (dep) and Task 2 (runner) commits are on the branch before pushing — if you push and PR with only the dep bump, `ios-compile` runs 7.x on the old runner and reds.
+
 ```bash
 git push -u origin chore/app-connectivity-plus-7
 ```
-(Note: the pre-push hook runs `npm run verify`. This branch touches no JS/frontend/server source, so the relevant legs are cache/no-op; let it finish — a multi-minute near-silent battery is the hook, not a hang.)
+**Pre-push reality:** the hook runs the **full** `npm run verify` battery (typecheck + frontend + server + server-slow + e2e + build) with **no path-scoping** — an app-only branch still runs the entire JS/e2e suite. Expect several minutes of near-silent output (that's the battery, not a hung push — confirm via the final `* [new branch]` line). If it **flake-fails on a pre-existing, unrelated JS/e2e/server test** (the repo flags server-slow timeouts and e2e port contention as flaky under GPU/CPU load):
+1. Triage related-vs-pre-existing: `git stash && git switch main && <re-run the failing test> && git switch - && git stash pop`.
+2. If it fails the same on `main` → it's pre-existing; **surface it to the user and do NOT `--no-verify`** (per CLAUDE.md commit-gate rule). The Flutter change has no local-hook coverage anyway — its gate is the CI `ios-compile` job, not this push.
+3. If it's a true one-off flake (passes in isolation), say so and re-push.
 
-Then open the PR (title must match the commit-convention subject):
+Then open the PR — **run this from the Bash tool** (the heredoc is a PowerShell parse error). Title must match the commit-convention subject:
 ```bash
 gh pr create \
   --title "chore(app): re-bump connectivity_plus to 7.x on macos-26 (#895)" \
