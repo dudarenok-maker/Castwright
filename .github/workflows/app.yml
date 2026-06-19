@@ -101,7 +101,7 @@ jobs:
           echo "ok: Flutter pin lockstep at $pins"
 
   ios-compile:
-    runs-on: macos-latest
+    runs-on: macos-26          # was macos-latest; macos-26 ships the iOS 26 SDK (#895)
     steps:
       - uses: actions/checkout@v6
       - uses: subosito/flutter-action@v2
