@@ -52,6 +52,7 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
+import { nanoid } from 'nanoid';
 
 export const qwenVoiceRouter = Router();
 
@@ -165,6 +166,46 @@ export async function persistEmotionVariant(
   const idx = cast.characters.findIndex((c) => c.id === characterId);
   cast.characters[idx] = addVariant(character);
   await writeJsonAtomic(castJsonPath(bookDir), cast);
+}
+
+/* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
+   voice is designed (the .pt is named from qwenStorageKey, which reads the
+   uuid). Idempotent: returns the existing uuid untouched. Mints under the
+   per-book design lock so two concurrent designs of one character can't mint
+   two uuids. Stamps the SAME uuid onto every linked-cast sibling (matching
+   voiceId ?? id) so a series-shared voice keeps one identity — series-scoped
+   when seriesFilter is given (mirrors persistEmotionVariant), else book-scoped.
+   Returns undefined for an unknown character. */
+export async function ensureCharacterVoiceUuid(
+  bookDir: string,
+  characterId: string,
+  seriesFilter?: { author: string; series: string },
+): Promise<string | undefined> {
+  return withDesignLock(bookDir, async () => {
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    const character = cast?.characters?.find((c) => c.id === characterId);
+    if (!cast || !character) return undefined;
+    if (character.voiceUuid) return character.voiceUuid;
+
+    const uuid = nanoid();
+    const stamp = (c: CastCharacter): CastCharacter => ({ ...c, voiceUuid: uuid });
+
+    if (seriesFilter) {
+      await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, stamp);
+      return uuid;
+    }
+    /* Book-scoped — stamp every character in THIS book sharing the linked id. */
+    const linkId = character.voiceId ?? character.id;
+    let dirty = false;
+    for (let i = 0; i < cast.characters.length; i++) {
+      if ((cast.characters[i].voiceId ?? cast.characters[i].id) === linkId) {
+        cast.characters[i] = stamp(cast.characters[i]);
+        dirty = true;
+      }
+    }
+    if (dirty) await writeJsonAtomic(castJsonPath(bookDir), cast);
+    return uuid;
+  });
 }
 
 /* Preview/promote (plan 161). The A/B "current vs proposed" audition must NOT
@@ -477,10 +518,15 @@ qwenVoiceRouter.post(
     /* Plan 161 — `preview:true` stages the design under a `-preview` sibling id
        so the live voice isn't overwritten during an A/B comparison; the drawer
        promotes it on approve. Default false keeps the original in-place design. */
+    const isStandalone = located.state?.isStandalone === true;
+    const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
+    /* srv-43 — mint/persist voiceUuid before the core names the .pt. */
+    const voiceUuid = await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined);
+    const characterForDesign: CastCharacter = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
     try {
       const { voiceId, url } = await designQwenVoiceForCharacter({
         bookDir,
-        character,
+        character: characterForDesign,
         characterId,
         persona,
         sampleVoiceId,
@@ -496,8 +542,6 @@ qwenVoiceRouter.post(
       if (emotion && body.preview !== true) {
         /* Propagate the variant across the series (linked cast) — book-scoped
            only for a standalone. Mirrors the base-voice series scope. */
-        const isStandalone = located.state?.isStandalone === true;
-        const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
         await persistEmotionVariant(
           bookDir,
           characterId,

@@ -39,7 +39,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant } from './qwen-voice.js';
+import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
@@ -236,12 +236,16 @@ async function runDesignJob(
          "unreachable"-class error while the supervisor respawns the sidecar.
          Wait for it to come back (ensureSidecarEngineReady polls /load through
          the respawn) and retry THIS character, up to MAX_RECYCLE_RIDEOUTS. */
+      /* srv-43 — mint/persist voiceUuid before the core names the .pt. */
+      const voiceUuid = await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
+      const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
+
       let rideouts = 0;
       for (;;) {
         try {
           const { voiceId } = await designQwenVoiceForCharacter({
             bookDir: job.bookDir,
-            character,
+            character: characterForDesign,
             characterId,
             persona,
             sampleVoiceId,

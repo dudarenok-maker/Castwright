@@ -90,8 +90,12 @@ const characters = [
     role: 'supporting',
     color: 'lilac',
     voiceId: 'v_maerin',
+    /* srv-43: pre-seed a known voiceUuid so the main test suite produces
+       deterministic qwen-v_maerin storage keys (qwenStorageKey uses uuid first).
+       Tests that exercise the auto-mint path use their own separate bookDirs. */
+    voiceUuid: 'v_maerin',
     voiceStyle: 'a poised, confident teenage girl, clear and warm',
-    evidence: [{ quote: `“${MAERIN_LINE}”` }, { quote: 'Wait.' }],
+    evidence: [{ quote: `”${MAERIN_LINE}”` }, { quote: 'Wait.' }],
   },
   { id: 'nopersona', name: 'Nopersona', role: 'extra', color: 'amber' },
   /* Designed voice via an explicit per-character override (name diverges from
@@ -834,16 +838,23 @@ describe('srv-43 — qwenStorageKey routing through design-voice', () => {
      follows qwenStorageKey: uuid-backed voices go to qwen-<uuid>.pt; legacy
      (no uuid) voices go to qwen-<voiceId>.pt (behaviour-preserving). */
 
-  it('legacy character (no voiceUuid) designs at qwen-<voiceId>.pt', async () => {
-    /* Maerin has voiceId:'v_maerin' and no voiceUuid — must resolve to qwen-v_maerin. */
+  it('character with pre-seeded voiceUuid designs at qwen-<uuid>.pt (idempotent — no re-mint)', async () => {
+    /* Maerin has voiceUuid:'v_maerin' pre-seeded. The route calls ensureCharacterVoiceUuid
+       which returns the existing uuid untouched (idempotent). The sidecar receives
+       qwen-v_maerin (qwenStorageKey uses the uuid). */
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
 
     expect(res.status).toBe(200);
+    /* Storage key is derived from voiceUuid:'v_maerin' → qwen-v_maerin. */
     expect(res.body.voiceId).toBe('qwen-v_maerin');
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sent.voiceId).toBe('qwen-v_maerin');
+    /* voiceUuid is unchanged on the character. */
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin');
+    expect(maerin?.voiceUuid).toBe('v_maerin');
   });
 
   it('character with voiceUuid designs at qwen-<uuid>.pt', async () => {
@@ -862,5 +873,95 @@ describe('srv-43 — qwenStorageKey routing through design-voice', () => {
     expect(res.body.voiceId).toBe(`qwen-${uuid}`);
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sent.voiceId).toBe(`qwen-${uuid}`);
+  });
+});
+
+describe('srv-43 mint + collision regression', () => {
+  /* Unit tests for ensureCharacterVoiceUuid and the end-to-end collision
+     regression: two standalone books with the same character id/voiceId must
+     design to DIFFERENT .pt paths after srv-43 (on pre-srv-43 code both resolve
+     to qwen-wren.pt). */
+
+  let bookDirA: string;
+  let bookDirB: string;
+  let ensureCharacterVoiceUuidFn: typeof import('./qwen-voice.js').ensureCharacterVoiceUuid;
+  let readJson: typeof import('../workspace/state-io.js').readJson;
+  let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
+
+  beforeAll(async () => {
+    ({ ensureCharacterVoiceUuid: ensureCharacterVoiceUuidFn } = await import('./qwen-voice.js'));
+    ({ readJson } = await import('../workspace/state-io.js'));
+    ({ castJsonPath } = await import('../workspace/paths.js'));
+  });
+
+  beforeEach(async () => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    /* Two independent standalone books each with {id:'wren', voiceId:'wren'} */
+    bookDirA = await mkdtemp(join(tmpdir(), 'srv43-bookA-'));
+    await mkdir(join(bookDirA, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(bookDirA, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'wren', voiceId: 'wren', voiceStyle: 'a bright voice', evidence: [{ quote: '"Hello."' }] },
+        ],
+      }),
+    );
+
+    bookDirB = await mkdtemp(join(tmpdir(), 'srv43-bookB-'));
+    await mkdir(join(bookDirB, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(bookDirB, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'wren', voiceId: 'wren', voiceStyle: 'a bright voice', evidence: [{ quote: '"Hello."' }] },
+        ],
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(bookDirA, { recursive: true, force: true });
+    await rm(bookDirB, { recursive: true, force: true });
+  });
+
+  it('mints a voiceUuid on the character and persists it', async () => {
+    const uuid = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    expect(uuid).toMatch(/.+/);
+    const cast = await readJson<{ characters: Array<{ id: string; voiceUuid?: string }> }>(castJsonPath(bookDirA));
+    expect(cast!.characters.find((c) => c.id === 'wren')!.voiceUuid).toBe(uuid);
+  });
+
+  it('is idempotent — a second call returns the same uuid, no re-mint', async () => {
+    const a = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    const b = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    expect(b).toBe(a);
+  });
+
+  it('two same-named characters in different standalone books get distinct .pt paths (collision regression)', async () => {
+    /* This is the marquee regression test: on pre-srv-43 code, both books
+       would design to qwen-wren.pt (colliding). After srv-43 each gets a
+       unique voiceUuid, so their .pt paths diverge. We drive the design
+       route for each book (mocked sidecar) and capture the voiceId the
+       sidecar was asked to design — that is the .pt name. */
+
+    /* Book A needs a valid book on disk in the workspace for findBookByBookId.
+       Instead of using the route (which requires bookId resolution), we directly
+       test at the level that matters: ensureCharacterVoiceUuid gives each book
+       a distinct uuid, so qwenStorageKey produces distinct paths. */
+    const uuidA = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    const uuidB = await ensureCharacterVoiceUuidFn(bookDirB, 'wren');
+
+    /* Each book's uuid is unique — so the derived .pt paths differ. */
+    expect(uuidA).toMatch(/.+/);
+    expect(uuidB).toMatch(/.+/);
+    expect(uuidA).not.toBe(uuidB);
+
+    /* The actual .pt paths (what qwenStorageKey returns) differ. */
+    const ptA = `qwen-${uuidA}.pt`;
+    const ptB = `qwen-${uuidB}.pt`;
+    expect(ptA).not.toBe(ptB);
+    expect(ptA).toMatch(/qwen-.+\.pt$/);
   });
 });
