@@ -563,6 +563,7 @@ export function mergeRosterChapter(
       roster.set(incoming.id, {
         ...incoming,
         attributes: incoming.attributes ? [...incoming.attributes] : undefined,
+        aliases: incoming.aliases ? [...incoming.aliases] : undefined,
         evidence: incoming.evidence ? incoming.evidence.map((e) => ({ ...e })) : undefined,
         tone: incoming.tone ? { ...incoming.tone } : undefined,
       });
@@ -607,12 +608,31 @@ export function mergeRosterChapter(
       }
       existing.evidence = next;
     }
-    /* Gender / ageRange / color / role / name: only adopt incoming when
-       existing doesn't have a value. First detection wins for identity
-       fields — switching pronouns mid-book is almost always a model
-       error, not a character development. */
+    /* Gender / ageRange / color / role: only adopt incoming when existing
+       doesn't have a value. First detection wins for identity fields —
+       switching pronouns mid-book is almost always a model error, not a
+       character development. */
     if (!existing.gender && incoming.gender) existing.gender = incoming.gender;
     if (!existing.ageRange && incoming.ageRange) existing.ageRange = incoming.ageRange;
+    /* Name: first-detection wins for the DISPLAY name, but a divergent name
+       form the model emits for the same id in a later chapter («Антон» then
+       «Антон Городецкий») — plus any incoming aliases — is preserved as an
+       alias rather than silently dropped, so cast review surfaces it. Dedup
+       case-insensitively; never record the display name itself. */
+    const aliasCandidates = [incoming.name, ...(incoming.aliases ?? [])];
+    const seen = new Set<string>([
+      existing.name.trim().toLowerCase(),
+      ...(existing.aliases ?? []).map((a) => a.trim().toLowerCase()),
+    ]);
+    const nextAliases = [...(existing.aliases ?? [])];
+    for (const cand of aliasCandidates) {
+      const key = cand.trim().toLowerCase();
+      if (key.length > 0 && !seen.has(key)) {
+        nextAliases.push(cand);
+        seen.add(key);
+      }
+    }
+    if (nextAliases.length) existing.aliases = nextAliases;
   }
 }
 

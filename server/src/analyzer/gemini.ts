@@ -177,7 +177,14 @@ export function languagePreamble(language?: string): string {
   const conventions = ru
     ? ' Dialogue is often marked with guillemets «…» or an em-dash —, not English "quotes". Characters may be named by first name, patronymic, surname, or diminutive (e.g. "Соня" for "Софья") — treat these as the same person. IMPORTANT: a dashed line that is a narrative TAG describing who spoke or what they did — e.g. «— сказал юноша.», «— тихо произнесла девушка.», «— Девушка улыбнулась.» (verbs like сказал/произнёс(ла)/воскликнул(а)/спросил(а)/засмеялся/улыбнулась/нахмурился) — is the narrator, NOT the speaker. Only the actually-spoken words belong to the speaker.'
     : '';
-  return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${conventions}`;
+  /* Cast-field guards for any non-English manuscript (validated on Russian +
+     gemma4-e4b, 2026-06-19: without these the local model emits gender/age
+     100% but `tone` 0% and writes role/description in mixed English/target
+     language). Phrased "when you output a character" so it is a no-op for the
+     stage-2 attribution pass (which lists sentences, not characters). Field
+     NAMES + enum values stay English as the line above already mandates. */
+  const castFields = ` When you output a character, ALWAYS include the \`tone\` object (integers 0–100 for warmth, pace, authority, emotion) estimated from how they speak — never omit it. Write the human-readable text — \`role\`, \`description\`, and each \`attributes\` tag, for every character INCLUDING the narrator — in ${where} (the manuscript's language), and always include a \`description\`.`;
+  return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${castFields}${conventions}`;
 }
 
 interface GeminiOptions {

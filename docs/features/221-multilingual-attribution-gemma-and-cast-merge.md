@@ -11,8 +11,11 @@ owner: null
 > works** via #851's model picker + the existing `defaultAnalysisModel` setting
 > (set gemma in Account → Model settings — admin-selectable, no hardcoding; only
 > per-language auto-default would be net-new, optional); **Wave C OBSOLETE** —
-> re-measured 2026-06-17: plan 219 already deduplicates (17 chars, 0 dups). The
-> Russian pipeline is functional end-to-end. Investigation reproduced cold; the
+> re-measured 2026-06-17: plan 219 already deduplicates (17 chars, 0 dups);
+> **Wave E implemented** (2026-06-19, `fix/server-ru-cast-tone-localization-aliases`):
+> Russian cast-field under-population — tone 0%→100% + localized role/description via
+> a `languagePreamble` cast-field guard, plus same-id alias capture in the roster merge.
+> The Russian pipeline is functional end-to-end. Investigation reproduced cold; the
 > **prompt-guard fix is empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](162-fs2-multilanguage.md)
 > and [187 (large-chapter stage-2 + attribution coverage)](archive/187-large-chapter-stage2-and-attribution-coverage.md).
 > Trigger: full analysis of a Russian book (Ночной дозор / Night Watch, 9 ch,
@@ -229,6 +232,51 @@ manual-downgrade `makeBucket` call too.
 
 - **Tests:** `makeBucket('ru')` names survive the canonicalizer; Russian
   `isDescriptorName` positives/negatives; fold threads language.
+
+### Wave E — Russian cast-field under-population (tone + localization + same-id aliases) — IMPLEMENTED
+
+**Status: implemented** (`fix/server-ru-cast-tone-localization-aliases`). A separate
+defect from the attribution ones above, found 2026-06-19 on the same _Ночной дозор_
+book: cast **metadata** comes back under-populated even when attribution completes.
+
+**Root cause (measured on the persisted analysis cache + a live gemma4-e4b probe).**
+Across **188 raw per-chapter character emissions**, gemma4-e4b emitted `gender` and
+`ageRange` **100%** but `tone` **0%** and `aliases` **0%**. The per-chapter detection
+skill says _"`tone`: Skip a field rather than guess"_, so the model takes the skip
+option for every character on Russian → the drawer falls back to a neutral 50/50/50/50
+(`profile-drawer.tsx:213`). Role/description came back in mixed English/Russian
+(the skill's English JSON example leaks; the preamble never told it to localize).
+Alias forms (Антон / Антон Городецкий) were never captured: the model reuses the
+short name under one id, and `mergeRosterChapter` (`analysis.ts`) **dropped** any
+divergent same-id name form instead of recording it.
+
+**Fix (two surgical changes, both TDD'd):**
+
+1. **`languagePreamble` cast-field guard** (`gemini.ts`, reaches the local path via
+   `ollama.ts:305`): for any non-English manuscript, instruct the model to ALWAYS
+   emit `tone`, and to write `role`/`description`/`attributes` (incl. the narrator)
+   in the manuscript's language. Phrased "when you output a character" so it is a
+   no-op for the stage-2 attribution pass. **Live-validated: tone 0% → 100%, role +
+   description returned in Russian** on gemma4-e4b. English is byte-identical (empty
+   preamble). Tests: `gemini.test.ts` "Russian cast-field guards".
+2. **Same-id alias capture in `mergeRosterChapter`** (`analysis.ts`): a divergent
+   name form for the same id (plus any incoming `aliases`) is appended to `aliases`
+   (case-insensitive dedup, never the display name) instead of dropped — runs at the
+   Phase-1 finalisation rebuild. Tests: `analysis.test.ts` "mergeRosterChapter".
+
+**Deliberately NOT done (evidence-backed decisions):**
+- **No deterministic attribute→tone fill** — the prompt nudge already hits 100%, and
+  a fill keyed on attributes would be fragile once attributes are localized.
+- **No prompt `aliases` nudge** — the model ignored an explicit alias instruction in
+  both live probes (0% compliance).
+- **No automatic cross-id fuzzy fold** (`anton`≡`anton-gorodetsky`). On this book the
+  full name was mis-attributed once to the **narrator's id** (12k lines); a name-based
+  fold would merge the narrator into Anton. Cross-id same-person linking stays a
+  **manual merge at cast review** (which already records aliases) — confirming Wave C's
+  obsolete/risky verdict. Re-confirms: exact-name Tier-1 wouldn't catch full-vs-short anyway.
+
+- **Acceptance:** full re-analysis of _Ночной дозор_ on local gemma4-e4b → cast carries
+  Russian role/description + populated tone; same-id name drift surfaces as aliases.
 
 ### Cross-cutting — reliable completion + wall-clock
 

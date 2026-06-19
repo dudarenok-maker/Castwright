@@ -277,6 +277,29 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
     });
   });
 
+  describe('languagePreamble — Russian cast-field guards (tone + localization)', () => {
+    it('tells the model to always provide tone, for ru', async () => {
+      const { languagePreamble } = await import('./gemini.js');
+      const p = languagePreamble('ru');
+      /* gemma4-e4b skips the optional numeric tone 100% of the time on
+         Russian unless explicitly told not to (measured). */
+      expect(p).toMatch(/tone/i);
+      expect(p).toMatch(/warmth|always/i);
+    });
+    it('tells the model to write role/description/attributes in Russian, incl. the narrator', async () => {
+      const { languagePreamble } = await import('./gemini.js');
+      const p = languagePreamble('ru');
+      expect(p).toMatch(/role/i);
+      expect(p).toMatch(/description/i);
+      expect(p).toMatch(/attributes/i);
+      expect(p).toMatch(/narrator/i);
+    });
+    it('adds none of the cast-field guards for English', async () => {
+      const { languagePreamble } = await import('./gemini.js');
+      expect(languagePreamble('en')).toBe('');
+    });
+  });
+
   it('buildSystemInstruction appends the preamble only for non-English', async () => {
     const { buildSystemInstruction } = await import('./gemini.js');
     expect(buildSystemInstruction('SKILL', 'ru')).toMatch(/manuscript text is in Russian/i);
