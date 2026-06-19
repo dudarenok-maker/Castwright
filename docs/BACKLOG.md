@@ -71,12 +71,7 @@ The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ### Companion app
 
-_The Android companion shipped (plan 188); the deep-link pairing flip (`app-17`) is now delivered — the remaining launch-blocking gap is the iOS half of the mobile audience._
-
-#### `app-17` — Companion stock-camera deep-link pairing — **DELIVERED 2026-06-19**
-
-- Shipped: Castwright [#899](https://github.com/dudarenok-maker/Castwright/pull/899) (`c1fbe0fd`) + Castwright-Website #90/#91 — verified deep-link URL payload, hosted `assetlinks.json` (real upload-key SHA), www-only manifest, 128-bit fp-tag, RFC1918 redeem guard, `/pair` page (CSP beacon-block). Spec: `docs/superpowers/specs/2026-06-18-app-17-deeplink-pairing-launch-design.md`.
-- **Open only for on-device acceptance** (sideload + stock-camera pair on Android 16/API 36) in [#729](https://github.com/dudarenok-maker/Castwright/issues/729); collapse this row once verified. Deferred follow-up: device-token TTL/scope → `srv-41` (#898).
+_The Android companion shipped (plan 188); the deep-link pairing flip (`app-17`) shipped + was on-device-accepted 2026-06-19 (#729 closed) — the remaining launch-blocking gap is the iOS half of the mobile audience._
 
 #### `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555))
 

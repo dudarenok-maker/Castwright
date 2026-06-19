@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-18
 - **Issue:** [app-17 / #729](https://github.com/dudarenok-maker/Castwright/issues/729)
-- **Status:** shipped — code merged + website deployed 2026-06-19; on-device acceptance pending ([#729](https://github.com/dudarenok-maker/Castwright/issues/729)). See **Ship notes** at the end.
+- **Status:** ✅ shipped + accepted — code merged, website deployed, and **on-device acceptance passed 2026-06-19** (`www.castwright.ai → verified`, stock-camera pair works); [#729](https://github.com/dudarenok-maker/Castwright/issues/729) closed. See **Ship notes** at the end.
 - **Builds on:** `fix/app-pairing-mlkit-decoder` (deep-link readiness shipped),
   `docs/superpowers/specs/2026-06-11-pairing-qr-mlkit-decoder-design.md`,
   `docs/superpowers/specs/2026-06-10-pairing-qr-redesign-design.md`
@@ -405,10 +405,14 @@ the `/pair` beacon-suppression is enforced browser-side via a CSP in the website
 `_headers` (PR #91) — see the
 `reference_cloudflare_webanalytics_edge_injection` memory.
 
-**Owed (Task 12, human / device):** sideload the `npm run apk:companion` build,
-`pm verify-app-links --re-verify ai.castwright` → `www.castwright.ai → verified`,
-stock-camera pair, record in #729, then close it. **Deferred:** device-token
-TTL/scope — **srv-41 / [#898](https://github.com/dudarenok-maker/Castwright/issues/898)**.
+**On-device acceptance (Task 12) — ✅ PASSED 2026-06-19, #729 closed.** Rebuilt
+the companion APK (`npm run apk:companion`, signer cert `ba7b147d…` = the pinned
+upload key), installed it, `pm get-app-links ai.castwright` → `www.castwright.ai →
+verified`, stock-camera scan auto-opens the app + pairs end-to-end (Android 16).
+*Acceptance gotcha:* first attempt opened the browser because the installed APK was
+a **stale pre-merge build** (apex host) — the git-ignored `companion/*.apk` doesn't
+refresh on `git pull`; rebuild after merging. **Deferred:** device-token TTL/scope
+— **srv-41 / [#898](https://github.com/dudarenok-maker/Castwright/issues/898)**.
 **Unrelated pre-existing:** Castwright-Website CI (gitleaks/semgrep/`verify`) is
 red repo-wide (2s no-log failures; `main` also red) — a missing-token/Actions
 config issue, non-required.
