@@ -273,9 +273,8 @@ export function TopBar({
           stage={stage}
           view={view}
           setView={setView}
-          onHome={onHome}
-          onOpenVoices={onOpenVoices}
-          onOpenChangelog={onOpenChangelog}
+          onGlobal={onGlobal}
+          showGlobalNav={showGlobalNav}
         />
         <button
           onClick={onHome}
@@ -383,22 +382,19 @@ function NavDrawer({
   stage,
   view,
   setView,
-  onHome,
-  onOpenVoices,
-  onOpenChangelog,
+  onGlobal,
+  showGlobalNav,
 }: {
   stage: Stage['kind'];
   view: View | null;
   setView: (v: View) => void;
-  onHome: () => void;
-  onOpenVoices: () => void;
-  onOpenChangelog: () => void;
+  onGlobal: (id: 'books' | 'voices' | 'changelog') => void;
+  showGlobalNav: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   const hasNav = stage === 'ready' || showGlobalNav;
 
   /* Focus the first row when the drawer opens (HelpMenu parity). */
@@ -446,11 +442,7 @@ function NavDrawer({
           id: t.id,
           label: t.label,
           active: stage === t.id,
-          run: () => {
-            if (t.id === 'books') onHome();
-            else if (t.id === 'voices') onOpenVoices();
-            else onOpenChangelog();
-          },
+          run: () => onGlobal(t.id),
         }));
 
   const select = (run: () => void) => {
