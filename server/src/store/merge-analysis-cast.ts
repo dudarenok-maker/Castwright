@@ -31,6 +31,7 @@ import { normaliseForMatch } from '../util/text-match.js';
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
   'voiceId',
+  'voiceUuid',
   'voiceState',
   'matchedFrom',
   'overrideTtsVoices',

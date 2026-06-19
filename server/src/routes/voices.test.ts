@@ -690,6 +690,38 @@ describe('PUT /api/voices/:voiceId/override', () => {
     expect(two.characters[0].overrideTtsVoice).toBeUndefined();
   });
 
+  it('preserves voiceUuid on both linked characters after an override-save (srv-43 regression guard)', async () => {
+    /* The spread inside applyOverrideToCastFiles ({ ...normalised }) must carry
+       voiceUuid forward; this test pins that invariant so a future allowlist
+       rewrite cannot silently drop it. Both characters share voiceId v_brann and
+       already carry voiceUuid 'U1' on disk. */
+    const castPathOne = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
+    const castPathTwo = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_TWO, '.audiobook', 'cast.json');
+    const castOne = JSON.parse(readFileSync(castPathOne, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    const castTwo = JSON.parse(readFileSync(castPathTwo, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    castOne.characters[0].voiceUuid = 'U1';
+    castTwo.characters[0].voiceUuid = 'U1';
+    writeFileSync(castPathOne, JSON.stringify(castOne));
+    writeFileSync(castPathTwo, JSON.stringify(castTwo));
+
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-wren' } });
+    expect(res.status).toBe(204);
+
+    const afterOne = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const afterTwo = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    expect(afterOne.characters[0].voiceUuid).toBe('U1');
+    expect(afterTwo.characters[0].voiceUuid).toBe('U1');
+
+    /* Cleanup. */
+    delete castOne.characters[0].voiceUuid;
+    delete castTwo.characters[0].voiceUuid;
+    writeFileSync(castPathOne, JSON.stringify(castOne));
+    writeFileSync(castPathTwo, JSON.stringify(castTwo));
+    await request(app).put('/api/voices/v_brann/override').send({ override: null });
+  });
+
   it('400 when override body is malformed', async () => {
     const res = await request(app)
       .put('/api/voices/v_brann/override')

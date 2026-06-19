@@ -56,6 +56,25 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wisp' } });
   });
 
+  it('preserves voiceUuid across a reparse/merge (srv-43)', () => {
+    const existing: C[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        voiceState: 'generated',
+        voiceUuid: 'U1',
+        overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+        lines: 20,
+      },
+    ];
+    const fresh: C[] = [{ id: 'wren', name: 'Wren', lines: 25 }]; // re-attributed, no voice fields
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].voiceUuid).toBe('U1');
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wren' } });
+    expect(merged[0].lines).toBe(25); // fresh attribution wins
+  });
+
   it('keeps a brand-new character (not in the old cast) as-is', () => {
     const existing: C[] = [{ id: 'wren', voiceId: 'wren' }];
     const fresh: C[] = [
