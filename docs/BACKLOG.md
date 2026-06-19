@@ -77,13 +77,12 @@ The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ### Companion app
 
-_The Android companion shipped (plan 188); these are the launch-blocking gaps — the deep-link pairing flip and the iOS half of the mobile audience._
+_The Android companion shipped (plan 188); the deep-link pairing flip (`app-17`) is now delivered — the remaining launch-blocking gap is the iOS half of the mobile audience._
 
-#### `app-17` — Host `castwright.ai/assetlinks.json` to light up companion deep-link pairing ([#729](https://github.com/dudarenok-maker/Castwright/issues/729))
+#### `app-17` — Companion stock-camera deep-link pairing — **DELIVERED 2026-06-19**
 
-- _What:_ The 2026-06-11 pairing fix ships the app-side deep-link readiness (`PairingQr` URL parser + `app_links` handler + `autoVerify` intent-filter) and a stable release-signing key. Launch flip, gated on the `castwright.ai` public launch: flip the server `/session` payload to the https URL + host `/.well-known/assetlinks.json` (pin `ai.castwright` + the recorded release SHA) so the phone's **stock camera** auto-opens the app — no app rebuild. The robust in-app live-camera ML Kit scanner (plan 208) is the path until then.
-- _Benefit (user):_ zero-friction pairing — the phone's native camera opens the app, no in-app scanner step.
-- _Depends on:_ castwright.ai public launch. _Full detail:_ [#729](https://github.com/dudarenok-maker/Castwright/issues/729) · [plan 208](features/208-pairing-qr-mlkit-decoder.md).
+- Shipped: Castwright [#899](https://github.com/dudarenok-maker/Castwright/pull/899) (`c1fbe0fd`) + Castwright-Website #90/#91 — verified deep-link URL payload, hosted `assetlinks.json` (real upload-key SHA), www-only manifest, 128-bit fp-tag, RFC1918 redeem guard, `/pair` page (CSP beacon-block). Spec: `docs/superpowers/specs/2026-06-18-app-17-deeplink-pairing-launch-design.md`.
+- **Open only for on-device acceptance** (sideload + stock-camera pair on Android 16/API 36) in [#729](https://github.com/dudarenok-maker/Castwright/issues/729); collapse this row once verified. Deferred follow-up: device-token TTL/scope → `srv-41` (#898).
 
 #### `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555))
 

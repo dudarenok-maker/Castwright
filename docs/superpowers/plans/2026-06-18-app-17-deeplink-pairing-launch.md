@@ -1,5 +1,10 @@
 # app-17 Deep-Link Pairing Launch Flip — Implementation Plan
 
+> **EXECUTED & SHIPPED 2026-06-19** (subagent-driven). Tasks 1–11 merged: Castwright
+> PR #899 (`c1fbe0fd`) + Castwright-Website #90/#91. Task 12 (deploy + sideloaded
+> on-device acceptance) is the only step left, in [#729](https://github.com/dudarenok-maker/Castwright/issues/729).
+> See the spec's **Ship notes** for the full summary.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Flip the companion pairing QR to a verified `https://www.castwright.ai/pair?…` deep link and host the `assetlinks.json` that lets a phone's stock camera auto-open the app and pair.
