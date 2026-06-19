@@ -113,4 +113,15 @@ describe('cache accessors (fe-27)', () => {
     refreshUpdateStatusInBackground(); // cache now fresh → no second fetch
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('does not cache an unreachable result', async () => {
+    __resetUpdateCacheForTests();
+    const fetchMock = vi.fn(async () => ({ ok: false }));
+    vi.stubGlobal('fetch', fetchMock);
+    refreshUpdateStatusInBackground();
+    // Let the fire-and-forget chain fully settle (fetch → build → finally).
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getCachedUpdateStatus()).toBeNull();
+  });
 });
