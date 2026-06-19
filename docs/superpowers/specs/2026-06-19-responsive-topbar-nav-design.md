@@ -33,8 +33,17 @@ disappears"; "you can't even get to cast or manuscript").
 ## Goal
 
 Below `xl` (1280px), the nav collapses into a hamburger → drawer menu so every
-destination is reachable with a comfortable touch target. Desktop (`xl+`) is
-pixel-identical to today.
+destination is reachable with a comfortable touch target. Desktop (`xl+`, i.e.
+≥1280px) renders the top bar unchanged from today.
+
+> **Breakpoint note (Tailwind v4):** there is no `tailwind.config.ts` — the
+> project is Tailwind v4 (CSS-first `@theme` in `src/styles.css`), which does
+> not override `--breakpoint-*`, so `xl` is the v4 default **80rem / 1280px**.
+> The desktop Playwright project (`Desktop Chrome`) viewport is **exactly
+> 1280×720**, which sits *on* the boundary: `xl:` = `min-width:1280px` matches
+> at 1280, so the inline strip still shows there and the chromium visual
+> baselines should not drift — but this must be **verified by a run**, not
+> asserted (see Testing → Visual baselines).
 
 ## Decisions (locked)
 
@@ -88,20 +97,31 @@ Escape, already implemented there):
 - Closes on: selecting a destination, scrim/outside click, Escape.
 - On open, focus moves to the first drawer item; on Escape, focus returns to `≡`.
 
+Focus behaviour is explicit (copy HelpMenu's two effects — they are NOT free
+from "portal + outside-click + Escape"): (a) on open, a `useEffect` focuses the
+first drawer row (`menuRef.current?.querySelector('[role="menuitem"]')?.focus()`
+idiom, HelpMenu line 398); (b) Escape closes AND returns focus to `≡` (HelpMenu
+line 411). Scrim/outside-click close does NOT restore focus — this is
+intentional HelpMenu parity, not an omission.
+
 Drawer contents are **stage-aware**, mirroring exactly what the desktop strip
 shows — no new destinations:
 
 | Stage | Drawer rows |
 |---|---|
-| `ready` (book open) | the 6 per-book tabs, active row marked `aria-current` |
-| `books` / `voices` / `changelog` | Books, Voices, Change log, active row marked |
+| `ready` (book open) | the 6 per-book tabs, active row marked `aria-current="page"` |
+| `books` / `voices` / `changelog` | Books, Voices, Change log, active row marked `aria-current="page"` |
 
 Each row is a full-width control, `min-h-[44px]`, left-aligned label, optional
 trailing check on the active destination, and calls the **same handler** the
 inline button does (`setView(id)` for tabs; `onHome`/`onOpenVoices`/
 `onOpenChangelog` via the existing `onGlobal` map). Rows carry **distinct**
 testids (`data-testid="nav-drawer-link-{id}"`) — they do NOT reuse the inline
-buttons' names-as-only-selector, so tests can disambiguate.
+buttons' names-as-only-selector, so tests can disambiguate. The active row
+carries `aria-current="page"` (a net-new pattern — `aria-current` appears
+nowhere in `src/` today; it's valid on a `<button>` and adds no axe risk). The
+unit test asserts it via `within(drawer).getByTestId('nav-drawer-link-cast')`
+then `toHaveAttribute('aria-current','page')`.
 
 ### Touch-target fix
 
@@ -111,9 +131,10 @@ for touch. No sub-44px *nav* tap zones remain `<xl`.
 
 ### What does NOT change
 
-- Desktop `xl+`: inline strip + full right cluster — byte-identical. The
-  hamburger uses `xl:hidden` (display:none at `xl`), so it is absent from the
-  desktop accessibility tree and tab order.
+- Desktop `xl+` (≥1280px): inline strip + full right cluster render unchanged
+  (verified by the chromium @1280 visual baselines staying green — see Testing,
+  do not assert without the run). The hamburger uses `xl:hidden` (display:none at
+  `xl`), so it is absent from the desktop accessibility tree and tab order.
 - The concurrent-multibook invariant: the Status pill stays visible on all
   viewports (NOT moved into the drawer).
 - Status / Admin / queue / Help / Theme / Version / avatar — all unchanged in
@@ -168,10 +189,36 @@ the hamburger IS visible, tapping it then "Cast" navigates to the Cast view.
 (`tablet-chrome` = iPad Pro 11 @ 834px < 1280 → hamburger shows; jsdom can't see
 the media query, so this is the only layer that proves the breakpoint.)
 
+**Visual baselines (MUST re-bless — required step, not optional):** `e2e/
+responsive/visual.spec.ts` captures the top bar in `ready`/`listen`/`generate`
+(+ dark) under all three projects, with committed baselines at
+`e2e/{win32,linux}/responsive/visual.spec.ts/{project}/`.
+- **chromium (1280):** the inline strip still shows at `xl`, so these should NOT
+  drift. Pre-push `verify` runs `test:e2e:visual` = **chromium-only**, so the
+  pre-push gate stays green. Confirm with a run (this is the "byte-identical"
+  verification above).
+- **tablet-chrome (834) + mobile-chrome (412):** the top bar changes (starved
+  strip → hamburger), so these baselines **WILL** drift and must be re-blessed.
+  They are exercised by the opt-in `test:e2e:mobile` and by the **release gate**
+  (`release.yml` runs `test:e2e:mobile` on Ubuntu before publish, plan 215) —
+  an un-blessed baseline blocks the release, not the push.
+- **Re-bless procedure:** locally on win32 →
+  `npx playwright test --project=tablet-chrome --project=mobile-chrome \
+  --update-snapshots e2e/responsive/visual.spec.ts`; Linux baselines (CI/release
+  run on Ubuntu) are regenerated via `.github/workflows/regen-visual-
+  baselines.yml`. Commit the changed PNGs in the same PR.
+
+**CLAUDE.md protocol amendment (in scope):** the "Mobile testing protocol" table
+classifies `≥1024px` (`lg:`) as "desktop … full top bar". This change collapses
+the *nav* below `xl` (1280), so a 1024–1279 desktop window now shows the
+hamburger. The PR MUST add a one-line note to that table recording the
+intentional deviation (nav collapses `<xl`; the rest of the bar follows the
+generic `lg:` desktop rule) so the checked-in contract stays truthful.
+
 **a11y:** the hamburger gets `aria-haspopup`/`aria-expanded`; drawer rows are
-real `<button>`/`<a>` with discernible names and `aria-current` on the active
-one. (The existing `a11y.test.tsx` scans views, not `TopBar`; adding a TopBar
-axe render is a nice-to-have, not required for this change.)
+real `<button>`/`<a>` with discernible names and `aria-current="page"` on the
+active one. (The existing `a11y.test.tsx` scans views, not `TopBar` — confirmed;
+adding a TopBar axe render is a nice-to-have, not required for this change.)
 
 ## Out of scope
 
