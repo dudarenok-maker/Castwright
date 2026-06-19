@@ -48,7 +48,7 @@ owner: null
   `sharp(buffer).jpeg({ quality: JPEG_QUALITY }).toBuffer()`.
 - `apps/android/lib/src/data/network_info.dart:11-23` — `checkConnectivity()`
   returns `List<ConnectivityResult>`; the mapping is the connectivity contract
-  (locked by `network_info_test.dart`, 5/5; held at connectivity_plus 6.1.0 — see app-18).
+  (locked by `network_info_test.dart`, 5/5; bumped to connectivity_plus 7.1.1 in app-18/#895).
 
 ## What shipped
 
@@ -94,7 +94,7 @@ Six commits on `chore/deps-round-4`, each gated by its own full `npm run verify`
   sharp 0.35 (38/38).
 - Flutter (`apps/android/test/data/network_info_test.dart`) — five-case
   connectivity mapping; `List<ConnectivityResult>` shape (5/5), held at
-  connectivity_plus 6.1.0 (see app-18). Full Flutter suite: 306/306.
+  connectivity_plus 6.1.0 at round-4 ship (since re-bumped to 7.1.1 in app-18/#895). Full Flutter suite: 306/306.
 - Full `npm run verify` (frontend + server + e2e + build) green on the JS
   surfaces after each commit; final clean-room `verify -- --no-cache` before the PR.
 

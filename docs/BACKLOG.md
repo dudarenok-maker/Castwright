@@ -135,12 +135,6 @@ _Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
 _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
 
-#### `app-18` — connectivity_plus 6→7 blocked on iOS SDK (`NWPath.isUltraConstrained`) ([#895](https://github.com/dudarenok-maker/Castwright/issues/895))
-
-- _What:_ Bumping `connectivity_plus` 6.1.0→7.1.1 (deps round 4) passed Android but **broke the iOS compile** — 7.x's iOS code calls `NWPath.isUltraConstrained`, which needs a newer iOS SDK (iOS 26-era) than the CI runner's Xcode has. Reverted to 6.1.0 (identical Dart API). **Blocked** on the GitHub macOS image shipping that SDK (or connectivity_plus guarding the call behind an availability check), then re-bump + confirm `app.yml` ios-compile is green.
-- _Benefit (technical):_ keeps the companion's connectivity dep current once iOS can build it; no feature needs 7.x today.
-_Full detail + acceptance:_ [#895](https://github.com/dudarenok-maker/Castwright/issues/895).
-
 #### `srv-40` — Non-Latin (Cyrillic) book support: on-box acceptance ([#823](https://github.com/dudarenok-maker/Castwright/issues/823))
 
 - _What:_ Plan [219](docs/features/219-non-latin-names-and-ids.md) (Unicode-aware coverage/ASR normalizers, `safe-id.ts` chokepoint, `makeBookId`/`slug`, cross-book keys, hardened sidecar/voice-sample filename boundaries) is merged with unit/pytest coverage. The off-box-unverifiable bits remain: a full analyze→generate→export of a Cyrillic book on Windows (ffmpeg + Cyrillic paths — pre-existing risk via `bookDirByDisplay`), real model-id shapes for Cyrillic names, and cross-book voice carryover for a Russian series.
