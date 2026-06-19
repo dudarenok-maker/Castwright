@@ -100,13 +100,21 @@ jobs:
       # any PNG. `--workers=1` keeps each run serial — visuals share the Vite
       # dev server and parallel-worker contention drifts font hinting past the
       # 5% maxDiffPixelRatio threshold (see e2e/responsive/visual.spec.ts:68).
+      #
+      # `--update-snapshots=all` (NOT the bare flag): the bare `--update-snapshots`
+      # defaults to `=changed`, which leaves a baseline untouched when the current
+      # render still matches it WITHIN the 5% threshold. With a 5% tolerance a
+      # whole-top-bar/branding change (audiobook. → Castwright, etc.) stays under
+      # threshold, so `=changed` silently kept the stale pre-rename baselines and
+      # this regen reported "nothing to commit" forever (#922). `=all` force-
+      # rewrites every PNG so the committed baselines always reflect current UI.
       - name: Regenerate baselines (all projects, sequential)
         run: |
           for project in chromium mobile-chrome tablet-chrome; do
             echo "::group::Regenerating ${project}"
             mkdir -p "e2e/linux/responsive/visual.spec.ts/${project}"
             npx playwright test e2e/responsive/visual.spec.ts \
-              --project="${project}" --update-snapshots --workers=1
+              --project="${project}" --update-snapshots=all --workers=1
             echo "::endgroup::"
           done
 
