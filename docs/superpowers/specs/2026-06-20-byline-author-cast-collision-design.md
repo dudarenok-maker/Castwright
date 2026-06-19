@@ -59,12 +59,14 @@ Reproduced on real data — *Ночной дозор* (Sergei Lukyanenko / Night
 ## Design overview
 
 Three layers, deterministic where it matters. Layer A removes the source so the
-problem rarely arises; Layer B is the deterministic safety net that reclaims lines
-for the protagonist; Layer C is a cheap prompt nudge that reduces how often B fires.
+problem rarely arises; Layer B is the deterministic guarantee — it **drops the
+byline-author entity from the roster before stage-2**, after which the model
+attributes the protagonist's dialogue to the real protagonist on its own (empirically
+validated, see Layer B); Layer C is a cheap prompt nudge that reduces how often B fires.
 
 All three need the same **shared plumbing**: thread the book's `author` (and
 `title`, `language`) — already stored in `state.json` / the analysis `record` — into
-the body-prep path (A), the per-chapter attribution flow (B), and
+the body-prep path (A), the per-chapter roster-finalization (B), and
 `buildStage1ChapterInbox` (C). No new persisted state.
 
 ---
@@ -99,63 +101,71 @@ picks up improvements and the user's source file is never rewritten.
 
 ---
 
-### Layer B — incremental per-chapter realignment with an early protagonist anchor
+### Layer B — per-chapter stage-1 roster guard (drop the byline author before stage-2)
 
-The byline-author guard runs **inside the existing per-chapter flow**, not as a
-single end-of-run pass. Anchoring the protagonist from Chapter 1 — where the real
-protagonist is established and dominant — makes the realignment target robust and
-avoids guessing from end-of-book totals the author has already skewed.
+**This layer was redesigned after an empirical observation (2026-06-20) overturned the
+original "reclaim and reassign" approach.** See "Empirical grounding" below — the data
+showed that simply *removing* the byline-author entity from the roster before stage-2
+makes the model attribute the protagonist's dialogue to the real protagonist on its
+own. No anchor, no line-reassignment, no narrator fallback is needed.
 
-New pure module `server/src/analyzer/byline-author-guard.ts` (exact shape settled in
-the plan), driven by the analysis route across chapters:
+New pure helper (e.g. `server/src/analyzer/byline-author-guard.ts`), applied at the
+**per-chapter stage-1 roster-finalization** step (where the route already finalizes
+each chapter's detected roster, before stage-2 attribution runs for that chapter):
 
-1. **Stage-1 (per chapter) — flag the byline author.** When a detected character's
-   name matches the book `author` (normalized via `normaliseNameKey`), flag it as
-   the byline-author entity and **ignore the model-assigned role** (e.g. the bogus
-   `"Protagonist"`).
+1. **Detect the byline author.** A detected character whose name matches the book
+   `author` (normalized via `normaliseNameKey`) is the byline-author entity,
+   regardless of the model-assigned role (e.g. the bogus `"Protagonist / Investigator"`).
 
-2. **Protagonist anchor (sticky, established early).** Maintain a running anchor =
-   the dominant **non-author, non-narrator** speaker accumulated so far. The real
-   protagonist appears and dominates from Chapter 1, so the anchor locks on early
-   (Anton via his dialogue) and **stays sticky** — a chatty side-character in a
-   later chapter cannot steal it.
+2. **Framed author's-note exemption (preserves the legit case).** If the chapter is an
+   explicitly **framed** author's-note / in-fiction document — detected by chapter
+   title matching author-note patterns (`Author's Note`, `Notes from the author`,
+   `От автора`, `Предисловие/Послесловие автора`, …; a small, extensible bilingual
+   set) — **keep** the author entity (legitimate author-as-speaker, the Unraveled
+   case). Otherwise → step 3.
 
-3. **Stage-2 (per chapter, as each chapter is attributed) — reclaim lines.** Any
-   sentence attributed to the byline-author entity is **reassigned to the current
-   anchor right then**. Cheap, incremental, self-correcting as the book flows.
-   - **Reassignment target = the anchor (the protagonist). No confidence/margin
-     gate** — that gate is what would force the bad narrator fallback. With two
-     Anton rows the larger one wins; the protagonist keeps their voice.
-   - **Narrator is a last resort only** when a book genuinely has no other speaker
-     (degenerate; never true for a novel).
+3. **Drop it from the roster for this chapter.** Remove the byline-author entity from
+   the chapter's roster contribution so it never reaches that chapter's stage-2
+   attribution. Because the entity is dropped from the *running* roster too, later
+   chapters don't carry it forward; if a later chapter's stage-1 independently re-mints
+   it, the same per-chapter guard drops it again — idempotent and self-correcting.
 
-4. **Author-only-prologue edge.** If an early chapter is a prologue spoken only by
-   the first-person voice and no other named speaker has appeared yet, there is no
-   anchor at that instant. **Hold** those byline-author sentences and retroactively
-   reassign them once the anchor establishes (almost always within Ch 1–2) — the
-   protagonist still reclaims the prologue rather than losing it to narrator.
+4. **Let stage-2 re-attribute naturally.** With no "Protagonist"-labeled author in the
+   roster, stage-2 attributes the protagonist's dialogue to the real protagonist
+   (`anton`), addressed by name in the prose. **Empirically validated** (see below):
+   the 8 dialogue lines that the author stole went to `anton` once the author was
+   dropped. No reclamation pass needed.
 
-5. **Framed author's-note exemption (preserves the legit case).** If the byline
-   author's lines fall inside an explicitly **framed** author's-note / in-fiction
-   document section — detected by chapter title matching author-note patterns
-   (`Author's Note`, `Notes from the author`, `От автора`,
-   `Предисловие/Послесловие автора`, …; a small, extensible bilingual set) — those
-   lines are **kept** on the author entity (legitimate author-as-speaker). Only
-   non-framed (story) lines are reclaimed.
+5. **End state + log.** The byline author is absent from the final roster (no bogus
+   `role: "Protagonist"` ghost). A summary line is emitted for the analysing-view log
+   (e.g. *"Byline author 'Сергей Лукьяненко' excluded from N story chapters"*).
 
-6. **End state.** The byline-author entity has no story lines left → dropped from
-   the roster (removing the bogus `role: "Protagonist"` ghost). The protagonist
-   carries the reclaimed narration + dialogue. A summary line is emitted for the
-   analysing-view log (e.g. *"Byline author 'Сергей Лукьяненко' removed; N lines
-   reassigned → Антон"*).
+**Why this is simpler than the prior design.** The original Layer B reclaimed the
+author's already-attributed sentences and reassigned them to a "dominant non-author
+speaker = protagonist" anchor. The empirical run showed that heuristic would have
+mis-picked **Larisa (11 lines)** over **Anton (0 lines — starved by the bug itself)**.
+Dropping the author *before* stage-2 sidesteps the whole anchor problem: there are no
+author-attributed sentences to reclaim, and stage-2's own name-resolution puts the
+lines on the right character.
 
-**Stated limitation.** "Dominant non-author speaker = protagonist" is a heuristic.
-In a rare book whose most-talkative character is not the POV protagonist, reclaimed
-lines land on that major character instead — still a named voice, recoverable by
-manual re-cast, and strictly better than narrator per the chosen preference. The
-residual two-Anton split for the protagonist's *own* originally-correct lines stays
-a manual merge (Wave C); this fix only guarantees the reclaimed lines land on a real
-protagonist, never narrator.
+**Residual (unchanged, out of scope).** The `anton` / `anton-gorodetsky` duplication
+remains (Wave C, manual merge): in the validation run the reclaimed dialogue split
+`anton: 8` / `anton-gorodetsky: 1`. The protagonist's lines land on a real Anton, not
+the author — the split is a cosmetic roster issue, not a loss of voice.
+
+### Empirical grounding (2026-06-20, real gemma4-e4b on *Ночной дозор* Ch 1)
+
+Real stage-2 attribution via local `gemma4-e4b-8gb`, same scene, same roster
+(scratch harness, since deleted):
+
+| Roster | `sergey-lukyanenko` | `anton` | `narrator` | `larisa` |
+|---|---|---|---|---|
+| **as detected** (author = "Protagonist") | **8 dialogue lines** | 0 | 97 (narration) | 11 |
+| **author removed** | 0 | **8 dialogue lines** | 96 | 10 |
+
+- The author stole the protagonist's **dialogue** (8 spoken lines: "— Не надо," "— Спасибо," …); first-person **narration** correctly went to `narrator` both ways.
+- Removing the author from the roster → the dialogue went to `anton` with **no other change** to the design needed.
+- A "dominant non-author = protagonist" anchor would have chosen Larisa, not Anton — the heuristic is disproven for this case. Dropping-before-stage-2 is the correct, simpler fix.
 
 ---
 
@@ -186,15 +196,16 @@ parse (epub) → chapters + book meta { author, title, language }
    │
 stage-1 cast detection (per chapter)
    ├─ Layer C: byline author rendered into the inbox prompt
-   └─ Layer B(1): flag byline-author entity by name==author
+   └─ Layer B: at per-chapter roster finalization, DROP the byline-author entity
+              (name==author) from the roster — unless the chapter is a framed
+              author's-note. Dropped from the running roster too, so it isn't
+              carried forward; idempotent if re-minted later.
    │
 stage-2 attribution (per chapter)
-   └─ Layer B(2,3,4,5): update sticky anchor; reassign byline-author sentences
-                        to anchor (hold-until-anchor for early prologue;
-                        framed author's-note sections exempt)
+   └─ runs against the cleaned roster → protagonist's dialogue lands on `anton`
+      (empirically validated; no reclamation pass)
    │
-finalisation: recoverTaggedNarratorLines → foldMinorCast
-   └─ Layer B(6): byline-author entity now line-less → dropped; summary logged
+finalisation: recoverTaggedNarratorLines → foldMinorCast  (unchanged)
 ```
 
 ## Testing
@@ -206,25 +217,26 @@ Per the project's testing discipline (paired automated tests for every change):
   copyright, library URLs) → stripped; ordinary narrative prose preserved; an
   author-name mention *inside* story prose left intact (conservative-boundary test);
   English book with no byline → no-op.
-- **Layer B** — pure unit tests on the guard: byline-author detected by name-match;
-  anchor establishes from Ch 1's dominant non-author speaker; anchor sticky across
-  later chapters; per-chapter reassignment moves author sentences to the anchor;
-  author-only prologue **held then retroactively reassigned**; framed author's-note
-  section **kept** (Unraveled case); narrator only when no candidate exists; the
-  line-less author entity is dropped at the end.
+- **Layer B** — pure unit tests on the roster guard: byline-author detected by
+  name-match (`normaliseNameKey`, case/inflection-tolerant: `Сергей Лукьяненко` ≈
+  `sergey-lukyanenko`); dropped from a normal story chapter's roster (and the running
+  roster); **kept** when the chapter title marks a framed author's-note (Unraveled
+  case); idempotent re-mint drop; no-op when the book has no `author` or the author
+  isn't on the roster.
 - **Layer C** — `buildStage1ChapterInbox` renders the byline-author guidance + the
   narrowed first-person rule; skill-file parity assertion.
-- **Integration regression** — a small first-person fixture with a byline (a variant
-  of the canonical `the-coalfall-commission` fixture, or a purpose-built minimal one)
-  run through the analysis path → final cast contains **no author-as-character** and
-  the protagonist holds the reclaimed first-person lines.
+- **Integration regression** — a small first-person fixture with a byline run through
+  the analysis path → final cast contains **no author-as-character** and the
+  protagonist (not the author, not narrator) holds the dialogue. Mirrors the validated
+  *Ночной дозор* observation.
 
 ## Open questions for the plan
 
-1. Exact insertion points in `analysis.ts` for Layer B across the full and subset
-   analysis entrypoints (the route already threads per-chapter results; the guard
-   should ride that, not a separate pass).
-2. Whether the anchor is recomputed per chapter or maintained as a running tally
-   (the plan picks the cheapest correct shape).
-3. The bilingual author-note title pattern set's initial membership (start small,
+1. Exact insertion point in `analysis.ts` for the Layer-B roster guard across the full
+   **and** subset analysis entrypoints (it should ride the existing per-chapter
+   roster-finalization / `mergeRosterChapter` path, before stage-2 runs for the
+   chapter — not a separate end pass).
+2. The bilingual author-note title pattern set's initial membership (start small,
    extend on real corpus data — same discipline as `GENERIC_ROLE_RU`).
+3. Whether to emit a one-line analysing-view log when the guard drops an author, and
+   whether to surface it in the change-log so a user can see why the author isn't cast.
