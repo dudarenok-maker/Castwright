@@ -21,6 +21,7 @@ export const IconArrowDn = (p: IconProps) => Svg(<path d="M6 9l6 6 6-6" />, p);
 export const IconChevR = (p: IconProps) => Svg(<path d="M9 6l6 6-6 6" />, p);
 export const IconCheck = (p: IconProps) => Svg(<path d="M20 6L9 17l-5-5" />, p);
 export const IconClose = (p: IconProps) => Svg(<path d="M18 6L6 18M6 6l12 12" />, p);
+export const IconMenu = (p: IconProps) => Svg(<path d="M4 6h16M4 12h16M4 18h16" />, p);
 export const IconSearch = (p: IconProps) =>
   Svg(
     <>

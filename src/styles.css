@@ -689,6 +689,14 @@ samp {
     transform: translateX(0);
   }
 }
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -730,6 +738,9 @@ samp {
 }
 .slide-in-right {
   animation: slide-in-right 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.slide-in-left {
+  animation: slide-in-left 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .fade-in {
   animation: fade-in 0.22s ease-out;
