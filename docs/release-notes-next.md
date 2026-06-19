@@ -19,7 +19,7 @@ user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-no
 release-notes-next-version: 1.9.0
 -->
 
-**A polish-and-reach patch.** Listen from any browser on your home network, know the moment a new build lands, and ride a steadier companion player — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
+**A polish-and-reach release.** Listen from any browser on your home network, know the moment a new build lands, and ride a steadier companion player — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
 
 ---
 
