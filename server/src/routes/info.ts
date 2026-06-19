@@ -22,6 +22,7 @@ import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl, getResolvedT
 import { engineForModelKey } from '../tts/model-keys.js';
 import type { SidecarDeviceMap, SidecarDevicesState } from './sidecar-health.js';
 import { normaliseDevices, normaliseDevicesState } from './sidecar-health.js';
+import { getCachedUpdateStatus, refreshUpdateStatusInBackground } from './updates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /* server/{src,dist}/routes → repoRoot is three levels up. RELEASE_NOTES.md ships
@@ -118,6 +119,10 @@ infoRouter.get('/', async (_req: Request, res: Response) => {
   const settings = await readUserSettings();
   const appVersion = getAppVersion();
   const sidecar = await fetchSidecarInfo();
+  const upd = getCachedUpdateStatus();
+  // fire-and-forget; never awaited. Gated off under vitest so /api/info tests
+  // (and the full-app server suites that mount this route) make no real GitHub call.
+  if (!process.env.VITEST) refreshUpdateStatusInBackground();
   res.json({
     appVersion,
     sidecarVersion: sidecar.version,
@@ -133,6 +138,10 @@ infoRouter.get('/', async (_req: Request, res: Response) => {
     devices: sidecar.devices,
     devicesState: sidecar.devicesState,
     activeEngine: engineForModelKey(getResolvedTtsModelKey()),
+    /* fe-27 — in-app update notifier. Cached GitHub-Releases check, read
+       non-blocking (null while cold/unreachable → notifier stays dark). */
+    updateAvailable: upd ? upd.updateAvailable : null,
+    latestVersion: upd ? upd.latestVersion : null,
   });
 });
 
