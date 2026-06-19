@@ -52,6 +52,7 @@ import {
   chapterDriftExceeded,
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
+import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import {
   readUserSettings,
   getCachedUserSettings,
@@ -2146,6 +2147,13 @@ export async function runMainAnalyzerJob(
   /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
      Resolved once per job; threaded into every runStage* call below. */
   const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  /* #938 Layer A — resolve the byline author + strip title-page/e-library
+     boilerplate from each chapter body BEFORE the model sees it. In-memory only
+     (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+  const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
+  for (const ch of record.chapterHints) {
+    ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
+  }
   const requestedFresh = opts.requestedFresh;
   const allowStage1Shrink = opts.allowStage1Shrink;
   const abortController = job.controller;
@@ -4365,6 +4373,13 @@ async function runSubsetAnalyzerJob(
   const manuscriptId = job.manuscriptId;
   /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate. */
   const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  /* #938 Layer A — resolve the byline author + strip title-page/e-library
+     boilerplate from each chapter body BEFORE the model sees it. In-memory only
+     (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+  const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
+  for (const ch of record.chapterHints) {
+    ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
+  }
   const abortController = job.controller;
   const analyzer = selection.analyzer;
   const analyzerLabel = engineLabel(selection.engine, selection.model);
