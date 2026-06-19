@@ -673,7 +673,8 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen' })} />);
     fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
     const rows = within(screen.getByTestId('topbar-nav-drawer')).getAllByRole('menuitem');
-    expect(rows.length).toBe(6);
+    /* 6 per-book tabs + the phone-only Admin row (#916). */
+    expect(rows.length).toBe(7);
     for (const r of rows) expect(r.className).toMatch(/min-h-\[44px\]/);
   });
 
@@ -722,6 +723,48 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     const inlineNav = screen.getByRole('button', { name: 'Manuscript' }).closest('nav')!;
     expect(inlineNav.className).toMatch(/hidden/);
     expect(inlineNav.className).toMatch(/xl:flex/);
+  });
+});
+
+/* #916 — phone inline-chrome trim. The responsive nav's 44px hamburger pushed
+   the right cluster (Help / Theme / Account) ~120px past the 412px phone
+   viewport, where overflow-x-clip hid them. The fix reclaims width by hiding the
+   wordmark text on phone and moving the Admin pill into the drawer on nav stages
+   (it stays inline where there is no drawer, and inline at sm+). jsdom can't see
+   the pixel clip, so these lock the responsive-class intent + drawer reachability;
+   the geometry itself is gated by e2e/responsive/topbar-nav.spec.ts at Pixel-7. */
+describe('TopBar — #916 phone inline-chrome trim', () => {
+  it('hides the Castwright wordmark text on phone (the mark stays as the home affordance)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    const home = screen.getByRole('button', { name: 'Castwright — home' });
+    const wordmark = within(home).getByText('Castwright');
+    expect(wordmark.className).toMatch(/hidden/);
+    expect(wordmark.className).toMatch(/sm:inline/);
+  });
+
+  it('hides the inline Admin pill on phone for a nav stage (it lives in the drawer there)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    const wrap = screen.getByTestId('topbar-admin-link').parentElement!;
+    expect(wrap.className).toMatch(/hidden/);
+    expect(wrap.className).toMatch(/sm:inline-flex/);
+  });
+
+  it('keeps the inline Admin pill on phone for a no-nav stage (upload) so it is never stranded', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'upload', view: null })} />);
+    const wrap = screen.getByTestId('topbar-admin-link').parentElement!;
+    expect(wrap.className).not.toMatch(/hidden/);
+    expect(wrap.className).toMatch(/inline-flex/);
+  });
+
+  it('surfaces Admin as a phone-only drawer row that fires onOpenAdmin and closes the drawer', () => {
+    const onOpenAdmin = vi.fn();
+    renderWithStore(<TopBar {...makeProps({ stage: 'books', onOpenAdmin })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = screen.getByTestId('nav-drawer-link-admin');
+    expect(row.className).toMatch(/sm:hidden/);
+    fireEvent.click(row);
+    expect(onOpenAdmin).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
   });
 });
 
