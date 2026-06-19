@@ -67,7 +67,7 @@ Then after the `.slide-in-right { … }` rule (~line 733) add:
 
 - [ ] **Step 3: Write the failing unit tests**
 
-Append this `describe` block to `src/components/top-bar.test.tsx` (it already imports `render, screen, fireEvent`; add `within` to that import from `@testing-library/react`, and `TABS` is internal so the test references labels, not the constant):
+Append this `describe` block to `src/components/top-bar.test.tsx`. Line 13 imports `{ render, screen, fireEvent }` from `@testing-library/react` — add **only** `within` to it (do NOT add `vi`; it is already imported from `vitest` on line 12). `TABS` is internal, so the tests reference testids, not the constant:
 
 ```tsx
 describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
@@ -156,6 +156,8 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     expect(screen.getByTestId('topbar-nav-drawer')).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+    /* Escape returns focus to the trigger (spec — HelpMenu parity). */
+    expect(screen.getByTestId('topbar-nav-toggle')).toHaveFocus();
     fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
     fireEvent.click(screen.getByTestId('topbar-nav-scrim'));
     expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
