@@ -3,176 +3,166 @@
 - **Date:** 2026-06-19
 - **Issue:** [#934](https://github.com/dudarenok-maker/Castwright/issues/934) (`area:srv`, `moscow:should`, `type:chore`)
 - **Branch:** `chore/server-srv-43-voice-uuid`
-- **Status:** approved design (revised after two adversarial passes) — ready for implementation plan
+- **Status:** approved design (revised after three adversarial passes) — ready for implementation plan
 
 ## Problem
 
-A designed Qwen voice has no stable identifier. Its **on-disk storage key** is the derived
-string `qwen-${voiceId ?? characterId}` (`deriveQwenVoiceId`, `server/src/routes/qwen-voice.ts`),
-which is also written into `overrideTtsVoices.qwen.name` and handed verbatim to the sidecar at
-synth time to load `voices/qwen/<key>.pt`. `voiceId` / `characterId` are stable **within** a
-series but **repeat across** unrelated series: two different characters that share a name/id in
-different books (e.g. a "Wren" in two unrelated series) both derive `qwen-wren`, write to the
-**same** `.pt`/`.json`, and the sidecar prompt cache keys on that same string. The second design
+A designed Qwen voice has no stable identifier. Its **on-disk storage key** is the derived string
+`qwen-${voiceId ?? characterId}` (`deriveQwenVoiceId`, `server/src/routes/qwen-voice.ts`), which is
+also handed to the sidecar at synth time to load `voices/qwen/<key>.pt`. `voiceId` / `characterId`
+are stable **within** a series but **repeat across** unrelated series: two characters sharing a
+name/id in different books (e.g. a "Wren" in two unrelated series) both derive `qwen-wren`, write to
+the **same** `.pt`/`.json`, and the sidecar prompt cache keys on that same string. The second design
 silently **overwrites** the first (last-write-wins).
 
-The collision is purely an **on-disk storage-key collision**. It is *not* a linker bug: both
-`series-reuse-link.ts` and `cross-book-duplicates.ts` are already same-author + same-series scoped.
 Only **Qwen** persists per-character designed files (no `coquiVoicesDir` / `kokoroVoicesDir`);
-Coqui / Kokoro / Gemini use shared catalog voices — zero collision risk, out of scope.
+Coqui / Kokoro / Gemini use shared catalog voices — zero collision risk, out of scope. The collision
+is purely an **on-disk storage-key collision**; both `series-reuse-link.ts` and
+`cross-book-duplicates.ts` are already same-author + same-series scoped, so it is not a linker bug.
 
-## Design — forward-only
+### The constraint that shapes the design
 
-No on-disk migration. Correctness rests on two mechanisms that are reliable regardless of
-upgrade path (a boot migration would be version-gated — fresh installs / restores / Pinokio
-reinstalls skip it — so correctness must not depend on one):
+The string `overrideTtsVoices.qwen.name` is doing **three** jobs that have conflicting requirements:
 
-1. **Design-time minting.** When a Qwen voice is first designed, mint an immutable
-   `voiceUuid = nanoid()` on the `Character` (if absent), and write its storage key as
-   `qwen-<voiceUuid>` into `overrideTtsVoices.qwen.name`. New designs are globally unique →
-   **100 % of new cross-series collisions are prevented.**
-2. **Runtime legacy fallback.** The key resolver returns the uuid-derived key when a
-   `voiceUuid` is present, else the legacy `qwen-${voiceId ?? characterId}` key. Existing
-   name-keyed voices keep resolving to their existing `.pt` files untouched — no migration,
-   no data movement, no breakage.
+1. **Storage / synth key** — wants to be *globally unique* (the bug).
+2. **Display label** — `cast.tsx:1412-1414` *deliberately* surfaces it ("so the row is
+   self-explanatory"); shown on ≥5 surfaces (cast, confirm-cast, voice-compare, voice-library,
+   rebaseline). Wants to stay *human-readable* (`qwen-wren`).
+3. **Dedup bucket** — `cross-book-duplicates.ts` and the voices-view family grouping pre-bucket on
+   it. Wants to stay *stable / shared-per-character*.
 
-Legacy voices stay name-keyed until they are next re-designed (at which point they lazily gain a
-`voiceUuid`). Already-collided legacy pairs remain collided — that overwrite already happened on
-disk and is unrecoverable by any approach.
+One field cannot be both globally-unique and human-readable, so the storage role must be split out.
 
-**Downgrade-safe.** Because the full storage key still lives in `overrideTtsVoices.qwen.name`
-(`qwen-<uuid>`), an older pre-srv-43 server ignores the unknown `voiceUuid` field, reads
-`qwen.name` as the synth key, and finds the `.pt` we wrote. No schema bump, no
-`UnsupportedSchemaError` refusal, no silent mis-synth.
+## Design — split storage from name (`voiceUuid` = storage; `name` = human)
 
-### `voiceUuid` placement and the key resolver
+- **`voiceUuid`** — a new immutable `nanoid`, minted once per physical voice at design time, stored
+  on the `Character`. It is the **canonical machine identity**. (`nanoid` is already a server dep.)
+- **`overrideTtsVoices.qwen.name` stays exactly as today** — the human label
+  (`qwen-${voiceId ?? characterId}`), shown in the UI and used by dedup. It may now collide across
+  series, which is *harmless* because it is no longer a storage key. **Display, dedup, and the
+  voices-view family grouping are therefore untouched** — they are out of scope for this change.
+- **Storage key** = `qwen-<voiceUuid>`, *derived* (never materialized into `name`). It names the
+  `.pt`/`.json` files and is the string handed to the sidecar at synth time.
 
-- `voiceUuid` lives on the **`Character`**, not inside the qwen slot. It is the only id that
-  survives an engine switch (the qwen slot can be absent when a character is on Coqui/Kokoro),
-  and it is the engine-agnostic id future cross-book features want. This is *why* it is stored
-  separately even though it is prefix-strippable from `qwen.name` — do not "simplify" it away.
-- **Invariant** (uuid-backed voices only): `overrideTtsVoices.qwen.name === 'qwen-' + voiceUuid`,
-  with `voiceUuid` as the source of truth. Asserted by a unit test.
-- `deriveQwenVoiceId(character, characterId)` becomes the single resolver:
-  `character.voiceUuid ? 'qwen-' + character.voiceUuid : 'qwen-' + (voiceId ?? characterId)`.
-  It is **read-only** (resolve); minting happens at the genuine design-creation entry point.
-  Every consumer must route through it: the **six call-sites** in `qwen-voice.ts`
-  (≈ lines 141, 224, 265, 548, 642, 703), `persistEmotionVariant` (a *second* cast.json writer
-  that defaults the base name), the `designed-persona` GET, `delete-variant`, and the `-preview`
-  `promote-voice` / `discard-voice` validation (`expectedPreview = deriveQwenVoiceId(...) +
-  '-preview'`). Update the stale `qwen-voice.ts:169-183` comment that says the committed id is
-  kept stable to avoid rippling duplicate-detection — srv-43 changes that committed id.
+### The synth-key resolver (the one behavioral change)
 
-The synth path is **untouched**: `pickVoiceForEngine` (`server/src/tts/voice-mapping.ts:248`)
-keeps returning `overrideTtsVoices.qwen.name` verbatim — which is now `qwen-<uuid>` for designed
-voices and the legacy name for unmigrated ones. The sidecar contract does not change.
+Introduce `qwenStorageKey(character)`:
 
-### Propagating `voiceUuid` on reuse
+```
+qwenStorageKey(c) = c.voiceUuid ? `qwen-${c.voiceUuid}`
+                                : deriveQwenVoiceId(c, characterId)   // legacy fallback
+```
 
-So that two books in a series **share** one voice (one uuid, one `.pt`) — and so the invariant
-holds on reused rows — `voiceUuid` must travel with the qwen override everywhere `voiceId`
-already does. Reuse uses explicit **allowlists**, so each must name the field:
+`deriveQwenVoiceId` is **unchanged** — it keeps returning the human `qwen-${voiceId ?? characterId}`
+string used for `name` and as the legacy fallback. Everything that touches the *file* or the
+*sidecar* routes through `qwenStorageKey` instead of reading `name`:
 
-- `merge-analysis-cast.ts` — add `voiceUuid` to the `PRESERVED_VOICE_FIELDS` constant (`:32-41`),
-  or a reparse/re-analysis **strips it** from the whole cast.
-- `server/src/tts/hydrate-reused-voice.ts` (note: under `tts/`, not `workspace/`) —
-  `ReuseHydratable`, `ResolvedReusedVoice`, `resolveReusedVoiceFields`, and `hydrateCharacterVoice`
-  each carry `voiceUuid` alongside `overrideTtsVoices`/`ttsEngine`.
-- `series-reuse-link.ts:324-339` denormalises `overrideTtsVoices.qwen.name = qwen-<sourceKey>`
-  onto the reused character — it must set the source's `voiceUuid` on the same lines, or the
-  reused row has `qwen.name` set with a blank `voiceUuid` (invariant break; dedup-skip never fires).
-- **Audit every `voiceId`-copy site and copy `voiceUuid` alongside**: `cast-link-prior.ts`
-  (`:192,230`), `voice-match.ts:227`, `voice-override-linked.ts:182`, `cast-add-from-roster.ts:136`,
-  `series-roster.ts:48`, `revisions.ts:256`, `character-snapshots.ts:38`.
+- `pickVoiceForEngine` (`server/src/tts/voice-mapping.ts:248`) — for `engine === 'qwen'`, return
+  `qwenStorageKey(voice)` instead of `overrideTtsVoices.qwen.name`.
+- `pickEmotionVariantVoice` (same file) — for a designed emotion, return
+  `qwenStorageKey(base) + '__' + emotion` (presence of `variants[emotion]` still signals "designed").
+- The `.pt`/`.json` path build (`qwen-voice.ts`, `paths.ts`) and the `deriveQwenVoiceId` consumers
+  that compute file keys: `persistEmotionVariant`, `designed-persona` GET, `delete-variant`, and the
+  `-preview` `promote-voice`/`discard-voice` validation — all use `qwenStorageKey`.
 
-`import.ts` writes cast.json directly without a `voiceUuid`; that is benign (the voice keeps its
-name-keyed `qwen.name`, resolved via the legacy fallback) — note it, no fix required.
+**Legacy voices keep working** with zero migration: no `voiceUuid` ⇒ `qwenStorageKey` falls back to
+the human name ⇒ resolves to the existing `qwen-wren.pt`. Same fallback for their variants.
 
-### Cross-book dedup re-bucket (Qwen only)
+**Not downgrade-safe** for *newly*-designed voices: an older pre-srv-43 server resolves the synth key
+from `name` (`qwen-wren`) and won't find `qwen-<uuid>.pt`. Acceptable for a `should` chore; noted.
 
-`detectDuplicateCandidates` (`cross-book-duplicates.ts:129`) buckets by `${provider}|${ttsVoice.name}`
-(`:137`) and then re-checks `looksLikeSameName(a.character, b.character)` (`:160`, **substring-aware**:
-`"wren" ⊂ "wren sparrow"` — the header comment calls that the detector's reason to exist). Once
-designed Qwen names are globally unique (`qwen-<uuid>`), the name bucket makes every Qwen voice a
-singleton → dedup silently returns nothing.
+### Mint / propagate lifecycle (the load-bearing correctness work)
 
-Fix, **scoped to Qwen only**: coarsen the Qwen bucket key to `qwen|${author}|${series}` (available
-via `ctx.seriesByBookId`), and let the existing in-bucket `looksLikeSameName` + author/series/
-standalone/`notLinkedTo`/alias guards (`:153-195`) do the real, substring-tolerant match. **Leave
-catalog engines (Coqui/Kokoro/Gemini) on `provider|name`** — re-bucketing them would change a
-shipped feature's results. Do **not** "match on `voiceUuid`": separately-designed same-character
-voices have *different* uuids by construction. A shared `voiceUuid` is used only to **skip** pairs
-that are already linked.
+The collision closes **only if every Character that shares one physical voice carries the same
+`voiceUuid`**, and the uuid exists **before** the `.pt` is named. The voice id is read at three
+points that must agree — the core's `.pt` name (`qwen-voice.ts:265`), the caller's persisted
+override, and the synth resolver — so the mint must happen on the character object *and be persisted*
+before the design core runs. Per-path rule:
 
-### Frontend plumbing
+| Path | Action | Where |
+|---|---|---|
+| Fresh single design | **MINT** `voiceUuid` if absent, stamp on owner **and** linked siblings, persist, **before** `qwenStorageKey` names the `.pt` | `qwen-voice.ts` design route |
+| Fresh "Design full cast" bulk | **MINT** likewise (second, independent design+persist entry point) | `cast-design.ts:242-258` |
+| Linked-sibling propagation on save | **STAMP/PRESERVE** the designed character's `voiceUuid` on every matched row; extend signature to receive it | `voices.ts` `applyOverrideToCastFiles` / `forEachMatchingCastCharacter` (`:572-622`) |
+| Series reuse | **COPY** the source voice's `voiceUuid` onto reused rows | `series-reuse-link.ts:308` (next to `c.voiceId = best.voice.voiceId`) **+** the candidate scan that builds `best.voice` (`library-cast-scan` / `series-full-cast-scan` / `voice-match`) must expose `voiceUuid` **+** `resolveReusedVoiceFields` in `server/src/tts/hydrate-reused-voice.ts` |
+| Manual unify / approve-duplicate | **CONVERGE** all unified rows to the **canonical** voice's `voiceUuid` (the other `.pt` then orphans, correctly) — required for the dedup "already-linked" suppression to hold | `voice-override-linked.ts:182-186` |
+| Reparse / re-analysis | **PRESERVE** — add `voiceUuid` to the field allowlist | `merge-analysis-cast.ts` `PRESERVED_VOICE_FIELDS` (`:32-41`) |
+| Snapshot restore | **PRESERVE** | `character-snapshots.ts:38` |
+| Import | none — legacy fallback, benign | `import.ts` |
 
-- Add `voiceUuid?: string` (**optional**, additive) to the `Character` **and** `Voice` schemas in
-  `openapi.yaml`; regenerate `src/lib/api-types.ts` (`npm run openapi:types`). Optional ⇒ no
-  `src/mocks/canned-data.ts` fixture breaks.
-- The voices aggregator in `voices.ts` (≈ 335–361) must **copy `c.voiceUuid`** onto each derived
-  `Voice`, or the field never reaches the frontend and the dedup change is dead code.
-- `voices.ts:350,355` key `gradientForTtsVoice` and the `generated`/`sampled` badges on
-  `ttsVoice.name`; ensure `renderedQwenNames` / sample scope are keyed on the new `qwen-<uuid>`
-  name so gradients/badges don't silently re-roll or mis-show. Cosmetic.
+Mint must hold `withDesignLock` (`design-lock.ts`) so two concurrent designs of one character can't
+mint two uuids.
+
+### Field plumbing
+
+- Add `voiceUuid?: string` (**optional**, additive) to the `Character` and `Voice` schemas in
+  `openapi.yaml`; regenerate `src/lib/api-types.ts`. Optional ⇒ no `canned-data.ts` fixture breaks.
+  v1 frontend does **not** consume it (dedup/display use `name`); it is exposed for future cross-book
+  features and to satisfy the issue's acceptance.
+- The voices aggregator (`voices.ts ~335-361`) copies `c.voiceUuid` onto each derived `Voice` (cheap;
+  keeps the API honest even though no v1 consumer reads it).
 
 ### Sidecar
 
 `server/tts-sidecar/main.py` — the designed-voice `.json` descriptor gains a `voiceUuid` field per
-the issue's acceptance. It is **inert / forward-looking**: the sidecar loads purely by filename and
-reads `instruct`/`language`/`refText`; nothing keys on `voiceUuid` today. No sidecar logic change.
+the issue's acceptance. **Inert / forward-looking**: the sidecar loads by filename and keys its
+prompt cache on the voice *string* (now `qwen-<uuid>`, already distinct); nothing reads
+`descriptor.voiceUuid`. No sidecar logic change.
 
-### Out of scope / non-goals
+## Explicitly out of scope (and why)
 
-- **No on-disk file migration, no schema bump, no `upgrade-coordinator` / fs-1-seam wiring, no
-  writer-side schema stamping.** (The boot-migration approach was rejected: a pure per-doc
-  transform splits legitimately-shared reused voices into independent uuids; it is version-gated
-  so unreliable; and it is unnecessary given the runtime fallback.)
-- No rename UI. The qwen storage name is never user-facing (the cast view shows the character name
-  + "Designed voice"); the issue's "`name` becomes a renamable mirror" acceptance is satisfied
-  **vacuously** — references resolve via `voiceUuid`, so any future label rename is safe.
-- No change to the `voiceId` field (still the reuse-link match key), to `pickVoiceForEngine`, or to
-  the sidecar synth contract.
+- **`cross-book-duplicates.ts`, the voices-view family grouping, and any display change** — `name`
+  stays human and unchanged, so all three behave exactly as today. (Earlier drafts proposed a dedup
+  re-bucket; unnecessary under this split.) If "skip already-linked pairs" is ever wanted, the
+  existing `matchedFrom` / `notLinkedTo` guards already cover it without needing `voiceUuid` on the
+  frontend.
+- **On-disk migration / schema bump / `upgrade-coordinator` wiring** — rejected: a per-doc transform
+  splits legitimately-shared reused voices, it is version-gated (fresh installs/restores skip it),
+  and it is unnecessary given the runtime fallback.
+- **No rename UI** (the issue's "renamable mirror" is satisfied vacuously — synth resolves via
+  `voiceUuid`, so any future label rename is safe). **No change to `voiceId`, to the sidecar synth
+  contract, or to the synthesis pipeline** (only the voice-mapping resolver changes).
 - Coqui / Kokoro / Gemini voices.
 
 ## Testing
 
-Paired automated tests are required (CLAUDE.md testing discipline). All are GPU-free — the
-`qwen-voice.test.ts` harness mocks `global.fetch` (the sidecar) and `selectTtsProvider`/
-`synthesize` and writes designed-voice JSON manually (`:54-66, 110, 177`):
+Paired automated tests required. All GPU-free — `qwen-voice.test.ts` mocks `global.fetch` and
+`selectTtsProvider`/`synthesize` and writes designed-voice JSON manually (`:54-66,110,177`):
 
-- **Collision regression** (route integration, mocked fetch) — design two same-named characters in
-  different series; assert distinct `voiceUuid` and that two *different* `qwen-<uuid>.pt` paths are
-  written, no overwrite. Fails on `main`.
-- **Legacy fallback** — a character with **no** `voiceUuid` resolves through `deriveQwenVoiceId` to
-  `qwen-${voiceId ?? characterId}` (unmigrated voices keep working).
-- **Invariant** — a freshly-designed voice satisfies `qwen.name === 'qwen-' + voiceUuid`; its
-  emotion variants are `qwen-<uuid>__<emotion>` with the base name unchanged.
-- **Reuse propagation** — a reused character in a later book of the same series inherits the
-  owner's `voiceUuid` (via `resolveReusedVoiceFields` + `series-reuse-link`); a reparse preserves
-  it (`PRESERVED_VOICE_FIELDS`).
-- **Dedup re-bucket** (pure unit test feeding synthetic `Voice[]` carrying `voiceUuid`, since mock
-  mode leaves the field undefined) — two separately-designed same-character Qwen voices (different
-  uuids, same series, substring names like "Wren" / "Wren Sparrow") are still surfaced as a
-  candidate; catalog-engine (Coqui/Kokoro) dedup results are unchanged; an already-linked pair
-  (shared uuid) is skipped.
-- **api-types** — `voiceUuid` present on the derived `Voice` from the voices aggregator.
-- **Sidecar descriptor** — `.json` round-trips `voiceUuid` (pytest); explicitly noted as inert.
+- **Collision regression** — design two same-named characters in different series; assert distinct
+  `voiceUuid` and that two different `qwen-<uuid>.pt` paths are written (via `qwenStorageKey`), no
+  overwrite. Fails on `main`.
+- **Resolver unit tests** (`voice-mapping.test.ts`) — `pickVoiceForEngine`/`pickEmotionVariantVoice`
+  return `qwen-<uuid>` (+ `__emotion`) for a uuid-backed voice and the legacy `name` for one without.
+- **Display unchanged** — a designed voice still has a *human* `overrideTtsVoices.qwen.name`
+  (`qwen-…`, **not** the uuid); guards the display regression the third pass caught.
+- **Mint lifecycle** — single design and `cast-design.ts` bulk both stamp `voiceUuid` on owner +
+  linked siblings and persist it before the `.pt` is written.
+- **Propagation** — reuse copies the source `voiceUuid` (candidate scan exposes it; `:308`;
+  `resolveReusedVoiceFields`); reparse preserves it (`PRESERVED_VOICE_FIELDS`);
+  `voice-override-linked` converges a unified group to one canonical `voiceUuid`; promote / discard /
+  delete-variant resolve the same key as synth.
+- **api-types** — `voiceUuid` present on the derived `Voice`.
+- **Sidecar descriptor** — `.json` round-trips `voiceUuid` (pytest); noted inert.
 
-No e2e spec expected (no router / redux / layout seam, and `voiceUuid` is undefined in mock mode).
-Confirmed in the plan; add a Playwright spec only if a UI-visible path is found.
+No e2e spec expected (no router/redux/layout seam; `voiceUuid` undefined in mock mode).
 
 ## Key files
 
-- `server/src/routes/qwen-voice.ts` — `deriveQwenVoiceId` resolver (uuid-or-legacy) + design-time
-  mint; the 6 call-sites, `persistEmotionVariant`, `designed-persona` GET, `delete-variant`,
-  `-preview` promote/discard derivation; update the stale `:169-183` comment.
-- `server/src/store/merge-analysis-cast.ts` — add `voiceUuid` to `PRESERVED_VOICE_FIELDS`.
-- `server/src/tts/hydrate-reused-voice.ts` + `server/src/workspace/series-reuse-link.ts` — carry
-  `voiceUuid` through reuse hydration + denormalisation (match key unchanged).
-- `voiceId`-copy sites: `cast-link-prior.ts`, `voice-match.ts`, `voice-override-linked.ts`,
-  `cast-add-from-roster.ts`, `series-roster.ts`, `revisions.ts`, `character-snapshots.ts`.
-- `server/src/routes/voices.ts` — `applyOverrideToCastFiles` storage-name write; the voices
-  aggregator (≈ 335–361) copies `c.voiceUuid`; gradient/badge keying (`:350,355`).
-- `src/lib/cross-book-duplicates.ts` — Qwen-only series-axis re-bucket.
+- `server/src/tts/voice-mapping.ts` — new `qwenStorageKey`; route `pickVoiceForEngine` +
+  `pickEmotionVariantVoice` synth resolution through it.
+- `server/src/routes/qwen-voice.ts` — mint `voiceUuid` at design (before `:265`); name `.pt` via
+  `qwenStorageKey`; `persistEmotionVariant`, `designed-persona`, `delete-variant`, preview
+  promote/discard via `qwenStorageKey`; `deriveQwenVoiceId` stays human.
+- `server/src/routes/cast-design.ts` — bulk design mints/stamps `voiceUuid` before storage-key derivation.
+- `server/src/routes/voices.ts` — `applyOverrideToCastFiles`/`forEachMatchingCastCharacter` stamp/
+  preserve `voiceUuid` on matched rows (signature gains the uuid); voices aggregator copies it.
+- `server/src/workspace/series-reuse-link.ts` (`:308`) + the reuse-candidate scan
+  (`library-cast-scan` / `series-full-cast-scan` / `voice-match`) + `server/src/tts/hydrate-reused-voice.ts`
+  — copy the source `voiceUuid` through reuse.
+- `server/src/routes/voice-override-linked.ts` — converge unified rows to the canonical `voiceUuid`.
+- `server/src/store/merge-analysis-cast.ts` — add `voiceUuid` to `PRESERVED_VOICE_FIELDS`;
+  `character-snapshots.ts` preserve.
+- `server/src/workspace/paths.ts` — `.pt`/`.json` path built from the storage key.
 - `server/tts-sidecar/main.py` — `.json` descriptor gains inert `voiceUuid`.
 - `openapi.yaml` + `src/lib/api-types.ts` — optional `voiceUuid` on `Character` and `Voice`.
