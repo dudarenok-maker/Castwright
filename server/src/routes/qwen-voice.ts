@@ -354,6 +354,7 @@ export async function designQwenVoiceForCharacter(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               voiceId,
+              voiceUuid: p.character.voiceUuid ?? null,
               instruct: instructForDesign,
               language: p.language,
               calibrationText,
