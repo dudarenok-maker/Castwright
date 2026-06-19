@@ -563,6 +563,47 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     expect(roster.get('wren')!.ageRange).toBe('teen');
   });
 
+  it('records a divergent same-id name form as an alias instead of dropping it', () => {
+    /* The model emits the same id with a fuller name in a later chapter
+       (e.g. «Антон» then «Антон Городецкий»). First-detection wins for the
+       display name, but the divergent form must be preserved as an alias
+       so cast review can surface it — not silently discarded. */
+    const roster = new Map<string, CharacterOutput>();
+    mergeRosterChapter(roster, [{ id: 'anton', name: 'Антон', role: 'Иной', color: 'blue' }]);
+    mergeRosterChapter(roster, [
+      { id: 'anton', name: 'Антон Городецкий', role: 'Иной', color: 'blue' },
+    ]);
+    const anton = roster.get('anton')!;
+    expect(anton.name).toBe('Антон');
+    expect(anton.aliases).toEqual(['Антон Городецкий']);
+  });
+
+  it('does not alias an identical name, and never adds the entry’s own name', () => {
+    const roster = new Map<string, CharacterOutput>();
+    mergeRosterChapter(roster, [{ id: 'wren', name: 'Wren', role: 'p', color: 'orange' }]);
+    mergeRosterChapter(roster, [{ id: 'wren', name: 'Wren', role: 'p', color: 'orange' }]);
+    expect(roster.get('wren')!.aliases ?? []).toEqual([]);
+  });
+
+  it('unions incoming aliases, deduping case-insensitively and excluding the display name', () => {
+    const roster = new Map<string, CharacterOutput>();
+    mergeRosterChapter(roster, [
+      { id: 'wren', name: 'Wren', role: 'p', color: 'orange', aliases: ['Wren Sparrow'] },
+    ]);
+    mergeRosterChapter(roster, [
+      {
+        id: 'wren',
+        name: 'Sparrow',
+        role: 'p',
+        color: 'orange',
+        aliases: ['wren sparrow', 'Wren'] /* dup of alias (case) + dup of display name */,
+      },
+    ]);
+    /* 'Sparrow' (divergent name) added; 'Wren Sparrow' kept once (case dedup);
+       'Wren' never added because it is the display name. */
+    expect(roster.get('wren')!.aliases).toEqual(['Wren Sparrow', 'Sparrow']);
+  });
+
   it('does not mutate the incoming chapter outputs (defensive clone)', () => {
     const roster = new Map<string, CharacterOutput>();
     const incoming: CharacterOutput[] = [
