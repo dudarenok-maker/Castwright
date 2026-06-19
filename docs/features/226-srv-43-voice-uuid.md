@@ -24,7 +24,8 @@ owner: server
 `overrideTtsVoices.qwen.name` was doing three jobs with conflicting requirements: (1) globally-unique storage key, (2) human display label, and (3) dedup bucket. This change removes responsibility (1):
 
 - **`voiceUuid`** — a `nanoid`, minted once per physical voice at design time. Immutable. The canonical machine identity for all file I/O and sidecar loading.
-- **`name`** (`qwen-${voiceId ?? characterId}`) — unchanged. Used for display in the cast row, voice-library family grouping, cross-book dedup matching, and legacy fallback storage key. May now collide across series — harmless, since it is no longer a storage key.
+- **`overrideTtsVoices.qwen.name`** — when a `voiceUuid` is present, this is now the **storage key** `qwen-<uuid>` (not the human label). The legacy form `qwen-<voiceId>` is still written for pre-uuid voices. Direct reads of this field yield the storage key, not a display label.
+- **`ttsVoice.name`** (voices aggregator output) — always the **human display label** `qwen-${voiceId ?? characterId}`. Used for display in the cast row, voice-library family grouping, and cross-book dedup bucket matching. The aggregator converts the on-disk storage key to this form. May collide across series — harmless, since dedup buckets on this stable per-character label intentionally, and the distinct `.pt` files are keyed by `voiceUuid`.
 - **`qwenStorageKey(c, cId)`** — returns `qwen-${c.voiceUuid}` when `voiceUuid` is present, or `deriveQwenVoiceId(c, cId)` (the legacy human name) otherwise. This is the one behavioral change; `deriveQwenVoiceId` itself is unchanged.
 
 ### Mint / propagate lifecycle
@@ -66,7 +67,7 @@ Not downgrade-safe for newly-designed voices: a pre-srv-43 server resolves synth
 
 1. **`qwenStorageKey` is the single file-path resolver** — every code path that reads or writes `voices/qwen/<key>.pt` or passes a voice string to the sidecar must go through `qwenStorageKey(character, characterId)` in `server/src/tts/voice-mapping.ts`, never by reading `overrideTtsVoices.qwen.name` directly for file I/O.
 
-2. **`name` stays human-readable** — `overrideTtsVoices.qwen.name` must remain the `qwen-${voiceId ?? characterId}` derived string, not the UUID. Any future display, dedup, or voices-view grouping that reads `name` must see a human-readable value, not `qwen-<uuid>`.
+2. **`ttsVoice.name` (aggregator output) is the human display name** — `overrideTtsVoices.qwen.name` in `cast.json` is the **storage key** (`qwen-<uuid>` when a `voiceUuid` is present, else the legacy `qwen-<voiceId>`). The voices aggregator (`GET /api/voices`) converts this to the human display form `qwen-${voiceId ?? characterId}` when emitting `ttsVoice.name`, so cast-view display and cross-book dedup (which bucket on `ttsVoice.name`) both see the stable per-character label. Any display path that reads `overrideTtsVoices.qwen.name` directly will see the storage key — always go through `ttsVoice.name` (the aggregator output) or derive the human label as `qwen-${voiceId}` explicitly.
 
 3. **Mint before write** — `voiceUuid` must be stamped on the character and persisted before `qwenStorageKey` is called to name the `.pt` file. The design routes both call `withDesignLock` to prevent a concurrent double-mint.
 
@@ -82,7 +83,7 @@ Not downgrade-safe for newly-designed voices: a pre-srv-43 server resolves synth
 
 - **Collision regression** (`server/src/routes/qwen-voice.test.ts`) — designs two same-named characters in two different standalone books; asserts that they receive distinct `voiceUuid` values and that `qwenStorageKey` produces two different `.pt` paths, with no overwrite. Fails on `main` without this change.
 - **Resolver unit tests** (`server/src/tts/voice-mapping.test.ts`) — `pickVoiceForEngine` returns `qwen-<uuid>` for a uuid-backed voice and the legacy human name for one without; `pickEmotionVariantVoice` returns `qwen-<uuid>__<emotion>` for a uuid-backed variant.
-- **Display unchanged** — a designed voice's `overrideTtsVoices.qwen.name` remains the human `qwen-<id>` string, not the uuid. Guards the display regression caught in plan-review adversarial pass 3.
+- **Display via aggregator** — the voices aggregator (`GET /api/voices`) emits `ttsVoice.name = qwen-<voiceId>` (human label) even when `overrideTtsVoices.qwen.name` in `cast.json` is the uuid storage key `qwen-<uuid>`. The new Wave 2 regression test in `voices.test.ts` (srv-43 Wave 2 test) pins this split: a character with `voiceUuid='ABC123'` and `voiceId='wren'` must have `ttsVoice.name === 'qwen-wren'` AND `generated === true` (keyed on `qwen-ABC123`).
 - **Mint lifecycle** (`server/src/routes/qwen-voice.test.ts`, `server/src/routes/cast-design.test.ts`) — single design and bulk "Design full cast" both stamp `voiceUuid` on the owner + linked siblings and persist it before the `.pt` is written.
 - **Propagation** (`server/src/workspace/series-reuse-link.test.ts`, `server/src/routes/voices.test.ts`, `server/src/routes/voice-override-linked.test.ts`) — reuse copies the source `voiceUuid`; reparse preserves it via `PRESERVED_VOICE_FIELDS`; manual unify converges a unified group to one canonical `voiceUuid`.
 - **No snapshot drift** (`server/src/workspace/character-snapshots.test.ts`) — `voiceUuid` is carried through a snapshot roundtrip without being added to the snapshot itself (no spurious drift).
@@ -100,7 +101,8 @@ Requires a running server + sidecar (GPU box with Qwen weights installed).
    - Open Book A → Cast → Profile drawer for a character named "Wren".
    - Click "Design & compare" → complete the Qwen design flow → "Use proposed voice".
    - On disk: confirm `voices/qwen/qwen-<uuid-A>.pt` exists (NOT `qwen-wren.pt`).
-   - In `<bookA-dir>/cast.json`: confirm `characters["wren"].voiceUuid` is set to `<uuid-A>` and `overrideTtsVoices.qwen.name === "qwen-wren"`.
+   - In `<bookA-dir>/cast.json`: confirm `characters["wren"].voiceUuid` is set to `<uuid-A>` and `overrideTtsVoices.qwen.name === "qwen-<uuid-A>"` (the storage key, NOT the human label).
+   - In the cast view, confirm the voice row shows **`qwen-wren`** (the human `qwen-<voiceId>` form emitted by the aggregator), not `qwen-<uuid-A>`.
 
 2. **Design "Wren" in Book B (different standalone, unrelated to Book A)**
    - Open Book B → Cast → Profile drawer for a character also named "Wren".

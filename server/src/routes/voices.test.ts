@@ -510,6 +510,67 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
     expect(marlow.sampled).toBeUndefined();
   });
+
+  it('srv-43 Wave 2: emits human display name (qwen-<voiceId>) and keeps generated flag keyed on storage key (qwen-<uuid>)', async () => {
+    /* Fail-before/pass-after for the display-name / generated-flag split.
+       A character carries BOTH a voiceId ('wren') AND a voiceUuid ('ABC123'),
+       so the storage key is qwen-ABC123 while the human display is qwen-wren.
+       The segment snapshot uses the STORAGE key — the aggregator must emit the
+       human name on ttsVoice.name AND still resolve generated:true by looking
+       up the storage key in renderedQwenNames. */
+    const bookDir = join(workspaceRoot, 'books', Q_AUTHOR, Q_SERIES, Q_TITLE);
+
+    /* Add a uuid-bearing character to the Qwen book's cast. */
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters.push({
+      id: 'c-wren',
+      name: 'Wren',
+      voiceId: 'wren',
+      voiceUuid: 'ABC123',
+      ttsEngine: 'qwen',
+      /* The override name is the STORAGE key (qwen-<uuid>), as written by
+         srv-43's qwen-voice route after a design session. */
+      overrideTtsVoices: { qwen: { name: 'qwen-ABC123' } },
+      attributes: [],
+      lines: 3,
+      scenes: 1,
+    });
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    /* Add a rendered segment snapshot using the STORAGE key (qwen-ABC123). */
+    const segPath = join(bookDir, 'audio', '02-two.segments.json');
+    writeFileSync(
+      segPath,
+      JSON.stringify({
+        bookId: 'qbook',
+        chapterId: 2,
+        chapterTitle: 'Two',
+        synthesizedAt: new Date().toISOString(),
+        segments: [],
+        characterSnapshots: {
+          'c-wren': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ABC123' },
+        },
+      }),
+    );
+
+    const res = await request(app).get('/api/voices?engine=qwen');
+    expect(res.status).toBe(200);
+    const wren = res.body.voices.find((v: { id: string }) => v.id === 'wren');
+    expect(wren).toBeDefined();
+    /* Display name must be the HUMAN form (qwen-<voiceId>), not the storage key. */
+    expect(wren.ttsVoice.name).toBe('qwen-wren');
+    /* Generated flag must be true even though ttsVoice.name !== the snapshot key. */
+    expect(wren.generated).toBe(true);
+
+    /* Cleanup: remove the added character and the chapter-2 snapshot. */
+    cast.characters.pop();
+    writeFileSync(castPath, JSON.stringify(cast));
+    const { rmSync: rmFile } = await import('node:fs');
+    rmFile(segPath);
+  });
 });
 
 describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
