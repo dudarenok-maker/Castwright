@@ -65,6 +65,40 @@ jobs:
       # NOT a Play upload artifact; the real Play AAB is built locally with the
       # upload keystore (`android/key.properties`). See apps/android/README.md.
       - run: flutter build appbundle --release
+      # ops-17 / #790 — Trip B. The KGP escape-hatch flags must stay present:
+      # deleting them silently re-breaks the build under AGP 9 (the unmigrated
+      # audio_session / flutter_foreground_task / mobile_scanner plugins).
+      - name: Guard KGP escape-hatch flags (ops-17 / #790)
+        run: |
+          set -euo pipefail
+          props=android/gradle.properties
+          for flag in 'android.builtInKotlin=false' 'android.newDsl=false'; do
+            grep -qF "$flag" "$props" || {
+              echo "::error::missing '$flag' in $props — KGP escape hatch (ops-17/#790)"; exit 1; }
+          done
+          echo "ok: KGP escape-hatch flags present"
+      # ops-17 / #790 — Trip B. The whole "escape-hatch removal can't surprise
+      # us" guarantee rests on the Flutter pin holding. Assert EVERY flutter-version
+      # in app.yml (it pins two jobs: android + ios-compile) AND app-deps-watch.yml
+      # is the SAME version, so neither drifts silently.
+      - name: Guard Flutter-pin lockstep (ops-17 / #790)
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -uo pipefail
+          # `sort -u` over ALL pins from both files; `head` is LAST in each pipe
+          # so nothing writes to a closed pipe (avoids a SIGPIPE false-red under
+          # pipefail). One unique value across both files == lockstep.
+          pins=$(grep -hE 'flutter-version:' \
+                   .github/workflows/app.yml \
+                   .github/workflows/app-deps-watch.yml \
+                 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+          count=$(printf '%s\n' "$pins" | grep -c .)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Flutter pin drift across app.yml / app-deps-watch.yml (ops-17/#790):"
+            printf '%s\n' "$pins"
+            exit 1
+          fi
+          echo "ok: Flutter pin lockstep at $pins"
 
   ios-compile:
     runs-on: macos-latest
