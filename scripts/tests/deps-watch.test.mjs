@@ -186,3 +186,55 @@ test('stickyRequest: PATCH on the existing numeric id, else POST to the issue', 
     path: 'repos/o/r/issues/790/comments',
   });
 });
+
+import {
+  STICKY_MARKER,
+  renderSticky,
+  renderSummary,
+  renderTransitionComment,
+} from '../deps-watch.mjs';
+
+const STATUS_CLEAN = [
+  { name: 'audio_session', pin: '0.2.3', latest: '0.2.3', ahead: false },
+  { name: 'flutter_foreground_task', pin: '9.2.2', latest: '9.2.2', ahead: false },
+  { name: 'mobile_scanner', pin: '7.2.0', latest: '7.2.0', ahead: false },
+];
+const STATUS_AHEAD = [
+  { name: 'audio_session', pin: '0.2.3', latest: '0.3.0', ahead: true },
+  { name: 'flutter_foreground_task', pin: '9.2.2', latest: '9.2.2', ahead: false },
+  { name: 'mobile_scanner', pin: '7.2.0', latest: '7.2.0', ahead: false },
+];
+
+test('renderSticky embeds the marker + a parseable state block', () => {
+  const md = renderSticky({ pluginStatus: STATUS_AHEAD, behind: [], today: '2026-07-01' });
+  assert.ok(md.includes(STICKY_MARKER));
+  assert.match(md, /<!-- state: .*audio_session.*-->/);
+  assert.ok(md.includes('⚠️')); // banner when a plugin is ahead
+  assert.ok(md.includes('verify')); // honest "verify whether it removed KGP" wording
+});
+
+test('renderSummary (no marker) shows the all-clear line when nothing is ahead', () => {
+  const md = renderSummary({ pluginStatus: STATUS_CLEAN, behind: [], today: '2026-07-01' });
+  assert.ok(!md.includes(STICKY_MARKER));
+  assert.ok(/still at their pin/i.test(md));
+  assert.ok(/None — all direct\/dev deps current/i.test(md));
+});
+
+test('renderSummary lists behind deps in a table', () => {
+  const md = renderSummary({
+    pluginStatus: STATUS_CLEAN,
+    behind: [{ name: 'build_runner', kind: 'dev', current: '2.15.0', latest: '2.16.0' }],
+    today: '2026-07-01',
+  });
+  assert.ok(md.includes('build_runner'));
+  assert.ok(md.includes('2.16.0'));
+});
+
+test('renderTransitionComment: null when no transitions; @mention + recipe otherwise', () => {
+  assert.equal(renderTransitionComment([], STATUS_AHEAD), null);
+  const md = renderTransitionComment(['audio_session'], STATUS_AHEAD);
+  assert.ok(md.includes('@dudarenok-maker'));
+  assert.ok(md.includes('audio_session'));
+  assert.ok(md.includes('0.3.0'));
+  assert.ok(/flutter build apk --release/.test(md));
+});

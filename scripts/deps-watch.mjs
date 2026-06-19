@@ -108,3 +108,55 @@ export function stickyRequest(existing, repo, issue) {
     ? { method: 'PATCH', path: `repos/${repo}/issues/comments/${existing.id}` }
     : { method: 'POST', path: `repos/${repo}/issues/${issue}/comments` };
 }
+
+/** The human-visible markdown (used for both the job summary and sticky body). */
+export function renderBody({ pluginStatus, behind, today }) {
+  const anyAhead = pluginStatus.some((s) => s.ahead);
+  const lines = [`### ops-17 deps watch — updated ${today}`, ''];
+  if (anyAhead) {
+    const names = pluginStatus
+      .filter((s) => s.ahead)
+      .map((s) => `\`${s.name}\` (pin ${s.pin} → latest ${s.latest})`)
+      .join(', ');
+    lines.push(`> ⚠️ **A KGP plugin has a newer version: ${names}.**`);
+    lines.push('> A newer version is **not** proof it removed KGP — verify: bump locally → `flutter build apk --release` → confirm the KGP warning is gone.');
+    lines.push('');
+  } else {
+    lines.push('_All three KGP plugins are still at their pin — no migrated release yet (blocked upstream, ops-17)._');
+    lines.push('');
+  }
+  lines.push('| KGP plugin | pin | latest | newer? |', '|---|---|---|---|');
+  for (const s of pluginStatus) {
+    lines.push(`| \`${s.name}\` | ${s.pin ?? '?'} | ${s.latest ?? '?'} | ${s.ahead ? '**yes**' : 'no'} |`);
+  }
+  lines.push('', `#### Direct/dev deps behind latest (${behind.length})`);
+  if (behind.length) {
+    lines.push('| package | kind | current | latest |', '|---|---|---|---|');
+    for (const b of behind) lines.push(`| \`${b.name}\` | ${b.kind} | ${b.current} | ${b.latest} |`);
+  } else {
+    lines.push('_None — all direct/dev deps current._');
+  }
+  return lines.join('\n');
+}
+
+export const renderSummary = renderBody;
+
+export function renderSticky(args) {
+  const state = buildState(args.pluginStatus);
+  return [STICKY_MARKER, `<!-- state: ${JSON.stringify(state)} -->`, '', renderBody(args)].join('\n');
+}
+
+export function renderTransitionComment(transitions, pluginStatus, mention = '@dudarenok-maker') {
+  if (!transitions.length) return null;
+  const items = transitions.map((name) => {
+    const s = pluginStatus.find((x) => x.name === name);
+    return `- \`${name}\`: pin ${s.pin} → latest ${s.latest}`;
+  });
+  return [
+    `${mention} — ops-17: a KGP plugin now has a newer version. Verify whether it removed KGP (built-in Kotlin / AGP 9):`,
+    '',
+    ...items,
+    '',
+    'Recipe: bump locally → `flutter build apk --release` → if the KGP warning is gone, bump the pin, drop the escape-hatch flags + the `app.yml` Trip-B flag assertion, and close #790.',
+  ].join('\n');
+}
