@@ -233,6 +233,11 @@ export function TopBar({
   onOpenQueue,
 }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
+  /* The hamburger drawer renders only when there's nav to host (#916). On phone
+     the Admin pill moves into that drawer to reclaim the ~120px the right
+     cluster needs; on a no-nav stage (upload/analysing/confirm) there's no
+     drawer, so the inline pill stays visible there instead of being stranded. */
+  const hasNav = stage === 'ready' || showGlobalNav;
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books') onHome();
     else if (id === 'voices') onOpenVoices();
@@ -276,6 +281,8 @@ export function TopBar({
           setView={setView}
           onGlobal={onGlobal}
           showGlobalNav={showGlobalNav}
+          onOpenAdmin={onOpenAdmin}
+          adminActive={stage === 'admin'}
         />
         <button
           onClick={onHome}
@@ -283,7 +290,9 @@ export function TopBar({
           className="font-bold text-base tracking-tight inline-flex items-center gap-2 hover:opacity-80 transition-opacity shrink-0 min-h-[44px]"
         >
           <CastwaveMark className="w-6 h-6 shrink-0" aria-hidden="true" />
-          <span>Castwright</span>
+          {/* Wordmark text hidden on phone (#916) — the mark alone is the home
+              affordance there; this reclaims ~85px so the right cluster fits. */}
+          <span className="hidden sm:inline">Castwright</span>
         </button>
         {projectTitle && (
           <button
@@ -338,7 +347,12 @@ export function TopBar({
           </div>
         )}
         <div className="flex items-center gap-3 shrink-0">
-          <AdminPill onClick={onOpenAdmin} active={stage === 'admin'} />
+          {/* On phone, a nav-stage Admin pill moves into the hamburger drawer
+              (#916) to reclaim width; on a no-nav stage (no drawer) it stays
+              inline so Admin is never unreachable. sm+ always shows it inline. */}
+          <span className={hasNav ? 'hidden sm:inline-flex' : 'inline-flex'}>
+            <AdminPill onClick={onOpenAdmin} active={stage === 'admin'} />
+          </span>
           {(queueCount ?? 0) > 0 && onOpenQueue && (
             <button
               type="button"
@@ -385,12 +399,16 @@ function NavDrawer({
   setView,
   onGlobal,
   showGlobalNav,
+  onOpenAdmin,
+  adminActive,
 }: {
   stage: Stage['kind'];
   view: View | null;
   setView: (v: View) => void;
   onGlobal: (id: 'books' | 'voices' | 'changelog') => void;
   showGlobalNav: boolean;
+  onOpenAdmin: () => void;
+  adminActive: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -497,6 +515,22 @@ function NavDrawer({
                   {r.active && <IconCheck className="w-4 h-4 shrink-0" />}
                 </button>
               ))}
+              {/* Admin lives inline at sm+ but moves here on phone (#916). Phone
+                  -only (sm:hidden) so tablet/desktop keep the single inline pill
+                  and never double-show it. */}
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="nav-drawer-link-admin"
+                aria-current={adminActive ? 'page' : undefined}
+                onClick={() => select(onOpenAdmin)}
+                className={`sm:hidden mt-1 pt-3 border-t border-ink/10 w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
+                  adminActive ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
+                }`}
+              >
+                <span>Admin</span>
+                {adminActive && <IconCheck className="w-4 h-4 shrink-0" />}
+              </button>
             </div>
           </>,
           document.body,
