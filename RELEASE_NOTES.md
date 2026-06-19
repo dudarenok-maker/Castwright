@@ -1,3 +1,13 @@
+# Castwright 1.8.1
+
+- **The app tells you when there's more.** When a newer Castwright is ready, a quiet banner lets you know and the version badge picks up a dot — so you're never unknowingly a release behind, and you can read what's new before you update.
+- **Listen from any browser in the house — safely.** Authorize a browser on your home network with a single scan, and your whole library opens there too. The admin panel lists every device you've trusted so you can revoke any one of them, and trusted browsers expire on their own after a while rather than lingering forever.
+- **Pairing your phone just works now.** The on-screen pairing code is redrawn so a real phone camera reads it first try, and opening it drops you straight into an already-trusted library — no fiddling, no second attempt.
+- **The phone player keeps its place.** It now names the chapter you're on, marks the ones you've finished, draws a progress bar for where you are, and scrolls the list to your spot — and it stays in step with what's actually playing, pausing politely when a call or another app needs the sound.
+- **A window that fits the screen it's on.** On a smaller window or a tablet the top navigation folds into a tidy menu button instead of spilling off the edge, so getting around stays easy at any size.
+- **A stuck library offers a way back.** If loading your shelf hits a snag, you get a Retry button instead of a skeleton that spins forever.
+- **A more secure foundation.** The voice engine's core and a handful of supporting parts are updated to their security-patched versions and the app's own defences are tightened — nothing changes in how Castwright sounds or works, just safer ground beneath it.
+
 # Castwright 1.8.0
 
 - **AMD graphics now welcome (early preview).** Castwright can reach for an AMD GPU when it finds one — it detects the card on its own, and if the setup isn't fully ready, it quietly falls back to your processor instead of stalling. It's an early preview, so treat it as a first outing rather than a finished road; NVIDIA and Apple Silicon stay the smoothest paths.

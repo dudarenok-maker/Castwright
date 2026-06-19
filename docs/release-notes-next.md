@@ -16,73 +16,51 @@ The marker is what bump-version checks: if it doesn't match the version being
 cut, the bump refuses (so a stale file can't ship as the body). The
 user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.8.0
+release-notes-next-version: 1.8.1
 -->
 
-**The open-beta release.** Castwright reaches more machines this cycle — an early **AMD GPU** preview and a **one-click Pinokio** install — on top of a deep round of analysis honesty, multilingual depth, and GPU-contention resilience that keeps long runs upright on an 8 GB card.
+**A polish-and-reach patch.** Listen from any browser on your home network, know the moment a new build lands, and ride a steadier companion player — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
 
 ---
 
 ## ✨ Headline features
 
-### 🟧 AMD GPU support — early preview (new)
-Castwright can reach for an AMD GPU when it finds one, with a safe net under it.
+### 🔐 Listen from any browser on your LAN (new)
+Authorize a browser on your home network and your whole library opens there too — with the security to match (app-17).
 
-- **Auto-detect with CPU fallback** — ROCm / DirectML is detected on its own; if the GPU path isn't ready it quietly falls back to the processor so the app still runs (#818).
-- **Accelerator control** — an `ACCELERATOR` knob + in-app picker, with the resolved per-engine profile surfaced on `/health`. Kokoro stays on CPU under DirectML (a documented DirectML limitation, not a fault). NVIDIA and Apple Silicon remain the smoothest paths.
+- **Browser device authorization** — authorize a browser with a scan; the session is held in an HttpOnly `__Host-cw_lan` cookie, guarded by an Origin allow-list CSRF check, and device tokens carry a TTL so trust expires on its own (#901).
+- **Admin LAN access card** — authorize, list, and revoke trusted devices; a revoked device drops out of the list immediately (#901, #904).
+- **Redeem hardening** — the pair-redeem routes are rate-limited, body-capped at 1 KB, restricted to the local network, and answer a stale browser redeem with a 410 (#902).
 
-### 📦 One-click install with Pinokio (new)
-A self-contained conda install (ops-16) built from the latest published release — no terminal, nothing to install by hand — landing in the same guided first-run as the desktop installers (#821).
+### 🔔 In-app update notifier (new) — fe-27
+- A non-blocking update banner plus a version-pill update dot, keyed to cached update fields on `/api/info`; dismissible, and it reappears when a newer version lands (#908).
 
-### 🧠 Pick the model that reads your book (new)
-The local analyzer is now yours to choose (plan 221).
-
-- **Installed-only model picker** — pick any Ollama model you've pulled per run; not-yet-pulled curated models install from the Model Manager (#851, #859, #860).
-- **Honest residency + label** — warm/residency and the analysing chip key to the model actually doing the reading, not the configured default; an `ANALYZER_KEEP_ALIVE` knob; per-phase model support.
-
-### 🩺 Honest engine health + one-tap Repair
-The Model Manager stops showing a hopeful green light (plan 220).
-
-- **True per-engine health** — package / weights / integrity, with a **"Needs repair"** badge and a one-click **Repair** + sidecar restart (#837).
-- **Re-tiered engines** — Qwen → standard (GPU), Coqui → opt-in, Whisper = base; fail-open readiness + diagnostics.
+### 📱 Companion player & pairing (app-17)
+- **Deep-link pairing launch** — a compact `CWP1` pairing URL that a real phone camera reads first-try, a private-host guard, and a re-entrancy guard against stacked pairing screens from deep links (#899).
+- **Listening cues** — the transport shows the current chapter name and a progress bar, finished chapters are marked, and the list auto-scrolls to where you are (#896).
+- **Playback fidelity** — the transport is synced to the real play state and now handles audio focus, pausing for calls and other apps (#906).
+- **APK build pipeline** — `npm run apk:companion` drops a signed APK with an auto-incrementing `versionCode` and a signer-cert verification so an update-install can't fail on a key/version mismatch (#897).
 
 ---
 
-## 🌍 Multilingual & attribution (plan 221)
+## 🖥️ Responsive UI
 
-- **Cyrillic, end to end** — character names, ids and cross-book keys handle non-Latin scripts (#852).
-- **Steadier non-English attribution** — a deterministic narrator-default heuristic, a Russian dash-dialogue preamble guard, and script-aware attribution + ASR normalizers (#852, #824).
-- **Localized cast review** — language-aware minor-cast fold buckets, so a Russian book's grouped roles read in Russian (e.g. _Незнакомый Парень_ / _Незнакомая Девушка_) instead of English (#856).
+- **Collapsing top-bar nav** — the inline nav strip folds into a hamburger drawer below `xl` (1280px) and stays inline at desktop, with reachability + visual baselines covered (#911).
+- **Recoverable library scan** — a failed shelf scan shows a Retry button instead of an eternal skeleton.
 
-## 📊 Analysing view — honesty & live progress
+## 🔒 Security & dependencies
 
-- **Truthful progress** — a per-chapter section sub-bar and counts, live ETA refinement, and a model-label chip that mirrors the server-resolved analyzer model (#841, #864, #826).
-- **Reload-proof** — a reconnecting bridge so refreshing the page no longer blanks the elapsed timer (#869).
-- **Big-chapter handling** — Stage-1 chunking for oversized chapters and cast-detection name-fidelity guards (#825, #827).
-
-## 🎮 GPU residency & resilience (plan 222)
-
-- **Waits its turn instead of crashing** — `withGpuLoad` does an atomic evict+verify+load and refuses on a busy card (409) rather than OOM-crashing; a top-bar "GPU busy · N waiting" pill says why (#840, #841).
-- **Smarter residency** — a VRAM-threshold policy keeps the analyzer resident across the analysis loop on a GPU; voice-design and generation preload run through the same gated path.
-- **VRAM telemetry substrate** — passive, env-gated per-engine VRAM sampling (fs-45, record-only; MB-accounting deferred) with a clean-process gate (#861, #863).
-
-## 🎙️ Voice design & casting
-
-- **A/B compare modal fixed** — portaled out of the clip-path drawer so it no longer renders clipped; Play-current resolves the Qwen voice and shows the descriptor on Side A; play errors surface (#832, #834).
-- **Age made audible** — Qwen voice-design personas describe age acoustically, not just as a label (#831).
-
-## 🎧 Listening & companion
-
-- **Offline waveform** — downloaded chapters persist their peaks, so the phone scrubber stays drawn with no signal.
+- **torch CVE bump** — torch / torchaudio 2.8 → 2.11 plus pytest ≥ 9, with a guardrail test that the sidecar never calls `torchaudio.load` (#884); the NVIDIA torch wheel is pre-installed from the cu128 index and the Kokoro ONNX-runtime swap is made skew-proof (#885).
+- **Maximal CodeQL remediation** — path-containment sanitizers threaded into every traversal sink, linear-time ReDoS strips, tainted log values passed as `%s` args, crypto-minted session ids, a cover `<img>` scheme allowlist, and generic sidecar errors; the CodeQL workflow now excludes test files to cut future noise (#887, #889, #890, #891, #892).
+- **Global API rate limiter** — an unconditional limiter mounted in front of the API (#887).
+- **Dependency hygiene round 4** — in-range server + frontend refresh, sharp 0.34 → 0.35, express-rate-limit 7 → 8, a js-yaml override, undici patched to 7.28.0 / 8.5.0, and esbuild / form-data bumps (#894, #912, #882).
 
 ## 🏗️ Under the hood
 
-- **Kokoro uses the NVIDIA GPU** — forces `onnxruntime-gpu` via an ORT swap (not `kokoro-onnx[gpu]`); a failed swap is fatal, so it can't silently run on the CPU (#828).
-- **Analyzer tolerates stray model keys** instead of failing the run (#839).
-- **Test resilience** — `test:server` auto-retries once on a vitest fork-pool worker-crash (#850); the `analysis-pipelining` rolling-roster CPU-contention timeout flake is quarantined in CI (#875).
-- **Release hygiene** — `.gitignore` now covers the renamed `castwright-workspace/` (#867); a CodeQL workflow and a pre-push commit-subject guard land (#858).
-- **Docs & Help** — CODE_OF_CONDUCT, a repo-opening-public checklist, repo legal pointers, plan-221/222 reconciliations, and new offline Help topics for analysis model-reload / "GPU busy" and an engine that reads "Needs repair".
+- **Dependency-drift guardrail** — a monthly `app-deps-watch` workflow plus app-CI assertions that keep the Kotlin-Gradle-Plugin escape-hatch flags and the Flutter pin in lockstep (ops-17, #917).
+- **Test resilience** — a non-gating quarantine lane with a `quarantinedIt` helper and a flaky register; the load-sensitive `analysis-pipelining` cases were rewritten event-driven and graduated off quarantine; the release body can no longer silently become a placeholder (#879, #880).
+- **Docs** — the LAN public-cert broker design + implementation plan (design only, not yet built); regression plan 225 for LAN browser device-auth; a `srv-41` device-token hardening backlog item.
 
 ---
 
-**Full changelog:** `v1.7.0...v1.8.0`
+**Full changelog:** `v1.8.0...v1.8.1`
