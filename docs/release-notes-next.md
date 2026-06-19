@@ -16,7 +16,7 @@ The marker is what bump-version checks: if it doesn't match the version being
 cut, the bump refuses (so a stale file can't ship as the body). The
 user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.8.1
+release-notes-next-version: 1.9.0
 -->
 
 **A polish-and-reach patch.** Listen from any browser on your home network, know the moment a new build lands, and ride a steadier companion player — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
@@ -63,4 +63,4 @@ Authorize a browser on your home network and your whole library opens there too 
 
 ---
 
-**Full changelog:** `v1.8.0...v1.8.1`
+**Full changelog:** `v1.8.0...v1.9.0`

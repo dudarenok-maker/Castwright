@@ -1,4 +1,4 @@
-# Castwright 1.8.1
+# Castwright 1.9.0
 
 - **The app tells you when there's more.** When a newer Castwright is ready, a quiet banner lets you know and the version badge picks up a dot — so you're never unknowingly a release behind, and you can read what's new before you update.
 - **Listen from any browser in the house — safely.** Authorize a browser on your home network with a single scan, and your whole library opens there too. The admin panel lists every device you've trusted so you can revoke any one of them, and trusted browsers expire on their own after a while rather than lingering forever.
