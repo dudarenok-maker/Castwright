@@ -57,8 +57,11 @@ const characters = [
     role: 'supporting',
     color: 'lilac',
     voiceId: 'v_aria',
+    /* srv-43: pre-seed voiceUuid so ensureCharacterVoiceUuid is idempotent and
+       qwenStorageKey returns a deterministic key for test assertions. */
+    voiceUuid: 'v_aria',
     voiceStyle: 'a poised, confident teenage girl, clear and warm',
-    evidence: [{ quote: '“We have to tell the Council before the others wake.”' }],
+    evidence: [{ quote: '”We have to tell the Council before the others wake.”' }],
   },
   {
     id: 'brann',
@@ -66,16 +69,21 @@ const characters = [
     role: 'supporting',
     color: 'teal',
     voiceId: 'v_brann',
+    /* srv-43: pre-seed voiceUuid for deterministic storage key. */
+    voiceUuid: 'v_brann',
     voiceStyle: 'a calm, assured young man, steady and warm',
-    evidence: [{ quote: '“Trust me — we can do this together.”' }],
+    evidence: [{ quote: '”Trust me — we can do this together.”' }],
   },
   /* No persona → exercises the Gemini fallback. */
+  /* srv-43: hart has no voiceId, so fallback id is 'hart' → voiceUuid 'hart'
+     gives storage key qwen-hart, matching the assertion. */
   {
     id: 'hart',
     name: 'Hart',
     role: 'supporting',
     color: 'amber',
-    evidence: [{ quote: '“I built it myself, you know.”' }],
+    voiceUuid: 'hart',
+    evidence: [{ quote: '”I built it myself, you know.”' }],
   },
   /* Already designed → freshness-skip. */
   {

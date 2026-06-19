@@ -221,6 +221,32 @@ def test_design_voice_falls_back_to_calibration_pangram_when_unset(fake_qwen_run
     assert engine._base.clone_calls[-1][0] == [engine.CALIBRATION_TEXT]
 
 
+def test_design_voice_writes_voice_uuid_to_manifest(fake_qwen_runtime) -> None:
+    """voiceUuid supplied → persisted in the descriptor (srv-43, inert field)."""
+    import json
+
+    engine = fake_qwen_runtime["engine"]
+    voices_dir = fake_qwen_runtime["dir"]
+    test_uuid = "550e8400-e29b-41d4-a716-446655440000"
+    engine.design_voice("lorian", "a calm, measured older man", "English", None, test_uuid)
+
+    manifest = json.loads((voices_dir / "lorian.json").read_text(encoding="utf-8"))
+    assert manifest["voiceUuid"] == test_uuid
+
+
+def test_design_voice_writes_null_voice_uuid_when_absent(fake_qwen_runtime) -> None:
+    """voiceUuid omitted (None) → descriptor contains null (srv-43, inert field)."""
+    import json
+
+    engine = fake_qwen_runtime["engine"]
+    voices_dir = fake_qwen_runtime["dir"]
+    engine.design_voice("lorian2", "a calm, measured older man", "English", None)
+
+    manifest = json.loads((voices_dir / "lorian2.json").read_text(encoding="utf-8"))
+    assert "voiceUuid" in manifest
+    assert manifest["voiceUuid"] is None
+
+
 # ── design-model race / idle-watchdog (2026-06-02 regression) ────────────
 
 def test_design_voice_survives_design_model_freed_in_the_gap(

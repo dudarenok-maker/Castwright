@@ -1491,7 +1491,7 @@ class QwenEngine(Engine):
             return []
 
     def design_voice(
-        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str]
+        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str], voice_uuid: Optional[str] = None
     ) -> SynthResult:
         """Design + cache a reusable bespoke voice from a persona `instruct`.
         Returns an audition preview (the calibration line spoken in the new
@@ -1570,6 +1570,7 @@ class QwenEngine(Engine):
                 _json.dump(
                     {
                         "voiceId": voice_id,
+                        "voiceUuid": voice_uuid,
                         "instruct": instruct,
                         "language": lang,
                         "refText": ref_text,
@@ -3187,6 +3188,7 @@ async def qwen_design_voice(req: Request) -> Response:
     instruct = body.get("instruct")
     language = body.get("language")
     calibration_text = body.get("calibrationText")
+    voice_uuid = body.get("voiceUuid") if isinstance(body.get("voiceUuid"), str) else None
     if not isinstance(voice_id, str) or not voice_id.strip():
         raise HTTPException(status_code=400, detail="`voiceId` is required.")
     if not isinstance(instruct, str) or not instruct.strip():
@@ -3214,6 +3216,7 @@ async def qwen_design_voice(req: Request) -> Response:
             instruct.strip(),
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
+            voice_uuid,
         )
     except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)

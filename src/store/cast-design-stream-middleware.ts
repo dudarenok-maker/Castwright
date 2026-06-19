@@ -164,11 +164,14 @@ export function createCastDesignMiddleware(): Middleware {
         ),
       onHeartbeat: () =>
         dispatch(castDesignActions.heartbeat({ bookId, lastTickAt: Date.now() })),
-      onCharacterDesigned: ({ characterId: cid, voiceId }) => {
+      onCharacterDesigned: ({ characterId: cid, voiceId, voiceUuid }) => {
         /* Mirror the persisted override into the cast slice so the row flips
            "Needs voice" → "Designed" live. (The `designed` event may carry an
            extra `url` now — ignored; we don't auto-play on first design in v1.) */
         dispatch(castActions.setQwenOverrideName({ characterId: cid, voiceId }));
+        /* srv-43: mirror the voiceUuid so "Play 12s" right after a first design
+           resolves the uuid-keyed cache entry without waiting for a cast refetch. */
+        if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
         dispatch(
           notificationsActions.pushToast({
             kind: 'info',
@@ -184,7 +187,7 @@ export function createCastDesignMiddleware(): Middleware {
            is satisfied by 'done', so it will dispatch clear() as before. */
         dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
       },
-      onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona }) => {
+      onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona, voiceUuid }) => {
         dispatch(
           castDesignActions.previewReady({
             bookId,
@@ -192,6 +195,7 @@ export function createCastDesignMiddleware(): Middleware {
             previewVoiceId,
             previewUrl,
             persona,
+            voiceUuid,
             lastTickAt: Date.now(),
           }),
         );

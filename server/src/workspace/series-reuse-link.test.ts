@@ -424,3 +424,106 @@ describe('pruneStaleReuseLinks', () => {
     expect(await pruneStaleReuseLinks(COALFALL, chars, opts())).toBe(0);
   });
 });
+
+/* srv-43 — voiceUuid propagation through series reuse and clearStaleLink. */
+describe('srv-43: voiceUuid propagation', () => {
+  /* A prior confirmed character in book-1 carries voiceUuid 'U1'. After
+     linkSeriesReuseAtAnalysis runs on book-2, the matched character should
+     inherit that same uuid so both books resolve to ONE .pt file. */
+  it('reused character inherits the source voiceUuid via projectVoice', async () => {
+    const PRIOR_WITH_UUID: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: {
+          id: 'wren',
+          name: 'Wren',
+          gender: 'female',
+          ageRange: 'teen',
+          voiceId: 'wren',
+          voiceUuid: 'U1',
+        },
+      },
+    ];
+    const options: LinkSeriesReuseOptions = {
+      ...baseOptions(),
+      scanLibrary: async () => PRIOR_WITH_UUID,
+      castLoader: async (bookId: string) =>
+        bookId === BOOK1
+          ? [
+              {
+                id: 'wren',
+                ttsEngine: 'qwen' as const,
+                voiceUuid: 'U1',
+                overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+                voiceStyle: 'a poised, confident teenage girl',
+              },
+            ]
+          : null,
+    };
+
+    const characters: LinkableCharacter[] = [{ id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen' }];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, options);
+    expect(linked).toBe(1);
+    expect(characters[0].voiceUuid).toBe('U1');
+  });
+
+  /* clearStaleLink on a 'reused' character must drop voiceUuid so the next
+     ensureCharacterVoiceUuid call mints a FRESH one, not the old shared value. */
+  it('clearStaleLink on a reused character drops voiceUuid', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        voiceId: 'narrator',
+        voiceUuid: 'OLD-UUID',
+        voiceState: 'reused',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+        voiceStyle: 'British female',
+        matchedFrom: { bookId: BOOK1, characterId: 'narrator', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+
+    /* pruneStaleReuseLinks calls clearStaleLink — drive it through the public API. */
+    const droppedCount = await pruneStaleReuseLinks(BOOK2, chars, {
+      resolveAuthorSeries: async (id) => (id === BOOK2 ? { author: AUTHOR, series: SERIES } : null),
+      positions: async () =>
+        new Map<string, number | null>([
+          [BOOK1, 1],
+          [BOOK2, 2],
+        ]),
+    });
+    expect(droppedCount).toBe(1);
+    expect(chars[0].voiceUuid).toBeUndefined();
+    expect(chars[0].voiceState).toBe('generated');
+  });
+
+  /* A tuned/locked character keeps its voiceUuid when clearStaleLink is called —
+     only the stale badge is stripped, not the user-owned voice identity. */
+  it('clearStaleLink on a tuned character preserves voiceUuid', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        voiceUuid: 'TUNED-UUID',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'my-custom-voice' } },
+        matchedFrom: { bookId: BOOK1, characterId: 'narrator', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+
+    const droppedCount = await pruneStaleReuseLinks(BOOK2, chars, {
+      resolveAuthorSeries: async (id) => (id === BOOK2 ? { author: AUTHOR, series: SERIES } : null),
+      positions: async () =>
+        new Map<string, number | null>([
+          [BOOK1, 1],
+          [BOOK2, 2],
+        ]),
+    });
+    expect(droppedCount).toBe(1);
+    /* tuned voice keeps its uuid */
+    expect(chars[0].voiceUuid).toBe('TUNED-UUID');
+    expect(chars[0].voiceState).toBe('tuned');
+  });
+});

@@ -26,7 +26,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter } from './qwen-voice.js';
+import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -115,9 +115,20 @@ async function runSingleDesign(
     job.phase = 'designing';
     broadcast(job, { type: 'phase', phase: 'designing', characterId: job.characterId });
 
+    /* srv-43 — mint/persist voiceUuid before the core names the .pt, matching
+       the bulk-job and REST-endpoint paths so every design entry point produces
+       the same uuid-keyed cache key. */
+    const seriesFilterForUuid = seriesFilter;
+    const voiceUuid = await ensureCharacterVoiceUuid(
+      job.bookDir,
+      job.characterId,
+      seriesFilterForUuid,
+    );
+    const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
+
     const { voiceId, url } = await designQwenVoiceForCharacter({
       bookDir: job.bookDir,
-      character,
+      character: characterForDesign,
       characterId: job.characterId,
       persona,
       sampleVoiceId,
@@ -131,7 +142,9 @@ async function runSingleDesign(
 
     if (job.preview) {
       /* Re-design: hold the preview, do NOT persist. The drawer's A/B compare
-         promotes (promote-voice) or discards (discard-voice). */
+         promotes (promote-voice) or discards (discard-voice).
+         srv-43: include voiceUuid so the drawer can resolve the uuid-keyed cache
+         entry immediately, without waiting for a cast refetch. */
       endJob(job, {
         type: 'preview_ready',
         characterId: job.characterId,
@@ -139,6 +152,7 @@ async function runSingleDesign(
         previewVoiceId: voiceId,
         previewUrl: url,
         persona,
+        voiceUuid: characterForDesign.voiceUuid,
       });
       return;
     }
@@ -152,6 +166,7 @@ async function runSingleDesign(
       name: job.characterName,
       voiceId,
       url,
+      voiceUuid: characterForDesign.voiceUuid,
     });
   } catch (e) {
     const message = (e as Error).message || 'Voice design failed.';

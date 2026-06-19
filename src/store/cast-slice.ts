@@ -112,6 +112,18 @@ export const castSlice = createSlice({
       const qwen = (otv.qwen ??= { name: '' });
       qwen.name = voiceId;
     },
+    /* srv-43 — mirror a freshly-minted voiceUuid into redux so a "Play 12s"
+       immediately after design resolves the uuid-keyed cache entry without
+       waiting for the next cast refetch. No-op for an unknown character. */
+    setCharacterVoiceUuid: (
+      s,
+      a: PayloadAction<{ characterId: string; voiceUuid: string }>,
+    ) => {
+      const { characterId, voiceUuid } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      c.voiceUuid = voiceUuid;
+    },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
        badge + count update live (the DELETE route already removed it from
        cast.json + disk — this is local-only, no persist rule, mirroring

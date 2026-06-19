@@ -33,19 +33,21 @@ function writeManifest(name: string, language: string): void {
   writeFileSync(join(qwenVoicesDir, `${name}.json`), JSON.stringify({ language }));
 }
 
-function char(id: string, designedName?: string): CastCharacter {
+function char(id: string, designedName?: string, voiceUuid?: string): CastCharacter {
   return {
     id,
     name: id,
     ttsEngine: 'qwen',
+    ...(voiceUuid !== undefined ? { voiceUuid } : {}),
     overrideTtsVoices: designedName ? { qwen: { name: designedName } } : {},
   };
 }
 
 describe('clearMismatchedDesignedVoices', () => {
   it('clears a designed Qwen voice whose manifest language ≠ the book language', async () => {
-    writeManifest('voice-en', 'English'); // designed under an English book
-    const cast = [char('hero', 'voice-en')];
+    /* Character id 'hero-mismatch' → storage key 'qwen-hero-mismatch'. */
+    writeManifest('qwen-hero-mismatch', 'English'); // designed under an English book
+    const cast = [char('hero-mismatch', 'Wren')];
 
     await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
 
@@ -53,16 +55,18 @@ describe('clearMismatchedDesignedVoices', () => {
   });
 
   it('keeps a designed voice whose manifest language matches', async () => {
-    writeManifest('voice-ru', 'Russian');
-    const cast = [char('hero', 'voice-ru')];
+    /* Character id 'hero-match' → storage key 'qwen-hero-match'. */
+    writeManifest('qwen-hero-match', 'Russian');
+    const cast = [char('hero-match', 'Remy')];
 
     await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
 
-    expect(cast[0].overrideTtsVoices?.qwen?.name).toBe('voice-ru');
+    expect(cast[0].overrideTtsVoices?.qwen?.name).toBe('Remy');
   });
 
   it('clears when the manifest file is missing entirely', async () => {
-    const cast = [char('hero', 'no-such-voice')];
+    /* No manifest written for 'hero-missing' → missing → cleared. */
+    const cast = [char('hero-missing', 'no-such-voice')];
 
     await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
 
@@ -72,6 +76,30 @@ describe('clearMismatchedDesignedVoices', () => {
   it('leaves undesigned characters untouched', async () => {
     const cast = [char('narrator')]; // no qwen override
     await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+    expect(cast[0].overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  /* srv-43 regression: the manifest lives at qwen-<uuid>.json, not qwen-<name>.json */
+  it('srv-43: uuid-backed voice with matching-language manifest at qwen-<uuid>.json is NOT cleared', async () => {
+    const uuid = 'abc123xyz';
+    /* Manifest on disk is keyed by uuid (qwen-<uuid>.json), NOT by the human name. */
+    writeManifest(`qwen-${uuid}`, 'Russian');
+    /* The character has both a voiceUuid AND a qwen.name (human label). */
+    const cast = [char('hero', 'wren', uuid)];
+
+    await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+
+    expect(cast[0].overrideTtsVoices?.qwen?.name).toBe('wren');
+  });
+
+  it('srv-43: discarded-preview character (voiceUuid, no qwen override) is skipped', async () => {
+    /* A character that carries voiceUuid but never had an override committed —
+       the guard (`if (!designedName) continue`) must skip it without error. */
+    const cast = [char('hero', undefined /* no name */, 'orphan-uuid')];
+
+    await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+
+    /* No crash, and the non-existent qwen slot remains absent. */
     expect(cast[0].overrideTtsVoices?.qwen).toBeUndefined();
   });
 });

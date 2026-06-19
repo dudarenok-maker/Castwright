@@ -292,6 +292,12 @@ export function ProfileDrawer({
       (voice?.ttsVoice?.provider === 'qwen' ? voice.ttsVoice.name : null) ??
       null,
   );
+  /* srv-43: voiceUuid of the just-designed or just-approved voice, seeded
+     before the cast refetch so "Play 12s" can resolve the uuid-keyed cache
+     entry immediately. Starts from the persisted value (if any). */
+  const [stagedVoiceUuid, setStagedVoiceUuid] = useState<string | undefined>(
+    character.voiceUuid ?? voice?.voiceUuid,
+  );
   /* URL of the most-recent audition preview. Now a stable cached-sample URL
      (the design route writes the audition into the voice-sample cache), so
      there's no blob to revoke — the ref only feeds `designPlaying` below. */
@@ -613,11 +619,14 @@ export function ProfileDrawer({
        `designedVoiceId` (live this session, pre-Save), not in the
        sample subject. Inject it into overrideTtsVoices.qwen so the server's
        pickVoiceForEngine('qwen', …) resolves it; preserve any other-engine
-       slots already on the subject. Non-qwen engines pass through unchanged. */
+       slots already on the subject. Non-qwen engines pass through unchanged.
+       srv-43: also inject voiceUuid so qwenStorageKey resolves the uuid-keyed
+       cache entry the design route wrote, instead of the legacy name-derived key. */
     const requestSubject =
       effectiveEngine === 'qwen' && designedVoiceId
         ? {
             ...sampleSubject,
+            voiceUuid: stagedVoiceUuid ?? voice?.voiceUuid ?? singleDesign?.preview?.voiceUuid ?? character.voiceUuid,
             overrideTtsVoices: {
               ...(voice?.overrideTtsVoices ?? {}),
               qwen: { name: designedVoiceId },
@@ -1062,12 +1071,15 @@ export function ProfileDrawer({
                   designModelKey={effectiveSampleModelKey}
                   sampleVoiceId={sampleVoiceId}
                   initial={voiceCompareInitial}
-                  onApprove={({ voiceId, persona: approvedPersona, previewUrl }) => {
+                  onApprove={({ voiceId, persona: approvedPersona, previewUrl, voiceUuid: approvedUuid }) => {
                     /* Stage the PROMOTED (stable) voice into the drawer; Save
                        persists it series-scoped exactly as before. */
                     setPersona(approvedPersona);
                     setDesignedVoiceId(voiceId);
                     designPreviewUrlRef.current = previewUrl;
+                    /* srv-43: seed the uuid so "Play 12s" can resolve the
+                       uuid-keyed cache entry before the next cast refetch. */
+                    if (approvedUuid) setStagedVoiceUuid(approvedUuid);
                     dispatch(
                       castActions.setVoiceStyle({
                         characterId: character.id,

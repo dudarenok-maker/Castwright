@@ -167,6 +167,21 @@ describe('single-design job — preview (re-design)', () => {
     });
     expect(applyOverrideStub).not.toHaveBeenCalled();
   });
+
+  /* srv-43: preview_ready must carry voiceUuid so the drawer can resolve the
+     uuid-keyed sample-cache entry before the next cast refetch.
+     Fail-before: voiceUuid was absent from the event; pass-after: it is a non-empty string. */
+  it('emits preview_ready with a voiceUuid field (srv-43)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'warmer', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b', preview: true });
+
+    expect(res.status).toBe(200);
+    const events = collectSse(res);
+    const ready = events.find((e) => e.type === 'preview_ready');
+    expect(typeof ready?.voiceUuid).toBe('string');
+    expect(ready?.voiceUuid).not.toBe('');
+  });
 });
 
 describe('single-design job — reattach + busy', () => {

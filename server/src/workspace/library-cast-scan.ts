@@ -15,6 +15,8 @@ export interface LibraryCastCharacter {
   name?: string;
   role?: string;
   voiceId?: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   aliases?: string[];
   attributes?: string[];
   gender?: 'male' | 'female' | 'neutral';

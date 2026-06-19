@@ -90,8 +90,12 @@ const characters = [
     role: 'supporting',
     color: 'lilac',
     voiceId: 'v_maerin',
+    /* srv-43: pre-seed a known voiceUuid so the main test suite produces
+       deterministic qwen-v_maerin storage keys (qwenStorageKey uses uuid first).
+       Tests that exercise the auto-mint path use their own separate bookDirs. */
+    voiceUuid: 'v_maerin',
     voiceStyle: 'a poised, confident teenage girl, clear and warm',
-    evidence: [{ quote: `“${MAERIN_LINE}”` }, { quote: 'Wait.' }],
+    evidence: [{ quote: `”${MAERIN_LINE}”` }, { quote: 'Wait.' }],
   },
   { id: 'nopersona', name: 'Nopersona', role: 'extra', color: 'amber' },
   /* Designed voice via an explicit per-character override (name diverges from
@@ -240,6 +244,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     const sent = JSON.parse(init.body);
     expect(sent).toEqual({
       voiceId: 'qwen-v_maerin',
+      voiceUuid: 'v_maerin',
       instruct: 'a poised, confident teenage girl, clear and warm',
       language: 'English',
       calibrationText: MAERIN_LINE,
@@ -826,5 +831,188 @@ describe('qwenVoicePtPath containment', () => {
   it('rejects a poisoned voice name', async () => {
     const { qwenVoicePtPath } = await import('./qwen-voice.js');
     expect(() => qwenVoicePtPath('../../evil')).toThrow();
+  });
+});
+
+describe('srv-43 — qwenStorageKey routing through design-voice', () => {
+  /* These tests verify that the storage key used by designQwenVoiceForCharacter
+     follows qwenStorageKey: uuid-backed voices go to qwen-<uuid>.pt; legacy
+     (no uuid) voices go to qwen-<voiceId>.pt (behaviour-preserving). */
+
+  it('character with pre-seeded voiceUuid designs at qwen-<uuid>.pt (idempotent — no re-mint)', async () => {
+    /* Maerin has voiceUuid:'v_maerin' pre-seeded. The route calls ensureCharacterVoiceUuid
+       which returns the existing uuid untouched (idempotent). The sidecar receives
+       qwen-v_maerin (qwenStorageKey uses the uuid). */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    /* Storage key is derived from voiceUuid:'v_maerin' → qwen-v_maerin. */
+    expect(res.body.voiceId).toBe('qwen-v_maerin');
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.voiceId).toBe('qwen-v_maerin');
+    /* voiceUuid is unchanged on the character. */
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin');
+    expect(maerin?.voiceUuid).toBe('v_maerin');
+  });
+
+  it('character with voiceUuid designs at qwen-<uuid>.pt', async () => {
+    /* Temporarily write a character with voiceUuid set. */
+    const uuid = 'V1StGXR8Z5';
+    const charsWithUuid = characters.map((c) =>
+      c.id === 'maerin' ? { ...c, voiceUuid: uuid } : c,
+    );
+    writeBookOnDisk(charsWithUuid);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe(`qwen-${uuid}`);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.voiceId).toBe(`qwen-${uuid}`);
+  });
+});
+
+describe('srv-43 mint + collision regression', () => {
+  /* Unit tests for ensureCharacterVoiceUuid and the end-to-end collision
+     regression: two standalone books with the same character id/voiceId must
+     design to DIFFERENT .pt paths after srv-43 (on pre-srv-43 code both resolve
+     to qwen-wren.pt). */
+
+  let bookDirA: string;
+  let bookDirB: string;
+  let ensureCharacterVoiceUuidFn: typeof import('./qwen-voice.js').ensureCharacterVoiceUuid;
+  let readJson: typeof import('../workspace/state-io.js').readJson;
+  let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
+
+  beforeAll(async () => {
+    ({ ensureCharacterVoiceUuid: ensureCharacterVoiceUuidFn } = await import('./qwen-voice.js'));
+    ({ readJson } = await import('../workspace/state-io.js'));
+    ({ castJsonPath } = await import('../workspace/paths.js'));
+  });
+
+  beforeEach(async () => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    /* Two independent standalone books each with {id:'wren', voiceId:'wren'} */
+    bookDirA = await mkdtemp(join(tmpdir(), 'srv43-bookA-'));
+    await mkdir(join(bookDirA, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(bookDirA, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'wren', voiceId: 'wren', voiceStyle: 'a bright voice', evidence: [{ quote: '"Hello."' }] },
+        ],
+      }),
+    );
+
+    bookDirB = await mkdtemp(join(tmpdir(), 'srv43-bookB-'));
+    await mkdir(join(bookDirB, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(bookDirB, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'wren', voiceId: 'wren', voiceStyle: 'a bright voice', evidence: [{ quote: '"Hello."' }] },
+        ],
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(bookDirA, { recursive: true, force: true });
+    await rm(bookDirB, { recursive: true, force: true });
+  });
+
+  it('mints a voiceUuid on the character and persists it', async () => {
+    const uuid = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    expect(uuid).toMatch(/.+/);
+    const cast = await readJson<{ characters: Array<{ id: string; voiceUuid?: string }> }>(castJsonPath(bookDirA));
+    expect(cast!.characters.find((c) => c.id === 'wren')!.voiceUuid).toBe(uuid);
+  });
+
+  it('is idempotent — a second call returns the same uuid, no re-mint', async () => {
+    const a = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    const b = await ensureCharacterVoiceUuidFn(bookDirA, 'wren');
+    expect(b).toBe(a);
+  });
+
+  it('two same-named characters in different standalone books get distinct .pt paths (collision regression)', async () => {
+    /* Marquee regression: on pre-srv-43 code both books design to qwen-wren.pt
+       (colliding). After srv-43 each book mints a unique voiceUuid so the sidecar
+       receives distinct storage keys. We drive the REAL design route for each book
+       and capture the voiceId the sidecar fetch body carries — that is the .pt
+       name. A passing test on pre-srv-43 code would see both equal 'qwen-wren'. */
+
+    /* Create two standalone books inside the shared workspace so findBookByBookId
+       can locate them. Different titles → different bookIds. Both carry 'wren'
+       with no voiceUuid so ensureCharacterVoiceUuid mints fresh for each. */
+    const { makeBookId } = await import('../workspace/paths.js');
+    const wrenChar = {
+      id: 'wren',
+      voiceId: 'wren',
+      voiceStyle: 'a bright voice',
+      evidence: [{ quote: '"Hello."' }],
+    };
+    const designWrenBody = { sampleVoiceId: 'wren', modelKey: QWEN_KEY };
+
+    function writeStandaloneBook(title: string, chars: object[]): string {
+      const bId = makeBookId(AUTHOR, 'Standalones', title);
+      const dir = join(workspaceRoot, 'books', AUTHOR, 'Standalones', title);
+      mkdirSync(join(dir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(dir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: bId,
+          manuscriptId: `m_${bId}`,
+          title,
+          author: AUTHOR,
+          series: 'Standalones',
+          seriesPosition: 0,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+      writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: chars }));
+      return bId;
+    }
+
+    const bookIdA = writeStandaloneBook('Collision Alpha', [wrenChar]);
+    const bookIdB = writeStandaloneBook('Collision Beta', [wrenChar]);
+
+    /* Design Book A — capture what voiceId the sidecar was asked for. */
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(okSidecarResponse());
+    const resA = await request(app)
+      .post(`/api/books/${bookIdA}/cast/wren/design-voice`)
+      .send(designWrenBody);
+    expect(resA.status).toBe(200);
+    const sentA = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    /* Design Book B — reset the mock so call[0] belongs to Book B. */
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(okSidecarResponse());
+    const resB = await request(app)
+      .post(`/api/books/${bookIdB}/cast/wren/design-voice`)
+      .send(designWrenBody);
+    expect(resB.status).toBe(200);
+    const sentB = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    /* The two sidecar storage keys must diverge (the whole point of srv-43). */
+    expect(sentA.voiceId).toMatch(/^qwen-.+/);
+    expect(sentB.voiceId).toMatch(/^qwen-.+/);
+    expect(sentA.voiceId).not.toBe(sentB.voiceId);
+
+    /* Clean up the two extra books from the workspace. */
+    rmSync(join(workspaceRoot, 'books', AUTHOR, 'Standalones'), { recursive: true, force: true });
   });
 });

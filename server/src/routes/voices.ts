@@ -38,7 +38,11 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import { resolveVoiceAssignment, type TtsVoiceAssignment } from '../tts/voice-mapping.js';
+import {
+  resolveVoiceAssignment,
+  qwenStorageKey,
+  type TtsVoiceAssignment,
+} from '../tts/voice-mapping.js';
 import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import {
@@ -120,6 +124,10 @@ interface DerivedVoice {
       the response. New clients read `overrideTtsVoices`. Populated from
       the active engine's slot when present. */
   overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time.
+      Copied from the source Character. Absent on pre-srv-43 designs and
+      catalog voices. */
+  voiceUuid?: string;
 }
 
 /* Read-time migration. Older cast.json files (pre-Kokoro) stored a
@@ -272,6 +280,13 @@ async function aggregateVoices(
              voiceId-less character — matching the frontend's sampleScopeFor —
              so it can diverge from `id` above. Compute it explicitly. */
           const sampleScope = c.voiceId ?? `char-${c.id}`;
+          /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
+             Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
+             Used to key generated-flag lookups against renderedQwenNames (which
+             contains STORAGE keys from segment snapshots), independently of the
+             human display name emitted on ttsVoice.name below. */
+          const qwenStoreKey =
+            engine === 'qwen' ? qwenStorageKey({ voiceUuid: c.voiceUuid, voiceId: c.voiceId }, id) : null;
           const overrideMap = c.overrideTtsVoices ?? null;
           const overrideForEngine = overrideMap?.[engine] ?? null;
           const legacyShape = overrideForEngine ? { engine, name: overrideForEngine.name } : null;
@@ -280,11 +295,21 @@ async function aggregateVoices(
             existing.books.add(state.bookId);
             existing.usedIn = existing.books.size;
             /* Promote to generated if this book rendered the voice, even
-               when the identity fields froze on an earlier (unrendered) book. */
+               when the identity fields froze on an earlier (unrendered) book.
+               srv-43 Wave 2: compare against the STORAGE key (qwen-<uuid> or
+               qwen-<voiceId>), not ttsVoice.name which is now the human display
+               name (qwen-<voiceId>) regardless of whether a uuid is present. */
+            const existingStoreKey =
+              engine === 'qwen'
+                ? qwenStorageKey(
+                    { voiceUuid: existing.voiceUuid, voiceId: existing.id },
+                    existing.id,
+                  )
+                : null;
             if (
               !existing.generated &&
-              existing.ttsVoice.name &&
-              renderedQwenNames.has(existing.ttsVoice.name)
+              existingStoreKey &&
+              renderedQwenNames.has(existingStoreKey)
             ) {
               existing.generated = true;
             }
@@ -322,7 +347,7 @@ async function aggregateVoices(
             continue;
           }
           const isCurrent = !!currentBookId && state.bookId === currentBookId;
-          const ttsVoice = resolveVoiceAssignment(
+          const ttsVoiceRaw = resolveVoiceAssignment(
             engine,
             {
               id,
@@ -332,6 +357,17 @@ async function aggregateVoices(
             },
             buildHintFromCast(c),
           );
+          /* srv-43 Wave 2: for a DESIGNED Qwen voice (ttsVoice.name is non-empty,
+             meaning a qwen override exists), replace the opaque storage key
+             (qwen-<uuid>) with the human display name (qwen-<voiceId>).
+             This restores the cast-view label and makes the cross-book dedup
+             bucket on the stable per-voice-id name rather than the uuid.
+             Undesigned qwen voices (ttsVoice.name === '') and all other engines
+             are left untouched. */
+          const ttsVoice: TtsVoiceAssignment =
+            engine === 'qwen' && ttsVoiceRaw.name
+              ? { ...ttsVoiceRaw, name: `qwen-${id}` }
+              : ttsVoiceRaw;
           acc.set(id, {
             id,
             character: c.name ?? id,
@@ -352,11 +388,15 @@ async function aggregateVoices(
             source: isCurrent ? 'current' : 'library',
             reusable: isNarratorId(id, c.name) || undefined,
             pinned: pinned.has(id) || undefined,
-            generated: renderedQwenNames.has(ttsVoice.name) || undefined,
+            /* srv-43 Wave 2: key on the STORAGE key (qwenStoreKey) so a uuid-
+               bearing voice (storage key = qwen-<uuid>) still matches the
+               rendered snapshot even though ttsVoice.name is now qwen-<voiceId>. */
+            generated: (qwenStoreKey ? renderedQwenNames.has(qwenStoreKey) : false) || undefined,
             sampled: hasCachedQwenSample(sampleScope) || undefined,
             ttsVoice,
             overrideTtsVoices: overrideMap,
             overrideTtsVoice: legacyShape,
+            voiceUuid: c.voiceUuid,
             books: new Set([state.bookId]),
           });
         }

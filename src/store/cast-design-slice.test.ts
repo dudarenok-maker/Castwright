@@ -152,4 +152,29 @@ describe('single-design snapshot', () => {
       preview: { characterId: 'c1', previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm' },
     });
   });
+
+  /* srv-43: previewReady with voiceUuid — the slice must persist it so the
+     drawer can resolve the uuid-keyed sample-cache entry before a cast refetch. */
+  it('previewReady persists voiceUuid in the preview payload', () => {
+    let s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
+      bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'redesign', lastTickAt: 10,
+    }));
+    s = castDesignSlice.reducer(s, castDesignActions.previewReady({
+      bookId: 'b1', characterId: 'c1',
+      previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm',
+      voiceUuid: 'uuid-c1-abc123', lastTickAt: 20,
+    }));
+    expect(s.active?.preview?.voiceUuid).toBe('uuid-c1-abc123');
+  });
+
+  it('previewReady without voiceUuid leaves voiceUuid undefined', () => {
+    let s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
+      bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'redesign', lastTickAt: 10,
+    }));
+    s = castDesignSlice.reducer(s, castDesignActions.previewReady({
+      bookId: 'b1', characterId: 'c1',
+      previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm', lastTickAt: 20,
+    }));
+    expect(s.active?.preview?.voiceUuid).toBeUndefined();
+  });
 });

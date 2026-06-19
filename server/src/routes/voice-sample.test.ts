@@ -317,6 +317,34 @@ describe('voice-sample router', () => {
     });
   });
 
+  describe('srv-43 voiceUuid resolution', () => {
+    /* A Qwen /sample whose voice carries voiceUuid should resolve the
+       storage key as `qwen-<uuid>`, not `qwen-<name>`. The profile drawer
+       must include voiceUuid on the voice it POSTs so the player hits the
+       cache the design route wrote under that uuid key. */
+    it('resolves qwen-<uuid> when voice carries voiceUuid (not qwen-<name>)', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_wren/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_wren',
+            character: 'Wren',
+            attributes: [],
+            voiceUuid: 'U1',
+            overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+          },
+          text: 'Hello from Wren.',
+        });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      const args = synthesize.mock.calls[0][0] as { voiceName: string };
+      /* With voiceUuid present the storage key MUST be qwen-U1, not qwen-wren. */
+      expect(args.voiceName).toBe('qwen-U1');
+    });
+  });
+
   describe('provider errors', () => {
     it('503 sidecar_down when the sidecar is unreachable', async () => {
       synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));

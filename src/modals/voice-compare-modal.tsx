@@ -44,7 +44,7 @@ interface Props {
   /** The proposed (preview) voice the drawer just designed before opening this
       form — `voiceId` is the staged `…-preview` id. */
   initial: { voiceId: string; previewUrl: string; persona: string };
-  onApprove: (next: { voiceId: string; persona: string; previewUrl: string }) => void;
+  onApprove: (next: { voiceId: string; persona: string; previewUrl: string; voiceUuid?: string }) => void;
   onClose: () => void;
 }
 
@@ -85,10 +85,13 @@ export function VoiceCompareModal({
       matchMode: 'prefix',
       play: async () => {
         /* Inject the resolved Qwen voiceId into the override slot the server
-           reads; non-Qwen current voices pass through unchanged. */
+           reads; non-Qwen current voices pass through unchanged.
+           srv-43: also carry voiceUuid so qwenStorageKey resolves the
+           uuid-keyed cache entry rather than the legacy name-derived key. */
         const requestVoice: Voice = currentQwenName
           ? {
               ...currentSubject,
+              voiceUuid: currentSubject.voiceUuid ?? character.voiceUuid,
               overrideTtsVoices: {
                 ...(currentSubject.overrideTtsVoices ?? {}),
                 qwen: { name: currentQwenName },
@@ -178,12 +181,12 @@ export function VoiceCompareModal({
       /* Commit the staged preview onto the character's stable voiceId, then
          hand the REAL id + persona back to the drawer to stage; the drawer's
          Save persists the override series-scoped. */
-      const { voiceId, url } = await api.promoteQwenVoice(bookId, character.id, {
+      const { voiceId, url, voiceUuid } = await api.promoteQwenVoice(bookId, character.id, {
         previewVoiceId: proposed.voiceId,
         sampleVoiceId,
         modelKey: designModelKey,
       });
-      onApprove({ voiceId, persona: persona.trim(), previewUrl: url });
+      onApprove({ voiceId, persona: persona.trim(), previewUrl: url, voiceUuid });
     } catch (e) {
       setError((e as Error).message || 'Could not keep the proposed voice.');
     } finally {

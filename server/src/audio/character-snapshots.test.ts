@@ -46,4 +46,26 @@ describe('buildCharacterSnapshots', () => {
     const snaps = buildCharacterSnapshots(cast, new Set(['narrator']), 'kokoro', new Map());
     expect(snaps.narrator.attributes).toBeUndefined();
   });
+
+  it('legacy Qwen voice without voiceUuid resolves to qwen-<voiceId> — no drift from srv-43 (srv-43 regression guard)', () => {
+    /* An UNCHANGED legacy character: designed before srv-43, so it carries
+       overrideTtsVoices.qwen.name but NO voiceUuid. The snapshot's
+       resolvedVoiceName must still be qwen-<voiceId> via the legacy fallback
+       path — not '' (undesigned) and not a uuid-based key. This asserts that
+       the srv-43 changes introduce no snapshot drift for voices that were never
+       re-designed after the upgrade. */
+    const legacy: CastCharacter[] = [
+      {
+        id: 'char-wren',
+        name: 'Wren',
+        gender: 'female',
+        voiceId: 'wren',
+        // no voiceUuid — pre-srv-43 voice
+        overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+        ttsEngine: 'qwen',
+      },
+    ];
+    const snaps = buildCharacterSnapshots(legacy, new Set(['char-wren']), 'qwen', new Map());
+    expect(snaps['char-wren'].resolvedVoiceName).toBe('qwen-wren');
+  });
 });

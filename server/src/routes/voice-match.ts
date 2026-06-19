@@ -69,6 +69,8 @@ export interface Candidate {
    re-walking the books tree. */
 export interface LibraryVoice {
   voiceId: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   bookId: string;
   bookTitle: string;
   characterId: string;
@@ -85,6 +87,7 @@ function projectLibraryVoice(rec: LibraryCharacterRecord): LibraryVoice | null {
   if (!voiceId) return null;
   return {
     voiceId,
+    voiceUuid: c.voiceUuid,
     bookId: rec.bookId,
     bookTitle: rec.bookTitle,
     characterId: c.id,

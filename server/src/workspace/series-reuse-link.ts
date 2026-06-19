@@ -52,6 +52,8 @@ export interface LinkableCharacter {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   attributes?: string[];
   voiceId?: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   voiceState?: 'generated' | 'tuned' | 'reused' | 'locked';
   ttsEngine?: TtsEngine | null;
   overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
@@ -99,6 +101,7 @@ function projectVoice(record: LibraryCharacterRecord): LibraryVoice | null {
   if (!voiceId) return null;
   return {
     voiceId,
+    voiceUuid: c.voiceUuid,
     bookId: record.bookId,
     bookTitle: record.bookTitle,
     characterId: c.id,
@@ -162,6 +165,7 @@ function clearStaleLink(c: LinkableCharacter): void {
     delete c.overrideTtsVoices;
     delete c.voiceStyle;
     delete c.ttsEngine;
+    delete c.voiceUuid;          // srv-43 — drop the inherited identity on unlink
   }
 }
 
@@ -306,6 +310,9 @@ export async function linkSeriesReuseAtAnalysis(
     /* Stamp the link. Keep the actual score on confidence so a low-confidence
        auto-link stays visible/overridable in the UI. */
     c.voiceId = best.voice.voiceId;
+    /* srv-43 — inherit the source voice's immutable identity so both books
+       share one uuid → one .pt (the intended reuse). */
+    if (best.voice.voiceUuid) c.voiceUuid = best.voice.voiceUuid;
     c.matchedFrom = {
       bookId: best.voice.bookId,
       characterId: best.voice.characterId,
@@ -335,6 +342,7 @@ export async function linkSeriesReuseAtAnalysis(
         c.ttsEngine = c.ttsEngine ?? resolved.ttsEngine ?? null;
         c.overrideTtsVoices = { ...resolved.overrideTtsVoices, ...(c.overrideTtsVoices ?? {}) };
         c.voiceStyle = c.voiceStyle ?? resolved.voiceStyle;
+        c.voiceUuid = c.voiceUuid ?? resolved.voiceUuid;
       }
     }
 

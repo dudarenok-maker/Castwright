@@ -15,6 +15,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   buildSentenceGroups,
   synthesiseChapter,
+  toVoiceLike,
   resolveQwenTokenBudget,
   DEFAULT_QWEN_BATCH_TOKEN_BUDGET,
   ChapterSynthTimeoutError,
@@ -22,6 +23,7 @@ import {
   RecycleStormError,
   type CastCharacter,
 } from './synthesise-chapter.js';
+import { pickVoiceForEngine } from './voice-mapping.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type {
   SynthesizeInput,
@@ -1228,9 +1230,10 @@ describe('synthesiseChapter per-character engine routing (plan 108)', () => {
           : { provider: kokoro, modelKey: 'kokoro-v1' },
     });
 
-    // Maerin's line went to the Qwen provider with her designed voiceId + qwen modelKey.
+    // Maerin's line went to the Qwen provider with her storage key + qwen modelKey.
+    // srv-43: voiceUuid absent → storage key = qwen-<voice.id> = qwen-maerin.
     expect(qwen.calls).toHaveLength(1);
-    expect(qwen.calls[0].voiceName).toBe('maerin-designed');
+    expect(qwen.calls[0].voiceName).toBe('qwen-maerin');
     expect(qwen.calls[0].modelKey).toBe('qwen3-tts-0.6b');
     // The narrator's two lines used the default (kokoro) provider + a kokoro voice.
     expect(kokoro.calls).toHaveLength(2);
@@ -1403,13 +1406,14 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       id: 'narrator',
       name: 'Narrator',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'narr-q' } },
+      /* srv-43: storage key format = qwen-<id>; voiceUuid absent so fallback. */
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
     },
     {
       id: 'maerin',
       name: 'Maerin',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'maerin-q' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-maerin' } },
     },
   ];
 
@@ -1461,10 +1465,10 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     expect(batchP.singleCalls).toHaveLength(1);
     expect(batchP.batchCalls).toHaveLength(1);
     expect(batchP.batchCalls[0].items.map((i) => i.voiceName)).toEqual([
-      'maerin-q',
-      'narr-q',
-      'maerin-q',
-      'narr-q',
+      'qwen-maerin',
+      'qwen-narrator',
+      'qwen-maerin',
+      'qwen-narrator',
     ]);
   });
 
@@ -2024,7 +2028,8 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
 
   it('does NOT fall back a designed Qwen voice when the engine is available', async () => {
     const cast: CastCharacter[] = [
-      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'marlow-q' } } },
+      /* srv-43: storage key = qwen-<id> when no voiceUuid. */
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
     ];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
@@ -2038,7 +2043,7 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
     });
 
     expect(qwen.calls).toHaveLength(1);
-    expect(qwen.calls[0].voiceName).toBe('marlow-q');
+    expect(qwen.calls[0].voiceName).toBe('qwen-marlow');
     expect(kokoro.calls).toHaveLength(0);
     const body = result.segments.find((s) => s.kind !== 'title');
     expect(body?.renderedFallbackEngine).toBeUndefined();
@@ -2046,7 +2051,8 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
 
   it('falls a designed Qwen voice back to Kokoro when the engine is unavailable', async () => {
     const cast: CastCharacter[] = [
-      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'marlow-q' } } },
+      /* srv-43: storage key = qwen-<id> when no voiceUuid. */
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
     ];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
@@ -2146,7 +2152,8 @@ describe('synthesiseChapter — forbidKokoroFallback (fs-2 never-cross-language)
 
   it('renders a designed Qwen voice normally when Qwen is available (no throw)', async () => {
     const cast: CastCharacter[] = [
-      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'sofiya-q' } } },
+      /* srv-43: storage key = qwen-<id> when no voiceUuid. */
+      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'qwen-sofiya' } } },
     ];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
@@ -2162,7 +2169,7 @@ describe('synthesiseChapter — forbidKokoroFallback (fs-2 never-cross-language)
     });
 
     expect(qwen.calls).toHaveLength(1);
-    expect(qwen.calls[0].voiceName).toBe('sofiya-q');
+    expect(qwen.calls[0].voiceName).toBe('qwen-sofiya');
     expect(kokoro.calls).toHaveLength(0);
     const body = result.segments.find((s) => s.kind !== 'title');
     expect(body?.renderedFallbackEngine).toBeUndefined();
@@ -2171,7 +2178,8 @@ describe('synthesiseChapter — forbidKokoroFallback (fs-2 never-cross-language)
   it('blocks the title beat too — an undesigned Qwen narrator throws before any synth', async () => {
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' },
-      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'sofiya-q' } } },
+      /* srv-43: storage key = qwen-<id> when no voiceUuid. */
+      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'qwen-sofiya' } } },
     ];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
@@ -2578,4 +2586,11 @@ describe('synthesiseChapter C1 in-loop recycle recovery', () => {
       }),
     ).rejects.toMatchObject({ transient: true });
   }, 15_000);
+});
+
+describe('srv-43 — toVoiceLike carries voiceUuid (blocker fix)', () => {
+  it('toVoiceLike carries voiceUuid so generation resolves qwen-<uuid>', () => {
+    const c = { id: 'wren', voiceUuid: 'V1StGXR8Z5', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+    expect(pickVoiceForEngine('qwen', toVoiceLike(c as never))).toBe('qwen-V1StGXR8Z5');
+  });
 });

@@ -352,6 +352,68 @@ describe('castDesignMiddleware', () => {
     });
   });
 
+  /* srv-43: previewReady voiceUuid threading — the middleware must pass the
+     uuid from the SSE event through to the castDesign/previewReady action so
+     the drawer can resolve the uuid-keyed cache entry before a cast refetch. */
+  it('onPreviewReady threads voiceUuid into the previewReady slice action', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+
+    const { cb } = singleStartCalls[0];
+    cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'qwen-c1-preview',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+      voiceUuid: 'uuid-c1-abc',
+    });
+
+    expect(store.getState().castDesign.active?.preview?.voiceUuid).toBe('uuid-c1-abc');
+  });
+
+  /* srv-43: first-design voiceUuid mirroring — onCharacterDesigned with a voiceUuid
+     must dispatch setCharacterVoiceUuid so the character's uuid lands in Redux
+     before a cast refetch, letting the drawer resolve the sample-cache entry. */
+  it('onCharacterDesigned mirrors voiceUuid into the cast slice when present', () => {
+    const store = makeStore();
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'first',
+      }),
+    );
+
+    const { cb } = singleStartCalls[0];
+    cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1', voiceUuid: 'uuid-c1-xyz' });
+
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'c1')?.voiceUuid,
+    ).toBe('uuid-c1-xyz');
+  });
+
   it('onVariantDesigned mirrors the variant into the cast slice and bumps done', () => {
     const store = makeStore();
     /* Seed character 'a' so setCharacterEmotionVariant has somewhere to land. */

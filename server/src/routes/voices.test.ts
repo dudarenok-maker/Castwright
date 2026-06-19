@@ -313,6 +313,35 @@ describe('GET /api/voices — aggregation', () => {
     delete cast.characters[0].overrideTtsVoices;
     writeFileSync(castPath, JSON.stringify(cast));
   });
+
+  it('surfaces voiceUuid on the derived Voice when the character carries one (srv-43)', async () => {
+    /* Fail-before/pass-after regression guard: the aggregator MUST copy
+       c.voiceUuid onto the derived Voice so the API contract stays honest.
+       Mutate the first-seen cast.json for v_brann, assert the payload
+       carries the uuid, then restore. */
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].voiceUuid = 'U1';
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const res = await request(app).get('/api/voices');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.voiceUuid).toBe('U1');
+
+    /* Restore. */
+    delete cast.characters[0].voiceUuid;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
 });
 
 describe('GET /api/voices?engine=qwen — generated flag', () => {
@@ -362,7 +391,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
             name: 'Oduvan',
             voiceId: 'v_oduvan',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-oduvan' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-v_oduvan' } },
             attributes: [],
             lines: 10,
             scenes: 1,
@@ -372,7 +401,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
             name: 'Marlow',
             voiceId: 'v_marlow',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
             attributes: [],
             lines: 10,
             scenes: 1,
@@ -409,7 +438,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
         synthesizedAt: new Date().toISOString(),
         segments: [],
         characterSnapshots: {
-          'c-oduvan': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-oduvan' },
+          'c-oduvan': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-v_oduvan' },
         },
       }),
     );
@@ -432,14 +461,14 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     const res = await request(app).get('/api/voices?engine=qwen');
     expect(res.status).toBe(200);
     const oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_oduvan');
-    expect(oduvan.ttsVoice.name).toBe('qwen-oduvan');
+    expect(oduvan.ttsVoice.name).toBe('qwen-v_oduvan');
     expect(oduvan.generated).toBe(true);
   });
 
   it('leaves a designed-but-unrendered Qwen voice without the generated flag', async () => {
     const res = await request(app).get('/api/voices?engine=qwen');
     const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
-    expect(marlow.ttsVoice.name).toBe('qwen-marlow');
+    expect(marlow.ttsVoice.name).toBe('qwen-v_marlow');
     expect(marlow.generated).toBeFalsy();
   });
 
@@ -480,6 +509,67 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     const res = await request(app).get('/api/voices?engine=coqui');
     const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
     expect(marlow.sampled).toBeUndefined();
+  });
+
+  it('srv-43 Wave 2: emits human display name (qwen-<voiceId>) and keeps generated flag keyed on storage key (qwen-<uuid>)', async () => {
+    /* Fail-before/pass-after for the display-name / generated-flag split.
+       A character carries BOTH a voiceId ('wren') AND a voiceUuid ('ABC123'),
+       so the storage key is qwen-ABC123 while the human display is qwen-wren.
+       The segment snapshot uses the STORAGE key — the aggregator must emit the
+       human name on ttsVoice.name AND still resolve generated:true by looking
+       up the storage key in renderedQwenNames. */
+    const bookDir = join(workspaceRoot, 'books', Q_AUTHOR, Q_SERIES, Q_TITLE);
+
+    /* Add a uuid-bearing character to the Qwen book's cast. */
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters.push({
+      id: 'c-wren',
+      name: 'Wren',
+      voiceId: 'wren',
+      voiceUuid: 'ABC123',
+      ttsEngine: 'qwen',
+      /* The override name is the STORAGE key (qwen-<uuid>), as written by
+         srv-43's qwen-voice route after a design session. */
+      overrideTtsVoices: { qwen: { name: 'qwen-ABC123' } },
+      attributes: [],
+      lines: 3,
+      scenes: 1,
+    });
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    /* Add a rendered segment snapshot using the STORAGE key (qwen-ABC123). */
+    const segPath = join(bookDir, 'audio', '02-two.segments.json');
+    writeFileSync(
+      segPath,
+      JSON.stringify({
+        bookId: 'qbook',
+        chapterId: 2,
+        chapterTitle: 'Two',
+        synthesizedAt: new Date().toISOString(),
+        segments: [],
+        characterSnapshots: {
+          'c-wren': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ABC123' },
+        },
+      }),
+    );
+
+    const res = await request(app).get('/api/voices?engine=qwen');
+    expect(res.status).toBe(200);
+    const wren = res.body.voices.find((v: { id: string }) => v.id === 'wren');
+    expect(wren).toBeDefined();
+    /* Display name must be the HUMAN form (qwen-<voiceId>), not the storage key. */
+    expect(wren.ttsVoice.name).toBe('qwen-wren');
+    /* Generated flag must be true even though ttsVoice.name !== the snapshot key. */
+    expect(wren.generated).toBe(true);
+
+    /* Cleanup: remove the added character and the chapter-2 snapshot. */
+    cast.characters.pop();
+    writeFileSync(castPath, JSON.stringify(cast));
+    const { rmSync: rmFile } = await import('node:fs');
+    rmFile(segPath);
   });
 });
 
@@ -688,6 +778,38 @@ describe('PUT /api/voices/:voiceId/override', () => {
     expect(two.characters[0].overrideTtsVoices).toBeUndefined();
     expect(one.characters[0].overrideTtsVoice).toBeUndefined();
     expect(two.characters[0].overrideTtsVoice).toBeUndefined();
+  });
+
+  it('preserves voiceUuid on both linked characters after an override-save (srv-43 regression guard)', async () => {
+    /* The spread inside applyOverrideToCastFiles ({ ...normalised }) must carry
+       voiceUuid forward; this test pins that invariant so a future allowlist
+       rewrite cannot silently drop it. Both characters share voiceId v_brann and
+       already carry voiceUuid 'U1' on disk. */
+    const castPathOne = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_ONE, '.audiobook', 'cast.json');
+    const castPathTwo = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_TWO, '.audiobook', 'cast.json');
+    const castOne = JSON.parse(readFileSync(castPathOne, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    const castTwo = JSON.parse(readFileSync(castPathTwo, 'utf8')) as { characters: Array<Record<string, unknown>> };
+    castOne.characters[0].voiceUuid = 'U1';
+    castTwo.characters[0].voiceUuid = 'U1';
+    writeFileSync(castPathOne, JSON.stringify(castOne));
+    writeFileSync(castPathTwo, JSON.stringify(castTwo));
+
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-wren' } });
+    expect(res.status).toBe(204);
+
+    const afterOne = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const afterTwo = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    expect(afterOne.characters[0].voiceUuid).toBe('U1');
+    expect(afterTwo.characters[0].voiceUuid).toBe('U1');
+
+    /* Cleanup. */
+    delete castOne.characters[0].voiceUuid;
+    delete castTwo.characters[0].voiceUuid;
+    writeFileSync(castPathOne, JSON.stringify(castOne));
+    writeFileSync(castPathTwo, JSON.stringify(castTwo));
+    await request(app).put('/api/voices/v_brann/override').send({ override: null });
   });
 
   it('400 when override body is malformed', async () => {

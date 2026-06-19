@@ -498,6 +498,10 @@ export interface DesignQwenVoiceResponse {
   /** Stable URL of the cached audition MP3 (= the 12s sample). Not a blob —
       nothing to revoke. */
   previewUrl: string;
+  /** srv-43 — immutable per-voice identity returned by the design route.
+      The drawer stamps this onto the in-memory voice so the /sample player
+      can resolve the uuid-keyed storage key without a full cast refetch. */
+  voiceUuid?: string;
 }
 
 /** Plan 161 — promote a previewed design onto the character's stable voiceId
@@ -512,6 +516,10 @@ export interface PromoteQwenVoiceResponse {
   voiceId: string;
   /** URL of the audition cached under the committed id. */
   url: string;
+  /** srv-43 — immutable per-voice identity returned by the promote route.
+      The drawer stamps this onto the in-memory voice so the /sample player
+      can resolve the uuid-keyed storage key without a full cast refetch. */
+  voiceUuid?: string;
 }
 
 /** Optional scope for a voice-override write (plan 108). Default
@@ -1831,12 +1839,15 @@ async function realDesignQwenVoice(
     }
     throw new Error(detail || `Voice design failed (${res.status}).`);
   }
-  /* Response is JSON { voiceId, url } pointing at the cached audition MP3 —
-     which is also the 12s sample the player will hit. */
-  const data = (await res.json()) as { voiceId?: string; url?: string };
+  /* Response is JSON { voiceId, url, voiceUuid } pointing at the cached
+     audition MP3 — which is also the 12s sample the player will hit.
+     srv-43: voiceUuid lets the drawer stamp the in-memory voice so /sample
+     resolves the uuid-keyed cache key without a full cast refetch. */
+  const data = (await res.json()) as { voiceId?: string; url?: string; voiceUuid?: string };
   return {
     voiceId: data.voiceId ?? `qwen-${characterId}${preview ? '-preview' : ''}`,
     previewUrl: data.url ?? '',
+    voiceUuid: data.voiceUuid,
   };
 }
 
@@ -1862,8 +1873,10 @@ async function realPromoteQwenVoice(
     }
     throw new Error(detail || `Promoting the voice failed (${res.status}).`);
   }
-  const data = (await res.json()) as { voiceId?: string; url?: string };
-  return { voiceId: data.voiceId ?? '', url: data.url ?? '' };
+  /* srv-43: voiceUuid is now in the promote response so the drawer can
+     stamp the in-memory voice and /sample resolves the uuid-keyed cache. */
+  const data = (await res.json()) as { voiceId?: string; url?: string; voiceUuid?: string };
+  return { voiceId: data.voiceId ?? '', url: data.url ?? '', voiceUuid: data.voiceUuid };
 }
 
 async function realDiscardQwenPreview(
@@ -4293,8 +4306,9 @@ export interface CastDesignCallbacks {
   onProgress?: (e: { characterId: string; name: string; done: number; total: number }) => void;
   /** Throttled (~6s) liveness tick during a long single design. */
   onHeartbeat?: (e: { characterId: string }) => void;
-  /** A character was designed + persisted; `voiceId` is the bespoke qwen name. */
-  onCharacterDesigned?: (e: { characterId: string; voiceId: string }) => void;
+  /** A character was designed + persisted; `voiceId` is the bespoke qwen name.
+      srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
@@ -4319,6 +4333,9 @@ export interface CastDesignCallbacks {
     previewVoiceId: string;
     previewUrl: string;
     persona: string;
+    /** srv-43: uuid of the character's bespoke voice file — lets the drawer
+        resolve the uuid-keyed cache entry before the next cast refetch. */
+    voiceUuid?: string;
   }) => void;
   /** Single-design (re)subscribe seed — replayed once on reload re-attach so the
       slice can open a single snapshot at the right character + phase. */
@@ -4348,6 +4365,7 @@ interface CastDesignStreamEvent {
   previewVoiceId?: string;
   previewUrl?: string;
   persona?: string;
+  voiceUuid?: string;
   mode?: 'first' | 'redesign';
   url?: string;
 }
@@ -4406,7 +4424,11 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
         break;
       case 'designed':
         if (typeof e.characterId === 'string' && typeof e.voiceId === 'string')
-          cb.onCharacterDesigned?.({ characterId: e.characterId, voiceId: e.voiceId });
+          cb.onCharacterDesigned?.({
+            characterId: e.characterId,
+            voiceId: e.voiceId,
+            voiceUuid: e.voiceUuid,
+          });
         break;
       case 'preview_ready':
         if (
@@ -4420,6 +4442,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             previewVoiceId: e.previewVoiceId,
             previewUrl: e.previewUrl,
             persona: e.persona ?? '',
+            voiceUuid: e.voiceUuid,
           });
         break;
       case 'progress':

@@ -11,6 +11,19 @@
 
 import type { TtsEngine } from './index.js';
 
+/* srv-43 — the on-disk/sidecar STORAGE key for a bespoke Qwen voice. Prefers
+   the immutable voiceUuid (globally unique → no cross-series collision); else
+   the legacy name-derived key (qwen-<voiceId??fallbackId>) — identical to
+   deriveQwenVoiceId's output, so existing voices resolve unchanged. Pure;
+   lives in tts/ so routes/qwen-voice.ts AND tts/verify-designed-voice-language.ts
+   import it with no cross-layer cycle. */
+export function qwenStorageKey(
+  v: { voiceUuid?: string | null; voiceId?: string | null },
+  fallbackId: string,
+): string {
+  return v.voiceUuid ? `qwen-${v.voiceUuid}` : `qwen-${v.voiceId ?? fallbackId}`;
+}
+
 /* fs-25 — per-quote emotion variant selection. A variant is just another
    designed Qwen voiceId, so the only synth-time lever is picking a different
    voice name; the sidecar contract is untouched. */
@@ -25,14 +38,15 @@ export function pickEmotionVariantVoice(
      voices to today. This is the load-bearing safety gate (plan 177 invariant 3). */
   if (engine !== 'qwen') return baseVoice;
   if (!emotion || emotion === 'neutral') return baseVoice;
-  const variant = variants?.[emotion]?.name;
-  /* Missing/blank variant → fall back to the base (neutral) voice; never throws,
-     so a tagged-but-undesigned emotion can't fail the chapter (invariant 5). */
-  return variant && variant.trim() ? variant : baseVoice;
+  /* srv-43 — derive the variant storage key from the (already uuid-resolved)
+     base; a designed variant slot only signals PRESENCE. Missing → base. */
+  return variants?.[emotion] ? `${baseVoice}__${emotion}` : baseVoice;
 }
 
 export interface VoiceLike {
   id: string;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
+  voiceUuid?: string;
   character?: string;
   attributes?: string[];
   /** Per-engine user-set voice overrides. The synth engine reads its own
@@ -245,6 +259,22 @@ export function pickVoiceForEngine(
   voice: VoiceLike,
   hint?: CharacterHint,
 ): string {
+  /* srv-43 — Qwen is bespoke (no catalog). A designed voice resolves to its
+     STORAGE key, not the human display name: qwen-<voiceUuid> when a uuid was
+     minted (post-srv-43), else the stored name (legacy fallback). Undesigned
+     → '' (cast view shows "no voice designed yet"). Handle before the generic
+     slot return so the uuid path wins. */
+  if (engine === 'qwen') {
+    /* Preserve the legacy singular `overrideTtsVoice` fallback too — a qwen
+       voice carrying only the un-normalised singular field must still count as
+       designed (matches the generic path's behavior). */
+    const designedName =
+      voice.overrideTtsVoices?.qwen?.name ??
+      (voice.overrideTtsVoice?.engine === 'qwen' ? voice.overrideTtsVoice.name : undefined);
+    if (!designedName) return '';
+    return qwenStorageKey(voice, voice.id);
+  }
+
   const slotName = voice.overrideTtsVoices?.[engine]?.name;
   if (slotName) return slotName;
   if (
@@ -254,13 +284,6 @@ export function pickVoiceForEngine(
   ) {
     return voice.overrideTtsVoice.name;
   }
-  /* Qwen voices are BESPOKE (designed per character, plan 108) — there is NO
-     profile catalog to infer from. A character on the Qwen engine MUST carry
-     an explicit designed voiceId in overrideTtsVoices.qwen; with none, there's
-     nothing to pick. Return '' so the cast view can show "no voice designed
-     yet"; the generation path treats a Qwen character without a designed voice
-     as an error or routes it to the default engine (plan 108 Wave 2b). */
-  if (engine === 'qwen') return '';
   const profile = inferProfile(voice, hint);
   const table = catalogForEngine(engine);
   const options = table[profile];
