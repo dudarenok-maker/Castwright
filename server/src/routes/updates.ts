@@ -113,6 +113,30 @@ async function fetchLatestRelease(): Promise<{ ok: true; tag: string; url: strin
 }
 
 let cache: { at: number; status: UpdateStatus } | null = null;
+let refreshing = false;
+
+/** Current cached status, or null when cold. No network — safe to call from a
+    hot handler. */
+export function getCachedUpdateStatus(): UpdateStatus | null {
+  return cache ? cache.status : null;
+}
+
+/** Fire-and-forget cache refresh. No-op while the cache is fresh or a refresh is
+    already in flight. Never throws; only a reachable result is cached. */
+export function refreshUpdateStatusInBackground(): void {
+  const now = Date.now();
+  if (cache && now - cache.at < CACHE_TTL_MS) return;
+  if (refreshing) return;
+  refreshing = true;
+  void (async () => {
+    try {
+      const status = buildUpdateStatus(getAppVersion(), await fetchLatestRelease());
+      if (status.reachable) cache = { at: Date.now(), status };
+    } finally {
+      refreshing = false;
+    }
+  })();
+}
 
 updatesRouter.get('/latest', async (_req: Request, res: Response) => {
   const now = Date.now();
@@ -130,4 +154,5 @@ updatesRouter.get('/latest', async (_req: Request, res: Response) => {
 /** Test seam — reset the module-level cache between cases. */
 export function __resetUpdateCacheForTests(): void {
   cache = null;
+  refreshing = false;
 }

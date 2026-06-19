@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseVersionFromTag, compareSemver, buildUpdateStatus } from './updates.js';
+import { describe, expect, it, afterEach, vi } from 'vitest';
+import { parseVersionFromTag, compareSemver, buildUpdateStatus, getCachedUpdateStatus, refreshUpdateStatusInBackground, __resetUpdateCacheForTests } from './updates.js';
 
 describe('parseVersionFromTag', () => {
   it('extracts X.Y.Z from common tag shapes', () => {
@@ -71,5 +71,46 @@ describe('buildUpdateStatus', () => {
     expect(s.reachable).toBe(true);
     expect(s.updateAvailable).toBe(false);
     expect(s.latestVersion).toBeNull();
+  });
+});
+
+describe('cache accessors (fe-27)', () => {
+  afterEach(() => {
+    __resetUpdateCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it('getCachedUpdateStatus is null before any refresh', () => {
+    __resetUpdateCacheForTests();
+    expect(getCachedUpdateStatus()).toBeNull();
+  });
+
+  it('refreshUpdateStatusInBackground populates the cache from a reachable release', async () => {
+    __resetUpdateCacheForTests();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ tag_name: 'v999.0.0', html_url: 'https://example/r' }),
+      })),
+    );
+    refreshUpdateStatusInBackground();
+    await vi.waitFor(() => expect(getCachedUpdateStatus()).not.toBeNull());
+    const status = getCachedUpdateStatus();
+    expect(status?.latestVersion).toBe('999.0.0');
+    expect(status?.updateAvailable).toBe(true);
+  });
+
+  it('does not refetch while the cache is fresh', async () => {
+    __resetUpdateCacheForTests();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tag_name: 'v999.0.0', html_url: 'https://example/r' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    refreshUpdateStatusInBackground();
+    await vi.waitFor(() => expect(getCachedUpdateStatus()).not.toBeNull());
+    refreshUpdateStatusInBackground(); // cache now fresh → no second fetch
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
