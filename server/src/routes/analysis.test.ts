@@ -2087,4 +2087,32 @@ describe('#938 byline-author exclusion — cached roster path integration', () =
        test above is a meaningful regression (the guard is the diff). */
     expect(authorEntry).toBeDefined();
   });
+
+  /* The two cases below exercise buildInterimCast directly — the exported
+     function that wires dropBylineAuthorFromChapter inside its own loop.
+     If the guard is deleted from buildInterimCast specifically, these
+     cases go red even if the rebuildRosterInline cases above stay green. */
+  it('buildInterimCast — excludes the byline author when author arg is supplied', () => {
+    const interim = buildInterimCast(cachedChapterCast, [1], undefined, BOOK_AUTHOR);
+
+    /* Real characters survive. */
+    expect(interim.some((c) => c.id === 'anton')).toBe(true);
+    expect(interim.some((c) => c.id === 'narrator')).toBe(true);
+
+    /* The byline author must be absent. */
+    const authorKey = normaliseNameKey(BOOK_AUTHOR);
+    const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
+    expect(authorEntry).toBeUndefined();
+  });
+
+  it('buildInterimCast — includes the byline author when author arg is omitted (witness: exclusion is from the guard)', () => {
+    /* Without the author arg the guard has nothing to match against, so
+       the author entry passes through. This proves the exclusion in the
+       case above is attributable to the guard, not some other filter. */
+    const interim = buildInterimCast(cachedChapterCast, [1]);
+
+    const authorKey = normaliseNameKey(BOOK_AUTHOR);
+    const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
+    expect(authorEntry).toBeDefined();
+  });
 });
