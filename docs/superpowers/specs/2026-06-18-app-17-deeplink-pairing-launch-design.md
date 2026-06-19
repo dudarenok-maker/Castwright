@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-18
 - **Issue:** [app-17 / #729](https://github.com/dudarenok-maker/Castwright/issues/729)
-- **Status:** draft (spec)
+- **Status:** shipped — code merged + website deployed 2026-06-19; on-device acceptance pending ([#729](https://github.com/dudarenok-maker/Castwright/issues/729)). See **Ship notes** at the end.
 - **Builds on:** `fix/app-pairing-mlkit-decoder` (deep-link readiness shipped),
   `docs/superpowers/specs/2026-06-11-pairing-qr-mlkit-decoder-design.md`,
   `docs/superpowers/specs/2026-06-10-pairing-qr-redesign-design.md`
@@ -380,3 +380,35 @@ next periodic re-verify or app update).
   choice (see decision 2).
 - **Smart `/pair` page** that re-renders the scan flow — rejected as
   over-engineered for a rare unverified-scan path.
+
+## Ship notes
+
+**Shipped 2026-06-19** via subagent-driven execution (11 tasks, per-task two-stage
+review + a final whole-branch opus review; full battery green — frontend/server
+2958 tests, Flutter 315+, website 69).
+
+- **Castwright** PR [#899](https://github.com/dudarenok-maker/Castwright/pull/899) → `c1fbe0fd` on `main`
+  (10 code commits `8122af0f`…`abb544cb`): server URL payload + 128-bit fp-tag,
+  redeem RFC1918 guard, label cap, frontend mock flip + density guard (worst-case
+  QR **v6** ≤ v7), Flutter www-only manifest + 128-bit cert compare + host-trust
+  (RFC1918 reject + `PairingQr.checked` bypass-fix + read-only host on deep-link)
+  + `_openPairing` re-entrancy guard.
+- **Castwright-Website** PR #90 (`cbbeda3d`) — `assetlinks.json` (real upload-key
+  SHA `BA:7B:14:7D:…:6B` = `scripts/build-companion-apk.mjs`
+  `EXPECTED_UPLOAD_CERT_SHA256`) + `/pair` page; PR #91 (`b20b37f0`) — `/pair` CSP
+  beacon-block. **Live & verified:** assetlinks 200/json/no-redirect on `www`,
+  `/pair` serves `content-security-policy: script-src 'self' 'unsafe-inline'`.
+
+**Follow-up beyond the original scope (shipped here):** Cloudflare auto-injects its
+Web Analytics beacon at the edge regardless of our HTML and the Pages toggle, so
+the `/pair` beacon-suppression is enforced browser-side via a CSP in the website
+`_headers` (PR #91) — see the
+`reference_cloudflare_webanalytics_edge_injection` memory.
+
+**Owed (Task 12, human / device):** sideload the `npm run apk:companion` build,
+`pm verify-app-links --re-verify ai.castwright` → `www.castwright.ai → verified`,
+stock-camera pair, record in #729, then close it. **Deferred:** device-token
+TTL/scope — **srv-41 / [#898](https://github.com/dudarenok-maker/Castwright/issues/898)**.
+**Unrelated pre-existing:** Castwright-Website CI (gitleaks/semgrep/`verify`) is
+red repo-wide (2s no-log failures; `main` also red) — a missing-token/Actions
+config issue, non-required.
