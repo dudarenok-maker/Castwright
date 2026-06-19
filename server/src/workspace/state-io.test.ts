@@ -29,6 +29,7 @@ function setRenameImpl(fn: ((src: string, dest: string) => Promise<void>) | null
 
 /* Import AFTER vi.mock so state-io.ts picks up the mocked rename. */
 const { writeJsonAtomic, readJsonWithRecovery } = await import('./state-io.js');
+const { jitteredDelayMs } = await import('./atomic-rename.js');
 
 let workdir: string;
 
@@ -128,6 +129,27 @@ describe('renameWithRetry transient-error handling', () => {
     await exerciseTransient('ENOENT');
   });
 
+  it('survives 5 consecutive transient EPERM failures (extended budget #915)', async () => {
+    /* #915 — 20-way same-target contention on a loaded Windows CI runner
+       exhausted the prior 4-delay (~800ms) budget. The tail was extended to
+       5 delays (6 attempts total), so a writer that loses the rename race up
+       to 5 times in a row still lands. This fails on the pre-#915 budget
+       (only 5 attempts → all 5 throw → surfaces EPERM) and passes after. */
+    const target = join(workdir, 'state.json');
+    let attempts = 0;
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    setRenameImpl(async (src: string, dest: string) => {
+      attempts++;
+      if (attempts <= 5) throw Object.assign(new Error('EPERM: simulated'), { code: 'EPERM' });
+      return actual.rename(src, dest);
+    });
+
+    await writeJsonAtomic(target, { ok: true });
+
+    expect(attempts).toBe(6);
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ ok: true });
+  });
+
   it('does NOT retry past EROFS (read-only filesystem) — surfaces immediately', async () => {
     /* Plan 79 widened the retry list to cover EACCES + EIO because Drive
        for Desktop surfaces those transiently during cache flushes. EROFS
@@ -143,7 +165,7 @@ describe('renameWithRetry transient-error handling', () => {
 
     await expect(writeJsonAtomic(target, { ok: true })).rejects.toThrow(/EROFS/);
     /* Exactly one attempt — non-transient errors must NOT spam retries
-       and waste 800ms of backoff before failing. */
+       and waste the full retry budget on backoff before failing. */
     expect(attempts).toBe(1);
   });
 
@@ -294,3 +316,27 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
     );
   });
 });
+
+describe('jitteredDelayMs (#915 thundering-herd decorrelation)', () => {
+  it('returns the base delay when rand() is 0 (lower bound)', () => {
+    expect(jitteredDelayMs(200, () => 0)).toBe(200);
+  });
+
+  it('adds up to ~100% jitter as rand() approaches 1 (upper bound)', () => {
+    expect(jitteredDelayMs(200, () => 0.5)).toBe(300);
+    /* floor(0.999 * 200) = 199 → 399, strictly below 2× so the bound is [base, 2*base). */
+    expect(jitteredDelayMs(200, () => 0.999)).toBe(399);
+  });
+
+  it('decorrelates equal base delays — two writers on the same schedule get different waits', () => {
+    /* The whole point: concurrent retriers must NOT wake in lockstep. Same
+       base, different rand() draws → different sleeps → no re-collision. */
+    const a = jitteredDelayMs(500, () => 0.1);
+    const b = jitteredDelayMs(500, () => 0.8);
+    expect(a).not.toBe(b);
+    for (const d of [a, b]) {
+      expect(d).toBeGreaterThanOrEqual(500);
+      expect(d).toBeLessThan(1000);
+    }
+  });
+})
