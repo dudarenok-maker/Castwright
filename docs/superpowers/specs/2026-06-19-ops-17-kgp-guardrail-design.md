@@ -76,7 +76,7 @@ Accept "blocked upstream"; add a lightweight guardrail. Do **not** vendor / fork
 
 | Trip | Condition | Mechanism | Urgency |
 |---|---|---|---|
-| **A** | Upstream ships a newer plugin release (the "go bump it" signal) | Monthly scheduled `flutter pub outdated` check that **warns** | Low — act when it fires |
+| **A** | Any direct `apps/android` pub dep is behind (the monthly catch-up nudge; the three KGP plugins are the ones that matter for ops-17, but the whole set is in scope) | Monthly scheduled `flutter pub outdated` check that **warns** + refreshes #790 | Low — act when it fires |
 | **B** | The escape-hatch flags get deleted from `gradle.properties` (silent build break) | Assertion step in `app.yml` | Caught at PR time |
 | **C** | Flutter actually removes the escape hatch | **Not chased** — gated on our own Flutter-pin bump | N/A |
 
@@ -120,25 +120,35 @@ not-currently-broken build.
   cadence.
 - **Job:** ubuntu, `flutter-action@v2` pinned to the same Flutter `3.44.1` as
   `app.yml`, `flutter pub get`, then `flutter pub outdated` in `apps/android`.
-- **Warn surface (no PR):**
-  - **Visibility (all-pub):** write the full `flutter pub outdated` table to the
-    GitHub **job summary** (`$GITHUB_STEP_SUMMARY`) so every run shows the
-    complete outdated picture for all `apps/android` pub deps.
-  - **Alarm (scoped to the three KGP plugins):** the job **exits non-zero**
-    only when `audio_session`, `flutter_foreground_task`, or `mobile_scanner`
-    has a newer resolvable version — a red scheduled run emails repo admins
-    via GitHub's standard scheduled-failure notification, self-clearing once we
-    bump. General outdated deps appear in the summary but do **not** turn the
-    run red (avoids permanently-red noise, since some pub dep is almost always
-    behind).
-  - No issue-comment / `issues: write` permission needed (avoids monthly
-    comment spam on #790). Considered and rejected in favour of the
-    failure-email surface.
-
-  > **Design note for review:** "all-pub" lives in the *summary*; the *hard
-  > trip* is scoped to the three plugins. This is the deliberate reconciliation
-  > of "all-pub coverage" with "don't be permanently red." Flag at spec review
-  > if you'd rather the trip also fire on other direct-dep drift.
+- **Warn surface (no PR), three layers:**
+  - **Visibility:** write the full `flutter pub outdated` table to the GitHub
+    **job summary** (`$GITHUB_STEP_SUMMARY`) every run — direct **and**
+    transitive, the complete picture.
+  - **Alarm (all direct deps):** the job **exits non-zero** when **any direct
+    dependency** (anything in `pubspec.yaml` `dependencies` / `dev_dependencies`)
+    has a newer resolvable version. A red monthly run is the deliberate
+    "catch-up this month" nudge and emails repo admins via GitHub's standard
+    scheduled-failure notification; it self-clears once the directs are current.
+    The three KGP plugins are the ones that matter for ops-17, but a monthly
+    all-directs sweep is sensible upkeep regardless. **Transitive-only drift**
+    stays summary-only and does **not** turn the run red — it isn't directly
+    actionable (no `pubspec.yaml` line to bump), so reddening on it would be
+    permanent unactionable noise.
+  - **#790 refresh (always, every run):** maintain a **single auto-managed
+    "sticky" comment** on #790, identified by a hidden marker
+    (`<!-- ops-17-deps-watch -->`). Each run **edits that one comment in place**
+    (creating it the first time) with the current-as-of-`<run date>` status:
+    the three KGP plugins' migration status (still-blocked vs. a release now
+    available) and the outdated-directs table. This is a **proper refresh** — it
+    replaces the prior content in the same comment rather than appending, so
+    #790 carries exactly one always-current status block, never a growing log.
+    Requires `permissions: issues: write` and `gh` (default-available in
+    Actions). Note: editing a comment in place does **not** send a GitHub
+    notification — the **red-run failure email** (above) is the active ping;
+    the sticky comment is the durable current-status record. The one-time
+    landing edit to the #790 *body* (§3) and this monthly sticky comment are
+    distinct: the body holds the human-curated What/Acceptance; the comment
+    holds the machine-refreshed status.
 
 ### 2. Trip B — escape-hatch assertion in `app.yml`
 
@@ -153,9 +163,11 @@ not-currently-broken build.
 
 ### 3. Issue + backlog housekeeping
 
-- Re-date #790 with the 2026-06-19 re-confirmation and note the guardrail
-  landed (the issue **stays open** — still blocked upstream; the guardrail is
-  the interim, not the fix).
+- One-time: re-date the #790 **body** with the 2026-06-19 re-confirmation and
+  note the guardrail landed (the issue **stays open** — still blocked upstream;
+  the guardrail is the interim, not the fix). Ongoing status refresh is then
+  automated by the monthly sticky comment (§1), so the body stays the stable
+  human-curated What/Acceptance.
 - Update the `ops-17` row in `docs/BACKLOG.md` with the same re-date + a pointer
   to the guardrail.
 
@@ -170,12 +182,16 @@ not-currently-broken build.
 
 ## Testing
 
-- **Trip A:** unit-test the pure outdated-parsing helper (which of the three
-  tracked plugins are behind, given a `flutter pub outdated --json` payload) —
-  the same shape as the existing companion script unit tests under
-  `scripts/tests/`. Covers: none-behind → exit 0; one tracked plugin behind →
-  exit 1; only an untracked dep behind → exit 0 + summary lists it. The
-  workflow YAML itself is exercised by a `workflow_dispatch` run.
+- **Trip A:** unit-test the pure helper that, given a `flutter pub outdated
+  --json` payload, returns (a) the set of **direct** deps that are behind (drives
+  the exit code), (b) the three KGP plugins' status (drives the sticky-comment
+  body), and (c) the rendered summary/comment markdown. Same shape as the
+  existing companion script unit tests under `scripts/tests/`. Covers:
+  all-current → exit 0; a direct dep behind → exit 1; only a transitive dep
+  behind → exit 0 + summary lists it; a KGP plugin now has a newer version →
+  comment body flips that plugin from "blocked" to "release available". The
+  workflow YAML itself is exercised by a `workflow_dispatch` run (which also
+  proves the sticky-comment create-then-edit path against #790).
 - **Trip B:** the assertion is self-testing — temporarily removing a flag turns
   `app.yml` red. Document the manual check; no separate harness needed for a
   grep guard. If the parsing/check is factored into a script, add a Pester/node
@@ -183,9 +199,14 @@ not-currently-broken build.
 
 ## Acceptance
 
-- `app-deps-watch.yml` exists, runs on `workflow_dispatch`, and a manual run is
-  green today (no tracked plugin is behind) with the full outdated table in the
-  job summary.
+- `app-deps-watch.yml` exists and runs on `workflow_dispatch`. A manual run
+  writes the full outdated table to the job summary, edits/creates the single
+  `<!-- ops-17-deps-watch -->` sticky comment on #790 with current status, and
+  goes **red iff any direct `apps/android` dep is behind** (today: green only if
+  every direct dep is current — otherwise the run is red as the catch-up nudge,
+  which is expected/correct behaviour, not a defect).
+- A second `workflow_dispatch` run **edits the same** sticky comment rather than
+  adding a new one (proper-refresh check).
 - Deleting either escape-hatch flag turns an `apps/android` PR red via the new
   `app.yml` assertion; restoring it goes green.
 - #790 re-dated and left open; `docs/BACKLOG.md` `ops-17` row re-dated.
