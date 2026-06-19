@@ -47,3 +47,64 @@ export function parsePins(pubspecText, names) {
   }
   return pins;
 }
+
+/** direct/dev packages whose latest exceeds current. */
+export function computeBehind(pkgMap) {
+  const behind = [];
+  for (const [name, p] of pkgMap) {
+    if ((p.kind === 'direct' || p.kind === 'dev') && p.current && p.latest && compareSemver(p.latest, p.current) > 0) {
+      behind.push({ name, kind: p.kind, current: p.current, latest: p.latest });
+    }
+  }
+  return behind;
+}
+
+export function exitCodeFor(behind) {
+  return behind.length ? 1 : 0;
+}
+
+/** Per-plugin {pin, latest, ahead}; an absent package is treated as at-pin. */
+export function computePluginStatus(pkgMap, pins, plugins = KGP_PLUGINS) {
+  return plugins.map((name) => {
+    const pin = pins[name] ?? null;
+    const latest = pkgMap.get(name)?.latest ?? pin;
+    const ahead = !!(pin && latest && compareSemver(latest, pin) > 0);
+    return { name, pin, latest, ahead };
+  });
+}
+
+export function extractState(commentBody) {
+  if (!commentBody) return {};
+  const m = commentBody.match(/<!--\s*state:\s*([\s\S]*?)\s*-->/);
+  if (!m) return {};
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return {};
+  }
+}
+
+export function buildState(pluginStatus) {
+  const state = {};
+  for (const s of pluginStatus) state[s.name] = { latest: s.latest, ahead: s.ahead };
+  return state;
+}
+
+/** Plugins that are ahead now but were not ahead in the prior state. */
+export function computeTransitions(pluginStatus, priorState) {
+  return pluginStatus.filter((s) => s.ahead && !priorState[s.name]?.ahead).map((s) => s.name);
+}
+
+/** The single sticky comment (by marker), or null. Found even if a human
+ *  commented after it — so the orchestrator never creates a duplicate. */
+export function findSticky(comments, marker = STICKY_MARKER) {
+  return comments.find((c) => (c.body || '').includes(marker)) || null;
+}
+
+/** The gh-api REST request for refreshing the sticky: PATCH the existing
+ *  comment by its NUMERIC id, else POST a new one to the issue. */
+export function stickyRequest(existing, repo, issue) {
+  return existing
+    ? { method: 'PATCH', path: `repos/${repo}/issues/comments/${existing.id}` }
+    : { method: 'POST', path: `repos/${repo}/issues/${issue}/comments` };
+}
