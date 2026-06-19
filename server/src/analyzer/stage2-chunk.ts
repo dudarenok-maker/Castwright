@@ -29,6 +29,7 @@ import { configValue } from '../config/resolver.js';
 import {
   runStage2WithCoverageGuard,
   validateStage2Coverage,
+  hasAttributableContent,
   type Stage2CoverageThresholds,
   type Stage2CoverageVerdict,
 } from './stage2-coverage.js';
@@ -208,6 +209,12 @@ export async function runStage2ChapterChunked(
     depth: number,
     preceding: string | null,
   ): Promise<SentenceOutput[]> => {
+    /* A span with no attributable words (a lone "***" scene break isolated
+       between two over-budget paragraphs) has nothing to attribute. Skip it:
+       no model call, no sentences. Otherwise the model attributes the preceding
+       context instead and the guard's zero-word source loops forever (2026-06-19
+       Ночной дозор ch7). */
+    if (!hasAttributableContent(span)) return [];
     try {
       const { result } = await runStage2WithCoverageGuard({
         body: span,

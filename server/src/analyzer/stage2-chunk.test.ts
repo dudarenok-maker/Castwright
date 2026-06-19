@@ -240,6 +240,34 @@ describe('runStage2ChapterChunked', () => {
     expect(out.coverage.ok).toBe(true);
   });
 
+  it('skips a word-free chunk (a *** scene break) without calling the model', async () => {
+    /* Regression (2026-06-19 Ночной дозор ch7): a lone "***" scene break, when
+       sandwiched between two over-budget paragraphs, is isolated as its own
+       tiny chunk by splitBodyIntoChunks. That chunk normalises to ZERO words,
+       so the coverage guard forced ratio 0.00 → "truncated" on every retry →
+       the whole chapter stuck for minutes (and the model wastefully re-chewed
+       the huge preceding-context paragraph each time, producing garbage
+       sentences). A word-free chunk has nothing to attribute: skip it entirely
+       — no model call, no sentences. */
+    const big1 = 'Word '.repeat(40).trim();
+    const big2 = 'Other text here '.repeat(20).trim();
+    const body = `${big1}\n\n***\n\n${big2}`;
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => fakeAttribute(subBody));
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 100, // both paragraphs over budget → *** isolated as its own chunk
+      coverageRetries: 2,
+      callForBody: call,
+    });
+    // The word-free chunk is never sent to the model.
+    expect(call.mock.calls.some(([sub]) => sub.trim() === '***')).toBe(false);
+    // It contributes no sentences (only the two real paragraphs are attributed).
+    expect(out.sentences.some((s) => s.text.trim() === '***')).toBe(false);
+    expect(out.sentences.length).toBeGreaterThanOrEqual(2);
+    // And the chapter completes cleanly — no permanent coverage failure.
+    expect(out.coverage.ok).toBe(true);
+  });
+
   it('retries a chunk whose first attempt has low coverage', async () => {
     const body = makeBody(8);
     const onRetry = vi.fn();

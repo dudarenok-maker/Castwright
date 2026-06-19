@@ -63,7 +63,7 @@ dependencies:
   # so the car browse tree can push a "children changed" refresh to Android Auto.
   # Already resolved transitively via audio_service; pinned here as a direct dep.
   rxdart: ^0.28.0
-  connectivity_plus: 6.1.0
+  connectivity_plus: 7.1.1
   # app-2 — scan the server pairing QR. zxing-cpp (flutter_zxing) could not decode
   # the QR on a real Android 16 device (confirmed 2026-06-11: valid QR, native lib
   # bundled, still 0 decodes). Decode a STILL image with Google ML Kit instead —

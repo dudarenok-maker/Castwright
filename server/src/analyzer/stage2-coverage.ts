@@ -96,6 +96,15 @@ function words(text: string): string[] {
     .filter(Boolean);
 }
 
+/** Does this prose normalise to ≥1 attributable word? A span that doesn't — a
+    lone scene break ("***", "* * *"), a rule of dashes, pure punctuation — has
+    nothing to attribute, so the chunk runner skips it rather than spend a model
+    call and trip the coverage guard's un-evaluable zero-word source (the
+    2026-06-19 Ночной дозор ch7 stuck loop). */
+export function hasAttributableContent(text: string): boolean {
+  return words(text).length > 0;
+}
+
 /** Largest contiguous run of sentences whose normalised text repeats an earlier
     sentence's text at a CONSTANT offset (the loop signature). */
 function findDuplicatedBlock(
@@ -144,7 +153,15 @@ export function validateStage2Coverage(
   const bodyWords = words(bodyText);
   const outWords = sentences.flatMap((s) => words(s.text));
 
-  const coverageRatio = bodyWords.length === 0 ? 0 : outWords.length / bodyWords.length;
+  /* A source that normalises to zero words is UN-EVALUABLE — there is nothing
+     to under- or over-cover, so the ratio is meaningless and must not gate. The
+     old code forced ratio 0 and let `0 < minCoverage` flag it "truncated" on
+     every retry → a permanent stuck loop on a word-free span (2026-06-19
+     Ночной дозор ch7: a lone "***" chunk; cf. the 2026-06-15 Cyrillic case the
+     module header records). An empty OUTPUT is still caught below via the
+     "No sentences attributed" check, so a genuinely empty result never slips. */
+  const sourceEvaluable = bodyWords.length > 0;
+  const coverageRatio = sourceEvaluable ? outWords.length / bodyWords.length : 0;
 
   // Ending present: do the source's trailing words appear (contiguously) in the
   // attributed word stream?
@@ -165,10 +182,15 @@ export function validateStage2Coverage(
      differently), which false-positived clean chapters at 94–99% coverage. It
      stays in the verdict, and supports the truncation message only when
      coverage is already low. */
-  const truncated = coverageRatio < t.minCoverageRatio;
-  const excess = coverageRatio > t.maxCoverageRatio;
+  const truncated = sourceEvaluable && coverageRatio < t.minCoverageRatio;
+  const excess = sourceEvaluable && coverageRatio > t.maxCoverageRatio;
 
-  if (sentences.length === 0) {
+  /* An empty result is always a failure — and now it MUST gate `ok` directly:
+     it used to be caught only as a side effect of the forced-zero ratio (which
+     a word-free source no longer produces), so without this an empty
+     attribution of an empty source would wrongly pass. */
+  const noSentences = sentences.length === 0;
+  if (noSentences) {
     issues.push('No sentences attributed for this chapter.');
   }
   if (truncated) {
@@ -189,7 +211,7 @@ export function validateStage2Coverage(
   }
 
   return {
-    ok: !truncated && !excess && !duplicatedBlock,
+    ok: !noSentences && !truncated && !excess && !duplicatedBlock,
     coverageRatio,
     endingPresent,
     duplicatedBlock,
