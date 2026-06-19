@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
 import type { AppInfo } from './types';
 import {
   getDismissedVersion,
   dismissUpdate,
   shouldShowUpdateNotice,
+  useDismissedVersion,
   __resetForTests,
 } from './update-notice';
 
@@ -51,8 +53,14 @@ describe('shouldShowUpdateNotice', () => {
 
 describe('dismissUpdate', () => {
   it('records the version and notifies subscribers', () => {
-    const seen: (string | null)[] = [];
-    dismissUpdate('1.9.0');
+    const { result } = renderHook(() => useDismissedVersion());
+    expect(result.current).toBe(null);
+
+    act(() => {
+      dismissUpdate('1.9.0');
+    });
+
+    expect(result.current).toBe('1.9.0');
     expect(getDismissedVersion()).toBe('1.9.0');
     expect(localStorage.getItem('castwright:dismissedUpdateVersion')).toBe('1.9.0');
   });
