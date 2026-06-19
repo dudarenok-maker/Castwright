@@ -631,6 +631,7 @@ export function toVoiceLike(c: CastCharacter): VoiceLike {
     attributes: c.attributes ?? [],
     overrideTtsVoices: c.overrideTtsVoices ?? null,
     overrideTtsVoice: c.overrideTtsVoice ?? null,
+    voiceUuid: c.voiceUuid,
   };
 }
 

@@ -14,6 +14,7 @@ import {
   pickVoiceForEngine,
   pickEmotionVariantVoice,
   resolveVoiceAssignment,
+  qwenStorageKey,
   KOKORO_PROFILE_VOICES,
 } from './voice-mapping.js';
 
@@ -208,18 +209,20 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
      explicit designed voiceId in overrideTtsVoices.qwen; with none, there's
      nothing to infer — the picker returns '' (not a fallback voice). */
 
-  it('returns the designed voiceId from the qwen override slot', () => {
+  it('returns the storage key for the designed qwen voice (uuid-less falls back to qwen-<id>)', () => {
+    /* srv-43: without a voiceUuid, qwenStorageKey falls back to qwen-<voice.id>.
+       voice.id = voiceId ?? characterId; here voiceId is not set so id='char-maerin'. */
     const picked = pickVoiceForEngine(
       'qwen',
       {
         id: 'char-maerin',
         character: 'Maerin',
         attributes: ['Female', 'Teen'],
-        overrideTtsVoices: { qwen: { name: 'maerin-bright-teen' } },
+        overrideTtsVoices: { qwen: { name: 'qwen-char-maerin' } },
       },
       { gender: 'female', ageRange: 'teen' },
     );
-    expect(picked).toBe('maerin-bright-teen');
+    expect(picked).toBe('qwen-char-maerin');
   });
 
   it('returns "" (no fallback) when no qwen voice has been designed', () => {
@@ -259,13 +262,15 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
       name: '',
       description: 'No voice designed yet',
     });
+    /* srv-43: the name returned is now the storage key (qwen-<id> without uuid),
+       not the raw overrideTtsVoices.qwen.name. */
     const designed = resolveVoiceAssignment('qwen', {
       id: 'char-x',
       character: 'X',
       attributes: [],
-      overrideTtsVoices: { qwen: { name: 'x-voice' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-char-x' } },
     });
-    expect(designed).toEqual({ provider: 'qwen', name: 'x-voice', description: 'Designed voice' });
+    expect(designed).toEqual({ provider: 'qwen', name: 'qwen-char-x', description: 'Designed voice' });
   });
 
   it('auditEngineCatalog reports an empty audit for qwen (no static catalog)', () => {
@@ -280,10 +285,12 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
 });
 
 describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selection)', () => {
+  /* srv-43: variant key is derived from the (already uuid-resolved) baseVoice,
+     not from the stored variant name. Variant slot presence = designed. */
   const variants = { angry: { name: 'wren__angry' }, whisper: { name: 'wren__whisper' } };
 
-  it('returns the variant voiceId for a tagged emotion on Qwen', () => {
-    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren-base')).toBe('wren__angry');
+  it('returns the derived variant key (baseVoice__emotion) for a tagged emotion on Qwen', () => {
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren-base')).toBe('wren-base__angry');
   });
 
   it('falls back to the base voice when the tagged emotion has no variant', () => {
@@ -302,10 +309,58 @@ describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selectio
     expect(pickEmotionVariantVoice('coqui', variants, 'angry', 'Asya Anara')).toBe('Asya Anara');
   });
 
-  it('handles a missing/empty variants map by returning the base', () => {
+  it('handles a missing variants map by returning the base', () => {
     expect(pickEmotionVariantVoice('qwen', undefined, 'angry', 'wren-base')).toBe('wren-base');
+    /* srv-43: slot PRESENCE signals designed; an object (even with blank name) → variant key. */
     expect(pickEmotionVariantVoice('qwen', { angry: { name: '  ' } }, 'angry', 'wren-base')).toBe(
-      'wren-base',
+      'wren-base__angry',
     );
+  });
+});
+
+describe('srv-43 qwen storage key', () => {
+  it('qwenStorageKey returns qwen-<voiceUuid> when uuid is present', () => {
+    expect(qwenStorageKey({ voiceUuid: 'U1' }, 'wren')).toBe('qwen-U1');
+  });
+
+  it('qwenStorageKey falls back to qwen-<voiceId> when no uuid', () => {
+    expect(qwenStorageKey({ voiceId: 'wren' }, 'x')).toBe('qwen-wren');
+  });
+
+  it('qwenStorageKey falls back to qwen-<fallbackId> when neither uuid nor voiceId', () => {
+    expect(qwenStorageKey({}, 'fallback')).toBe('qwen-fallback');
+  });
+
+  it('returns qwen-<voiceUuid> for a designed voice that has a uuid', () => {
+    const voice = {
+      id: 'wren',
+      voiceUuid: 'V1StGXR8Z5',
+      overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    };
+    expect(pickVoiceForEngine('qwen', voice)).toBe('qwen-V1StGXR8Z5');
+  });
+
+  it('falls back to the stored name for a legacy designed voice (no uuid)', () => {
+    const voice = { id: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+    expect(pickVoiceForEngine('qwen', voice)).toBe('qwen-wren');
+  });
+
+  it('returns empty string for an undesigned qwen character', () => {
+    expect(pickVoiceForEngine('qwen', { id: 'wren' })).toBe('');
+  });
+
+  it('derives the emotion-variant key from the resolved base storage key', () => {
+    expect(
+      pickEmotionVariantVoice('qwen', { angry: { name: 'ignored-legacy-name' } }, 'angry', 'qwen-V1StGXR8Z5'),
+    ).toBe('qwen-V1StGXR8Z5__angry');
+  });
+
+  it('resolves a uuid-backed qwen designed voice via the legacy singular field too', () => {
+    const voice = {
+      id: 'wren',
+      voiceUuid: 'V1StGXR8Z5',
+      overrideTtsVoice: { engine: 'qwen' as const, name: 'qwen-wren' },
+    };
+    expect(pickVoiceForEngine('qwen', voice)).toBe('qwen-V1StGXR8Z5');
   });
 });
