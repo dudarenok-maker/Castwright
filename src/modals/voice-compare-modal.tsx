@@ -85,10 +85,13 @@ export function VoiceCompareModal({
       matchMode: 'prefix',
       play: async () => {
         /* Inject the resolved Qwen voiceId into the override slot the server
-           reads; non-Qwen current voices pass through unchanged. */
+           reads; non-Qwen current voices pass through unchanged.
+           srv-43: also carry voiceUuid so qwenStorageKey resolves the
+           uuid-keyed cache entry rather than the legacy name-derived key. */
         const requestVoice: Voice = currentQwenName
           ? {
               ...currentSubject,
+              voiceUuid: currentSubject.voiceUuid ?? character.voiceUuid,
               overrideTtsVoices: {
                 ...(currentSubject.overrideTtsVoices ?? {}),
                 qwen: { name: currentQwenName },

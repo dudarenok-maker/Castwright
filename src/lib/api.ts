@@ -498,6 +498,10 @@ export interface DesignQwenVoiceResponse {
   /** Stable URL of the cached audition MP3 (= the 12s sample). Not a blob —
       nothing to revoke. */
   previewUrl: string;
+  /** srv-43 — immutable per-voice identity returned by the design route.
+      The drawer stamps this onto the in-memory voice so the /sample player
+      can resolve the uuid-keyed storage key without a full cast refetch. */
+  voiceUuid?: string;
 }
 
 /** Plan 161 — promote a previewed design onto the character's stable voiceId
@@ -512,6 +516,10 @@ export interface PromoteQwenVoiceResponse {
   voiceId: string;
   /** URL of the audition cached under the committed id. */
   url: string;
+  /** srv-43 — immutable per-voice identity returned by the promote route.
+      The drawer stamps this onto the in-memory voice so the /sample player
+      can resolve the uuid-keyed storage key without a full cast refetch. */
+  voiceUuid?: string;
 }
 
 /** Optional scope for a voice-override write (plan 108). Default
@@ -1831,12 +1839,15 @@ async function realDesignQwenVoice(
     }
     throw new Error(detail || `Voice design failed (${res.status}).`);
   }
-  /* Response is JSON { voiceId, url } pointing at the cached audition MP3 —
-     which is also the 12s sample the player will hit. */
-  const data = (await res.json()) as { voiceId?: string; url?: string };
+  /* Response is JSON { voiceId, url, voiceUuid } pointing at the cached
+     audition MP3 — which is also the 12s sample the player will hit.
+     srv-43: voiceUuid lets the drawer stamp the in-memory voice so /sample
+     resolves the uuid-keyed cache key without a full cast refetch. */
+  const data = (await res.json()) as { voiceId?: string; url?: string; voiceUuid?: string };
   return {
     voiceId: data.voiceId ?? `qwen-${characterId}${preview ? '-preview' : ''}`,
     previewUrl: data.url ?? '',
+    voiceUuid: data.voiceUuid,
   };
 }
 
@@ -1862,8 +1873,10 @@ async function realPromoteQwenVoice(
     }
     throw new Error(detail || `Promoting the voice failed (${res.status}).`);
   }
-  const data = (await res.json()) as { voiceId?: string; url?: string };
-  return { voiceId: data.voiceId ?? '', url: data.url ?? '' };
+  /* srv-43: voiceUuid is now in the promote response so the drawer can
+     stamp the in-memory voice and /sample resolves the uuid-keyed cache. */
+  const data = (await res.json()) as { voiceId?: string; url?: string; voiceUuid?: string };
+  return { voiceId: data.voiceId ?? '', url: data.url ?? '', voiceUuid: data.voiceUuid };
 }
 
 async function realDiscardQwenPreview(

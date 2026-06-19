@@ -2834,6 +2834,14 @@ export interface components {
                 id?: string;
                 character?: string;
                 attributes?: string[];
+                /** @description srv-43 — immutable per-voice identity (nanoid). When present on a Qwen voice the server resolves the storage key as qwen-<voiceUuid> so the player hits the design-time cache entry. */
+                voiceUuid?: string;
+                /** @description Per-engine voice override map. For Qwen the qwen slot holds the designed-voice display name. */
+                overrideTtsVoices?: {
+                    [key: string]: {
+                        name?: string;
+                    };
+                };
             };
             /**
              * @description Extra signals the server uses to pick a sensible prebuilt Gemini

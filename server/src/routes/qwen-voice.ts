@@ -551,7 +551,9 @@ qwenVoiceRouter.post(
           seriesInfo ?? undefined,
         );
       }
-      return res.status(200).json({ voiceId, url });
+      /* srv-43 — return voiceUuid so the drawer can stamp it locally without
+         a refetch; the /sample player needs it to hit the uuid-keyed cache. */
+      return res.status(200).json({ voiceId, url, voiceUuid });
     } catch (e) {
       /* The core throws a user-facing message for sidecar/encode/timeout
          failures — surface it as a 502 (the sidecar boundary). */
@@ -657,7 +659,11 @@ qwenVoiceRouter.post(
       /* sidecar unreachable — non-fatal */
     }
 
-    return res.status(200).json({ voiceId: realVoiceId, url: voiceSamplePublicUrl(realFileName) });
+    /* srv-43 — return voiceUuid so the drawer can stamp it locally; the
+       /sample player needs it to hit the uuid-keyed cache on the next play. */
+    return res
+      .status(200)
+      .json({ voiceId: realVoiceId, url: voiceSamplePublicUrl(realFileName), voiceUuid: character.voiceUuid });
   },
 );
 

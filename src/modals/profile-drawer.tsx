@@ -613,11 +613,14 @@ export function ProfileDrawer({
        `designedVoiceId` (live this session, pre-Save), not in the
        sample subject. Inject it into overrideTtsVoices.qwen so the server's
        pickVoiceForEngine('qwen', …) resolves it; preserve any other-engine
-       slots already on the subject. Non-qwen engines pass through unchanged. */
+       slots already on the subject. Non-qwen engines pass through unchanged.
+       srv-43: also inject voiceUuid so qwenStorageKey resolves the uuid-keyed
+       cache entry the design route wrote, instead of the legacy name-derived key. */
     const requestSubject =
       effectiveEngine === 'qwen' && designedVoiceId
         ? {
             ...sampleSubject,
+            voiceUuid: voice?.voiceUuid ?? character.voiceUuid,
             overrideTtsVoices: {
               ...(voice?.overrideTtsVoices ?? {}),
               qwen: { name: designedVoiceId },
