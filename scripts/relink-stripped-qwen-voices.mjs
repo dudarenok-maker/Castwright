@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// SUPERSEDED by srv-43 (voiceUuid-keyed storage, plan 226): this script correlates
+// characters to voices/qwen/qwen-<voiceId>.pt by legacy name; uuid-keyed files
+// (qwen-<uuid>.pt) will be treated as "no embedding on disk". Needs a uuid-aware
+// update before rerun on a post-srv-43 workspace.
 /* Re-link cast characters to their on-disk designed Qwen voices after a
    re-analysis stripped the per-character `overrideTtsVoices.qwen` pointer.
 
