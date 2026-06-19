@@ -1,8 +1,9 @@
 {
-  "voiceId": "qwen-brann-weir",
+  "voiceId": "qwen-1e4492c5e78a435c8ae0d",
   "instruct": "A male adult voice with a medium-low pitch and a steady, rhythmic pace, featuring a resonant, gravelly timbre and a curious, rising inflection for expressive character dialogue.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "voiceUuid": "1e4492c5e78a435c8ae0d"
 }
