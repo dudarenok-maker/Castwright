@@ -29,15 +29,45 @@
       "id": 3,
       "title": "Chapter One — The Knock",
       "slug": "03-chapter-one-the-knock",
-      "duration": "00:00",
-      "uuid": "1017f4fa-5728-431e-8c60-a784def0fa3e"
+      "duration": "03:59",
+      "uuid": "1017f4fa-5728-431e-8c60-a784def0fa3e",
+      "audioModelKey": "qwen3-tts-0.6b",
+      "audioEngines": {
+        "qwen": 6
+      },
+      "audioRenderedAt": "2026-06-16T02:50:36.261Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.15,
+        "truePeakDb": -1.5,
+        "durationSec": 238.920125,
+        "expectedSec": 237.5,
+        "checkedAt": "2026-06-16T02:50:36.260Z"
+      }
     },
     {
       "id": 4,
       "title": "Chapter Two — The Pour",
       "slug": "04-chapter-two-the-pour",
-      "duration": "00:00",
-      "uuid": "4934a15c-411e-4d16-a073-7d27eaca15ce"
+      "duration": "13:47",
+      "uuid": "4934a15c-411e-4d16-a073-7d27eaca15ce",
+      "audioModelKey": "qwen3-tts-0.6b",
+      "audioEngines": {
+        "qwen": 13
+      },
+      "audioRenderedAt": "2026-06-16T03:18:48.799Z",
+      "audioQa": {
+        "status": "suspect",
+        "reasons": [
+          "2 sentence(s) still flagged after re-recording (e.g. Suspiciously long — 1.1s rendered vs ~0.4s expected (possible runaway synthesis).)."
+        ],
+        "measuredLufs": -16.03,
+        "truePeakDb": -1.5,
+        "durationSec": 827.32025,
+        "expectedSec": 831.4285714285714,
+        "checkedAt": "2026-06-16T03:18:48.799Z"
+      }
     }
   ],
   "coverGradient": [
@@ -45,7 +75,7 @@
     "#0F0E0D"
   ],
   "createdAt": "2026-06-09T00:43:33.392Z",
-  "updatedAt": "2026-06-11T01:49:46.225Z",
+  "updatedAt": "2026-06-16T03:18:48.877Z",
   "chapterTitleParserVersion": 2,
   "language": "en",
   "schema": 1,

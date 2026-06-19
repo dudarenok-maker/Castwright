@@ -1,9 +1,9 @@
 {
-  "voiceId": "qwen-0959ddd030f6435fb969f",
+  "voiceId": "qwen-dcf959bc701d4e90acd84",
   "instruct": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
   "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-  "voiceUuid": "0959ddd030f6435fb969f"
+  "voiceUuid": "dcf959bc701d4e90acd84"
 }

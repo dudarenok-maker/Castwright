@@ -1,9 +1,9 @@
 {
-  "voiceId": "qwen-091ee6cfbe3c4be39c9e9",
+  "voiceId": "qwen-6f3dcb392e804d8d9c9a6",
   "instruct": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
   "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-  "voiceUuid": "091ee6cfbe3c4be39c9e9"
+  "voiceUuid": "6f3dcb392e804d8d9c9a6"
 }

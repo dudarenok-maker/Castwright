@@ -12,18 +12,24 @@
                    (self-contained bundle). For a workspace book pass the shared
                    `<workspaceRoot>/voices/qwen`.
      --dry-run   — print the plan, change nothing.
+     --copy      — COPY originals to the new uuid names instead of renaming
+                   them. REQUIRED for a shared workspace `voices/qwen`, where a
+                   name (e.g. `qwen-narrator`) may be referenced by OTHER books —
+                   renaming would break them. Leaves originals untouched. Use the
+                   default (rename) only for a self-contained bundle.
 
    For each DISTINCT designed qwen voice (shared voices map to ONE uuid), it
    mints a uuid, renames `qwen-<name>.{pt,json}` + every `__<emotion>` variant to
    `qwen-<uuid>.*`, rewrites `cast.json` (voiceUuid + qwen.name + variant names),
    and updates each descriptor's `voiceId` + adds the inert `voiceUuid`.
    Idempotent: a character that already has a `voiceUuid` is skipped. */
-import { readFileSync, writeFileSync, existsSync, renameSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, copyFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
+const copyMode = args.includes('--copy');
 const [bookDir, voicesDirArg] = args.filter((a) => !a.startsWith('--'));
 if (!bookDir) {
   console.error('Usage: node scripts/rekey-qwen-voices-to-uuid.mjs "<bookDir>" [voicesDir] [--dry-run]');
@@ -86,15 +92,18 @@ for (const [oldName, uuid] of nameToUuid) {
   for (const suffix of variantSuffixes(oldName)) planRename(`${oldName}${suffix}`, `${newName}${suffix}`);
 }
 
-console.log(`Re-keying ${nameToUuid.size} voice(s) in ${voicesDir}${dryRun ? ' (dry-run)' : ''}:`);
+const verb = copyMode ? 'copy' : 'rename';
+console.log(`Re-keying ${nameToUuid.size} voice(s) in ${voicesDir} (${verb})${dryRun ? ' (dry-run)' : ''}:`);
 for (const [oldName, uuid] of nameToUuid) console.log(`  ${oldName} → qwen-${uuid}`);
-console.log(`Files to rename: ${renames.length}; cast characters skipped (already keyed): ${skipped}`);
+console.log(`Files to ${verb}: ${renames.length}; cast characters skipped (already keyed): ${skipped}`);
 
 if (dryRun) process.exit(0);
 
-/* 1. Rename files + patch each descriptor's voiceId + add inert voiceUuid. */
+/* 1. Rename/copy files + patch each descriptor's voiceId + add inert voiceUuid.
+   --copy leaves the originals (a shared workspace name may belong to other books). */
 for (const { from, to, ext, newKey } of renames) {
-  renameSync(from, to);
+  if (copyMode) copyFileSync(from, to);
+  else renameSync(from, to);
   if (ext === 'json') {
     const d = JSON.parse(readFileSync(to, 'utf8'));
     const uuid = newKey.replace(/^qwen-/, '').split('__')[0];

@@ -1,9 +1,9 @@
 {
-  "voiceId": "qwen-9a57ce06017e48989812b",
+  "voiceId": "qwen-5fc748d516a24bf7b54a1",
   "instruct": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
   "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-  "voiceUuid": "9a57ce06017e48989812b"
+  "voiceUuid": "5fc748d516a24bf7b54a1"
 }
