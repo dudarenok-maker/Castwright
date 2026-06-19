@@ -4306,8 +4306,9 @@ export interface CastDesignCallbacks {
   onProgress?: (e: { characterId: string; name: string; done: number; total: number }) => void;
   /** Throttled (~6s) liveness tick during a long single design. */
   onHeartbeat?: (e: { characterId: string }) => void;
-  /** A character was designed + persisted; `voiceId` is the bespoke qwen name. */
-  onCharacterDesigned?: (e: { characterId: string; voiceId: string }) => void;
+  /** A character was designed + persisted; `voiceId` is the bespoke qwen name.
+      srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
@@ -4332,6 +4333,9 @@ export interface CastDesignCallbacks {
     previewVoiceId: string;
     previewUrl: string;
     persona: string;
+    /** srv-43: uuid of the character's bespoke voice file — lets the drawer
+        resolve the uuid-keyed cache entry before the next cast refetch. */
+    voiceUuid?: string;
   }) => void;
   /** Single-design (re)subscribe seed — replayed once on reload re-attach so the
       slice can open a single snapshot at the right character + phase. */
@@ -4361,6 +4365,7 @@ interface CastDesignStreamEvent {
   previewVoiceId?: string;
   previewUrl?: string;
   persona?: string;
+  voiceUuid?: string;
   mode?: 'first' | 'redesign';
   url?: string;
 }
@@ -4419,7 +4424,11 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
         break;
       case 'designed':
         if (typeof e.characterId === 'string' && typeof e.voiceId === 'string')
-          cb.onCharacterDesigned?.({ characterId: e.characterId, voiceId: e.voiceId });
+          cb.onCharacterDesigned?.({
+            characterId: e.characterId,
+            voiceId: e.voiceId,
+            voiceUuid: e.voiceUuid,
+          });
         break;
       case 'preview_ready':
         if (
@@ -4433,6 +4442,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             previewVoiceId: e.previewVoiceId,
             previewUrl: e.previewUrl,
             persona: e.persona ?? '',
+            voiceUuid: e.voiceUuid,
           });
         break;
       case 'progress':

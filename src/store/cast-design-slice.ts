@@ -37,6 +37,9 @@ export interface CastDesignPreview {
   previewVoiceId: string;
   previewUrl: string;
   persona: string;
+  /** srv-43: uuid of the character's bespoke voice so the drawer can resolve
+      the uuid-keyed sample-cache entry before the next cast refetch. */
+  voiceUuid?: string;
 }
 
 /** Snapshot of the in-flight bulk-design job for ONE book. Opened by the
@@ -284,6 +287,8 @@ export const castDesignSlice = createSlice({
         previewUrl: string;
         persona: string;
         lastTickAt: number;
+        /** srv-43: uuid of the character's bespoke voice file. */
+        voiceUuid?: string;
       }>,
     ) {
       const snap = state.active;
@@ -296,6 +301,7 @@ export const castDesignSlice = createSlice({
         previewVoiceId: action.payload.previewVoiceId,
         previewUrl: action.payload.previewUrl,
         persona: action.payload.persona,
+        voiceUuid: action.payload.voiceUuid,
       };
       snap.lastTickAt = action.payload.lastTickAt;
     },
