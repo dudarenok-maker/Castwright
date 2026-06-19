@@ -39,12 +39,6 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 _The onboarding & first-run cluster below was promoted from Could to Must on 2026-06-08 —
 first-run friction is the biggest adoption blocker for non-technical deployers._
 
-#### `fe-27` — In-app update notifier ([#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471))
-
-- _What:_ Check GitHub Releases (via a small server proxy) and surface "vX.Y.Z available" + a changelog link when the running version is behind. Complements `fs-1` (the upgrade *mechanism*) — this is the *prompt*.
-- _Benefit (user):_ closes the distribution loop so testers actually know to upgrade.
-_Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471).
-
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
 
 - _What:_ Add an Inno Setup (or NSIS) script that wraps the `castwright-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\Castwright`, drops a Start Menu entry, checks the **runtime** prereqs (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links for any missing dep, then launches the app. **Model install + smoke test are owned by the `fs-21` first-run wizard** (shared with macOS `ops-15`), not the installer — so the platforms stay consistent. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
