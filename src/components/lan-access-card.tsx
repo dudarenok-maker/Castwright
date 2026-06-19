@@ -25,7 +25,15 @@ export function LanAccessCard() {
     try { setSession(await api.createDevicePairSession({ label: label.trim() || 'Device' })); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
-  const revoke = async (id: string) => { await api.revokeDevice(id); refresh(); };
+  const revoke = async (id: string) => {
+    setErr(null);
+    try {
+      await api.revokeDevice(id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    refresh(); // re-read: a revoked device drops out of the list below
+  };
 
   return (
     <section className="bg-white rounded-3xl border border-ink/10 shadow-card p-6">
@@ -48,7 +56,7 @@ export function LanAccessCard() {
             </div>
           )}
           <ul className="mt-6 divide-y divide-ink/8">
-            {(devices ?? []).map((d) => (
+            {(devices ?? []).filter((d) => !d.revoked).map((d) => (
               <li key={d.id} className="py-3 flex items-center justify-between gap-3 text-sm">
                 <span className="text-ink">
                   <span className="font-medium">{d.label}</span>
@@ -61,6 +69,18 @@ export function LanAccessCard() {
               </li>
             ))}
           </ul>
+          <details className="mt-5 text-xs text-ink/55">
+            <summary className="cursor-pointer text-ink/70">Phone shows "Not secure" / certificate warning?</summary>
+            <p className="mt-2 leading-relaxed">
+              The phone's browser must trust this computer's local certificate (one-time). Run{' '}
+              <code className="px-1 py-0.5 rounded bg-ink/5">npm run install:cert-mobile</code> on this
+              computer — it prints a QR + per-OS steps to download and install the root certificate
+              (served at <code className="px-1 py-0.5 rounded bg-ink/5">/cert/root.crt</code>). On
+              Android: Settings → Security → Install a certificate → CA certificate; on iOS: install
+              the profile, then General → About → Certificate Trust Settings → enable it. The companion
+              app trusts it automatically (cert pinning) — only browsers need this step.
+            </p>
+          </details>
         </>
       )}
     </section>
