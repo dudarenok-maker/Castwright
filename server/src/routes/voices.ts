@@ -120,6 +120,10 @@ interface DerivedVoice {
       the response. New clients read `overrideTtsVoices`. Populated from
       the active engine's slot when present. */
   overrideTtsVoice?: { engine: TtsEngine; name: string } | null;
+  /** srv-43 — immutable per-voice identity (nanoid) minted at design time.
+      Copied from the source Character. Absent on pre-srv-43 designs and
+      catalog voices. */
+  voiceUuid?: string;
 }
 
 /* Read-time migration. Older cast.json files (pre-Kokoro) stored a
@@ -357,6 +361,7 @@ async function aggregateVoices(
             ttsVoice,
             overrideTtsVoices: overrideMap,
             overrideTtsVoice: legacyShape,
+            voiceUuid: c.voiceUuid,
             books: new Set([state.bookId]),
           });
         }

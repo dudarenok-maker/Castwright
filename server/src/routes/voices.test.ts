@@ -313,6 +313,35 @@ describe('GET /api/voices — aggregation', () => {
     delete cast.characters[0].overrideTtsVoices;
     writeFileSync(castPath, JSON.stringify(cast));
   });
+
+  it('surfaces voiceUuid on the derived Voice when the character carries one (srv-43)', async () => {
+    /* Fail-before/pass-after regression guard: the aggregator MUST copy
+       c.voiceUuid onto the derived Voice so the API contract stays honest.
+       Mutate the first-seen cast.json for v_brann, assert the payload
+       carries the uuid, then restore. */
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].voiceUuid = 'U1';
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const res = await request(app).get('/api/voices');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.voiceUuid).toBe('U1');
+
+    /* Restore. */
+    delete cast.characters[0].voiceUuid;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
 });
 
 describe('GET /api/voices?engine=qwen — generated flag', () => {
@@ -362,7 +391,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
             name: 'Oduvan',
             voiceId: 'v_oduvan',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-oduvan' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-v_oduvan' } },
             attributes: [],
             lines: 10,
             scenes: 1,
@@ -372,7 +401,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
             name: 'Marlow',
             voiceId: 'v_marlow',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
             attributes: [],
             lines: 10,
             scenes: 1,
@@ -409,7 +438,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
         synthesizedAt: new Date().toISOString(),
         segments: [],
         characterSnapshots: {
-          'c-oduvan': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-oduvan' },
+          'c-oduvan': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-v_oduvan' },
         },
       }),
     );
@@ -432,14 +461,14 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     const res = await request(app).get('/api/voices?engine=qwen');
     expect(res.status).toBe(200);
     const oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_oduvan');
-    expect(oduvan.ttsVoice.name).toBe('qwen-oduvan');
+    expect(oduvan.ttsVoice.name).toBe('qwen-v_oduvan');
     expect(oduvan.generated).toBe(true);
   });
 
   it('leaves a designed-but-unrendered Qwen voice without the generated flag', async () => {
     const res = await request(app).get('/api/voices?engine=qwen');
     const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
-    expect(marlow.ttsVoice.name).toBe('qwen-marlow');
+    expect(marlow.ttsVoice.name).toBe('qwen-v_marlow');
     expect(marlow.generated).toBeFalsy();
   });
 
