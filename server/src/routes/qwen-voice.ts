@@ -258,10 +258,10 @@ qwenVoiceRouter.get(
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
     }
 
-    /* Same voiceId resolution as design-voice: an explicit per-character qwen
-       override wins, else the stable `qwen-${voiceId}` key (so a REUSED
-       character with an empty own override still resolves to its series-shared
-       sidecar). */
+    /* Same storage-key resolution as design-voice: an explicit per-character
+       qwen override name (the storage key) wins, else the derived
+       `qwenStorageKey` (so a REUSED character with an empty own override still
+       resolves to its series-shared sidecar `.json`). */
     const voiceName =
       character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(character, characterId);
     const sidecar = await readJson<{ instruct?: string }>(qwenVoiceSidecarPath(voiceName)).catch(

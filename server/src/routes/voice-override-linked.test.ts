@@ -239,8 +239,8 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
         voiceUuid: 'U2',
       },
     ]);
-    /* Also remove BOOK_B's wren-sparrow from the mix so it doesn't confuse the assertion
-       (wren-sparrow has no voiceUuid — verify it gets undefined, not U1). */
+    /* BOOK_B's wren-sparrow starts with NO voiceUuid; the unify must converge it
+       onto the canonical U1 (asserted below), like every other unified row. */
     writeBookOnDisk(AUTHOR, SERIES, BOOK_B, bookB, [
       { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'character', color: 'unset', lines: 90 },
     ]);
