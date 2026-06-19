@@ -13,6 +13,7 @@ import {
 } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { computeOverallProgress } from '../lib/analysis-progress';
+import { derivePhaseState } from '../lib/analysis-phase-state';
 import {
   MODEL_OPTIONS,
   buildLocalModelOptions,
@@ -128,8 +129,16 @@ export function AnalysingView({
   onComplete,
 }: Props) {
   const dispatch = useAppDispatch();
+  /* `phase` is the pipeline FRONTIER — the highest phase id seen this run.
+     It drives the overall %, the sticky bar, and the cross-nav snapshot. The
+     per-phase progress + live payloads are kept in separate maps so two
+     pipelined phases (cast + attribution, under the split analyzer) never
+     clobber each other's ticker — the old single `live`/`phaseProgress` state
+     was the active-card "flicker" the user filmed. */
   const [phase, setPhase] = useState(0);
-  const [phaseProgress, setPhaseProgress] = useState(0);
+  const maxPhaseRef = useRef(0);
+  const [progressByPhase, setProgressByPhase] = useState<Record<number, number>>({});
+  const [liveByPhase, setLiveByPhase] = useState<Record<number, AnalysisLiveInfo | null>>({});
   const [logs, setLogs] = useState<Record<number, string[]>>({});
   const [error, setError] = useState<{
     message: string;
@@ -144,7 +153,6 @@ export function AnalysingView({
   }>({ nonce: 0, fresh: false });
   const [conn, setConn] = useState<ConnState>('idle');
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
-  const [live, setLive] = useState<AnalysisLiveInfo | null>(null);
   /* Per-phase live "Receiving response" indicator. Cleared whenever the
      active phase changes so a stale heartbeat never bleeds into the next
      phase's UI. Heartbeat events arrive throttled (~one per 2s); the local
@@ -383,12 +391,13 @@ export function AnalysingView({
     analysisControllerRef.current = controller;
     hasStartedOnceRef.current = true;
     setPhase(0);
-    setPhaseProgress(0);
+    maxPhaseRef.current = 0;
+    setProgressByPhase({});
+    setLiveByPhase({});
     setLogs({});
     setError(null);
     setConn('connecting');
     setLastEventAt(null);
-    setLive(null);
     setHeartbeatByPhase({});
     setServerModelByPhase({});
     setRemainingMs(null);
@@ -443,38 +452,35 @@ export function AnalysingView({
             if (serverModel) {
               setServerModelByPhase((prev) => ({ ...prev, [phaseId]: serverModel }));
             }
+            /* Per-phase state: each phase owns its progress + live payload so
+               pipelined cast (Phase 0) and attribution (Phase 1) ticks don't
+               overwrite one another. A phase event with no `live` clears that
+               phase's ticker (it's finished a chapter / the whole phase) while
+               leaving the other phase untouched. A done phase's stale heartbeat
+               never renders because PhaseCard gates it on isActive. */
+            setProgressByPhase((prev) => ({ ...prev, [phaseId]: progress }));
+            setLiveByPhase((prev) => ({ ...prev, [phaseId]: live ?? null }));
+            const prevMax = maxPhaseRef.current;
+            const newMax = Math.max(prevMax, phaseId);
+            maxPhaseRef.current = newMax;
+            if (newMax !== prevMax) setPhase(newMax);
+            /* Only the frontier phase drives the cross-nav snapshot's phase
+               label/progress (so the top-bar pill doesn't flip-flop between the
+               two pipelined phases); lagging-phase ticks just refresh the
+               liveness timestamp. */
             dispatch(
-              analysisActions.applyAnalysisSnapshotTick({
-                manuscriptId,
-                phaseId,
-                phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
-                phaseProgress: progress,
-                lastTickAt: Date.now(),
-              }),
+              analysisActions.applyAnalysisSnapshotTick(
+                phaseId === newMax
+                  ? {
+                      manuscriptId,
+                      phaseId,
+                      phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+                      phaseProgress: progress,
+                      lastTickAt: Date.now(),
+                    }
+                  : { manuscriptId, lastTickAt: Date.now() },
+              ),
             );
-            setPhase((prev) => {
-              /* Drop heartbeat for the previous phase the moment the active
-                 phase advances — completed phases shouldn't keep a "still
-                 receiving" hint. */
-              if (prev !== phaseId) {
-                setHeartbeatByPhase((hbs) => {
-                  if (!(prev in hbs)) return hbs;
-                  const { [prev]: _drop, ...rest } = hbs;
-                  return rest;
-                });
-                setThrottleByPhase((ts) => {
-                  if (!(prev in ts)) return ts;
-                  const { [prev]: _drop, ...rest } = ts;
-                  return rest;
-                });
-              }
-              return phaseId;
-            });
-            setPhaseProgress(progress);
-            /* Carry the realtime "what's running right now" payload so the
-               active phase header can render a ticking elapsed indicator.
-               Cleared as soon as the active phase changes (below). */
-            if (live) setLive(live);
           },
           onLog: ({ phaseId, message }) => {
             if (cancelled) return;
@@ -794,9 +800,11 @@ export function AnalysingView({
         onPhase: ({ phaseId, progress, live }) => {
           markEvent();
           setConn('streaming');
-          setPhase(phaseId);
-          setPhaseProgress(progress);
-          if (live) setLive(live);
+          setProgressByPhase((prev) => ({ ...prev, [phaseId]: progress }));
+          setLiveByPhase((prev) => ({ ...prev, [phaseId]: live ?? null }));
+          const newMax = Math.max(maxPhaseRef.current, phaseId);
+          maxPhaseRef.current = newMax;
+          setPhase(newMax);
           /* Snapshot tick — proof to the middleware that the subset
            SSE is alive so it can attach as a second subscriber. */
           dispatch(
@@ -907,7 +915,7 @@ export function AnalysingView({
       });
   };
 
-  const overall = computeOverallProgress(phase, phaseProgress);
+  const overall = computeOverallProgress(phase, progressByPhase[phase] ?? 0);
   const sinceLastSec = lastEventAt
     ? Math.max(0, Math.round((Date.now() - lastEventAt) / 1000))
     : null;
@@ -1352,25 +1360,34 @@ export function AnalysingView({
         </div>
 
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card divide-y divide-ink/5">
-          {ANALYSIS_PHASES.map((p) => (
-            <PhaseCard
-              key={p.id}
-              phase={p}
-              activePhaseId={phase}
-              phaseProgress={phaseProgress}
-              phaseLogs={logs[p.id] ?? []}
-              live={live}
-              heartbeat={heartbeatByPhase[p.id]}
-              throttle={throttleByPhase[p.id]}
-              serverModelByPhase={serverModelByPhase}
-              isLocalAnalyzer={isLocalAnalyzer}
-              analysisStarted={analysisStarted}
-              conn={conn}
-              isResuming={resuming}
-              bookId={bookId}
-              droppedQuotesRefreshKey={droppedQuotesRefreshKey}
-            />
-          ))}
+          {ANALYSIS_PHASES.map((p) => {
+            const phaseState = derivePhaseState(p.id, {
+              progressByPhase,
+              liveByPhase,
+              maxPhase: phase,
+            });
+            return (
+              <PhaseCard
+                key={p.id}
+                phase={p}
+                activePhaseId={phase}
+                isPhaseActive={phaseState === 'active'}
+                isPhaseDone={phaseState === 'done'}
+                phaseProgress={progressByPhase[p.id] ?? 0}
+                phaseLogs={logs[p.id] ?? []}
+                live={liveByPhase[p.id] ?? null}
+                heartbeat={heartbeatByPhase[p.id]}
+                throttle={throttleByPhase[p.id]}
+                serverModelByPhase={serverModelByPhase}
+                isLocalAnalyzer={isLocalAnalyzer}
+                analysisStarted={analysisStarted}
+                conn={conn}
+                isResuming={resuming}
+                bookId={bookId}
+                droppedQuotesRefreshKey={droppedQuotesRefreshKey}
+              />
+            );
+          })}
         </div>
 
         {/* Stage 1 shrink-refused banner. The server refused to overwrite

@@ -739,21 +739,6 @@ const STAGE1_BASELINE_RATE = 1.0; // input chars / ms; tuned for gemini-2.5-flas
    the side of "we promised more time than it took" beats pegging at 95%. */
 const STAGE2_STRETCH = 5.0;
 const MIN_EST_MS = 3000;
-/* When elapsed exceeds the per-chapter estimate, the bar asymptotes toward
-   the cap instead of pegging — overage frac is mapped through 1 - 1/(1+x)
-   so a 2× overage adds half the remaining headroom, a 4× overage adds 80%.
-   Log lines fire at each threshold so the user gets a textual signal too. */
-const OVERAGE_LOG_THRESHOLDS = [1.5, 2.0, 3.0] as const;
-
-/* Wall-clock heartbeat thresholds (ms). Independent of the per-chapter
-   estimate — guarantees the log gets a fresh line at predictable intervals
-   even when the estimate is small (a 22s estimate's 1.5×/2×/3× thresholds
-   are only 33s/44s/66s, so without these the log would stall on a 5-minute
-   chapter). Each threshold fires once per chapter. */
-const HEARTBEAT_MS_THRESHOLDS = [
-  30_000, 60_000, 120_000, 180_000, 300_000, 420_000, 600_000, 900_000,
-] as const;
-
 /* Streaming-chunk feedback. Throttle SSE heartbeat emission so a fast model
    pumping 200 chunks/s doesn't drown the client. 2 s is high-signal:
    noticeable to the user, low overhead on the wire. */
@@ -3445,8 +3430,6 @@ export async function runMainAnalyzerJob(
         );
       }
       const chapterEstMs = chapterEstMsFor(ch.body.length);
-      const loggedOverages = new Set<number>();
-      const loggedHeartbeats = new Set<number>();
       const startedAt = Date.now();
       inFlight.set(i, {
         chapterIndex: i,
@@ -3497,33 +3480,14 @@ export async function runMainAnalyzerJob(
           refineEstMs(slot, elapsed);
         }
         sendLiveTick();
-        /* Over-budget log thresholds — fire once per chapter. */
-        for (const t of OVERAGE_LOG_THRESHOLDS) {
-          if (loggedOverages.has(t)) continue;
-          if (elapsed >= chapterEstMs * t) {
-            loggedOverages.add(t);
-            log(
-              1,
-              `Chapter ${i + 1}/${totalChapters} still running — ${humanSeconds(elapsed)} elapsed (est was ${humanSeconds(chapterEstMs)}, ${t}× exceeded). Continuing.`,
-            );
-          }
-        }
-        /* Wall-clock heartbeats. */
-        for (const ms of HEARTBEAT_MS_THRESHOLDS) {
-          if (loggedHeartbeats.has(ms)) continue;
-          if (elapsed >= ms) {
-            loggedHeartbeats.add(ms);
-            const overageRecent = Array.from(loggedOverages).some(
-              (t) => Math.abs(chapterEstMs * t - ms) < 5000,
-            );
-            if (!overageRecent) {
-              log(
-                1,
-                `Chapter ${i + 1}/${totalChapters} — ${humanSeconds(elapsed)} elapsed, still waiting on the model.`,
-              );
-            }
-          }
-        }
+        /* The per-chapter "Nm elapsed, still waiting on the model" wall-clock
+           heartbeats and the "still running, Nx exceeded" over-budget lines
+           used to live here. They've been removed: the live ticker ("M:SS of
+           ~M:SS · section X/Y · Attributed ~N of ~M sentences") is the proper,
+           always-fresh progress readout, and the elapsed log lines both
+           duplicated it AND disagreed with it (they tracked chapter-total
+           elapsed while the ticker re-anchors per server tick). The silence
+           watchdog (onWaiting below) still warns on genuine model stalls. */
       };
 
       log(

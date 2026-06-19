@@ -56,8 +56,13 @@ function LiveChapterRow({
 
   const overBudget = displayMs > chapter.estMs * 1.25;
   const showSections = chapter.sectionsTotal !== undefined && chapter.sectionsTotal > 1;
-  const sectionPct = showSections
-    ? ((chapter.sectionsDone ?? 0) / chapter.sectionsTotal!) * 100
+  const sectionsDone = chapter.sectionsDone ?? 0;
+  const sectionPct = showSections ? (sectionsDone / chapter.sectionsTotal!) * 100 : 0;
+  /* Show the section CURRENTLY being processed (1-based) rather than the
+     completed count — otherwise a slow first section reads as a stuck
+     "section 0/N". Clamp to the total so the last section never overshoots. */
+  const currentSection = showSections
+    ? Math.min(sectionsDone + 1, chapter.sectionsTotal!)
     : 0;
   return (
     <div className="flex flex-col gap-0.5">
@@ -80,7 +85,7 @@ function LiveChapterRow({
           <>
             <span className="text-ink/30">·</span>
             <span className="text-ink/50">
-              section {chapter.sectionsDone}/{chapter.sectionsTotal}
+              section {currentSection.toLocaleString()}/{chapter.sectionsTotal!.toLocaleString()}
             </span>
           </>
         )}
@@ -95,7 +100,8 @@ function LiveChapterRow({
         <>
           <div className="inline-flex items-center gap-2 text-[11px] font-mono tabular-nums text-ink/70">
             <span className="font-semibold">
-              Attributed ~{chapter.sentencesDone ?? 0} of ~{chapter.sentencesTotal} sentences
+              Attributed ~{(chapter.sentencesDone ?? 0).toLocaleString()} of ~
+              {chapter.sentencesTotal.toLocaleString()} sentences
             </span>
           </div>
           <div className="h-0.5 w-48 rounded-full bg-ink/10 overflow-hidden">
@@ -375,6 +381,12 @@ function ThrottleRow({
 interface PhaseCardProps {
   phase: AnalysisPhase;
   activePhaseId: number;
+  /** Explicit per-phase render state, used when the parent derives each
+      phase independently so pipelined Phase 0 + Phase 1 can both be active
+      at once (kills the active-card flicker). When omitted, falls back to the
+      legacy `activePhaseId === phase.id` comparison. */
+  isPhaseActive?: boolean;
+  isPhaseDone?: boolean;
   phaseProgress: number;
   phaseLogs: string[];
   live: AnalysisLiveInfo | null;
@@ -401,6 +413,8 @@ interface PhaseCardProps {
 export function PhaseCard({
   phase: p,
   activePhaseId,
+  isPhaseActive,
+  isPhaseDone,
   phaseProgress,
   phaseLogs,
   live,
@@ -414,8 +428,8 @@ export function PhaseCard({
   bookId,
   droppedQuotesRefreshKey,
 }: PhaseCardProps) {
-  const isActive = activePhaseId === p.id;
-  const isDone = activePhaseId > p.id;
+  const isActive = isPhaseActive ?? activePhaseId === p.id;
+  const isDone = isPhaseDone ?? activePhaseId > p.id;
   const throttleActive = throttle && throttle.until > Date.now();
   /* The "warms up after ch. N" handoff only happens when the two-model split
      is engaged — then Phase 1 dispatches `minLag` chapters behind Phase 0
