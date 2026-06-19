@@ -51,6 +51,7 @@ import {
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
+import { qwenStorageKey } from '../tts/voice-mapping.js';
 
 export const qwenVoiceRouter = Router();
 
@@ -138,7 +139,7 @@ export async function persistEmotionVariant(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return;
-  const baseVoiceId = deriveQwenVoiceId(character, characterId);
+  const baseVoiceId = qwenStorageKey(character, characterId);
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
@@ -221,7 +222,7 @@ qwenVoiceRouter.get(
        character with an empty own override still resolves to its series-shared
        sidecar). */
     const voiceName =
-      character.overrideTtsVoices?.qwen?.name ?? deriveQwenVoiceId(character, characterId);
+      character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(character, characterId);
     const sidecar = await readJson<{ instruct?: string }>(qwenVoiceSidecarPath(voiceName)).catch(
       () => null,
     );
@@ -262,7 +263,7 @@ export interface DesignQwenVoiceParams {
 export async function designQwenVoiceForCharacter(
   p: DesignQwenVoiceParams,
 ): Promise<{ voiceId: string; url: string }> {
-  const baseVoiceId = deriveQwenVoiceId(p.character, p.characterId);
+  const baseVoiceId = qwenStorageKey(p.character, p.characterId);
   const designedId = p.emotion ? `${baseVoiceId}__${p.emotion}` : baseVoiceId;
   const voiceId = p.preview ? previewVoiceIdFor(designedId) : designedId;
   const instructForDesign = p.emotion ? buildVariantInstruct(p.persona, p.emotion) : p.persona;
@@ -545,7 +546,7 @@ qwenVoiceRouter.post(
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
     }
 
-    const realVoiceId = deriveQwenVoiceId(character, characterId);
+    const realVoiceId = qwenStorageKey(character, characterId);
     const expectedPreview = previewVoiceIdFor(realVoiceId);
     const previewVoiceId =
       typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '';
@@ -639,7 +640,7 @@ qwenVoiceRouter.post(
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
     }
 
-    const expectedPreview = previewVoiceIdFor(deriveQwenVoiceId(character, characterId));
+    const expectedPreview = previewVoiceIdFor(qwenStorageKey(character, characterId));
     const previewVoiceId =
       typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '';
     if (previewVoiceId !== expectedPreview) {
@@ -700,7 +701,7 @@ qwenVoiceRouter.delete(
     }
 
     /* Delete the designed embedding + its persona sidecar (best-effort). */
-    const designedId = `${deriveQwenVoiceId(character, characterId)}__${emotion}`;
+    const designedId = `${qwenStorageKey(character, characterId)}__${emotion}`;
     await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
     await rm(qwenVoiceSidecarPath(designedId), { force: true }).catch(() => {});
 

@@ -15,6 +15,7 @@
 import { readJson } from '../workspace/state-io.js';
 import { qwenVoiceSidecarPath } from '../workspace/paths.js';
 import type { CastCharacter } from './synthesise-chapter.js';
+import { qwenStorageKey } from './voice-mapping.js';
 
 /** Clear any reused designed Qwen voice whose baked manifest language doesn't
     match the book's. `expectedLang` is the sidecar language WORD
@@ -30,7 +31,7 @@ export async function clearMismatchedDesignedVoices(
     const designedName = c.overrideTtsVoices?.qwen?.name;
     if (!designedName) continue;
     const manifest = await readJson<{ language?: string }>(
-      qwenVoiceSidecarPath(designedName),
+      qwenVoiceSidecarPath(qwenStorageKey(c, c.id)),
     ).catch(() => null);
     if (!manifest || manifest.language !== expectedLang) {
       if (c.overrideTtsVoices?.qwen) delete c.overrideTtsVoices.qwen;

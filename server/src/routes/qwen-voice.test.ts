@@ -828,3 +828,39 @@ describe('qwenVoicePtPath containment', () => {
     expect(() => qwenVoicePtPath('../../evil')).toThrow();
   });
 });
+
+describe('srv-43 — qwenStorageKey routing through design-voice', () => {
+  /* These tests verify that the storage key used by designQwenVoiceForCharacter
+     follows qwenStorageKey: uuid-backed voices go to qwen-<uuid>.pt; legacy
+     (no uuid) voices go to qwen-<voiceId>.pt (behaviour-preserving). */
+
+  it('legacy character (no voiceUuid) designs at qwen-<voiceId>.pt', async () => {
+    /* Maerin has voiceId:'v_maerin' and no voiceUuid — must resolve to qwen-v_maerin. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-v_maerin');
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.voiceId).toBe('qwen-v_maerin');
+  });
+
+  it('character with voiceUuid designs at qwen-<uuid>.pt', async () => {
+    /* Temporarily write a character with voiceUuid set. */
+    const uuid = 'V1StGXR8Z5';
+    const charsWithUuid = characters.map((c) =>
+      c.id === 'maerin' ? { ...c, voiceUuid: uuid } : c,
+    );
+    writeBookOnDisk(charsWithUuid);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe(`qwen-${uuid}`);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.voiceId).toBe(`qwen-${uuid}`);
+  });
+});
