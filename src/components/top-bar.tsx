@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { IconArrowLeft, IconSpinner, IconClock, IconWarning, CastwaveMark } from '../lib/icons';
+import { IconArrowLeft, IconSpinner, IconClock, IconWarning, IconMenu, IconCheck, CastwaveMark } from '../lib/icons';
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
 import { useAppInfo } from '../lib/use-app-info';
@@ -270,6 +270,13 @@ export function TopBar({
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
       <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
+        <NavDrawer
+          stage={stage}
+          view={view}
+          setView={setView}
+          onGlobal={onGlobal}
+          showGlobalNav={showGlobalNav}
+        />
         <button
           onClick={onHome}
           aria-label="Castwright — home"
@@ -292,7 +299,7 @@ export function TopBar({
             the leftover space and scrolls horizontally when narrow. */}
         <div className="flex-1 min-w-0 flex items-center gap-3 overflow-x-auto scrollbar-thin">
           {stage === 'ready' && (
-            <nav className="flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
+            <nav className="hidden xl:flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
               {TABS.map((t) => (
                 <button
                   key={t.id}
@@ -305,7 +312,7 @@ export function TopBar({
             </nav>
           )}
           {showGlobalNav && (
-            <nav className="flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
+            <nav className="hidden xl:flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
               {GLOBAL_NAV.map((t) => (
                 <button
                   key={t.id}
@@ -363,6 +370,138 @@ export function TopBar({
         </div>
       </div>
     </header>
+  );
+}
+
+/* <xl responsive nav. Below 1280px the inline tab/global strips are hidden
+   (hidden xl:flex) and this hamburger opens a portaled left drawer with the
+   SAME destinations. Mirrors HelpMenu: local open state, portal-to-body,
+   outside-click + Escape, and — crucially — unmounted when closed so jsdom
+   never sees the drawer rows alongside the inline strip (no duplicate
+   selectors). Renders nothing on stages with no nav. */
+function NavDrawer({
+  stage,
+  view,
+  setView,
+  onGlobal,
+  showGlobalNav,
+}: {
+  stage: Stage['kind'];
+  view: View | null;
+  setView: (v: View) => void;
+  onGlobal: (id: 'books' | 'voices' | 'changelog') => void;
+  showGlobalNav: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const hasNav = stage === 'ready' || showGlobalNav;
+
+  /* Focus the first row when the drawer opens (HelpMenu parity). */
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [open]);
+
+  /* Outside-click + Escape dismissal. Escape returns focus to the trigger;
+     outside-click intentionally does not (HelpMenu parity). */
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (triggerRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (!hasNav) return null;
+
+  const rows: Array<{ id: string; label: string; active: boolean; run: () => void }> =
+    stage === 'ready'
+      ? TABS.map((t) => ({
+          id: t.id,
+          label: t.label,
+          active: view === t.id,
+          run: () => setView(t.id),
+        }))
+      : GLOBAL_NAV.map((t) => ({
+          id: t.id,
+          label: t.label,
+          active: stage === t.id,
+          run: () => onGlobal(t.id),
+        }));
+
+  const select = (run: () => void) => {
+    run();
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="Open navigation menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="topbar-nav-toggle"
+        onClick={() => setOpen((s) => !s)}
+        className="xl:hidden shrink-0 inline-flex items-center justify-center w-11 h-11 min-h-[44px] min-w-[44px] rounded-full text-ink/70 hover:bg-ink/10 transition-colors"
+      >
+        <IconMenu className="w-5 h-5" />
+      </button>
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <>
+            <div
+              data-testid="topbar-nav-scrim"
+              onClick={() => setOpen(false)}
+              className="xl:hidden fixed inset-x-0 top-16 bottom-0 bg-ink/30 z-40 fade-in"
+            />
+            <div
+              ref={panelRef}
+              data-testid="topbar-nav-drawer"
+              role="menu"
+              aria-label="Navigation"
+              className="xl:hidden fixed top-16 bottom-0 left-0 w-[min(80vw,320px)] bg-canvas shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-left p-2"
+            >
+              {rows.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="menuitem"
+                  data-testid={`nav-drawer-link-${r.id}`}
+                  aria-current={r.active ? 'page' : undefined}
+                  onClick={() => select(r.run)}
+                  className={`w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
+                    r.active ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
+                  }`}
+                >
+                  <span>{r.label}</span>
+                  {r.active && <IconCheck className="w-4 h-4 shrink-0" />}
+                </button>
+              ))}
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
   );
 }
 

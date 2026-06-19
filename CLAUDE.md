@@ -269,6 +269,11 @@ The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features
 | `640–1024px` | `sm:` and `md:` | tablets, landscape phones | two-column where appropriate, modals as dialog, secondary panes as right drawer |
 | `≥1024px` | `lg:` and `xl:` | desktop, tablet landscape | three-pane layouts, full top bar |
 
+> **Top-bar nav exception (2026-06-19):** the top-bar navigation collapses into a
+> hamburger drawer below `xl` (1280px), so a 1024–1279px desktop window shows the
+> hamburger rather than the inline strip. The rest of the bar follows the generic
+> `lg:`=desktop rule above. See `docs/superpowers/specs/2026-06-19-responsive-topbar-nav-design.md`.
+
 **Touch-equivalence rule:** every desktop drag/hover affordance ships its tap replacement. Examples already in the codebase:
 - Cast voice library: drag-and-drop voice card → cast row OR tap "Assign" pill → tap row (`src/views/cast.tsx`).
 - Manuscript paragraph boundary: PointerEvent handler covers mouse + touch + pen in one path (`src/views/manuscript.tsx`).

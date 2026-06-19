@@ -10,7 +10,7 @@
    modal) and are now exercised directly here. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import type { AppInfo } from '../lib/types';
@@ -621,6 +621,107 @@ describe('GenerationPill', () => {
     );
     fireEvent.click(screen.getByTestId('generation-pill'));
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
+  it('renders the hamburger trigger on a book stage and on global stages', () => {
+    const { unmount } = renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    const toggle = screen.getByTestId('topbar-nav-toggle');
+    expect(toggle.tagName).toBe('BUTTON');
+    expect(toggle.className).toMatch(/xl:hidden/);
+    unmount();
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.getByTestId('topbar-nav-toggle')).toBeInTheDocument();
+  });
+
+  it('does NOT render the hamburger on a stage with no nav (e.g. upload)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'upload', view: null })} />);
+    expect(screen.queryByTestId('topbar-nav-toggle')).not.toBeInTheDocument();
+  });
+
+  it('keeps the drawer unmounted until the trigger is clicked (duplicate-selector safety)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+  });
+
+  it('opens the drawer with the six per-book tabs when a book is open, active one marked', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const drawer = screen.getByTestId('topbar-nav-drawer');
+    const d = within(drawer);
+    expect(d.getByTestId('nav-drawer-link-manuscript')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-cast')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-library')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-generate')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-listen')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-log')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-cast')).toHaveAttribute('aria-current', 'page');
+    expect(d.getByTestId('nav-drawer-link-manuscript')).not.toHaveAttribute('aria-current');
+  });
+
+  it('opens the drawer with the global nav on a global stage', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const d = within(screen.getByTestId('topbar-nav-drawer'));
+    expect(d.getByTestId('nav-drawer-link-books')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-voices')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-changelog')).toBeInTheDocument();
+  });
+
+  it('every drawer row meets the 44px touch target', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const rows = within(screen.getByTestId('topbar-nav-drawer')).getAllByRole('menuitem');
+    expect(rows.length).toBe(6);
+    for (const r of rows) expect(r.className).toMatch(/min-h-\[44px\]/);
+  });
+
+  it('clicking a per-book row calls setView and closes (unmounts) the drawer', () => {
+    const setView = vi.fn();
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen', setView })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    fireEvent.click(screen.getByTestId('nav-drawer-link-cast'));
+    expect(setView).toHaveBeenCalledWith('cast');
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+  });
+
+  it('clicking the global Books / Voices / Change log rows calls the right handlers', () => {
+    const onHome = vi.fn();
+    const onOpenVoices = vi.fn();
+    const onOpenChangelog = vi.fn();
+    renderWithStore(
+      <TopBar {...makeProps({ stage: 'books', onHome, onOpenVoices, onOpenChangelog })} />,
+    );
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    fireEvent.click(screen.getByTestId('nav-drawer-link-changelog'));
+    expect(onOpenChangelog).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    fireEvent.click(screen.getByTestId('nav-drawer-link-voices'));
+    expect(onOpenVoices).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    fireEvent.click(screen.getByTestId('nav-drawer-link-books'));
+    expect(onHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape closes the drawer; outside-click (scrim) closes it too', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('topbar-nav-drawer')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+    /* Escape returns focus to the trigger (spec — HelpMenu parity). */
+    expect(screen.getByTestId('topbar-nav-toggle')).toHaveFocus();
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    fireEvent.click(screen.getByTestId('topbar-nav-scrim'));
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+  });
+
+  it('the inline desktop nav strip is gated behind hidden xl:flex', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    const inlineNav = screen.getByRole('button', { name: 'Manuscript' }).closest('nav')!;
+    expect(inlineNav.className).toMatch(/hidden/);
+    expect(inlineNav.className).toMatch(/xl:flex/);
   });
 });
 
