@@ -108,7 +108,7 @@ git commit -m "fix(openapi,server): add optional voiceUuid to Character/Voice sh
 Make the synth path produce `qwen-<voiceUuid>` (falling back to the stored name) instead of returning the display name verbatim. This is the change that routes generation at the new `.pt`.
 
 **Files:**
-- Modify: `server/src/tts/voice-mapping.ts` (`pickVoiceForEngine` ~`:243-269`, `pickEmotionVariantVoice` ~`:17-32`)
+- Modify: `server/src/tts/voice-mapping.ts` — **define + export `qwenStorageKey` here** (a `tts/` module, so `routes/qwen-voice.ts` and `tts/verify-designed-voice-language.ts` import it WITHOUT a `tts → routes` cycle); `pickVoiceForEngine` ~`:243-269`; `pickEmotionVariantVoice` ~`:17-32`
 - Modify: `server/src/tts/synthesise-chapter.ts` (`toVoiceLike` ~`:623-631`) — **load-bearing: see Step 4a**
 - Test: `server/src/tts/voice-mapping.test.ts`, `server/src/tts/synthesise-chapter.test.ts`
 
@@ -197,7 +197,7 @@ export function pickVoiceForEngine(
       voice.overrideTtsVoices?.qwen?.name ??
       (voice.overrideTtsVoice?.engine === 'qwen' ? voice.overrideTtsVoice.name : undefined);
     if (!designedName) return '';
-    return voice.voiceUuid ? `qwen-${voice.voiceUuid}` : designedName;
+    return qwenStorageKey(voice, voice.id);
   }
 
   const slotName = voice.overrideTtsVoices?.[engine]?.name;
@@ -205,7 +205,26 @@ export function pickVoiceForEngine(
   // ... (unchanged: legacy overrideTtsVoice, then profile inference)
 ```
 
-Delete the now-dead `if (engine === 'qwen') return '';` line further down (`:263`). (Verified safe in plan review: the early branch returns for all qwen cases, so the catalog path — which would otherwise fall through to Coqui's table — is unreachable for qwen; non-qwen engines bypass the new branch entirely.)
+Delete the now-dead `if (engine === 'qwen') return '';` line further down (`:263`).
+
+Also add the shared resolver to `voice-mapping.ts` (exported, in `tts/` — the single source of truth all three layers import):
+
+```typescript
+/* srv-43 — the on-disk/sidecar STORAGE key for a bespoke Qwen voice. Prefers
+   the immutable voiceUuid (globally unique → no cross-series collision); else
+   the legacy name-derived key (qwen-<voiceId??fallbackId>) — identical to
+   deriveQwenVoiceId's output, so existing voices resolve unchanged. Pure;
+   lives in tts/ so routes/qwen-voice.ts AND tts/verify-designed-voice-language.ts
+   import it with no cross-layer cycle. */
+export function qwenStorageKey(
+  v: { voiceUuid?: string | null; voiceId?: string | null },
+  fallbackId: string,
+): string {
+  return v.voiceUuid ? `qwen-${v.voiceUuid}` : `qwen-${v.voiceId ?? fallbackId}`;
+}
+```
+
+For a legacy `VoiceLike`, `voice.id` is `voiceId ?? characterId` (set by `toVoiceLike`), so `qwenStorageKey(voice, voice.id)` reproduces the stored legacy name exactly. Add a unit test for the helper here too: `qwenStorageKey({voiceUuid:'U1'}, 'wren') === 'qwen-U1'` and `qwenStorageKey({voiceId:'wren'}, 'x') === 'qwen-wren'`. (Verified safe in plan review: the early branch returns for all qwen cases, so the catalog path — which would otherwise fall through to Coqui's table — is unreachable for qwen; non-qwen engines bypass the new branch entirely.)
 
 - [ ] **Step 4a (BLOCKER fix): Populate `voiceUuid` in `toVoiceLike`**
 
@@ -260,49 +279,19 @@ Route every file/key consumer in the routes through a `qwenStorageKey(character,
 - Test: `server/src/routes/qwen-voice.test.ts`, `server/src/tts/verify-designed-voice-language.test.ts`
 
 **Interfaces:**
-- Produces: `export function qwenStorageKey(character: CastCharacter, characterId: string): string` → `character.voiceUuid ? 'qwen-' + character.voiceUuid : deriveQwenVoiceId(character, characterId)`.
+- Consumes: `qwenStorageKey` from `../tts/voice-mapping.js` (defined in Task 2). `qwenStorageKey(character, characterId)` → `qwen-<voiceUuid>` when set, else `qwen-<voiceId ?? characterId>` (== `deriveQwenVoiceId`).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Import `qwenStorageKey` and confirm via a route test**
 
-Add to `server/src/routes/qwen-voice.test.ts`:
-
-```typescript
-import { qwenStorageKey, deriveQwenVoiceId } from './qwen-voice.js';
-
-describe('srv-43 qwenStorageKey', () => {
-  it('derives the storage key from voiceUuid when present', () => {
-    const c = { id: 'wren', voiceId: 'wren', voiceUuid: 'V1StGXR8Z5' };
-    expect(qwenStorageKey(c, 'wren')).toBe('qwen-V1StGXR8Z5');
-  });
-
-  it('falls back to deriveQwenVoiceId when no voiceUuid (legacy)', () => {
-    const c = { id: 'wren', voiceId: 'wren' };
-    expect(qwenStorageKey(c, 'wren')).toBe(deriveQwenVoiceId(c, 'wren'));
-    expect(qwenStorageKey(c, 'wren')).toBe('qwen-wren');
-  });
-});
-```
-
-- [ ] **Step 2: Run to verify it fails**
-
-Run: `cd server && npm run test -- qwen-voice.test.ts -t "qwenStorageKey"`
-Expected: FAIL with "qwenStorageKey is not a function".
-
-- [ ] **Step 3: Add the resolver next to `deriveQwenVoiceId`**
-
-In `qwen-voice.ts`, immediately after `deriveQwenVoiceId` (`:89-91`):
+`qwenStorageKey` is defined in `server/src/tts/voice-mapping.ts` (Task 2) — a `tts/` module, deliberately NOT in `routes/qwen-voice.ts`, so importing it into both `qwen-voice.ts` (routes) and `verify-designed-voice-language.ts` (tts) creates no `tts → routes` cycle. Add to `qwen-voice.ts` imports:
 
 ```typescript
-/* srv-43 — the on-disk/sidecar STORAGE key for a character's bespoke voice.
-   Prefers the immutable voiceUuid (globally unique → no cross-series collision);
-   falls back to the legacy name-derived key for voices designed before srv-43.
-   deriveQwenVoiceId stays the HUMAN display label written into qwen.name. */
-export function qwenStorageKey(character: CastCharacter, characterId: string): string {
-  return character.voiceUuid ? `qwen-${character.voiceUuid}` : deriveQwenVoiceId(character, characterId);
-}
+import { qwenStorageKey } from '../tts/voice-mapping.js';
 ```
 
-- [ ] **Step 4: Route the file/key consumers through it**
+`deriveQwenVoiceId` STAYS in `qwen-voice.ts` unchanged — it's still the human display label used for `qwen.name` writes and is the legacy fallback `qwenStorageKey` reproduces.
+
+- [ ] **Step 2: Route the file/key consumers through it**
 
 Replace `deriveQwenVoiceId(character, characterId)` / `deriveQwenVoiceId(p.character, p.characterId)` with `qwenStorageKey(...)` at exactly these sites (leave the `qwen.name` display writes alone):
 - `designQwenVoiceForCharacter:265` — `const baseVoiceId = qwenStorageKey(p.character, p.characterId);`
@@ -312,20 +301,23 @@ Replace `deriveQwenVoiceId(character, characterId)` / `deriveQwenVoiceId(p.chara
 - `discard-voice:642` — `const expectedPreview = previewVoiceIdFor(qwenStorageKey(character, characterId));`
 - `delete-variant:703` — `const designedId = `${qwenStorageKey(character, characterId)}__${emotion}`;`
 
-- [ ] **Step 4b (BLOCKER fix): Route `verify-designed-voice-language.ts` through `qwenStorageKey`**
+- [ ] **Step 3 (BLOCKER fix): Route `verify-designed-voice-language.ts` through `qwenStorageKey`**
 
-`server/src/tts/verify-designed-voice-language.ts` `clearMismatchedDesignedVoices` (~`:30-33`) reads the manifest by the **human name** — `const designedName = c.overrideTtsVoices?.qwen?.name;` then `qwenVoiceSidecarPath(designedName)`. For a uuid-backed voice the manifest lives at `qwen-<uuid>.json`, so this reads `qwen-wren.json` → miss → it concludes "language mismatch" and **deletes `c.overrideTtsVoices.qwen`** (treats a correctly-designed voice as undesigned), and the `forbidKokoroFallback` gate then blocks generation. Runs on full-generate AND fs-26 splice re-record for every non-English book. Fix: resolve the manifest path via the storage key.
+`server/src/tts/verify-designed-voice-language.ts` `clearMismatchedDesignedVoices` (~`:30-31`) reads the manifest by the **human name** — `const designedName = c.overrideTtsVoices?.qwen?.name; if (!designedName) continue;` then `qwenVoiceSidecarPath(designedName)`. For a uuid-backed voice the manifest lives at `qwen-<uuid>.json`, so this reads `qwen-wren.json` → miss → it concludes "language mismatch" and **deletes `c.overrideTtsVoices.qwen`** (treats a correctly-designed voice as undesigned), and the `forbidKokoroFallback` gate then blocks generation. Runs on full-generate AND fs-26 splice re-record for every non-English book. Fix: **keep the existing guard exactly as-is** (it correctly gates on the committed override), then resolve the manifest path via the storage key:
 
 ```typescript
-// import { qwenStorageKey } from '../routes/qwen-voice.js';
-const designedName = qwenStorageKey(c, c.id);          // was: c.overrideTtsVoices?.qwen?.name
-if (!designedName) continue;                           // keep the existing undesigned guard
-const manifest = await readJson<{ language?: string }>(qwenVoiceSidecarPath(designedName)).catch(() => null);
+import { qwenStorageKey } from './voice-mapping.js';   // same tts/ dir — no cross-layer import
+// ...
+const designedName = c.overrideTtsVoices?.qwen?.name;
+if (!designedName) continue;                            // UNCHANGED guard — gates on committed override
+const manifest = await readJson<{ language?: string }>(
+  qwenVoiceSidecarPath(qwenStorageKey(c, c.id)),        // was: qwenVoiceSidecarPath(designedName)
+).catch(() => null);
 ```
 
-Confirm the existing "no qwen voice → skip" guard still holds: `qwenStorageKey` returns a non-empty string even for undesigned characters, so gate the language check on the character actually having a qwen override (`if (!c.overrideTtsVoices?.qwen?.name && !c.voiceUuid) continue;`) before resolving the path — preserve the current "only check designed voices" behavior. Add a regression case to `verify-designed-voice-language.test.ts`: a uuid-backed voice with a matching-language manifest at `qwen-<uuid>.json` is NOT cleared.
+> **Plan-review correction:** do NOT change the guard to `if (!c.overrideTtsVoices?.qwen?.name && !c.voiceUuid)` — that's a logic bug. It would let a non-qwen character (or a discarded-preview character) that merely carries a `voiceUuid` fall through and get its absent qwen override "cleared" / a misleading warning logged. A uuid-backed designed voice ALWAYS still has `qwen.name` (Save writes the human label), so the unchanged guard is correct and sufficient. Add a regression case to `verify-designed-voice-language.test.ts`: a uuid-backed voice with a matching-language manifest at `qwen-<uuid>.json` is NOT cleared; and a discarded-preview character (voiceUuid, no qwen override) is skipped.
 
-- [ ] **Step 5: Write a route-level fallback test**
+- [ ] **Step 4: Write a route-level fallback test**
 
 Add a test that a designed character WITHOUT a `voiceUuid` still designs to `qwen-<voiceId>.pt` (legacy behavior unchanged), and one WITH a pre-set `voiceUuid` designs to `qwen-<uuid>.pt`. Use the existing mocked-fetch harness in this file (see `:54-66,110,177` for the fetch/`writeFile` mock pattern); assert on the `.pt` path passed to the write.
 
@@ -339,15 +331,15 @@ it('character with voiceUuid designs at qwen-<uuid>.pt', async () => {
 });
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
-Run: `cd server && npm run test -- qwen-voice.test.ts`
+Run: `cd server && npm run test -- qwen-voice.test.ts verify-designed-voice-language.test.ts`
 Expected: PASS (including the file's pre-existing tests).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/routes/qwen-voice.ts server/src/routes/qwen-voice.test.ts
+git add server/src/routes/qwen-voice.ts server/src/tts/verify-designed-voice-language.ts server/src/routes/qwen-voice.test.ts server/src/tts/verify-designed-voice-language.test.ts
 git commit -m "fix(server): route qwen .pt/key consumers through qwenStorageKey (srv-43)"
 ```
 
@@ -586,16 +578,22 @@ And in `series-reuse-link.ts`'s `resolveReusedVoiceFields` consumer (`:335-338`)
 
 - [ ] **Step 5b (MAJOR fix): Clear `voiceUuid` on a stale-link revert**
 
-`series-reuse-link.ts` `clearStaleLink` (~`:156-166`) deletes `voiceId`/`overrideTtsVoices`/`voiceStyle`/`ttsEngine` when a prior link no longer holds — but **not `voiceUuid`**. A reverted character would keep the old shared uuid, and the next design hits `ensureCharacterVoiceUuid`'s idempotent "already has uuid → reuse" path → writes into the OLD shared `.pt` → re-introduces the exact cross-identity collision srv-43 prevents. Add the delete alongside the others:
+`series-reuse-link.ts` `clearStaleLink` (~`:156-166`) resets a stale-linked character — but does **not** drop `voiceUuid`. A reverted character would keep the old shared uuid, and the next design hits `ensureCharacterVoiceUuid`'s idempotent "already has uuid → reuse" path → writes into the OLD shared `.pt` → re-introduces the exact cross-identity collision srv-43 prevents.
+
+**Match the real code** (plan-review corrected): the reset is `c.voiceId = c.id` inside an `if (c.voiceState === 'reused') { … }` block (a tuned/locked voice keeps its voice). Add `delete c.voiceUuid;` **inside that block**, beside the existing deletes — so a tuned/locked voice rightly keeps its uuid:
 
 ```typescript
-    delete c.voiceId;
-    delete c.voiceUuid;          // srv-43 — drop the inherited identity on unlink
+  if (c.voiceState === 'reused') {
+    c.voiceId = c.id;
+    c.voiceState = 'generated';
     delete c.overrideTtsVoices;
-    // ...rest unchanged
+    delete c.voiceStyle;
+    delete c.ttsEngine;
+    delete c.voiceUuid;          // srv-43 — drop the inherited identity on unlink
+  }
 ```
 
-Add a test: a character whose link is cleared loses `voiceUuid`, and a subsequent `ensureCharacterVoiceUuid` mints a FRESH one (not the old shared value).
+Add a test: a `reused` character whose link is cleared loses `voiceUuid`, and a subsequent `ensureCharacterVoiceUuid` mints a FRESH one (not the old shared value); a `tuned`/`locked` character keeps its `voiceUuid`.
 
 - [ ] **Step 6: Run the tests**
 
@@ -644,16 +642,11 @@ export const PRESERVED_VOICE_FIELDS = [
 ] as const;
 ```
 
-- [ ] **Step 4: Snapshot the uuid**
+- [ ] **Step 4: Snapshots — do NOT add `voiceUuid`; verify no spurious drift**
 
-`character-snapshots.ts`, in the snapshot object (`:34-49`), after `voiceId: c.voiceId,`:
+**Plan-review correction:** do NOT add `voiceUuid` to the `CharacterSnapshot` object (`character-snapshots.ts:34-49`). Snapshots are a drift-detection artifact, not persistence — adding the field risks a whole-object comparison flagging a sibling as "changed" merely because it was stamped.
 
-```typescript
-      voiceId: c.voiceId,
-      voiceUuid: c.voiceUuid,
-```
-
-Add `voiceUuid?: string;` to the `CharacterSnapshot` type if it explicitly lists fields.
+The `resolvedVoiceName` it already records (`:33`, via `pickVoiceForEngine(toVoiceLike(c))`) now flips `qwen-wren` → `qwen-<uuid>` for a uuid voice. Confirm this is NOT spurious: `ensureCharacterVoiceUuid` only mints at **design time**, when the embedding is (re)written — so the owner's `resolvedVoiceName` change coincides with a real voice change, and a stamped sibling's shared `.pt` was just re-designed too, so its drift→re-record is warranted, not spurious. **Add a regression test** asserting that a snapshot taken for an UNCHANGED legacy voice (no `voiceUuid`, never re-designed) is byte-identical to the prior snapshot (its `resolvedVoiceName` stays `qwen-wren` via the legacy fallback) — i.e. the change introduces no drift for untouched voices.
 
 - [ ] **Step 5: Confirm `applyOverrideToCastFiles` preserves `voiceUuid` (regression guard — plan review verified it already does)**
 
@@ -760,9 +753,10 @@ In `main.py`, `QwenEngine.design_voice` (`:1493`) has the signature `(voice_id, 
     voice_uuid = body.get("voiceUuid")
 ```
 
-(b) Pass it as a new positional/keyword arg in the `asyncio.to_thread` call (`:3211-3217`):
+(b) Pass it as a new positional arg in the `asyncio.to_thread` call (`:3211-3217`) — follow the existing arg-guard style in that call (each arg is `.strip()`/`isinstance(...) else None` guarded), so:
 
 ```python
+    voice_uuid = body.get("voiceUuid") if isinstance(body.get("voiceUuid"), str) else None
     await asyncio.to_thread(qwen.design_voice, voice_id, instruct, language, calibration_text, voice_uuid)
 ```
 
@@ -858,11 +852,14 @@ Expected: FAIL (resolves `qwen-wren` because `body.voice` carries no uuid / `Voi
 
 - [ ] **Step 3: Return `voiceUuid` from the design + promote responses**
 
-In `qwen-voice.ts`, the design route returns `res.status(200).json({ voiceId, url })` (`:508`) and promote returns `{ voiceId, url }` (`:614`). Add `voiceUuid` (the value `ensureCharacterVoiceUuid` returned / `qwenStorageKey`'s source) so the drawer can stamp it locally:
+In `qwen-voice.ts`, the design route returns `res.status(200).json({ voiceId, url })` (`:508`) and promote returns `{ voiceId, url }` (`:614`). Add `voiceUuid` so the drawer can stamp it locally:
 
 ```typescript
+      // design route (:508) — `voiceUuid` is the var Task 4 Step 4 declares before the try
       return res.status(200).json({ voiceId, url, voiceUuid });
 ```
+
+**promote-voice (`:614`) has no `ensureCharacterVoiceUuid` call** — source the value from the already-read character: `return res.status(200).json({ voiceId: realVoiceId, url: …, voiceUuid: character.voiceUuid });`.
 
 - [ ] **Step 4: Plumb `voiceUuid` through OpenAPI + frontend**
 
@@ -890,11 +887,19 @@ git commit -m "fix(server,frontend): carry voiceUuid into the audition/sample pa
 
 - [ ] **Step 1: Write the regression plan doc**
 
-Document the invariant (storage key = `qwen-<voiceUuid>` with legacy fallback; `qwen.name` stays human), the forward-only decision, and a manual acceptance walkthrough (design two same-named characters in different standalone books → confirm two distinct `voices/qwen/qwen-<uuid>.pt` files, both playable). Cite the canonical fixture if an e2e run is wanted.
+Document the invariant (storage key = `qwen-<voiceUuid>` with legacy fallback; `qwen.name` stays human), the forward-only decision, and a manual acceptance walkthrough (design two same-named characters in different standalone books → confirm two distinct `voices/qwen/qwen-<uuid>.pt` files, both playable). Cite the canonical fixture if an e2e run is wanted. **Record two known forward-only limitations** (below) so they're not silently lost.
+
+- [ ] **Step 1b: Document the fs-22 demo-bundle limitation (plan-review MAJOR)**
+
+The shipped fs-22 demo bundle (`samples/the-coalfall-commission/`) ships **legacy** `voices/qwen/qwen-<name>.{pt,json}` and a `cast.json` with **no `voiceUuid`**, and `samples.ts:112-127` merges it into the workspace **by filename, no-clobber**. So if a user's workspace already holds an unrelated `qwen-wren.pt`, the bundle's is skipped and the demo's "Wren" binds to the stranger's embedding — the exact collision, unprotected for the shipped demo (forward-only doesn't help a pre-uuid bundle). **Resolve one of:** (a) regenerate the bundle on a GPU box post-srv-43 so its `.pt` files are `qwen-<uuid>` and its `cast.json` carries `voiceUuid` (preferred; needs the box — track as a follow-up issue if not done now), or (b) explicitly document the demo bundle stays legacy/name-keyed and is collision-prone only under a pre-existing name clash. State which in the plan doc; file a Backlog issue if deferring (a).
+
+- [ ] **Step 1c: Flag the legacy-name maintenance scripts (plan-review MINOR)**
+
+`scripts/relink-stripped-qwen-voices.mjs` and `scripts/repair-reused-qwen-overrides.mjs` correlate cast → `voices/qwen/qwen-<voiceId>.pt` by the legacy name; post-srv-43 they'd treat uuid voices as "no embedding on disk." They're one-off recovery tools (not runtime), but add a header comment / plan note marking them **superseded — needs a uuid-aware update before rerun**.
 
 - [ ] **Step 2: Update INDEX and BACKLOG**
 
-Add the plan to `docs/features/INDEX.md`; remove the `srv-43` row from `docs/BACKLOG.md` (`:116-120`).
+Add the plan to `docs/features/INDEX.md`; remove the `srv-43` row from `docs/BACKLOG.md` (`:116-120`). If deferring the fs-22 bundle regen (Step 1b option a), add a thin Backlog row + file its issue in the same round.
 
 - [ ] **Step 3: Run the full battery**
 
@@ -935,6 +940,15 @@ Push the branch; open a PR titled `fix(server): stable per-voice voiceUuid to pr
 - MAJOR `/sample` audition needs frontend `voiceUuid` → new Task 10.
 - MAJOR qwen branch dropped legacy singular `overrideTtsVoice` → Task 2 Step 3 fixed.
 - Minors: `seriesInfo` hoist deletion explicit (Task 4); self-deadlock warning (Task 4); `projectVoice` (not `projectLibraryVoice`) is the required edit (Task 5); Task 7 canonical uuid already in hand (no new read); `normaliseCastCharacter` confirmed a spread (Task 6 Step 5 = regression guard, no code change).
+
+**Round-5 fixes folded in (2-reviewer pass on the patched plan):**
+- `qwenStorageKey` **relocated to `tts/voice-mapping.ts`** (was `routes/qwen-voice.ts`) to avoid a `tts → routes` import cycle — Tasks 2 (define+export) & 3 (import).
+- Task 3 guard logic bug fixed — keep `if (!c.overrideTtsVoices?.qwen?.name) continue;` verbatim (the `&& !c.voiceUuid` variant would clear non-qwen / discarded-preview voices).
+- Task 5 Step 5b `clearStaleLink` snippet corrected to the real `if (voiceState === 'reused')` block (tuned/locked keep their uuid).
+- Task 8 5th arg uses the `isinstance(...) else None` guard; Task 10 promote sources `character.voiceUuid`.
+- Task 6 Step 4: do NOT add `voiceUuid` to the snapshot (drift artifact); added a no-spurious-drift regression test instead.
+- **NEW (MAJOR): fs-22 demo bundle** is forward-only-unprotected (legacy name-keyed, no-clobber merge) → Task 11 Step 1b (regenerate or document + Backlog issue). Maintenance scripts flagged → Task 11 Step 1c.
+- Confirmed clear by review: `/speakers`, `queue-engine-stamp`, preview-mint (required), `ensureCharacterVoiceUuid` series-scope, frontend never renders `voiceUuid`.
 
 **Placeholder scan:** route-level test bodies describe arrange/assert without full harness boilerplate — acceptable because they reuse the documented mocked-fetch pattern in `qwen-voice.test.ts` (`:54-66,110,177`). No `TODO`/`TBD`.
 
