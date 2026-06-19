@@ -54,6 +54,11 @@ dependencies:
   image: ^4.9.1
   just_audio: ^0.10.5
   audio_service: ^0.18.18
+  # app-5: configure the OS audio session (audio focus + becomingNoisy on
+  # headset/route change) in main(). Already resolved transitively via
+  # just_audio/audio_service; pinned here as a direct dep because main.dart
+  # imports it. Constraint tracks the resolved version.
+  audio_session: ^0.2.3
   # app-9: per-folder BehaviorSubjects backing AudioHandler.subscribeToChildren,
   # so the car browse tree can push a "children changed" refresh to Android Auto.
   # Already resolved transitively via audio_service; pinned here as a direct dep.

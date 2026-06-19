@@ -9,10 +9,16 @@
    The AnalysisPill / GenerationPill components survive (reused inside the
    modal) and are now exercised directly here. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
+import type { AppInfo } from '../lib/types';
+
+const appInfoH = vi.hoisted(() => ({ info: null as AppInfo | null, refresh: vi.fn(async () => {}) }));
+vi.mock('../lib/use-app-info', () => ({
+  useAppInfo: () => ({ info: appInfoH.info, error: null, refresh: appInfoH.refresh }),
+}));
 
 /* TopBar now always renders the <AdminPill>, which self-polls
    api.getGenerationStats + api.getDiagnostics. Stub just those two so the pill
@@ -716,5 +722,37 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     const inlineNav = screen.getByRole('button', { name: 'Manuscript' }).closest('nav')!;
     expect(inlineNav.className).toMatch(/hidden/);
     expect(inlineNav.className).toMatch(/xl:flex/);
+  });
+});
+
+import { __resetForTests } from '../lib/update-notice';
+
+const infoWith = (over: Partial<AppInfo>): AppInfo => ({
+  appVersion: '1.8.0',
+  sidecarVersion: '1.8.0',
+  schemas: {},
+  lastSeenAppVersion: null,
+  showWhatsNew: false,
+  releaseNotes: '',
+  ...over,
+});
+
+describe('VersionPill update dot (fe-27)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetForTests();
+    appInfoH.info = null;
+  });
+
+  it('shows a dot when an undismissed update is available', () => {
+    appInfoH.info = infoWith({ updateAvailable: true, latestVersion: '1.9.0' });
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.getByTestId('version-pill-dot')).toBeInTheDocument();
+  });
+
+  it('hides the dot when up to date', () => {
+    appInfoH.info = infoWith({ updateAvailable: false, latestVersion: null });
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.queryByTestId('version-pill-dot')).not.toBeInTheDocument();
   });
 });

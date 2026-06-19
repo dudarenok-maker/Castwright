@@ -25,6 +25,27 @@ void main() {
     expect(find.byKey(const Key('progress-ht1-c2')), findsOneWidget);
   });
 
+  testWidgets(
+      'transport play/pause icon reflects the real engine playing state, not a local flag',
+      (tester) async {
+    // Regression: the in-app player used a local `_playing` bool that only
+    // flipped on tap, so it never tracked the engine. When playback stopped
+    // out-of-band (headset/Android Auto disconnect) the icon stayed "pause"
+    // and the first tap was a silent no-op ("click twice to restart"). The
+    // demo engine reports playing==true, so a correctly-bound transport shows
+    // the pause icon without any tap.
+    final rt = await buildDemoRuntime(fs: InMemoryFileStore(), root: '/demo');
+    await tester.pumpWidget(MaterialApp(
+      home: PlayerScreen(
+          runtime: rt, bookId: 'hollow-tide-1', title: 'The Drowning Bell'),
+    ));
+    await tester.pumpAndSettle();
+
+    final button = tester.widget<IconButton>(
+        find.byKey(const Key('player-playpause')));
+    expect((button.icon as Icon).icon, Icons.pause_circle);
+  });
+
   testWidgets('bottom transport names the current chapter', (tester) async {
     final rt = await buildDemoRuntime(fs: InMemoryFileStore(), root: '/demo');
     await tester.pumpWidget(MaterialApp(

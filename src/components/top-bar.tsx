@@ -4,6 +4,7 @@ import { IconArrowLeft, IconSpinner, IconClock, IconWarning, IconMenu, IconCheck
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
 import { useAppInfo } from '../lib/use-app-info';
+import { useDismissedVersion, shouldShowUpdateNotice } from '../lib/update-notice';
 import { buildInfo } from '../lib/build-info';
 import { StatusPopover } from './status-popover';
 import { AdminPill } from './admin-pill';
@@ -651,6 +652,8 @@ const STATUS_ICON: Record<StatusSummary['icon'], ReactNode> = {
    sidecar version too. */
 function VersionPill({ onClick }: { onClick: () => void }) {
   const { info } = useAppInfo();
+  const dismissed = useDismissedVersion();
+  const showDot = shouldShowUpdateNotice(info ?? null, dismissed);
   const version = info?.appVersion ?? buildInfo.version;
   const title =
     info?.sidecarVersion != null
@@ -661,11 +664,18 @@ function VersionPill({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       title={title}
-      aria-label={`Version v${version} — open Account`}
+      aria-label={`Version v${version}${showDot ? ' — update available' : ''} — open Account`}
       data-testid="version-pill"
-      className="hidden sm:inline-flex items-center rounded-full border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/60 hover:bg-ink/5 focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
+      className="relative hidden sm:inline-flex items-center rounded-full border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/60 hover:bg-ink/5 focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
     >
       v{version}
+      {showDot && (
+        <span
+          data-testid="version-pill-dot"
+          aria-hidden="true"
+          className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-ink/50"
+        />
+      )}
     </button>
   );
 }

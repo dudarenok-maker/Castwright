@@ -8,6 +8,7 @@ import {
   mockGetContinueListening,
   mockSetShelfStatus,
   _resetMockListenStats,
+  readE2eUpdateOverride,
 } from './api';
 
 describe('mockGetSetupReadiness', () => {
@@ -109,5 +110,19 @@ describe('mock listen-stats client', () => {
     await mockSetShelfStatus('h', { hidden: true });
     expect(await mockGetContinueListening()).toEqual([]);
     delete (globalThis as any).__SEED_CONTINUE__;
+  });
+});
+
+describe('readE2eUpdateOverride (fe-27 update override)', () => {
+  it('defaults update fields off when the param is absent', () => {
+    expect(readE2eUpdateOverride('')).toEqual({ updateAvailable: false, latestVersion: null });
+    expect(readE2eUpdateOverride('?foo=bar')).toEqual({ updateAvailable: false, latestVersion: null });
+  });
+
+  it('honours ?e2eUpdate=<version>', () => {
+    expect(readE2eUpdateOverride('?e2eUpdate=9.9.9')).toEqual({
+      updateAvailable: true,
+      latestVersion: '9.9.9',
+    });
   });
 });

@@ -51,6 +51,7 @@ import { ModelControlPill } from './ModelControlPill';
 import { AsrStatusBadge } from './AsrStatusBadge';
 import { TtsNoticeBanner } from './tts-notice-banner';
 import { WhatsNewBanner } from './whats-new-banner';
+import { UpdateNotifierBanner } from './update-notifier-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import {
   selectEnginesInUse,
@@ -1338,6 +1339,9 @@ export function Layout() {
       {/* fs-1 — post-upgrade "What's new" banner, top of every view. Self-gated
           on the server's showWhatsNew flag (no-op in mock mode). */}
       <WhatsNewBanner />
+
+      {/* fe-27 — "update available" notifier; self-gated, dark in mock mode. */}
+      <UpdateNotifierBanner />
 
       {/* Global TTS Load/Stop notices. Rendered here (not just in the Generate
           view) so a Load failure or analyzer-eviction triggered from the

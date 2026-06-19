@@ -10,6 +10,11 @@ import { rmSync } from 'node:fs';
 import { infoRouter } from './info.js';
 import { getAppVersion } from '../app-version.js';
 import { USER_SETTINGS_PATH, writeUpgradeMeta, _resetUserSettingsCache, readUserSettings } from '../workspace/user-settings.js';
+import {
+  getCachedUpdateStatus,
+  refreshUpdateStatusInBackground,
+  __resetUpdateCacheForTests,
+} from './updates.js';
 
 let app: Express;
 
@@ -116,5 +121,36 @@ describe('GET /api/info', () => {
 
     res = await request(app).get('/api/info');
     expect(res.body.showWhatsNew).toBe(false);
+  });
+});
+
+describe('GET /api/info — update fields (fe-27)', () => {
+  afterEach(() => __resetUpdateCacheForTests());
+
+  it('returns null update fields on a cold cache without blocking', async () => {
+    __resetUpdateCacheForTests();
+    const res = await request(app).get('/api/info');
+    expect(res.status).toBe(200);
+    expect(res.body.updateAvailable).toBeNull();
+    expect(res.body.latestVersion).toBeNull();
+  });
+
+  it('reflects a populated cache', async () => {
+    __resetUpdateCacheForTests();
+    // Stub fetch to answer GitHub (tag) but still fail the sidecar /health probe.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (typeof url === 'string' && url.includes('api.github.com')) {
+          return { ok: true, json: async () => ({ tag_name: 'v999.0.0', html_url: 'https://example/r' }) };
+        }
+        throw new Error('sidecar down');
+      }),
+    );
+    refreshUpdateStatusInBackground();
+    await vi.waitFor(() => expect(getCachedUpdateStatus()).not.toBeNull());
+    const res = await request(app).get('/api/info');
+    expect(res.body.latestVersion).toBe('999.0.0');
+    expect(res.body.updateAvailable).toBe(true);
   });
 });
