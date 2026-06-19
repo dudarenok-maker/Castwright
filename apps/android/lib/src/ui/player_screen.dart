@@ -104,12 +104,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _chapters = chapters;
           _finished = finished;
           _ready = true;
+          _playing = widget.runtime.player.playing; // seed from real state
         });
         _ensureCurrentPeaks();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollToCurrent(animate: false);
         });
       }
+      // Track the real engine playing state so the transport reflects out-of-band
+      // stops (headset/Android Auto disconnect, audio-focus loss) — not a local
+      // flag that only flips on tap (which caused the "tap twice to restart" bug).
+      _subs.add(widget.runtime.player.playingStream.listen((playing) {
+        if (mounted) setState(() => _playing = playing);
+      }));
       // Move the highlight + progress as chapters change (incl. auto-advance).
       _subs.add(widget.runtime.player.nowPlayingStream.listen((_) {
         if (mounted) {
@@ -143,18 +150,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _playChapter(String uuid) async {
     await widget.runtime.player.playChapter(uuid);
-    if (mounted) setState(() => _playing = true);
+    // _playing follows playingStream; no optimistic flip.
     _ensureCurrentPeaks();
   }
 
   Future<void> _togglePlay() async {
     final p = widget.runtime.player;
-    if (_playing) {
+    // Decide off the real engine state, not a local flag that can be stale after
+    // an out-of-band stop — otherwise the first tap is a silent no-op.
+    if (p.playing) {
       await p.pause();
     } else {
       await p.play();
     }
-    if (mounted) setState(() => _playing = !_playing);
+    // _playing updates via playingStream.
   }
 
   bool _isFinished(String uuid) => _finished.contains(uuid);

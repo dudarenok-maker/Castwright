@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:app_links/app_links.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 
 import 'src/data/cert_pinning.dart';
@@ -22,6 +23,15 @@ import 'src/ui/pairing_screen.dart';
 /// needed to open the downloaded library).
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // app-5: configure the OS audio session BEFORE any playback so just_audio
+  // actually requests/holds audio focus and auto-pauses on interruptions and
+  // route changes (headset unplug / Bluetooth / Android Auto disconnect emit
+  // becomingNoisy). Without this, focus loss silently stalls audio while the
+  // engine still reports `playing == true` — the lock-screen/headset buttons
+  // then act on a desynced state and a single press appears dead. `.speech()`
+  // is the audiobook-appropriate preset (matches the audio_service example).
+  final session = await AudioSession.instance;
+  await session.configure(const AudioSessionConfiguration.speech());
   // app-5/app-9: the media session must exist before the UI (lock-screen /
   // Bluetooth / Android Auto). The runtime attaches the live player once paired.
   final handler = await AudioService.init(

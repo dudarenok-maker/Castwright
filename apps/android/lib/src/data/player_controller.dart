@@ -101,6 +101,13 @@ class PlayerController {
   final StreamController<NowPlaying?> _nowPlaying =
       StreamController<NowPlaying?>.broadcast();
 
+  /// Re-broadcasts the engine's playing state so the player UI *and* the media
+  /// session can each subscribe independently (the engine stream gets a single
+  /// subscriber here). Decoupling this is what lets the in-app transport track
+  /// out-of-band stops (headset/Android Auto disconnect, audio-focus loss).
+  final StreamController<bool> _playing =
+      StreamController<bool>.broadcast();
+
   /// Emits a chapter's `uuid` when it plays to its end (app-4 finished-tracking).
   final StreamController<String> _chapterCompleted =
       StreamController<String>.broadcast();
@@ -118,8 +125,10 @@ class PlayerController {
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
 
-  /// Playing/paused for the media session.
-  Stream<bool> get playingStream => _engine.playingStream;
+  /// Playing/paused for the media session and the in-app transport. Mirrors the
+  /// engine via the single [_playingSub] subscription, re-broadcast so multiple
+  /// listeners (UI + handler) never multi-subscribe the engine stream.
+  Stream<bool> get playingStream => _playing.stream;
   bool get playing => _engine.playing;
 
   /// Emits on every chapter load (incl. auto-advance) so the media session
@@ -277,6 +286,9 @@ class PlayerController {
 
   // fs-16: drive the accumulator from the engine's playing-state stream.
   void _onPlayingChanged(bool isPlaying) {
+    // Re-broadcast first so the UI/media session update even when no accumulator
+    // is wired (the early-return below is stats-only).
+    if (!_playing.isClosed) _playing.add(isPlaying);
     // Accrual is gated on play/pause intent only. Safe because playback is always
     // from local downloaded files (setFilePath), so there are no sustained buffer
     // stalls. If streaming (setStreamUrl) is ever wired into the player flow,
@@ -344,6 +356,7 @@ class PlayerController {
     await _sub?.cancel();
     await _completionSub?.cancel();
     await _playingSub?.cancel();
+    await _playing.close();
     await _nowPlaying.close();
     await _chapterCompleted.close();
     await _engine.dispose();
