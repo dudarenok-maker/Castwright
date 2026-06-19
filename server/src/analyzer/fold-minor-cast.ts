@@ -177,6 +177,24 @@ const GENERIC_ROLE_RU = new Set([
   'старик',
   'старуха',
   'парнишка',
+  'оператор',
+  'водитель',
+]);
+
+/* Russian function words (prepositions + a few conjunctions) that appear as a
+   standalone token ONLY inside a descriptive PHRASE — "женщина С двумя
+   овчарками НА поводке", "молодой В куртке". A proper Russian name (first ·
+   patronymic · surname · diminutive) structurally never contains one of these
+   as a separate word, so a multi-word "name" carrying a function-word token is
+   a description, not a person — the highest-precision fold signal we have, with
+   effectively zero false-positive risk against real names (the #938 lesson:
+   never let a widened fold swallow a real character). Single-letter forms
+   (с/в/к/у/о/а/и) are included on purpose — capitalised initials carry a dot
+   ("А.") so they don't collide. Russian-only, mirrors GENERIC_ROLE_RU. */
+const RU_FUNCTION_WORDS = new Set([
+  'с', 'со', 'в', 'во', 'на', 'по', 'под', 'из', 'у', 'за', 'к', 'ко',
+  'о', 'об', 'обо', 'при', 'про', 'для', 'без', 'до', 'от', 'над',
+  'и', 'или', 'а', 'но',
 ]);
 
 /* Decides whether a character's `name` reads as a descriptor rather
@@ -198,10 +216,16 @@ const GENERIC_ROLE_RU = new Set([
    choices don't matter.
 
    When `language` is Russian the English patterns above still apply (the
-   model occasionally emits "Unknown …" even on a Russian book) AND a bare
-   Russian generic noun ("девушка", "парень") is additionally treated as a
-   descriptor. Russian inflection means partial coverage for v1 — see
-   `GENERIC_ROLE_RU`. */
+   model occasionally emits "Unknown …" even on a Russian book) AND two further
+   Russian-only signals fold:
+     - a bare Russian generic noun ("девушка", "парень", "оператор") — see
+       `GENERIC_ROLE_RU`;
+     - a multi-word phrase carrying a standalone function word ("женщина С
+       двумя овчарками", "молодой В куртке") — a description, never a proper
+       name (see `RU_FUNCTION_WORDS`).
+   Deliberately NOT folded: "<adjective> <role-noun>" forms like "Тёмный маг"
+   (could be a meaningful role character) — those are left to the post-stage-2
+   line-count fold. Russian inflection still means partial coverage for v1. */
 export function isDescriptorName(name: string, language?: string): boolean {
   const trimmed = name.trim();
   if (!trimmed) return false;
@@ -215,6 +239,18 @@ export function isDescriptorName(name: string, language?: string): boolean {
   if (normaliseBookLanguage(language) === 'ru') {
     /* Match a lone Russian generic noun (the typical background-speaker form). */
     if (parts.length === 1 && GENERIC_ROLE_RU.has(parts[0].toLowerCase())) return true;
+    /* A multi-word Russian phrase carrying a standalone function-word token is
+       a DESCRIPTION, not a proper name ("женщина с двумя овчарками на поводке",
+       "молодой в яркой оранжевой куртке"). Strip leading/trailing dashes from
+       each token so a "Имя — с …" dash beat still tokenises cleanly. Safe
+       against real names — they never contain a preposition/conjunction word
+       (see RU_FUNCTION_WORDS). */
+    if (parts.length >= 2) {
+      const hasFunctionWord = parts.some((p) =>
+        RU_FUNCTION_WORDS.has(p.toLowerCase().replace(/^[—–-]+|[—–-]+$/g, '')),
+      );
+      if (hasFunctionWord) return true;
+    }
   }
   return false;
 }
