@@ -215,4 +215,47 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
     expect(res.body.updated).toHaveLength(1);
     expect(res.body.updated[0].characterId).toBe('loner');
   });
+
+  it('converges voiceUuid to canonical on manual unify — both rows get U1', async () => {
+    /* Seed: two Wren rows with DIFFERENT voiceUuids; canonical (source) has U1. */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        voiceUuid: 'U1',
+      },
+    ]);
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_C, bookC, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        lines: 70,
+        voiceUuid: 'U2',
+      },
+    ]);
+    /* Also remove BOOK_B's wren-sparrow from the mix so it doesn't confuse the assertion
+       (wren-sparrow has no voiceUuid — verify it gets undefined, not U1). */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_B, bookB, [
+      { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'character', color: 'unset', lines: 90 },
+    ]);
+
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'wren-uuid-test' },
+    });
+    expect(res.status).toBe(200);
+
+    /* Canonical source (A/wren, voiceUuid=U1) retains U1. */
+    expect(findChar(BOOK_A, 'wren')?.voiceUuid).toBe('U1');
+    /* Non-canonical (C/wren, voiceUuid=U2) must be overwritten to U1. */
+    expect(findChar(BOOK_C, 'wren')?.voiceUuid).toBe('U1');
+    /* Row with no prior voiceUuid (B/wren-sparrow) also gets U1 — canonical uuid
+       propagates to all unified rows so the whole group converges on one identity. */
+    expect(findChar(BOOK_B, 'wren-sparrow')?.voiceUuid).toBe('U1');
+  });
 });

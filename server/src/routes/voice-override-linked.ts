@@ -144,7 +144,7 @@ voiceOverrideLinkedRouter.post(
     const failed: Array<{ bookId: string; bookTitle: string; error: string }> = [];
     for (const w of writes) {
       try {
-        const wrote = await applyToBook(w.bookDir, w.ids, canonicalVoiceId, override);
+        const wrote = await applyToBook(w.bookDir, w.ids, canonicalVoiceId, source.voiceUuid, override);
         for (const id of wrote) {
           updated.push({ bookId: w.bookId, bookTitle: w.bookTitle, characterId: id });
         }
@@ -172,6 +172,7 @@ async function applyToBook(
   bookDir: string,
   ids: string[],
   canonicalVoiceId: string,
+  canonicalVoiceUuid: string | undefined,
   override: { engine: Engine; name: string } | null,
 ): Promise<string[]> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
@@ -182,6 +183,7 @@ async function applyToBook(
   cast.characters = cast.characters.map((c) => {
     if (!want.has(c.id)) return c;
     const next: PersistedCharacter = { ...c, voiceId: canonicalVoiceId };
+    if (canonicalVoiceUuid) next.voiceUuid = canonicalVoiceUuid;
     if (override === null) {
       delete next.overrideTtsVoices;
     } else {
