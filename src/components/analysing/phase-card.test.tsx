@@ -46,8 +46,11 @@ const activePhase: AnalysisPhase = {
 
 describe('LiveChapterRow — section sub-bar', () => {
   /* When a chapter has sectionsTotal > 1 the row must show "section M/N"
-     and a thin sub-bar; single-section (or absent) chapters must stay clean. */
-  it('shows "section M/N" text when sectionsTotal > 1', () => {
+     and a thin sub-bar; single-section (or absent) chapters must stay clean.
+     The counter reads the section CURRENTLY being processed (1-based) so it
+     never sits on the confusing "section 0/N" while a slow first section
+     grinds — sectionsDone is the completed count, so current = done + 1. */
+  it('shows the in-progress (1-based) section as "section M/N" when sectionsTotal > 1', () => {
     const store = mountStore();
     render(
       <Provider store={store}>
@@ -77,7 +80,42 @@ describe('LiveChapterRow — section sub-bar', () => {
         />
       </Provider>,
     );
-    expect(screen.getByText(/section 3\/4/i)).toBeInTheDocument();
+    // 3 sections done → currently on section 4 of 4.
+    expect(screen.getByText(/section 4\/4/i)).toBeInTheDocument();
+  });
+
+  it('shows "section 1/N" (never 0) while the first section is still in flight', () => {
+    const store = mountStore();
+    render(
+      <Provider store={store}>
+        <PhaseCard
+          phase={activePhase}
+          activePhaseId={activePhase.id}
+          phaseProgress={0.1}
+          phaseLogs={[]}
+          live={{
+            totalChapters: 10,
+            chapters: [
+              {
+                chapterIndex: 8,
+                chapterTitle: 'Chapter 8',
+                elapsedMs: 60000,
+                estMs: 120000,
+                sectionsDone: 0,
+                sectionsTotal: 10,
+              },
+            ],
+          }}
+          isLocalAnalyzer={false}
+          analysisStarted={true}
+          conn="streaming"
+          bookId={null}
+          droppedQuotesRefreshKey={0}
+        />
+      </Provider>,
+    );
+    expect(screen.getByText(/section 1\/10/i)).toBeInTheDocument();
+    expect(screen.queryByText(/section 0\//i)).toBeNull();
   });
 
   it('renders no "section" text when sectionsTotal is 1', () => {
@@ -198,6 +236,52 @@ describe('LiveChapterRow sentence headline', () => {
   it('omits the sentence headline before sentence mode', () => {
     renderCard({ live: { totalChapters: 9, chapters: [liveChapter()] } });
     expect(screen.queryByText(/Attributed/)).not.toBeInTheDocument();
+  });
+
+  it('formats the sentence counts with thousands separators', () => {
+    renderCard({
+      live: {
+        totalChapters: 9,
+        chapters: [liveChapter({ sentencesDone: 1129, sentencesTotal: 2220, inSentenceMode: true })],
+      },
+    });
+    expect(screen.getByText(/Attributed ~1,129 of ~2,220 sentences/)).toBeInTheDocument();
+  });
+});
+
+describe('LiveChapterRow section count formatting', () => {
+  it('formats large section totals with thousands separators', () => {
+    renderCard({
+      live: {
+        totalChapters: 9,
+        chapters: [liveChapter({ sectionsDone: 1200, sectionsTotal: 1500 })],
+      },
+    });
+    // current section = done + 1 = 1,201 of 1,500.
+    expect(screen.getByText(/section 1,201\/1,500/)).toBeInTheDocument();
+  });
+});
+
+describe('PhaseCard per-phase active/done overrides (pipelined phases)', () => {
+  /* When the parent derives per-phase state, it passes isPhaseActive/
+     isPhaseDone explicitly so two pipelined phases can both render their
+     own live ticker — the override wins over the activePhaseId fallback. */
+  it('renders the live ticker when isPhaseActive is forced true even though activePhaseId differs', () => {
+    renderCard({
+      activePhaseId: 0, // a different phase is the global "max"
+      isPhaseActive: true,
+      live: { totalChapters: 9, chapters: [liveChapter({ chapterTitle: 'Forced Active' })] },
+    });
+    expect(screen.getByText('Forced Active')).toBeInTheDocument();
+  });
+
+  it('hides the live ticker when isPhaseActive is forced false even though activePhaseId matches', () => {
+    renderCard({
+      activePhaseId: 1, // matches phase1.id → fallback would be active
+      isPhaseActive: false,
+      live: { totalChapters: 9, chapters: [liveChapter({ chapterTitle: 'Should Be Hidden' })] },
+    });
+    expect(screen.queryByText('Should Be Hidden')).not.toBeInTheDocument();
   });
 
   it('keeps the chars/s speed pulse in the heartbeat row', () => {

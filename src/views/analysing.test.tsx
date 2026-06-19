@@ -174,6 +174,96 @@ describe('AnalysingView — live ticker (regression for stuck-chapter screenshot
     expect(overBudget).toHaveLength(1);
   });
 
+  it('keeps BOTH pipelined phases live at once (Phase 0 + Phase 1 tickers do not clobber each other)', async () => {
+    await renderViewWaitingForAnalysis();
+
+    /* Split-analyzer pipelining: Phase 0 (cast) and Phase 1 (attribution)
+       emit interleaved `phase` events, each with its OWN live payload. The
+       bug was a single shared `live`/`phase` state — the later event wiped
+       the earlier one, so the active card + its timer flip-flopped between
+       the two phases (the 5:59 ↔ 45:33 flicker the user filmed). */
+    const castLive: AnalysisLiveInfo = {
+      totalChapters: 9,
+      chapters: [{ chapterIndex: 8, chapterTitle: 'CAST CH8', elapsedMs: 476_000, estMs: 2_066_000 }],
+    };
+    const attribLive: AnalysisLiveInfo = {
+      totalChapters: 9,
+      chapters: [{ chapterIndex: 1, chapterTitle: 'ATTRIB CH1', elapsedMs: 184_000, estMs: 362_000 }],
+    };
+
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.6, live: castLive });
+      capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.1, live: attribLive });
+    });
+
+    // Both phase tickers stay on screen simultaneously — neither overwrites the other.
+    expect(screen.getByText('CAST CH8')).toBeInTheDocument();
+    expect(screen.getByText('ATTRIB CH1')).toBeInTheDocument();
+  });
+
+  it('keeps a phase headline STICKY across a mid-phase tick that carries no live payload', async () => {
+    await renderViewWaitingForAnalysis();
+
+    /* Regression for the e2e timeout (#930 follow-up): the server (and the
+       mock) emit `live` only while a chapter is in flight; a later same-phase
+       tick can arrive with no `live` (progress still < 1). The ticker MUST
+       persist that phase's last live rather than blanking — otherwise the
+       headline flickers out mid-phase and a poller waiting on it hangs. */
+    act(() => {
+      capturedOpts?.onPhase?.({
+        phaseId: 0,
+        progress: 0.5,
+        live: {
+          totalChapters: 2,
+          chapters: [
+            {
+              chapterIndex: 1,
+              chapterTitle: 'Chapter 1',
+              elapsedMs: 1000,
+              estMs: 2000,
+              sentencesDone: 60,
+              sentencesTotal: 120,
+              inSentenceMode: true,
+            },
+          ],
+        },
+      });
+    });
+    expect(screen.getByText(/Attributed ~60 of ~120 sentences/)).toBeInTheDocument();
+
+    // A later mid-phase tick with NO live (progress still < 1) must NOT blank it.
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.8 });
+    });
+    expect(screen.getByText(/Attributed ~60 of ~120 sentences/)).toBeInTheDocument();
+  });
+
+  it('stops showing a phase ticker once that phase completes (progress 1), without disturbing the other phase', async () => {
+    await renderViewWaitingForAnalysis();
+
+    act(() => {
+      capturedOpts?.onPhase?.({
+        phaseId: 0,
+        progress: 0.6,
+        live: { totalChapters: 9, chapters: [{ chapterIndex: 8, chapterTitle: 'CAST CH8', elapsedMs: 1000, estMs: 2000 }] },
+      });
+      capturedOpts?.onPhase?.({
+        phaseId: 1,
+        progress: 0.1,
+        live: { totalChapters: 9, chapters: [{ chapterIndex: 1, chapterTitle: 'ATTRIB CH1', elapsedMs: 1000, estMs: 2000 }] },
+      });
+    });
+    expect(screen.getByText('CAST CH8')).toBeInTheDocument();
+
+    // Phase 0 completes (progress 1) — it reads as done, so its ticker is no
+    // longer rendered, but Phase 1's ticker is untouched.
+    act(() => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
+    });
+    expect(screen.queryByText('CAST CH8')).not.toBeInTheDocument();
+    expect(screen.getByText('ATTRIB CH1')).toBeInTheDocument();
+  });
+
   it('hides the ticker entirely when no chapters are in flight (between completion and next start)', async () => {
     await renderViewWaitingForAnalysis();
 

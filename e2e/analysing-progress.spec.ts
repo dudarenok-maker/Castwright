@@ -35,10 +35,17 @@ test('attribution shows a non-snapping sentence count + chars/s', async ({ page 
 
   /* Poll the count ~8 times at 250 ms intervals (2 s total window).
      Deduplicate consecutive equal reads so a fast phase doesn't inflate
-     the sample; then assert the deduplicated series is monotone. */
+     the sample; then assert the deduplicated series is monotone.
+
+     The headline belongs to the phase that's actively attributing; once that
+     phase completes its ticker is (correctly) removed, so a read can land
+     after it's gone. Use a SHORT per-read timeout + count() guard so the loop
+     samples the visible window and moves on instead of auto-waiting the full
+     test timeout for a detached element (which previously hung the test). */
   const reads: number[] = [];
   for (let i = 0; i < 8; i += 1) {
-    const txt = await headline.textContent().catch(() => null);
+    const present = (await headline.count()) > 0;
+    const txt = present ? await headline.textContent({ timeout: 500 }).catch(() => null) : null;
     if (txt) {
       const n = Number(/~(\d+) of/.exec(txt)?.[1] ?? '0');
       if (reads.length === 0 || reads[reads.length - 1] !== n) reads.push(n);
