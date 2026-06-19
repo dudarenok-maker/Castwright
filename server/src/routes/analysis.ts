@@ -116,6 +116,7 @@ import {
   tryParseApiError,
   FAILURE_REMEDIATIONS,
 } from './failure-taxonomy.js';
+import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -652,11 +653,15 @@ export function buildInterimCast(
   chapterCast: Record<number, CharacterOutput[]>,
   chapterOrder: number[],
   language?: string,
+  author = '',
 ): CharacterOutput[] {
   const roster = new Map<string, CharacterOutput>();
   for (const chapterId of chapterOrder) {
     const cast = chapterCast[chapterId];
-    if (cast?.length) mergeRosterChapter(roster, cast);
+    if (cast?.length) {
+      const guarded = dropBylineAuthorFromChapter(cast, { author }); // #938 — no title here (transient interim)
+      mergeRosterChapter(roster, guarded.characters);
+    }
   }
   if (roster.size === 0) return [];
   const folded = previewFoldForLiveView(Array.from(roster.values()), language);
@@ -2577,7 +2582,16 @@ export async function runMainAnalyzerJob(
         const r = new Map<string, CharacterOutput>();
         for (const ch of recordRef.chapterHints) {
           const cast = chapterCast[ch.id];
-          if (cast?.length) mergeRosterChapter(r, cast);
+          if (cast?.length) {
+            /* #938 Layer B — keep the byline author out of every roster build
+               (covers cached chapterCast too, unlike guarding only fresh writes).
+               Framed author's-note chapters keep the author. */
+            const guarded = dropBylineAuthorFromChapter(cast, {
+              author: bookAuthor,
+              chapterTitle: ch.title,
+            });
+            mergeRosterChapter(r, guarded.characters);
+          }
         }
         return r;
       };
@@ -2942,6 +2956,7 @@ export async function runMainAnalyzerJob(
             chapterCast,
             recordRef.chapterHints.map((h) => h.id),
             bookLanguage,
+            bookAuthor,
           );
           if (interim.length > 0) {
             try {
@@ -4504,7 +4519,16 @@ async function runSubsetAnalyzerJob(
       const r = new Map<string, CharacterOutput>();
       for (const ch of record.chapterHints) {
         const cast = chapterCast[ch.id];
-        if (cast?.length) mergeRosterChapter(r, cast);
+        if (cast?.length) {
+          /* #938 Layer B — keep the byline author out of every roster build
+             (covers cached chapterCast too, unlike guarding only fresh writes).
+             Framed author's-note chapters keep the author. */
+          const guarded = dropBylineAuthorFromChapter(cast, {
+            author: bookAuthor,
+            chapterTitle: ch.title,
+          });
+          mergeRosterChapter(r, guarded.characters);
+        }
       }
       return r;
     };
@@ -4589,6 +4613,7 @@ async function runSubsetAnalyzerJob(
             chapterCast,
             record.chapterHints.map((h) => h.id),
             bookLanguage,
+            bookAuthor,
           );
           if (interim.length > 0) {
             try {
