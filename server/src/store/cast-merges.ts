@@ -15,7 +15,7 @@
    from scratch); each fold pass replaces all `kind:'fold'` entries with that
    pass's set while preserving `kind:'manual'`; manual merges append.
 
-   Only these two paths rewrite THIS book's per-sentence `characterId`. The
+   Only these three paths rewrite THIS book's per-sentence `characterId`. The
    stage-1 roster merge happens before sentence attribution exists, and
    cast-link-prior / voice-match / add-alias only attach a recognition label —
    none of them move sentences, so the unlink route correctly falls back to the

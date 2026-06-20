@@ -26,6 +26,7 @@ import {
   replayCatchUp,
   castInFlightEntryToLiveChapter,
   resolveBookAuthorForManuscript,
+  dedupAndPrepare,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
@@ -2114,5 +2115,76 @@ describe('#938 byline-author exclusion — cached roster path integration', () =
     const authorKey = normaliseNameKey(BOOK_AUTHOR);
     const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
     expect(authorEntry).toBeDefined();
+  });
+});
+
+describe('dedupAndPrepare — dedup BEFORE fold, sentence rewrite + capture for journal', () => {
+  const char = (over: Partial<CharacterOutput> & { id: string; name: string }): CharacterOutput =>
+    ({
+      role: 'supporting',
+      attributes: [],
+      evidence: [],
+      lines: 0,
+      scenes: 0,
+      ...over,
+    }) as CharacterOutput;
+
+  const sentence = (over: Partial<SentenceOutput> & { id: number; characterId: string }): SentenceOutput =>
+    ({ chapterId: 1, text: 'x', ...over }) as SentenceOutput;
+
+  it('collapses two same-name characters to one canonical id and rewrites all their sentences', () => {
+    const characters: CharacterOutput[] = [
+      char({ id: 'olga', name: 'Ольга', gender: 'female' }),
+      char({ id: 'ольга', name: 'Ольга', gender: 'female' }),
+    ];
+    const sentences: SentenceOutput[] = [
+      sentence({ id: 1, characterId: 'olga' }),
+      sentence({ id: 2, characterId: 'ольга' }),
+      sentence({ id: 3, characterId: 'narrator' }),
+    ];
+
+    const dd = dedupAndPrepare(characters, sentences, 'ru');
+
+    // ONE Ольга survives, with the safeId-derived canonical id.
+    const olgas = dd.characters.filter((c) => c.name === 'Ольга');
+    expect(olgas).toHaveLength(1);
+    const canonical = olgas[0].id;
+    expect(canonical).toBe('ольга');
+
+    // Every sentence that was attributed to either source now points at the canonical id.
+    expect(dd.sentences.find((s) => s.id === 1)!.characterId).toBe(canonical);
+    expect(dd.sentences.find((s) => s.id === 2)!.characterId).toBe(canonical);
+    // Untouched sentences keep their attribution.
+    expect(dd.sentences.find((s) => s.id === 3)!.characterId).toBe('narrator');
+
+    // A non-empty rewrites map drove the collapse.
+    expect(Object.keys(dd.rewrites).length).toBeGreaterThan(0);
+    expect(dd.rewrites['olga']).toBe(canonical);
+
+    // preDedupSentences captured the ORIGINAL ids (pre-rewrite) for the journal.
+    expect(dd.preDedupSentences.find((s) => s.id === 1)!.characterId).toBe('olga');
+    expect(dd.preDedupSentences.find((s) => s.id === 2)!.characterId).toBe('ольга');
+
+    // preDedupRoster captured the pre-dedup names (for journal sourceName lookup).
+    expect(dd.preDedupRoster.some((r) => r.id === 'olga' && r.name === 'Ольга')).toBe(true);
+  });
+
+  it('is a no-op (empty rewrites) when the roster has no name collisions', () => {
+    const characters: CharacterOutput[] = [
+      char({ id: 'anton', name: 'Антон', gender: 'male' }),
+      char({ id: 'olga', name: 'Ольга', gender: 'female' }),
+    ];
+    const sentences: SentenceOutput[] = [
+      sentence({ id: 1, characterId: 'anton' }),
+      sentence({ id: 2, characterId: 'olga' }),
+    ];
+
+    const dd = dedupAndPrepare(characters, sentences, 'ru');
+
+    expect(dd.characters).toHaveLength(2);
+    expect(Object.keys(dd.rewrites)).toHaveLength(0);
+    // Sentences pass through unchanged.
+    expect(dd.sentences.find((s) => s.id === 1)!.characterId).toBe('anton');
+    expect(dd.sentences.find((s) => s.id === 2)!.characterId).toBe('olga');
   });
 });
