@@ -38,6 +38,14 @@ describe('dedupeRosterByName Tier-2a (full vs short)', () => {
     expect(r.rewrites).toEqual({ anton: 'anton-gorodetsky' });
   });
 
+  it('Tier-2a tie on equal lines → earlier roster entry survives', () => {
+    const chars = [c({ id: 'anton', name: 'Антон', gender: 'male' }), c({ id: 'anton-gorodetsky', name: 'Антон Городецкий', gender: 'male' })];
+    const r = dedupeRosterByName(chars as any, [...sent('anton', 5), ...sent('anton-gorodetsky', 5)]);
+    expect(r.characters).toHaveLength(1);
+    expect(r.characters[0].id).toBe('anton'); // earlier-in-roster wins the tie
+    expect(r.rewrites).toEqual({ 'anton-gorodetsky': 'anton' });
+  });
+
   it('does NOT merge when two longer names both contain the short name (ambiguous)', () => {
     const chars = [
       c({ id: 'anton', name: 'Антон', gender: 'male' }),

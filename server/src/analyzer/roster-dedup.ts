@@ -141,15 +141,15 @@ export function dedupeRosterByName(
     if (supersets.length !== 1) continue;
 
     const long = supersets[0];
-    // Survivor = more lines; tie → earlier in roster (snapshot) order = `long`
-    // since the outer loop visits shorter-name candidates and the superset is
-    // always the longer name, which was encountered before or after.
+    // Survivor = more lines; tie → earlier in roster (snapshot) order.
     // When tied, prefer the one that appears earlier in snapshot order.
     const longLines = linesOf(long);
     const shortLines = linesOf(short);
     let survivor: CharacterOutput;
     let victim: CharacterOutput;
-    if (longLines >= shortLines) {
+    const shortIdx = snapshot.indexOf(short);
+    const longIdx = snapshot.indexOf(long);
+    if (longLines > shortLines || (longLines === shortLines && longIdx < shortIdx)) {
       survivor = long;
       victim = short;
     } else {
