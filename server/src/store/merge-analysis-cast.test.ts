@@ -14,6 +14,7 @@ import {
   mergeAnalysisResultWithExistingCast,
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
+  applyRewriteToPriorCast,
 } from './merge-analysis-cast.js';
 
 type C = Record<string, unknown> & { id: string };
@@ -228,5 +229,19 @@ describe('voicedSurvivorsDropped', () => {
   it('returns the fresh roster unchanged when there is no existing cast', () => {
     const fresh: C[] = [{ id: 'a' }, { id: 'b' }];
     expect(mergeAnalysisResultWithExistingCast([], fresh)).toEqual(fresh);
+  });
+});
+
+describe('applyRewriteToPriorCast', () => {
+  it('remaps prior ids and keeps the strongest voiceState on collision', () => {
+    const prior = [
+      { id: 'olga', name: 'Ольга', voiceState: 'generated', overrideTtsVoices: { qwen: { name: 'qwen-gen' } } },
+      { id: 'ольга', name: 'Ольга', voiceState: 'tuned', overrideTtsVoices: { qwen: { name: 'qwen-tuned' } } },
+    ];
+    const { priorCast, droppedVoices } = applyRewriteToPriorCast(prior, { olga: 'ольга' });
+    const survivor = priorCast.find((c) => c.id === 'ольга');
+    expect(survivor?.overrideTtsVoices?.qwen?.name).toBe('qwen-tuned'); // tuned beats generated
+    expect(priorCast.filter((c) => c.id === 'ольга')).toHaveLength(1); // no duplicate id
+    expect(droppedVoices).toEqual([{ id: 'olga', voiceState: 'generated' }]);
   });
 });

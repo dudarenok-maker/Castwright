@@ -159,6 +159,77 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   return overlaid;
 }
 
+/** Strength order for voiceState collision resolution. Higher = stronger. */
+const VOICE_STATE_RANK: Record<string, number> = {
+  locked: 3,
+  tuned: 2,
+  reused: 1,
+  generated: 0,
+};
+
+function voiceStateRank(state: unknown): number {
+  return typeof state === 'string' ? (VOICE_STATE_RANK[state] ?? -1) : -1;
+}
+
+/** Remap each prior cast row's `id` through `rewrites` (dedup canonical-id
+    table). When two rows collide on the same canonical id, keep the one with
+    the strongest `voiceState` (locked > tuned > reused > generated, undefined
+    weakest); tie-break by more lines if available, else first encountered.
+    Returns a new array of remapped rows and a list of dropped rows (original id
+    + voiceState) for caller logging. Inputs are not mutated. */
+export function applyRewriteToPriorCast<T extends CastRecord>(
+  priorCast: ReadonlyArray<T>,
+  rewrites: Record<string, string>,
+): { priorCast: T[]; droppedVoices: Array<{ id: string; voiceState?: string }> } {
+  // Map from canonical id → { row (with remapped id), originalId }
+  const winners = new Map<string, { row: T; originalId: string }>();
+  const droppedVoices: Array<{ id: string; voiceState?: string }> = [];
+
+  for (const row of priorCast) {
+    const originalId = row.id;
+    const canonicalId = rewrites[originalId] ?? originalId;
+    const remapped: T = canonicalId === originalId ? row : { ...row, id: canonicalId };
+    const existing = winners.get(canonicalId);
+    if (!existing) {
+      winners.set(canonicalId, { row: remapped, originalId });
+      continue;
+    }
+    // Collision — compare strengths
+    const incomingRank = voiceStateRank(row.voiceState);
+    const existingRank = voiceStateRank(existing.row.voiceState);
+    let droppedOriginalId: string;
+    let droppedVoiceState: unknown;
+    if (incomingRank > existingRank) {
+      droppedOriginalId = existing.originalId;
+      droppedVoiceState = existing.row.voiceState;
+      winners.set(canonicalId, { row: remapped, originalId });
+    } else if (incomingRank === existingRank) {
+      // tie-break: more lines wins, else first (existing) wins
+      const incomingLines = typeof row.lines === 'number' ? row.lines : -1;
+      const existingLines = typeof existing.row.lines === 'number' ? existing.row.lines : -1;
+      if (incomingLines > existingLines) {
+        droppedOriginalId = existing.originalId;
+        droppedVoiceState = existing.row.voiceState;
+        winners.set(canonicalId, { row: remapped, originalId });
+      } else {
+        droppedOriginalId = originalId;
+        droppedVoiceState = row.voiceState;
+        // existing stays in winners
+      }
+    } else {
+      droppedOriginalId = originalId;
+      droppedVoiceState = row.voiceState;
+      // existing stays in winners
+    }
+    droppedVoices.push({
+      id: droppedOriginalId,
+      ...(droppedVoiceState !== undefined ? { voiceState: droppedVoiceState as string } : {}),
+    });
+  }
+
+  return { priorCast: Array.from(winners.values()).map((w) => w.row), droppedVoices };
+}
+
 /** Seed the Facet-A guard fields (`notLinkedTo`, `matchedFrom`) from the prior
     cast onto the fresh roster IN PLACE, by id, before linkSeriesReuseAtAnalysis
     runs. Without this the link pass scores against an empty `notLinkedTo` and
