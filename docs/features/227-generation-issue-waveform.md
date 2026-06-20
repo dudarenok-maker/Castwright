@@ -7,6 +7,7 @@ owner: null
 # 227 — Generation issue-waveform: per-segment QA overlay + MiniPlayer jump
 
 > Status: active
+> Issue: fs-47 (#959) · PR: #958
 > Key files: `src/lib/chapter-issues.ts`, `src/components/waveform.tsx`, `src/views/generation.tsx` (ChapterDetailPanel), `src/components/mini-player.tsx`, `src/components/layout.tsx`, `server/src/routes/chapter-audio.ts`
 > URL surface: `#/books/<id>/generate`, inline MiniPlayer preview strip
 > OpenAPI ops: `GET /api/books/{bookId}/chapters/{chapterId}/audio` (extended `segments[]` with `suspect`, `reasons`)
