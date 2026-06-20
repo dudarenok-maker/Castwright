@@ -6,6 +6,11 @@ import 'audio_engine.dart';
 import 'library_database.dart';
 import 'playback_store.dart';
 
+/// A book/chapter counts as finished once playback enters this window before
+/// the end — covers the user's "last 5–10 seconds" rule and makes ticks robust
+/// to skipping/seeking (no need to hit the engine's exact end-of-file event).
+const Duration kFinishThreshold = Duration(seconds: 10);
+
 /// One chapter the player can load: its stable `uuid` and local file path,
 /// plus display metadata (title/duration) for the media-session notification.
 class PlayableChapter {
@@ -71,6 +76,18 @@ class PlayerController {
     _completionSub = _engine.completionStream.listen((_) {
       final finished = currentChapterUuid;
       if (finished != null) _chapterCompleted.add(finished);
+      // M1: a short last chapter (duration <= kFinishThreshold) never enters the
+      // near-end window, so the near-end path never fires _bookCompleted. Emit it
+      // here instead. No isPlaying guard — a genuine engine end-of-file event
+      // confirms real playback ended. Dedup with _bookFinishEmitted so the normal
+      // long-chapter path (near-end already emitted) doesn't double-fire.
+      final book = _bookId;
+      if (book != null &&
+          _index == _playlist.length - 1 &&
+          !_bookFinishEmitted) {
+        _bookFinishEmitted = true;
+        if (!_bookCompleted.isClosed) _bookCompleted.add(book);
+      }
       _advance();
     });
     // Subscribe to playing state to drive the accumulator.
@@ -112,6 +129,17 @@ class PlayerController {
   final StreamController<String> _chapterCompleted =
       StreamController<String>.broadcast();
   Stream<String> get chapterCompletedStream => _chapterCompleted.stream;
+
+  /// Emits a book's `bookId` once when its LAST chapter enters [kFinishThreshold].
+  final StreamController<String> _bookCompleted =
+      StreamController<String>.broadcast();
+  Stream<String> get bookCompletedStream => _bookCompleted.stream;
+
+  /// Dedup guards so the per-tick near-end check fires at most once per chapter
+  /// and once per book; reset on every chapter load.
+  String? _nearEndTickedUuid;
+  bool _bookFinishEmitted = false;
+
   List<PlayableChapter> _playlist = const [];
   String? _bookId;
   String _bookTitle = '';
@@ -206,12 +234,22 @@ class PlayerController {
       final i = _playlist.indexWhere((c) => c.uuid == saved.chapterUuid);
       if (i >= 0) index = i;
     }
+    // Reset the book-level guard so every openBook call (including replay)
+    // starts fresh — _loadIndex's own reset only fires on non-last chapters,
+    // which misses single-chapter books where index 0 == length-1 always.
+    _bookFinishEmitted = false;
     await _loadIndex(index, seekMs: saved?.positionMs ?? 0);
   }
 
   Future<void> _loadIndex(int index, {int seekMs = 0}) async {
     if (index < 0 || index >= _playlist.length) return;
     _index = index;
+    // Reset near-end dedup so each new chapter can tick once.
+    _nearEndTickedUuid = null;
+    // Reset book-finish guard only when loading a non-last chapter: re-seeking
+    // within the finished last chapter must not re-emit; replaying loads ch0
+    // (non-last) which resets the guard for the new play-through.
+    if (index != _playlist.length - 1) _bookFinishEmitted = false;
     final c = _playlist[index];
     _nowPlaying.add(NowPlaying(
       id: c.uuid,
@@ -303,6 +341,28 @@ class PlayerController {
   }
 
   void _onTick(Duration position) {
+    // ── Near-end check (runs every tick, before the autosave-throttle block) ──
+    final book = _bookId;
+    final uuid = currentChapterUuid;
+    final dur = _engine.duration;
+    // Chapters shorter than kFinishThreshold rely on completionStream exclusively for ticks.
+    if (book != null && uuid != null && dur != null && dur > kFinishThreshold) {
+      final remaining = dur - position;
+      if (remaining <= kFinishThreshold) {
+        if (_nearEndTickedUuid != uuid) {
+          _nearEndTickedUuid = uuid;
+          if (!_chapterCompleted.isClosed) _chapterCompleted.add(uuid);
+        }
+        final isLast = _index == _playlist.length - 1;
+        // I2: only emit the book-finish event while actually playing — a scrub/seek
+        // while paused (engine emits a position on seek) must NOT hide the book.
+        if (isLast && !_bookFinishEmitted && _engine.playing) {
+          _bookFinishEmitted = true;
+          if (!_bookCompleted.isClosed) _bookCompleted.add(book);
+        }
+      }
+    }
+    // ── Autosave-throttle block (unchanged) ──────────────────────────────────
     final last = _lastSave;
     final now = _now();
     if (last == null || now.difference(last) >= _autosaveInterval) {
@@ -359,6 +419,7 @@ class PlayerController {
     await _playing.close();
     await _nowPlaying.close();
     await _chapterCompleted.close();
+    await _bookCompleted.close();
     await _engine.dispose();
   }
 }

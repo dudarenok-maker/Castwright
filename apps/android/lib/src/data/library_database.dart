@@ -33,6 +33,12 @@ class Books extends Table {
   /// On-disk path of the cached ~250×250 cover thumbnail (client-downscaled).
   TextColumn get coverThumbPath => text().nullable()();
 
+  /// Whether the user has dismissed this book from the "Continue listening"
+  /// shelf — set on auto-finish (last chapter reached) or a manual long-press
+  /// remove, cleared on replay (markPlayed). Drives shelf exclusion only; the
+  /// book stays fully in the library.
+  BoolColumn get hidden => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column<Object>> get primaryKey => {bookId};
 }
@@ -94,7 +100,7 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase.open() : this(driftDatabase(name: 'library'));
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -104,6 +110,7 @@ class LibraryDatabase extends _$LibraryDatabase {
           if (from < 3) await m.addColumn(chapters, chapters.durationSec);
           if (from < 4) await m.createTable(listenStatsBuffer);
           if (from < 5) await m.addColumn(chapters, chapters.peaks);
+          if (from < 6) await m.addColumn(books, books.hidden);
         },
       );
 

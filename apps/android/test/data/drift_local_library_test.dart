@@ -278,6 +278,44 @@ void main() {
     });
   });
 
+  group('DriftLocalLibrary (app-14 finished-shelf)', () {
+    test('setBookHidden persists and surfaces via listBooks', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      expect((await lib.listBooks()).single.hidden, isFalse);
+      await lib.setBookHidden('b1', true);
+      expect((await lib.listBooks()).single.hidden, isTrue);
+      await lib.close();
+    });
+
+    test('markPlayed clears hidden (replay restores the book)', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      await lib.setBookHidden('b1', true);
+      await lib.markPlayed('b1', '2026-06-20T12:00:00Z');
+      expect((await lib.listBooks()).single.hidden, isFalse);
+      await lib.close();
+    });
+
+    test('markBookFinished ticks every chapter and hides the book', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp', urlSuffix: 'audio.mp3', durationSec: 10);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u2', chapterId: 2, title: 'Two',
+          fingerprint: 'fp', urlSuffix: 'audio.mp3', durationSec: 10);
+      await lib.markBookFinished('b1');
+      expect(await lib.finishedChapterUuids('b1'), {'u1', 'u2'});
+      expect((await lib.listBooks()).single.hidden, isTrue);
+      await lib.close();
+    });
+  });
+
   group('DriftLocalLibrary (player cues)', () {
     test('finishedChapterUuids returns only chapters flagged finished', () async {
       final lib = DriftLocalLibrary(

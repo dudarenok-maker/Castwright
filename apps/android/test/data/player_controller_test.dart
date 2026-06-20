@@ -14,14 +14,29 @@ class FakeAudioEngine implements AudioEngine {
   Duration _position = Duration.zero;
   String? loadedPath;
 
+  // Mutable duration so tests can inject a known chapter length.
+  Duration? _duration;
+  final StreamController<Duration?> _durationCtl =
+      StreamController<Duration?>.broadcast();
+
   @override
   Duration get position => _position;
   @override
   Stream<Duration> get positionStream => _pos.stream;
   @override
-  Duration? get duration => null;
+  Duration? get duration => _duration;
   @override
-  Stream<Duration?> get durationStream => const Stream.empty();
+  Stream<Duration?> get durationStream => _durationCtl.stream;
+
+  /// Inject a chapter duration (mirrors how [emitCompletion] works).
+  void emitDuration(Duration d) {
+    _duration = d;
+    _durationCtl.add(d);
+  }
+
+  /// Alias used by the near-end tests — same as [emit] but named for clarity.
+  void emitPosition(Duration p) => emit(p);
+
   final _completionCtl = StreamController<void>.broadcast();
   @override
   Stream<void> get completionStream => _completionCtl.stream;
@@ -75,6 +90,7 @@ class FakeAudioEngine implements AudioEngine {
     await _pos.close();
     await _playingCtl.close();
     await _completionCtl.close();
+    await _durationCtl.close();
   }
 
   void emit(Duration p) {
@@ -296,6 +312,216 @@ void main() {
       await pc.openBook('b1');
       expect(pc.isInUse('u1'), isTrue);
       expect(pc.isInUse('u2'), isFalse);
+      await pc.dispose();
+    });
+
+    test('near-end position ticks the chapter without waiting for completion',
+        () async {
+      // 2-chapter book so 'u2' is the last chapter; we play chapter 1 (u1).
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final done = <String>[];
+      final sub = pc.chapterCompletedStream.listen(done.add);
+      await pc.openBook('b1'); // starts at u1 (non-last)
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 51)); // remaining 9s <= 10s
+      await Future<void>.delayed(Duration.zero);
+      expect(done, ['u1']);
+      // A second near-end tick must NOT re-emit for the same chapter.
+      engine.emitPosition(const Duration(seconds: 52));
+      await Future<void>.delayed(Duration.zero);
+      expect(done, ['u1']);
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test('last chapter near-end emits bookCompleted once', () async {
+      // 2-chapter book — play chapter 2 (u2 = last).
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1');
+      await pc.playChapter('u2'); // u2 = last chapter in this 2-chapter list
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55)); // remaining 5s
+      await Future<void>.delayed(Duration.zero);
+      engine.emitPosition(const Duration(seconds: 56)); // second tick — no re-emit
+      await Future<void>.delayed(Duration.zero);
+      expect(books, ['b1']);
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test('non-last chapter near-end does NOT emit bookCompleted', () async {
+      // 2-chapter book, start at u1 (non-last).
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1'); // starts at u1 (not last)
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55)); // within threshold
+      await Future<void>.delayed(Duration.zero);
+      expect(books, isEmpty);
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    // ── I2: scrub/seek while paused must NOT emit bookCompleted ─────────────
+
+    test(
+        'scrub to near-end while paused does NOT emit bookCompleted (I2)',
+        () async {
+      // Last chapter loaded, engine paused.
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1');
+      // Load the last chapter (playChapter calls play() internally via
+      // PlayerController.play → engine.play). Immediately pause so the engine
+      // is in the "paused" state when the scrub position arrives.
+      await pc.playChapter('u2'); // sets engine.playing = true
+      await engine.pause();       // set engine.playing = false
+      engine.emitDuration(const Duration(seconds: 60));
+      // Scrub emits a position into the near-end window while paused.
+      engine.emitPosition(const Duration(seconds: 55));
+      await Future<void>.delayed(Duration.zero);
+      expect(books, isEmpty,
+          reason: 'scrub while paused must not emit bookCompleted');
+
+      // Now resume playing — same near-end zone must now emit once.
+      await engine.play();
+      engine.emitPosition(const Duration(seconds: 56)); // still in near-end zone
+      await Future<void>.delayed(Duration.zero);
+      expect(books, ['b1'],
+          reason: 'first tick while playing should emit bookCompleted');
+
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    // ── M1: short last chapter emits bookCompleted via completionStream ──────
+
+    test(
+        'short last chapter (<= kFinishThreshold) emits bookCompleted via completionStream (M1)',
+        () async {
+      // Single short chapter: duration 6 s <= kFinishThreshold (10 s).
+      // The near-end guard `dur > kFinishThreshold` is never satisfied,
+      // so bookCompleted must come from the completionStream handler instead.
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1');
+      engine.emitDuration(const Duration(seconds: 6)); // short chapter
+      // No position tick into near-end zone — fire the engine's end-of-file event.
+      engine.emitCompletion();
+      await Future<void>.delayed(Duration.zero);
+      expect(books, ['b1'],
+          reason: 'short last chapter must emit bookCompleted via completionStream');
+      // Must not double-fire.
+      expect(books.length, 1);
+
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    // ── M1+I2 interaction: long chapter dedup — completionStream must not ────
+    // ── double-fire when near-end already emitted _bookFinishEmitted=true. ───
+
+    test(
+        'long last chapter: near-end emit dedups completionStream (no double-fire)',
+        () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1');
+      await engine.play();
+      engine.emitDuration(const Duration(seconds: 60));
+      // Near-end tick fires bookCompleted first.
+      engine.emitPosition(const Duration(seconds: 55));
+      await Future<void>.delayed(Duration.zero);
+      expect(books, ['b1']);
+      // Engine fires completionStream — must NOT double-fire.
+      engine.emitCompletion();
+      await Future<void>.delayed(Duration.zero);
+      expect(books.length, 1, reason: 'completionStream must not double-fire after near-end');
+
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test(
+        'single-chapter book: replay re-emits chapterCompleted and bookCompleted',
+        () async {
+      // The only chapter (u1) is also the last (index 0 == length-1).
+      // Before the fix, _bookFinishEmitted is never cleared by _loadIndex
+      // (because `index != _playlist.length - 1` is always false), so a
+      // replay never fires bookCompletedStream a second time.
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+        ],
+      });
+      final chapters = <String>[];
+      final books = <String>[];
+      final chSub = pc.chapterCompletedStream.listen(chapters.add);
+      final bkSub = pc.bookCompletedStream.listen(books.add);
+
+      // ── First play-through ──────────────────────────────────────────────
+      await pc.openBook('b1');
+      await engine.play(); // must be playing for the near-end gate (I2)
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55)); // remaining 5s <= 10s
+      await Future<void>.delayed(Duration.zero);
+      expect(chapters, ['u1'], reason: 'first play: chapterCompleted once');
+      expect(books, ['b1'], reason: 'first play: bookCompleted once');
+
+      // ── Replay (simulate user tapping "play again" → openBook called again) ─
+      await pc.openBook('b1');
+      await engine.play(); // must be playing for the near-end gate (I2)
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55));
+      await Future<void>.delayed(Duration.zero);
+      expect(chapters, ['u1', 'u1'],
+          reason: 'replay: chapterCompleted a second time');
+      expect(books, ['b1', 'b1'],
+          reason: 'replay: bookCompleted a second time');
+
+      await chSub.cancel();
+      await bkSub.cancel();
       await pc.dispose();
     });
   });

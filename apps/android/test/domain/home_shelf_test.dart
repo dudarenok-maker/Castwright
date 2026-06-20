@@ -10,6 +10,16 @@ ShelfBook sb(String id, {String? lastPlayedAt, String updatedAt = 't'}) =>
       updatedAt: updatedAt,
     );
 
+ShelfBook book(String id, {String? lastPlayedAt, bool hidden = false}) =>
+    ShelfBook(
+      bookId: id,
+      title: id,
+      author: 'A',
+      lastPlayedAt: lastPlayedAt,
+      updatedAt: '',
+      hidden: hidden,
+    );
+
 void main() {
   group('buildContinueListening', () {
     test('only in-progress books, most-recently-played first', () {
@@ -24,6 +34,22 @@ void main() {
     test('treats empty lastPlayedAt as not started', () {
       final shelf = buildContinueListening([sb('a', lastPlayedAt: '')]);
       expect(shelf, isEmpty);
+    });
+
+    test('excludes hidden books', () {
+      final shelf = buildContinueListening([
+        book('a', lastPlayedAt: '2026-06-20T10:00:00Z'),
+        book('b', lastPlayedAt: '2026-06-20T11:00:00Z', hidden: true),
+      ]);
+      expect(shelf.map((b) => b.bookId), ['a']);
+    });
+
+    test('still orders visible books newest-first', () {
+      final shelf = buildContinueListening([
+        book('a', lastPlayedAt: '2026-06-20T10:00:00Z'),
+        book('b', lastPlayedAt: '2026-06-20T11:00:00Z'),
+      ]);
+      expect(shelf.map((b) => b.bookId), ['b', 'a']);
     });
   });
 
