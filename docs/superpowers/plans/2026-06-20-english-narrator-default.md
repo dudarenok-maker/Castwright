@@ -123,7 +123,7 @@ In `server/src/analyzer/narrator-default.test.ts`, change the import (lines 3-7)
 ```ts
 describe('applyNarratorDefault', () => {
   it('runs for English: demotes non-spoken character lines to narrator, leaves spoken lines', () => {
-    const en = [s(1, 'stephanie', 'She was lost.'), s(2, 'stephanie', '“Hard to starboard,”')];
+    const en = [s(1, 'stephanie', 'She was lost.'), s(2, 'stephanie', '"Hard to starboard,"')];
     expect(applyNarratorDefault(en).map((x) => x.characterId)).toEqual(['narrator', 'stephanie']);
   });
 
@@ -142,7 +142,7 @@ describe('applyNarratorDefault', () => {
     const seq = [
       s(1, 'stephanie', 'She was lost.'),       // override -> clamp 0.5
       s(2, 'stephanie', 'She turned away.'),     // override -> 0.9
-      s(3, 'stephanie', '“This way,”'),          // spoken -> reset
+      s(3, 'stephanie', '"This way,"'),          // spoken -> reset
       s(4, 'stephanie', 'She walked on.'),       // override -> clamp 0.5 (new run)
     ];
     const out = applyNarratorDefault(seq);
@@ -191,20 +191,24 @@ Expected: FAIL — `applyNarratorDefault` is not exported / not defined.
    languages 2026-06-20).
 
    The per-sentence attribution model mislabels third-person NARRATION as the
-   named character (e.g. "She was lost." → `stephanie`, or "Егор засунул руки в
-   карманы" → `egor`), which would read narration in that character's voice. The
-   spoken-vs-narration distinction is mechanical, so we decide it in code: any
-   sentence that is NOT a spoken line is forced to `narrator`. Runs for English
-   too (the model ignores the same rule in the skill prompt).
+   named character (e.g. "She was lost." -> stephanie), which would read
+   narration in that character's voice. The spoken-vs-narration distinction is
+   mechanical, so we decide it in code: any sentence that is NOT a spoken line is
+   forced to narrator. Runs for English too (the model ignores the same rule in
+   the skill prompt).
 
-   A "spoken line" = begins with a dialogue dash (—/–/-) or any opening quote
-   («/"/“/‘/'), OR contains a quoted span (double / guillemet / smart-single /
-   boundary-anchored straight-single). Everything else is narration. Demote-only
-   at the sentence level: it never reassigns a
-   quoted line and never promotes narrator→character (it does lower line counts,
-   which fold/reconcile consume downstream). Coverage is unaffected (the coverage
-   guard keys on sentence text, not characterId). Pure: no I/O, no model calls. */
+   A spoken line begins with a dialogue dash or any opening quote, OR contains a
+   quoted span (double / guillemet / smart-single / boundary-anchored
+   straight-single). Everything else is narration. Demote-only at the sentence
+   level: it never reassigns a quoted line and never promotes narrator->character
+   (it does lower line counts, which fold/reconcile consume downstream). Coverage
+   is unaffected (the coverage guard keys on sentence text, not characterId).
+   Pure: no I/O, no model calls. */
 ```
+
+**ASCII-only by design** — write this comment exactly as shown (no smart quotes, no
+Cyrillic, no arrows). The only non-ASCII in this file lives in the `isSpokenLine`
+regex, which Task 2 does NOT touch.
 
 2. Delete the `import { isNonEnglish } from '../tts/language.js';` line (line 21).
 3. Delete the JSDoc + `applyNonEnglishNarratorDefault` function (lines 48-57 — the doc is 48-50, the function 51-57).
@@ -297,7 +301,7 @@ it('English: a character whose only lines are demoted narration folds out (inten
   const sentences = [
     s(1, 'extra', 'A passer-by walked past.'),
     s(2, 'extra', 'He paused at the corner.'),
-    s(3, 'extra', '“What?”'), // one real quoted line
+    s(3, 'extra', '"What?"'), // one real quoted line
   ];
   const chars = [
     { id: 'narrator', name: 'Narrator', role: 'narrator', gender: 'neutral' },
@@ -312,9 +316,9 @@ it('English: a character with >= minLines real quoted lines survives the fold', 
   const sentences = [
     s(1, 'stephanie', 'She was lost.'),
     s(2, 'stephanie', 'She turned away.'),
-    s(3, 'stephanie', '“This way,”'),
-    s(4, 'stephanie', '“No, wait,”'),
-    s(5, 'stephanie', '“Here.”'),
+    s(3, 'stephanie', '"This way,"'),
+    s(4, 'stephanie', '"No, wait,"'),
+    s(5, 'stephanie', '"Here."'),
   ];
   const chars = [
     { id: 'narrator', name: 'Narrator', role: 'narrator', gender: 'neutral' },
