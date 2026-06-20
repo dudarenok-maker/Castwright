@@ -16,7 +16,7 @@ ResumeAction reconcileResume({
   if (localListenedAt == null && remoteUpdatedAt == null) return ResumeAction.noop;
   if (remoteUpdatedAt == null) return ResumeAction.pushLocal;
   if (localListenedAt == null) return ResumeAction.pullRemote;
-  final cmp = localListenedAt.compareTo(remoteUpdatedAt);
+  final cmp = DateTime.parse(localListenedAt).toUtc().compareTo(DateTime.parse(remoteUpdatedAt).toUtc());
   if (cmp > 0) return ResumeAction.pushLocal;
   if (cmp < 0) return ResumeAction.pullRemote;
   return ResumeAction.noop;

@@ -305,7 +305,7 @@ class PlayerController {
     final uuid = currentChapterUuid;
     if (book == null || uuid == null) return;
     await _store.savePlayback(
-        book, uuid, _engine.position.inMilliseconds, _now().toIso8601String());
+        book, uuid, _engine.position.inMilliseconds, _now().toUtc().toIso8601String());
     _lastSave = _now();
   }
 
@@ -388,7 +388,7 @@ class PlayerController {
         _lastSave = now;
         // Fire-and-forget; ordering preserved by the single-subscription stream.
         _store.savePlayback(
-            book, uuid, position.inMilliseconds, now.toIso8601String());
+            book, uuid, position.inMilliseconds, now.toUtc().toIso8601String());
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
       }

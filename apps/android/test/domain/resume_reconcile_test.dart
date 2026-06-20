@@ -47,5 +47,14 @@ void main() {
         ResumeAction.noop,
       );
     });
+
+    test('orders by instant, not raw string (tz-skew)', () {
+      // local is +10:00 wall time, remote is the same instant in UTC → noop/pull, not a wrong push
+      final action = reconcileResume(
+        localListenedAt: '2026-06-20T20:00:00.000+10:00',
+        remoteUpdatedAt: '2026-06-20T10:00:00.000Z', // same instant
+      );
+      expect(action, ResumeAction.noop);
+    });
   });
 }
