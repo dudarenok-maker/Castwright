@@ -238,6 +238,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     );
     if (remove != true) return;
     await widget.runtime.library.setBookHidden(b.bookId, true);
+    widget.runtime.api.setShelfStatus(b.bookId, hidden: true).catchError((_) {});
     if (mounted) await _refresh();
   }
 

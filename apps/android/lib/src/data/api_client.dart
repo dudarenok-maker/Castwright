@@ -170,6 +170,34 @@ class ApiClient {
     }
   }
 
+  /// POST the shelf status (finished and/or hidden) for a book to the server
+  /// (app-19 cross-device finished sync). Only the supplied fields are included
+  /// in the body — callers pass just the flag they changed. CA-pinned, same
+  /// transport as [putListenProgress]. Best-effort — callers swallow errors via
+  /// `.catchError((_) {})`.
+  Future<void> setShelfStatus(String bookId,
+      {bool? finished, bool? hidden}) async {
+    final client = _pinnedHttpClient(connection);
+    try {
+      final body = <String, dynamic>{};
+      if (finished != null) body['finished'] = finished;
+      if (hidden != null) body['hidden'] = hidden;
+      final req = await client.postUrl(
+          _u('/api/books/${Uri.encodeComponent(bookId)}/shelf-status'));
+      req.headers.set(
+          HttpHeaders.authorizationHeader, 'Bearer ${connection.server.token}');
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode(body));
+      final res = await req.close();
+      await res.drain<void>();
+      if (res.statusCode >= 400) {
+        throw ApiException(res.statusCode, 'shelf-status POST failed');
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// PUT absolute listening-time accruals (fs-16). Body: `{ sessionId, days }`.
   /// CA-pinned, same transport as [putListenProgress].
   Future<void> putListenStats(

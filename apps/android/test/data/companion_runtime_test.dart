@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:castwright/src/data/api_client.dart';
 import 'package:castwright/src/data/audio_engine.dart';
 import 'package:castwright/src/data/companion_runtime.dart';
 import 'package:castwright/src/data/drift_local_library.dart';
 import 'package:castwright/src/data/file_store.dart';
 import 'package:castwright/src/data/library_database.dart';
+import 'package:castwright/src/data/pairing_service.dart' show Connection;
 import 'package:castwright/src/data/playback_store.dart';
 import 'package:castwright/src/data/player_controller.dart';
+import 'package:castwright/src/domain/paired_server.dart';
 
 // ---------------------------------------------------------------------------
 // Minimal fake AudioEngine for this test file.
@@ -99,6 +102,31 @@ class _MemPlaybackStore implements PlaybackStore {
 }
 
 // ---------------------------------------------------------------------------
+// Fake ApiClient that records setShelfStatus calls.
+// ---------------------------------------------------------------------------
+
+class _FakeApiClient extends ApiClient {
+  _FakeApiClient()
+      : super(
+          const Connection(
+            server: PairedServer(
+                url: 'https://10.0.0.1:8443', token: 't', caFingerprint: 'f'),
+            caPem: 'PEM',
+          ),
+          send: (_, _, _) async => const HttpResult(200, '{}'),
+        );
+
+  final List<({String bookId, bool? finished, bool? hidden})> shelfStatusCalls =
+      [];
+
+  @override
+  Future<void> setShelfStatus(String bookId,
+      {bool? finished, bool? hidden}) async {
+    shelfStatusCalls.add((bookId: bookId, finished: finished, hidden: hidden));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -151,7 +179,7 @@ void main() {
       );
 
       // ── Wire finished-tracking (the real path under test) ──────────────────
-      final subs = wireFinishedTracking(player, library);
+      final subs = wireFinishedTracking(player, library, _FakeApiClient());
 
       // ── Act: open the book, jump to ch1 near-end to tick it, then drive
       // ── the last chapter to its near-end finish window while playing. ─────
@@ -178,6 +206,64 @@ void main() {
       final finishedUuids = await library.finishedChapterUuids('b1');
       expect(finishedUuids.length, 2,
           reason: 'both chapters must be marked finished');
+
+      // ── Cleanup ────────────────────────────────────────────────────────────
+      for (final s in subs) {
+        await s.cancel();
+      }
+      await player.dispose();
+      await library.close();
+    });
+
+    test('wireFinishedTracking POSTs finished:true to the API when book completes',
+        () async {
+      // ── Arrange ────────────────────────────────────────────────────────────
+      final db = LibraryDatabase(NativeDatabase.memory());
+      final library = DriftLocalLibrary(db, InMemoryFileStore(), root: '/t');
+
+      await library.upsertBookMeta(
+          bookId: 'bx',
+          title: 'X',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      await library.recordChapterMeta(
+          bookId: 'bx',
+          uuid: 'ux',
+          chapterId: 1,
+          title: 'One',
+          fingerprint: 'fp',
+          urlSuffix: 'audio.mp3',
+          durationSec: 60);
+
+      final engine = _FakeAudioEngine();
+      final player = PlayerController(
+        audioEngine: engine,
+        playbackStore: _MemPlaybackStore(),
+        playlistLoader: (_) async =>
+            [const PlayableChapter(uuid: 'ux', path: '/bx/ux/audio.mp3')],
+        clock: () => DateTime.utc(2026, 6, 20),
+      );
+
+      final fakeApi = _FakeApiClient();
+
+      // ── Wire with the new 3-arg signature ─────────────────────────────────
+      final subs = wireFinishedTracking(player, library, fakeApi);
+
+      // ── Act: drive the single (last) chapter to near-end while playing ────
+      await player.openBook('bx');
+      await player.playChapter('ux');
+      await engine.play();
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55));
+      await Future<void>.delayed(Duration.zero);
+
+      // ── Assert: API was called with finished:true ──────────────────────────
+      expect(fakeApi.shelfStatusCalls, hasLength(1),
+          reason: 'setShelfStatus must be called once on book completion');
+      expect(fakeApi.shelfStatusCalls.single.bookId, 'bx');
+      expect(fakeApi.shelfStatusCalls.single.finished, isTrue);
+      expect(fakeApi.shelfStatusCalls.single.hidden, isNull);
 
       // ── Cleanup ────────────────────────────────────────────────────────────
       for (final s in subs) {
