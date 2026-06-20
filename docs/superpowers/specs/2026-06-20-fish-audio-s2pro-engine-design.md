@@ -3,15 +3,18 @@
 - **Date:** 2026-06-20
 - **Issue:** _to be filed_ (`area:fs`, `moscow:could`, `type:feat`)
 - **Branch:** _none yet — backlog Could item; spec only_
-- **Status:** approved design (brainstormed + two adversarial reviews folded in) — captured as a
-  future Could item, not slated for build
-- **Revision note:** v2 corrects v1's factual and codebase claims after two adversarial reviews
-  and a dedicated 16GB-feasibility research pass. Material changes: **16GB is the primary target**
-  (per product steer — 24GB cards are out of reach for most local users), reached via **BNB NF4
-  4-bit** (the chosen quant; FP8 is really a 20GB path, GGUF is too slow); license terms are
-  stronger with personal-use as the through-line; **in-process PyTorch reuse is the preferred
-  integration** (NF4/`bitsandbytes` is pure torch), with an out-of-process HTTP child as the
-  documented fallback; several v1 file/function names were wrong and are corrected below.
+- **Status:** approved design (brainstormed + three adversarial reviews folded in) — a
+  **parked Could**, blocked on a physical 16GB card + legal sign-off + srv-43; not slated for build
+- **Revision note:** v3 after three adversarial reviews + a 16GB-feasibility research pass.
+  **16GB is the design target** (per product steer — 24GB cards are out of reach for most local
+  users), reached via **BNB NF4 4-bit** (FP8 is really a 20GB path, GGUF too slow) — but framed
+  honestly as a **bet unproven until the hardware spike**, not a settled fact. License terms
+  sharpened (Research License; personal-use through-line). **In-process PyTorch reuse is the
+  preferred integration** (NF4/`bitsandbytes` is pure torch); out-of-process HTTP child is the
+  fallback. Round 3 added: the **parked/blocked MoSCoW honesty** (four hard gates), the
+  **fallback-ladder honesty** (24GB rung is a different product), the chunk-length spike task,
+  and fixed a stray "Redux models state" claim (it's local component state). Wrong v1
+  file/function names corrected throughout; codebase claims re-verified.
 
 ## Summary
 
@@ -28,11 +31,13 @@ It is **not** a default engine and **not** auto-installed. You opt in through th
 of reach for most local users**, so a 24GB-only engine would miss the audience. fishaudio's
 *official* recommendation is ~24GB and they declined to ship a 16GB-fitting path themselves
 (issue #1168, closed "not planned") — but the **consumer ecosystem already runs S2-Pro on
-≤16GB via community 4-bit quantization** (BNB NF4; see §"The 16GB path"). So **16GB is the primary
-design target**; **24GB is the comfortable fallback** for users who have it, and the
-**full-precision 24GB path is the safety net** if the 16GB path can't hit an acceptable quality
-or speed bar. The 16GB path is **measured, not assumed** — it's gated on the hardware spike
-(§Gate 2 / §Acceptance). See §"The 16GB path" for the concrete approach.
+≤16GB via community 4-bit quantization** (BNB NF4; see §"The 16GB path"). So **16GB is the design
+target we're betting on** — but it is **a bet, not a settled fact**: the NF4 ~16GB figure is an
+unverified community claim, never measured on a real 16GB card, and 4-bit's effect on S2-Pro's
+expressive quality is untested (§"The 16GB path", §Risks). The bet is only confirmed by the
+hardware spike (§Gate 2 / §Acceptance). **24GB/full precision is the safety net** if the 16GB
+path can't hit the VRAM/speed/quality bar — though note (§Gate 2) that falling back to 24GB
+ships a *different* product that no longer serves this item's headline audience.
 
 S2-Pro's multilingual reach is a real incidental benefit but not the headline.
 
@@ -76,14 +81,21 @@ only run once a **16GB card is physically in hand**. Its job is to confirm a cho
 quantization path hits **peak VRAM ≤ 16GB at an acceptable speed and quality** (bar in
 §Acceptance). The candidate paths and evidence are detailed in §"The 16GB path."
 
-**Fallback ladder if the NF4 spike underperforms** (so the item never just dies):
+**Fallback ladder if the NF4 spike underperforms.** Be honest about what each rung actually
+saves: rung 1 saves the 16GB target; rungs 2–3 save *an* engine but **not this item's headline
+benefit** — "premium quality on a *16GB* card." A 24GB-class engine is a different product
+serving a different (smaller) audience, so reaching rung 2 should trigger an explicit
+*should-we-even-ship* re-evaluation, not an automatic yes.
 1. Add **chunked synthesis** (ComfyUI-style chunk-length) to cap KV-cache peak; if still over,
-   try the build-it-yourself sequential stage-load / codec CPU-offload.
-2. If 16GB can't hit the VRAM/speed/quality bar, ship as a **20GB (FP8) or 24GB (full)**
-   engine with 16GB marked experimental — still useful, just not the headline.
+   try the build-it-yourself sequential stage-load / codec CPU-offload. *(Saves the 16GB target.)*
+2. If 16GB can't hit the VRAM/speed bar, ship as a **20GB (FP8) or 24GB (full)** engine with
+   16GB experimental. *(Saves an engine, loses the 16GB headline — re-evaluate whether it's worth
+   it.)*
 3. The GGUF/`s2.cpp` path covers sub-12GB/CPU users but at RTF≈3 — offer it only as an explicit
    "slow but tiny" option, never the default.
-4. Only if *none* works does the item park.
+4. If the **4-bit quality gate** (Acceptance #3) *or* the **better-than-Qwen gate**
+   (Acceptance #5) fails at every precision, **the item parks** — an engine no better than the
+   resident Qwen isn't worth its VRAM.
 
 ## Engine architecture
 
@@ -183,9 +195,13 @@ our own numbers on our own pipeline.
    quantization is most likely to degrade exactly that, and **no report has tested it.** If NF4
    guts the emotion control, the "premium quality" premise fails even if VRAM fits — fall back
    to FP8@20GB or full@24GB and drop the 16GB headline.
-2. **Peak under a long KV cache.** 16GB-NF4 is a *claim*; a real 16GB card could OOM once the KV
-   cache grows over a long sentence. Chunked synthesis (the ComfyUI `chunk-length` knob, 100-400)
-   is the mitigation; the spike must confirm peak stays ≤16GB with desktop/OS headroom.
+2. **Peak under a long KV cache — and the arithmetic is tight.** The table's "~16GB" is the
+   *model + KV* figure with **no OS/desktop headroom** (Windows idle alone is ~1–2GB), and it's
+   *before* KV-cache growth over a long sentence. On those numbers the raw NF4 path **fails
+   Acceptance #2** (≤16GB *including* headroom *and* KV cache) — chunked synthesis is what's
+   expected to rescue it. **Spike task:** sweep the ComfyUI `chunk-length` knob (100–400) to find
+   the largest chunk that holds **peak ≤16GB with OS headroom**; if no chunk size does, the 16GB
+   target falls to rung 2 of the ladder. This knob is the literal make-or-break lever.
 
 **Undocumented-but-plausible levers** (build-it-yourself, no S2-Pro precedent): sequential
 stage-loading (load slow-AR → free → load codec) and CPU-offloading the codec stage. Only reach
@@ -222,6 +238,13 @@ approximate).
 
 ### Bundled seed-reference voice library (a first-class deliverable, with its own picker path)
 
+_Captured here at the product owner's request while the thinking was fresh — but this taxonomy is
+**plan-time design, not a go/no-go input.** The go/no-go rests only on Gate 1 (legal) + Gate 2
+(16GB VRAM/quality spike). The one decision-relevant fact is the **cost flag**: clone-only means
+we must source and bundle a seed library, which is non-trivial, ethically-constrained asset work
+— "mirror Qwen" is not free. The grid below is the proposed shape for when the item is actually
+planned._
+
 A curated **age × gender grid** of short reference clips:
 
 - **Age (5):** `child`, `teenager`, `young-adult`, `adult`, `elderly`.
@@ -250,7 +273,12 @@ ethically constrained asset work — part of the item, not an afterthought. **Br
 note:** the engine also lets a user clone *any* uploaded clip, including a real child's — a
 misuse surface the seed-sourcing rule does not cover; worth a usage/ToS line.
 
-## Integration seams (corrected touch-list)
+## Integration seams (indicative — plan-time detail)
+
+_File/function names below are **indicative**, verified against today's code to size the work and
+surface hidden costs — not a frozen contract (v1 got several wrong; an unbuilt parked item will
+drift). The genuinely **load-bearing** seam for the go/no-go is the **srv-43 `qwenStorageKey`
+dependency** (a hard external blocker); the rest is plan-time content captured early._
 
 **Sidecar (Python):**
 - `server/tts-sidecar/main.py` — `FishAudioS2ProEngine` registered in `ENGINES`; **preferred:
@@ -287,7 +315,9 @@ misuse surface the seed-sourcing rule does not cover; worth a usage/ToS line.
 - `src/components/ModelControlPill.tsx` — Fish health card + Load / Stop / Repair (the real
   Model-Manager component; there is **no** `server/src/model-control/` dir nor a
   `use-model-control.ts` hook — v1 named both wrongly).
-- The models inventory state (Redux + `models-inventory` route) — install/tier surfacing.
+- The model inventory surfacing — the `models-inventory` route read into **local component
+  state** (`model-manager.tsx` `useState` / `ModelControlPill.tsx`); **not** Redux (there is no
+  models slice in `src/store/`).
 - Voice-picker UI — Fish's age×gender grid + the tone/persona text box.
 
 **Docs:** a regression plan under `docs/features/`; `INDEX.md` entry; INSTALL/README engine
@@ -368,8 +398,13 @@ generating," with a clear error otherwise.
 
 ## Backlog framing
 
-- **MoSCoW: Could.** Prefix `fs-` (full-stack engine). **Next free id confirmed = `fs-48`**
-  (highest existing across GitHub issues is `fs-47`).
+- **MoSCoW: Could — explicitly *parked / blocked*.** A plain "Could" would over-state
+  readiness: the item sits behind **four independent hard gates**, any of which can kill it —
+  (1) legal sign-off on the Research License, (2) srv-43 must land first, (3) a physical 16GB
+  card must be acquired for Task 0, (4) the 4-bit quality gate is unproven and make-or-break. So
+  it's filed as a Could but tagged **"parked — blocked on hardware + legal + srv-43"** in
+  `docs/BACKLOG.md`, not as a ready-to-pull Could. Prefix `fs-` (full-stack engine).
+  **Next free id confirmed = `fs-48`** (highest existing across GitHub issues is `fs-47`).
 - Issue carries What / Acceptance / **Key files** / **Depends on (legal sign-off + srv-43 +
   16GB hardware spike)** / Benefit; a thin row lands in `docs/BACKLOG.md` under **Could**,
   linking this spec.
