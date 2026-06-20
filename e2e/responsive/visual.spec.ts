@@ -177,6 +177,32 @@ test.describe('visual baselines', () => {
       maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
     });
   });
+
+  /* #925 — proves the top-bar gate actually catches a branding change, so a
+     future loosening of TOPBAR_DIFF_RATIO can't silently re-open the gap.
+     Skipped under --update-snapshots: in bless mode toHaveScreenshot would
+     write the injected (magenta) capture over the real topbar.png baseline. */
+  test('top-bar gate catches a branding repaint', async ({ page }, testInfo) => {
+    test.skip(
+      testInfo.config.updateSnapshots === 'all',
+      'compare-mode only — would overwrite topbar.png under --update-snapshots',
+    );
+    await page.goto('/');
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 });
+    /* Fixed-size repaint on the real header (top-bar.tsx:267) — a background
+       swap, so no reflow (a reflow would change the element box and trip a
+       size mismatch instead of the diff we want to prove). */
+    await page.addStyleTag({ content: 'header.sticky { background: #f0f !important; }' });
+    let threw = false;
+    try {
+      await expect(page.getByRole('banner')).toHaveScreenshot('topbar.png', {
+        maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+      });
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
 });
 
 /* fs-16 — stats dashboard visual baseline.
