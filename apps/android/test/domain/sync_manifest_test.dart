@@ -58,6 +58,14 @@ void main() {
     });
   });
 
+  group('SyncManifestIndexBook', () {
+    test('fromJson parses finished + hidden (default false when absent)', () {
+      final b = SyncManifestIndexBook.fromJson({'bookId': 'b1', 'updatedAt': 't', 'finished': true});
+      expect(b.finished, isTrue);
+      expect(b.hidden, isFalse);
+    });
+  });
+
   group('SyncManifestBookDetail', () {
     test('parses uuid-keyed chapters with the full active set', () {
       final detail = SyncManifestBookDetail.fromJson({

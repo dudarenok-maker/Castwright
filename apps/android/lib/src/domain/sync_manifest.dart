@@ -16,6 +16,8 @@ class SyncManifestIndexBook {
     required this.seriesPosition,
     required this.chapterCount,
     this.coverUrl,
+    this.finished = false,
+    this.hidden = false,
   });
 
   final String bookId;
@@ -32,6 +34,8 @@ class SyncManifestIndexBook {
   /// Active (non-excluded) chapter count.
   final int chapterCount;
   final String? coverUrl;
+  final bool finished;
+  final bool hidden;
 
   factory SyncManifestIndexBook.fromJson(Map<String, dynamic> json) {
     return SyncManifestIndexBook(
@@ -43,6 +47,8 @@ class SyncManifestIndexBook {
       seriesPosition: (json['seriesPosition'] as num?)?.toDouble(),
       chapterCount: (json['chapterCount'] as num?)?.toInt() ?? 0,
       coverUrl: json['coverUrl'] as String?,
+      finished: json['finished'] as bool? ?? false,
+      hidden: json['hidden'] as bool? ?? false,
     );
   }
 }

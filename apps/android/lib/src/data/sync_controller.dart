@@ -52,6 +52,7 @@ class SyncController {
         series: b.series,
         seriesPosition: b.seriesPosition?.toInt(), // drift col is int; display uses the index double
       );
+      await _library.setBookSyncState(b.bookId, finished: b.finished, hidden: b.hidden);
     }
     return index.books;
   }
