@@ -202,6 +202,52 @@ describe('seedReuseGuardsFromPriorCast', () => {
     seedReuseGuardsFromPriorCast(existing, fresh);
     expect((fresh[0].matchedFrom as { bookId: string }).bookId).toBe('new');
   });
+
+  it('seeds onto a same-name survivor when the id was remapped by dedup (collapsed-source)', () => {
+    const existing: C[] = [
+      {
+        id: 'olga',
+        name: 'Ольга',
+        notLinkedTo: [{ bookId: 'b1', characterId: 'other' }],
+        matchedFrom: { bookId: 'b0', characterId: 'olga', confidence: 0.8 },
+      },
+    ];
+    const fresh: C[] = [{ id: 'ольга', name: 'Ольга' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'other' }]);
+    expect(fresh[0].matchedFrom).toEqual({ bookId: 'b0', characterId: 'olga', confidence: 0.8 });
+  });
+
+  it('does NOT use the name-fallback when two fresh rows share a name (ambiguous — pre-dedup main route)', () => {
+    const existing: C[] = [{ id: 'olga', name: 'Ольга', matchedFrom: { bookId: 'b0', characterId: 'olga' } }];
+    const fresh: C[] = [
+      { id: 'olga', name: 'Ольга' },
+      { id: 'ольга', name: 'Ольга' },
+    ];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].matchedFrom).toEqual({ bookId: 'b0', characterId: 'olga' }); // id match still works
+    expect(fresh[1].matchedFrom).toBeUndefined(); // ambiguous fresh name → not seeded
+  });
+
+  it('does NOT use the name-fallback when two prior rows share a name (ambiguous source)', () => {
+    const existing: C[] = [
+      { id: 'olga', name: 'Ольга', matchedFrom: { bookId: 'b0', characterId: 'olga' } },
+      { id: 'olga2', name: 'Ольга', matchedFrom: { bookId: 'b9', characterId: 'olga2' } },
+    ];
+    const fresh: C[] = [{ id: 'ольга', name: 'Ольга' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].matchedFrom).toBeUndefined();
+  });
+
+  it('id match takes precedence over the name-fallback', () => {
+    const existing: C[] = [
+      { id: 'ольга', name: 'Ольга', matchedFrom: { bookId: 'right', characterId: 'ольга' } },
+      { id: 'olga', name: 'Ольга', matchedFrom: { bookId: 'wrong', characterId: 'olga' } },
+    ];
+    const fresh: C[] = [{ id: 'ольга', name: 'Ольга' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect((fresh[0].matchedFrom as { bookId: string }).bookId).toBe('right');
+  });
 });
 
 describe('voicedSurvivorsDropped', () => {

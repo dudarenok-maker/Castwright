@@ -21,8 +21,14 @@ owner: null
 > a voiceState-ranked prior-cast remap so designed voices follow the merge, plus a
 > two-schema `runStage` (required-tone GRAMMAR / tolerant VALIDATION) + deterministic
 > `fillToneFromAttributes` backstop closing the tone-0% root cause (tone was
-> `.optional()` in the constrained-decoding schema). Follow-ups: srv-44 #960,
-> srv-45 #961. Design+plan: `docs/superpowers/{specs,plans}/2026-06-20-russian-cast-dedup-and-tone*`.
+> `.optional()` in the constrained-decoding schema). Follow-ups srv-44 #960 +
+> srv-45 #961 **SHIPPED 2026-06-20** (branch `fix/server-ru-dedup-followups`): srv-44
+> = an ambiguity-guarded same-name fallback in `seedReuseGuardsFromPriorCast` so the
+> subset-route reuse-guard seam (which runs after dedup on the raw prior cast) bridges
+> a collapsed legacy id → canonical survivor by name; srv-45 = a Gemini slow-tier
+> tone-less validation lock mirroring the Ollama one. Design+plan:
+> `docs/superpowers/{specs,plans}/2026-06-20-russian-cast-dedup-and-tone*` (+ follow-up
+> plan `docs/superpowers/plans/2026-06-20-russian-cast-dedup-followups.md`).
 > **Wave E implemented** (2026-06-19, `fix/server-ru-cast-tone-localization-aliases`):
 > Russian cast-field under-population — tone 0%→100% + localized role/description via
 > a `languagePreamble` cast-field guard, plus same-id alias capture in the roster merge.
@@ -235,7 +241,12 @@ Also note the residency landscape changed: **plan 222 / #840** shipped a GPU-res
 > BLOCKER). Tone-0% (the other defect) fixed via two-schema `runStage` +
 > `fillToneFromAttributes`. Design+plan: `docs/superpowers/{specs,plans}/2026-06-20-russian-cast-dedup-and-tone*`.
 > Follow-ups: srv-44 [#960](https://github.com/dudarenok-maker/Castwright/issues/960),
-> srv-45 [#961](https://github.com/dudarenok-maker/Castwright/issues/961).
+> srv-45 [#961](https://github.com/dudarenok-maker/Castwright/issues/961) — both ✅ **SHIPPED
+> 2026-06-20** (branch `fix/server-ru-dedup-followups`): srv-44 = ambiguity-guarded same-name
+> fallback in `seedReuseGuardsFromPriorCast` (the subset chapter-retry route runs the reuse-guard
+> seam after dedup on the raw prior cast, so a collapsed legacy id → canonical survivor now
+> bridges by name; the main route's pre-dedup seam is already id-aligned, so the guard is a safe
+> no-op there); srv-45 = Gemini slow-tier tone-less validation lock.
 
 _Obsolete-verdict evidence retained for history:_
 

@@ -170,18 +170,6 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (user):_ precise coexistence on bigger cards without edge-case OOMs — once the cost table is measured rather than guessed.
 _Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-honesty.md) "Out of scope" + spec `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 · drafted plan `docs/superpowers/plans/2026-06-16-wave4-vram-mb-accounting.md` · [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
 
-#### `srv-44` — Thread dedup rewrite into reuse-guard/series-link seam on re-analysis ([#960](https://github.com/dudarenok-maker/Castwright/issues/960))
-
-- _What:_ At the analysis finalization sites, `seedReuseGuardsFromPriorCast`/`linkSeriesReuseAtAnalysis` still use the **raw** prior cast; the dedup id remap (`applyRewriteToPriorCast`) is threaded only into the merge call. Bounded gap: the link pass runs in the stage-1 phase before dedup exists, and is a no-op for the only safe re-analysis path (no designed voices / series links) — so it bites only a re-analysis of a voiced/series book.
-- _Benefit (technical):_ designed-voice / series-reuse linkage rides the dedup remap, closing the last bounded gap in the voice-carry-forward fix.
-_Full detail + acceptance:_ [#960](https://github.com/dudarenok-maker/Castwright/issues/960) · follow-up of branch `fix/server-ru-cast-dedup-and-tone` (plan [221](features/221-multilingual-attribution-gemma-and-cast-merge.md) Wave C).
-
-#### `srv-45` — Gemini slow-tier regression test for two-schema `runStage` tone handling ([#961](https://github.com/dudarenok-maker/Castwright/issues/961))
-
-- _What:_ Task 7's tolerant-validation contract (a tone-less stage-1 response doesn't fail a chapter) is unit-tested on the Ollama path only; add a `gemini.test.ts` (slow tier) assertion for the shipped cloud default engine.
-- _Benefit (technical):_ locks the contract on the engine users actually default to (gemini-3.1-flash-lite).
-_Full detail + acceptance:_ [#961](https://github.com/dudarenok-maker/Castwright/issues/961).
-
 #### `side-17` — Sidecar engine-dep major bump (torch · transformers · huggingface_hub · …) ([#893](https://github.com/dudarenok-maker/Castwright/issues/893))
 
 - _What:_ The Python TTS sidecar engine deps are ~24 behind, but the heavy ones are **safety-pinned** (torch 2.11→2.12 = cu130 driver bump + voids the CVE-cleared cu128 pin; transformers 4.57→5.12 breaks the `<5.0` Qwen/Kokoro/Coqui lockstep; huggingface_hub 0.36→1.19 major; kokoro-onnx, onnxruntime-gpu, fastapi/starlette/uvicorn majors). Audited in deps round 4 (plan 224) and deferred — each is a GPU-box + golden-audio validated spike, not hygiene. Supersedes the closed #883 (torch CVE bump) with a full engine-dep sweep.
