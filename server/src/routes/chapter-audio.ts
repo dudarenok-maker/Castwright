@@ -112,6 +112,11 @@ interface ChapterSegmentsFile {
         audit / future UI can opt in to rendering the title beat on the
         timeline. */
     kind?: 'title';
+    // issue-waveform: per-segment QA, present when the gates ran
+    suspect?: boolean;
+    asrSuspect?: boolean;
+    qa?: { reasons?: string[] };
+    asr?: { reasons?: string[] };
   }>;
   /** Per-character voice snapshot captured at synthesis time. Read by the
       revisions route to surface drift. Older segments files (pre-snapshot
@@ -127,6 +132,30 @@ interface ChapterSegmentsFile {
       attributes?: string[];
     }
   >;
+}
+
+/** issue-waveform: map an on-disk segment to its wire shape, surfacing
+    per-segment QA flags when present. `suspect` is true when either the
+    pre-assembly segment-QA gate (`seg.suspect`) or the ASR content-QA gate
+    (`seg.asrSuspect`) fired. `reasons` includes segment-QA reasons whenever
+    `seg.suspect`; ASR reasons only when `seg.asrSuspect === true` (never
+    for an inconclusive ASR verdict where `asrSuspect` is false/absent). */
+function publishSegment(s: ChapterSegmentsFile['segments'][number]) {
+  const suspect = Boolean(s.suspect || s.asrSuspect);
+  const reasons = suspect
+    ? [
+        ...(s.suspect ? (s.qa?.reasons ?? []) : []),
+        ...(s.asrSuspect ? (s.asr?.reasons ?? []) : []),
+      ]
+    : undefined;
+  return {
+    start: s.startSec,
+    end: s.endSec,
+    characterId: s.characterId,
+    sentenceId: s.sentenceIds[0],
+    ...(suspect ? { suspect: true } : {}),
+    ...(reasons && reasons.length ? { reasons } : {}),
+  };
 }
 
 export const chapterAudioRouter = Router();
@@ -209,12 +238,7 @@ chapterAudioRouter.get(
      and the OpenAPI contract types sentenceId as a required integer. */
     const segments = (meta?.segments ?? [])
       .filter((s) => s.kind !== 'title')
-      .map((s) => ({
-        start: s.startSec,
-        end: s.endSec,
-        characterId: s.characterId,
-        sentenceId: s.sentenceIds[0],
-      }));
+      .map(publishSegment);
     /* Plan 56: surface the real 240-bin RMS peaks emitted at encode time.
        Missing file → `[]`, preserving the pre-plan-56 contract so chapters
        generated before this plan keep loading and the Listen view falls
@@ -251,12 +275,7 @@ chapterAudioRouter.get(
     const meta = await readJson<ChapterSegmentsFile>(found.segPath);
     const segments = (meta?.segments ?? [])
       .filter((s) => s.kind !== 'title')
-      .map((s) => ({
-        start: s.startSec,
-        end: s.endSec,
-        characterId: s.characterId,
-        sentenceId: s.sentenceIds[0],
-      }));
+      .map(publishSegment);
     /* Plan 56: the preserved audition variant has no peaks writer today
        (rollback preservation does not move peaks alongside the audio +
        segments pair). `readPeaksOrEmpty` therefore typically returns `[]`

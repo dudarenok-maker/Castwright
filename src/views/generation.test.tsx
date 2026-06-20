@@ -13,7 +13,8 @@ import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
-import { GenerationView } from './generation';
+import { GenerationView, ChapterSegmentStrip } from './generation';
+import { api } from '../lib/api';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import type { LayoutContext } from '../components/layout';
 import type { Chapter, Character, Sentence } from '../lib/types';
@@ -68,7 +69,7 @@ vi.mock('../lib/api', () => ({
       streamGenerationMock(args);
       return () => {};
     },
-    getChapterAudio: () => new Promise(() => {}),
+    getChapterAudio: vi.fn(() => new Promise(() => {})),
     /* Sidecar status pill polls this on mount. Resolve with a happy status
        so the pill renders the green variant without spamming console
        warnings during the test render. */
@@ -119,6 +120,8 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   setChapterExcludedSpy.mockReset();
   runAnalysisForChaptersSpy.mockReset();
+  vi.mocked(api.getChapterAudio).mockReset();
+  vi.mocked(api.getChapterAudio).mockReturnValue(new Promise(() => {}));
   getOllamaHealthSpy.mockResolvedValue({
     status: 'reachable',
     url: '(test)',
@@ -2346,5 +2349,32 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
       generationErrorCode: 'unknown',
     });
     expect(screen.queryByRole('link', { name: /more help/i })).toBeNull();
+  });
+});
+
+describe('ChapterSegmentStrip — issue waveform', () => {
+  const baseAudio = {
+    url: 's', durationSec: 20, sampleRate: 44100, peaks: Array(240).fill(0.5),
+    segments: [
+      { start: 0, end: 6, characterId: 'narrator', sentenceId: 1 },
+      { start: 6, end: 10, characterId: 'narrator', sentenceId: 2, suspect: true, reasons: ['Long sentence'] },
+    ],
+  };
+
+  it('shows the issue count + amber when a segment is flagged', async () => {
+    vi.mocked(api.getChapterAudio).mockResolvedValue(baseAudio as never);
+    render(<ChapterSegmentStrip chapter={{ id: 1, audioQa: { status: 'suspect', reasons: [] } } as never}
+      bookId="b" characters={[]} />);
+    expect(await screen.findByText(/1 issue to review/)).toBeInTheDocument();
+  });
+
+  it('shows the chapter-level baseline note when suspect but no per-segment issue', async () => {
+    vi.mocked(api.getChapterAudio).mockResolvedValue({
+      ...baseAudio,
+      segments: [{ start: 0, end: 20, characterId: 'narrator', sentenceId: 1 }],
+    } as never);
+    render(<ChapterSegmentStrip chapter={{ id: 1, audioQa: { status: 'suspect', reasons: ['Near-silent'] } } as never}
+      bookId="b" characters={[]} />);
+    expect(await screen.findByText(/Chapter-level issue/)).toBeInTheDocument();
   });
 });
