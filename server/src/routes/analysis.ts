@@ -26,13 +26,22 @@ import {
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { detectOllamaDevice } from './ollama-health.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
+import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
+import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
 import {
   loadCastMerges,
   saveCastMerges,
   clearCastMerges,
   replaceFoldEntries,
   buildFoldJournalEntries,
+  replaceDedupEntries,
+  buildDedupJournalEntries,
 } from '../store/cast-merges.js';
+import {
+  writeSuggestions,
+  clearSuggestions,
+} from '../store/cast-merge-suggestions.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
   runStage2ChapterChunked,
@@ -89,6 +98,7 @@ import {
   mergeAnalysisResultWithExistingCast,
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
+  applyRewriteToPriorCast,
 } from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -571,70 +581,7 @@ export function mergeRosterChapter(
       });
       continue;
     }
-    /* Description: keep whichever is longer. */
-    if (
-      incoming.description &&
-      (!existing.description || incoming.description.length > existing.description.length)
-    ) {
-      existing.description = incoming.description;
-    }
-    /* Tone: latest-wins per field, but only when the incoming entry
-       provided that field (don't blank out a known value). */
-    if (incoming.tone) {
-      existing.tone = { ...existing.tone, ...incoming.tone };
-    }
-    /* Attributes: union dedup. Order: existing first, then any new. */
-    if (incoming.attributes?.length) {
-      const seen = new Set(existing.attributes ?? []);
-      const next = [...(existing.attributes ?? [])];
-      for (const a of incoming.attributes) {
-        if (!seen.has(a)) {
-          next.push(a);
-          seen.add(a);
-        }
-      }
-      existing.attributes = next;
-    }
-    /* Evidence: append non-duplicate quotes. Dedup on normalised quote
-       so smart-vs-straight typography drift between chapters doesn't
-       inflate the array. */
-    if (incoming.evidence?.length) {
-      const seen = new Set((existing.evidence ?? []).map((e) => normaliseForMatch(e.quote)));
-      const next = [...(existing.evidence ?? [])];
-      for (const e of incoming.evidence) {
-        const norm = normaliseForMatch(e.quote);
-        if (norm.length > 0 && !seen.has(norm)) {
-          next.push({ ...e });
-          seen.add(norm);
-        }
-      }
-      existing.evidence = next;
-    }
-    /* Gender / ageRange / color / role: only adopt incoming when existing
-       doesn't have a value. First detection wins for identity fields —
-       switching pronouns mid-book is almost always a model error, not a
-       character development. */
-    if (!existing.gender && incoming.gender) existing.gender = incoming.gender;
-    if (!existing.ageRange && incoming.ageRange) existing.ageRange = incoming.ageRange;
-    /* Name: first-detection wins for the DISPLAY name, but a divergent name
-       form the model emits for the same id in a later chapter («Антон» then
-       «Антон Городецкий») — plus any incoming aliases — is preserved as an
-       alias rather than silently dropped, so cast review surfaces it. Dedup
-       case-insensitively; never record the display name itself. */
-    const aliasCandidates = [incoming.name, ...(incoming.aliases ?? [])];
-    const seen = new Set<string>([
-      existing.name.trim().toLowerCase(),
-      ...(existing.aliases ?? []).map((a) => a.trim().toLowerCase()),
-    ]);
-    const nextAliases = [...(existing.aliases ?? [])];
-    for (const cand of aliasCandidates) {
-      const key = cand.trim().toLowerCase();
-      if (key.length > 0 && !seen.has(key)) {
-        nextAliases.push(cand);
-        seen.add(key);
-      }
-    }
-    if (nextAliases.length) existing.aliases = nextAliases;
+    mergeCharacterFields(existing, incoming);
   }
 }
 
@@ -699,6 +646,69 @@ async function writeFoldJournal(
       buildFoldJournalEntries(rewrites, preFoldSentences, characters, new Date().toISOString()),
     ),
   );
+}
+
+/* srv-1 — sibling of writeFoldJournal for the dedup pass. Replace-all keeps
+   kind:'dedup' entries in lockstep with the current roster, preserving fold +
+   manual entries. Same non-fatal-at-call-site contract. The pre-dedup roster +
+   sentences are captured by dedupAndPrepare before the rewrite, so sourceName +
+   affected sentences reflect the state the dedup collapsed. */
+async function writeDedupJournal(
+  bookDir: string,
+  rewrites: Record<string, string>,
+  preDedupSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
+  preDedupRoster: ReadonlyArray<{ id: string; name: string }>,
+): Promise<void> {
+  const journal = await loadCastMerges(bookDir);
+  await saveCastMerges(
+    bookDir,
+    replaceDedupEntries(
+      journal,
+      buildDedupJournalEntries(rewrites, preDedupSentences, preDedupRoster, new Date().toISOString()),
+    ),
+  );
+}
+
+/* Run the dedup pass + apply its rewrites to the sentence stream, capturing the
+   PRE-dedup roster + sentences for the journal — all in the order the spec
+   mandates (dedup BEFORE fold). The caller feeds the returned `characters` +
+   `sentences` into the existing foldMinorCast call, persists the journal from
+   `preDedupSentences`/`preDedupRoster`, and composes `rewrites` with the fold's
+   rewrites for the voice carry-forward remap. Tone fill is applied by the caller
+   AFTER the fold (on the folded survivors), not here. Pure aside from no IO. */
+export function dedupAndPrepare(
+  characters: CharacterOutput[],
+  sentences: SentenceOutput[],
+  language: string | undefined,
+): {
+  characters: CharacterOutput[];
+  sentences: SentenceOutput[];
+  rewrites: Record<string, string>;
+  suggestions: MergeSuggestion[];
+  preDedupSentences: { id: number; chapterId: number; characterId: string }[];
+  preDedupRoster: { id: string; name: string }[];
+} {
+  // Capture pre-dedup lineage BEFORE any rewrite (journal needs the original ids/names).
+  const preDedupSentences = sentences.map((s) => ({
+    id: s.id,
+    chapterId: s.chapterId,
+    characterId: s.characterId,
+  }));
+  const preDedupRoster = characters.map((c) => ({ id: c.id, name: c.name }));
+
+  const dd = dedupeRosterByName(characters, sentences, { language });
+  const rewrittenSentences = sentences.map((s) =>
+    dd.rewrites[s.characterId] ? { ...s, characterId: dd.rewrites[s.characterId] } : s,
+  );
+
+  return {
+    characters: dd.characters,
+    sentences: rewrittenSentences,
+    rewrites: dd.rewrites,
+    suggestions: dd.suggestions,
+    preDedupSentences,
+    preDedupRoster,
+  };
 }
 
 function previewFoldForLiveView(
@@ -2304,8 +2314,9 @@ export async function runMainAnalyzerJob(
            reparse carryover too so it can't resurrect links (srv-13). */
         await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
         /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
-           meaningless; drop the merge journal too. */
+           meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);
+        await clearSuggestions(recordRef.bookDir);
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
@@ -3919,10 +3930,20 @@ export async function runMainAnalyzerJob(
         `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`,
       );
     }
+    /* srv-1 — dedup BEFORE the fold: collapse same-name / token-subset roster
+       duplicates and rewrite their sentences onto the canonical id, so the fold
+       counts lines against deduped ids. Captures pre-dedup lineage for the
+       journal + diminutive suggestions for the sibling file. */
+    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage);
+    stage1.characters = dd.characters;
+    recovered.sentences = dd.sentences;
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
       language: bookLanguage,
     });
+    /* Fill each folded survivor's tone from its attributes where the analyzer
+       left it blank (axes default to a neutral 50). */
+    folded.characters = folded.characters.map(fillToneFromAttributes);
     if (folded.summary.foldedCount > 0) {
       const parts: string[] = [];
       if (folded.summary.intoMale) parts.push(`${folded.summary.intoMale} → Unknown male`);
@@ -4031,18 +4052,42 @@ export async function runMainAnalyzerJob(
         } catch (journalErr) {
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
+        /* srv-1 — record this run's dedup lineage + persist diminutive
+           suggestions. Non-fatal, mirroring the fold journal. */
+        try {
+          await writeDedupJournal(
+            record.bookDir,
+            dd.rewrites,
+            dd.preDedupSentences,
+            dd.preDedupRoster,
+          );
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters));
+        } catch (dedupErr) {
+          console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
+        }
         if (phase1DriftExceeded) {
           log(
             1,
             `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
         } else {
+          /* Remap the prior cast's ids through the cumulative dedup→fold rewrite
+             so designed voices ride onto the surviving canonical ids instead of
+             stranding on a collapsed source id. */
+          const cumulative = composeRewrites(dd.rewrites, folded.rewrites);
+          const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
+          if (remapped.droppedVoices.length) {
+            log(
+              1,
+              `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
+            );
+          }
           await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, characters),
+            characters: mergeAnalysisResultWithExistingCast(remapped.priorCast, characters),
           });
           await logCarriedForwardCharacters(
             record.bookDir,
-            voicedSurvivorsDropped(priorCastForMerge, characters),
+            voicedSurvivorsDropped(remapped.priorCast, characters),
           );
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
@@ -4889,11 +4934,19 @@ async function runSubsetAnalyzerJob(
         `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`,
       );
     }
+    /* srv-1 — dedup BEFORE the re-fold (see the main route's same block):
+       collapse same-name / token-subset duplicates and rewrite their sentences
+       onto the canonical id so the fold counts deduped lines. */
+    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage);
+    stage1.characters = dd.characters;
+    recovered.sentences = dd.sentences;
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions. */
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       language: bookLanguage,
     });
+    /* Fill each folded survivor's tone from its attributes where blank. */
+    folded.characters = folded.characters.map(fillToneFromAttributes);
     if (folded.summary.droppedSilent > 0) {
       const sample = folded.dropped.slice(0, 4).join(', ');
       const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
@@ -5011,18 +5064,41 @@ async function runSubsetAnalyzerJob(
         } catch (journalErr) {
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
+        /* srv-1 — record this run's dedup lineage + persist diminutive
+           suggestions. Non-fatal, mirroring the fold journal. */
+        try {
+          await writeDedupJournal(
+            record.bookDir,
+            dd.rewrites,
+            dd.preDedupSentences,
+            dd.preDedupRoster,
+          );
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched));
+        } catch (dedupErr) {
+          console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
+        }
         if (subsetDriftExceeded) {
           log(
             1,
             `Attribution drift exceeded threshold (${subsetReconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
         } else {
+          /* Remap the prior cast's ids through the cumulative dedup→fold rewrite
+             so designed voices ride onto the surviving canonical ids. */
+          const cumulative = composeRewrites(dd.rewrites, folded.rewrites);
+          const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
+          if (remapped.droppedVoices.length) {
+            log(
+              1,
+              `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
+            );
+          }
           await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, enriched),
+            characters: mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched),
           });
           await logCarriedForwardCharacters(
             record.bookDir,
-            voicedSurvivorsDropped(priorCastForMerge, enriched),
+            voicedSurvivorsDropped(remapped.priorCast, enriched),
           );
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);

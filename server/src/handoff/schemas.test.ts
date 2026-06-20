@@ -4,9 +4,13 @@ import {
   stage1Schema,
   stage2Schema,
   characterSchema,
+  stage1ChapterSchema,
   sentenceSchema,
   emotionAnnotationSchema,
   EMOTIONS,
+  analyzerCharacterSchema,
+  stage1ChapterGrammarSchema,
+  stage1GrammarSchema,
 } from './schemas.js';
 
 /* The Ollama analyzer (server/src/analyzer/ollama.ts) feeds these per-stage
@@ -130,5 +134,64 @@ describe('fs-33 — emotion-only annotation schema', () => {
       emotionAnnotationSchema.safeParse({ annotations: [{ sentenceId: 1.5, emotion: 'sad' }] })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('analyzer grammar schemas — required tone (Task 6)', () => {
+  const charWithoutTone = { id: 'a', name: 'Alice', role: 'protagonist', color: '#abc' };
+  const charWithTone = {
+    ...charWithoutTone,
+    tone: { warmth: 50, pace: 60, authority: 70, emotion: 40 },
+  };
+
+  it('analyzerCharacterSchema rejects a character with NO tone (grammar strict)', () => {
+    expect(analyzerCharacterSchema.safeParse(charWithoutTone).success).toBe(false);
+  });
+
+  it('characterSchema still accepts a character with NO tone (validation tolerant)', () => {
+    expect(characterSchema.safeParse(charWithoutTone).success).toBe(true);
+  });
+
+  it('analyzerCharacterSchema accepts a character with all four tone axes', () => {
+    expect(analyzerCharacterSchema.safeParse(charWithTone).success).toBe(true);
+  });
+
+  it('stage1ChapterGrammarSchema JSON-schema marks tone required on character and axes required on tone', () => {
+    const json = z.toJSONSchema(stage1ChapterGrammarSchema, {
+      target: 'draft-07',
+      reused: 'inline',
+    }) as Record<string, unknown>;
+
+    // Walk: properties.characters.items → character item schema
+    const props = json['properties'] as Record<string, unknown>;
+    const charArraySchema = props['characters'] as Record<string, unknown>;
+    const charItemSchema = charArraySchema['items'] as Record<string, unknown>;
+
+    // tone must appear in the character's required array
+    const charRequired = charItemSchema['required'] as string[];
+    expect(Array.isArray(charRequired)).toBe(true);
+    expect(charRequired).toContain('tone');
+
+    // tone's own JSON schema must list all four axes in its required array
+    const charItemProps = charItemSchema['properties'] as Record<string, unknown>;
+    const toneJsonSchema = charItemProps['tone'] as Record<string, unknown>;
+    const toneRequired = toneJsonSchema['required'] as string[];
+    expect(Array.isArray(toneRequired)).toBe(true);
+    expect(toneRequired).toContain('warmth');
+    expect(toneRequired).toContain('pace');
+    expect(toneRequired).toContain('authority');
+    expect(toneRequired).toContain('emotion');
+  });
+
+  it('stage1GrammarSchema rejects a character with no tone', () => {
+    const result = stage1GrammarSchema.safeParse({
+      characters: [charWithoutTone],
+      chapters: [{ id: 1, title: 'Chapter 1' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('stage1ChapterSchema (validation) still accepts characters with no tone', () => {
+    expect(stage1ChapterSchema.safeParse({ characters: [charWithoutTone] }).success).toBe(true);
   });
 });

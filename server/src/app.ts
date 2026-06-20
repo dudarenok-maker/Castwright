@@ -12,6 +12,7 @@ import { manuscriptsRouter } from './routes/manuscripts.js';
 import { analysisRouter } from './routes/analysis.js';
 import { voiceMatchRouter } from './routes/voice-match.js';
 import { castMergeRouter } from './routes/cast-merge.js';
+import { castMergeSuggestionsRouter } from './routes/cast-merge-suggestions.js';
 import { voiceOverrideLinkedRouter } from './routes/voice-override-linked.js';
 import { castAliasesRouter } from './routes/cast-aliases.js';
 import { castLinkPriorRouter } from './routes/cast-link-prior.js';
@@ -137,6 +138,7 @@ app.use('/api/books', backupRouter); // srv-2 — /:bookId/backups (list) + /bac
 app.use('/api/books', coverRouter); // mounts /:bookId/cover{,/candidates} (OpenLibrary covers)
 app.use('/api/books', voiceMatchRouter); // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter); // mounts /:bookId/cast/merge
+app.use('/api/books', castMergeSuggestionsRouter); // mounts /:bookId/cast/merge-suggestions (list/dismiss/accept)
 app.use('/api/books', voiceOverrideLinkedRouter); // mounts /:bookId/cast/:characterId/voice-override-linked (plan 122 — name/alias-aware series voice write)
 app.use('/api/books', castAliasesRouter); // mounts /:bookId/cast/{unlink-alias,add-alias} (editable alias chips on the profile drawer)
 app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)

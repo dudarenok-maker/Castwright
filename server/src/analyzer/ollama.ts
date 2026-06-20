@@ -24,6 +24,8 @@ import {
   stage1ChapterSchema,
   stage2ChapterSchema,
   emotionAnnotationSchema,
+  stage1GrammarSchema,
+  stage1ChapterGrammarSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
@@ -237,7 +239,15 @@ export class OllamaAnalyzer implements Analyzer {
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
-    return this.runStage(manuscriptId, '1', 'whole_book_stage1', promptMd, stage1Schema, call);
+    return this.runStage(
+      manuscriptId,
+      '1',
+      'whole_book_stage1',
+      promptMd,
+      stage1GrammarSchema,
+      stage1Schema,
+      call,
+    );
   }
 
   async runStage1Chapter(
@@ -252,6 +262,7 @@ export class OllamaAnalyzer implements Analyzer {
       key,
       'per_chapter_stage1',
       promptMd,
+      stage1ChapterGrammarSchema,
       stage1ChapterSchema,
       call,
     );
@@ -270,6 +281,7 @@ export class OllamaAnalyzer implements Analyzer {
       'per_chapter_stage2',
       promptMd,
       stage2ChapterSchema,
+      stage2ChapterSchema,
       call,
     );
   }
@@ -287,6 +299,7 @@ export class OllamaAnalyzer implements Analyzer {
       'emotion_annotation',
       promptMd,
       emotionAnnotationSchema,
+      emotionAnnotationSchema,
       call,
     );
   }
@@ -296,27 +309,31 @@ export class OllamaAnalyzer implements Analyzer {
     key: HandoffKey,
     skillName: SkillName,
     promptMd: string,
-    schema: z.ZodType<T>,
+    grammarSchema: z.ZodType<unknown>,
+    validationSchema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
     const systemInstruction = buildSystemInstruction(skill, call.language);
-    /* Convert the per-stage Zod schema into a JSON Schema for Ollama 0.5+
-       structured-output (constrained decoding). reused:'inline' inlines
-       nested schemas (characterSchema inside stage1ChapterSchema, etc.) so
-       Ollama doesn't have to resolve $ref — safer across engine versions.
-       target:'draft-07' keeps the same dialect zod-to-json-schema emitted
-       before the Zod 4 bump. The resulting schema preserves .strict() as
-       additionalProperties:false and .min(1) as minItems:1, constraining the
-       overall JSON shape. NOTE: llama.cpp's grammar conversion does NOT honour
-       additionalProperties:false — the model can still stamp an extra key on
-       an object (the real qwen3.5:9b per-chapter cast failure stamped a stray
-       top-level `chapterId`). parseAndValidate tolerates that by stripping
-       unrecognized-keys-only failures, so a stray key no longer discards a
-       whole chapter. */
-    const responseFormat = z.toJSONSchema(schema, { target: 'draft-07', reused: 'inline' });
+    /* Convert the GRAMMAR schema into a JSON Schema for Ollama 0.5+ structured-
+       output (constrained decoding). grammarSchema may differ from
+       validationSchema — e.g. stage1ChapterGrammarSchema makes tone REQUIRED so
+       the model is nudged to emit it, while stage1ChapterSchema (the validation
+       schema) keeps tone optional so a missing tone never fails a chapter.
+       reused:'inline' inlines nested schemas (characterSchema inside
+       stage1ChapterSchema, etc.) so Ollama doesn't have to resolve $ref — safer
+       across engine versions. target:'draft-07' keeps the same dialect
+       zod-to-json-schema emitted before the Zod 4 bump. The resulting schema
+       preserves .strict() as additionalProperties:false and .min(1) as
+       minItems:1, constraining the overall JSON shape. NOTE: llama.cpp's grammar
+       conversion does NOT honour additionalProperties:false — the model can still
+       stamp an extra key on an object (the real qwen3.5:9b per-chapter cast
+       failure stamped a stray top-level `chapterId`). parseAndValidate tolerates
+       that by stripping unrecognized-keys-only failures, so a stray key no
+       longer discards a whole chapter. */
+    const responseFormat = z.toJSONSchema(grammarSchema, { target: 'draft-07', reused: 'inline' });
 
     const start = Date.now();
     const tick = call.onWaiting
@@ -335,7 +352,7 @@ export class OllamaAnalyzer implements Analyzer {
         call.signal,
       );
 
-      const firstAttempt = parseAndValidate(firstText, schema);
+      const firstAttempt = parseAndValidate(firstText, validationSchema);
       if (firstAttempt.ok) {
         if (firstAttempt.repaired) {
           console.warn(
@@ -392,7 +409,7 @@ export class OllamaAnalyzer implements Analyzer {
         call.signal,
       );
 
-      const secondAttempt = parseAndValidate(secondText, schema);
+      const secondAttempt = parseAndValidate(secondText, validationSchema);
       if (secondAttempt.ok) {
         if (secondAttempt.repaired) {
           console.warn(

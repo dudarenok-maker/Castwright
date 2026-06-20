@@ -6,15 +6,16 @@
    EXACTLY the sentences that merge rewrote — instead of reconstructing
    "impacted chapters" from the chapterCast roster, which over-reports.
 
-   Two write sites, mirroring how the alias gets created in the first place:
-     - manual merge (cast-merge.ts)         → appendManualEntry  (append-only)
-     - post-stage-2 auto-fold (analysis.ts) → replaceFoldEntries (idempotent)
+   Three write sites, mirroring how the alias gets created in the first place:
+     - manual merge (cast-merge.ts)         → appendManualEntry      (append-only)
+     - post-stage-2 auto-fold (analysis.ts) → replaceFoldEntries     (idempotent)
+     - dedup pass (analysis.ts)            → replaceDedupEntries    (idempotent)
 
    Lifecycle: a `fresh: true` re-analysis clears the whole file (ids regenerate
    from scratch); each fold pass replaces all `kind:'fold'` entries with that
    pass's set while preserving `kind:'manual'`; manual merges append.
 
-   Only these two paths rewrite THIS book's per-sentence `characterId`. The
+   Only these three paths rewrite THIS book's per-sentence `characterId`. The
    stage-1 roster merge happens before sentence attribution exists, and
    cast-link-prior / voice-match / add-alias only attach a recognition label —
    none of them move sentences, so the unlink route correctly falls back to the
@@ -38,7 +39,7 @@ export interface AffectedSentence {
 export interface CastMergeEntry {
   /** ISO timestamp the entry was recorded. */
   ts: string;
-  kind: 'manual' | 'fold';
+  kind: 'manual' | 'fold' | 'dedup';
   /** Character id that disappeared in the merge. */
   sourceId: string;
   /** The name that became the alias on the target — the match key the unlink
@@ -93,6 +94,43 @@ export function buildFoldJournalEntries(
   return sourceIds.map((sourceId) => ({
     ts,
     kind: 'fold' as const,
+    sourceId,
+    sourceName: nameById.get(sourceId) ?? sourceId,
+    targetId: rewrites[sourceId],
+    affected: affectedBySource.get(sourceId) ?? [],
+  }));
+}
+
+/** Replace ALL dedup entries with `dedupEntries`, preserving fold + manual.
+    Idempotent across resume / re-analysis — orthogonal to replaceFoldEntries. */
+export function replaceDedupEntries(
+  file: CastMergesFile,
+  dedupEntries: CastMergeEntry[],
+): CastMergesFile {
+  return { entries: [...file.entries.filter((e) => e.kind !== 'dedup'), ...dedupEntries] };
+}
+
+/** Like buildFoldJournalEntries but stamps kind:'dedup'. `affected` = the
+    (chapterId, sentenceId) of every PRE-DEDUP sentence attributed to each source;
+    `sourceName` from the pre-dedup roster. */
+export function buildDedupJournalEntries(
+  rewrites: Record<string, string>,
+  preDedupSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
+  characters: ReadonlyArray<{ id: string; name: string }>,
+  ts: string,
+): CastMergeEntry[] {
+  const sourceIds = Object.keys(rewrites);
+  if (sourceIds.length === 0) return [];
+  const nameById = new Map(characters.map((c) => [c.id, c.name]));
+  const affectedBySource = new Map<string, AffectedSentence[]>();
+  for (const id of sourceIds) affectedBySource.set(id, []);
+  for (const s of preDedupSentences) {
+    const bucket = affectedBySource.get(s.characterId);
+    if (bucket) bucket.push({ chapterId: s.chapterId, sentenceId: s.id });
+  }
+  return sourceIds.map((sourceId) => ({
+    ts,
+    kind: 'dedup' as const,
     sourceId,
     sourceName: nameById.get(sourceId) ?? sourceId,
     targetId: rewrites[sourceId],

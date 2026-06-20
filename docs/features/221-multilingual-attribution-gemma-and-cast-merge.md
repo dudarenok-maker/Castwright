@@ -10,8 +10,19 @@ owner: null
 > guard); **Wave D shipped** (#856, localized cast buckets); **Wave B core already
 > works** via #851's model picker + the existing `defaultAnalysisModel` setting
 > (set gemma in Account → Model settings — admin-selectable, no hardcoding; only
-> per-language auto-default would be net-new, optional); **Wave C OBSOLETE** —
-> re-measured 2026-06-17: plan 219 already deduplicates (17 chars, 0 dups);
+> per-language auto-default would be net-new, optional); **Wave C RE-OPENED + SHIPPED**
+> (2026-06-20, branch `fix/server-ru-cast-dedup-and-tone`) — the "OBSOLETE, 0 dups"
+> re-measure was a **false negative** (a single stochastic gemma probe got consistent
+> ids; a real run drifts). User hit byte-identical duplicate display names with
+> transliterated ids (`ольга`/`olga`, `ilya`/`илья`, `semen`/`семен`,
+> `тигренок`/`tigrenok`) on a real gemma4-e4b run. Fixed model-independently via a
+> finalization `dedupeRosterByName` pass (Tier-1 exact + Tier-2a full-vs-short
+> auto-merge + Tier-2b diminutive SUGGESTIONS), canonical id = `safeId(name)`, with
+> a voiceState-ranked prior-cast remap so designed voices follow the merge, plus a
+> two-schema `runStage` (required-tone GRAMMAR / tolerant VALIDATION) + deterministic
+> `fillToneFromAttributes` backstop closing the tone-0% root cause (tone was
+> `.optional()` in the constrained-decoding schema). Follow-ups: srv-44 #960,
+> srv-45 #961. Design+plan: `docs/superpowers/{specs,plans}/2026-06-20-russian-cast-dedup-and-tone*`.
 > **Wave E implemented** (2026-06-19, `fix/server-ru-cast-tone-localization-aliases`):
 > Russian cast-field under-population — tone 0%→100% + localized role/description via
 > a `languagePreamble` cast-field guard, plus same-id alias capture in the roster merge.
@@ -204,7 +215,29 @@ Also note the residency landscape changed: **plan 222 / #840** shipped a GPU-res
 > - **Wave C: RE-MEASURE on current `main` FIRST.** The duplicate set in Defect 1 below is **pre-219** (transliteration removed in 219; ids are now Cyrillic via `unicodeKebab`; roster threaded into later chunks). The real residual must be re-collected before designing the tiering. Use `normaliseNameKey` (`safe-id.ts:76`), not `normaliseForMatch` (no combining-mark stripping). Run the fuzzy merge **once at finalisation** (analysis.ts:~3795), NOT inside the per-rebuild `mergeRosterChapter` (order-sensitive live-SSE path — keep that exact-id). **Tier-1 (exact normalized-name) only for v1** — Russian patronymic/surname token-sharing makes Tier-2 false-merge-prone (219 notes the 4B smears surnames). Russian `DIALOGUE_VERBS` extension needs the `.mjs` drift-copy + verb-initial word-order pattern, and may be redundant with Wave A.
 > - **Wave D:** thread `language` through `previewFoldForLiveView` AND the exported `buildInterimCast` (signature change + 6 preview call sites) or live/interim buckets show English then flip; `cast-merge.ts:84` `makeBucket` has no book language in scope — resolve it from the book record. Russian descriptor detection (`isDescriptorName`) is English-structured (no "the", inflection) → partial coverage for v1, state the limitation.
 
-### Wave C — name/alias-aware cross-chapter merge (Defect 1) — ❌ OBSOLETE (superseded by plan 219)
+### Wave C — name/alias-aware cross-chapter merge (Defect 1) — ✅ RE-OPENED + SHIPPED 2026-06-20 (branch `fix/server-ru-cast-dedup-and-tone`)
+
+> **The "OBSOLETE" verdict below was a FALSE NEGATIVE.** It rested on one stochastic
+> gemma4-e4b probe run that happened to emit consistent Cyrillic ids. A real
+> full-book run on the SAME model drifts: 2026-06-20 the user's persisted `cast.json`
+> showed duplicate pairs, each a byte-identical display name with one Cyrillic-kebab
+> id + one Latin-transliterated id (`ольга`/`olga`, `ilya`/`илья`, `semen`/`семен`,
+> `тигренок`/`tigrenok`). Root cause is model-INDEPENDENT: the analyzer's emitted
+> character `id` is trusted verbatim and `mergeRosterChapter` merges by exact id only.
+> **Shipped fix** (subagent-driven TDD, 12 tasks, 3× adversarially reviewed spec +
+> opus whole-branch review): a finalization `dedupeRosterByName` pass — **Tier-1**
+> exact normalized-name auto-merge (gender-gated, narrator-safe, canonical id =
+> `safeId(name)`); **Tier-2a** full-vs-short token-subset auto-merge (single-superset
+> gate); **Tier-2b** diminutive → SUGGESTION only (sibling `cast-merge-suggestions.json`
+> + list/accept/dismiss routes + cast-review cards) — with a `kind:'dedup'` journal,
+> sentence-id rewrite + transitive `composeRewrites`, and a voiceState-ranked
+> `applyRewriteToPriorCast` so designed voices follow `olga→ольга` (the carry-forward
+> BLOCKER). Tone-0% (the other defect) fixed via two-schema `runStage` +
+> `fillToneFromAttributes`. Design+plan: `docs/superpowers/{specs,plans}/2026-06-20-russian-cast-dedup-and-tone*`.
+> Follow-ups: srv-44 [#960](https://github.com/dudarenok-maker/Castwright/issues/960),
+> srv-45 [#961](https://github.com/dudarenok-maker/Castwright/issues/961).
+
+_Obsolete-verdict evidence retained for history:_
 
 **Re-measured 2026-06-17 on current `main` (real Phase-0, all 9 chapters, gemma4-e4b): 17 distinct characters, ZERO same-person duplicate groups.** Plan 219 (transliteration removed → Cyrillic `unicodeKebab` ids + accumulated roster threaded into each chapter's detection prompt) already deduplicates the cast. The 43-character pre-219 duplicate set (egor/yegor, boris-ignatyevich/boris-ignatievich/shef, anton/anton-gorodetsky…) no longer occurs — a single `anton` ("Антон Сергеевич Городецкий"), single `egor`, single `boris-ignatiyevich`, etc. **Do NOT build the cross-chapter fuzzy merge — it would solve an already-fixed problem** (the adversarial-review BLOCKER on this was confirmed). Residuals (NOT dedup; possible small follow-ups): stage-1 occasionally emits schema-invalid JSON on a chapter (bare probe lost ch1/ch7; the real `runStage1WithRosterGuard` + parse-retry likely recovers); cosmetic id↔name model quirks.
 

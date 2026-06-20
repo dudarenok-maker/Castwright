@@ -1188,6 +1188,90 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/VoiceMatchResponse' }
 
+  /api/books/{bookId}/cast/merge-suggestions:
+    get:
+      summary: List diminutive merge suggestions for a book
+      operationId: listCastMergeSuggestions
+      description: |
+        Returns the current set of per-book diminutive merge suggestions written
+        by the dedup pass (e.g. "Оля + Ольга — same person?"). Returns
+        `{ suggestions: [] }` when the book is unknown or no file exists —
+        safe to call without a prior existence check.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current suggestion list (may be empty)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CastMergeSuggestionsResponse' }
+
+  /api/books/{bookId}/cast/merge-suggestions/dismiss:
+    post:
+      summary: Dismiss a merge suggestion
+      operationId: dismissCastMergeSuggestion
+      description: |
+        Removes the matching `(sourceId, targetId)` pair from the suggestions
+        file. No-op when the pair is already absent. Does NOT perform any merge.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, targetId]
+              properties:
+                sourceId:
+                  type: string
+                  description: The id of the character to fold (the diminutive / duplicate).
+                targetId:
+                  type: string
+                  description: The id of the canonical survivor.
+      responses:
+        '200':
+          description: Suggestion removed (or was already absent)
+        '400':
+          description: sourceId or targetId missing
+        '404':
+          description: Book not found
+
+  /api/books/{bookId}/cast/merge-suggestions/accept:
+    post:
+      summary: Accept a merge suggestion (merge + dismiss)
+      operationId: acceptCastMergeSuggestion
+      description: |
+        Performs the cast merge (`sourceId` folded into `targetId`, where
+        `targetId` is the canonical survivor), then drops the suggestion so it
+        never resurfaces. Equivalent to calling `POST /cast/merge` followed by
+        `POST /cast/merge-suggestions/dismiss`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, targetId]
+              properties:
+                sourceId:
+                  type: string
+                  description: The id of the character to fold (the diminutive / duplicate).
+                targetId:
+                  type: string
+                  description: The id of the canonical survivor.
+      responses:
+        '200':
+          description: Merge performed and suggestion removed
+        '400':
+          description: Missing or equal sourceId/targetId
+        '404':
+          description: Book or character not found
+        '409':
+          description: Book has no cast yet
+
   /api/queue:
     get:
       summary: Read the workspace-level chapter-generation queue
@@ -2438,6 +2522,34 @@ paths:
 # ---------------------------------------------------------------------
 components:
   schemas:
+    # --- Cast merge suggestions -------------------------------------
+    MergeSuggestion:
+      type: object
+      description: |
+        A suggested merge pair produced by the dedup pass (Tier-2b).
+        `sourceId` is the diminutive/duplicate character; `targetId` is the
+        canonical survivor. The UI surfaces this as "Are Оля and Ольга the
+        same person?" and lets the user accept (merge) or dismiss (keep both).
+      required: [sourceId, targetId, reason]
+      properties:
+        sourceId:
+          type: string
+          description: Id of the character to fold away (the diminutive / duplicate).
+        targetId:
+          type: string
+          description: Id of the canonical surviving character.
+        reason:
+          type: string
+          description: Human-readable explanation of why these were flagged (e.g. "diminutive of Ольга").
+
+    CastMergeSuggestionsResponse:
+      type: object
+      required: [suggestions]
+      properties:
+        suggestions:
+          type: array
+          items: { $ref: '#/components/schemas/MergeSuggestion' }
+
     # --- User settings ----------------------------------------------
     BackupSnapshot:
       type: object
