@@ -12,7 +12,7 @@
 
 import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, waitFor, act, fireEvent, screen } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MiniPlayer, makeSessionId } from './mini-player';
@@ -39,6 +39,41 @@ function makeStore() {
 function renderPlayer(ui: React.ReactElement) {
   return render(<Provider store={makeStore()}>{ui}</Provider>);
 }
+
+/* Convenience helper for tests that only need to vary the chapter + a few
+   MiniPlayer props. `chapterOverrides` patches chapter1; `playerOverrides`
+   passes extra props to <MiniPlayer> (e.g. autoSeekToIssues). */
+function renderMiniPlayer(
+  chapterOverrides: Partial<Chapter>,
+  playerOverrides: Record<string, unknown> = {},
+) {
+  const chapter: Chapter = { ...chapter1, ...chapterOverrides };
+  return render(
+    <Provider store={makeStore()}>
+      <MiniPlayer
+        chapter={chapter}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+        {...playerOverrides}
+      />
+    </Provider>,
+  );
+}
+
+/* vi.hoisted lets us create a vi.fn() that's available inside the vi.mock
+   factory (which is hoisted to the top of the file before imports). The
+   default pendingByChapter-based implementation is set in beforeEach so
+   existing tests keep using resolveChapter(); jump-to-issue tests override
+   with mockResolvedValue(audioWithIssues). */
+const { getChapterAudioFn } = vi.hoisted(() => ({
+  getChapterAudioFn: vi.fn<
+    (args: { chapterId: number; bookId: string; duration: string }) => Promise<unknown>
+  >(),
+}));
 
 type Resolver = (meta: ChapterAudio) => void;
 const pendingByChapter = new Map<number, Resolver>();
@@ -69,12 +104,7 @@ const putListenStatsMock = vi.fn(async (_bookId: string, _body: unknown) => ({})
 
 vi.mock('../lib/api', () => ({
   api: {
-    getChapterAudio: ({ chapterId }: { chapterId: number }) => {
-      getChapterAudioMock(chapterId);
-      return new Promise<ChapterAudio>((resolve) => {
-        pendingByChapter.set(chapterId, resolve);
-      });
-    },
+    getChapterAudio: getChapterAudioFn,
     /* Plan 47 — listen-progress hooks. Defaults to "no resume point"
        so the existing test cases see the legacy seek-to-0 behaviour.
        Per-test overrides via getListenProgressMock.mockImplementation
@@ -91,6 +121,15 @@ vi.mock('../lib/api', () => ({
 beforeEach(() => {
   pendingByChapter.clear();
   getChapterAudioMock.mockReset();
+  /* Restore the default pendingByChapter implementation for every test;
+     jump-to-issue tests override with mockResolvedValue(). */
+  getChapterAudioFn.mockReset();
+  getChapterAudioFn.mockImplementation(({ chapterId }: { chapterId: number }) => {
+    getChapterAudioMock(chapterId);
+    return new Promise<ChapterAudio>((resolve) => {
+      pendingByChapter.set(chapterId, resolve);
+    });
+  });
   getListenProgressMock.mockReset();
   /* Default — no resume point. Per-test cases override via
      mockResolvedValueOnce / mockImplementationOnce. */
@@ -1050,5 +1089,105 @@ describe('MiniPlayer — onCrossedFinish (Task 4 / fs-15 auto-finish)', () => {
     /* Even at currentTime=6 (remaining=2 <= 10), no fire because duration <= 10. */
     await fireTimeUpdate(audioEl, 6);
     expect(onCrossedFinish).not.toHaveBeenCalled();
+  });
+});
+
+describe('MiniPlayer — issue waveform scrubber', () => {
+  it('renders the issue list + keeps the scrubber thumb when a segment is flagged', async () => {
+    renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    /* Resolve with a suspect segment: start=6, end=10, seekSec = 6-2 = 4 → "0:04" */
+    await act(async () => {
+      const resolver = pendingByChapter.get(1);
+      if (!resolver) throw new Error('No pending fetch for chapter 1');
+      resolver({
+        url: 'blob:x',
+        durationSec: 20,
+        sampleRate: 44100,
+        peaks: Array(240).fill(0.5),
+        segments: [{ start: 6, end: 10, characterId: 'n', sentenceId: 1, suspect: true, reasons: ['Long sentence'] }],
+      } as never);
+    });
+    expect(await screen.findByText(/Issue at 0:04: Long sentence/)).toBeInTheDocument();
+    expect(screen.getByTestId('scrubber-thumb')).toBeInTheDocument();
+  });
+});
+
+describe('MiniPlayer — jump-to-issue + auto-seek', () => {
+  const audioWithIssues = {
+    url: 'blob:x', durationSec: 30, sampleRate: 44100, peaks: Array(240).fill(0.5),
+    segments: [{ start: 10, end: 12, characterId: 'n', sentenceId: 1, suspect: true, reasons: ['Long sentence'] }],
+  };
+
+  it('⚠ next seeks to the issue seekSec (10 - 2 = 8)', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    await screen.findByLabelText(/Next issue/);
+    fireEvent.click(screen.getByLabelText(/Next issue/));
+    expect(el.currentTime).toBe(8);
+  });
+
+  it('auto-seeks to the first issue in the generate context, overriding resume', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    getListenProgressMock.mockResolvedValue({ chapterId: 1, currentSec: 25 } as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' }, { autoSeekToIssues: true });
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    /* Wait for the issue scrubber marker to appear — that proves issues state
+       has settled in the component (issuesRef is populated) AND the
+       listen-progress fetch resolved (pendingSeekRef is set). Then fire
+       onLoadedMetadata: the auto-seek block runs BEFORE the resume block and
+       wins. */
+    await screen.findByLabelText(/Next issue/);
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await act(async () => { fireEvent.loadedMetadata(el); });
+    expect(el.currentTime).toBe(8); // first issue seekSec, NOT the 25s resume
+  });
+
+  it('does NOT auto-seek when autoSeekToIssues is false (Listen resumes)', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    getListenProgressMock.mockResolvedValue({ chapterId: 1, currentSec: 25 } as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' }, { autoSeekToIssues: false });
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    /* Wait for issues + listen-progress to both resolve before firing
+       loadedMetadata so pendingSeekRef carries the 25 s resume point. */
+    await screen.findByLabelText(/Next issue/);
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await act(async () => { fireEvent.loadedMetadata(el); });
+    expect(el.currentTime).toBe(25); // resume bookmark wins
+  });
+
+  it('suppresses waveform sr-only issues when peaks are empty (decorative fallback bars)', async () => {
+    /* Regression for issue-waveform: the scrubber should pass issues={undefined}
+       to <Waveform> when peaks are empty, so amber never paints on decorative
+       fallback bars and their sr-only issue list never renders. */
+    getChapterAudioFn.mockResolvedValue({
+      url: 'blob:x',
+      durationSec: 30,
+      sampleRate: 44100,
+      peaks: [], // Empty peaks — decorative mode
+      segments: [{ start: 10, end: 12, characterId: 'n', sentenceId: 1, suspect: true, reasons: ['Long sentence'] }],
+    } as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
+    /* Wait for the player to fetch and settle, so issues state derives
+       from the segment (would normally render an issue). */
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    await waitFor(() => expect(getChapterAudioFn).toHaveBeenCalled());
+    /* Without the guard, the unguarded Waveform would render the sr-only
+       issue list even though bars are decorative. Assert the list is absent. */
+    expect(screen.queryByText(/Issue at/)).toBeNull();
   });
 });

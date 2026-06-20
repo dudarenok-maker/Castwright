@@ -582,3 +582,51 @@ describe('chapter-audio router', () => {
     });
   });
 });
+
+describe('meta endpoint — per-segment QA issues (issue-waveform)', () => {
+  function writeSegments(segments: unknown[]) {
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId, chapterId: 1, chapterTitle: 'Chapter 1', durationSec: 12.5,
+        sampleRate: 24_000, modelKey: 'xtts_v2', synthesizedAt: new Date().toISOString(),
+        segments,
+      }),
+    );
+  }
+
+  it('publishes suspect + segment-QA reasons; excludes inconclusive-ASR noise', async () => {
+    resetAudio();
+    writeMp3();
+    writeSegments([
+      // segment-QA suspect, ASR ran but was inconclusive (must NOT leak asr.reasons)
+      {
+        groupIndex: 0, characterId: 'marlow', sentenceIds: [101], startSec: 0, endSec: 6.2,
+        suspect: true, qa: { status: 'suspect', reasons: ['Long sentence — 6.2s'] },
+        asrSuspect: false, asr: { reasons: ['Not scored — under the 12-char ASR floor.'] },
+      },
+      // ASR drift suspect (asrSuspect): include asr.reasons
+      {
+        groupIndex: 1, characterId: 'oduvan', sentenceIds: [103], startSec: 6.2, endSec: 12.5,
+        asrSuspect: true, asr: { reasons: ['Wrong words — word-error 0.42'] },
+      },
+    ]);
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+    expect(res.status).toBe(200);
+    expect(res.body.segments[0].suspect).toBe(true);
+    expect(res.body.segments[0].reasons).toEqual(['Long sentence — 6.2s']);
+    expect(res.body.segments[1].suspect).toBe(true);
+    expect(res.body.segments[1].reasons).toEqual(['Wrong words — word-error 0.42']);
+  });
+
+  it('omits suspect/reasons for a clean segment', async () => {
+    resetAudio();
+    writeMp3();
+    writeSegments([
+      { groupIndex: 0, characterId: 'marlow', sentenceIds: [101], startSec: 0, endSec: 12.5 },
+    ]);
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+    expect(res.body.segments[0].suspect).toBeUndefined();
+    expect(res.body.segments[0].reasons).toBeUndefined();
+  });
+});

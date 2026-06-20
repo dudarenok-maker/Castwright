@@ -1638,8 +1638,20 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
   });
   /* Deterministic per-character segment layout so the Listen-view per-line
      re-record resolver (fs-26) has something to bite on in mock mode: split
-     the chapter into three contiguous spans (narrator / halloran / narrator). */
+     the chapter into four contiguous spans (narrator / halloran / narrator /
+     narrator-late-suspect).  The two suspect segments are non-adjacent so
+     deriveIssues produces TWO distinct IssueRegions rather than merging them
+     — the e2e jump-to-issue test needs a "before" region (issue-1, halloran)
+     and an "after" region (issue-2, late narrator) to prove the Next-issue
+     button actually advances the playhead. */
   const third = totalSec / 3;
+  /* issue-1: halloran at [third, third*2]; padded seekSec = third − 2.
+     issue-2: late narrator at [third*2 + 88, totalSec]; padded seekSec =
+     third*2 + 86.  Gap between padded end of issue-1 (third*2 + 2) and
+     padded start of issue-2 (third*2 + 86) = 84 s → will NOT merge.
+     For chapter 1 (duration '38:24' = 2304 s): third=768, lateStart=1624,
+     seekSec-1=766 (33.2%), seekSec-2=1622 (70.4%). */
+  const lateStart = third * 2 + 88;
   return {
     url: stubAudioB,
     durationSec: totalSec,
@@ -1647,8 +1659,23 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
     sampleRate: 44100,
     segments: [
       { start: 0, end: third, characterId: 'narrator', sentenceId: 1 },
-      { start: third, end: third * 2, characterId: 'halloran', sentenceId: 2 },
-      { start: third * 2, end: totalSec, characterId: 'narrator', sentenceId: 3 },
+      {
+        start: third,
+        end: third * 2,
+        characterId: 'halloran',
+        sentenceId: 2,
+        suspect: true,
+        reasons: ['Long sentence — possible truncation'],
+      },
+      { start: third * 2, end: lateStart, characterId: 'narrator', sentenceId: 3 },
+      {
+        start: lateStart,
+        end: totalSec,
+        characterId: 'narrator',
+        sentenceId: 4,
+        suspect: true,
+        reasons: ['Pacing anomaly — possible mispronunciation'],
+      },
     ],
   };
 }

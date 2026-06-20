@@ -1387,6 +1387,7 @@ export function Layout() {
         <MiniPlayer
           chapter={trackChapter}
           bookId={bookId}
+          autoSeekToIssues={view === 'generate'}
           onClose={() => dispatch(uiActions.setCurrentTrack(null))}
           onPrev={() =>
             prevTrackAvailable && dispatch(uiActions.setCurrentTrack(chapters[trackIdx - 1].id))

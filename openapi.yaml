@@ -4010,6 +4010,18 @@ components:
               end: { type: number, description: 'seconds' }
               characterId: { type: string }
               sentenceId: { type: integer }
+              suspect:
+                type: boolean
+                description: >-
+                  issue-waveform — true when this segment is still flagged by the
+                  pre-assembly segment-QA gate or the ASR content-QA gate. Absent
+                  on clean / legacy / pre-QA renders.
+              reasons:
+                type: array
+                items: { type: string }
+                description: >-
+                  Human-readable QA reasons for a suspect segment. Segment-QA
+                  reasons always; ASR reasons only when the ASR verdict was drift.
         lufs:
           $ref: '#/components/schemas/ChapterLoudness'
           nullable: true
