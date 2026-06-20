@@ -189,6 +189,11 @@ class CompanionRuntime {
     final completedSub = player.chapterCompletedStream
         .listen((uuid) => library.setChapterFinished(uuid, true));
 
+    // app-14: when the last chapter is reached, drop the book from the shelf
+    // and tick all its chapters.
+    final bookFinishedSub = player.bookCompletedStream
+        .listen((bookId) => library.markBookFinished(bookId));
+
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
     // the live player + a downloaded-only, 2-tab car browse tree (CarBrowse).
     // "current book" = the live player's book, else the most-recently-played one.
@@ -226,7 +231,7 @@ class CompanionRuntime {
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
         settingsStore, settings, resumeSync, sleepTimer, handler,
-        [connectivitySub, completedSub]);
+        [connectivitySub, completedSub, bookFinishedSub]);
   }
 
   /// app-4: enforce the storage cap (auto-delete finished + LRU book eviction).
