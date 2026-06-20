@@ -167,29 +167,39 @@ git commit -m "feat(server): openapi finished+hidden on sync-manifest index (Ref
 
 **Files:**
 - Modify: `src/store/continue-listening-slice.ts:16-40`
+- Modify (REQUIRED — won't compile otherwise): `src/store/continue-listening-slice.test.ts` — the existing `empty(): ContinueListeningState` helper (`:21`) and the `selectContinueListening({ continueListening: { items } })` literal (`:76`) must add `dismissedIds: []` once the field is required.
+- Modify: `src/views/book-library.tsx:149-166` (fs-15 `applyShelfStatus` error-recovery — see [I1] below)
 - Test: `src/store/continue-listening-slice.test.ts`
 
 **Interfaces:**
-- Produces: `ContinueListeningState` gains `dismissedIds: string[]`; `dismiss(bookId)` adds to it + filters items; `hydrate(items)` filters its payload through `dismissedIds` AND removes any id whose book is absent from the fresh payload (server-confirmed gone).
+- Produces: `ContinueListeningState` gains `dismissedIds: string[]`; `dismiss(bookId)` adds to it + filters items; `hydrate(items)` filters its payload through `dismissedIds` AND removes any id whose book is absent from the fresh payload (server-confirmed gone); `undismiss(bookId)` removes an id from `dismissedIds` (for the fs-15 failed-POST recovery, so a failed "Mark as finished" restores the card).
 
 - [ ] **Step 1: Write the failing tests:**
 
 ```ts
 it('hydrate keeps a dismissed book out until the server confirms it gone', () => {
-  let s = reducer(undefined, actions.hydrate([item('a'), item('b')]));
+  let s = reducer(undefined, actions.hydrate([item({ bookId: 'a' }), item({ bookId: 'b' })]));
   s = reducer(s, actions.dismiss('a'));
   // server still returns 'a' (POST not yet reflected) → must stay hidden
-  s = reducer(s, actions.hydrate([item('a'), item('b')]));
+  s = reducer(s, actions.hydrate([item({ bookId: 'a' }), item({ bookId: 'b' })]));
   expect(s.items.map((i) => i.bookId)).toEqual(['b']);
   // server now omits 'a' (confirmed finished) → dismissedIds clears
-  s = reducer(s, actions.hydrate([item('b')]));
+  s = reducer(s, actions.hydrate([item({ bookId: 'b' })]));
   expect(s.dismissedIds).not.toContain('a');
   // and a later re-appearance of 'a' (e.g. replayed) shows again
-  s = reducer(s, actions.hydrate([item('a'), item('b')]));
+  s = reducer(s, actions.hydrate([item({ bookId: 'a' }), item({ bookId: 'b' })]));
   expect(s.items.map((i) => i.bookId)).toEqual(['a', 'b']);
 });
+
+it('undismiss restores a card (fs-15 failed-POST recovery)', () => {
+  let s = reducer(undefined, actions.hydrate([item({ bookId: 'a' })]));
+  s = reducer(s, actions.dismiss('a'));
+  s = reducer(s, actions.undismiss('a'));
+  s = reducer(s, actions.hydrate([item({ bookId: 'a' })])); // failure refetch
+  expect(s.items.map((i) => i.bookId)).toEqual(['a']);
+});
 ```
-> NOTE: `item(id)` = a minimal `ContinueItem` with `bookId: id`; reuse/borrow the test file's existing item factory.
+> NOTE: the real factory is `item(over: Partial<ContinueItem>)` called as `item({ bookId: 'a' })` — match the existing test file's factory exactly.
 
 - [ ] **Step 2: Run, verify fail**
 
@@ -216,7 +226,16 @@ const initialState: ContinueListeningState = { items: [], dismissedIds: [] };
       if (!s.dismissedIds.includes(a.payload)) s.dismissedIds.push(a.payload);
       s.items = s.items.filter((i) => i.bookId !== a.payload);
     },
+    /** fs-15 recovery: undo an optimistic dismiss (e.g. the shelf-status POST
+        failed) so the next hydrate restores the card. */
+    undismiss: (s, a: PayloadAction<string>) => {
+      s.dismissedIds = s.dismissedIds.filter((id) => id !== a.payload);
+    },
 ```
+
+Then fix the existing test helpers so the suite still compiles: `src/store/continue-listening-slice.test.ts:21` `empty()` → `({ items: [], dismissedIds: [] })`, and the `:76` literal → `{ continueListening: { items, dismissedIds: [] } }`.
+
+- [ ] **Step 3b ([I1]): fix the fs-15 failure path.** In `src/views/book-library.tsx:149-166` (`applyShelfStatus`), the `.catch` currently re-fetches + `hydrate`s to "restore truth"; because `hydrate` now filters through `dismissedIds`, the dismissed card would stay hidden on a failed POST. Add `dispatch(continueListeningActions.undismiss(bookId))` at the start of the `.catch` (before the error toast / refetch) so the card returns. Add a regression test (in `book-library.test.tsx`) asserting a failed `setShelfStatus` restores the card.
 
 - [ ] **Step 4: Run, verify pass** (+ full `npm test`)
 
@@ -226,8 +245,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/store/continue-listening-slice.ts src/store/continue-listening-slice.test.ts
-git commit -m "feat(frontend): self-terminating dismiss guard on continue-listening slice (Refs #952)"
+git add src/store/continue-listening-slice.ts src/store/continue-listening-slice.test.ts src/views/book-library.tsx src/views/book-library.test.tsx
+git commit -m "feat(frontend): self-terminating dismiss guard + undismiss recovery on continue-listening slice (Refs #952)"
 ```
 
 ---
@@ -267,8 +286,8 @@ Expected: FAIL — no `onCrossedFinish` prop / not called.
 
 - [ ] **Step 3: Implement.**
   - In `mini-player.tsx`: add `onCrossedFinish?: () => void` to props; add a `crossedFinishRef = useRef(false)` reset when the chapter id changes; in `onTimeUpdate` (after the existing live-playback dispatch), compute `remaining = duration - t`; if `duration > 10 && remaining <= 10 && !crossedFinishRef.current` → set ref + call `onCrossedFinish?.()`. Also call it from `onEnded`.
-  - In `layout.tsx`: compute the final listenable chapter id once: `const finalListenable = [...chapters].reverse().find((c) => !c.excluded && c.state === 'done' && parseDuration(c.duration) > 0)` (reuse the project's duration parser — check `src/lib/time.ts`). Pass `onCrossedFinish={() => { if (currentChapter?.id === finalListenable?.id) { dispatch(continueListeningActions.dismiss(bookId)); void api.setShelfStatus(bookId, { finished: true }); } }}`.
-> NOTE: confirm the exact chapter-state field (`c.state === 'done'`) and duration parser against `src/views/listen.tsx:143`; match them exactly.
+  - In `layout.tsx`: **add the import** `import { continueListeningActions } from '../store/continue-listening-slice';` (it is NOT currently imported — verified). `parseDuration` is already imported (`layout.tsx:40`), and `dispatch`, `chapters`, the current chapter (`trackChapter`), and `bookId` are in scope. Compute the final listenable chapter once: `const finalListenable = [...chapters].reverse().find((c) => !c.excluded && c.state === 'done' && parseDuration(c.duration) > 0)`. Pass `onCrossedFinish={() => { if (trackChapter?.id === finalListenable?.id) { dispatch(continueListeningActions.dismiss(bookId)); void api.setShelfStatus(bookId, { finished: true }); } }}`.
+> NOTE: chapter-state field is `c.state === 'done'` and `!c.excluded` per `src/views/listen.tsx:143-144` (verified); `api.setShelfStatus` is real (`src/lib/api.ts:2041`, `ShelfStatusArgs = {finished?, hidden?}`). Confirm the current-chapter variable name (`trackChapter`) against the file.
 
 - [ ] **Step 4: Run, verify pass** (+ full `npm test`, `npm run typecheck`).
 

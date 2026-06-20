@@ -15,7 +15,7 @@
 - Branch: cut `feat/app-finished-sync-pull` off `main` AFTER PR 1 merges (so `SyncManifestIndexBook` carries `finished`/`hidden` from the server). Android companion only (`apps/android/**`).
 - Finish/hide is signalled to the server via the existing `POST /api/books/{bookId}/shelf-status` (unguarded). Pushes are best-effort + offline-tolerant; failures are non-fatal (a dropped `finished:true` self-heals on the web via server-derived `isFinished` from the synced position). NO durable pending-set (YAGNI).
 - `markPlayed` must keep clearing `hidden` (pre-existing un-hide-on-open) but must NOT clear `Books.finished` (else a glance drops a finished book off the shelf).
-- Un-finish (clear `Books.finished` + `POST finished:false`) fires ONLY on an unambiguous replay: `_loadIndex` loading a chapter earlier than the last (`index != _playlist.length - 1`, which already resets `_bookFinishEmitted`), OR an explicit Restart, OR position moving backward across the finish tail. NEVER on `markPlayed`/open or "first forward advance".
+- Un-finish (clear `Books.finished` + `POST finished:false`) fires ONLY on a **genuine backward navigation**: `_loadIndex(newIndex)` where a prior chapter was loaded (`_index >= 0`) AND `newIndex < _index` (the user jumped *back* to an earlier chapter), gated by the runtime on the book actually being finished. This is NOT the initial `openBook` restore (no prior `_index`), NOT forward auto-advance (`newIndex > _index`), and NOT `markPlayed`/open — so a glance-reopen of a finished book does NOT un-finish it. An explicit "Restart" reuses the same backward-load path.
 - Run from `apps/android/`: `flutter test`, `flutter analyze` (use `flutter.bat` under PowerShell; `flutter` in Bash). Drift codegen: `dart run build_runner build --delete-conflicting-outputs`. Run `flutter pub get` first in the worktree.
 - TDD: failing test first, implement, commit per task.
 
@@ -77,7 +77,7 @@ Bump `schemaVersion => 7;` and add migration step: `if (from < 7) await m.addCol
 ```
 Confirm `markPlayed` still writes only `lastPlayedAt` + `hidden: false` (do NOT add `finished` there).
 
-- [ ] **Step 4: Run, verify pass** (+ full `flutter test`). Existing `car_browse_test.dart` / others using `BookSummary` will need `finished: false` added like Batch-1 did for `hidden` — fix those constructions.
+- [ ] **Step 4: Run, verify pass** (+ full `flutter test`). Making `BookSummary.finished` **required** breaks exactly two `BookSummary(...)` construction sites — fix both: the prod mapper at `drift_local_library.dart:367` (the non-`listBooks` `BookSummary` build) and the test helper at `test/data/car_browse_test.dart:7`. (`ShelfBook.finished` defaults to false, so its call sites do NOT break — same as Batch-1's `hidden`.)
 
 - [ ] **Step 5: Commit**
 
@@ -164,8 +164,7 @@ test('buildContinueListening excludes finished books', () {
 
 - [ ] **Step 3a:** `home_shelf.dart`: add `this.finished = false,` + `final bool finished;` to `ShelfBook`; filter becomes `books.where((b) => b.inProgress && !b.hidden && !b.finished)`.
 
-- [ ] **Step 3b:** `library_home_screen.dart` `_refresh()` — the shelf is currently built from `listBooks()` BEFORE `loadLibraryLocalFirst` streams (`:60-70`), so a fresh pull isn't reflected. Rebuild the shelf from local rows AFTER the pull completes (inside the stream loop's final state, or re-query `listBooks()` after `loadLibrary` and `setState(_continue = ...)`). Pass `finished: s.finished` into each `ShelfBook` (alongside `hidden`).
-> NOTE: confirm the stream's terminal/`!s.loading` state and rebuild there; keep the optimistic pre-pull shelf for instant paint, then replace with the post-pull one.
+- [ ] **Step 3b:** `library_home_screen.dart` `_refresh()` — the shelf is built from `listBooks()` BEFORE the `loadLibraryLocalFirst` stream (`:60-70`), and every stream tick re-assigns the SAME captured pre-pull `shelf` to `_continue` (`:78`). The pulled finished/hidden lands in **Drift only** (via `loadIndex`→`setBookSyncState`), so it is NOT reflected without a fresh local read. **REQUIRED:** after the stream reaches its terminal/`!s.loading` state, **re-query `await widget.runtime.library.listBooks()`**, rebuild the `ShelfBook` list (passing `finished: s.finished` and `hidden: s.hidden`), and `setState(() => _continue = rebuiltShelf)`. Keep the initial pre-pull `shelf` for instant paint, then replace with the post-pull re-query result. A simple in-loop re-build that re-reads from the just-updated local store is not enough unless it re-queries `listBooks()` (the stream payload `_books` is the grid, not the shelf rows).
 
 - [ ] **Step 4: Run, verify pass** (+ full `flutter test`, `flutter analyze`).
 
@@ -217,7 +216,7 @@ git commit -m "feat(app): shelf excludes finished + rebuild after server pull (R
     api.setShelfStatus(bookId, finished: true).catchError((_) {});
   });
 ```
-> NOTE: `wireFinishedTracking` may need the `ApiClient` passed in — thread it from `forConnection`.
+> REQUIRED wiring: `wireFinishedTracking` currently is `wireFinishedTracking(PlayerController player, DriftLocalLibrary library)` (`companion_runtime.dart:38-52`), called as `wireFinishedTracking(player, library)` at `:213-214`. Change its signature to add `ApiClient api` and update that single call site to pass `api` (the runtime holds `api` as a public field at `:91`, in scope in `forConnection`). The book-completed listener's local `markBookFinished` already sets `hidden` locally (offline-correct); the POST is purely the cross-device push.
 
 - [ ] **Step 3c:** `library_home_screen.dart` `_confirmRemoveFromShelf`: after `setBookHidden(b.bookId, true)`, add `widget.runtime.api.setShelfStatus(b.bookId, hidden: true).catchError((_) {});` (best-effort).
 
@@ -241,15 +240,26 @@ git commit -m "feat(app): push shelf-status on auto-finish + long-press remove (
 - Test: `apps/android/test/data/player_controller_test.dart` + companion_runtime test
 
 **Interfaces:**
-- Produces: `PlayerController` exposes a replay signal — e.g. `Stream<String> get bookReplayedStream` emitting `bookId` when `_loadIndex` loads `index != _playlist.length - 1` for a book whose local state is finished (or an explicit `restart()`); `DriftLocalLibrary.clearBookFinished(String bookId)` sets `Books.finished=false`.
+- Produces: `PlayerController` exposes `Stream<String> get bookReplayedStream` emitting `bookId` on a **backward navigation** — inside `_loadIndex(newIndex)`, capture `prev = _index` BEFORE reassigning, and after the load emit when `prev >= 0 && newIndex < prev` (a real jump back; not the initial restore, not forward advance). `DriftLocalLibrary` gains `Future<bool> isBookFinished(String bookId)` and `Future<void> clearBookFinished(String bookId)` (sets `Books.finished=false`).
 
-- [ ] **Step 1: Write failing tests:** loading a non-last chapter emits `bookReplayedStream` once; loading/seeking within the last chapter does NOT; `clearBookFinished` sets finished=false; the runtime wiring clears local finished + POSTs `finished:false` on the replay signal.
-> NOTE: keep it minimal — the cleanest unambiguous trigger is `_loadIndex(index)` with `index != _playlist.length - 1` (which already resets `_bookFinishEmitted` at `player_controller.dart:252`). Emit `bookReplayedStream.add(_bookId)` there (guard non-null bookId). An explicit `restart()` (load index 0 + play) can reuse the same emit.
+- [ ] **Step 1: Write failing tests:**
+  - player_controller: open a 3-chapter book (loads ch0), advance forward to ch1 then ch2 → NO `bookReplayedStream` emit; then `playChapter(ch0)` (jump back) → emits once. Re-`openBook` (initial restore at saved index) → NO emit.
+  - `clearBookFinished` sets finished=false; `isBookFinished` reflects it.
+  - runtime: on `bookReplayedStream` for a **finished** book → `clearBookFinished` + `POST finished:false`; for a **not-finished** book → neither (gated).
+> NOTE: emit on backward nav ONLY (`newIndex < prev`), gated downstream on `isBookFinished`. This avoids BOTH false positives the review flagged: the glance-reopen (initial restore has no prior `_index`) and forward auto-advance (`newIndex > prev`).
 
 - [ ] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3:** Implement the stream + emit in `_loadIndex` (non-last index); `clearBookFinished` in Drift; in `companion_runtime` wire `bookReplayedStream.listen((bookId) { library.clearBookFinished(bookId); api.setShelfStatus(bookId, finished: false).catchError((_){}); _pendingUnfinish.add(bookId); })`. Add a transient in-memory `_pendingUnfinish` set consulted in the pull (`sync_controller.loadIndex`/`setBookSyncState` path or a wrapper) so a pulled `finished:true` is ignored for a book in `_pendingUnfinish` until a subsequent pull reports it `finished:false` (then remove from the set).
-> NOTE: keep `_pendingUnfinish` simple (in-memory on the runtime); the guard prevents the next pull from flickering the just-replayed book back off the shelf.
+- [ ] **Step 3:** In `player_controller.dart` `_loadIndex`, capture `final prev = _index;` before `_index = newIndex;` and after the load `if (prev >= 0 && newIndex < prev && _bookId != null) _bookReplayed.add(_bookId!);` (add the `_bookReplayed` broadcast controller + getter + close in `dispose`). Add `isBookFinished`/`clearBookFinished` to `DriftLocalLibrary`. In `companion_runtime` (inside `wireFinishedTracking` or alongside), wire:
+```dart
+  final replaySub = player.bookReplayedStream.listen((bookId) async {
+    if (!await library.isBookFinished(bookId)) return; // gate: only un-finish a finished book
+    await library.clearBookFinished(bookId);
+    api.setShelfStatus(bookId, finished: false).catchError((_) {});
+  });
+```
+Add `replaySub` to the `_subs` disposal list.
+> NO `_pendingUnfinish` guard (cut as YAGNI per review [I5]): the `finished:false` POST lands before the next library-entry pull (the user is in the player when they jump back, and the pull happens on returning to the library), so a stale `finished:true` won't be re-pulled; any momentary flicker self-corrects on the following pull. Document this as an accepted minor.
 
 - [ ] **Step 4: Run, verify pass** (+ full `flutter test`).
 
@@ -283,7 +293,7 @@ test('orders by instant, not raw string (tz-skew)', () {
 
 - [ ] **Step 2: Run, verify fail** (raw string compare gives the wrong answer).
 
-- [ ] **Step 3:** Replace the raw `.compareTo` (`resume_reconcile.dart:19`) with `DateTime.parse(localListenedAt).toUtc().compareTo(DateTime.parse(remoteUpdatedAt).toUtc())`; keep the null-handling branches. Ensure the companion stamps `listenedAt` as `DateTime.now().toUtc().toIso8601String()` wherever it emits it (`resume_sync_service.dart` / player save path).
+- [ ] **Step 3:** Replace the raw `.compareTo` (`resume_reconcile.dart:19`) with `DateTime.parse(localListenedAt).toUtc().compareTo(DateTime.parse(remoteUpdatedAt).toUtc())`; keep the three null-handling branches (`:16-18`) and `enum ResumeAction { pushLocal, pullRemote, noop }`. **REQUIRED (else the parse misinterprets local time as UTC):** the companion currently stamps `listenedAt` via `DateTime.now().toIso8601String()` — a NAIVE local string with no `Z`/offset — at `player_controller.dart:292` and `:375` (the `_store.savePlayback`/`saveNow` paths). Change BOTH to `DateTime.now().toUtc().toIso8601String()` (and any stamp in `resume_sync_service.dart`). Without this, `DateTime.parse(naiveLocal).toUtc()` shifts the time by the device offset.
 
 - [ ] **Step 4: Run, verify pass** (+ full `flutter test`).
 
