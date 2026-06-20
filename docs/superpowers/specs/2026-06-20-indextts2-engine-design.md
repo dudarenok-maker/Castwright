@@ -4,9 +4,10 @@
 - **Issue:** _to be filed_ (`area:fs`, `moscow:could` — _a passing 8GB spike makes it **eligible
   for re-triage** to `should`, not an automatic promotion; see §Backlog framing_, `type:feat`)
 - **Branch:** _none yet — backlog item; spec only, no plan this round_
-- **Status:** design hardened over **two adversarial review rounds** (round 1: feasibility /
+- **Status:** design hardened over **three adversarial review rounds** (round 1: feasibility /
   consistency-spine / license-product; round 2: fresh whole-doc critic + a regression critic on the
-  round-1 fixes). A **sibling** to the parked Fish S2-Pro spec
+  round-1 fixes; round 3: final fresh-eyes pass — verdict "ready after minor fixes," folded into v4).
+  A **sibling** to the parked Fish S2-Pro spec
   ([2026-06-20-fish-audio-s2pro-engine-design.md](2026-06-20-fish-audio-s2pro-engine-design.md));
   the two compete for the same "expressive perform engine" slot (see §"Why two specs, not one").
 - **Revision note:**
@@ -23,6 +24,12 @@
     resident-stage** miscount the v2 F1 fix introduced; (e) minors — a synthetic-clip-failure fallback
     rung, the `emo_text` follow-on's +1.7B re-budget, an analyzer-mistag risk, training-scale as a
     soft prior, `excited→happy` relabeled approximate.
+  - **v4** folds in round 3. The one above-minor finding: the **srv-43 over-claim** — the `voiceUuid`
+    field + storage-key (`qwenStorageKey`, minted at design time) **already exist on `main`**, so
+    srv-43 does **not** gate the spike; the only go/no-go is Gate 1 (8GB). Plus polish: the envelope
+    one-liner now matches its own table (upper bound lands *at* 8GB → quant more-likely-than-not), an
+    `excited`-arousal acceptance sub-check, an RTF-floor rationale (background batch job), and the
+    "why two specs" claim trimmed to what holds (the *spikes* differ; the seam lists are mirrored).
 - **Provenance note:** every IndexTTS-2 fact traces to a verified, adversarially-checked research
   pass (arXiv 2506.21619 v1/v2; the `index-tts/index-tts` repo + LICENSE; the `IndexTeam/IndexTTS-2`
   HuggingFace weights card; project page). Claims the research could **not** settle — chiefly the
@@ -193,8 +200,9 @@ candidate engines under one shared spike — and **rejected**, deliberately, for
 
 - **The two differ on independent axes, not degree.** Fish is a 16GB / inline-tag / community-NF4-
   evidenced bet; IndexTTS-2 is an 8GB / decoupled-emotion-vector / no-community-evidence bet under a
-  different (contested-but-lighter) license. Their integration shapes, install scripts, VRAM stories,
-  and legal gates barely overlap — one spec would muddy both.
+  different (contested-but-lighter) license. Their **VRAM stories and legal gates differ sharply** —
+  the integration *seam lists* are deliberately mirrored for comparison, but the experiments behind
+  them are not.
 - **Their spikes are different experiments.** Fish's is "does NF4 hold 16GB"; IndexTTS-2's is "does
   the three-stage fp16/quant stack hold 8GB *and* does the emo_vector decoupling survive in the
   shipped weights." A shared spike would conflate two unrelated go/no-go questions.
@@ -385,7 +393,10 @@ order-of-magnitude; the spike still decides.**
 - **fp16 weights ≈ 1.5–3.5 GB** (the spread is the uncounted-encoder risk).
 - **Plus runtime:** CUDA/torch context ~1–2 GB; KV cache (grows over a long sentence) ~0.1–0.5 GB;
   BigVGAN activations on long segments up to ~GB; **Windows OS headroom ~1.5 GB.**
-- **Envelope total ≈ ~5–8 GB at fp16 → plausible-but-tight; genuinely live, not doomed, not safe.**
+- **Envelope total ≈ ~5–8 GB at fp16.** Read honestly against its own table: the *central* case clears
+  8GB, but the **explicitly-flagged uncounted-encoder risk lands the upper bound *at* the bar with no
+  margin** — so it is "plausible-but-tight, leaning tight," and **quant is more-likely-than-not on the
+  actual hardware**, not a last resort. Genuinely live, not doomed; not safe.
 
 **Consequence for the levers:** because fp16 is *plausible*, **DIY quantization (lever 4) is
 likely-helpful, not certainly-mandatory** — the spike confirms whether fp16 clears or whether quant is
@@ -441,9 +452,11 @@ no more shippable than Fish's unavailable 16GB — neither is a settled advantag
 
 ## Integration seams (indicative — plan-time detail)
 
-_Names verified against today's `main` to size the work; not a frozen contract. The load-bearing
-dependency for go/no-go is **srv-43** (per-character `voiceUuid`). fs-49 mirrors fs-48's seam list so
-the two are easy to compare._
+_Names verified against today's `main` to size the work; not a frozen contract. **The only go/no-go is
+Gate 1 (8GB) — not a code dependency:** the `voiceUuid` field + storage-key pattern (`qwenStorageKey`
+at `voice-mapping.ts:20`, minted at design time) **already exist on `main`**, so `indexStorageKey` can
+mirror them directly today. srv-43's remaining work (retroactive re-match) hardens per-character
+identity but **does not gate the spike**. fs-49 mirrors fs-48's seam list so the two are easy to compare._
 
 **Sidecar (Python):**
 - `server/tts-sidecar/main.py` — `IndexTts2Engine` in `ENGINES`; in-process **or** HTTP-child per the
@@ -462,7 +475,8 @@ the two are easy to compare._
   label; arm `isTtsModelKey()`, `engineForModelKey()`, `canonicalModelKeyForEngine()`,
   `sidecarModelId()`. *(These four exist and are correctly named — verified.)*
 - `server/src/tts/voice-mapping.ts` — clone-only handling + an `indexStorageKey` mirroring
-  `qwenStorageKey` (**depends on srv-43 `voiceUuid`**); `pickEmotionVariantVoice` stays a no-op for
+  `qwenStorageKey` (the `voiceUuid` field + design-time minting **already exist on `main`** — no srv-43
+  block for the spike); `pickEmotionVariantVoice` stays a no-op for
   `index_tts2`; extend the private `catalogForEngine` / `describeVoice` / `auditEngineCatalog` for the
   seed-library catalog.
 - `server/src/tts/synthesise-chapter.ts` — per-character routing on `index_tts2`; **the per-quote
@@ -524,14 +538,19 @@ error, same honest posture as fs-48. **Russian coverage is an explicit Acceptanc
      with the analyzer Ollama evicted.
    - **2b. RTF (pre-committed floor, not "set at spike time"):** **≥ 1.0× realtime** — an N-minute
      chapter renders in **≤ N minutes** of wall-clock on the 8GB card (flow-matching NFE tuned).
-     **Target ≥ 2× realtime**; below 1.0× fails (unusable for chapter-length audio).
+     **Target ≥ 2× realtime**; below 1.0× fails (unusable for chapter-length audio). *Why 1.0× is the
+     floor:* generation is a **background batch job** (cf. the existing export queue), not interactive,
+     so real-time-or-faster is tolerable where a slower-than-real-time render is not.
    - **2c. Cold-load:** completes within a set budget with a user-visible loading state.
 3. **Emotion-decoupling quality (make-or-break, upstream #433) — defined A/B:** a **blind A/B on ≥ 20
    emotionally-varied lines** drawn from *The Coalfall Commission* fixture
    (`server/src/__fixtures__/the-coalfall-commission.md`), **≥ 2 raters**, confirms the *shipped
    weights* deliver timbre-stable, recognisable per-line emotion (the paper's GRL decoupling may not be
    realised in the release). If emotion bleeds the timbre or affects are indistinct on a majority of
-   lines, the headline fails.
+   lines, the headline fails. **Sub-check for the one lossy mapping:** the A/B must confirm
+   `excited`-tagged lines read as **higher-arousal than plain `happy`/neutral** (the `excited→happy`
+   approximation, §Emotion mapping) — or `excited≈happy` is recorded as an accepted v1 limitation, so
+   it cannot silently pass as "distinct."
 4. **Quality vs the resident engine — defined A/B:** on the same ≥ 20-line *Coalfall Commission* set,
    **blind**, ≥ 2 raters, **"at least as good as Qwen"** = IndexTTS-2 is **not dispreferred on more than
    half** the lines; **ties resolve toward the incumbent (Qwen)** — IndexTTS-2 must clear the bar, not
@@ -589,7 +608,9 @@ error, same honest posture as fs-48. **Russian coverage is an explicit Acceptanc
 8. **In-process integration may be infeasible** *(spike output)* — `index-tts`'s torch/CUDA/BigVGAN
    pins may collide with the shared venv (documented prior scars), and in-process leak/fragmentation
    poisons the next engine on an 8GB budget; out-of-process is the default if either fails.
-9. **srv-43 dependency** — per-character storage key needs the `voiceUuid` apparatus (mirrors Fish).
+9. **srv-43 is a *soft* dependency, not a spike gate** — the `voiceUuid` field + `qwenStorageKey`
+   (design-time minting) already exist on `main`, so `indexStorageKey` mirrors them now; srv-43's
+   outstanding retroactive-re-match hardens identity later but does not block the go/no-go (Gate 1).
 10. **VRAM weight is a guess** until the spike measures it; the semaphore is advisory, not an OOM guard.
 11. **Label-order / API drift** — the 8-float vector order and inference param names vary across
     versions/wrappers; pin against the installed weights or every line mis-renders.
@@ -621,11 +642,12 @@ error, same honest posture as fs-48. **Russian coverage is an explicit Acceptanc
   two-16GB-engines tradeoff vs Fish (Fallback rung 2). The re-triage is a **human judgment** weighing
   VRAM + RTF + quality A/B + license re-verify + the Fish tradeoff — the spike merely makes it
   *eligible*. So it is filed as a **Could** tagged **"8GB spike ⇒ re-triage candidate for Should;
-  depends on srv-43 + license re-verify"** in `docs/BACKLOG.md`. Prefix `fs-`. **Proposed id `fs-49`**
+  license re-verify before paid"** in `docs/BACKLOG.md`. Prefix `fs-`. **Proposed id `fs-49`**
   (fs-48 is the Fish sibling) — verify against `docs/BACKLOG.md` at filing time, since the two sibling
   specs were drafted in the same round and could collide.
-- Issue carries What / Acceptance / **Key files** / **Depends on (srv-43 + an 8GB hardware+quality
-  spike + a license re-verify before any paid exposure)** / Benefit; a thin row lands in
+- Issue carries What / Acceptance / **Key files** / **Depends on (an 8GB hardware+quality spike + a
+  license re-verify before any paid exposure; srv-43 retroactive-re-match is a soft follow-on, not a
+  spike gate — §Integration seams)** / Benefit; a thin row lands in
   `docs/BACKLOG.md` under **Could**, linking this spec and the Fish sibling.
 - **Benefit (user):** finer, **per-line emotional performance** from a single designed voice — the
   thing our pre-baked variant-voice flow does expensively and Qwen-only — driven by the emotion data we
