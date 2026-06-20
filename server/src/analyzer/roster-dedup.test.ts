@@ -1,7 +1,8 @@
+import { describe, expect, it } from 'vitest';
 import { dedupeRosterByName, composeRewrites } from './roster-dedup.js';
 
 const c = (over: { id: string; name: string; role?: string; color?: string; gender?: string; [key: string]: unknown }) =>
-  ({ id: over.id, name: over.name, role: over.role ?? 'r', color: over.color ?? 'c', ...over });
+  ({ role: 'r', color: 'c', ...over });
 const sent = (characterId: string, n = 1) => Array.from({ length: n }, () => ({ characterId }));
 
 describe('dedupeRosterByName Tier-1 (exact name)', () => {

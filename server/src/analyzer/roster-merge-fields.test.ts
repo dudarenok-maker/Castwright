@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { mergeCharacterFields } from './roster-merge-fields.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 

@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { diminutiveCanonical } from './ru-diminutives.js';
 
 describe('diminutiveCanonical', () => {
