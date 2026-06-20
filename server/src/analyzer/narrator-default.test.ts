@@ -44,6 +44,24 @@ describe('isSpokenLine', () => {
     // to the model rather than forced to narrator — never the reverse.
     expect(isSpokenLine('На двери висела табличка «Закрыто».')).toBe(true);
   });
+  it('treats smart single-quote dialogue as spoken (UK/Irish typeset convention)', () => {
+    expect(isSpokenLine('‘I’m lost,’ she said.')).toBe(true); // leading U+2018
+    expect(isSpokenLine('She said ‘this way’ firmly.')).toBe(true); // embedded U+2018…U+2019
+  });
+  it('treats straight single-quote dialogue as spoken (leading + boundary-anchored embedded)', () => {
+    expect(isSpokenLine("'I'm lost,' she said.")).toBe(true); // leading straight '
+    expect(isSpokenLine("She said 'go away' angrily.")).toBe(true); // embedded, boundary-anchored
+    expect(isSpokenLine("'Aye, Captain,'")).toBe(true); // leading-only spoken split
+  });
+  it('a single quote used as an apostrophe does NOT make narration spoken', () => {
+    expect(isSpokenLine('She didn’t know where she was.')).toBe(false); // smart apostrophe (lone U+2019)
+    expect(isSpokenLine("She didn't know where she'd been.")).toBe(false); // straight apostrophes, word-internal
+    expect(isSpokenLine("The dogs' bones lay by the cats' bowls.")).toBe(false); // possessive apostrophes
+    expect(isSpokenLine("O'Brien walked past the corner.")).toBe(false); // name apostrophe
+  });
+  it('narration quoting a sign with straight double quotes still reads as spoken (documented false-negative)', () => {
+    expect(isSpokenLine('She read the sign that said "Exit".')).toBe(true);
+  });
 });
 
 describe('forceNarratorOnNonSpokenLines', () => {
