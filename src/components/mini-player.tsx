@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { StatsAccumulator } from '../lib/listen-stats-reporter';
+import { Waveform } from './waveform';
 import { useKeyBinding } from '../lib/keybindings';
 import {
   IconBook,
@@ -13,6 +14,7 @@ import {
   IconWaveform,
 } from '../lib/icons';
 import { api } from '../lib/api';
+import { deriveIssues } from '../lib/chapter-issues';
 import { parseDuration, formatTime } from '../lib/time';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Chapter, ChapterAudio } from '../lib/types';
@@ -85,6 +87,7 @@ export function MiniPlayer({
   nextAvailable,
 }: MiniPlayerProps) {
   const [audio, setAudio] = useState<ChapterAudio>({ durationSec: 0, peaks: [], url: null });
+  const issues = useMemo(() => deriveIssues(audio), [audio]);
   const [currentSec, setCurrentSec] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -672,10 +675,12 @@ export function MiniPlayer({
             </span>
             <div
               onClick={onScrub}
-              className="flex-1 h-1 rounded-full bg-canvas/15 relative cursor-pointer group"
+              data-testid="mini-player-scrubber"
+              className="flex-1 relative cursor-pointer group h-7"
             >
+              <Waveform progress={progress} active peaks={audio.peaks} issues={issues} />
               <div
-                className="absolute inset-y-0 left-0 rounded-full bg-gradient-progress pointer-events-none"
+                className="absolute bottom-0 left-0 h-[2px] rounded-full bg-gradient-progress pointer-events-none"
                 style={{ width: `${progress * 100}%` }}
               />
               <span

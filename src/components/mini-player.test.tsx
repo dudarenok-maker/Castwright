@@ -12,7 +12,7 @@
 
 import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, waitFor, act, fireEvent, screen } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MiniPlayer, makeSessionId } from './mini-player';
@@ -873,5 +873,35 @@ describe('MiniPlayer — scrubber thumb touch fallback (fe-5)', () => {
 describe('MiniPlayer — makeSessionId (insecure-randomness fix)', () => {
   it('mints a non-empty session id without Math.random', () => {
     expect(makeSessionId()).toMatch(/^(ss_|[0-9a-f-]{36})/i);
+  });
+});
+
+describe('MiniPlayer — issue waveform scrubber', () => {
+  it('renders the issue list + keeps the scrubber thumb when a segment is flagged', async () => {
+    renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    /* Resolve with a suspect segment: start=6, end=10, seekSec = 6-2 = 4 → "0:04" */
+    await act(async () => {
+      const resolver = pendingByChapter.get(1);
+      if (!resolver) throw new Error('No pending fetch for chapter 1');
+      resolver({
+        url: 'blob:x',
+        durationSec: 20,
+        sampleRate: 44100,
+        peaks: Array(240).fill(0.5),
+        segments: [{ start: 6, end: 10, characterId: 'n', sentenceId: 1, suspect: true, reasons: ['Long sentence'] }],
+      } as never);
+    });
+    expect(await screen.findByText(/Issue at 0:04: Long sentence/)).toBeInTheDocument();
+    expect(screen.getByTestId('scrubber-thumb')).toBeInTheDocument();
   });
 });
