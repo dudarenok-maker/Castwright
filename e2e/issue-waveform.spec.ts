@@ -43,7 +43,6 @@ test('Preview on a done chapter: Next-issue button advances scrubber from issue-
      assertions (jumpToIssue sets currentTime directly; the play() stub
      does not suppress that). */
   await page.addInitScript(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (HTMLMediaElement.prototype as any).play = () => Promise.resolve();
   });
 
