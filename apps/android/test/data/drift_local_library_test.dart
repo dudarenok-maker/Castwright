@@ -414,7 +414,30 @@ void main() {
       await lib.close();
     });
 
-    test('clearBookFinished sets finished=false; isBookFinished reflects it',
+    test('isBookFinished returns true after markBookFinished (local-finish path)',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      // markBookFinished sets hidden=true but NOT finished (the local-finish
+      // signal that precedes any server pull). isBookFinished must treat hidden
+      // as a finished state.
+      await lib.markBookFinished('b1');
+      final b = (await lib.listBooks()).single;
+      expect(b.hidden, isTrue,
+          reason: 'sanity: markBookFinished sets hidden=true');
+      expect(b.finished, isFalse,
+          reason: 'sanity: markBookFinished does NOT set finished');
+      expect(await lib.isBookFinished('b1'), isTrue,
+          reason: 'isBookFinished must return true when hidden=true (local-finish)');
+      await lib.close();
+    });
+
+    test('clearBookFinished clears BOTH finished and hidden; isBookFinished reflects it',
         () async {
       final lib = makeLib(InMemoryFileStore());
       await lib.upsertBookMeta(
@@ -429,7 +452,12 @@ void main() {
           reason: 'sanity: finished after setBookSyncState(finished:true)');
       await lib.clearBookFinished('b1');
       expect(await lib.isBookFinished('b1'), isFalse,
+          reason: 'clearBookFinished must clear the finished state');
+      final b = (await lib.listBooks()).single;
+      expect(b.finished, isFalse,
           reason: 'clearBookFinished must set finished=false');
+      expect(b.hidden, isFalse,
+          reason: 'clearBookFinished must also set hidden=false');
       await lib.close();
     });
 

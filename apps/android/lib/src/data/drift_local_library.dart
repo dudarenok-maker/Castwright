@@ -380,21 +380,32 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
     ];
   }
 
-  /// Whether the book is locally marked as finished.
+  /// Whether the book is in a finished state on THIS device.
+  ///
+  /// Returns true when the server-synced [finished] column is set (a manifest
+  /// pull propagated a cross-device finish via [setBookSyncState]) OR when
+  /// [hidden] is set (the local-finish signal that [markBookFinished] writes
+  /// before any server pull). Both columns are reliable signals that "the user
+  /// has listened to the end on some device".
   Future<bool> isBookFinished(String bookId) async {
     final row = await (_db.select(_db.books)
           ..where((b) => b.bookId.equals(bookId)))
         .getSingleOrNull();
-    return row?.finished ?? false;
+    return (row?.finished ?? false) || (row?.hidden ?? false);
   }
 
-  /// Clear the book-level finished flag (un-finish on replay).
-  /// Does NOT touch `hidden` or chapter `finished` rows — the user is back in
-  /// the player; the shelf pull on returning to the library will reflect the
-  /// updated server state.
+  /// Clear the finished AND hidden flags on genuine replay.
+  ///
+  /// Clears both [finished] (the server-synced column) and [hidden] (the
+  /// local-finish signal written by [markBookFinished]) so the book returns to
+  /// the "Continue listening" shelf, which filters out [finished || hidden].
+  /// Does NOT touch chapter [finished] rows.
   Future<void> clearBookFinished(String bookId) async {
     await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
-        .write(const BooksCompanion(finished: Value(false)));
+        .write(const BooksCompanion(
+      finished: Value(false),
+      hidden: Value(false),
+    ));
   }
 
   /// Persist server finished/hidden pulled from the manifest index.

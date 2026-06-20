@@ -269,7 +269,10 @@ void main() {
       await player.openBook('b1');        // loads u1; no replay emit (prev=-1)
       await player.playChapter('u2');     // forward; no replay emit
       await player.playChapter('u1');     // backward → bookReplayedStream emits 'b1'
-      await Future<void>.delayed(Duration.zero);
+      // The listener has TWO async awaits (isBookFinished + clearBookFinished),
+      // both real SQLite round-trips. Duration.zero drains only one microtask
+      // turn and can race on slower machines — use 10 ms instead.
+      await Future.delayed(const Duration(milliseconds: 10));
 
       // ── Assert ─────────────────────────────────────────────────────────────
       expect(await library.isBookFinished('b1'), isFalse,
@@ -279,6 +282,100 @@ void main() {
             .where((c) => c.bookId == 'b1' && c.finished == false),
         isNotEmpty,
         reason: 'must POST finished:false after un-finish',
+      );
+
+      // ── Cleanup ────────────────────────────────────────────────────────────
+      for (final s in subs) {
+        await s.cancel();
+      }
+      await player.dispose();
+      await library.close();
+    });
+
+    test(
+        'bookReplayedStream for a SAME-DEVICE-finished book (hidden=true, finished=false) clears both and POSTs finished:false',
+        () async {
+      // Regression: markBookFinished sets hidden=true but NOT books.finished.
+      // The old gate read books.finished only → suppressed the un-finish silently
+      // and did not self-heal. This test seeds via markBookFinished (the local
+      // path) and asserts the listener fires correctly.
+      //
+      // With the OLD gate (finished-only): isBookFinished returns false
+      // (finished=false, hidden=true) → listener returns early → no clear, no POST.
+      // With the NEW gate (finished||hidden): isBookFinished returns true → fires.
+      //
+      // ── Arrange ────────────────────────────────────────────────────────────
+      final db = LibraryDatabase(NativeDatabase.memory());
+      final library = DriftLocalLibrary(db, InMemoryFileStore(), root: '/t');
+
+      await library.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      await library.recordChapterMeta(
+          bookId: 'b1',
+          uuid: 'u1',
+          chapterId: 1,
+          title: 'One',
+          fingerprint: 'fp',
+          urlSuffix: 'audio.mp3');
+      await library.recordChapterMeta(
+          bookId: 'b1',
+          uuid: 'u2',
+          chapterId: 2,
+          title: 'Two',
+          fingerprint: 'fp2',
+          urlSuffix: 'audio.mp3');
+
+      // Seed via the LOCAL finish path — this is what the auto-finish wires do
+      // on THIS device BEFORE any server pull. books.finished stays false;
+      // books.hidden becomes true.
+      await library.markBookFinished('b1');
+      final bBefore = (await library.listBooks()).single;
+      expect(bBefore.hidden, isTrue,
+          reason: 'sanity: markBookFinished sets hidden=true');
+      expect(bBefore.finished, isFalse,
+          reason: 'sanity: markBookFinished does NOT set finished');
+      expect(await library.isBookFinished('b1'), isTrue,
+          reason: 'sanity: isBookFinished must see hidden as finished state');
+
+      final playlist = [
+        const PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+        const PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+      ];
+      final engine = _FakeAudioEngine();
+      final player = PlayerController(
+        audioEngine: engine,
+        playbackStore: _MemPlaybackStore(),
+        playlistLoader: (_) async => playlist,
+        clock: () => DateTime.utc(2026, 6, 20),
+      );
+
+      final fakeApi = _FakeApiClient();
+      final subs = wireFinishedTracking(player, library, fakeApi);
+
+      // ── Act: jump backward → bookReplayedStream emits 'b1' ───────────────
+      await player.openBook('b1');    // no emit (prev=-1)
+      await player.playChapter('u2'); // forward; no emit
+      await player.playChapter('u1'); // backward → emits
+      await Future.delayed(const Duration(milliseconds: 10));
+
+      // ── Assert ─────────────────────────────────────────────────────────────
+      // Both finished AND hidden must be cleared (book returns to shelf).
+      final bAfter = (await library.listBooks()).single;
+      expect(bAfter.finished, isFalse,
+          reason: 'clearBookFinished must set finished=false');
+      expect(bAfter.hidden, isFalse,
+          reason: 'clearBookFinished must set hidden=false (restores to shelf)');
+      expect(await library.isBookFinished('b1'), isFalse,
+          reason: 'isBookFinished must return false after clearBookFinished');
+      expect(
+        fakeApi.shelfStatusCalls
+            .where((c) => c.bookId == 'b1' && c.finished == false),
+        isNotEmpty,
+        reason: 'must POST finished:false after same-device un-finish',
       );
 
       // ── Cleanup ────────────────────────────────────────────────────────────
@@ -337,14 +434,16 @@ void main() {
       await player.openBook('b1');
       await player.playChapter('u2'); // forward
       await player.playChapter('u1'); // backward → emits, but gate suppresses
-      await Future<void>.delayed(Duration.zero);
+      // Give the listener time to run through its async gate check.
+      await Future.delayed(const Duration(milliseconds: 10));
 
       // ── Assert: gate must suppress — no POST with finished:false ──────────
+      // The book is neither finished nor hidden, so the gate must suppress.
       expect(
         fakeApi.shelfStatusCalls
             .where((c) => c.bookId == 'b1' && c.finished == false),
         isEmpty,
-        reason: 'gate must suppress un-finish for a not-finished book',
+        reason: 'gate must suppress un-finish for a not-finished, not-hidden book',
       );
 
       // ── Cleanup ────────────────────────────────────────────────────────────
