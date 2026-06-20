@@ -157,6 +157,7 @@ export function BookLibraryView({
       .setShelfStatus(bookId, body)
       .then(() => dispatch(notificationsActions.pushToast({ kind: 'info', message: okMessage })))
       .catch(() => {
+        dispatch(continueListeningActions.undismiss(bookId));
         dispatch(notificationsActions.pushToast({ kind: 'error', message: failMessage }));
         api
           .getContinueListening()
