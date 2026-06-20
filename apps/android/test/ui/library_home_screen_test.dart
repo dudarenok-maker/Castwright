@@ -25,8 +25,8 @@ import 'package:castwright/src/data/pairing_service.dart' show Connection;
 // ---------------------------------------------------------------------------
 
 class _SpyApiClient extends ApiClient {
-  _SpyApiClient(Connection connection)
-      : super(connection, send: demoHttpSend(offline: true));
+  _SpyApiClient(super.connection)
+      : super(send: demoHttpSend(offline: true));
 
   final List<({String bookId, bool? finished, bool? hidden})> shelfStatusCalls =
       [];
