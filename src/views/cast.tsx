@@ -56,7 +56,9 @@ import { CompareCastModal } from '../modals/compare-cast-modal';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
 import { DesignScopePicker } from '../components/design-scope-picker';
+import { MergeSuggestionCard } from '../components/merge-suggestion-card';
 import { api } from '../lib/api';
+import type { MergeSuggestion } from '../lib/api';
 import type { CastDesignScope } from '../store/cast-design-slice';
 import { buildVariantTasks, variantWorkCounts } from '../lib/variant-tasks';
 
@@ -208,6 +210,25 @@ export function CastView({
   );
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
+  /* Tier-2b diminutive merge-suggestions — fetched once when the book is ready,
+     maintained in local state so accept/dismiss updates remove the card immediately
+     without a round-trip. */
+  const [mergeSuggestions, setMergeSuggestions] = useState<MergeSuggestion[]>([]);
+  useEffect(() => {
+    if (!bookId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const suggestions = await api.listMergeSuggestions(bookId);
+        if (alive) setMergeSuggestions(suggestions);
+      } catch {
+        /* Non-fatal: the cast view is fully functional without suggestions. */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [bookId]);
   /* Per-row sample state: { [characterId]: 'loading' | 'error: msg' }. The
      "playing" indicator is derived from the singleton playback hook by
      comparing currentUrl, so multiple rows can't show as "playing" at once. */
@@ -495,6 +516,27 @@ export function CastView({
     );
   }
 
+  /* Tier-2b merge-suggestion handlers. Accept folds the source character
+     into the target via the accept route (merge + dismiss in one call),
+     then removes the card and optimistically removes the source from the
+     local roster. Dismiss drops the card without merging. */
+  async function handleMergeSuggestion(sourceId: string, targetId: string) {
+    if (!bookId) return;
+    await api.acceptMergeSuggestion(bookId, sourceId, targetId);
+    setMergeSuggestions((prev) =>
+      prev.filter((s) => !(s.sourceId === sourceId && s.targetId === targetId)),
+    );
+    setCharacters((prev) => prev.filter((c) => c.id !== sourceId));
+  }
+
+  async function handleDismissSuggestion(sourceId: string, targetId: string) {
+    if (!bookId) return;
+    await api.dismissMergeSuggestion(bookId, sourceId, targetId);
+    setMergeSuggestions((prev) =>
+      prev.filter((s) => !(s.sourceId === sourceId && s.targetId === targetId)),
+    );
+  }
+
   function handleDrop(charId: string) {
     if (!draggingVoiceId) return;
     const voice = findVoice(draggingVoiceId);
@@ -709,6 +751,29 @@ export function CastView({
               This book isn't in English, so it renders through Qwen — undesigned characters can't be
               generated.
             </p>
+          </div>
+        )}
+
+        {/* Tier-2b — diminutive merge-suggestion cards. Rendered when the
+            dedup pass detected possible name-alias duplicates (e.g. "Оля" vs
+            "Ольга"). One card per suggestion; accept folds the source character
+            into the target, dismiss hides the card without merging. */}
+        {mergeSuggestions.length > 0 && (
+          <div data-testid="merge-suggestions-list" className="mb-4 space-y-0">
+            {mergeSuggestions.map((s) => {
+              const sourceName = characters.find((c) => c.id === s.sourceId)?.name ?? s.sourceId;
+              const targetName = characters.find((c) => c.id === s.targetId)?.name ?? s.targetId;
+              return (
+                <MergeSuggestionCard
+                  key={`${s.sourceId}+${s.targetId}`}
+                  suggestion={s}
+                  sourceName={sourceName}
+                  targetName={targetName}
+                  onMerge={() => handleMergeSuggestion(s.sourceId, s.targetId)}
+                  onDismiss={() => handleDismissSuggestion(s.sourceId, s.targetId)}
+                />
+              );
+            })}
           </div>
         )}
 

@@ -54,6 +54,7 @@ import type {
   LibraryStats,
   ContinueListeningItem,
 } from './types';
+import type { components as ApiComponents } from './api-types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -262,6 +263,8 @@ export interface MergeCharactersArgs {
 export interface MergeCharactersResponse {
   characters: Character[];
 }
+/* Tier-2b diminutive merge-suggestions (Task 12). Sourced from api-types.ts. */
+export type MergeSuggestion = ApiComponents['schemas']['MergeSuggestion'];
 /* POST /api/books/:bookId/cast/:characterId/series-patch — cross-book
    Compare save propagation. Applies the patch to the source character
    AND every series-sibling cast.json row that the plan-94 dedup rule
@@ -2762,6 +2765,97 @@ async function mockMergeCharacters({
   void sourceId;
   void targetId;
   return { characters: [] };
+}
+
+/* ── Tier-2b diminutive merge-suggestions (Task 12) ─────────────────────── */
+
+/* Module-level mutable list so accept/dismiss mock calls remove the pair and
+   a subsequent listMergeSuggestions returns the updated state within a session. */
+let mockMergeSuggestions: MergeSuggestion[] = [
+  { sourceId: 'eliza', targetId: 'halloran', reason: 'Possible duplicate — same scene pattern' },
+  { sourceId: 'marcus', targetId: 'halloran', reason: 'Possible duplicate — shared minor role' },
+];
+
+async function realListMergeSuggestions(bookId: string): Promise<MergeSuggestion[]> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/merge-suggestions`);
+  if (!res.ok) throw new Error(`List merge-suggestions failed (${res.status}).`);
+  const body = (await res.json()) as { suggestions: MergeSuggestion[] };
+  return body.suggestions;
+}
+
+async function mockListMergeSuggestions(_bookId: string): Promise<MergeSuggestion[]> {
+  await wait(40);
+  return [...mockMergeSuggestions];
+}
+
+async function realAcceptMergeSuggestion(
+  bookId: string,
+  sourceId: string,
+  targetId: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/merge-suggestions/accept`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceId, targetId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Accept merge-suggestion failed (${res.status}).`);
+  }
+}
+
+async function mockAcceptMergeSuggestion(
+  _bookId: string,
+  sourceId: string,
+  targetId: string,
+): Promise<void> {
+  await wait(60);
+  mockMergeSuggestions = mockMergeSuggestions.filter(
+    (s) => !(s.sourceId === sourceId && s.targetId === targetId),
+  );
+}
+
+async function realDismissMergeSuggestion(
+  bookId: string,
+  sourceId: string,
+  targetId: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/merge-suggestions/dismiss`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceId, targetId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Dismiss merge-suggestion failed (${res.status}).`);
+  }
+}
+
+async function mockDismissMergeSuggestion(
+  _bookId: string,
+  sourceId: string,
+  targetId: string,
+): Promise<void> {
+  await wait(60);
+  mockMergeSuggestions = mockMergeSuggestions.filter(
+    (s) => !(s.sourceId === sourceId && s.targetId === targetId),
+  );
 }
 
 async function realSeriesPatchCharacter({
@@ -6639,6 +6733,9 @@ const real = {
   analyseManuscript: realAnalyseManuscript,
   matchVoices: realMatchVoices,
   mergeCharacters: realMergeCharacters,
+  listMergeSuggestions: realListMergeSuggestions,
+  acceptMergeSuggestion: realAcceptMergeSuggestion,
+  dismissMergeSuggestion: realDismissMergeSuggestion,
   seriesPatchCharacter: realSeriesPatchCharacter,
   unlinkAlias: realUnlinkAlias,
   addAlias: realAddAlias,
@@ -6896,6 +6993,9 @@ const mock = {
   analyseManuscript: mockAnalyseManuscript,
   matchVoices: mockMatchVoices,
   mergeCharacters: mockMergeCharacters,
+  listMergeSuggestions: mockListMergeSuggestions,
+  acceptMergeSuggestion: mockAcceptMergeSuggestion,
+  dismissMergeSuggestion: mockDismissMergeSuggestion,
   seriesPatchCharacter: mockSeriesPatchCharacter,
   unlinkAlias: mockUnlinkAlias,
   addAlias: mockAddAlias,
