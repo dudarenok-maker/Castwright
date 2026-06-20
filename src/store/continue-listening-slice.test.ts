@@ -18,7 +18,7 @@ const item = (over: Partial<ContinueItem> = {}): ContinueItem => ({
   ...over,
 });
 
-const empty = (): ContinueListeningState => ({ items: [] });
+const empty = (): ContinueListeningState => ({ items: [], dismissedIds: [] });
 
 describe('continueListeningSlice — hydrate', () => {
   it('stores the supplied items', () => {
@@ -73,10 +73,41 @@ describe('continueListeningSlice — dismiss', () => {
 describe('selectContinueListening', () => {
   it('returns items when slice is present', () => {
     const items = [item()];
-    expect(selectContinueListening({ continueListening: { items } })).toEqual(items);
+    expect(selectContinueListening({ continueListening: { items, dismissedIds: [] } })).toEqual(items);
   });
 
   it('returns [] when slice is absent (older test stores)', () => {
     expect(selectContinueListening({})).toEqual([]);
+  });
+});
+
+const reducer = continueListeningSlice.reducer;
+const actions = continueListeningActions;
+
+describe('continueListeningSlice — dismissedIds flicker guard', () => {
+  it('hydrate keeps a dismissed book out until the server confirms it gone', () => {
+    let s = reducer(undefined, actions.hydrate([item({ bookId: 'a' }), item({ bookId: 'b' })]));
+    s = reducer(s, actions.dismiss('a'));
+    s = reducer(s, actions.hydrate([item({ bookId: 'a' }), item({ bookId: 'b' })])); // server still returns 'a'
+    expect(s.items.map((i) => i.bookId)).toEqual(['b']);
+    s = reducer(s, actions.hydrate([item({ bookId: 'b' })])); // server now omits 'a'
+    expect(s.dismissedIds).not.toContain('a');
+    s = reducer(s, actions.hydrate([item({ bookId: 'a' }), item({ bookId: 'b' })])); // 'a' reappears
+    expect(s.items.map((i) => i.bookId)).toEqual(['a', 'b']);
+  });
+
+  it('undismiss restores a card (fs-15 failed-POST recovery)', () => {
+    let s = reducer(undefined, actions.hydrate([item({ bookId: 'a' })]));
+    s = reducer(s, actions.dismiss('a'));
+    s = reducer(s, actions.undismiss('a'));
+    s = reducer(s, actions.hydrate([item({ bookId: 'a' })]));
+    expect(s.items.map((i) => i.bookId)).toEqual(['a']);
+  });
+
+  it('dismiss deduplicates ids', () => {
+    let s = reducer(undefined, actions.hydrate([item({ bookId: 'a' })]));
+    s = reducer(s, actions.dismiss('a'));
+    s = reducer(s, actions.dismiss('a'));
+    expect(s.dismissedIds).toEqual(['a']);
   });
 });

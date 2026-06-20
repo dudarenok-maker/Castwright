@@ -44,6 +44,11 @@ export interface SyncManifestIndexBook {
   /** Active (non-excluded) chapter count. */
   chapterCount: number;
   coverUrl?: string;
+  /** Explicit "Mark as finished" flag from listen-progress.json (NOT the
+   *  derived isFinished — durations aren't reliably loaded on the index path). */
+  finished?: boolean;
+  /** "Hide from shelf" flag from listen-progress.json. */
+  hidden?: boolean;
 }
 
 export interface SyncManifestIndex {
@@ -103,11 +108,11 @@ export function bookManifestUpdatedAt(state: BookStateJson): string {
 }
 
 export function buildSyncManifestIndex(
-  books: ReadonlyArray<{ bookId: string; state: BookStateJson; coverUrl?: string }>,
+  books: ReadonlyArray<{ bookId: string; state: BookStateJson; coverUrl?: string; finished?: boolean; hidden?: boolean }>,
   since?: string,
 ): SyncManifestIndex {
   const rows: SyncManifestIndexBook[] = [];
-  for (const { bookId, state, coverUrl } of books) {
+  for (const { bookId, state, coverUrl, finished, hidden } of books) {
     const updatedAt = bookManifestUpdatedAt(state);
     if (since && updatedAt <= since) continue;
     rows.push({
@@ -119,6 +124,8 @@ export function buildSyncManifestIndex(
       seriesPosition: state.seriesPosition,
       chapterCount: state.chapters.filter((c) => !c.excluded).length,
       ...(coverUrl ? { coverUrl } : {}),
+      ...(finished ? { finished: true } : {}),
+      ...(hidden ? { hidden: true } : {}),
     });
   }
   return {

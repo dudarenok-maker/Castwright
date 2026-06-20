@@ -10,6 +10,7 @@ import { librarySlice, libraryActions } from '../store/library-slice';
 import { tourSlice } from '../store/tour-slice';
 import { uiSlice } from '../store/ui-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { BookLibraryView } from './book-library';
 import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
 
@@ -18,6 +19,7 @@ import type { ContinueItem } from '../store/continue-listening-slice';
 const mockGetContinueListening = vi.fn<() => Promise<ContinueItem[]>>(
   () => Promise.resolve([]),
 );
+const mockSetShelfStatus = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -25,6 +27,7 @@ vi.mock('../lib/api', () => ({
        stays hidden, which is fine for these assertions. */
     getWorkspaceInfo: () => new Promise(() => {}),
     getContinueListening: () => mockGetContinueListening(),
+    setShelfStatus: () => mockSetShelfStatus(),
   },
 }));
 
@@ -93,6 +96,7 @@ describe('BookLibraryView — loading affordance', () => {
     /* Reset to the default (empty) response so individual tests that
        don't care about the rail don't need to stub it themselves. */
     mockGetContinueListening.mockResolvedValue([]);
+    mockSetShelfStatus.mockResolvedValue(undefined);
   });
 
   it('renders skeleton while library.loaded is false (no empty-state flash)', () => {
@@ -553,6 +557,85 @@ describe('BookLibraryView — loading affordance', () => {
       await act(async () => {});
 
       expect(screen.queryByText('Continue listening')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('applyShelfStatus failure recovery (fs-15 undismiss guard)', () => {
+    it('restores the continue-listening card when setShelfStatus fails', async () => {
+      const continueItem: ContinueItem = {
+        bookId: 'book-1',
+        title: 'A',
+        chapterId: 2,
+        currentSec: 120,
+        remainingSec: 600,
+        completionPct: 0.3,
+        updatedAt: '2026-06-13T00:00:00Z',
+      };
+
+      /* setShelfStatus rejects so the catch path fires. */
+      mockSetShelfStatus.mockRejectedValue(new Error('network'));
+      /* getContinueListening re-fetch restores the item. */
+      mockGetContinueListening
+        .mockResolvedValueOnce([continueItem]) /* initial mount fetch */
+        .mockResolvedValueOnce([continueItem]); /* recovery re-fetch in catch */
+
+      const store = configureStore({
+        reducer: {
+          account: accountSlice.reducer,
+          library: librarySlice.reducer,
+          tour: tourSlice.reducer,
+          ui: uiSlice.reducer,
+          continueListening: continueListeningSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
+        },
+      });
+
+      render(
+        <Provider store={store}>
+          <BookLibraryView
+            authors={[]}
+            activeBookId={null}
+            onOpenBook={vi.fn()}
+            onDeleteBook={vi.fn()}
+            onReparseBook={vi.fn()}
+            onReplaceManuscript={vi.fn()}
+            onEditBook={vi.fn()}
+            onStartNew={vi.fn()}
+          />
+        </Provider>,
+      );
+
+      /* Wait for the initial mount fetch to resolve and the rail to render. */
+      await waitFor(() => {
+        expect(screen.getByText('Continue listening')).toBeInTheDocument();
+      });
+
+      /* Card is visible before the action. */
+      expect(screen.getByRole('button', { name: /Continue listening to A/i })).toBeInTheDocument();
+
+      /* Open the overflow menu on the card, then click "Mark as finished".
+         The menu portals to document.body so it's findable after the
+         options button is clicked. */
+      const optionsBtn = screen.getByRole('button', { name: /Continue-listening options/i });
+      fireEvent.click(optionsBtn);
+      const finishBtn = await screen.findByRole('menuitem', { name: /Mark as finished/i });
+      fireEvent.click(finishBtn);
+
+      /* After the dismiss, card disappears optimistically. */
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /Continue listening to A/i })).not.toBeInTheDocument();
+      });
+
+      /* After the catch runs (undismiss + re-fetch hydrate), card should be back. */
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Continue listening to A/i })).toBeInTheDocument();
+      });
+
+      /* undismiss cleared the id — the store's dismissedIds must be empty. */
+      expect(store.getState().continueListening.dismissedIds).not.toContain('book-1');
     });
   });
 

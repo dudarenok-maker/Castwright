@@ -33,6 +33,9 @@ import { analysisSlice } from '../store/analysis-slice';
 import { castDesignSlice } from '../store/cast-design-slice';
 import { queueSlice } from '../store/queue-slice';
 import { tourSlice } from '../store/tour-slice';
+import { listenProgressSlice } from '../store/listen-progress-slice';
+import { settingsSlice } from '../store/settings-slice';
+import { continueListeningSlice } from '../store/continue-listening-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -91,6 +94,29 @@ vi.mock('../lib/api', () => ({
     /* Guided-tour boot fetch — resolve to not-completed so the tour slice
        stays inactive (overlay renders null) and the test harness is unaffected. */
     getTourStatus: vi.fn(async () => ({ completedAt: null })),
+    /* MiniPlayer stubs — needed when Layout renders a MiniPlayer (ready stage
+       with a current track). Defaults to no-ops so the player mounts cleanly. */
+    getChapterAudio: vi.fn(async () => ({
+      url: '/api/books/b1/chapters/1/audio.mp3',
+      durationSec: 600,
+      peaks: [],
+      sampleRate: 44100,
+      segments: [],
+    })),
+    getListenProgress: vi.fn(async () => null),
+    putListenProgress: vi.fn(async () => ({
+      chapterId: 1,
+      currentSec: 0,
+      updatedAt: new Date().toISOString(),
+    })),
+    putListenStats: vi.fn(async () => ({})),
+    /* fs-15 shelf-status — the auto-finish call. Mocked as a vi.fn so tests
+       can assert it was called with {finished:true}. */
+    setShelfStatus: vi.fn(async () => ({
+      chapterId: 1,
+      currentSec: 0,
+      updatedAt: new Date().toISOString(),
+    })),
   },
   AnalysisError: class extends Error {},
   ExportIncompleteError: class extends Error {
@@ -115,6 +141,7 @@ import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
 import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
+import type { Chapter } from '../lib/types';
 
 function makeStore() {
   return configureStore({
@@ -134,6 +161,9 @@ function makeStore() {
       castDesign: castDesignSlice.reducer,
       queue: queueSlice.reducer,
       tour: tourSlice.reducer,
+      listenProgress: listenProgressSlice.reducer,
+      settings: settingsSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
     },
   });
 }
@@ -684,5 +714,214 @@ describe('Layout — voices re-hydrate as generation renders chapters', () => {
     await waitFor(() => {
       expect(getVoices.mock.calls.length).toBeGreaterThan(callsAfterFirstChapter);
     });
+  });
+});
+
+/* Task 4 (fs-15 / #952) — auto-finish dispatch+POST on reaching the final
+   listenable chapter.
+   "Final listenable" = last chapter with !excluded && state==='done' && parsedDuration>0.
+   When Layout passes onCrossedFinish to MiniPlayer and the currently-loaded
+   chapter IS that final chapter, it must:
+     1. dispatch(continueListeningSlice.dismiss(bookId))   → dismissedIds grows
+     2. call api.setShelfStatus(bookId, {finished:true})   → POST fires once
+   When the chapter is NOT the final listenable chapter, NEITHER should happen. */
+describe('Layout — auto-finish on reaching the final listenable chapter (Task 4 / fs-15)', () => {
+  /* A chapter shape satisfying the "done + duration > 0 + !excluded" predicate. */
+  function doneChapter(id: number, durationStr: string, over?: Partial<Chapter>): Chapter {
+    return {
+      id,
+      title: `Chapter ${id}`,
+      duration: durationStr,
+      state: 'done',
+      progress: 1,
+      characters: {},
+      ...over,
+    } as Chapter;
+  }
+
+  /* A minimal BookStateResponse so Layout's per-book hydration resolves cleanly. */
+  function bookStatePayload(chapters: Chapter[]) {
+    return {
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns1',
+        title: 'Test Book',
+        author: 'Author',
+        series: null,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters,
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: [] },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    };
+  }
+
+  async function fireAudioEvents(audioEl: HTMLAudioElement, currentTimeSec: number, durationSec: number) {
+    /* Seed the native duration so onLoadedMetadata and onTimeUpdate both see it. */
+    Object.defineProperty(audioEl, 'duration', { configurable: true, value: durationSec });
+    /* Fire loadedmetadata first so MiniPlayer's handler sets audio.durationSec. */
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+    /* Now seed currentTime and fire timeupdate — the finish-tail check
+       reads e.currentTarget.duration (= durationSec) and e.currentTarget.currentTime (= currentTimeSec). */
+    Object.defineProperty(audioEl, 'currentTime', { configurable: true, writable: true, value: currentTimeSec });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  beforeEach(() => {
+    HTMLMediaElement.prototype.load = vi.fn();
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    vi.mocked(api.setShelfStatus).mockReset();
+    vi.mocked(api.setShelfStatus).mockResolvedValue({
+      chapterId: 1,
+      currentSec: 0,
+      updatedAt: new Date().toISOString(),
+    } as never);
+    vi.mocked(api.getChapterAudio).mockResolvedValue({
+      url: '/api/books/b1/chapters/1/audio.mp3',
+      durationSec: 600,
+      peaks: [],
+      sampleRate: 44100,
+      segments: [],
+    } as never);
+  });
+
+  it('dispatches dismiss and calls setShelfStatus({finished:true}) when the FINAL listenable chapter enters its tail', async () => {
+    /* Two done chapters; chapter 2 is the final listenable. */
+    const chapters = [doneChapter(1, '10:00'), doneChapter(2, '10:00')];
+
+    /* Stub getBookState to return a payload whose completedSlugs marks both
+       chapters done. The slug format mirrors what the server generates:
+       `${id-padded}-${slugified-title}`. hydrateFromBookState checks
+       completedSlugs against c.slug on the raw chapter object. */
+    getBookStateMock.mockResolvedValue({
+      ...bookStatePayload(chapters),
+      completedSlugs: ['01-chapter-1', '02-chapter-2'],
+      state: {
+        ...bookStatePayload(chapters).state,
+        chapters: chapters.map((c) => ({
+          id: c.id,
+          title: c.title,
+          slug: c.id === 1 ? '01-chapter-1' : '02-chapter-2',
+          duration: c.duration,
+          generationState: 'done',
+        })),
+      },
+    });
+
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_confirmed' }));
+
+    const { container } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/listen']}>
+          <Routes>
+            <Route path="/books/:bookId/listen" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* Wait for chapters to hydrate from getBookState and both become 'done'. */
+    await waitFor(() => {
+      const chs = store.getState().chapters.chapters;
+      expect(chs.length).toBe(2);
+      expect(chs.every((c) => c.state === 'done')).toBe(true);
+    });
+
+    /* Set the current track to the FINAL chapter (id=2) AFTER hydration. */
+    act(() => {
+      store.dispatch(uiActions.setCurrentTrack(2));
+    });
+
+    /* MiniPlayer should now render and its <audio> element should be in the DOM. */
+    let audioElOrNull: HTMLAudioElement | null = null;
+    await waitFor(() => {
+      audioElOrNull = container.querySelector('audio');
+      expect(audioElOrNull).not.toBeNull();
+    });
+    const audioEl = audioElOrNull!;
+
+    /* Fire a timeUpdate with remaining <= 10 s (591 out of 600). */
+    await fireAudioEvents(audioEl, 591, 600);
+
+    await waitFor(() => {
+      expect(vi.mocked(api.setShelfStatus)).toHaveBeenCalledWith('b1', { finished: true });
+    });
+
+    /* dismiss also landed in the slice. */
+    expect(store.getState().continueListening.dismissedIds).toContain('b1');
+  });
+
+  it('does NOT dispatch dismiss or call setShelfStatus on a NON-final chapter', async () => {
+    const chapters = [doneChapter(1, '10:00'), doneChapter(2, '10:00')];
+
+    getBookStateMock.mockResolvedValue({
+      ...bookStatePayload(chapters),
+      completedSlugs: ['01-chapter-1', '02-chapter-2'],
+      state: {
+        ...bookStatePayload(chapters).state,
+        chapters: chapters.map((c) => ({
+          id: c.id,
+          title: c.title,
+          slug: c.id === 1 ? '01-chapter-1' : '02-chapter-2',
+          duration: c.duration,
+          generationState: 'done',
+        })),
+      },
+    });
+
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_confirmed' }));
+
+    const { container } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/listen']}>
+          <Routes>
+            <Route path="/books/:bookId/listen" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      const chs = store.getState().chapters.chapters;
+      expect(chs.length).toBe(2);
+      expect(chs.every((c) => c.state === 'done')).toBe(true);
+    });
+
+    /* Set current track to chapter 1 — NOT the final listenable (chapter 2 is). */
+    act(() => {
+      store.dispatch(uiActions.setCurrentTrack(1));
+    });
+
+    let audioElOrNull2: HTMLAudioElement | null = null;
+    await waitFor(() => {
+      audioElOrNull2 = container.querySelector('audio');
+      expect(audioElOrNull2).not.toBeNull();
+    });
+    const audioEl2 = audioElOrNull2!;
+
+    await fireAudioEvents(audioEl2, 591, 600);
+
+    /* Nothing should fire for a non-final chapter. */
+    await new Promise((r) => setTimeout(r, 50));
+    expect(vi.mocked(api.setShelfStatus)).not.toHaveBeenCalled();
+    expect(store.getState().continueListening.dismissedIds).not.toContain('b1');
   });
 });

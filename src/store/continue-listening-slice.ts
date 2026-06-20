@@ -15,26 +15,45 @@ export type ContinueItem = components['schemas']['ContinueListeningItem'];
 
 export interface ContinueListeningState {
   items: ContinueItem[];
+  /** Ids of books optimistically dismissed by the user. hydrate filters these
+   *  out until the server confirms the book is gone (id is then cleared).
+   *  This prevents a dismissed card from flickering back if the finish POST
+   *  hasn't reflected in the next getContinueListening response yet. */
+  dismissedIds: string[];
 }
 
 const initialState: ContinueListeningState = {
   items: [],
+  dismissedIds: [],
 };
 
 export const continueListeningSlice = createSlice({
   name: 'continueListening',
   initialState,
   reducers: {
-    /** Replace the shelf with a fresh server fetch result. */
+    /** Replace the shelf with a fresh server fetch result.
+     *
+     *  Self-terminating dismiss guard: any dismissedId NOT present in the
+     *  incoming payload is cleared (the server confirmed it gone). Remaining
+     *  dismissedIds filter the items so an in-flight optimistic dismiss isn't
+     *  undone by a stale server response. */
     hydrate: (s, a: PayloadAction<ContinueItem[]>) => {
-      s.items = a.payload;
+      const incomingIds = new Set(a.payload.map((i) => i.bookId));
+      s.dismissedIds = s.dismissedIds.filter((id) => incomingIds.has(id));
+      s.items = a.payload.filter((i) => !s.dismissedIds.includes(i.bookId));
     },
     /** fs-15 shelf controls — optimistically drop one book from the shelf
-        (after the user marks it finished or hides it). The server fetch on the
-        next mount is the source of truth; this just makes the card vanish
-        immediately. */
+        (after the user marks it finished or hides it). Adds the bookId to
+        dismissedIds (deduped) so subsequent hydrate calls keep it hidden
+        until the server confirms it gone. */
     dismiss: (s, a: PayloadAction<string>) => {
+      if (!s.dismissedIds.includes(a.payload)) s.dismissedIds.push(a.payload);
       s.items = s.items.filter((i) => i.bookId !== a.payload);
+    },
+    /** fs-15 failed-POST recovery — remove a bookId from dismissedIds so the
+     *  next hydrate can restore the card (used when setShelfStatus fails). */
+    undismiss: (s, a: PayloadAction<string>) => {
+      s.dismissedIds = s.dismissedIds.filter((id) => id !== a.payload);
     },
   },
 });

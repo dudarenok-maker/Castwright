@@ -2214,6 +2214,10 @@ export interface components {
             chapterCount: number;
             /** @description Server-relative cover URL when a cover image is on disk; absent otherwise. */
             coverUrl?: string;
+            /** @description Explicit "Mark as finished" flag (additive; absent = false). */
+            finished?: boolean;
+            /** @description Hide from shelf flag (additive; absent = false). */
+            hidden?: boolean;
         };
         /**
          * @description srv-32 (plan 191) — the per-book detail level. `chapters` lists the

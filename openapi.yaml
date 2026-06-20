@@ -2878,6 +2878,12 @@ components:
         coverUrl:
           type: string
           description: Server-relative cover URL when a cover image is on disk; absent otherwise.
+        finished:
+          type: boolean
+          description: Explicit "Mark as finished" flag (additive; absent = false).
+        hidden:
+          type: boolean
+          description: Hide from shelf flag (additive; absent = false).
 
     SyncManifestBookDetail:
       type: object

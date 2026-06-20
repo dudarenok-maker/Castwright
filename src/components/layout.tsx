@@ -24,6 +24,7 @@ import { changeLogActions } from '../store/change-log-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { listenProgressActions } from '../store/listen-progress-slice';
+import { continueListeningActions } from '../store/continue-listening-slice';
 import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
@@ -361,6 +362,14 @@ export function Layout() {
   const trackIdx = trackChapter ? chapters.indexOf(trackChapter) : -1;
   const prevTrackAvailable = trackIdx > 0;
   const nextTrackAvailable = trackIdx >= 0 && trackIdx < chapters.length - 1;
+  /* fs-15 / Task 4 — final listenable chapter for auto-finish.
+     "Final listenable" = the LAST chapter satisfying
+       !c.excluded && c.state === 'done' && parseDuration(c.duration) > 0.
+     Computing via [...].reverse().find() avoids mutating the slice array. */
+  const finalListenable =
+    [...chapters].reverse().find(
+      (c) => !c.excluded && c.state === 'done' && parseDuration(c.duration) > 0,
+    ) ?? null;
 
   const [resultDialog, setResultDialog] = useState<{
     open: boolean;
@@ -1388,6 +1397,22 @@ export function Layout() {
           }
           prevAvailable={prevTrackAvailable}
           nextAvailable={nextTrackAvailable}
+          /* fs-15 / Task 4 — auto-finish: only fire when the currently-loaded
+             chapter IS the final listenable chapter so mid-book chapter ends
+             don't incorrectly mark the book finished. */
+          onCrossedFinish={
+            finalListenable != null && trackChapter?.id === finalListenable.id
+              ? () => {
+                  dispatch(continueListeningActions.dismiss(bookId));
+                  void api.setShelfStatus(bookId, { finished: true }).catch((err) => {
+                    console.warn(
+                      '[layout] setShelfStatus finished failed',
+                      (err as Error).message,
+                    );
+                  });
+                }
+              : undefined
+          }
         />
       )}
 
