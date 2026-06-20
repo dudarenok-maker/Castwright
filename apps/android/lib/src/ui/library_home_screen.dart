@@ -57,6 +57,10 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
   Future<void> _refresh() async {
     setState(() => _error = null);
     // app-14: continue-listening rail from local lastPlayedAt (always local).
+    // FIX 4: pass finished: here too so an already-finished book does not flash
+    // on the shelf during the brief window before the post-pull re-query.
+    // FIX 5: one-shot guard so the post-pull re-query runs at most once per _refresh.
+    var postPullRequeried = false;
     final shelf = buildContinueListening([
       for (final s in await widget.runtime.library.listBooks())
         ShelfBook(
@@ -66,6 +70,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
           lastPlayedAt: s.lastPlayedAt,
           updatedAt: '',
           hidden: s.hidden,
+          finished: s.finished,
         ),
     ]);
     await for (final s in loadLibraryLocalFirst(
@@ -88,7 +93,11 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
       // state persisted by loadIndex→setBookSyncState is reflected in the
       // shelf. The stream payload only carries the library grid, not the shelf
       // rows, so we must re-read listBooks() once the loading phase is done.
-      if (!s.loading && mounted) {
+      // FIX 5: _postPullRequeried guards against running this block more than
+      // once per _refresh — the stream can emit multiple non-loading ticks when
+      // a local library exists (local + server ticks both have loading:false).
+      if (!s.loading && !postPullRequeried && mounted) {
+        postPullRequeried = true;
         final updated = buildContinueListening([
           for (final b in await widget.runtime.library.listBooks())
             ShelfBook(
