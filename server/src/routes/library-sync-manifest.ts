@@ -18,7 +18,7 @@ import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { audioDir, coverImagePath, stateJsonPath } from '../workspace/paths.js';
+import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
   buildSyncManifestIndex,
@@ -100,14 +100,29 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
 
     const since = typeof req.query.since === 'string' ? req.query.since : undefined;
     const books = await collectBooks();
-    const rows = books.map(({ bookDir, state }) => ({
-      bookId: state.bookId,
-      state,
-      coverUrl:
-        state.coverImage && existsSync(coverImagePath(bookDir))
-          ? `/api/books/${state.bookId}/cover`
-          : undefined,
-    }));
+    const rows = books.map(({ bookDir, state }) => {
+      let finished = false;
+      let hidden = false;
+      try {
+        const lp = JSON.parse(readFileSync(listenProgressJsonPath(bookDir), 'utf8')) as {
+          finished?: boolean; hidden?: boolean;
+        };
+        finished = lp.finished === true;
+        hidden = lp.hidden === true;
+      } catch {
+        /* no listen-progress.json yet → both false */
+      }
+      return {
+        bookId: state.bookId,
+        state,
+        coverUrl:
+          state.coverImage && existsSync(coverImagePath(bookDir))
+            ? `/api/books/${state.bookId}/cover`
+            : undefined,
+        ...(finished ? { finished: true } : {}),
+        ...(hidden ? { hidden: true } : {}),
+      };
+    });
     return sendMaybeGzip(req, res, buildSyncManifestIndex(rows, since));
   } catch (e) {
     console.error('[sync-manifest] failed', e);

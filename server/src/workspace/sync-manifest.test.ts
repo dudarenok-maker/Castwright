@@ -111,6 +111,17 @@ describe('buildSyncManifestIndex', () => {
     // but the active set still lists every book so the client can evict
     expect(idx.activeBookIds.sort()).toEqual(['b1', 'b2']);
   });
+
+  it('carries finished + hidden flags through the index', () => {
+    const idx = buildSyncManifestIndex([
+      { bookId: 'b1', state: state({ bookId: 'b1', updatedAt: '2026-01-01T00:00:00.000Z', chapters: [ch({ id: 1, uuid: 'u1' })] }), finished: true, hidden: false },
+      { bookId: 'b2', state: state({ bookId: 'b2', updatedAt: '2026-06-01T00:00:00.000Z', chapters: [ch({ id: 1, uuid: 'u2' })] }), hidden: true },
+    ]);
+    const b1 = idx.books.find((b) => b.bookId === 'b1')!;
+    const b2 = idx.books.find((b) => b.bookId === 'b2')!;
+    expect(b1.finished).toBe(true);
+    expect(b2.hidden).toBe(true);
+  });
 });
 
 describe('buildSyncManifestBookDetail', () => {
