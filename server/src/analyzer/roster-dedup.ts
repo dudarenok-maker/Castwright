@@ -205,3 +205,14 @@ export function dedupeRosterByName(
 
   return { characters: roster, rewrites, suggestions };
 }
+
+/** Drop suggestions whose source OR target id is not a standing character in the
+    final (post-fold) roster — the fold may have collapsed a low-line diminutive
+    into a bucket, which would leave a suggestion pointing at a gone id. */
+export function pruneSuggestionsToRoster(
+  suggestions: MergeSuggestion[],
+  characters: ReadonlyArray<{ id: string }>,
+): MergeSuggestion[] {
+  const ids = new Set(characters.map((c) => c.id));
+  return suggestions.filter((s) => ids.has(s.sourceId) && ids.has(s.targetId));
+}

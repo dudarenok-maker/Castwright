@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dedupeRosterByName, composeRewrites } from './roster-dedup.js';
+import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster } from './roster-dedup.js';
 
 const c = (over: { id: string; name: string; role?: string; color?: string; gender?: string; [key: string]: unknown }) =>
   ({ role: 'r', color: 'c', ...over });
@@ -71,6 +71,26 @@ describe('dedupeRosterByName Tier-2b (diminutive suggestions)', () => {
     const chars = [c({ id: 's1', name: 'Саша' }), c({ id: 's2', name: 'Александр' })];
     const r = dedupeRosterByName(chars as any, [...sent('s1'), ...sent('s2')]);
     expect(r.suggestions).toEqual([]);
+  });
+});
+
+describe('pruneSuggestionsToRoster', () => {
+  it('drops a suggestion whose sourceId is absent from the roster', () => {
+    const suggestions = [{ sourceId: 'olya', targetId: 'ольга', reason: 'Diminutive of «Ольга»' }];
+    const roster = [{ id: 'ольга' }];
+    expect(pruneSuggestionsToRoster(suggestions, roster)).toEqual([]);
+  });
+
+  it('drops a suggestion whose targetId is absent from the roster', () => {
+    const suggestions = [{ sourceId: 'olya', targetId: 'ольга', reason: 'Diminutive of «Ольга»' }];
+    const roster = [{ id: 'olya' }];
+    expect(pruneSuggestionsToRoster(suggestions, roster)).toEqual([]);
+  });
+
+  it('keeps a suggestion when both ids are present in the roster', () => {
+    const suggestions = [{ sourceId: 'olya', targetId: 'ольга', reason: 'Diminutive of «Ольга»' }];
+    const roster = [{ id: 'olya' }, { id: 'ольга' }];
+    expect(pruneSuggestionsToRoster(suggestions, roster)).toEqual(suggestions);
   });
 });
 

@@ -27,7 +27,7 @@ import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { detectOllamaDevice } from './ollama-health.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
-import { dedupeRosterByName, composeRewrites, type MergeSuggestion } from '../analyzer/roster-dedup.js';
+import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
 import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
 import {
   loadCastMerges,
@@ -4062,7 +4062,7 @@ export async function runMainAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          await writeSuggestions(record.bookDir, dd.suggestions);
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters));
         } catch (dedupErr) {
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
@@ -5074,7 +5074,7 @@ async function runSubsetAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          await writeSuggestions(record.bookDir, dd.suggestions);
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched));
         } catch (dedupErr) {
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
