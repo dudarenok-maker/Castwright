@@ -59,6 +59,8 @@ import { engineForModelId } from '../lib/models';
 import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
+import { deriveIssues } from '../lib/chapter-issues';
+import { Waveform } from '../components/waveform';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import {
   isChapterStaleFromReassign,
@@ -2071,7 +2073,7 @@ function CharStatusBar({
 /* Visual confirmation that this chapter's audio was assembled in narrative
    order. Lazy-fetches the same segments JSON we already use for preview
    playback; renders coloured bands keyed to character palette colours. */
-function ChapterSegmentStrip({
+export function ChapterSegmentStrip({
   chapter,
   bookId,
   characters,
@@ -2098,8 +2100,12 @@ function ChapterSegmentStrip({
     };
   }, [bookId, chapter.id]);
 
+  const issues = useMemo(() => (audio ? deriveIssues(audio) : []), [audio]);
+
   if (error || !audio || !audio.segments?.length || !audio.durationSec) return null;
   const findChar = (id: string) => characters.find((c) => c.id === id);
+  const hasPeaks = (audio.peaks?.length ?? 0) > 0;
+  const chapterLevelOnly = chapter.audioQa?.status === 'suspect' && issues.length === 0;
 
   return (
     <div className="mt-4 ml-[60px]">
@@ -2123,6 +2129,31 @@ function ChapterSegmentStrip({
           );
         })}
       </div>
+
+      {hasPeaks && (
+        <div className="mt-2 relative">
+          <Waveform progress={0} active={false} peaks={audio.peaks} issues={issues} />
+          {chapterLevelOnly && (
+            <div
+              className="absolute left-0 right-0 -bottom-0.5 h-[2px] rounded-full bg-amber-400/70"
+              title={chapter.audioQa?.reasons.join(' ') || 'Chapter-level issue'}
+            />
+          )}
+        </div>
+      )}
+
+      {issues.length > 0 && (
+        <p className="mt-1 text-[10px] font-semibold text-amber-700 flex items-center gap-1">
+          <span aria-hidden>⚠</span>
+          {issues.length} issue{issues.length > 1 ? 's' : ''} to review
+        </p>
+      )}
+      {chapterLevelOnly && (
+        <p className="mt-1 text-[10px] font-semibold text-amber-700 flex items-center gap-1"
+           title={chapter.audioQa?.reasons.join(' ')}>
+          <span aria-hidden>⚠</span> Chapter-level issue
+        </p>
+      )}
     </div>
   );
 }
