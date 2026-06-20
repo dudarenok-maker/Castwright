@@ -26,6 +26,7 @@ import {
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { detectOllamaDevice } from './ollama-health.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
 import {
   loadCastMerges,
   saveCastMerges,
@@ -571,70 +572,7 @@ export function mergeRosterChapter(
       });
       continue;
     }
-    /* Description: keep whichever is longer. */
-    if (
-      incoming.description &&
-      (!existing.description || incoming.description.length > existing.description.length)
-    ) {
-      existing.description = incoming.description;
-    }
-    /* Tone: latest-wins per field, but only when the incoming entry
-       provided that field (don't blank out a known value). */
-    if (incoming.tone) {
-      existing.tone = { ...existing.tone, ...incoming.tone };
-    }
-    /* Attributes: union dedup. Order: existing first, then any new. */
-    if (incoming.attributes?.length) {
-      const seen = new Set(existing.attributes ?? []);
-      const next = [...(existing.attributes ?? [])];
-      for (const a of incoming.attributes) {
-        if (!seen.has(a)) {
-          next.push(a);
-          seen.add(a);
-        }
-      }
-      existing.attributes = next;
-    }
-    /* Evidence: append non-duplicate quotes. Dedup on normalised quote
-       so smart-vs-straight typography drift between chapters doesn't
-       inflate the array. */
-    if (incoming.evidence?.length) {
-      const seen = new Set((existing.evidence ?? []).map((e) => normaliseForMatch(e.quote)));
-      const next = [...(existing.evidence ?? [])];
-      for (const e of incoming.evidence) {
-        const norm = normaliseForMatch(e.quote);
-        if (norm.length > 0 && !seen.has(norm)) {
-          next.push({ ...e });
-          seen.add(norm);
-        }
-      }
-      existing.evidence = next;
-    }
-    /* Gender / ageRange / color / role: only adopt incoming when existing
-       doesn't have a value. First detection wins for identity fields —
-       switching pronouns mid-book is almost always a model error, not a
-       character development. */
-    if (!existing.gender && incoming.gender) existing.gender = incoming.gender;
-    if (!existing.ageRange && incoming.ageRange) existing.ageRange = incoming.ageRange;
-    /* Name: first-detection wins for the DISPLAY name, but a divergent name
-       form the model emits for the same id in a later chapter («Антон» then
-       «Антон Городецкий») — plus any incoming aliases — is preserved as an
-       alias rather than silently dropped, so cast review surfaces it. Dedup
-       case-insensitively; never record the display name itself. */
-    const aliasCandidates = [incoming.name, ...(incoming.aliases ?? [])];
-    const seen = new Set<string>([
-      existing.name.trim().toLowerCase(),
-      ...(existing.aliases ?? []).map((a) => a.trim().toLowerCase()),
-    ]);
-    const nextAliases = [...(existing.aliases ?? [])];
-    for (const cand of aliasCandidates) {
-      const key = cand.trim().toLowerCase();
-      if (key.length > 0 && !seen.has(key)) {
-        nextAliases.push(cand);
-        seen.add(key);
-      }
-    }
-    if (nextAliases.length) existing.aliases = nextAliases;
+    mergeCharacterFields(existing, incoming);
   }
 }
 
