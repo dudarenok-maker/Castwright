@@ -1647,7 +1647,14 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
     sampleRate: 44100,
     segments: [
       { start: 0, end: third, characterId: 'narrator', sentenceId: 1 },
-      { start: third, end: third * 2, characterId: 'halloran', sentenceId: 2 },
+      {
+        start: third,
+        end: third * 2,
+        characterId: 'halloran',
+        sentenceId: 2,
+        suspect: true,
+        reasons: ['Long sentence — possible truncation'],
+      },
       { start: third * 2, end: totalSec, characterId: 'narrator', sentenceId: 3 },
     ],
   };
