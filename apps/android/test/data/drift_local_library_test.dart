@@ -278,6 +278,27 @@ void main() {
     });
   });
 
+  group('DriftLocalLibrary (app-19 cross-device finished-sync)', () {
+    test('setBookSyncState persists finished+hidden; listBooks surfaces finished', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      await lib.setBookSyncState('b1', finished: true, hidden: false);
+      expect((await lib.listBooks()).single.finished, isTrue);
+      await lib.close();
+    });
+
+    test('markPlayed clears hidden but NOT finished', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      await lib.setBookSyncState('b1', finished: true, hidden: true);
+      await lib.markPlayed('b1', '2026-06-20T12:00:00Z');
+      final b = (await lib.listBooks()).single;
+      expect(b.hidden, isFalse);
+      expect(b.finished, isTrue);
+      await lib.close();
+    });
+  });
+
   group('DriftLocalLibrary (app-14 finished-shelf)', () {
     test('setBookHidden persists and surfaces via listBooks', () async {
       final lib = makeLib(InMemoryFileStore());

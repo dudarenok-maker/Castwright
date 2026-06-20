@@ -20,6 +20,7 @@ class BookSummary {
     required this.lastPlayedAt,
     required this.coverThumbPath,
     required this.hidden,
+    required this.finished,
   });
   final String bookId;
   final String title;
@@ -29,6 +30,7 @@ class BookSummary {
   final String? lastPlayedAt;
   final String? coverThumbPath;
   final bool hidden;
+  final bool finished;
 }
 
 /// A locally-stored chapter (the offline source for the player + durations).
@@ -373,8 +375,16 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
           lastPlayedAt: b.lastPlayedAt,
           coverThumbPath: b.coverThumbPath,
           hidden: b.hidden,
+          finished: b.finished,
         ),
     ];
+  }
+
+  /// Persist server finished/hidden pulled from the manifest index.
+  Future<void> setBookSyncState(String bookId, {required bool finished, required bool hidden}) async {
+    await _ensureBook(bookId);
+    await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
+        .write(BooksCompanion(finished: Value(finished), hidden: Value(hidden)));
   }
 
   @override
