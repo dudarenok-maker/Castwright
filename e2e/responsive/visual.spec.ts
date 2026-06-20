@@ -1,4 +1,6 @@
-/* Visual-regression baselines for the seven core surfaces.
+/* Visual-regression baselines for the core surfaces (viewport captures, not
+ * full-page — toHaveScreenshot defaults fullPage:false) plus a clipped top-bar
+ * branding gate (#925).
  *
  * Per-platform AND per-project: each test captures one screenshot under
  * `e2e/{platform}/responsive/visual.spec.ts/{projectName}/<name>.png`
@@ -89,6 +91,12 @@ test.describe.configure({ mode: 'serial' });
    level override below is cleaner. */
 const VISUAL_DIFF_OPTS = { maxDiffPixelRatio: 0.05 } as const;
 
+/* #925 — top-bar clip gate. A branding/logo change is ~1-2% of the full
+   1280x720 viewport (under VISUAL_DIFF_OPTS' 5%) but a large fraction of the
+   clipped ~64px <header>, so a 1% tolerance on the element screenshot catches
+   it. See docs/superpowers/specs/2026-06-20-visual-diff-sensitivity-design.md. */
+const TOPBAR_DIFF_RATIO = 0.01;
+
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
   test('library', async ({ page }) => {
@@ -157,6 +165,17 @@ test.describe('visual baselines', () => {
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('generate.png', VISUAL_DIFF_OPTS);
+  });
+
+  test('top-bar (branding)', async ({ page }) => {
+    await page.goto('/');
+    /* The <header> carries the implicit ARIA banner role. */
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 });
+    /* Match the siblings' settle for staggered mount transitions. */
+    await page.waitForTimeout(300);
+    await expect(page.getByRole('banner')).toHaveScreenshot('topbar.png', {
+      maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+    });
   });
 });
 
@@ -296,5 +315,14 @@ test.describe('visual baselines (dark theme)', () => {
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(300);
     await expect(page).toHaveScreenshot('generate-dark.png', VISUAL_DIFF_OPTS);
+  });
+
+  test('top-bar (branding, dark)', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 });
+    await page.waitForTimeout(300);
+    await expect(page.getByRole('banner')).toHaveScreenshot('topbar-dark.png', {
+      maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+    });
   });
 });
