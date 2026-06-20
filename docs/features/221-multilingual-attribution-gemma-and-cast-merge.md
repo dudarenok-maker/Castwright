@@ -15,6 +15,10 @@ owner: null
 > **Wave E implemented** (2026-06-19, `fix/server-ru-cast-tone-localization-aliases`):
 > Russian cast-field under-population — tone 0%→100% + localized role/description via
 > a `languagePreamble` cast-field guard, plus same-id alias capture in the roster merge.
+> **Wave F implemented** (2026-06-19, `fix/server-ru-descriptor-fold-phrases`): Russian
+> descriptor-phrase fold (safe-tier `isDescriptorName` widening — function-word phrases +
+> оператор/водитель), closing Wave D's stated `isDescriptorName` limitation. Byline-author
+> mis-roster (author ate Anton's lines) split out to **bug #938** for a dedicated brainstorm.
 > The Russian pipeline is functional end-to-end. Investigation reproduced cold; the
 > **prompt-guard fix is empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](162-fs2-multilanguage.md)
 > and [187 (large-chapter stage-2 + attribution coverage)](archive/187-large-chapter-stage2-and-attribution-coverage.md).
@@ -277,6 +281,39 @@ divergent same-id name form instead of recording it.
 
 - **Acceptance:** full re-analysis of _Ночной дозор_ on local gemma4-e4b → cast carries
   Russian role/description + populated tone; same-id name drift surfaces as aliases.
+
+### Wave F — Russian descriptor-phrase fold (closes the Wave D `isDescriptorName` limitation) — IMPLEMENTED
+
+**Status: implemented** (`fix/server-ru-descriptor-fold-phrases`, #938-adjacent). Wave D
+flagged its own gap: Russian `isDescriptorName` was "English-structured… partial coverage
+for v1." Observed live on _Ночной дозор_ (2026-06-19): the model names nameless background
+speakers with multi-word **descriptive phrases** ("женщина с двумя овчарками на поводке",
+"молодой в яркой оранжевой куртке", "женщина — с сонным малышом") that the bare-single-noun
+rule missed, so they leaked into the live cast instead of folding.
+
+**Fix (safe-tier widening of `isDescriptorName`, Russian path only — TDD'd):**
+
+1. A multi-word phrase carrying a standalone **function-word** token (preposition/conjunction:
+   `с/во/в/на/у/из/к/и…`, see `RU_FUNCTION_WORDS`) is a description, not a proper name — a real
+   Russian name (first · patronymic · surname · diminutive) structurally never contains one.
+   Near-zero false-positive risk. Leading/trailing dashes are stripped per token so a "Имя — с …"
+   dash beat tokenises cleanly.
+2. Bare occupational role nouns added to `GENERIC_ROLE_RU`: `оператор`, `водитель`.
+
+**Deliberately NOT done (precision over recall — the #938 lesson):** no "`<adjective> <role-noun>`"
+rule, so "Тёмный маг" is **not** folded by name (it can be a meaningful faction role); it falls to
+the post-stage-2 line-count fold if genuinely minor (<3 lines). The guard tests assert Антон /
+Антон Городецкий / Сергей Лукьяненко / Борис Игнатьевич / Светлана Назарова / Завулон never fold;
+the widening is Russian-only (no effect under `en`/undefined).
+
+**Not addressed here (separate, bug #938):** the byline **author** (`Сергей Лукьяненко`) being
+rostered as a speaking character and absorbing the protagonist's dialogue — a roster-inclusion /
+attribution defect, not a fold gap. Tracked for a dedicated brainstorm.
+
+- **Tests:** `fold-minor-cast.test.ts` "Wave E — Russian descriptor phrases (safe tier)" (function-word
+  phrases, bare role nouns, the proper-name guard, the adjective+role-noun exclusion, Russian-only
+  scoping, and a `foldMinorCast` integration that folds a 6-line phrase descriptor while keeping a
+  4-line Anton).
 
 ### Cross-cutting — reliable completion + wall-clock
 

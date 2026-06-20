@@ -890,3 +890,83 @@ describe('Wave D — localized minor-cast fold buckets', () => {
     expect(isDescriptorName('Unknown Jogger', 'ru')).toBe(true);
   });
 });
+
+describe('Wave E — Russian descriptor phrases (safe tier)', () => {
+  /* Background speakers on a Russian book are often named with a multi-word
+     DESCRIPTIVE PHRASE ("женщина с двумя овчарками на поводке"), not a bare
+     noun — the single-noun rule (Wave D) missed all of these, so they leaked
+     into the live cast instead of folding. The safe-tier widening fires only on
+     signals a proper Russian name structurally CANNOT have, so it can never
+     fold a real character (#938 author-takeover lesson). */
+
+  it('folds a multi-word phrase containing a Russian function word (preposition/conjunction)', () => {
+    /* Real cases from the Ночной дозор run (2026-06-19). */
+    expect(isDescriptorName('женщина с двумя овчарками на поводке', 'ru')).toBe(true); // с, на
+    expect(isDescriptorName('молодой в яркой оранжевой куртке', 'ru')).toBe(true); // в
+    expect(isDescriptorName('женщина - с сонным малышом', 'ru')).toBe(true); // dash + с
+    expect(isDescriptorName('мужчина у окна', 'ru')).toBe(true); // у
+    expect(isDescriptorName('девочка и её собака', 'ru')).toBe(true); // и
+  });
+
+  it('folds bare occupational role nouns added to the Russian set', () => {
+    expect(isDescriptorName('оператор', 'ru')).toBe(true);
+    expect(isDescriptorName('Водитель', 'ru')).toBe(true);
+  });
+
+  it('NEVER folds a real Russian proper name (the cardinal guard)', () => {
+    expect(isDescriptorName('Антон', 'ru')).toBe(false);
+    expect(isDescriptorName('Антон Городецкий', 'ru')).toBe(false);
+    expect(isDescriptorName('Сергей Лукьяненко', 'ru')).toBe(false); // byline author — not our job to fold (#938)
+    expect(isDescriptorName('Борис Игнатьевич', 'ru')).toBe(false);
+    expect(isDescriptorName('Светлана Назарова', 'ru')).toBe(false);
+    expect(isDescriptorName('Алиса Донникова', 'ru')).toBe(false);
+    expect(isDescriptorName('Завулон', 'ru')).toBe(false);
+    expect(isDescriptorName('Полина Васильевна', 'ru')).toBe(false);
+  });
+
+  it('safe tier deliberately does NOT fold "<adjective> <role-noun>" — relies on the line-count fold', () => {
+    /* "Тёмный маг" can be a meaningful faction role in this universe; the
+       safe tier leaves it to the post-stage-2 line-count fold so we never
+       swallow a real role character by name. */
+    expect(isDescriptorName('Тёмный маг', 'ru')).toBe(false);
+    expect(isDescriptorName('Темный маг', 'ru')).toBe(false);
+  });
+
+  it('the function-word + role-noun widening is Russian-only (no effect under en / undefined)', () => {
+    expect(isDescriptorName('женщина с двумя овчарками на поводке')).toBe(false);
+    expect(isDescriptorName('женщина с двумя овчарками на поводке', 'en')).toBe(false);
+    expect(isDescriptorName('оператор', 'en')).toBe(false);
+  });
+
+  it('foldMinorCast collapses a phrase descriptor regardless of line count, but keeps a real name with ≥ minLines', () => {
+    const chars = [
+      makeChar('narrator'),
+      makeChar('anton', { name: 'Антон Городецкий', gender: 'male' }),
+      makeChar('dog-woman', { name: 'женщина с двумя овчарками на поводке', gender: 'female' }),
+    ];
+    /* The descriptor speaks 6 lines (> minLines) yet still folds — the name
+       trigger is line-count-independent. Anton speaks 4 lines and must stay. */
+    const sentences = makeSentences([
+      [1, 'anton'],
+      [1, 'anton'],
+      [2, 'anton'],
+      [2, 'anton'],
+      [1, 'dog-woman'],
+      [1, 'dog-woman'],
+      [1, 'dog-woman'],
+      [2, 'dog-woman'],
+      [2, 'dog-woman'],
+      [2, 'dog-woman'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3, language: 'ru' });
+
+    expect(result.rewrites).toEqual({ 'dog-woman': FEMALE_BUCKET_ID });
+    /* Anton untouched. */
+    expect(result.characters.find((c) => c.id === 'anton')?.name).toBe('Антон Городецкий');
+    /* The phrase is rolled into the bucket's aliases for cross-book matching. */
+    const female = result.characters.find((c) => c.id === FEMALE_BUCKET_ID);
+    expect(female?.name).toBe('Незнакомая Девушка');
+    expect(female?.aliases).toContain('женщина с двумя овчарками на поводке');
+  });
+});
