@@ -121,6 +121,10 @@ describe('buildSyncManifestIndex', () => {
     const b2 = idx.books.find((b) => b.bookId === 'b2')!;
     expect(b1.finished).toBe(true);
     expect(b2.hidden).toBe(true);
+    // omit-when-false: a false/absent flag must NOT serialise the key (the
+    // companion parser relies on this, matching the coverUrl convention).
+    expect('hidden' in b1).toBe(false);
+    expect('finished' in b2).toBe(false);
   });
 });
 
