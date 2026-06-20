@@ -99,6 +99,47 @@ describe('cast-merges store — pure helpers', () => {
     expect(next.entries).toHaveLength(1);
     expect(next.entries[0]).toMatchObject({ kind: 'manual', sourceId: 'a' });
   });
+
+  it('replaceDedupEntries swaps dedup entries but preserves fold + manual', async () => {
+    const { replaceDedupEntries } = await import('./cast-merges.js');
+    const base = {
+      entries: [
+        { ts: 't', kind: 'manual' as const, sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [] },
+        { ts: 't', kind: 'fold' as const, sourceId: 'c', sourceName: 'C', targetId: 'd', affected: [] },
+        { ts: 't', kind: 'dedup' as const, sourceId: 'olga', sourceName: 'Ольга', targetId: 'ольга', affected: [] },
+      ],
+    };
+    const next = replaceDedupEntries(base, [
+      { ts: 't2', kind: 'dedup' as const, sourceId: 'ilya', sourceName: 'Илья', targetId: 'илья', affected: [] },
+    ]);
+    expect(next.entries.filter((e) => e.kind === 'manual')).toHaveLength(1);
+    expect(next.entries.filter((e) => e.kind === 'fold')).toHaveLength(1);
+    expect(next.entries.filter((e) => e.kind === 'dedup')).toEqual([
+      { ts: 't2', kind: 'dedup', sourceId: 'ilya', sourceName: 'Илья', targetId: 'илья', affected: [] },
+    ]);
+  });
+
+  it('buildDedupJournalEntries records pre-dedup affected sentences + sourceName', async () => {
+    const { buildDedupJournalEntries } = await import('./cast-merges.js');
+    const rewrites = { olga: 'ольга' };
+    const preDedupSentences = [
+      { id: 1, chapterId: 3, characterId: 'olga' },
+      { id: 2, chapterId: 3, characterId: 'antonio' },
+      { id: 5, chapterId: 4, characterId: 'olga' },
+    ];
+    const chars = [{ id: 'olga', name: 'Ольга' }, { id: 'ольга', name: 'Ольга' }];
+    const entries = buildDedupJournalEntries(rewrites, preDedupSentences, chars, 'TS');
+    expect(entries).toEqual([
+      {
+        ts: 'TS',
+        kind: 'dedup',
+        sourceId: 'olga',
+        sourceName: 'Ольга',
+        targetId: 'ольга',
+        affected: [{ chapterId: 3, sentenceId: 1 }, { chapterId: 4, sentenceId: 5 }],
+      },
+    ]);
+  });
 });
 
 describe('cast-merges store — IO round-trip', () => {
