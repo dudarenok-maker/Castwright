@@ -184,7 +184,7 @@ test.describe('visual baselines', () => {
      write the injected (magenta) capture over the real topbar.png baseline. */
   test('top-bar gate catches a branding repaint', async ({ page }, testInfo) => {
     test.skip(
-      testInfo.config.updateSnapshots === 'all',
+      testInfo.config.updateSnapshots === 'all' || testInfo.config.updateSnapshots === 'changed',
       'compare-mode only — would overwrite topbar.png under --update-snapshots',
     );
     await page.goto('/');
