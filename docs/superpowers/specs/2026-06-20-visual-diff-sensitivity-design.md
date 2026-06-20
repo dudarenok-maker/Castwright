@@ -1,265 +1,303 @@
-# Visual-diff sensitivity — contiguity gate
+# Visual-diff sensitivity — measure, then gate
 
-**Date:** 2026-06-20
+**Date:** 2026-06-20 (rev 2 — incorporates adversarial review)
 **Issue:** [#925](https://github.com/dudarenok-maker/Castwright/issues/925) — _Visual-diff threshold (5%) too loose to catch top-bar/branding-scale changes_
 **Area:** `area:ops` / `type:chore`
-**Status:** design (approved in brainstorming; pending spec review)
+**Status:** design (approved direction in brainstorming; spec revised after adversarial review)
 
 ## Problem
 
-`e2e/responsive/visual.spec.ts` compares 15 full-page screenshots (7 light +
-stats + 7 dark) with a single `maxDiffPixelRatio: 0.05` (5%). That ratio is
-large enough that a whole-top-bar / branding-scale change is **under 5% of
-total page pixels** and passes against an outdated baseline. This is exactly how
-the baselines silently drifted to the pre-rename "audiobook." UI without any
-visual spec failing (#922 fixed the staleness mechanism; this is the remaining
-detection gap).
+`e2e/responsive/visual.spec.ts` compares 15 screenshots per project (7 light +
+stats + 7 dark) with a single `maxDiffPixelRatio: 0.05` (5%). That ratio is large
+enough that a top-bar / branding-scale change can fall **under 5% of total
+pixels** and pass against an outdated baseline — exactly how the baselines
+silently drifted to the pre-rename "audiobook." UI without any visual spec
+failing (#922 fixed the staleness mechanism; this is the remaining detection
+gap).
 
-### Why a single full-page pixel-count threshold cannot fix this
+### What the captures actually are (corrected)
 
-Approximate arithmetic on a desktop chromium full-page capture
-(~1800×1280 ≈ 2.3M px):
+The captures are **viewport screenshots, not full-page** — `toHaveScreenshot`
+defaults `fullPage: false` and `visual.spec.ts` never overrides it. Verified
+baseline dimensions:
 
-- The top-bar is ~64px tall ≈ **3.6%** of the page.
-- A wordmark/logo swap repaints roughly half of it → **~1.8% of total pixels**.
-- The documented Windows chromium font-hinting noise floor is **~1–2%**
-  (scattered sub-pixel drift along anti-aliased text edges).
+| Project | Dimensions | Total px |
+|---|---|---|
+| chromium | 1280×720 | 921,600 |
+| mobile-chrome | 412×839 | 345,668 |
+| tablet-chrome | 834×1194 | 995,796 |
 
-So the **signal (~1.8%) overlaps the noise (~1–2%)** on the total-changed-pixel
-metric. This is not a tuning problem: any threshold on total changed-pixel count
-— ratio *or* absolute (`maxDiffPixels`) — is trying to separate a signal that is
-the same size as the noise. Lowering the ratio re-introduces font-hinting flakes
-before it reliably catches a top-bar change.
+(The `visual.spec.ts` header comment and `regen-visual-baselines.yml` that call
+these "full-page" / "14 specs" are stale; there are 15 captures and they are
+viewport. Pre-existing; out of scope to fix here beyond a note.)
 
-### The metric that does separate them: contiguity
+### Why this is genuinely hard (and why option 1 is a real contender)
 
-Font-hinting noise is thousands of **tiny, scattered, 1–2px-wide specks** along
-text edges. A branding-scale change is **one large contiguous block**. Measured
-as *"size of the largest connected region of changed pixels,"* the two are
-orders of magnitude apart, not a thin margin. The fix replaces (layers over) the
-total-pixel ratio with a **largest-contiguous-cluster** gate.
+On the real chromium capture (921,600 px), the top-bar (~64px) is **~8.9%** of
+pixels. But a *branding rename* (#922's case) changes only the **inked glyph /
+logo pixels**, which are sparse — plausibly **~1–3% of total**, overlapping the
+documented Windows chromium font-hinting noise floor of **~1–2%** (scattered
+sub-pixel drift along anti-aliased text edges; see `visual.spec.ts:78–89`). A
+heavier restyle (background, height) could reach ~9%.
+
+So the changed-pixel fraction of the regression we care about is **not known a
+priori** — it depends on how much ink moves — and may or may not separate cleanly
+from noise on a tightened ratio. **The previous revision of this spec asserted
+"signal ~1.8% overlaps noise" as settled fact and dismissed a tighter ratio.
+That was wrong: the number was derived from phantom full-page dimensions.** This
+revision makes the mechanism choice a **measured bake-off**, not an assertion.
+
+### The two candidate mechanisms
+
+- **Mechanism A — tightened / per-page ratio** (issue option 1): lower
+  `maxDiffPixelRatio` (globally or per-surface) to sit just above the measured
+  noise floor. Simplest; zero new code/deps. Wins iff the branding signal sits a
+  safe multiple above noise on the total-pixel metric.
+- **Mechanism B — contiguity gate**: run connected-component labeling on the
+  diff mask and fail on the largest *contiguous* changed cluster. Font noise is
+  scattered specks; a branding change is one block — *if* that holds under a
+  real connectivity rule and real text density, B separates signal from noise
+  even when A cannot. More code + one new devDep.
+
+**Default to A.** B must *earn* its complexity by beating A on the Phase-0
+numbers. The arithmetic no longer pre-judges which wins.
 
 ## Goals / non-goals
 
 **Goals**
 
-1. Catch _any_ large contiguous visual change — top-bar, footer, `/about`
-   wordmark, an added/removed section — regardless of page height, on the 15
-   existing surfaces.
-2. Introduce **no new font-hinting flakes** across chromium / mobile-chrome /
-   tablet-chrome on Windows + Ubuntu.
-3. Decide the threshold mechanism from **measured data**, not assertion.
-4. Make a near-threshold diff **reviewable** (failure artifact), not silently
-   pass/fail.
-5. Lock the new sensitivity with a **permanent** regression test (not the
+1. Reliably catch a top-bar / branding-scale change on the chromium surfaces
+   (the gate that runs in pre-push `verify`).
+2. Introduce **no new font-hinting flakes**.
+3. Choose the mechanism (A vs B) from **measured data on real dimensions**.
+4. Make a near-threshold diff **reviewable** (failure artifact).
+5. Lock the chosen sensitivity with a **permanent** regression test (not the
    issue's throwaway-and-revert).
 
 **Non-goals**
 
-- Replacing Playwright's baseline lifecycle. We piggyback on
-  `toHaveScreenshot` for create / bless / `--update-snapshots` / per-platform
-  per-project paths.
-- Region-scoping to the top-bar only (issue option 4). The approved scope is
-  _any_ large-region change anywhere on the page; contiguity covers that
-  generally, so a dedicated chrome capture is unnecessary.
-- Perceptual/structural-similarity (SSIM) diffing. Contiguity is sufficient and
-  far simpler to reason about and calibrate.
+- Re-blessing baselines as full-page. Catching below-the-fold (footer/`/about`)
+  changes would need `fullPage: true` baselines — a much larger change, deferred
+  unless Phase 0 shows it's necessary. The honest scope is **what's in the
+  viewport** of the 15 existing surfaces.
+- Replacing Playwright's baseline lifecycle (`--update-snapshots`, per-platform
+  per-project paths).
+- SSIM / perceptual diffing.
 
-## Approach (two phases)
+## Phase 0 — measurement (decides A vs B, on real dimensions)
 
-### Phase 0 — measurement (gates the mechanism choice)
+A harness, gated behind `MEASURE_VISUAL=1` (reuses the spec's navigation
+helpers, dev server, and three projects; **not** in any gating battery),
+produces a committed evidence table at `docs/testing/visual-noise-measurement.md`
+(mirrors `docs/testing/flake-evidence.md`).
 
-A harness quantifies, per surface × project × OS, the separation between noise
-and a branding-scale signal under both candidate metrics, so the mechanism is
-chosen on data.
+It must measure the things the previous revision asserted, and avoid the
+circularity the review flagged:
 
-- **Form:** a Playwright spec gated behind `MEASURE_VISUAL=1` (reuses the
-  navigation helpers, dev server, and the three projects) — _not_ part of any
-  gating battery. (A standalone `scripts/measure-visual-noise.mjs` was
-  considered but would duplicate navigation/settle logic already in the spec
-  helpers.)
-- **Noise floor:** capture each surface **N=10×** back-to-back with the same
-  settle as the gating capture (`animations: 'disabled'`, `waitForTimeout`).
-  For each capture vs. the first, `pixelmatch` → mask → record
-  **`totalDiffRatio`** (today's metric) and **`maxClusterPx`** (proposed).
-  Aggregate the **max observed** of each = the noise floor under each metric.
-- **Signal footprint:** inject a synthetic branding-scale change via
-  `page.addStyleTag` at a few magnitudes (logo +30%, wordmark font-size 1.4×,
-  top-bar background swap), diff against the **unmodified** baseline, record the
-  same two metrics = the signal footprint.
-- **Output:** a per-surface table (noise floor vs. signal footprint under both
-  metrics) committed to `docs/testing/visual-noise-measurement.md` (mirrors the
-  existing `docs/testing/flake-evidence.md` convention).
+1. **Noise floor.** Capture each surface **N=10×** back-to-back with the *exact
+   gating capture settings* (see "capture parity" below). For each capture vs.
+   the first, compute the diff and record, per surface × project:
+   - `totalDiffRatio` (Mechanism A's metric), and
+   - `maxClusterPx` under **both 4- and 8-connectivity** (Mechanism B's metric).
+2. **Threshold sweep (breaks C3 circularity).** Report both metrics as a
+   function of `pixelmatchThreshold` (e.g. 0.05 / 0.1 / 0.2). This separates
+   "the per-pixel YIQ threshold suppressed noise" from "contiguity suppressed
+   noise" — B only earns its keep if it adds separation *beyond* what the
+   per-pixel threshold alone buys.
+3. **Text-density stress.** Include the text-heaviest surfaces — `ready
+   (manuscript)`, `stats`, `confirm` — in **both themes**, because the central
+   risk to Mechanism B is collinear glyph-edge specks **chaining** into one
+   large cluster along a text line (worse under 8-connectivity, which bridges
+   inter-glyph gaps diagonally). If even 4-connectivity chains text-line noise
+   into a large cluster, B's premise ("noise = small clusters") fails for dense
+   text and B needs a morphological erosion / min-component-dimension filter —
+   or we fall back to A.
+4. **Signal footprint.** Inject a synthetic branding-scale change via
+   `page.addStyleTag` at a few magnitudes (logo +30%; wordmark color/background
+   swap that does **not** reflow; a top-bar background change), diff against the
+   unmodified baseline, record both metrics. Magnitudes are expressed as **% of
+   the real per-project dimensions**, not the phantom 2.3M-px page.
 
-**Downgrade gate (decision rule applied to the numbers):**
+**Decision rule (applied to the table):**
 
-- If `maxClusterPx`: `min signal cluster / max noise cluster ≥ ~5×` →
-  **proceed with the contiguity comparator (Phase 1)**; set the per-project
-  `maxClusterPx` budget at `noise_max × 3`, verified still `≪ min signal
-  cluster`.
-- If, unexpectedly, `totalDiffRatio` shows a clean ≥3× gap →
-  **downgrade to issue option 1**: per-page calibrated `maxDiffPixelRatio`,
-  skip the comparator. (Recorded for completeness; the arithmetic above makes
-  this outcome unlikely.)
+- Let `gapA = min(signal totalDiffRatio) / max(noise totalDiffRatio)` and
+  `gapB = min(signal maxClusterPx) / max(noise maxClusterPx)` at the best
+  `pixelmatchThreshold`.
+- **If `gapA ≥ 3×`** (clean headroom on the simple metric) → **ship Mechanism A**:
+  per-surface calibrated `maxDiffPixelRatio` set at `noise_max × √(gapA)` (geometric
+  midpoint), no comparator, no new deps. Stop here.
+- **Else if `gapB ≥ 3×`** under the connectivity that keeps text-line noise small
+  → **ship Mechanism B** (Phase 1), `maxClusterPx` budget at the geometric midpoint
+  between noise and signal, per-project.
+- **Else** (neither separates) → escalate: full-page re-bless, region-scoping the
+  top-bar (issue option 4), or erosion. Re-spec before building.
 
-### Phase 1 — the contiguity comparator
+The single `3×` bar (not the previous, unjustified asymmetric 5×/3×) is the
+headroom we require for either mechanism to be flake-safe; it is the same bar for
+both so the comparison is apples-to-apples.
+
+## Phase 1 — the contiguity gate (only if Phase 0 selects Mechanism B)
 
 Keep `toHaveScreenshot` as a **loose** catastrophe-net + baseline-manager; layer
-a contiguity gate that reads the same baseline and fails on any large connected
-changed region.
-
-**Per-capture test body** (all 15 captures gain one line):
-
-```ts
-await expect(page).toHaveScreenshot('library.png', LOOSE_OPTS); // baseline mgmt + total-meltdown net
-await expectNoLargeRegionDrift(page, 'library.png');            // the real signal: largest contiguous change
-```
-
-`LOOSE_OPTS` retains `maxDiffPixelRatio: 0.05` (or looser) — its only remaining
-job is catching a total-page meltdown; the contiguity gate carries precision.
+a contiguity gate that reads the same baseline.
 
 **New module `e2e/visual-diff.ts`:**
 
 ```ts
 export interface RegionDriftOpts {
-  maxClusterPx?: number;        // budget; default from the calibration constant
-  pixelmatchThreshold?: number; // per-pixel YIQ sensitivity; default ~0.1
+  maxClusterPx?: number;        // per-project budget from Phase 0
+  connectivity?: 4 | 8;         // from Phase 0 (default 4 unless 8 measured safe)
+  pixelmatchThreshold?: number; // from Phase 0
 }
-
-// Pure, unit-tested core — no I/O, no Playwright.
-export function largestChangedCluster(
-  changed: Uint8Array, w: number, h: number,
+export function largestChangedCluster(            // pure, unit-tested
+  changed: Uint8Array, w: number, h: number, connectivity: 4 | 8,
 ): { size: number; bbox: [number, number, number, number] };
-
-// Assertion. Called from within a test (uses test.info()).
 export async function expectNoLargeRegionDrift(
   page: Page, name: string, opts?: RegionDriftOpts,
 ): Promise<void>;
 ```
 
-**`expectNoLargeRegionDrift` flow:**
-
-1. `test.info().snapshotPath(name)` resolves the committed baseline path,
-   honoring the custom `snapshotPathTemplate` — **no path-template
-   duplication**. _(De-risk: if `snapshotPath` is found not to honor the custom
-   template, fall back to formatting the template from a shared constant. Verify
-   during implementation.)_
-2. If the baseline is **missing** (un-blessed platform), return — the
-   `toHaveScreenshot` that ran on the prior line will have blessed it, and there
-   is nothing to compare against this run.
-3. Decode baseline (`pngjs`) and a fresh `page.screenshot()`.
-4. **Dimension mismatch** (page width/height changed) → throw immediately with a
-   clear message; a changed page size _is_ a large structural change.
-5. `pixelmatch(base, actual, diffBuf, w, h, { threshold })` → build a
-   `Uint8Array` "changed?" mask from the diff buffer.
-6. `largestChangedCluster(mask, w, h)` → if `size > maxClusterPx`, attach the
-   failure artifact (below) and throw with the cluster size, the budget, and the
-   bounding box.
-
-**Connected-component core:** iterative flood-fill (explicit stack,
-**8-connectivity** so diagonal glyph strokes don't fragment the noise into a
-misleadingly large blob _or_ split a real change), single pass with a visited
-bitset, O(w·h). ~2.3M px runs well under 100 ms.
-
-**Under `--update-snapshots`:** `toHaveScreenshot` rewrites the baseline on the
-prior line before the comparator reads it, so the gate naturally passes — no
-need to detect update-mode in-worker (which `visual.spec.ts` notes is
-unreliable; the CLI flag is not in worker `process.argv`).
-
-**Third-capture noise checkpoint (known risk):** `page.screenshot()` is a third
-capture after `toHaveScreenshot`'s two-frame stabilization, so it carries its
-own font-hinting noise. That is exactly what the cluster budget tolerates and
-what Phase 0 measures directly. If Phase 0 shows third-capture noise produces an
-unexpectedly large _contiguous_ cluster (it should not — hinting noise is
-thin/scattered), add a two-frame settle before the screenshot. Flagged as a
-checkpoint, not a surprise.
-
-### Failure artifact (issue option 3)
-
-On a gate trip, render a PNG: the baseline dimmed, the offending cluster's
-pixels in magenta, a bounding-box outline. `testInfo.attach('<name>-cluster-diff',
-{ contentType: 'image/png', body })` surfaces it in the Playwright HTML report
-and CI artifacts — a near-threshold diff becomes reviewable rather than silently
-passing/failing.
-
-### Permanent proof (upgrades the issue's "throwaway")
-
-A standing negative spec replaces the issue's add-a-throwaway-then-revert
-acceptance step:
+**Capture parity (was M1 — load-bearing, now in the body not a footnote).** The
+comparator's screenshot MUST replicate every `toHaveScreenshot` option that
+affects pixels, or the pixelmatch is garbage:
 
 ```ts
-test('contiguity gate catches a branding-scale change', async ({ page }) => {
-  await page.goto('/');
-  await page.addStyleTag({ content: '/* scale top-bar wordmark ~1.4× */ …' });
-  await expect(expectNoLargeRegionDrift(page, 'library.png')).rejects.toThrow(/contiguous/i);
+await page.screenshot({
+  animations: 'disabled', // else mid-transition frames vs frozen baseline
+  caret: 'hide',          // else a focused input's caret blinks (e.g. upload)
+  scale: 'css',           // CRITICAL: page.screenshot defaults 'device' → on
+                          //   mobile/tablet (dSF>1) the capture is 2× the
+                          //   baseline's dimensions → guaranteed dimension
+                          //   mismatch on two of three projects
+  fullPage: false,        // match the viewport baselines
 });
 ```
 
-This locks the sensitivity on every run: if a future refactor loosens the budget
-enough that a top-bar-scale change slips through, this test goes red.
+**Composition / ordering (was M2).** The comparator is **independent of
+`toHaveScreenshot`'s pass/fail** — it reads the baseline file directly:
 
-## Where it runs
+1. Resolve the baseline path. Use `test.info().snapshotPath(name)` **only after
+   a one-line spike confirms** it honors the `{snapshotDir}/{platform}/{testFilePath}/{projectName}/{arg}{ext}`
+   template without double-appending `{ext}` to a `'library.png'` arg (was M3).
+   If it mis-resolves, format the template from a single shared constant
+   (re-introduces minor duplication — acceptable, documented).
+2. If the baseline file is **absent**, return (the describe is already
+   `test.skip`-ped when the platform's `BASELINE_DIR` is missing; an
+   individual-file absence is a first-bless that `toHaveScreenshot` reports
+   loudly on its own line).
+3. Decode baseline (`pngjs`) + the parity screenshot above.
+4. **Dimension mismatch → throw** a *distinct, dimension-specific* error
+   (separate message from the cluster-size error — see the negative proof).
+5. `pixelmatch(..., { threshold })` → "changed?" `Uint8Array` → `largestChangedCluster`.
+6. If `size > maxClusterPx`, attach the artifact and throw a *cluster-size-specific*
+   error naming size, budget, bbox.
 
-- **chromium:** `npm run test:e2e:visual` (chromium-only, `--workers=1`), which
-  runs in the pre-push `verify` battery. So the chromium contiguity gate is in
-  the standard gate.
-- **mobile-chrome / tablet-chrome:** their visual baselines run **only** in the
-  opt-in `npm run test:e2e:all` (`test:e2e:mobile` excludes them via
-  `--grep-invert="visual baselines"`). The contiguity gate rides along there.
-  Phase 0 still measures per-project budgets so those gates are calibrated when
-  they do run.
-- **Linux:** `regen-visual-baselines.yml` blesses Linux baselines; the
-  comparator reads whatever baseline exists for the running platform, so it is
-  platform-agnostic.
+Compose semantics, stated explicitly: the loose `toHaveScreenshot` catches
+total-meltdown (>5%); the contiguity gate catches the **sub-5% contiguous**
+changes that pass the loose net — which is the branding case (sparse ink, passes
+5%, fails contiguity). When `toHaveScreenshot` itself fails (>5%), it throws
+first and the test is already loudly red; the contiguity artifact isn't produced
+in that case **by design** (a >5% change needs no extra precision). Under
+`--update-snapshots`, `toHaveScreenshot` rewrites the baseline on its line before
+the comparator reads it.
 
-## Testing (CLAUDE.md-compliant)
+**Connected-component core.** Iterative flood-fill, explicit stack, visited
+bitset, O(w·h) — at 0.92M px, sub-50ms. Connectivity is a **parameter** set by
+Phase 0, defaulting to **4** (8-connectivity is opt-in only if Phase 0 proves it
+keeps text-line noise small).
 
-- **Vitest unit** — `largestChangedCluster`: one large blob; scattered specks
-  (must stay below any real budget); a diagonal-connectivity chain (8-conn);
-  empty mask; single pixel; a blob touching an edge; the bbox is correct.
-- **E2E negative** — the injected-branding proof above (must throw).
-- **E2E positive** — the 15 existing captures now also run the gate green on
-  committed baselines (the "no new flakes" half of acceptance), validated on
-  chromium locally + Ubuntu via the regen workflow.
-- **Phase 0 harness** — produces the committed evidence doc; not gating.
+**Failure artifact (issue option 3).** Render the baseline dimmed + the offending
+cluster in magenta + bbox outline; `testInfo.attach('<name>-cluster-diff', …)`
+surfaces it in the HTML report and CI artifacts.
+
+**Permanent proof (was M4 — must test the gate, not reflow).** Inject a change
+that is **guaranteed not to alter dimensions** (a `background`/`color` swap on a
+fixed-size top-bar region — *no* font-size scaling, which reflows and would trip
+the dimension path), and assert it throws the **cluster-size-specific** error
+(match on that message, not a generic `/contiguous/i`):
+
+```ts
+test('contiguity gate rejects a fixed-size branding repaint', async ({ page }) => {
+  await page.goto('/');
+  await page.addStyleTag({ content: '[data-topbar] { background: #f0f !important; }' });
+  await expect(expectNoLargeRegionDrift(page, 'library.png'))
+    .rejects.toThrow(/largest contiguous .* exceeds .* budget/i);
+});
+```
+
+## Where it runs (was M5 — stated honestly)
+
+- **chromium** visual specs run in `npm run test:e2e:visual` → in the pre-push
+  `verify` battery. **This is the verified gate.**
+- **mobile-chrome / tablet-chrome** visual specs run **only** in opt-in
+  `npm run test:e2e:all` (`test:e2e:visual` is chromium-only; `test:e2e:mobile`
+  excludes "visual baselines" via `--grep-invert`). Their budgets are
+  Phase-0-calibrated but **not exercised in any routine battery**.
+- **Goal 2 is therefore scoped honestly: "no new flakes on chromium (verified);
+  mobile/tablet calibrated-but-unverified."** The capture-parity `scale:'css'`
+  fix is mandatory regardless, so that `test:e2e:all` doesn't fail outright the
+  first time someone runs it.
 
 ## Dependencies
 
-- Add `pixelmatch` + `pngjs` to **devDependencies** (`pixelmatch` is what
-  Playwright uses internally; both are small, widely-used, zero-native-build).
+- Mechanism A: **none**.
+- Mechanism B: add **`pixelmatch`** to devDependencies. `pngjs` resolves
+  transitively via Playwright, but **declare it explicitly** if used (don't rely
+  on a transitive dep).
+
+## Testing (CLAUDE.md-compliant)
+
+- **Vitest unit** — `largestChangedCluster`: large blob; scattered specks (stay
+  below budget) under **both 4- and 8-conn**; a diagonal chain (asserts the
+  4-vs-8 difference is real); empty; single pixel; edge-touching blob; bbox
+  correctness.
+- **E2E negative** — the fixed-size repaint proof above (throws the cluster
+  error specifically).
+- **E2E positive** — the 15 chromium captures run the chosen gate green on
+  committed baselines (the "no new flakes" half), locally + Ubuntu via the regen
+  workflow.
+- **Phase 0 harness** — produces the evidence doc; not gating.
+
+(All of the above for Mechanism B. For Mechanism A: the test is simply the
+tightened per-surface ratio + a permanent proof that injects the same fixed-size
+repaint and asserts the ratio assertion fails.)
 
 ## Docs & process
 
 - New plan `docs/features/227-visual-diff-sensitivity.md` (from `TEMPLATE.md`,
   `status: active`) + `docs/features/INDEX.md` entry.
-- `docs/testing/visual-noise-measurement.md` — the Phase 0 numbers.
-- Update the `visual.spec.ts` header comment and the 5%-rationale comment in
-  `.github/workflows/regen-visual-baselines.yml` to describe the two-layer gate.
-- PR body: `Closes #925`. The issue's four options are addressed: (1)/(2)
-  evaluated and superseded by contiguity per the arithmetic; (3) failure
-  artifact shipped; (4) generalized — contiguity covers any region, not just
-  chrome.
+- `docs/testing/visual-noise-measurement.md` — Phase 0 numbers + the A-vs-B
+  decision.
+- Update the stale `visual.spec.ts` header comment (viewport not full-page; 15
+  not 14) and the chosen gate's rationale; note the `regen-visual-baselines.yml`
+  "14/42" staleness (optionally fix in a separate trivial commit — it doesn't
+  block).
+- PR body: `Closes #925`. Issue options mapped: (1)=Mechanism A; (2) rejected
+  (absolute count couples to page height); (3) failure artifact (Mechanism B) or
+  N/A (A); (4) deferred fallback only.
 
 ## Rollout
 
 One branch, `chore/ops-visual-diff-contiguity`:
 
-1. Phase 0 harness + commit `visual-noise-measurement.md`.
-2. Apply the downgrade gate to the measured numbers (expected: proceed).
-3. Build the comparator + `largestChangedCluster` unit tests.
-4. Wire the gate into the 15 captures + add the negative proof.
-5. Docs (plan 227, INDEX, header/workflow comments).
-6. `npm run verify`.
+1. Spike `test.info().snapshotPath('x.png')` vs the custom template (de-risk M3).
+2. Phase 0 harness → commit `visual-noise-measurement.md` with real-dimension
+   numbers, both connectivities, the threshold sweep.
+3. Apply the decision rule → pick Mechanism A or B (document the choice).
+4. Build the chosen mechanism + unit tests + permanent proof + (B only) artifact.
+5. Wire into the 15 chromium captures; fix `scale:'css'` so mobile/tablet don't
+   false-fail.
+6. Docs (plan 227, INDEX, header/workflow comments).
+7. `npm run verify`.
 
 ## Risks & open questions
 
-- **`snapshotPath` template fidelity** — verify it honors the custom
-  `snapshotPathTemplate`; fall back to a shared template constant if not.
-- **Third-capture noise** — see the checkpoint above; mitigation is a two-frame
-  settle if Phase 0 demands it.
-- **Per-project budgets** — mobile/tablet pages are narrower/taller; Phase 0
-  may yield different `maxClusterPx` per project. A small per-project map covers
-  this; default to one global budget if the numbers are close.
-- **`page.screenshot()` full-page vs. viewport** — must capture the same region
-  `toHaveScreenshot` baselines (full page). Confirm `fullPage` parity during
-  implementation so dimensions match the baseline.
+- **A might win.** If Phase 0 shows `gapA ≥ 3×`, we ship a one-line per-surface
+  ratio change and **none** of Phase 1 — the cheapest possible fix. The spec is
+  structured so that's a clean, expected outcome, not a failure.
+- **Text-line chaining could sink B** even at 4-connectivity on dense dark-mode
+  text. Phase 0's text-density stress is the go/no-go; the fallback is erosion or
+  region-scoping, which forces a re-spec.
+- **`snapshotPath` template fidelity** — spike first (step 1).
+- **Mobile/tablet are calibrated-but-unverified** — accepted scope; the
+  `scale:'css'` fix prevents an outright break when `test:e2e:all` runs.
