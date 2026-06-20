@@ -339,6 +339,12 @@ _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ the variant filter never silently carries over to a tab where it shows nothing.
 _Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644).
 
+#### `fs-48` — Fish Audio S2-Pro TTS engine (16GB premium tier) ([#964](https://github.com/dudarenok-maker/Castwright/issues/964))
+
+- _What:_ Opt-in fourth TTS engine (alongside Kokoro/Coqui/Qwen) targeting **16GB consumer GPUs** via **BNB NF4 4-bit** (FP8 ≈ 20GB, GGUF too slow at RTF≈3). Prefer in-process PyTorch reuse; clone-from-seed voices on a Qwen-style per-character lifecycle + a bundled age×gender seed-reference library. **Parked — blocked on four gates:** legal sign-off (Fish Audio Research License — personal use OK, for-sale is the user's own licence), a physical 16GB card for the hardware-gated Task-0 spike, `srv-43` (`voiceUuid`), and the unproven make-or-break 4-bit prosody-quality question.
+- _Benefit (user):_ the best-quality, expressive, multilingual engine within reach of quality-chasers on a mainstream 16GB card (no 24GB required).
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-fish-audio-s2pro-engine-design.md` (brainstormed + 3 adversarial reviews) · [#964](https://github.com/dudarenok-maker/Castwright/issues/964).
+
 ### Security & hardening
 
 Source for the whole sub-group: the [2026-05-31 security review](security/2026-05-31-security-review.md). All are scoped to the **opt-in LAN exposure surface** (`npm run start:lan`) or local-only defense-in-depth — the app is single-user/local-first by design, so these harden the hostile-LAN and local-write threat models rather than fixing an exploited-today hole. `srv-19` (draft plan 157) is the partner default-bind fix.
