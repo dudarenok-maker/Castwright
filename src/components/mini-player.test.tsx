@@ -991,4 +991,26 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
     await act(async () => { fireEvent.loadedMetadata(el); });
     expect(el.currentTime).toBe(25); // resume bookmark wins
   });
+
+  it('suppresses waveform sr-only issues when peaks are empty (decorative fallback bars)', async () => {
+    /* Regression for issue-waveform: the scrubber should pass issues={undefined}
+       to <Waveform> when peaks are empty, so amber never paints on decorative
+       fallback bars and their sr-only issue list never renders. */
+    getChapterAudioFn.mockResolvedValue({
+      url: 'blob:x',
+      durationSec: 30,
+      sampleRate: 44100,
+      peaks: [], // Empty peaks — decorative mode
+      segments: [{ start: 10, end: 12, characterId: 'n', sentenceId: 1, suspect: true, reasons: ['Long sentence'] }],
+    } as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
+    /* Wait for the player to fetch and settle, so issues state derives
+       from the segment (would normally render an issue). */
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    await waitFor(() => expect(getChapterAudioFn).toHaveBeenCalled());
+    /* Without the guard, the unguarded Waveform would render the sr-only
+       issue list even though bars are decorative. Assert the list is absent. */
+    expect(screen.queryByText(/Issue at/)).toBeNull();
+  });
 });

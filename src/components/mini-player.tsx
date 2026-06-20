@@ -703,7 +703,7 @@ export function MiniPlayer({
               data-testid="mini-player-scrubber"
               className="flex-1 relative cursor-pointer group h-7"
             >
-              <Waveform progress={progress} active peaks={audio.peaks} issues={issues} />
+              <Waveform progress={progress} active peaks={audio.peaks} issues={audio.peaks?.length ? issues : undefined} />
               <div
                 className="absolute bottom-0 left-0 h-[2px] rounded-full bg-gradient-progress pointer-events-none"
                 style={{ width: `${progress * 100}%` }}
