@@ -651,6 +651,31 @@ afterAll(async () => {
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_test-stage1-ch7.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_retry_5xx-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_gemini_no_tone-stage1-ch1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_gemini_no_tone-stage1-ch1.json'), { force: true });
+});
+
+describe('GeminiAnalyzer.runStage1Chapter — two-schema runStage tolerates a tone-less response (srv-45)', () => {
+  it('a stage-1 response with NO tone validates with no retry (non-fatal)', async () => {
+    /* The validation schema (stage1ChapterSchema → characterSchema) marks tone
+       optional; a missing tone must NOT fail parseAndValidate or trigger the
+       single retry. Mirrors the Ollama two-schema test, validation half only. */
+    const noTone = JSON.stringify({
+      characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
+    });
+    generateContentStream.mockResolvedValue(
+      asyncFromArray(chunksOf(noTone, 24).map((text) => ({ text }))),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-3.1-flash-lite' });
+
+    const result = await analyzer.runStage1Chapter('m_gemini_no_tone', 1, '# stage1 prompt', {});
+
+    expect(generateContentStream).toHaveBeenCalledTimes(1); // no retry
+    expect(result.characters).toHaveLength(1);
+    expect(result.characters[0].tone).toBeUndefined(); // absent is fine
+  });
 });
 
 describe('appendBounded — stream accumulator cap', () => {
