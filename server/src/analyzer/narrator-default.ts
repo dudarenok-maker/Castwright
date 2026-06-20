@@ -1,24 +1,22 @@
-/* Deterministic narrator-default heuristic (plan 221, Wave A).
+/* Deterministic narrator-default heuristic (plan 221 Wave A; generalized to all
+   languages 2026-06-20).
 
-   The per-sentence attribution model — especially on non-Latin scripts —
-   mislabels third-person NARRATION as the named character (e.g. "Егор засунул
-   руки в карманы" → `egor`), which would read narration in that character's
-   voice. The spoken-vs-narration distinction is mechanical, so we decide it in
-   code instead of trusting the model: any sentence that is NOT a spoken line is
-   forced to `narrator`.
+   The per-sentence attribution model mislabels third-person NARRATION as the
+   named character (e.g. “She was lost.” -> stephanie), which would read
+   narration in that character's voice. The spoken-vs-narration distinction is
+   mechanical, so we decide it in code: any sentence that is NOT a spoken line is
+   forced to narrator. Runs for English too (the model ignores the same rule in
+   the skill prompt).
 
-   A "spoken line" = begins with a dialogue dash (—/–/-) or an opening quote
-   («/"/“), OR contains a quoted span. Everything else is narration. This
-   deliberately LEAVES dashed narrative tags ("— сказал юноша") to the model +
-   language preamble (they look spoken), and never touches dialogue lines, so it
-   cannot break speaker attribution — it only ever changes a non-spoken line to
-   `narrator`. Coverage is unaffected (the coverage guard keys on sentence text,
-   not characterId). Empirically (server/repro-heuristic.mts) this took the
-   model's narration-block correctness from 0–1/6 to 6/6 on every run with zero
-   dialogue damage. Pure: no I/O, no model calls. */
+   A spoken line begins with a dialogue dash or any opening quote, OR contains a
+   quoted span (double / guillemet / smart-single / boundary-anchored
+   straight-single). Everything else is narration. Demote-only at the sentence
+   level: it never reassigns a quoted line and never promotes narrator->character
+   (it does lower line counts, which fold/reconcile consume downstream). Coverage
+   is unaffected (the coverage guard keys on sentence text, not characterId).
+   Pure: no I/O, no model calls. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
-import { isNonEnglish } from '../tts/language.js';
 
 const NARRATOR_ID = 'narrator';
 
@@ -48,13 +46,24 @@ export function forceNarratorOnNonSpokenLines(sentences: SentenceOutput[]): Sent
   );
 }
 
-/** Apply the narrator-default heuristic only for non-English books. For English
-    (and missing language) returns the SAME array reference (no-op) so the
-    English path is byte-identical. */
-export function applyNonEnglishNarratorDefault(
-  sentences: SentenceOutput[],
-  language: string | undefined,
-): SentenceOutput[] {
-  if (!isNonEnglish(language ?? '')) return sentences;
-  return forceNarratorOnNonSpokenLines(sentences);
+/** Apply the narrator-default heuristic for ALL languages. Each non-spoken
+    sentence whose model-assigned characterId is a real character is demoted to
+    `narrator`; the FIRST such override in each contiguous demoted run has its
+    confidence clamped to <= 0.5 so the Confirm-view low-confidence navigator
+    gets one review stop per block (not one per sentence). Spoken lines and
+    pre-existing-narrator lines are returned by reference, untouched. Pure. */
+export function applyNarratorDefault(sentences: SentenceOutput[]): SentenceOutput[] {
+  let clampedThisRun = false;
+  return sentences.map((s) => {
+    if (isSpokenLine(s.text)) {
+      clampedThisRun = false;
+      return s;
+    }
+    if (s.characterId === NARRATOR_ID) return s; // already narrator — not an override
+    if (!clampedThisRun) {
+      clampedThisRun = true;
+      return { ...s, characterId: NARRATOR_ID, confidence: Math.min(s.confidence ?? 1, 0.5) };
+    }
+    return { ...s, characterId: NARRATOR_ID };
+  });
 }

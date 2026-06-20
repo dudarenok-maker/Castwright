@@ -10,7 +10,7 @@ import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
-import { applyNonEnglishNarratorDefault } from '../analyzer/narrator-default.js';
+import { applyNarratorDefault } from '../analyzer/narrator-default.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -1555,12 +1555,11 @@ async function attributeChapterStage2(opts: {
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
-  /* plan 221 Wave A — non-English narrator-default heuristic. The model
-     mislabels third-person narration as a character on non-Latin scripts;
-     force non-spoken sentences to `narrator`. No-op for English. Runs AFTER
-     coverage (coverage keys on text, not characterId), so the verdict is
-     unchanged. */
-  result.sentences = applyNonEnglishNarratorDefault(result.sentences, opts.stageCall.language);
+  /* Deterministic narrator-default: force non-spoken sentences to `narrator`
+     and flag the first of each demoted block low-confidence. Runs for ALL
+     languages, AFTER coverage (coverage keys on text, not characterId, so the
+     verdict is unchanged) and UPSTREAM of fold/reconcile. */
+  result.sentences = applyNarratorDefault(result.sentences);
   return result;
 }
 

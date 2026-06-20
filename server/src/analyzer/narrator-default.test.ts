@@ -3,7 +3,7 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import {
   isSpokenLine,
   forceNarratorOnNonSpokenLines,
-  applyNonEnglishNarratorDefault,
+  applyNarratorDefault,
 } from './narrator-default.js';
 import { foldMinorCast } from './fold-minor-cast.js';
 
@@ -87,20 +87,58 @@ describe('forceNarratorOnNonSpokenLines', () => {
   });
 });
 
-describe('applyNonEnglishNarratorDefault', () => {
-  const input = [s(1, 'egor', 'Егор побежал.'), s(2, 'woman', '— Стой!')];
-  it('applies the heuristic for non-English languages', () => {
-    expect(applyNonEnglishNarratorDefault(input, 'ru').map((x) => x.characterId)).toEqual(['narrator', 'woman']);
-    expect(applyNonEnglishNarratorDefault(input, 'ru-RU').map((x) => x.characterId)).toEqual(['narrator', 'woman']);
+describe('applyNarratorDefault', () => {
+  it('runs for English: demotes non-spoken character lines to narrator, leaves spoken lines', () => {
+    const en = [s(1, 'stephanie', 'She was lost.'), s(2, 'stephanie', '"Hard to starboard,"')];
+    expect(applyNarratorDefault(en).map((x) => x.characterId)).toEqual(['narrator', 'stephanie']);
   });
-  it('is a no-op for English and for missing language (returns the same array reference)', () => {
-    expect(applyNonEnglishNarratorDefault(input, 'en')).toBe(input);
-    expect(applyNonEnglishNarratorDefault(input, undefined)).toBe(input);
+
+  it('clamps only the FIRST override in a contiguous demoted run to 0.5', () => {
+    const run = [
+      s(1, 'stephanie', 'She was lost.'),
+      s(2, 'stephanie', 'She turned away from the dead end.'),
+      s(3, 'stephanie', 'She tried to remember the way.'),
+    ];
+    const out = applyNarratorDefault(run);
+    expect(out.map((x) => x.characterId)).toEqual(['narrator', 'narrator', 'narrator']);
+    expect(out.map((x) => x.confidence)).toEqual([0.5, 0.9, 0.9]);
   });
-  it('leaves English characterIds unchanged in VALUE, not just reference (guards a gate regression)', () => {
-    const en = [s(1, 'halloran', 'The wind had turned.'), s(2, 'halloran', '"Hard to starboard,"')];
-    const out = applyNonEnglishNarratorDefault(en, 'en');
-    expect(out.map((x) => x.characterId)).toEqual(['halloran', 'halloran']);
+
+  it('a spoken line resets the run so each demoted block gets its own single flag', () => {
+    const seq = [
+      s(1, 'stephanie', 'She was lost.'),       // override -> clamp 0.5
+      s(2, 'stephanie', 'She turned away.'),     // override -> 0.9
+      s(3, 'stephanie', '"This way,"'),          // spoken -> reset
+      s(4, 'stephanie', 'She walked on.'),       // override -> clamp 0.5 (new run)
+    ];
+    const out = applyNarratorDefault(seq);
+    expect(out.map((x) => x.characterId)).toEqual(['narrator', 'narrator', 'stephanie', 'narrator']);
+    expect(out.map((x) => x.confidence)).toEqual([0.5, 0.9, 0.9, 0.5]);
+  });
+
+  it('leaves pre-existing narrator lines untouched and they do not consume the clamp slot', () => {
+    const seq = [
+      s(1, 'narrator', 'The hall was dark.'),  // already narrator
+      s(2, 'stephanie', 'She was lost.'),       // first override of the run -> 0.5
+    ];
+    const out = applyNarratorDefault(seq);
+    expect(out[0]).toBe(seq[0]); // unchanged reference
+    expect(out[1].characterId).toBe('narrator');
+    expect(out[1].confidence).toBe(0.5);
+  });
+
+  it('clamp is min, not overwrite: a model confidence already below 0.5 stays', () => {
+    const low = [
+      { id: 1, chapterId: 1, characterId: 'stephanie', text: 'She was lost.', confidence: 0.3 } as SentenceOutput,
+    ];
+    expect(applyNarratorDefault(low)[0].confidence).toBe(0.3);
+  });
+
+  it('demotes non-English narration too AND now flags it (both-language flag)', () => {
+    const ru = [s(1, 'egor', 'Егор побежал.'), s(2, 'woman', '— Стой!')];
+    const out = applyNarratorDefault(ru);
+    expect(out.map((x) => x.characterId)).toEqual(['narrator', 'woman']);
+    expect(out[0].confidence).toBe(0.5); // previously silent, now flagged
   });
 });
 
