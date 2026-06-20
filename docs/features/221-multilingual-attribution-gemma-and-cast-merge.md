@@ -162,6 +162,8 @@ preamble guard, rather than guard-text-only:
    verdict is unchanged; English is a byte-identical no-op. Empirically (the
    model's narration correctness 0–1/6 → a deterministic 6/6 every run, dialogue
    untouched). See [162](162-fs2-multilanguage.md) for the full write-up.
+
+> **Update (2026-06-20, bug #954 / PR #955):** the narrator-default heuristic was generalized to ALL languages — `applyNonEnglishNarratorDefault` renamed `applyNarratorDefault`, the `isNonEnglish` gate dropped — to fix English close-third-person narration being voiced as the POV character. `isSpokenLine` now recognizes all common quote conventions (US double, UK/Irish single, guillemet, dash; a word-boundary-anchored straight-single matcher ignores apostrophes/possessives), and the first sentence of each demoted block is flagged low-confidence (both language paths). English is therefore NO LONGER a no-op. Design: `docs/superpowers/specs/2026-06-20-english-narrator-default-attribution-design.md`.
 2. **Russian dash-dialogue tag guard** in `languagePreamble`
    (`server/src/analyzer/gemini.ts`): the one class the heuristic deliberately
    leaves to the model is the dashed narrative TAG (`— сказал юноша`,

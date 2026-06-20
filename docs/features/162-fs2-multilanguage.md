@@ -112,6 +112,8 @@ language param.
 
 ### Non-English narrator-default heuristic (plan 221 Wave A)
 
+> **Update (2026-06-20, bug #954 / PR #955):** this heuristic now runs for ALL languages — renamed `applyNarratorDefault` with the `isNonEnglish` gate removed — recognizing every common quote convention (incl. boundary-anchored straight-single, apostrophe-safe) and flagging the first sentence of each demoted block low-confidence. The English path is no longer a byte-identical no-op. Full design: `docs/superpowers/specs/2026-06-20-english-narrator-default-attribution-design.md`.
+
 The per-sentence attribution model — especially on non-Latin scripts —
 mislabels third-person NARRATION as the named character (e.g. "Егор засунул
 руки в карманы" → `egor`), which would read narration in that character's
