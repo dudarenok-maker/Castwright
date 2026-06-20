@@ -18,6 +18,8 @@ import {
   stage1ChapterSchema,
   stage2ChapterSchema,
   emotionAnnotationSchema,
+  stage1GrammarSchema,
+  stage1ChapterGrammarSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
@@ -202,7 +204,15 @@ export class GeminiAnalyzer implements Analyzer {
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
-    return this.runStage(manuscriptId, '1', 'whole_book_stage1', promptMd, stage1Schema, call);
+    return this.runStage(
+      manuscriptId,
+      '1',
+      'whole_book_stage1',
+      promptMd,
+      stage1GrammarSchema,
+      stage1Schema,
+      call,
+    );
   }
 
   async runStage1Chapter(
@@ -217,6 +227,7 @@ export class GeminiAnalyzer implements Analyzer {
       key,
       'per_chapter_stage1',
       promptMd,
+      stage1ChapterGrammarSchema,
       stage1ChapterSchema,
       call,
     );
@@ -235,6 +246,7 @@ export class GeminiAnalyzer implements Analyzer {
       'per_chapter_stage2',
       promptMd,
       stage2ChapterSchema,
+      stage2ChapterSchema,
       call,
     );
   }
@@ -252,6 +264,7 @@ export class GeminiAnalyzer implements Analyzer {
       'emotion_annotation',
       promptMd,
       emotionAnnotationSchema,
+      emotionAnnotationSchema,
       call,
     );
   }
@@ -261,7 +274,8 @@ export class GeminiAnalyzer implements Analyzer {
     key: HandoffKey,
     skillName: SkillName,
     promptMd: string,
-    schema: z.ZodType<T>,
+    _grammarSchema: z.ZodType<unknown>,
+    validationSchema: z.ZodType<T>,
     call: StageCall,
   ): Promise<T> {
     await writeInbox(manuscriptId, key, promptMd);
@@ -281,7 +295,7 @@ export class GeminiAnalyzer implements Analyzer {
         call,
       );
 
-      const firstAttempt = parseAndValidate(firstText, schema);
+      const firstAttempt = parseAndValidate(firstText, validationSchema);
       if (firstAttempt.ok) {
         await persistResponse(manuscriptId, key, firstText);
         return firstAttempt.value;
@@ -309,7 +323,7 @@ export class GeminiAnalyzer implements Analyzer {
         call,
       );
 
-      const secondAttempt = parseAndValidate(secondText, schema);
+      const secondAttempt = parseAndValidate(secondText, validationSchema);
       if (secondAttempt.ok) {
         await persistResponse(manuscriptId, key, secondText);
         return secondAttempt.value;

@@ -10,6 +10,7 @@
    server, just a deterministic Response object per scenario. */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+import { z } from 'zod';
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -299,6 +300,59 @@ describe('OllamaAnalyzer — schema-constrained `format`', () => {
     expect(s2.properties.sentences.items.required).toEqual(
       expect.arrayContaining(['id', 'chapterId', 'characterId', 'text']),
     );
+  });
+});
+
+describe('OllamaAnalyzer — two-schema runStage (grammar vs validation)', () => {
+  /* Task 7: runStage now accepts grammarSchema (fed to z.toJSONSchema → Ollama
+     format) and validationSchema (fed to parseAndValidate). For stage1Chapter,
+     the grammar uses stage1ChapterGrammarSchema (tone REQUIRED) while
+     validation uses stage1ChapterSchema (tone OPTIONAL). A response with no
+     tone field must pass validation without a retry. */
+  it('a stage-1 response with NO tone passes validation (non-fatal), grammar still required-tone', async () => {
+    /* Arrange: character without tone — grammar requires it, validation tolerates absence. */
+    const noToneResponse = JSON.stringify({
+      characters: [
+        {
+          id: 'narrator',
+          name: 'Narrator',
+          role: 'narrator',
+          color: 'narrator',
+          /* NOTE: tone is intentionally absent here — the validation schema
+             (stage1ChapterSchema → characterSchema) marks tone as optional.
+             A missing tone must NOT fail parseAndValidate or trigger a retry. */
+        },
+      ],
+    });
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(noToneResponse, 32))));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const { stage1ChapterGrammarSchema } = await import('../handoff/schemas.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+
+    /* (b) validation is tolerant: the call succeeds with no retry */
+    const result = await analyzer.runStage1Chapter(
+      'm_ollama_two_schema',
+      1,
+      '# stage1 prompt',
+      {},
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no retry
+    expect(result.characters).toHaveLength(1);
+    expect(result.characters[0].tone).toBeUndefined(); // absent is fine
+
+    /* (a) grammar fed to Ollama is derived from the required-tone grammar schema */
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    const expectedGrammar = z.toJSONSchema(stage1ChapterGrammarSchema, {
+      target: 'draft-07',
+      reused: 'inline',
+    });
+    expect(body.format).toEqual(expectedGrammar);
+
+    /* Confirm the grammar schema DOES require tone (its character items list
+       tone as required), while the validation schema does not. */
+    const charItems = body.format.properties.characters.items;
+    expect(charItems.required).toContain('tone');
   });
 });
 
@@ -634,6 +688,7 @@ afterAll(async () => {
     'm_ollama_format_shape_diff',
     'm_ollama_raw_attempt1',
     'm_ollama_raw_both',
+    'm_ollama_two_schema',
   ]) {
     await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stage1-ch1.md`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`), { force: true });
