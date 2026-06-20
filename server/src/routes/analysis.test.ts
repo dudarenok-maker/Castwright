@@ -25,8 +25,11 @@ import {
   trackForReplay,
   replayCatchUp,
   castInFlightEntryToLiveChapter,
+  resolveBookAuthorForManuscript,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
+import { normaliseNameKey } from '../util/safe-id.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1545,6 +1548,26 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   });
 });
 
+describe('buildStage1ChapterInbox — #938 byline-author guidance', () => {
+  const chapter = { id: 1, title: 'Chapter 1', body: 'Эскалатор полз медленно.' };
+
+  it('renders a "book author is not a character" block when an author is provided', () => {
+    const md = buildStage1ChapterInbox('m1', 'Ночной дозор', chapter, [], [], 'Сергей Лукьяненко');
+    expect(md).toMatch(/Сергей Лукьяненко/);
+    expect(md).toMatch(/not a character/i);
+  });
+
+  it('omits the block when no author is provided (back-compat)', () => {
+    const md = buildStage1ChapterInbox('m1', 'Ночной дозор', chapter, [], []);
+    expect(md).not.toMatch(/not a character/i);
+  });
+
+  it('narrows the first-person-document rule to framed embedded documents', () => {
+    const md = buildStage1ChapterInbox('m1', 'X', chapter, [], [], 'Author');
+    expect(md).toMatch(/first-person novel is NOT/i);
+  });
+});
+
 /* buildInterimCast underpins the mid-run cast.json writes — the helper
    must produce a deduped, palette-coloured roster with lines:0/scenes:0
    placeholders so the file shape matches the post-Phase-1 end-of-run
@@ -1959,5 +1982,137 @@ describe('castInFlightEntryToLiveChapter — live tick chapter map (Phase-0a cas
     expect(result.chapterTitle).toBe('Chapter Three');
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(typeof result.estMs).toBe('number');
+  });
+});
+
+describe('resolveBookAuthorForManuscript', () => {
+  it('returns "" for an unknown manuscript (no throw)', async () => {
+    await expect(resolveBookAuthorForManuscript('mns_does_not_exist')).resolves.toBe('');
+  });
+});
+
+/* #938 regression — byline-author exclusion on the CACHED roster path.
+   The adversarial-review insight: the guard sits on the roster-BUILD
+   (read) path inside rebuildRoster(), so it must drop the author even
+   when chapterCast came from cache (a resume / already-analyzed book),
+   not only for freshly-detected chapters.
+
+   We cannot import rebuildRoster() (it is a closure inside the route),
+   so we exercise the EXACT wiring Task 5 added:
+     chapterCast → dropBylineAuthorFromChapter → mergeRosterChapter
+   This is the composition that both entrypoints share and is the precise
+   seam Task 5 introduced. The test FAILS without the guard. */
+describe('#938 byline-author exclusion — cached roster path integration', () => {
+  const BOOK_AUTHOR = 'Сергей Лукьяненко';
+
+  /* Simulate a chapterCast record that came from CACHE (a prior
+     completed analysis run). Chapter 1 is a story chapter; the
+     stage-1 model mistakenly included the byline author. */
+  const cachedChapterCast: Record<number, CharacterOutput[]> = {
+    1: [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        role: 'Omniscient narrator',
+        color: 'narrator',
+        evidence: [{ quote: 'Эскалатор вниз полз медленно.' }],
+      },
+      {
+        /* The bug: stage-1 detected the book's author as a character. */
+        id: 'sergey-lukyanenko',
+        name: 'Сергей Лукьяненко',
+        role: 'Protagonist',
+        color: 'unset',
+        evidence: [{ quote: 'Я — Иной.' }],
+      },
+      {
+        id: 'anton',
+        name: 'Антон',
+        role: 'Protagonist',
+        color: 'unset',
+        evidence: [{ quote: 'Поехали.' }],
+      },
+    ],
+  };
+
+  /* Inline the same logic rebuildRoster() uses in analysis.ts
+     (both the main-route and subset-route closures do exactly this). */
+  function rebuildRosterInline(
+    chapterCast: Record<number, CharacterOutput[]>,
+    chapterHints: Array<{ id: number; title?: string }>,
+    author: string,
+  ): Map<string, CharacterOutput> {
+    const r = new Map<string, CharacterOutput>();
+    for (const ch of chapterHints) {
+      const cast = chapterCast[ch.id];
+      if (cast?.length) {
+        const guarded = dropBylineAuthorFromChapter(cast, {
+          author,
+          chapterTitle: ch.title,
+        });
+        mergeRosterChapter(r, guarded.characters);
+      }
+    }
+    return r;
+  }
+
+  it('excludes the byline author from the final roster when chapterCast came from cache', () => {
+    const chapterHints = [{ id: 1, title: 'Пролог' }];
+
+    const finalRoster = rebuildRosterInline(cachedChapterCast, chapterHints, BOOK_AUTHOR);
+    const rosterArray = Array.from(finalRoster.values());
+
+    /* The real protagonist and narrator must survive. */
+    expect(rosterArray.some((c) => c.id === 'anton')).toBe(true);
+    expect(rosterArray.some((c) => c.id === 'narrator')).toBe(true);
+
+    /* The byline author must NOT appear in the final roster (match
+       case-insensitively via normaliseNameKey, same as the guard uses). */
+    const authorKey = normaliseNameKey(BOOK_AUTHOR);
+    const authorEntry = rosterArray.find((c) => normaliseNameKey(c.name) === authorKey);
+    expect(authorEntry).toBeUndefined();
+  });
+
+  it('would include the byline author if the guard were absent (confirms the test is meaningful)', () => {
+    /* Simulate rebuildRoster WITHOUT the guard — raw mergeRosterChapter
+       from cache. If the guard is removed, the author leaks through. */
+    const r = new Map<string, CharacterOutput>();
+    mergeRosterChapter(r, cachedChapterCast[1]!);
+    const rosterArray = Array.from(r.values());
+
+    const authorKey = normaliseNameKey(BOOK_AUTHOR);
+    const authorEntry = rosterArray.find((c) => normaliseNameKey(c.name) === authorKey);
+
+    /* Without the guard the author IS in the roster — this confirms the
+       test above is a meaningful regression (the guard is the diff). */
+    expect(authorEntry).toBeDefined();
+  });
+
+  /* The two cases below exercise buildInterimCast directly — the exported
+     function that wires dropBylineAuthorFromChapter inside its own loop.
+     If the guard is deleted from buildInterimCast specifically, these
+     cases go red even if the rebuildRosterInline cases above stay green. */
+  it('buildInterimCast — excludes the byline author when author arg is supplied', () => {
+    const interim = buildInterimCast(cachedChapterCast, [1], undefined, BOOK_AUTHOR);
+
+    /* Real characters survive. */
+    expect(interim.some((c) => c.id === 'anton')).toBe(true);
+    expect(interim.some((c) => c.id === 'narrator')).toBe(true);
+
+    /* The byline author must be absent. */
+    const authorKey = normaliseNameKey(BOOK_AUTHOR);
+    const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
+    expect(authorEntry).toBeUndefined();
+  });
+
+  it('buildInterimCast — includes the byline author when author arg is omitted (witness: exclusion is from the guard)', () => {
+    /* Without the author arg the guard has nothing to match against, so
+       the author entry passes through. This proves the exclusion in the
+       case above is attributable to the guard, not some other filter. */
+    const interim = buildInterimCast(cachedChapterCast, [1]);
+
+    const authorKey = normaliseNameKey(BOOK_AUTHOR);
+    const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
+    expect(authorEntry).toBeDefined();
   });
 });

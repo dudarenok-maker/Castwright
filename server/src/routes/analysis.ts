@@ -52,6 +52,7 @@ import {
   chapterDriftExceeded,
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
+import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import {
   readUserSettings,
   getCachedUserSettings,
@@ -115,6 +116,7 @@ import {
   tryParseApiError,
   FAILURE_REMEDIATIONS,
 } from './failure-taxonomy.js';
+import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -651,11 +653,15 @@ export function buildInterimCast(
   chapterCast: Record<number, CharacterOutput[]>,
   chapterOrder: number[],
   language?: string,
+  author = '',
 ): CharacterOutput[] {
   const roster = new Map<string, CharacterOutput>();
   for (const chapterId of chapterOrder) {
     const cast = chapterCast[chapterId];
-    if (cast?.length) mergeRosterChapter(roster, cast);
+    if (cast?.length) {
+      const guarded = dropBylineAuthorFromChapter(cast, { author }); // #938 — no title here (transient interim)
+      mergeRosterChapter(roster, guarded.characters);
+    }
   }
   if (roster.size === 0) return [];
   const folded = previewFoldForLiveView(Array.from(roster.values()), language);
@@ -1245,6 +1251,7 @@ export function buildStage1ChapterInbox(
   chapter: { id: number; title: string; body: string },
   runningRoster: CharacterOutput[],
   seriesPrior: SeriesPriorCharacter[] = [],
+  author = '',
 ): string {
   /* Compact roster format — only the identity fields the model needs to
      reuse ids verbatim. Skipping evidence/tone/description keeps each
@@ -1293,6 +1300,15 @@ ${priorJson}
 \`\`\`
 `;
 
+  /* #938 — the book's byline author is NOT a character. Rendered only when known. */
+  const authorBlock = author.trim()
+    ? `
+## Book author — NOT a character
+
+The byline author of this book is **${author.trim()}**. This is the real-world author printed on the cover — they are NOT a character in the story. Do NOT add them to the roster, and never assign the narrator's prose or the protagonist's first-person lines to them — UNLESS this chapter is an explicitly-framed author's note/letter in which the author speaks in the first person about the book.
+`
+    : '';
+
   return `---
 manuscriptId: ${manuscriptId}
 stage: 1-ch${chapter.id}
@@ -1318,6 +1334,9 @@ true:
    the *author* is the character, with their \`id\` set to their name,
    and the document's prose becomes their evidence. \`narrator\` is
    reserved for omniscient third-person prose with no in-fiction author.
+   A whole **first-person novel is NOT** such a document — its first-person
+   voice is the protagonist/narrator, NOT the book's author; never roster the
+   byline author as that voice.
 
 **An explicit \`<Name> <speech-verb>\` dialogue tag is binding** — \`"…,"
 Lessom repeated.\`, \`"Fine," Sela agreed.\`, \`"Where?" Wren asked.\`
@@ -1365,7 +1384,7 @@ For any character below who appears in this chapter, use the existing \`id\`
 duplicate roster entry.
 
 ${rosterBlock}
-${priorBlock}
+${priorBlock}${authorBlock}
 ## Chapter
 
 ${chapter.body}
@@ -2124,6 +2143,18 @@ export async function resolveBookLanguageForManuscript(manuscriptId: string): Pr
   }
 }
 
+/* #938 — the book's byline author (cover/byline name), for the Layer A front-matter
+   strip + the Layer B roster guard. Mirrors resolveBookLanguageForManuscript's
+   fail-open shape: "" on any miss so the guard/strip degrade to no-ops. */
+export async function resolveBookAuthorForManuscript(manuscriptId: string): Promise<string> {
+  try {
+    const located = await findBookByManuscriptId(manuscriptId);
+    return located?.state?.author ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
@@ -2134,6 +2165,13 @@ export async function runMainAnalyzerJob(
   /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
      Resolved once per job; threaded into every runStage* call below. */
   const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  /* #938 Layer A — resolve the byline author + strip title-page/e-library
+     boilerplate from each chapter body BEFORE the model sees it. In-memory only
+     (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+  const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
+  for (const ch of record.chapterHints) {
+    ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
+  }
   const requestedFresh = opts.requestedFresh;
   const allowStage1Shrink = opts.allowStage1Shrink;
   const abortController = job.controller;
@@ -2557,7 +2595,16 @@ export async function runMainAnalyzerJob(
         const r = new Map<string, CharacterOutput>();
         for (const ch of recordRef.chapterHints) {
           const cast = chapterCast[ch.id];
-          if (cast?.length) mergeRosterChapter(r, cast);
+          if (cast?.length) {
+            /* #938 Layer B — keep the byline author out of every roster build
+               (covers cached chapterCast too, unlike guarding only fresh writes).
+               Framed author's-note chapters keep the author. */
+            const guarded = dropBylineAuthorFromChapter(cast, {
+              author: bookAuthor,
+              chapterTitle: ch.title,
+            });
+            mergeRosterChapter(r, guarded.characters);
+          }
         }
         return r;
       };
@@ -2760,6 +2807,7 @@ export async function runMainAnalyzerJob(
                       { ...ch, body: subBody },
                       Array.from(rebuildRoster().values()),
                       seriesPrior,
+                      bookAuthor,
                     ),
                     {
                       signal: abortController.signal,
@@ -2922,6 +2970,7 @@ export async function runMainAnalyzerJob(
             chapterCast,
             recordRef.chapterHints.map((h) => h.id),
             bookLanguage,
+            bookAuthor,
           );
           if (interim.length > 0) {
             try {
@@ -4353,6 +4402,13 @@ async function runSubsetAnalyzerJob(
   const manuscriptId = job.manuscriptId;
   /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate. */
   const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  /* #938 Layer A — resolve the byline author + strip title-page/e-library
+     boilerplate from each chapter body BEFORE the model sees it. In-memory only
+     (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+  const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
+  for (const ch of record.chapterHints) {
+    ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
+  }
   const abortController = job.controller;
   const analyzer = selection.analyzer;
   const analyzerLabel = engineLabel(selection.engine, selection.model);
@@ -4477,7 +4533,16 @@ async function runSubsetAnalyzerJob(
       const r = new Map<string, CharacterOutput>();
       for (const ch of record.chapterHints) {
         const cast = chapterCast[ch.id];
-        if (cast?.length) mergeRosterChapter(r, cast);
+        if (cast?.length) {
+          /* #938 Layer B — keep the byline author out of every roster build
+             (covers cached chapterCast too, unlike guarding only fresh writes).
+             Framed author's-note chapters keep the author. */
+          const guarded = dropBylineAuthorFromChapter(cast, {
+            author: bookAuthor,
+            chapterTitle: ch.title,
+          });
+          mergeRosterChapter(r, guarded.characters);
+        }
       }
       return r;
     };
@@ -4523,6 +4588,7 @@ async function runSubsetAnalyzerJob(
                     { ...ch, body: subBody },
                     Array.from(rebuildRoster().values()),
                     subsetSeriesPrior,
+                    bookAuthor,
                   ),
                   {
                     signal: abortController.signal,
@@ -4562,6 +4628,7 @@ async function runSubsetAnalyzerJob(
             chapterCast,
             record.chapterHints.map((h) => h.id),
             bookLanguage,
+            bookAuthor,
           );
           if (interim.length > 0) {
             try {

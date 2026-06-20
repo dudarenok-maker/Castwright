@@ -74,6 +74,10 @@ one **verbatim utterance** that is theirs — either:
    `FILED BY: ODUVAN`, signature `—Marlow`, chapter title `Wren's
 Registry File`, the surrounding bio block, etc.). The author of
    such text is a character whose `id` is their name, NOT `narrator`.
+   A whole first-person **novel** is NOT such a document — its first-person voice
+   is the protagonist/narrator, not the book's author. Never roster the book's
+   byline author as a character unless they explicitly act or speak in the story
+   (e.g. a clearly-framed author's note).
 
 **Binding rule — an explicit dialogue tag always counts.** If the chapter
 contains a `<Name> <speech-verb>` attribution beat next to a quote — `"…,"
