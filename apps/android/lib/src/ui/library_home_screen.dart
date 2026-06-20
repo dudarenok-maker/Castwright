@@ -65,6 +65,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
           author: s.author,
           lastPlayedAt: s.lastPlayedAt,
           updatedAt: '',
+          hidden: s.hidden,
         ),
     ]);
     await for (final s in loadLibraryLocalFirst(

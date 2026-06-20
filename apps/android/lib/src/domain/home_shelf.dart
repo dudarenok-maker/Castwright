@@ -10,6 +10,7 @@ class ShelfBook {
     required this.author,
     required this.lastPlayedAt,
     required this.updatedAt,
+    this.hidden = false,
   });
   final String bookId;
   final String title;
@@ -21,12 +22,17 @@ class ShelfBook {
   /// ISO last-updated time (server-side change).
   final String updatedAt;
 
+  /// Whether this book is hidden from the "Continue listening" shelf (finished
+  /// or manually removed). Defaults to false so existing callers compile
+  /// without change.
+  final bool hidden;
+
   bool get inProgress => (lastPlayedAt ?? '').isNotEmpty;
 }
 
-/// In-progress books, most-recently-played first.
+/// In-progress books, most-recently-played first. Hidden books are excluded.
 List<ShelfBook> buildContinueListening(List<ShelfBook> books) {
-  final inProgress = books.where((b) => b.inProgress).toList()
+  final inProgress = books.where((b) => b.inProgress && !b.hidden).toList()
     ..sort((a, b) => b.lastPlayedAt!.compareTo(a.lastPlayedAt!));
   return inProgress;
 }
