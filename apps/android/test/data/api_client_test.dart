@@ -109,43 +109,36 @@ void main() {
       expect(await api.getChapterPeaks('b1', 3), isEmpty);
     });
 
-    // setShelfStatus uses the same pinned HttpClient as putListenProgress/putListenStats
-    // (not the injectable _send), so we verify the JSON body shape — the same
-    // pattern the putListenStats test uses — and confirm the method exists on
-    // ApiClient (compilation is the RED signal; the body tests are the GREEN contract).
-    test('setShelfStatus body includes only finished when hidden is absent', () async {
-      // Verify the JSON serialisation contract: only supplied fields appear.
-      const finished = true;
-      final body = <String, dynamic>{};
-      body['finished'] = finished;
-      final encoded = jsonEncode(body);
-      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
-      expect(decoded['finished'], isTrue);
-      expect(decoded.containsKey('hidden'), isFalse);
-
-      // Confirm the method is present on ApiClient (compilation check; actual
-      // HTTP call is validated at device level — pinned TLS can't run in unit tests).
-      expect(ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, ''))
-          .setShelfStatus, isA<Function>());
+    // shelfStatusBody is the package-private helper extracted from setShelfStatus
+    // so the null-filtering logic can be tested without a live pinned TLS client.
+    // These tests cover the KEY invariant: only non-null flags appear in the body.
+    // An always-both-keys implementation would fail the "only finished" and
+    // "only hidden" cases because containsKey would return true for the absent key.
+    test('shelfStatusBody returns empty map when both flags are null', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody();
+      expect(body, isEmpty);
     });
 
-    test('setShelfStatus body includes only hidden when finished is absent', () async {
-      final body = <String, dynamic>{};
-      body['hidden'] = true;
-      final encoded = jsonEncode(body);
-      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
-      expect(decoded['hidden'], isTrue);
-      expect(decoded.containsKey('finished'), isFalse);
+    test('shelfStatusBody includes only finished when hidden is null', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody(finished: true);
+      expect(body['finished'], isTrue);
+      expect(body.containsKey('hidden'), isFalse);
     });
 
-    test('setShelfStatus body includes both flags when both are provided', () async {
-      final body = <String, dynamic>{};
-      body['finished'] = true;
-      body['hidden'] = true;
-      final encoded = jsonEncode(body);
-      final decoded = jsonDecode(encoded) as Map<String, dynamic>;
-      expect(decoded['finished'], isTrue);
-      expect(decoded['hidden'], isTrue);
+    test('shelfStatusBody includes only hidden when finished is null', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody(hidden: true);
+      expect(body['hidden'], isTrue);
+      expect(body.containsKey('finished'), isFalse);
+    });
+
+    test('shelfStatusBody includes both flags when both are provided', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody(finished: true, hidden: false);
+      expect(body['finished'], isTrue);
+      expect(body['hidden'], isFalse);
     });
   });
 }

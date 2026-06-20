@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../domain/sync_manifest.dart';
 import 'chapter_downloader.dart' show RangeFetch, RangeResponse;
 import 'listen_stats_service.dart' show ListenStatsApi, StatDay;
@@ -170,6 +172,17 @@ class ApiClient {
     }
   }
 
+  /// Builds the JSON body for [setShelfStatus]: only the non-null flags are
+  /// included so callers can pass a single changed field without overwriting
+  /// the other on the server.
+  @visibleForTesting
+  Map<String, dynamic> shelfStatusBody({bool? finished, bool? hidden}) {
+    final body = <String, dynamic>{};
+    if (finished != null) body['finished'] = finished;
+    if (hidden != null) body['hidden'] = hidden;
+    return body;
+  }
+
   /// POST the shelf status (finished and/or hidden) for a book to the server
   /// (app-19 cross-device finished sync). Only the supplied fields are included
   /// in the body — callers pass just the flag they changed. CA-pinned, same
@@ -179,9 +192,7 @@ class ApiClient {
       {bool? finished, bool? hidden}) async {
     final client = _pinnedHttpClient(connection);
     try {
-      final body = <String, dynamic>{};
-      if (finished != null) body['finished'] = finished;
-      if (hidden != null) body['hidden'] = hidden;
+      final body = shelfStatusBody(finished: finished, hidden: hidden);
       final req = await client.postUrl(
           _u('/api/books/${Uri.encodeComponent(bookId)}/shelf-status'));
       req.headers.set(
