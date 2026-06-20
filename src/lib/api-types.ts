@@ -836,6 +836,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/merge-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List diminutive merge suggestions for a book
+         * @description Returns the current set of per-book diminutive merge suggestions written
+         *     by the dedup pass (e.g. "Оля + Ольга — same person?"). Returns
+         *     `{ suggestions: [] }` when the book is unknown or no file exists —
+         *     safe to call without a prior existence check.
+         */
+        get: operations["listCastMergeSuggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/merge-suggestions/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss a merge suggestion
+         * @description Removes the matching `(sourceId, targetId)` pair from the suggestions
+         *     file. No-op when the pair is already absent. Does NOT perform any merge.
+         */
+        post: operations["dismissCastMergeSuggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/merge-suggestions/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept a merge suggestion (merge + dismiss)
+         * @description Performs the cast merge (`sourceId` folded into `targetId`, where
+         *     `targetId` is the canonical survivor), then drops the suggestion so it
+         *     never resurfaces. Equivalent to calling `POST /cast/merge` followed by
+         *     `POST /cast/merge-suggestions/dismiss`.
+         */
+        post: operations["acceptCastMergeSuggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queue": {
         parameters: {
             query?: never;
@@ -1866,6 +1933,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description A suggested merge pair produced by the dedup pass (Tier-2b).
+         *     `sourceId` is the diminutive/duplicate character; `targetId` is the
+         *     canonical survivor. The UI surfaces this as "Are Оля and Ольга the
+         *     same person?" and lets the user accept (merge) or dismiss (keep both).
+         */
+        MergeSuggestion: {
+            /** @description Id of the character to fold away (the diminutive / duplicate). */
+            sourceId: string;
+            /** @description Id of the canonical surviving character. */
+            targetId: string;
+            /** @description Human-readable explanation of why these were flagged (e.g. "diminutive of Ольга"). */
+            reason: string;
+        };
+        CastMergeSuggestionsResponse: {
+            suggestions: components["schemas"]["MergeSuggestion"][];
+        };
         /**
          * @description srv-2 — one auto-backup snapshot of a book's state.json. Returned
          *     by GET /api/books/{bookId}/backups, newest first.
@@ -5255,6 +5339,121 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VoiceMatchResponse"];
                 };
+            };
+        };
+    };
+    listCastMergeSuggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current suggestion list (may be empty) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CastMergeSuggestionsResponse"];
+                };
+            };
+        };
+    };
+    dismissCastMergeSuggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The id of the character to fold (the diminutive / duplicate). */
+                    sourceId: string;
+                    /** @description The id of the canonical survivor. */
+                    targetId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Suggestion removed (or was already absent) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description sourceId or targetId missing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    acceptCastMergeSuggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The id of the character to fold (the diminutive / duplicate). */
+                    sourceId: string;
+                    /** @description The id of the canonical survivor. */
+                    targetId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Merge performed and suggestion removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or equal sourceId/targetId */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book has no cast yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

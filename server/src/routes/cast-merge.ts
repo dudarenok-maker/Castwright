@@ -18,13 +18,13 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { normaliseForMatch } from './analysis.js';
-import { bookStateLanguage } from '../workspace/scan.js';
 import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
@@ -47,33 +47,41 @@ interface MergeBody {
   targetId?: unknown;
 }
 
-castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) => {
-  const { bookId } = req.params;
-  const body = (req.body ?? {}) as MergeBody;
-  const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
-  const targetId = typeof body.targetId === 'string' ? body.targetId.trim() : '';
+/** Result returned by `performCastMerge`. */
+export interface CastMergeResult {
+  characters: CharacterOutput[];
+}
 
-  if (!sourceId || !targetId) {
-    return res.status(400).json({ error: 'sourceId and targetId are required.' });
-  }
-  if (sourceId === targetId) {
-    return res.status(400).json({ error: 'sourceId and targetId must differ.' });
-  }
+/** Shared merge parameters — passed by both the manual-merge route and the
+    accept-suggestion route so the logic lives in exactly one place. */
+export interface CastMergeArgs {
+  bookId: string;
+  bookDir: string;
+  /** The book's state object (needed for language-aware bucket names). */
+  state: BookStateJson;
+  /** The id of the character to fold away (the "source" / duplicate). */
+  sourceId: string;
+  /** The id of the surviving character (the "target" / canonical). */
+  targetId: string;
+}
 
-  const located = await findBookByBookId(bookId);
-  if (!located) return res.status(404).json({ error: 'Book not found.' });
-  const { bookDir, state } = located;
+/** Perform the cast merge: fold `sourceId` into `targetId`, rewriting
+    cast.json, manuscript-edits.json, the analysis cache, and the
+    cast-merges journal. Returns the updated character list.
+
+    Throws with a shape `{ status: number; error: string }` on semantic
+    errors (404 / 409) so the caller can propagate the right HTTP status. */
+export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeResult> {
+  const { bookId, bookDir, state, sourceId, targetId } = args;
 
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   if (!cast?.characters?.length) {
-    return res
-      .status(409)
-      .json({ error: 'Book has no cast on disk yet. Run analysis before merging characters.' });
+    throw { status: 409, error: 'Book has no cast on disk yet. Run analysis before merging characters.' };
   }
 
   const source = cast.characters.find((c) => c.id === sourceId);
   let target = cast.characters.find((c) => c.id === targetId);
-  if (!source) return res.status(404).json({ error: `Character "${sourceId}" not found.` });
+  if (!source) throw { status: 404, error: `Character "${sourceId}" not found.` };
   /* Downgrade-to-bucket path: when the caller targets one of the standing
      `unknown-male` / `unknown-female` buckets and that bucket doesn't yet
      exist in cast.json (the book had no auto-folded background speakers),
@@ -91,7 +99,7 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
     cast.characters.push(createdBucket);
     target = createdBucket;
   }
-  if (!target) return res.status(404).json({ error: `Character "${targetId}" not found.` });
+  if (!target) throw { status: 404, error: `Character "${targetId}" not found.` };
 
   /* Build the merged target. Field rules mirror mergeRosterChapter, with
      two twists for the manual-merge case:
@@ -256,7 +264,36 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
       (cacheTouched ? ' (rewrote cache)' : ''),
   );
 
-  return res.json({ characters: nextCharacters });
+  return { characters: nextCharacters };
+}
+
+castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) => {
+  const { bookId } = req.params;
+  const body = (req.body ?? {}) as MergeBody;
+  const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
+  const targetId = typeof body.targetId === 'string' ? body.targetId.trim() : '';
+
+  if (!sourceId || !targetId) {
+    return res.status(400).json({ error: 'sourceId and targetId are required.' });
+  }
+  if (sourceId === targetId) {
+    return res.status(400).json({ error: 'sourceId and targetId must differ.' });
+  }
+
+  const located = await findBookByBookId(bookId);
+  if (!located) return res.status(404).json({ error: 'Book not found.' });
+  const { bookDir, state } = located;
+
+  try {
+    const result = await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+    return res.json(result);
+  } catch (err) {
+    const e = err as { status?: number; error?: string };
+    if (e.status && e.error) {
+      return res.status(e.status).json({ error: e.error });
+    }
+    throw err;
+  }
 });
 
 /* Build the merged aliases list. Lower-case dedup, target first, then the
