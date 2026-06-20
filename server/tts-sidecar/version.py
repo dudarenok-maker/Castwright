@@ -7,4 +7,4 @@ SIDECAR_PROTOCOL_VERSION in main.py: the protocol version gates adopt/replace of
 a running sidecar, while __version__ is purely informational.
 """
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
