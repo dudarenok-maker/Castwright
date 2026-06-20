@@ -92,6 +92,19 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _hiddenMeta = const VerificationMeta('hidden');
+  @override
+  late final GeneratedColumn<bool> hidden = GeneratedColumn<bool>(
+    'hidden',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("hidden" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     bookId,
@@ -102,6 +115,7 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
     seriesPosition,
     lastPlayedAt,
     coverThumbPath,
+    hidden,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -174,6 +188,12 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
         ),
       );
     }
+    if (data.containsKey('hidden')) {
+      context.handle(
+        _hiddenMeta,
+        hidden.isAcceptableOrUnknown(data['hidden']!, _hiddenMeta),
+      );
+    }
     return context;
   }
 
@@ -215,6 +235,10 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
         DriftSqlType.string,
         data['${effectivePrefix}cover_thumb_path'],
       ),
+      hidden: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}hidden'],
+      )!,
     );
   }
 
@@ -238,6 +262,12 @@ class Book extends DataClass implements Insertable<Book> {
 
   /// On-disk path of the cached ~250×250 cover thumbnail (client-downscaled).
   final String? coverThumbPath;
+
+  /// Whether the user has dismissed this book from the "Continue listening"
+  /// shelf — set on auto-finish (last chapter reached) or a manual long-press
+  /// remove, cleared on replay (markPlayed). Drives shelf exclusion only; the
+  /// book stays fully in the library.
+  final bool hidden;
   const Book({
     required this.bookId,
     required this.updatedAt,
@@ -247,6 +277,7 @@ class Book extends DataClass implements Insertable<Book> {
     this.seriesPosition,
     this.lastPlayedAt,
     this.coverThumbPath,
+    required this.hidden,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -265,6 +296,7 @@ class Book extends DataClass implements Insertable<Book> {
     if (!nullToAbsent || coverThumbPath != null) {
       map['cover_thumb_path'] = Variable<String>(coverThumbPath);
     }
+    map['hidden'] = Variable<bool>(hidden);
     return map;
   }
 
@@ -284,6 +316,7 @@ class Book extends DataClass implements Insertable<Book> {
       coverThumbPath: coverThumbPath == null && nullToAbsent
           ? const Value.absent()
           : Value(coverThumbPath),
+      hidden: Value(hidden),
     );
   }
 
@@ -301,6 +334,7 @@ class Book extends DataClass implements Insertable<Book> {
       seriesPosition: serializer.fromJson<int?>(json['seriesPosition']),
       lastPlayedAt: serializer.fromJson<String?>(json['lastPlayedAt']),
       coverThumbPath: serializer.fromJson<String?>(json['coverThumbPath']),
+      hidden: serializer.fromJson<bool>(json['hidden']),
     );
   }
   @override
@@ -315,6 +349,7 @@ class Book extends DataClass implements Insertable<Book> {
       'seriesPosition': serializer.toJson<int?>(seriesPosition),
       'lastPlayedAt': serializer.toJson<String?>(lastPlayedAt),
       'coverThumbPath': serializer.toJson<String?>(coverThumbPath),
+      'hidden': serializer.toJson<bool>(hidden),
     };
   }
 
@@ -327,6 +362,7 @@ class Book extends DataClass implements Insertable<Book> {
     Value<int?> seriesPosition = const Value.absent(),
     Value<String?> lastPlayedAt = const Value.absent(),
     Value<String?> coverThumbPath = const Value.absent(),
+    bool? hidden,
   }) => Book(
     bookId: bookId ?? this.bookId,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -340,6 +376,7 @@ class Book extends DataClass implements Insertable<Book> {
     coverThumbPath: coverThumbPath.present
         ? coverThumbPath.value
         : this.coverThumbPath,
+    hidden: hidden ?? this.hidden,
   );
   Book copyWithCompanion(BooksCompanion data) {
     return Book(
@@ -357,6 +394,7 @@ class Book extends DataClass implements Insertable<Book> {
       coverThumbPath: data.coverThumbPath.present
           ? data.coverThumbPath.value
           : this.coverThumbPath,
+      hidden: data.hidden.present ? data.hidden.value : this.hidden,
     );
   }
 
@@ -370,7 +408,8 @@ class Book extends DataClass implements Insertable<Book> {
           ..write('series: $series, ')
           ..write('seriesPosition: $seriesPosition, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
-          ..write('coverThumbPath: $coverThumbPath')
+          ..write('coverThumbPath: $coverThumbPath, ')
+          ..write('hidden: $hidden')
           ..write(')'))
         .toString();
   }
@@ -385,6 +424,7 @@ class Book extends DataClass implements Insertable<Book> {
     seriesPosition,
     lastPlayedAt,
     coverThumbPath,
+    hidden,
   );
   @override
   bool operator ==(Object other) =>
@@ -397,7 +437,8 @@ class Book extends DataClass implements Insertable<Book> {
           other.series == this.series &&
           other.seriesPosition == this.seriesPosition &&
           other.lastPlayedAt == this.lastPlayedAt &&
-          other.coverThumbPath == this.coverThumbPath);
+          other.coverThumbPath == this.coverThumbPath &&
+          other.hidden == this.hidden);
 }
 
 class BooksCompanion extends UpdateCompanion<Book> {
@@ -409,6 +450,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
   final Value<int?> seriesPosition;
   final Value<String?> lastPlayedAt;
   final Value<String?> coverThumbPath;
+  final Value<bool> hidden;
   final Value<int> rowid;
   const BooksCompanion({
     this.bookId = const Value.absent(),
@@ -419,6 +461,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     this.seriesPosition = const Value.absent(),
     this.lastPlayedAt = const Value.absent(),
     this.coverThumbPath = const Value.absent(),
+    this.hidden = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   BooksCompanion.insert({
@@ -430,6 +473,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     this.seriesPosition = const Value.absent(),
     this.lastPlayedAt = const Value.absent(),
     this.coverThumbPath = const Value.absent(),
+    this.hidden = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : bookId = Value(bookId);
   static Insertable<Book> custom({
@@ -441,6 +485,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     Expression<int>? seriesPosition,
     Expression<String>? lastPlayedAt,
     Expression<String>? coverThumbPath,
+    Expression<bool>? hidden,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -452,6 +497,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
       if (seriesPosition != null) 'series_position': seriesPosition,
       if (lastPlayedAt != null) 'last_played_at': lastPlayedAt,
       if (coverThumbPath != null) 'cover_thumb_path': coverThumbPath,
+      if (hidden != null) 'hidden': hidden,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -465,6 +511,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     Value<int?>? seriesPosition,
     Value<String?>? lastPlayedAt,
     Value<String?>? coverThumbPath,
+    Value<bool>? hidden,
     Value<int>? rowid,
   }) {
     return BooksCompanion(
@@ -476,6 +523,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
       seriesPosition: seriesPosition ?? this.seriesPosition,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       coverThumbPath: coverThumbPath ?? this.coverThumbPath,
+      hidden: hidden ?? this.hidden,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -507,6 +555,9 @@ class BooksCompanion extends UpdateCompanion<Book> {
     if (coverThumbPath.present) {
       map['cover_thumb_path'] = Variable<String>(coverThumbPath.value);
     }
+    if (hidden.present) {
+      map['hidden'] = Variable<bool>(hidden.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -524,6 +575,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
           ..write('seriesPosition: $seriesPosition, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
           ..write('coverThumbPath: $coverThumbPath, ')
+          ..write('hidden: $hidden, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1825,6 +1877,7 @@ typedef $$BooksTableCreateCompanionBuilder =
       Value<int?> seriesPosition,
       Value<String?> lastPlayedAt,
       Value<String?> coverThumbPath,
+      Value<bool> hidden,
       Value<int> rowid,
     });
 typedef $$BooksTableUpdateCompanionBuilder =
@@ -1837,6 +1890,7 @@ typedef $$BooksTableUpdateCompanionBuilder =
       Value<int?> seriesPosition,
       Value<String?> lastPlayedAt,
       Value<String?> coverThumbPath,
+      Value<bool> hidden,
       Value<int> rowid,
     });
 
@@ -1886,6 +1940,11 @@ class $$BooksTableFilterComposer
 
   ColumnFilters<String> get coverThumbPath => $composableBuilder(
     column: $table.coverThumbPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get hidden => $composableBuilder(
+    column: $table.hidden,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1938,6 +1997,11 @@ class $$BooksTableOrderingComposer
     column: $table.coverThumbPath,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get hidden => $composableBuilder(
+    column: $table.hidden,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$BooksTableAnnotationComposer
@@ -1978,6 +2042,9 @@ class $$BooksTableAnnotationComposer
     column: $table.coverThumbPath,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get hidden =>
+      $composableBuilder(column: $table.hidden, builder: (column) => column);
 }
 
 class $$BooksTableTableManager
@@ -2016,6 +2083,7 @@ class $$BooksTableTableManager
                 Value<int?> seriesPosition = const Value.absent(),
                 Value<String?> lastPlayedAt = const Value.absent(),
                 Value<String?> coverThumbPath = const Value.absent(),
+                Value<bool> hidden = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => BooksCompanion(
                 bookId: bookId,
@@ -2026,6 +2094,7 @@ class $$BooksTableTableManager
                 seriesPosition: seriesPosition,
                 lastPlayedAt: lastPlayedAt,
                 coverThumbPath: coverThumbPath,
+                hidden: hidden,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2038,6 +2107,7 @@ class $$BooksTableTableManager
                 Value<int?> seriesPosition = const Value.absent(),
                 Value<String?> lastPlayedAt = const Value.absent(),
                 Value<String?> coverThumbPath = const Value.absent(),
+                Value<bool> hidden = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => BooksCompanion.insert(
                 bookId: bookId,
@@ -2048,6 +2118,7 @@ class $$BooksTableTableManager
                 seriesPosition: seriesPosition,
                 lastPlayedAt: lastPlayedAt,
                 coverThumbPath: coverThumbPath,
+                hidden: hidden,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

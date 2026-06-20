@@ -19,6 +19,7 @@ class BookSummary {
     required this.seriesPosition,
     required this.lastPlayedAt,
     required this.coverThumbPath,
+    required this.hidden,
   });
   final String bookId;
   final String title;
@@ -27,6 +28,7 @@ class BookSummary {
   final int? seriesPosition;
   final String? lastPlayedAt;
   final String? coverThumbPath;
+  final bool hidden;
 }
 
 /// A locally-stored chapter (the offline source for the player + durations).
@@ -288,7 +290,26 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
   Future<void> markPlayed(String bookId, String isoNow) async {
     await _ensureBook(bookId);
     await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
-        .write(BooksCompanion(lastPlayedAt: Value(isoNow)));
+        .write(BooksCompanion(
+      lastPlayedAt: Value(isoNow),
+      hidden: const Value(false), // replaying un-hides from the shelf
+    ));
+  }
+
+  /// Hide/un-hide a book from the "Continue listening" shelf without touching
+  /// its resume point or chapter ticks (manual long-press remove).
+  Future<void> setBookHidden(String bookId, bool hidden) async {
+    await _ensureBook(bookId);
+    await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
+        .write(BooksCompanion(hidden: Value(hidden)));
+  }
+
+  /// Mark a whole book finished: tick every chapter and drop it from the shelf.
+  /// Reversible — markPlayed (replay) clears `hidden`.
+  Future<void> markBookFinished(String bookId) async {
+    await (_db.update(_db.chapters)..where((c) => c.bookId.equals(bookId)))
+        .write(const ChaptersCompanion(finished: Value(true)));
+    await setBookHidden(bookId, true);
   }
 
   Future<void> setChapterFinished(String uuid, bool finished) async {
@@ -351,6 +372,7 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
           seriesPosition: b.seriesPosition,
           lastPlayedAt: b.lastPlayedAt,
           coverThumbPath: b.coverThumbPath,
+          hidden: b.hidden,
         ),
     ];
   }
