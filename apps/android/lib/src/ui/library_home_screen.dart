@@ -204,11 +204,29 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     );
   }
 
+  Future<void> _confirmRemoveFromShelf(ShelfBook b) async {
+    final remove = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListTile(
+          key: const Key('remove-from-shelf'),
+          leading: const Icon(Icons.remove_circle_outline),
+          title: const Text('Remove from Continue listening'),
+          onTap: () => Navigator.of(ctx).pop(true),
+        ),
+      ),
+    );
+    if (remove != true) return;
+    await widget.runtime.library.setBookHidden(b.bookId, true);
+    if (mounted) await _refresh();
+  }
+
   Widget _shelfCard(ShelfBook b) {
     final path = _covers[b.bookId];
     return InkWell(
       key: Key('continue-${b.bookId}'),
       onTap: () => _openBook(b.bookId, b.title),
+      onLongPress: () => _confirmRemoveFromShelf(b),
       child: SizedBox(
         width: 100,
         child: Padding(
