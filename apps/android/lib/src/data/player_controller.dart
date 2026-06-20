@@ -232,6 +232,12 @@ class PlayerController {
         await _persistStatsHandoff(handoff);
       }
     }
+    // FIX 1: reset _index before changing _bookId so that _loadIndex's
+    // backward-nav check (prev >= 0 && index < prev && _bookId == currentBook)
+    // cannot see a stale prior-book index when opening a different book.
+    // The reset to -1 means _loadIndex captures prev=-1, which is excluded by
+    // the `prev >= 0` guard — no spurious bookReplayedStream emit on switch.
+    if (_bookId != bookId) _index = -1;
     _bookId = bookId;
     _bookTitle = bookTitle;
     _artPath = artPath;
