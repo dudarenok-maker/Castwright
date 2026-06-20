@@ -1,3 +1,6 @@
+import { formatTime } from '../lib/time';
+import type { IssueRegion } from '../lib/chapter-issues';
+
 interface WaveformProps {
   progress: number;
   active: boolean;
@@ -6,6 +9,8 @@ interface WaveformProps {
       seeded `BARS` fallback below keeps the decorative shape for loading /
       not-yet-generated rows. */
   peaks?: number[];
+  /** issue-waveform — padded/merged regions to paint amber. */
+  issues?: IssueRegion[];
 }
 
 const BAR_COUNT = 48;
@@ -22,6 +27,16 @@ const BARS: number[] = (() => {
   }
   return out;
 })();
+
+function issueBarSet(issues: IssueRegion[] | undefined, count: number): Set<number> {
+  const set = new Set<number>();
+  for (const r of issues ?? []) {
+    const lo = Math.max(0, Math.floor(r.startFrac * count));
+    const hi = Math.min(count - 1, Math.ceil(r.endFrac * count) - 1);
+    for (let i = lo; i <= hi; i += 1) set.add(i);
+  }
+  return set;
+}
 
 /* Reduce the server's variable-length RMS envelope (240 bins in practice) to
    `count` bar heights in [floor, 1]. Chunked mean, then re-normalised so the
@@ -45,20 +60,43 @@ export function peaksToBars(peaks: number[] | undefined, count = BAR_COUNT): num
   return means.map((m) => floor + (1 - floor) * (m / max));
 }
 
-export function Waveform({ progress, active, peaks }: WaveformProps) {
+export function Waveform({ progress, active, peaks, issues }: WaveformProps) {
   const bars = peaksToBars(peaks) ?? BARS;
-  return (
-    <div className="flex items-end gap-[2px] h-7">
+  const amber = issueBarSet(issues, bars.length);
+  const hasIssues = (issues?.length ?? 0) > 0;
+
+  const barRow = (
+    <div className="flex items-end gap-[2px] h-7" aria-hidden={hasIssues || undefined}>
       {bars.map((h, i) => {
         const filled = i / bars.length <= progress;
+        const cls = amber.has(i)
+          ? 'bg-amber-400'
+          : active && filled
+            ? 'bg-magenta'
+            : active
+              ? 'bg-ink/15'
+              : 'bg-ink/20';
         return (
           <span
             key={i}
-            className={`w-[3px] rounded-sm transition-colors ${active && filled ? 'bg-magenta' : active ? 'bg-ink/15' : 'bg-ink/20'}`}
+            className={`w-[3px] rounded-sm transition-colors ${cls}`}
             style={{ height: `${h * 100}%` }}
           />
         );
       })}
     </div>
+  );
+
+  if (!hasIssues) return barRow;
+
+  return (
+    <>
+      {barRow}
+      <ul className="sr-only">
+        {issues!.map((r, i) => (
+          <li key={i}>{`Issue at ${formatTime(r.seekSec)}: ${r.reasons.join('; ')}`}</li>
+        ))}
+      </ul>
+    </>
   );
 }
