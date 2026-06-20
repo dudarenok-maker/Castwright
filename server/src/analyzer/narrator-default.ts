@@ -2,7 +2,7 @@
    languages 2026-06-20).
 
    The per-sentence attribution model mislabels third-person NARRATION as the
-   named character (e.g. “She was lost.” -> stephanie), which would read
+   named character (e.g. "She was lost." -> stephanie), which would read
    narration in that character's voice. The spoken-vs-narration distinction is
    mechanical, so we decide it in code: any sentence that is NOT a spoken line is
    forced to narrator. Runs for English too (the model ignores the same rule in

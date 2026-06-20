@@ -245,8 +245,13 @@ full-pipeline path where applicable):
    spoken and **not** demoted (documented false-negative — safe direction).
 5. **Both-language flag:** a non-English override now also carries the clamped
    confidence (previously it did not).
-6. **Drift-guard ordering pin:** guard demotions emit `'narrator'` and are not
-   counted by `reconcileSentenceCharacterIds` / do not trip `attributionDriftExceeded`.
+6. **Drift-guard ordering pin (covered transitively):** guard demotions emit
+   `'narrator'` — a valid roster id — so `reconcileSentenceCharacterIds` passes them
+   through uncounted and `attributionDriftExceeded` cannot trip. This invariant is
+   pinned by the existing reconcile test in `analysis.test.ts` (a sentence whose
+   characterId is in `validIds` is never demoted/counted), not by a new
+   guard-specific test — `applyNarratorDefault` only ever emits `'narrator'` or
+   leaves a spoken line unchanged, so the coverage is genuine.
 7. **One-stop-per-block:** a contiguous demoted run of N>1 sentences yields exactly
    one sentence with `confidence === 0.5`; a spoken line between two demoted runs
    resets the run so each block gets its own single flag.
