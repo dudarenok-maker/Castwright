@@ -855,7 +855,6 @@ describe('Layout — auto-finish on reaching the final listenable chapter (Task 
       audioElOrNull = container.querySelector('audio');
       expect(audioElOrNull).not.toBeNull();
     });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const audioEl = audioElOrNull!;
 
     /* Fire a timeUpdate with remaining <= 10 s (591 out of 600). */
@@ -916,7 +915,6 @@ describe('Layout — auto-finish on reaching the final listenable chapter (Task 
       audioElOrNull2 = container.querySelector('audio');
       expect(audioElOrNull2).not.toBeNull();
     });
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const audioEl2 = audioElOrNull2!;
 
     await fireAudioEvents(audioEl2, 591, 600);
