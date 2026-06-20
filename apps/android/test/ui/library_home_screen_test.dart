@@ -148,4 +148,55 @@ void main() {
 
     await library.close();
   });
+
+  testWidgets('finished book is excluded from Continue listening rail',
+      (tester) async {
+    // Seed two books: one normal (in-progress), one finished.
+    final library = DriftLocalLibrary(
+        LibraryDatabase(NativeDatabase.memory()), InMemoryFileStore(),
+        root: '/t');
+
+    await library.upsertBookMeta(
+        bookId: 'active',
+        title: 'Active Book',
+        author: 'Author A',
+        series: '',
+        seriesPosition: null);
+
+    await library.upsertBookMeta(
+        bookId: 'done',
+        title: 'Finished Book',
+        author: 'Author A',
+        series: '',
+        seriesPosition: null);
+
+    // Both have lastPlayedAt so both would appear in Continue without the
+    // finished filter.
+    await library.markPlayed('active', '2026-06-20T10:00:00Z');
+    await library.markPlayed('done', '2026-06-20T11:00:00Z');
+
+    // Mark the second book finished via the sync-state path (mirrors Task 2).
+    await library.setBookSyncState('done',
+        finished: true, hidden: false);
+
+    final rt = await _buildTestRuntime(library);
+    addTearDown(rt.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: LibraryHomeScreen(
+        runtime: rt,
+        server: _server,
+        onUnpair: () async {},
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // The finished book must NOT appear in the Continue rail.
+    expect(find.byKey(const Key('continue-done')), findsNothing);
+
+    // The active book IS in the rail.
+    expect(find.byKey(const Key('continue-active')), findsOneWidget);
+
+    await library.close();
+  });
 }

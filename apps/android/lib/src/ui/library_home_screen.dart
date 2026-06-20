@@ -83,6 +83,26 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
       });
       _loadCovers(s.books);
       _loadDurations(s.books);
+
+      // After the pull completes, re-query Drift so that any finished/hidden
+      // state persisted by loadIndex→setBookSyncState is reflected in the
+      // shelf. The stream payload only carries the library grid, not the shelf
+      // rows, so we must re-read listBooks() once the loading phase is done.
+      if (!s.loading && mounted) {
+        final updated = buildContinueListening([
+          for (final b in await widget.runtime.library.listBooks())
+            ShelfBook(
+              bookId: b.bookId,
+              title: b.title,
+              author: b.author,
+              lastPlayedAt: b.lastPlayedAt,
+              updatedAt: '',
+              hidden: b.hidden,
+              finished: b.finished,
+            ),
+        ]);
+        if (mounted) setState(() => _continue = updated);
+      }
     }
   }
 

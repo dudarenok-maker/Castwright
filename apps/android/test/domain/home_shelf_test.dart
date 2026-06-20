@@ -10,7 +10,8 @@ ShelfBook sb(String id, {String? lastPlayedAt, String updatedAt = 't'}) =>
       updatedAt: updatedAt,
     );
 
-ShelfBook book(String id, {String? lastPlayedAt, bool hidden = false}) =>
+ShelfBook book(String id,
+        {String? lastPlayedAt, bool hidden = false, bool finished = false}) =>
     ShelfBook(
       bookId: id,
       title: id,
@@ -18,6 +19,7 @@ ShelfBook book(String id, {String? lastPlayedAt, bool hidden = false}) =>
       lastPlayedAt: lastPlayedAt,
       updatedAt: '',
       hidden: hidden,
+      finished: finished,
     );
 
 void main() {
@@ -50,6 +52,14 @@ void main() {
         book('b', lastPlayedAt: '2026-06-20T11:00:00Z'),
       ]);
       expect(shelf.map((b) => b.bookId), ['b', 'a']);
+    });
+
+    test('buildContinueListening excludes finished books', () {
+      final shelf = buildContinueListening([
+        book('a', lastPlayedAt: '2026-06-20T10:00:00Z'),
+        book('b', lastPlayedAt: '2026-06-20T11:00:00Z', finished: true),
+      ]);
+      expect(shelf.map((b) => b.bookId), ['a']);
     });
   });
 
