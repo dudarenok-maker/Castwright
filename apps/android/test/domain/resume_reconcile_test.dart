@@ -56,5 +56,54 @@ void main() {
       );
       expect(action, ResumeAction.noop);
     });
+
+    // ── FIX 2: parse-safety for empty/malformed remote timestamps ─────────────
+
+    test('FIX-2: empty-string remote updatedAt (non-null) → noop, does not throw',
+        () {
+      // Before the fix, DateTime.parse('') threw FormatException, which aborted
+      // the whole syncAll loop. Must degrade gracefully to noop.
+      expect(
+        reconcileResume(
+          localListenedAt: '2026-06-20T10:00:00.000Z',
+          remoteUpdatedAt: '',
+        ),
+        ResumeAction.noop,
+      );
+    });
+
+    test('FIX-2: malformed remote stamp → noop, does not throw', () {
+      expect(
+        reconcileResume(
+          localListenedAt: '2026-06-20T10:00:00.000Z',
+          remoteUpdatedAt: 'not-a-date',
+        ),
+        ResumeAction.noop,
+      );
+    });
+
+    test('FIX-2: tz-skewed pair where local is genuinely NEWER → pushLocal', () {
+      // local: 2026-06-20 21:00 +10:00 = 2026-06-20 11:00 UTC
+      // remote: 2026-06-20 10:00 UTC  (1 hour earlier)
+      expect(
+        reconcileResume(
+          localListenedAt: '2026-06-20T21:00:00.000+10:00',
+          remoteUpdatedAt: '2026-06-20T10:00:00.000Z',
+        ),
+        ResumeAction.pushLocal,
+      );
+    });
+
+    test('FIX-2: tz-skewed pair where remote is genuinely NEWER → pullRemote', () {
+      // local: 2026-06-20 21:00 +10:00 = 2026-06-20 11:00 UTC
+      // remote: 2026-06-20 12:00 UTC  (1 hour later)
+      expect(
+        reconcileResume(
+          localListenedAt: '2026-06-20T21:00:00.000+10:00',
+          remoteUpdatedAt: '2026-06-20T12:00:00.000Z',
+        ),
+        ResumeAction.pullRemote,
+      );
+    });
   });
 }

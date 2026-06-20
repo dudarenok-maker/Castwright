@@ -16,7 +16,19 @@ ResumeAction reconcileResume({
   if (localListenedAt == null && remoteUpdatedAt == null) return ResumeAction.noop;
   if (remoteUpdatedAt == null) return ResumeAction.pushLocal;
   if (localListenedAt == null) return ResumeAction.pullRemote;
-  final cmp = DateTime.parse(localListenedAt).toUtc().compareTo(DateTime.parse(remoteUpdatedAt).toUtc());
+  // FIX 2: guard against empty or malformed timestamps on either side.
+  // An unparseable stamp (empty string, 'not-a-date', etc.) degrades to noop
+  // rather than throwing FormatException and aborting the whole syncAll loop.
+  if (remoteUpdatedAt.isEmpty || localListenedAt.isEmpty) return ResumeAction.noop;
+  final DateTime localDt;
+  final DateTime remoteDt;
+  try {
+    localDt = DateTime.parse(localListenedAt).toUtc();
+    remoteDt = DateTime.parse(remoteUpdatedAt).toUtc();
+  } on FormatException {
+    return ResumeAction.noop;
+  }
+  final cmp = localDt.compareTo(remoteDt);
   if (cmp > 0) return ResumeAction.pushLocal;
   if (cmp < 0) return ResumeAction.pullRemote;
   return ResumeAction.noop;
