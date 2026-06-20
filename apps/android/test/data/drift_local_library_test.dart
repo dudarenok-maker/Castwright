@@ -395,4 +395,55 @@ void main() {
       await lib.close();
     });
   });
+
+  // ── Task 5: isBookFinished / clearBookFinished ────────────────────────────
+
+  group('isBookFinished / clearBookFinished', () {
+    test('isBookFinished returns true after setBookSyncState with finished:true',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      // Simulate a server pull that set finished:true on this book.
+      await lib.setBookSyncState('b1', finished: true, hidden: true);
+      expect(await lib.isBookFinished('b1'), isTrue);
+      await lib.close();
+    });
+
+    test('clearBookFinished sets finished=false; isBookFinished reflects it',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      // Simulate a server pull that set finished:true.
+      await lib.setBookSyncState('b1', finished: true, hidden: true);
+      expect(await lib.isBookFinished('b1'), isTrue,
+          reason: 'sanity: finished after setBookSyncState(finished:true)');
+      await lib.clearBookFinished('b1');
+      expect(await lib.isBookFinished('b1'), isFalse,
+          reason: 'clearBookFinished must set finished=false');
+      await lib.close();
+    });
+
+    test('isBookFinished returns false for a book that was never finished',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      expect(await lib.isBookFinished('b1'), isFalse);
+      await lib.close();
+    });
+  });
 }

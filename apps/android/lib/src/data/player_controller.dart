@@ -135,6 +135,14 @@ class PlayerController {
       StreamController<String>.broadcast();
   Stream<String> get bookCompletedStream => _bookCompleted.stream;
 
+  /// Emits a book's `bookId` when the user navigates BACKWARD within its
+  /// chapter list — a genuine replay signal. Only fires on `newIndex < prev`
+  /// (where `prev >= 0`), so the initial `openBook` restore (prev = -1) and
+  /// every forward auto-advance (`newIndex >= prev`) are both excluded.
+  final StreamController<String> _bookReplayed =
+      StreamController<String>.broadcast();
+  Stream<String> get bookReplayedStream => _bookReplayed.stream;
+
   /// Dedup guards so the per-tick near-end check fires at most once per chapter
   /// and once per book; reset on every chapter load.
   String? _nearEndTickedUuid;
@@ -243,6 +251,8 @@ class PlayerController {
 
   Future<void> _loadIndex(int index, {int seekMs = 0}) async {
     if (index < 0 || index >= _playlist.length) return;
+    // Capture prior index BEFORE reassigning — used for the backward-nav replay signal.
+    final prev = _index;
     _index = index;
     // Reset near-end dedup so each new chapter can tick once.
     _nearEndTickedUuid = null;
@@ -268,6 +278,12 @@ class PlayerController {
     // Measure the autosave interval from load time, so we don't persist on the
     // very first position tick.
     _lastSave = _now();
+    // Emit the replay signal when the user navigates BACKWARD (genuine replay).
+    // prev=-1 on the initial openBook restore → excluded by `prev >= 0`.
+    // forward auto-advance: newIndex > prev → excluded by `index < prev`.
+    if (prev >= 0 && index < prev && _bookId != null) {
+      _bookReplayed.add(_bookId!);
+    }
   }
 
   Future<void> seekTo(Duration position) =>
@@ -420,6 +436,7 @@ class PlayerController {
     await _nowPlaying.close();
     await _chapterCompleted.close();
     await _bookCompleted.close();
+    await _bookReplayed.close();
     await _engine.dispose();
   }
 }

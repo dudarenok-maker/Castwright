@@ -380,6 +380,23 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
     ];
   }
 
+  /// Whether the book is locally marked as finished.
+  Future<bool> isBookFinished(String bookId) async {
+    final row = await (_db.select(_db.books)
+          ..where((b) => b.bookId.equals(bookId)))
+        .getSingleOrNull();
+    return row?.finished ?? false;
+  }
+
+  /// Clear the book-level finished flag (un-finish on replay).
+  /// Does NOT touch `hidden` or chapter `finished` rows — the user is back in
+  /// the player; the shelf pull on returning to the library will reflect the
+  /// updated server state.
+  Future<void> clearBookFinished(String bookId) async {
+    await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
+        .write(const BooksCompanion(finished: Value(false)));
+  }
+
   /// Persist server finished/hidden pulled from the manifest index.
   Future<void> setBookSyncState(String bookId, {required bool finished, required bool hidden}) async {
     await _ensureBook(bookId);

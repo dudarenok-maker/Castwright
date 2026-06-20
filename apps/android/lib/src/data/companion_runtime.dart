@@ -52,7 +52,20 @@ List<StreamSubscription<String>> wireFinishedTracking(
     api.setShelfStatus(bookId, finished: true).catchError((_) {});
   });
 
-  return [completedSub, bookFinishedSub];
+  // Task-5 (app-19 cross-device un-finish): when the user genuinely replays a
+  // finished book (backward chapter navigation), clear the local finished flag
+  // and push finished:false. Gated on isBookFinished so a mid-book backward
+  // skip doesn't accidentally un-finish a not-yet-finished book.
+  // Accepted minor: no durable pending-unfinish set (YAGNI per review [I5]) —
+  // the POST lands before the library pull on returning to the shelf, so any
+  // momentary stale finished:true self-corrects on the next pull.
+  final replaySub = player.bookReplayedStream.listen((bookId) async {
+    if (!await library.isBookFinished(bookId)) return;
+    await library.clearBookFinished(bookId);
+    api.setShelfStatus(bookId, finished: false).catchError((_) {});
+  });
+
+  return [completedSub, bookFinishedSub, replaySub];
 }
 
 /// The wired runtime for a paired server (app-shell integration): builds the
