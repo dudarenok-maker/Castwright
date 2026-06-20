@@ -14,14 +14,29 @@ class FakeAudioEngine implements AudioEngine {
   Duration _position = Duration.zero;
   String? loadedPath;
 
+  // Mutable duration so tests can inject a known chapter length.
+  Duration? _duration;
+  final StreamController<Duration?> _durationCtl =
+      StreamController<Duration?>.broadcast();
+
   @override
   Duration get position => _position;
   @override
   Stream<Duration> get positionStream => _pos.stream;
   @override
-  Duration? get duration => null;
+  Duration? get duration => _duration;
   @override
-  Stream<Duration?> get durationStream => const Stream.empty();
+  Stream<Duration?> get durationStream => _durationCtl.stream;
+
+  /// Inject a chapter duration (mirrors how [emitCompletion] works).
+  void emitDuration(Duration d) {
+    _duration = d;
+    _durationCtl.add(d);
+  }
+
+  /// Alias used by the near-end tests — same as [emit] but named for clarity.
+  void emitPosition(Duration p) => emit(p);
+
   final _completionCtl = StreamController<void>.broadcast();
   @override
   Stream<void> get completionStream => _completionCtl.stream;
@@ -75,6 +90,7 @@ class FakeAudioEngine implements AudioEngine {
     await _pos.close();
     await _playingCtl.close();
     await _completionCtl.close();
+    await _durationCtl.close();
   }
 
   void emit(Duration p) {
@@ -296,6 +312,74 @@ void main() {
       await pc.openBook('b1');
       expect(pc.isInUse('u1'), isTrue);
       expect(pc.isInUse('u2'), isFalse);
+      await pc.dispose();
+    });
+
+    test('near-end position ticks the chapter without waiting for completion',
+        () async {
+      // 2-chapter book so 'u2' is the last chapter; we play chapter 1 (u1).
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final done = <String>[];
+      final sub = pc.chapterCompletedStream.listen(done.add);
+      await pc.openBook('b1'); // starts at u1 (non-last)
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 51)); // remaining 9s <= 10s
+      await Future<void>.delayed(Duration.zero);
+      expect(done, ['u1']);
+      // A second near-end tick must NOT re-emit for the same chapter.
+      engine.emitPosition(const Duration(seconds: 52));
+      await Future<void>.delayed(Duration.zero);
+      expect(done, ['u1']);
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test('last chapter near-end emits bookCompleted once', () async {
+      // 2-chapter book — play chapter 2 (u2 = last).
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1');
+      await pc.playChapter('u2'); // u2 = last chapter in this 2-chapter list
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55)); // remaining 5s
+      await Future<void>.delayed(Duration.zero);
+      engine.emitPosition(const Duration(seconds: 56)); // second tick — no re-emit
+      await Future<void>.delayed(Duration.zero);
+      expect(books, ['b1']);
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test('non-last chapter near-end does NOT emit bookCompleted', () async {
+      // 2-chapter book, start at u1 (non-last).
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b1/u2/audio.mp3'),
+        ],
+      });
+      final books = <String>[];
+      final sub = pc.bookCompletedStream.listen(books.add);
+      await pc.openBook('b1'); // starts at u1 (not last)
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55)); // within threshold
+      await Future<void>.delayed(Duration.zero);
+      expect(books, isEmpty);
+      await sub.cancel();
       await pc.dispose();
     });
   });
