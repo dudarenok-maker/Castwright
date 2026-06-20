@@ -1,7 +1,7 @@
 # English narrator-default attribution guard — design
 
 - **Date:** 2026-06-20
-- **Status:** draft
+- **Status:** active
 - **Area:** server / analyzer (stage-2 sentence attribution)
 - **Branch:** `feat/server-english-narrator-default`
 
