@@ -46,6 +46,10 @@ interface MiniPlayerProps {
   onNext: () => void;
   prevAvailable: boolean;
   nextAvailable: boolean;
+  /** fs-15 / Task 4 — called exactly once per chapter load when the
+   *  playhead enters the final 10 s (or on chapter end). Layout uses
+   *  this to fire the auto-finish signal for the FINAL listenable chapter. */
+  onCrossedFinish?: () => void;
 }
 
 /* Plan 53 — playback-rate picker presets. Exposed at module scope so
@@ -83,6 +87,7 @@ export function MiniPlayer({
   onNext,
   prevAvailable,
   nextAvailable,
+  onCrossedFinish,
 }: MiniPlayerProps) {
   const [audio, setAudio] = useState<ChapterAudio>({ durationSec: 0, peaks: [], url: null });
   const [currentSec, setCurrentSec] = useState(0);
@@ -105,6 +110,11 @@ export function MiniPlayer({
      dispatch (the Listen-view row mirrors it). Independent of the 5 s
      disk-save gate above: this only churns Redux, never the disk. */
   const lastLiveDispatchRef = useRef(0);
+  /* fs-15 / Task 4 — dedup guard so onCrossedFinish fires at most ONCE
+     per chapter load (either from the 10 s tail or from onEnded).
+     Reset to false in an effect keyed on chapter.id so switching to a
+     new chapter re-arms it. */
+  const crossedFinishRef = useRef(false);
 
   /* fs-16 — wall-clock listening stats. A stable session id minted once
      per page load; shared across book switches in the same tab so the
@@ -256,6 +266,12 @@ export function MiniPlayer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, chapter?.id, chapter?.duration, chapter?.audioRenderedAt]);
+
+  /* fs-15 / Task 4 — reset the finish-signal dedup ref whenever the
+     chapter changes so each new chapter can fire onCrossedFinish once. */
+  useEffect(() => {
+    crossedFinishRef.current = false;
+  }, [chapter?.id]);
 
   /* When the URL lands, point the audio element at it. Resetting src + load
      also clears any prior playback state from the previous chapter.
@@ -917,6 +933,25 @@ export function MiniPlayer({
                 );
               }
             }
+            /* fs-15 / Task 4 — auto-finish signal. Fire once when the
+               playhead enters the final 10 s of a chapter with
+               duration > 10 s. The dedup ref prevents double-fire on
+               subsequent ticks or when onEnded also runs. Uses the live
+               audio element duration (e.currentTarget.duration) so the
+               threshold is accurate even for chapters where the server's
+               durationSec differs from the browser's estimate. */
+            {
+              const duration = e.currentTarget.duration;
+              const remaining = duration - t;
+              if (
+                duration > 10 &&
+                remaining <= 10 &&
+                !crossedFinishRef.current
+              ) {
+                crossedFinishRef.current = true;
+                onCrossedFinish?.();
+              }
+            }
             /* Plan 47 — debounced save. Once per 5 s of wall-clock,
                post the position so a refresh / close / app crash
                loses at most ~5 s of resume accuracy. Don't dispatch
@@ -983,6 +1018,13 @@ export function MiniPlayer({
                onPause() is idempotent (safe even if already paused). */
             accRef.current.onPause();
             flushStats(bookId, accRef.current.drain().days);
+            /* fs-15 / Task 4 — fire the finish signal on ended if the
+               10 s tail hasn't already done so (dedup ref prevents
+               double-fire when both paths trigger). */
+            if (!crossedFinishRef.current) {
+              crossedFinishRef.current = true;
+              onCrossedFinish?.();
+            }
             /* fe-23 — auto-advance: roll into the next chapter only when the
                user opted in, there IS a next chapter, and the sleep timer
                didn't just fire on this chapter's end. Keep `playing` true so

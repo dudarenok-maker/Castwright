@@ -875,3 +875,180 @@ describe('MiniPlayer — makeSessionId (insecure-randomness fix)', () => {
     expect(makeSessionId()).toMatch(/^(ss_|[0-9a-f-]{36})/i);
   });
 });
+
+describe('MiniPlayer — onCrossedFinish (Task 4 / fs-15 auto-finish)', () => {
+  /* Helpers reused across the finish-tail specs. The chapter has
+     duration > 10 s so the tail guard fires. */
+
+  async function fireLoadedMetadata(audioEl: HTMLAudioElement, durationSec: number) {
+    Object.defineProperty(audioEl, 'duration', { configurable: true, value: durationSec });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+  }
+
+  async function fireTimeUpdate(audioEl: HTMLAudioElement, currentTimeSec: number) {
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: currentTimeSec,
+    });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('fires onCrossedFinish exactly once when currentTime enters the last 10 s', async () => {
+    const onCrossedFinish = vi.fn();
+    const { container } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={false}
+        onCrossedFinish={onCrossedFinish}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+
+    /* At t=585, remaining=15 — outside the tail, no callback yet. */
+    await fireTimeUpdate(audioEl, 585);
+    expect(onCrossedFinish).not.toHaveBeenCalled();
+
+    /* At t=591, remaining=9 — inside the tail, fires once. */
+    await fireTimeUpdate(audioEl, 591);
+    expect(onCrossedFinish).toHaveBeenCalledTimes(1);
+
+    /* Second tick inside the tail — dedup ref prevents double-fire. */
+    await fireTimeUpdate(audioEl, 595);
+    expect(onCrossedFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires onCrossedFinish on the ended event when tail did NOT already trigger it', async () => {
+    const onCrossedFinish = vi.fn();
+    const { container } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={false}
+        onCrossedFinish={onCrossedFinish}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+
+    /* No time-update crossing the tail — fire ended directly. */
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('ended'));
+    });
+    expect(onCrossedFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT double-fire onCrossedFinish on ended when the tail already triggered it', async () => {
+    const onCrossedFinish = vi.fn();
+    const { container } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={false}
+        onCrossedFinish={onCrossedFinish}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+
+    /* Tail fires first. */
+    await fireTimeUpdate(audioEl, 592);
+    expect(onCrossedFinish).toHaveBeenCalledTimes(1);
+
+    /* ended fires — ref already set, no second call. */
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('ended'));
+    });
+    expect(onCrossedFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms after a chapter change — fires again on the new chapter tail', async () => {
+    const onCrossedFinish = vi.fn();
+    const store = makeStore();
+    const { container, rerender } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+          onCrossedFinish={onCrossedFinish}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+
+    /* Fire finish on chapter 1. */
+    await fireTimeUpdate(audioEl, 592);
+    expect(onCrossedFinish).toHaveBeenCalledTimes(1);
+
+    /* Switch to chapter 2 — the ref must reset so the callback can fire again. */
+    rerender(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter2}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={true}
+          nextAvailable={false}
+          onCrossedFinish={onCrossedFinish}
+        />
+      </Provider>,
+    );
+    await resolveChapter(2, '/api/books/book-1/chapters/2/audio.mp3');
+    await fireLoadedMetadata(audioEl, 500);
+    await fireTimeUpdate(audioEl, 492);
+    expect(onCrossedFinish).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT fire when duration is <= 10 s (short clip guard)', async () => {
+    const onCrossedFinish = vi.fn();
+    const { container } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={false}
+        onCrossedFinish={onCrossedFinish}
+      />,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 8); // only 8 s
+
+    /* Even at currentTime=6 (remaining=2 <= 10), no fire because duration <= 10. */
+    await fireTimeUpdate(audioEl, 6);
+    expect(onCrossedFinish).not.toHaveBeenCalled();
+  });
+});
