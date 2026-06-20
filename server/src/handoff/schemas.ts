@@ -164,3 +164,42 @@ export type Stage2ChapterOutput = z.infer<typeof stage2ChapterSchema>;
 export type CharacterOutput = z.infer<typeof characterSchema>;
 export type SentenceOutput = z.infer<typeof sentenceSchema>;
 export type EmotionAnnotationOutput = z.infer<typeof emotionAnnotationSchema>;
+
+/* ── Analyzer grammar schemas (Task 6) ──────────────────────────────────────
+   These are used ONLY to constrain the analyzer model's output via structured
+   decoding (Ollama format / Gemini responseSchema). They are NEVER used for
+   validation of stored cast.json files — that stays characterSchema / stage1*
+   (all tone fields optional there so old files keep validating).
+
+   The grammar makes tone REQUIRED so the model is nudged to emit all four
+   axes every time. */
+
+export const requiredToneSchema = z
+  .object({
+    warmth: z.number().int().min(0).max(100),
+    pace: z.number().int().min(0).max(100),
+    authority: z.number().int().min(0).max(100),
+    emotion: z.number().int().min(0).max(100),
+  })
+  .strict();
+
+/** Character schema for the analyzer GRAMMAR — tone required so constrained
+    decoding nudges the model to emit all four axes. Never used for validation
+    (that stays characterSchema, tone optional). */
+export const analyzerCharacterSchema = characterSchema.extend({ tone: requiredToneSchema });
+
+/** Grammar variant of stage1ChapterSchema — embeds analyzerCharacterSchema
+    so the model must emit tone on every character it returns. */
+export const stage1ChapterGrammarSchema = z
+  .object({
+    characters: z.array(analyzerCharacterSchema),
+  })
+  .strict();
+
+/** Grammar variant of stage1Schema — embeds analyzerCharacterSchema. */
+export const stage1GrammarSchema = z
+  .object({
+    characters: z.array(analyzerCharacterSchema).min(1),
+    chapters: stage1Schema.shape.chapters,
+  })
+  .strict();
