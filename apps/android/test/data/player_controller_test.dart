@@ -526,6 +526,117 @@ void main() {
     });
   });
 
+  // ── Task 5: bookReplayedStream — un-finish on genuine replay ─────────────
+
+  group('bookReplayedStream', () {
+    test(
+        'forward navigation ch0→ch1→ch2 does NOT emit bookReplayedStream',
+        () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore());
+      final replays = <String>[];
+      final sub = pc.bookReplayedStream.listen(replays.add);
+      await pc.openBook('b1'); // loads ch0 (u1); prev=-1 → no emit
+      await pc.playChapter('u2'); // forward ch0→ch1 → no emit
+      await pc.playChapter('u3'); // forward ch1→ch2 → no emit
+      await Future<void>.delayed(Duration.zero);
+      expect(replays, isEmpty,
+          reason: 'forward navigation must not emit bookReplayedStream');
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test(
+        'jumping back (ch2→ch0) emits bookReplayedStream exactly once',
+        () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore());
+      final replays = <String>[];
+      final sub = pc.bookReplayedStream.listen(replays.add);
+      await pc.openBook('b1'); // ch0; prev=-1 → no emit
+      await pc.playChapter('u2'); // forward → no emit
+      await pc.playChapter('u3'); // forward → no emit
+      await pc.playChapter('u1'); // backward ch2→ch0 → emits 'b1'
+      await Future<void>.delayed(Duration.zero);
+      expect(replays, ['b1'],
+          reason: 'backward jump must emit bookReplayedStream once');
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test(
+        'initial openBook restore (no prior index) does NOT emit bookReplayedStream',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()
+        ..map['b1'] = const PlaybackPoint(chapterUuid: 'u3', positionMs: 0);
+      final pc = make(engine, store);
+      final replays = <String>[];
+      final sub = pc.bookReplayedStream.listen(replays.add);
+      // openBook restores to u3 (index 2) — _index starts at -1 so prev=-1 < 0 → no emit
+      await pc.openBook('b1');
+      await Future<void>.delayed(Duration.zero);
+      expect(replays, isEmpty,
+          reason: 'initial openBook restore must not emit bookReplayedStream');
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    // ── FIX 1: cross-book _index carryover must NOT emit bookReplayedStream ──
+
+    test(
+        'FIX-1: opening a second book after playing the first at a high index does '
+        'NOT emit bookReplayedStream for the second book',
+        () async {
+      // Regression: PlayerController is a long-lived singleton. After playing
+      // Book A up to chapter 6 (index 5), opening Book B that restores at
+      // index 0 would see prev=5 and 0<5 → spurious bookReplayed emit for B.
+      // The fix: _index is reset to -1 before the book changes, so prev=-1
+      // which is excluded by `prev >= 0`.
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'bookA': const [
+          PlayableChapter(uuid: 'a1', path: '/a/a1.mp3'),
+          PlayableChapter(uuid: 'a2', path: '/a/a2.mp3'),
+          PlayableChapter(uuid: 'a3', path: '/a/a3.mp3'),
+          PlayableChapter(uuid: 'a4', path: '/a/a4.mp3'),
+          PlayableChapter(uuid: 'a5', path: '/a/a5.mp3'),
+          PlayableChapter(uuid: 'a6', path: '/a/a6.mp3'),
+          PlayableChapter(uuid: 'a7', path: '/a/a7.mp3'),
+        ],
+        'bookB': const [
+          PlayableChapter(uuid: 'b1', path: '/b/b1.mp3'),
+          PlayableChapter(uuid: 'b2', path: '/b/b2.mp3'),
+        ],
+      });
+
+      final replays = <String>[];
+      final sub = pc.bookReplayedStream.listen(replays.add);
+
+      // Simulate user playing Book A up to chapter 6 (index 5).
+      await pc.openBook('bookA');   // loads index 0
+      await pc.playChapter('a2');   // → index 1
+      await pc.playChapter('a3');   // → index 2
+      await pc.playChapter('a4');   // → index 3
+      await pc.playChapter('a5');   // → index 4
+      await pc.playChapter('a6');   // → index 5
+      // _index is now 5 for bookA
+      expect(replays, isEmpty, reason: 'no backward nav yet');
+
+      // Now open Book B which has no saved resume → restores at index 0.
+      // Before the fix, _index was still 5 (from bookA) → _loadIndex(0) saw
+      // prev=5, 0 < 5, bookId=bookB → spurious emit.
+      await pc.openBook('bookB');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(replays, isEmpty,
+          reason: 'FIX-1: switching to a fresh book must NOT emit bookReplayedStream');
+
+      await sub.cancel();
+      await pc.dispose();
+    });
+  });
+
   // ── fs-16: listen-stats accumulator wiring ────────────────────────────────
 
   group('PlayerController stats accumulator (fs-16)', () {

@@ -135,6 +135,14 @@ class PlayerController {
       StreamController<String>.broadcast();
   Stream<String> get bookCompletedStream => _bookCompleted.stream;
 
+  /// Emits a book's `bookId` when the user navigates BACKWARD within its
+  /// chapter list — a genuine replay signal. Only fires on `newIndex < prev`
+  /// (where `prev >= 0`), so the initial `openBook` restore (prev = -1) and
+  /// every forward auto-advance (`newIndex >= prev`) are both excluded.
+  final StreamController<String> _bookReplayed =
+      StreamController<String>.broadcast();
+  Stream<String> get bookReplayedStream => _bookReplayed.stream;
+
   /// Dedup guards so the per-tick near-end check fires at most once per chapter
   /// and once per book; reset on every chapter load.
   String? _nearEndTickedUuid;
@@ -224,6 +232,12 @@ class PlayerController {
         await _persistStatsHandoff(handoff);
       }
     }
+    // FIX 1: reset _index before changing _bookId so that _loadIndex's
+    // backward-nav check (prev >= 0 && index < prev && _bookId == currentBook)
+    // cannot see a stale prior-book index when opening a different book.
+    // The reset to -1 means _loadIndex captures prev=-1, which is excluded by
+    // the `prev >= 0` guard — no spurious bookReplayedStream emit on switch.
+    if (_bookId != bookId) _index = -1;
     _bookId = bookId;
     _bookTitle = bookTitle;
     _artPath = artPath;
@@ -243,6 +257,8 @@ class PlayerController {
 
   Future<void> _loadIndex(int index, {int seekMs = 0}) async {
     if (index < 0 || index >= _playlist.length) return;
+    // Capture prior index BEFORE reassigning — used for the backward-nav replay signal.
+    final prev = _index;
     _index = index;
     // Reset near-end dedup so each new chapter can tick once.
     _nearEndTickedUuid = null;
@@ -268,6 +284,12 @@ class PlayerController {
     // Measure the autosave interval from load time, so we don't persist on the
     // very first position tick.
     _lastSave = _now();
+    // Emit the replay signal when the user navigates BACKWARD (genuine replay).
+    // prev=-1 on the initial openBook restore → excluded by `prev >= 0`.
+    // forward auto-advance: newIndex > prev → excluded by `index < prev`.
+    if (prev >= 0 && index < prev && _bookId != null) {
+      _bookReplayed.add(_bookId!);
+    }
   }
 
   Future<void> seekTo(Duration position) =>
@@ -289,7 +311,7 @@ class PlayerController {
     final uuid = currentChapterUuid;
     if (book == null || uuid == null) return;
     await _store.savePlayback(
-        book, uuid, _engine.position.inMilliseconds, _now().toIso8601String());
+        book, uuid, _engine.position.inMilliseconds, _now().toUtc().toIso8601String());
     _lastSave = _now();
   }
 
@@ -372,7 +394,7 @@ class PlayerController {
         _lastSave = now;
         // Fire-and-forget; ordering preserved by the single-subscription stream.
         _store.savePlayback(
-            book, uuid, position.inMilliseconds, now.toIso8601String());
+            book, uuid, position.inMilliseconds, now.toUtc().toIso8601String());
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
       }
@@ -420,6 +442,7 @@ class PlayerController {
     await _nowPlaying.close();
     await _chapterCompleted.close();
     await _bookCompleted.close();
+    await _bookReplayed.close();
     await _engine.dispose();
   }
 }

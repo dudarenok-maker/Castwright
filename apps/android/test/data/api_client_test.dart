@@ -108,5 +108,37 @@ void main() {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(404, ''));
       expect(await api.getChapterPeaks('b1', 3), isEmpty);
     });
+
+    // shelfStatusBody is the package-private helper extracted from setShelfStatus
+    // so the null-filtering logic can be tested without a live pinned TLS client.
+    // These tests cover the KEY invariant: only non-null flags appear in the body.
+    // An always-both-keys implementation would fail the "only finished" and
+    // "only hidden" cases because containsKey would return true for the absent key.
+    test('shelfStatusBody returns empty map when both flags are null', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody();
+      expect(body, isEmpty);
+    });
+
+    test('shelfStatusBody includes only finished when hidden is null', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody(finished: true);
+      expect(body['finished'], isTrue);
+      expect(body.containsKey('hidden'), isFalse);
+    });
+
+    test('shelfStatusBody includes only hidden when finished is null', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody(hidden: true);
+      expect(body['hidden'], isTrue);
+      expect(body.containsKey('finished'), isFalse);
+    });
+
+    test('shelfStatusBody includes both flags when both are provided', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      final body = api.shelfStatusBody(finished: true, hidden: false);
+      expect(body['finished'], isTrue);
+      expect(body['hidden'], isFalse);
+    });
   });
 }

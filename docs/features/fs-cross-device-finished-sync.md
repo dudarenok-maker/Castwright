@@ -4,7 +4,7 @@ shipped: null
 owner: null
 ---
 
-# Cross-device finished sync — PR1: web auto-finish + manifest index fields
+# Cross-device finished sync — PR1: web auto-finish + manifest index fields; PR2: companion pull + push
 
 > Status: active
 > Key files: `src/store/continue-listening-slice.ts`, `src/components/layout.tsx`, `src/components/mini-player.tsx`, `src/views/book-library.tsx`, `server/src/workspace/sync-manifest.ts`, `server/src/routes/library-sync-manifest.ts`, `openapi.yaml`, `src/lib/api-types.ts`
@@ -91,15 +91,69 @@ Run against the full stack (`npm start`) with at least one book that has a gener
 - **Companion pushing finish/hide to the server:** calling `POST /shelf-status` from the companion on book completion or long-press remove is PR2. Branch 1 (app-14) keeps this on-device only.
 - **`listenedAt` field:** the web auto-finish signals via `POST /shelf-status`, NOT via `PUT /listen-progress`. No `listenedAt` timestamp is written by PR1. The companion's `listenedAt` reconcile (plan 188 `srv-34`) is unchanged.
 
-## Follow-up (PR2 — companion)
+---
 
-PR2 will wire the Android companion to consume the new `finished`/`hidden` manifest index fields and push finish/hide back to the server:
+## PR2: Companion pull + push (cross-device finished sync)
 
-- **Server → companion:** during delta sync, if a book's index entry has `finished: true`, the companion sets `Books.hidden = true` in Drift — the book leaves the local shelf even if it was finished on the web.
-- **Companion → server:** `bookCompletedStream` (app-14's `PlayerController`) triggers `POST /api/books/{id}/shelf-status { finished: true }` on the auto-finish path; the long-press remove path triggers `POST /shelf-status { hidden: true }`.
-- **`listenedAt` reconcile fix:** `resume_reconcile.dart` compares `listenedAt` as raw ISO strings; timezone/sub-second formatting differences can silently drop a valid push. Fix to parse + compare as `DateTime`.
+> Key files (companion): `apps/android/lib/data/database.dart` (schema 6→7, `Books.finished` column), `apps/android/lib/data/book_repository.dart` (`setBookSyncState`, `listBooks`, `markPlayed`, `markBookFinished`, `clearBookFinished`), `apps/android/lib/sync/library_sync.dart` (manifest index parse, `_refresh`), `apps/android/lib/data/api_client.dart` (`setShelfStatus`), `apps/android/lib/player/player_controller.dart` (`bookCompletedStream`, `bookReplayedStream`), `apps/android/lib/sync/resume_reconcile.dart` (UTC timestamp compare).
+> OpenAPI ops: `POST /api/books/{bookId}/shelf-status` (called from companion on auto-finish, long-press remove, and replay un-finish).
 
-References: [#952](https://github.com/dudarenok-maker/Castwright/issues/952).
+### Companion architectural impact
+
+**Pull (server → companion):**
+
+- `Books` Drift table gains a `finished` boolean column (schema version 6 → 7, migration in `database.dart`). `BookSummary` and `ShelfBook` expose `finished`.
+- `setBookSyncState(bookId, {finished, hidden})` persists both flags atomically into Drift, called from the manifest index walk in `library_sync.dart`.
+- During manifest index load, `library_sync.dart` parses `finished` and `hidden` from each `SyncManifestIndexBook` entry and calls `setBookSyncState`. The Continue-listening shelf filter in `listBooks()` excludes books where `inProgress && !hidden && !finished`.
+- After the server pull completes, `_refresh` re-queries `listBooks()` and rebuilds the shelf, so pulled finished/hidden state is visible on the next library visit without a separate trigger.
+- `markPlayed` clears `hidden` on open — a manually-removed book that is reopened will not spuriously un-finish on later replay.
+
+**Push (companion → server):**
+
+- `ApiClient.setShelfStatus(bookId, {finished, hidden})` issues `POST /api/books/{bookId}/shelf-status` best-effort (errors are swallowed; the local Drift state is the source of truth).
+- On auto-finish (`PlayerController.bookCompletedStream`), the companion POSTs `{finished: true}`.
+- On long-press "remove from shelf", the companion POSTs `{hidden: true}`.
+
+**Un-finish on genuine replay:**
+
+- `PlayerController.bookReplayedStream` emits only on a genuine **backward** chapter navigation — not on initial restore, not on forward auto-advance. This is the un-finish signal.
+- The runtime gates un-finish on `isBookFinished`, defined as `books.finished || books.hidden`. The `hidden` flag is the **local-finish signal** that `markBookFinished` writes before any server pull, so a same-device "finish then replay" cycle un-finishes correctly without first round-tripping through a server pull.
+- `clearBookFinished` clears **both** `finished` and `hidden` so a replayed book returns to the Continue-listening shelf.
+- The companion then POSTs `{finished: false}` to the server.
+
+**Reconcile fix:**
+
+- `resume_reconcile.dart` previously compared `listenedAt`/`updatedAt` as raw ISO 8601 strings. Timezone suffix and sub-second formatting differences silently dropped valid pushes. The fix parses both sides as UTC instants (`DateTime.parse(...).toUtc().compareTo(...)`) before comparing.
+- The companion now stamps `listenedAt` as UTC (`DateTime.now().toUtc().toIso8601String()`), so future comparisons are always timezone-consistent.
+
+### PR2 invariants to preserve
+
+- `listBooks()` shelf filter excludes books where `inProgress && !hidden && !finished`; books that are `finished` or `hidden` do not appear on the Continue-listening shelf.
+- `isBookFinished` uses `books.finished || books.hidden` (not `books.finished` alone) so that a same-device finish (which writes `hidden` before a server pull arrives) gates the un-finish check correctly.
+- `clearBookFinished` clears both `finished` and `hidden` columns atomically; after a genuine backward replay the book is neither finished nor hidden locally and returns to the shelf.
+- `markPlayed` clears `hidden` on open so a long-press-removed book that is reopened is not treated as finished.
+- `bookReplayedStream` fires ONLY on backward chapter navigation (initial restore and forward auto-advance must not emit).
+- `setShelfStatus` failures are swallowed; local Drift state is not rolled back on POST failure.
+- UTC timestamp comparison in `resume_reconcile.dart` uses `DateTime.parse(...).toUtc().compareTo(...)` for both sides.
+
+### PR2 automated coverage
+
+- **Flutter unit tests** (`apps/android/test/`) — `setBookSyncState` persists both flags; `listBooks` excludes `finished` and `hidden` books from the shelf; `markBookFinished` writes `hidden: true`; `clearBookFinished` clears both flags; `markPlayed` clears `hidden`; `isBookFinished` returns true for both `finished` and `hidden`; `bookReplayedStream` emits only on backward navigation, not on restore or forward advance; `resume_reconcile` UTC parse comparison correctly orders timestamps that differ only by timezone suffix; FIX-3a: `loadIndex` with `finished:true`/`hidden:true` in the manifest propagates those flags through `setBookSyncState` to Drift (asserted in `sync_controller_test.dart`).
+- **Schema migration 6→7 coverage note (FIX-3b):** a round-trip automated migration test was not written. The Drift migration test infra (`verifySchema`/`testMigration` via `drift_dev`) requires pre-exported `.dart_tool/drift_schemas/` snapshot files that are not bootstrapped in this repo. The manual raw-SQL injection approach (open `NativeDatabase.memory()`, CREATE TABLE v6, PRAGMA user_version=6, then pass to `LibraryDatabase`) is blocked by Drift's generated `_$LibraryDatabase` calling `onCreate` unconditionally on a fresh executor, bypassing `onUpgrade`. The migration is covered by code review: the `if (from < 7) addColumn(books, books.finished)` line in `MigrationStrategy.onUpgrade` follows the identical pattern used for v4→5 (`peaks`) and v5→6 (`hidden`), both of which are known working migrations. A follow-up to bootstrap `drift_dev` schema snapshots and add the automated round-trip would be the correct next step (`ops/drift-migration-tests` backlog item).
+
+### PR2 manual acceptance walkthrough
+
+Run against the full stack (`npm start`) with a real Android device or emulator running the companion, connected to the server over LAN.
+
+1. **Web → phone (pull):** finish a book on the web (play the final listenable chapter to its last ~10 s and let it auto-dismiss). On the phone, open the Library. The book is gone from the Continue-listening shelf. (The pull happens on library entry via `_refresh`.)
+
+2. **Phone → web (push):** long-press a book on the phone to "remove from shelf". The companion POSTs `{hidden: true}` best-effort. On the next web library visit (or page reload), the book is absent from the Continue-listening rail.
+
+3. **Replay un-finish (either device):** open a finished book on either device and jump **back** to an earlier chapter (genuine backward navigation). The book returns to the Continue-listening shelf on the local device and the server receives `POST /shelf-status {finished: false}`. On the next sync/visit on the other device, the book reappears on its shelf.
+
+4. **Reinstall / fresh device:** after a fresh install and first sync, the companion shelf correctly reflects the `finished`/`hidden` state pulled from the server manifest index — books finished on the web are absent; books in progress appear.
+
+---
 
 ## Ship notes
 

@@ -278,6 +278,27 @@ void main() {
     });
   });
 
+  group('DriftLocalLibrary (app-19 cross-device finished-sync)', () {
+    test('setBookSyncState persists finished+hidden; listBooks surfaces finished', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      await lib.setBookSyncState('b1', finished: true, hidden: false);
+      expect((await lib.listBooks()).single.finished, isTrue);
+      await lib.close();
+    });
+
+    test('markPlayed clears hidden but NOT finished', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(bookId: 'b1', title: 'T', author: 'A', series: '', seriesPosition: null);
+      await lib.setBookSyncState('b1', finished: true, hidden: true);
+      await lib.markPlayed('b1', '2026-06-20T12:00:00Z');
+      final b = (await lib.listBooks()).single;
+      expect(b.hidden, isFalse);
+      expect(b.finished, isTrue);
+      await lib.close();
+    });
+  });
+
   group('DriftLocalLibrary (app-14 finished-shelf)', () {
     test('setBookHidden persists and surfaces via listBooks', () async {
       final lib = makeLib(InMemoryFileStore());
@@ -371,6 +392,85 @@ void main() {
       final lib = makeLib(InMemoryFileStore());
       await lib.importLegacyJsonIfPresent(); // must not throw
       expect(await lib.syncedBookUpdatedAt(), isEmpty);
+      await lib.close();
+    });
+  });
+
+  // ── Task 5: isBookFinished / clearBookFinished ────────────────────────────
+
+  group('isBookFinished / clearBookFinished', () {
+    test('isBookFinished returns true after setBookSyncState with finished:true',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      // Simulate a server pull that set finished:true on this book.
+      await lib.setBookSyncState('b1', finished: true, hidden: true);
+      expect(await lib.isBookFinished('b1'), isTrue);
+      await lib.close();
+    });
+
+    test('isBookFinished returns true after markBookFinished (local-finish path)',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      // markBookFinished sets hidden=true but NOT finished (the local-finish
+      // signal that precedes any server pull). isBookFinished must treat hidden
+      // as a finished state.
+      await lib.markBookFinished('b1');
+      final b = (await lib.listBooks()).single;
+      expect(b.hidden, isTrue,
+          reason: 'sanity: markBookFinished sets hidden=true');
+      expect(b.finished, isFalse,
+          reason: 'sanity: markBookFinished does NOT set finished');
+      expect(await lib.isBookFinished('b1'), isTrue,
+          reason: 'isBookFinished must return true when hidden=true (local-finish)');
+      await lib.close();
+    });
+
+    test('clearBookFinished clears BOTH finished and hidden; isBookFinished reflects it',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      // Simulate a server pull that set finished:true.
+      await lib.setBookSyncState('b1', finished: true, hidden: true);
+      expect(await lib.isBookFinished('b1'), isTrue,
+          reason: 'sanity: finished after setBookSyncState(finished:true)');
+      await lib.clearBookFinished('b1');
+      expect(await lib.isBookFinished('b1'), isFalse,
+          reason: 'clearBookFinished must clear the finished state');
+      final b = (await lib.listBooks()).single;
+      expect(b.finished, isFalse,
+          reason: 'clearBookFinished must set finished=false');
+      expect(b.hidden, isFalse,
+          reason: 'clearBookFinished must also set hidden=false');
+      await lib.close();
+    });
+
+    test('isBookFinished returns false for a book that was never finished',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+          bookId: 'b1',
+          title: 'T',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      expect(await lib.isBookFinished('b1'), isFalse);
       await lib.close();
     });
   });

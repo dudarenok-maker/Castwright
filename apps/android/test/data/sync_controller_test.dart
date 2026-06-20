@@ -31,9 +31,12 @@ class _ThrowingApi implements ManifestApi {
       throw Exception('offline');
 }
 
-SyncManifestIndexBook idx(String id, String title) => SyncManifestIndexBook(
-    bookId: id, updatedAt: 't', title: title, author: 'A', series: 'S',
-    seriesPosition: 1, chapterCount: 1);
+SyncManifestIndexBook idx(String id, String title,
+        {bool finished = false, bool hidden = false}) =>
+    SyncManifestIndexBook(
+        bookId: id, updatedAt: 't', title: title, author: 'A', series: 'S',
+        seriesPosition: 1, chapterCount: 1,
+        finished: finished, hidden: hidden);
 
 SyncManifestChapter ch(String book, String uuid, int id, String fp,
         {double? dur}) =>
@@ -68,6 +71,40 @@ void main() {
   setUp(() {
     fs = InMemoryFileStore();
     lib = DriftLocalLibrary(LibraryDatabase(NativeDatabase.memory()), fs, root: '/d');
+  });
+
+  // ── FIX 3a: manifest finished/hidden flags reach Drift via loadIndex ─────
+
+  test('FIX-3a: loadIndex with finished:true propagates to Drift (setBookSyncState)',
+      () async {
+    // Previously the idx() helper always passed finished:false/hidden:false, so
+    // the setBookSyncState call was trivially exercised but never validated
+    // against a truthy flag. This test loads a manifest where one book is
+    // finished:true and one is hidden:true, then asserts listBooks() reflects them.
+    final api = _FakeApi(
+      SyncManifestIndex(
+        schemaVersion: 1,
+        books: [
+          idx('b-fin', 'Finished Book', finished: true),
+          idx('b-hid', 'Hidden Book', hidden: true),
+          idx('b-norm', 'Normal Book'),
+        ],
+        activeBookIds: ['b-fin', 'b-hid', 'b-norm'],
+      ),
+      const {},
+    );
+    await make(api, {}).loadIndex();
+    final listed = await lib.listBooks();
+    final byId = {for (final b in listed) b.bookId: b};
+
+    expect(byId['b-fin']?.finished, isTrue,
+        reason: 'FIX-3a: finished:true from manifest must reach Drift');
+    expect(byId['b-hid']?.hidden, isTrue,
+        reason: 'FIX-3a: hidden:true from manifest must reach Drift');
+    expect(byId['b-norm']?.finished, isFalse,
+        reason: 'normal book must NOT be marked finished');
+    expect(byId['b-norm']?.hidden, isFalse,
+        reason: 'normal book must NOT be hidden');
   });
 
   test('loadIndex records book metadata for the library (no downloads)', () async {

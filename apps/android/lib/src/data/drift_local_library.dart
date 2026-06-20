@@ -20,6 +20,7 @@ class BookSummary {
     required this.lastPlayedAt,
     required this.coverThumbPath,
     required this.hidden,
+    required this.finished,
   });
   final String bookId;
   final String title;
@@ -29,6 +30,7 @@ class BookSummary {
   final String? lastPlayedAt;
   final String? coverThumbPath;
   final bool hidden;
+  final bool finished;
 }
 
 /// A locally-stored chapter (the offline source for the player + durations).
@@ -373,8 +375,44 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
           lastPlayedAt: b.lastPlayedAt,
           coverThumbPath: b.coverThumbPath,
           hidden: b.hidden,
+          finished: b.finished,
         ),
     ];
+  }
+
+  /// Whether the book is in a finished state on THIS device.
+  ///
+  /// Returns true when the server-synced [finished] column is set (a manifest
+  /// pull propagated a cross-device finish via [setBookSyncState]) OR when
+  /// [hidden] is set (the local-finish signal that [markBookFinished] writes
+  /// before any server pull). Both columns are reliable signals that "the user
+  /// has listened to the end on some device".
+  Future<bool> isBookFinished(String bookId) async {
+    final row = await (_db.select(_db.books)
+          ..where((b) => b.bookId.equals(bookId)))
+        .getSingleOrNull();
+    return (row?.finished ?? false) || (row?.hidden ?? false);
+  }
+
+  /// Clear the finished AND hidden flags on genuine replay.
+  ///
+  /// Clears both [finished] (the server-synced column) and [hidden] (the
+  /// local-finish signal written by [markBookFinished]) so the book returns to
+  /// the "Continue listening" shelf, which filters out [finished || hidden].
+  /// Does NOT touch chapter [finished] rows.
+  Future<void> clearBookFinished(String bookId) async {
+    await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
+        .write(const BooksCompanion(
+      finished: Value(false),
+      hidden: Value(false),
+    ));
+  }
+
+  /// Persist server finished/hidden pulled from the manifest index.
+  Future<void> setBookSyncState(String bookId, {required bool finished, required bool hidden}) async {
+    await _ensureBook(bookId);
+    await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
+        .write(BooksCompanion(finished: Value(finished), hidden: Value(hidden)));
   }
 
   @override

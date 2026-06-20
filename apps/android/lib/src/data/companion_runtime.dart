@@ -34,21 +34,38 @@ import 'sync_controller.dart';
 /// and an in-memory library.
 ///
 /// - `chapterCompletedStream → setChapterFinished(uuid, true)`
-/// - `bookCompletedStream → markBookFinished(bookId)`
+/// - `bookCompletedStream → markBookFinished(bookId)` + best-effort
+///   `api.setShelfStatus(bookId, finished: true)` push for cross-device sync.
 List<StreamSubscription<String>> wireFinishedTracking(
   PlayerController player,
   DriftLocalLibrary library,
+  ApiClient api,
 ) {
   // app-4: mark a chapter finished when it plays to its end.
   final completedSub = player.chapterCompletedStream
       .listen((uuid) => library.setChapterFinished(uuid, true));
 
   // app-14: when the last chapter is reached, drop the book from the shelf
-  // and tick all its chapters.
-  final bookFinishedSub = player.bookCompletedStream
-      .listen((bookId) => library.markBookFinished(bookId));
+  // and tick all its chapters. Best-effort POST keeps other devices in sync.
+  final bookFinishedSub = player.bookCompletedStream.listen((bookId) {
+    library.markBookFinished(bookId);
+    api.setShelfStatus(bookId, finished: true).catchError((_) {});
+  });
 
-  return [completedSub, bookFinishedSub];
+  // Task-5 (app-19 cross-device un-finish): when the user genuinely replays a
+  // finished book (backward chapter navigation), clear the local finished flag
+  // and push finished:false. Gated on isBookFinished so a mid-book backward
+  // skip doesn't accidentally un-finish a not-yet-finished book.
+  // Accepted minor: no durable pending-unfinish set (YAGNI per review [I5]) —
+  // the POST lands before the library pull on returning to the shelf, so any
+  // momentary stale finished:true self-corrects on the next pull.
+  final replaySub = player.bookReplayedStream.listen((bookId) async {
+    if (!await library.isBookFinished(bookId)) return;
+    await library.clearBookFinished(bookId);
+    api.setShelfStatus(bookId, finished: false).catchError((_) {});
+  });
+
+  return [completedSub, bookFinishedSub, replaySub];
 }
 
 /// The wired runtime for a paired server (app-shell integration): builds the
@@ -211,7 +228,7 @@ class CompanionRuntime {
         Connectivity().onConnectivityChanged.listen((_) => autoSync.maybeSync());
 
     // app-4/app-14: wire finished-tracking streams (chapter + book) to the library.
-    final finishedSubs = wireFinishedTracking(player, library);
+    final finishedSubs = wireFinishedTracking(player, library, api);
 
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
     // the live player + a downloaded-only, 2-tab car browse tree (CarBrowse).

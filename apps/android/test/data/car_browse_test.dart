@@ -13,6 +13,7 @@ BookSummary _book(String id, String title, String author, {String? cover}) =>
       lastPlayedAt: null,
       coverThumbPath: cover,
       hidden: false,
+      finished: false,
     );
 
 DownloadedChapter _ch(String uuid, int id, String title, int bytes,

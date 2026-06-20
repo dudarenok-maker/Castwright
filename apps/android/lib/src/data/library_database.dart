@@ -39,6 +39,11 @@ class Books extends Table {
   /// book stays fully in the library.
   BoolColumn get hidden => boolean().withDefault(const Constant(false))();
 
+  /// Server-derived/explicit "finished" pulled from the sync-manifest index —
+  /// drives shelf exclusion (book left the Continue-listening shelf). Distinct
+  /// from per-chapter Chapters.finished. Cleared locally only on genuine replay.
+  BoolColumn get finished => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column<Object>> get primaryKey => {bookId};
 }
@@ -100,7 +105,7 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase.open() : this(driftDatabase(name: 'library'));
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -111,6 +116,7 @@ class LibraryDatabase extends _$LibraryDatabase {
           if (from < 4) await m.createTable(listenStatsBuffer);
           if (from < 5) await m.addColumn(chapters, chapters.peaks);
           if (from < 6) await m.addColumn(books, books.hidden);
+          if (from < 7) await m.addColumn(books, books.finished);
         },
       );
 
