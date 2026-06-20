@@ -76,6 +76,18 @@ class PlayerController {
     _completionSub = _engine.completionStream.listen((_) {
       final finished = currentChapterUuid;
       if (finished != null) _chapterCompleted.add(finished);
+      // M1: a short last chapter (duration <= kFinishThreshold) never enters the
+      // near-end window, so the near-end path never fires _bookCompleted. Emit it
+      // here instead. No isPlaying guard — a genuine engine end-of-file event
+      // confirms real playback ended. Dedup with _bookFinishEmitted so the normal
+      // long-chapter path (near-end already emitted) doesn't double-fire.
+      final book = _bookId;
+      if (book != null &&
+          _index == _playlist.length - 1 &&
+          !_bookFinishEmitted) {
+        _bookFinishEmitted = true;
+        if (!_bookCompleted.isClosed) _bookCompleted.add(book);
+      }
       _advance();
     });
     // Subscribe to playing state to drive the accumulator.
@@ -342,7 +354,9 @@ class PlayerController {
           if (!_chapterCompleted.isClosed) _chapterCompleted.add(uuid);
         }
         final isLast = _index == _playlist.length - 1;
-        if (isLast && !_bookFinishEmitted) {
+        // I2: only emit the book-finish event while actually playing — a scrub/seek
+        // while paused (engine emits a position on seek) must NOT hide the book.
+        if (isLast && !_bookFinishEmitted && _engine.playing) {
           _bookFinishEmitted = true;
           if (!_bookCompleted.isClosed) _bookCompleted.add(book);
         }

@@ -97,6 +97,18 @@ Run on a real device or emulator connected to the local Castwright server with a
    - The book reappears on the "Continue listening" shelf.
    - Chapter ticks are cleared as chapters are replayed.
 
+## Behavior notes
+
+### Auto-delete-finished interaction (C1)
+
+When a book is finished, `markBookFinished` ticks **every** chapter as finished — including chapters the user may have skipped. This is intentional: a completed book should show full tick marks regardless of whether every chapter was listened to in full.
+
+The companion app has an off-by-default **"Auto-delete finished audio"** setting (key `auto-delete-finished`, defaulting to `false` in `app_settings.dart`; toggled in `settings_screen.dart`). If the user has enabled this setting, finishing a book makes the entire book's downloaded audio — including chapters they skipped — eligible for deletion on the next storage-enforcement or sync pass (see `CompanionRuntime.enforceStorageCap` and `DriftLocalLibrary.applyEviction`).
+
+The book itself stays in the library and remains re-downloadable at any time. Replaying a finished book (calling `openBook` again) clears the `hidden` flag via `markPlayed` and restores it to the "Continue listening" shelf. The user can then download and listen again normally.
+
+**Summary:** enabling "Auto-delete finished audio" means finishing any book — even one where chapters were skipped — may free disk space for all of that book's audio on the next enforcement pass.
+
 ## Out of scope
 
 Cross-device sync is deferred to Branch 2 (not in this plan):

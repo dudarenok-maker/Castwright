@@ -26,6 +26,31 @@ import 'resume_sync_service.dart';
 import 'settings_store.dart';
 import 'sync_controller.dart';
 
+/// Wires the player's finished-tracking streams to the library.
+///
+/// Returns the two [StreamSubscription]s so the caller can cancel them on
+/// dispose. Extracted for testability — the real runtime calls this from
+/// [CompanionRuntime.forConnection]; tests call it directly with a fake engine
+/// and an in-memory library.
+///
+/// - `chapterCompletedStream → setChapterFinished(uuid, true)`
+/// - `bookCompletedStream → markBookFinished(bookId)`
+List<StreamSubscription<String>> wireFinishedTracking(
+  PlayerController player,
+  DriftLocalLibrary library,
+) {
+  // app-4: mark a chapter finished when it plays to its end.
+  final completedSub = player.chapterCompletedStream
+      .listen((uuid) => library.setChapterFinished(uuid, true));
+
+  // app-14: when the last chapter is reached, drop the book from the shelf
+  // and tick all its chapters.
+  final bookFinishedSub = player.bookCompletedStream
+      .listen((bookId) => library.markBookFinished(bookId));
+
+  return [completedSub, bookFinishedSub];
+}
+
 /// The wired runtime for a paired server (app-shell integration): builds the
 /// cert-pinned [ApiClient], the on-device drift store, the [SyncController]
 /// (index + per-book download), the [PlayerController] over `just_audio`, and
@@ -185,14 +210,8 @@ class CompanionRuntime {
     final connectivitySub =
         Connectivity().onConnectivityChanged.listen((_) => autoSync.maybeSync());
 
-    // app-4: mark a chapter finished when it plays to its end.
-    final completedSub = player.chapterCompletedStream
-        .listen((uuid) => library.setChapterFinished(uuid, true));
-
-    // app-14: when the last chapter is reached, drop the book from the shelf
-    // and tick all its chapters.
-    final bookFinishedSub = player.bookCompletedStream
-        .listen((bookId) => library.markBookFinished(bookId));
+    // app-4/app-14: wire finished-tracking streams (chapter + book) to the library.
+    final finishedSubs = wireFinishedTracking(player, library);
 
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
     // the live player + a downloaded-only, 2-tab car browse tree (CarBrowse).
@@ -231,7 +250,7 @@ class CompanionRuntime {
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
         settingsStore, settings, resumeSync, sleepTimer, handler,
-        [connectivitySub, completedSub, bookFinishedSub]);
+        [connectivitySub, ...finishedSubs]);
   }
 
   /// app-4: enforce the storage cap (auto-delete finished + LRU book eviction).
