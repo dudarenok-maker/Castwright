@@ -19,7 +19,7 @@ user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-no
 release-notes-next-version: 1.9.0
 -->
 
-**A polish-and-reach release.** Listen from any browser on your home network, know the moment a new build lands, and ride a steadier companion player — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
+**A polish-and-reach release.** Listen from any browser on your home network, know the moment a new build lands, ride a steadier companion player, and meet a cast that reads truer — Russian books included — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
 
 ---
 
@@ -43,9 +43,18 @@ Authorize a browser on your home network and your whole library opens there too 
 
 ---
 
+## 🎭 Cast & analysis quality
+
+- **Byline author no longer enters the cast** — front-matter / boilerplate is stripped before analysis (Layer A), the resolved byline author is guarded out of stage-1 roster builds incl. cached `chapterCast` (Layer B), and the detection prompt clarifies the byline-author + first-person rule (Layer C), so a name on the title page can't surface as a phantom character (#938).
+- **Russian cast localization** — non-English manuscripts now always emit `tone` and write role / description / attributes (incl. narrator) in the manuscript's language, divergent same-id name forms fold into `aliases` instead of being dropped (#936), and descriptor fold-phrases are handled (#939).
+- **Voice identity decoupled from display name** — characters and voices carry an inert `voiceUuid` minted at design time and threaded through synth-key resolution, reparse, override-save, snapshots, series reuse, and the audition / sample path, so a freshly designed voice auditions as itself and a shared qwen display name can't mis-route storage (srv-43, #940).
+- **Honest analysing screen** — the two pipelined phases (cast detection + attribution) each render their own live ticker instead of clobbering one another, the section counter shows the in-progress section (1-based, clamped) rather than a stuck `0/N`, and section / sentence counts gain thousands separators (#931).
+- **A lone scene break can't stall a chapter** — a word-free `***` chunk is skipped before attribution and a zero-word source is treated as un-evaluable by the coverage guard, so a chapter built around a section break no longer flags "truncated" forever (#926).
+
 ## 🖥️ Responsive UI
 
 - **Collapsing top-bar nav** — the inline nav strip folds into a hamburger drawer below `xl` (1280px) and stays inline at desktop, with reachability + visual baselines covered (#911).
+- **Phone top-bar reachability** — Help, the theme toggle, and the account avatar stay on-screen at a 412px phone width (the wordmark text is hidden below `sm` and the Admin pill moves into the hamburger drawer on nav stages) instead of being clipped off-viewport (#916).
 - **Recoverable library scan** — a failed shelf scan shows a Retry button instead of an eternal skeleton.
 
 ## 🔒 Security & dependencies
@@ -58,7 +67,10 @@ Authorize a browser on your home network and your whole library opens there too 
 ## 🏗️ Under the hood
 
 - **Dependency-drift guardrail** — a monthly `app-deps-watch` workflow plus app-CI assertions that keep the Kotlin-Gradle-Plugin escape-hatch flags and the Flutter pin in lockstep (ops-17, #917).
-- **Test resilience** — a non-gating quarantine lane with a `quarantinedIt` helper and a flaky register; the load-sensitive `analysis-pipelining` cases were rewritten event-driven and graduated off quarantine; the release body can no longer silently become a placeholder (#879, #880).
+- **Test resilience** — a non-gating quarantine lane with a `quarantinedIt` helper and a flaky register; the load-sensitive `analysis-pipelining` cases were rewritten event-driven and graduated off quarantine; the release body can no longer silently become a placeholder (#879, #880). Rename-retry backoff is now jittered to de-flake concurrent `state.json` writes with the retry count aligned (#921, #928), and the e2e visual baselines were force-refreshed / regenerated and now run on label-gated PR CI (#923, #924, #933).
+- **Demo bundle** — the fs-22 demo bundle is re-keyed to uuid-keyed qwen voices and re-captured from the canonical book, with a `--copy` script mode for shared workspaces (srv-44, #942, #943).
+- **Companion deps** — `connectivity_plus` bumped 6.1.0 → 7.1.1 with the iOS compile moved to macos-26 for the iOS 26 SDK (app-18, #929).
+- **Repo hygiene** — personal / internal-only docs removed from the now-public repo (#932) and an unused Flutter import dropped to keep `flutter analyze` green (#919).
 - **Docs** — the LAN public-cert broker design + implementation plan (design only, not yet built); regression plan 225 for LAN browser device-auth; a `srv-41` device-token hardening backlog item.
 
 ---

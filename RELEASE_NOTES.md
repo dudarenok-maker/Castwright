@@ -6,6 +6,10 @@
 - **The phone player keeps its place.** It now names the chapter you're on, marks the ones you've finished, draws a progress bar for where you are, and scrolls the list to your spot — and it stays in step with what's actually playing, pausing politely when a call or another app needs the sound.
 - **A window that fits the screen it's on.** On a smaller window or a tablet the top navigation folds into a tidy menu button instead of spilling off the edge, so getting around stays easy at any size.
 - **A stuck library offers a way back.** If loading your shelf hits a snag, you get a Retry button instead of a skeleton that spins forever.
+- **The author isn't one of the cast.** A name printed on the title page used to risk turning up as a character with no lines of its own. Castwright now reads past the front matter and the byline, so your cast is the people in the story — no phantom author to clean up afterwards.
+- **The analysing screen stops second-guessing itself.** As Castwright reads your book in two passes, each pass keeps its own steady timer instead of flickering between them, the section count climbs from one rather than sticking at zero, and the figures read cleanly — what you see is what's actually happening.
+- **A Russian cast that reads fully Russian.** Characters in a Russian book now arrive with their tone and their descriptions written in Russian, and the different ways a single name appears are gathered under one person — so the cast you meet reads as naturally as the book itself.
+- **A lone scene break can't stall a chapter.** A chapter that hung on a single break between scenes, with no words of its own, used to be able to get stuck partway; Castwright now steps past the empty break and keeps performing.
 - **A more secure foundation.** The voice engine's core and a handful of supporting parts are updated to their security-patched versions and the app's own defences are tightened — nothing changes in how Castwright sounds or works, just safer ground beneath it.
 
 # Castwright 1.8.0
