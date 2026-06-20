@@ -178,4 +178,37 @@ describe('narrator-default + foldMinorCast interaction', () => {
     const folded = foldMinorCast(chars, fixed, { minLines: 3 });
     expect(folded.rewrites['extra']).toBe('unknown-male'); // 1 dialogue line < 3 -> folded (correct)
   });
+
+  it('English: a character whose only lines are demoted narration folds out (intended)', () => {
+    const sentences = [
+      s(1, 'extra', 'A passer-by walked past.'),
+      s(2, 'extra', 'He paused at the corner.'),
+      s(3, 'extra', '"What?"'), // one real quoted line
+    ];
+    const chars = [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', gender: 'neutral' },
+      { id: 'extra', name: 'Passer-by', role: 'Passerby', gender: 'male' },
+    ] as any;
+    const fixed = applyNarratorDefault(sentences); // 2 narration -> narrator, 1 quoted stays
+    const folded = foldMinorCast(chars, fixed, { minLines: 3 });
+    expect(folded.rewrites['extra']).toBe('unknown-male'); // 1 dialogue line < 3 -> folded (correct)
+  });
+
+  it('English: a character with >= minLines real quoted lines survives the fold', () => {
+    const sentences = [
+      s(1, 'stephanie', 'She was lost.'),
+      s(2, 'stephanie', 'She turned away.'),
+      s(3, 'stephanie', '"This way,"'),
+      s(4, 'stephanie', '"No, wait,"'),
+      s(5, 'stephanie', '"Here."'),
+    ];
+    const chars = [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', gender: 'neutral' },
+      { id: 'stephanie', name: 'Stephanie', role: 'Protagonist', gender: 'female' },
+    ] as any;
+    const fixed = applyNarratorDefault(sentences); // 2 narration -> narrator, 3 quoted stay
+    const folded = foldMinorCast(chars, fixed, { minLines: 3 });
+    expect(folded.characters.some((c) => c.id === 'stephanie')).toBe(true); // survived (3 quoted lines)
+    expect(folded.rewrites['stephanie']).toBeUndefined();
+  });
 });
