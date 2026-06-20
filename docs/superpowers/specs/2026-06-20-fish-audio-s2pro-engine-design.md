@@ -236,6 +236,23 @@ S2-Pro's free-form inline tone tags — the model supports 15,000+ tags, e.g. `[
 is "a few seconds" (the often-cited "5–15s" is **not** a sourced fishaudio figure — treat as
 approximate).
 
+> **💭 Thought bubble (future idea, not committed scope) — "design in Qwen, perform in Fish".**
+> The seed clip doesn't have to be bundled or uploaded — we already have a *text-persona →
+> bespoke-timbre* generator: **Qwen-VoiceDesign**. So a natural authoring flow is: the user
+> *describes* a character → Qwen-VoiceDesign invents the timbre and we **capture that clip** →
+> hand it to S2-Pro as the **clone/timbre prompt**, then drive **per-line expression** with
+> S2-Pro's tone engine. *Design in Qwen, perform in Fish.* This preserves our describe-a-voice
+> authoring flow (no clip to pick or record) and **demotes the bundled seed library from "the
+> catalog" to a cold-start fallback** (for when Qwen isn't installed, or the user wants an
+> instant pick). It also fits the VRAM budget: design and performance are **sequential phases**,
+> not co-resident — design (Qwen-VoiceDesign loaded) → capture clip → evict VoiceDesign via the
+> existing idle watchdog → load Fish and perform — so the two heavy models never stack on a 16GB
+> card. *Open questions for plan-time:* does a Qwen-generated clip clone *well* under S2-Pro
+> (clip quality feeds clone fidelity — a spike check), and is the extra Qwen→Fish hop worth it
+> vs. a curated seed. The same pattern is exactly how **IndexTTS-2** (a separate strong
+> emotion-engine clone model) would slot in too — so this aside doubles as the seam for any
+> future "Qwen-timbre + expressive-clone-engine" pairing, not just Fish.
+
 ### Bundled seed-reference voice library (a first-class deliverable, with its own picker path)
 
 _Captured here at the product owner's request while the thinking was fresh — but this taxonomy is
