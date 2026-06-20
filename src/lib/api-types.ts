@@ -3062,6 +3062,10 @@ export interface components {
                 end?: number;
                 characterId?: string;
                 sentenceId?: number;
+                /** @description issue-waveform — true when this segment is still flagged by the pre-assembly segment-QA gate or the ASR content-QA gate. Absent on clean / legacy / pre-QA renders. */
+                suspect?: boolean;
+                /** @description Human-readable QA reasons for a suspect segment. Segment-QA reasons always; ASR reasons only when the ASR verdict was drift. */
+                reasons?: string[];
             }[];
             /**
              * @description EBU R128 loudness measurement persisted next to the chapter
