@@ -241,8 +241,37 @@ export function seedReuseGuardsFromPriorCast<
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
   if (!existing.length) return;
   const byId = new Map(existing.map((c) => [c.id, c]));
+
+  /* Name-fallback for dedup id remap (srv-44): on re-analysis the dedup pass
+     collapses a legacy prior id onto a canonical survivor, so the prior cast's
+     guard row no longer matches the survivor by id. Bridge a SINGLE same-name
+     prior row to a SINGLE same-name fresh row, mirroring the ambiguity-guarded
+     fallback in mergeAnalysisResultWithExistingCast. Guard against guessing: a
+     normalised name shared by >1 prior OR >1 fresh row falls back to id-only. */
+  const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
+    typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
+  const freshNameCounts = new Map<string, number>();
   for (const f of fresh) {
-    const old = byId.get(f.id);
+    const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+    if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
+  }
+  const existingByName = new Map<string, CastRecord>();
+  const ambiguousExistingNames = new Set<string>();
+  for (const old of existing) {
+    const key = nameOf(old);
+    if (!key) continue;
+    if (existingByName.has(key)) ambiguousExistingNames.add(key);
+    else existingByName.set(key, old);
+  }
+
+  for (const f of fresh) {
+    let old = byId.get(f.id);
+    if (!old) {
+      const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
+      if (key && !ambiguousExistingNames.has(key) && freshNameCounts.get(key) === 1) {
+        old = existingByName.get(key);
+      }
+    }
     if (!old) continue;
     if (f.notLinkedTo === undefined && old.notLinkedTo !== undefined)
       f.notLinkedTo = old.notLinkedTo as T['notLinkedTo'];
