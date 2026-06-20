@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-20
 - **Status:** draft
-- **Area:** frontend (generation view + mini-player) + server (chapter-audio route / OpenAPI)
+- **Area:** frontend (generation view + app-wide mini-player + shared waveform) + server (chapter-audio route / OpenAPI)
 - **Suggested branch:** `feat/frontend-generation-issue-waveform`
 
 ## Problem
@@ -17,64 +17,87 @@ to jump to and listen to the flagged moment.
 
 The user wants the same waveform shown on the Listen section brought into the
 generation view, with the flagged regions painted a distinct colour, and that
-same highlight carried into the bottom preview player so they can scrub
-straight to a flagged region and listen.
+same highlight carried into the bottom player so they can scrub straight to a
+flagged region and listen — hearing a little **before and after** the issue,
+which is how you actually judge whether audio is wrong.
 
 ## Scope
 
 **In:** per-segment audio/ASR QA flags (too-long, pause, language mismatch) —
 the only "suspect" signal that is both per-region _and_ tied to playable
-rendered audio. (The chapter-level audio-QA verdict and the analysis-stage
-low-confidence attribution are explicitly out — different granularity /
-different surface.)
+rendered audio. The analysis-stage low-confidence attribution is out (different
+granularity / different surface). The **chapter-level** audio-QA verdict
+(whole-chapter near-silent / duration drift / LUFS) is in only as a
+**fallback surface** (see Component 6) so a badge never points at a blank
+waveform.
 
-## Why this is cheap: the data and surfaces already exist
+## Verified premises (adversarial review, 2026-06-20)
 
-- **Data is already on disk.** Every rendered chapter writes
-  `<slug>.segments.json`. Each segment (`ChapterSegment`,
-  `server/src/tts/synthesise-chapter.ts`) carries `startSec` / `endSec`
-  (exact time range in the chapter) **and**, when the gates ran, `qa.reasons`
-  + `suspect` (segment-qa, plan 179) and `asr` + `asrSuspect` (ASR content-QA,
-  srv-31 / plan 186). So "where" and "why" are both recorded per sentence.
-- **The RMS envelope is time-proportional.** `computePeaks`
-  (`server/src/audio/compute-peaks.ts`) emits a 240-bin RMS envelope whose
-  bins are sample-count proportional = time proportional at a single sample
-  rate. So a segment's `[startSec, endSec]` maps to a contiguous bar range by
-  simple arithmetic — no per-segment audio analysis needed.
-- **Both target surfaces already fetch `getChapterAudio`.** The generation
-  view's `ChapterSegmentStrip` (`src/views/generation.tsx`) lazy-fetches it for
-  the "Narrative order" strip; the `MiniPlayer` (`src/components/mini-player.tsx`)
-  fetches it for the scrubber. Both already receive `segments` (`start`/`end`)
-  + `peaks` + `durationSec`.
+Both load-bearing claims were checked against the **write** path, not just the
+read path:
 
-**The only gap:** the `chapter-audio` route maps each segment to
+- **Data is genuinely persisted.** `finalizeChapterAudioWrite`
+  (`server/src/audio/finalize-chapter-write.ts:188`) writes `segments` as the
+  full `ChapterSegment[]` — `qa.reasons`, `suspect`, `asr`, `asrSuspect` all
+  included, not stripped. The route just doesn't republish them.
+- **Timebase aligns.** The peaks file is computed from the **same** chapter
+  `pcm` the segments' `startSec`/`endSec` index into
+  (`writeChapterPeaksFile(pcm, …)`, line 202); loudnorm/encode preserves
+  duration. So `startSec/durationSec → bar` is valid, lead/title/post silence
+  included.
+
+So a segment's `[startSec, endSec]` maps to a contiguous bar range by simple
+arithmetic — no per-segment audio analysis needed. `computePeaks`
+(`server/src/audio/compute-peaks.ts`) emits a 240-bin RMS envelope; the shared
+`Waveform` reduces it to 48 bars. The coarse bar resolution is **acceptable by
+design** because the highlight is a context-padded bounding box, not a
+razor-precise sliver (see Component 2).
+
+**The only server gap:** the `chapter-audio` route maps each segment to
 `{ start, end, characterId, sentenceId }` and **drops `suspect` / `reasons`**.
-Surfacing those two fields lights up everything downstream.
 
 ## Design
+
+### Component 0 — A shared "issues" derivation
+
+A small pure helper (e.g. `src/lib/chapter-issues.ts`) turns a `ChapterAudio`
+(`segments[]` + `durationSec`) into the padded issue ranges every surface
+consumes, so the row, the player, and their tests share one source of truth:
+
+```
+ISSUE_CONTEXT_PAD_SEC = 2   // lead-in / lead-out so you hear before & after
+
+deriveIssues(audio): Array<{
+  startSec, endSec,          // raw flagged segment span (for the jump target math)
+  startFrac, endFrac,        // PADDED + clamped → [max(0,start-PAD), min(dur,end+PAD)] / dur
+  seekSec,                   // max(0, startSec - PAD) — where prev/next + auto-seek land
+  reasons: string[],         // verbatim from the segment (see Component 1)
+}>
+```
+
+The **pad bounds the issue inside the coloured region** (the flagged sentence
+always sits within the amber band with margin) and makes the jump land *before*
+the issue so playback runs up into it and through its tail. Precision of
+*playback* is preserved (seek is continuous, below); only the *visual* band is a
+forgiving bounding box.
 
 ### Component 1 — Server: expose per-segment issues
 
 `server/src/routes/chapter-audio.ts` (both the `current` and `previous`
-mappers) + `openapi.yaml`.
-
-The on-disk segment already holds the QA data; the route just stops dropping
-it. Add to each published wire segment:
+mappers) + `openapi.yaml`. The on-disk segment already holds the QA data; the
+route just stops dropping it. Add to each published wire segment:
 
 - `suspect?: boolean` — `Boolean(seg.suspect || seg.asrSuspect)`
-- `reasons?: string[]` — short, user-facing labels derived from the segment's
-  QA verdicts:
-  - segment-qa "too long" → `"Long sentence"`
-  - segment-qa long internal silence → `"Long pause"`
-  - `asrSuspect` (WER drift) → `"Wrong words"`
-
-  (Map from the existing `qa.reasons` strings + the `asr` verdict; keep the
-  raw reason available for the tooltip if a clean short label isn't derivable.)
+- `reasons?: string[]` — the segment's **raw** reason strings, concatenated
+  from `seg.qa?.reasons` (segment-qa) and `seg.asr?.reasons` (ASR), passed
+  through **verbatim**. (No short-label remapping: the reason strings are full
+  sentences and string-matching them to coin `"Long sentence"` is brittle —
+  show the real reason in the tooltip instead. _Adversarial fix #3._)
 
 Add the two **optional** fields to `ChapterAudio.segments[]` in `openapi.yaml`
 and regenerate `src/lib/api-types.ts` (`npm run openapi:types`). Optional →
-legacy / pre-QA / splice renders simply omit them and show no issue
-highlight (graceful, matches the existing `peaks: []` fallback contract).
+legacy / pre-QA / splice renders simply omit them and show no issue highlight
+(graceful, matches the existing `peaks: []` fallback contract).
 
 ### Component 2 — Shared `Waveform` gets an issue overlay
 
@@ -84,98 +107,135 @@ highlight (graceful, matches the existing `peaks: []` fallback contract).
 issues?: Array<{ startFrac: number; endFrac: number; reason: string }>
 ```
 
-`startFrac`/`endFrac` are `startSec/durationSec` and `endSec/durationSec`
-(computed by the caller, so the component stays presentational). Each issue
-maps to bar indices `floor(startFrac * N)` .. `ceil(endFrac * N)`; those bars
-render in **amber** (Tailwind `amber-*`, matching the existing srv-27 Suspect
-badge `bg-amber-100 / text-amber-800` — no raw hex) regardless of the
-play-progress fill, with a per-region `title` carrying the reason + a
-`m:ss–m:ss` range. When `issues` is empty/undefined the component renders
-exactly as today — **the Listen view is untouched.**
+(fed by Component 0 — already padded/clamped). Each issue maps to bar indices
+`floor(startFrac * N)` .. `ceil(endFrac * N)`; those bars render in **amber**
+(Tailwind `amber-*`, matching the existing srv-27 Suspect badge
+`bg-amber-100 / text-amber-800` — no raw hex) regardless of the play-progress
+fill, with a per-region `title` carrying the reason + a `m:ss–m:ss` range.
+Single issue colour by design (the user's "different colour"); the reason lives
+in the tooltip.
 
-Single issue colour by design (the user's "different colour"); the specific
-reason lives in the tooltip, not in the bar colour.
+**Empty-peaks guard (_adversarial fix #7_):** the component already falls back
+to a decorative seeded bar shape when `peaks` is empty. Painting amber onto a
+*fake* shape would mislead, so the **caller** only passes `issues` when real
+`peaks` are present; with no peaks, no amber (the chapter-level badge still
+conveys "suspect" textually). When `issues` is empty/undefined the component
+renders exactly as today.
 
 ### Component 3 — Generation row: waveform on every done chapter
 
-`src/views/generation.tsx`. On **every `done` chapter** (consistency — the
-user explicitly wants no per-chapter visual difference in the list), render the
-shared `Waveform` fed by the already-fetched `peaks`, with the `issues` derived
-from the chapter's flagged segments. Clean chapters show a plain waveform;
-flagged chapters show the same waveform with amber issue bars. This sits
-alongside the existing chapter row; the existing "Narrative order" character
-strip is retained unchanged (it answers "who/order"; the waveform answers
-"where/loudness/issues").
+`src/views/generation.tsx`. On **every `done` chapter** (consistency — the user
+explicitly wants no per-chapter visual difference in the list or the preview),
+render the shared `Waveform` fed by the already-fetched `peaks`, with `issues`
+from Component 0. The existing **"Narrative order" character strip is retained
+unchanged** (it answers "who/order"; the waveform answers "where/loudness/
+issues") — both strips, the surgical choice that removes no existing
+diagnostic. The data is already fetched by `ChapterSegmentStrip`'s
+`getChapterAudio` call, so the waveform adds no new request.
 
-### Component 4 — MiniPlayer: waveform scrubber + jump-to-issue
+### Component 4 — App-wide player: waveform scrubber + jump-to-issue
 
-`src/components/mini-player.tsx`.
+`src/components/mini-player.tsx`. **This is a single, app-wide player** —
+`layout.tsx:1378` mounts ONE `MiniPlayer` at the bottom of every stage,
+including the **Listen view**. The decision (confirmed) is to show the new
+affordances **everywhere**, with one guard:
 
-- **Waveform scrubber.** Replace the thin 1-px scrubber with the shared
-  `Waveform` (the player already fetches `peaks` + `segments` + `durationSec`),
-  preserving click-to-seek: map click-x → fraction → `el.currentTime`, same
-  math as the current `onScrub`. The progress fill drives the
-  `progress`/`active` props.
-- **Amber issue bars** from the same `issues` mapping as the row.
+- **Waveform scrubber** replaces the thin 1-px scrubber (the player already
+  fetches `peaks` + `segments` + `durationSec`). Click-to-seek stays
+  **continuous** — `clientX / width → fraction → el.currentTime`, exactly the
+  current `onScrub` math — so seek precision is unaffected by the 48-bar
+  visual. The progress fill drives the `progress`/`active` props.
+- **Amber issue bars** (Component 0) — shown in both the generation preview and
+  Listen.
 - **`⚠ ‹ prev / next ›` control** that seeks the playhead to the previous/next
-  issue segment's `startSec`. Hidden when the chapter has no issues.
-- **Auto-seek on open:** when the previewed chapter has ≥1 issue, land the
-  playhead on the first issue's `startSec` (via the existing `pendingSeekRef`
-  path) instead of 0:00.
+  issue's `seekSec` (= `startSec − PAD`), so you land *before* the flagged
+  audio. Hidden when the chapter has no issues. Shown in both contexts.
+- **Auto-seek-before-first-issue is context-gated (_adversarial fix #1/#2_).**
+  The MiniPlayer already hijacks `pendingSeekRef` to resume the listener's last
+  position. Auto-seek must NOT fight that in Listen. `layout.tsx` derives the
+  context from `ui.stage` and passes a prop (e.g. `autoSeekToIssues`):
+  **true only in the generation/preview context**, false in Listen. In Listen
+  the resume bookmark wins; in preview the player opens on the first issue's
+  `seekSec`.
 
-Responsive: the waveform scrubber must still fit the 412-px mobile layout
-(the existing 5-column grid). Keep the jump control compact / `min-h-[44px]`
-touch target.
+Responsive: the waveform scrubber must still fit the 412-px mobile grid; the
+jump control stays compact with a `min-h-[44px]` touch target.
 
-### Component 5 — Tests
+### Component 5 — Chapter-level-suspect fallback (_adversarial fix #4_)
 
-- **Unit (`waveform.test.tsx`):** issue-fraction → amber-bar-index mapping
-  (boundaries: a region at the very start, very end, and a sub-bar-width
-  region still paints ≥1 bar); empty `issues` renders identically to today.
+A chapter can be "Suspect" from **whole-chapter** signals (near-silent,
+duration drift, LUFS) that have no per-segment location — so the waveform would
+show the badge's chapter but **no amber**, reading as "it says suspect, where?"
+When `chapter.audioQa?.status === 'suspect'` **and** no segment carries
+`suspect`/`asrSuspect` (no per-region issues), render a subtle **whole-track
+amber baseline tint** under the waveform with a tooltip carrying
+`chapter.audioQa.reasons` (already on the wire — no new data). This keeps the
+badge and the waveform consistent without inventing a fake region.
+
+### Component 6 — Tests
+
+- **Unit (`chapter-issues.test.ts`):** padding/clamp math — an issue near 0:00
+  clamps `startFrac` to 0; near the end clamps `endFrac` to 1; a sub-bar-width
+  issue still yields ≥1 amber bar; `seekSec = max(0, startSec − PAD)`.
+- **Unit (`waveform.test.tsx`):** issue-fraction → amber-bar-index mapping;
+  empty `issues` renders identically to today; no amber when `peaks` is empty.
 - **Server (`chapter-audio.test.ts`):** a segments fixture with `suspect` /
-  `asrSuspect` / `qa.reasons` publishes `suspect: true` + the mapped
-  `reasons[]`; a clean segment omits both fields.
-- **Generation (`generation.test.tsx`):** a done chapter with a flagged
-  segment renders the waveform with amber issue bar(s) + reason tooltip; a
-  clean done chapter renders the waveform with none.
-- **MiniPlayer (`mini-player.test.tsx`):** the `⚠ next` button seeks to the
-  next issue's `startSec`; the jump control is absent on a clean chapter;
-  opening a suspect chapter auto-seeks to the first issue.
+  `asrSuspect` / `qa.reasons` / `asr.reasons` publishes `suspect: true` + the
+  verbatim merged `reasons[]`; a clean segment omits both fields.
+- **Generation (`generation.test.tsx`):** a done chapter with a flagged segment
+  renders amber bars + reason tooltip; a clean done chapter renders a plain
+  waveform; a chapter-level-only suspect renders the baseline tint, not bars.
+- **MiniPlayer (`mini-player.test.tsx`):** `⚠ next` seeks to the next issue's
+  `seekSec` (before the segment, not at it); jump control absent on a clean
+  chapter; **auto-seek fires in the preview context and is suppressed in Listen
+  (resume bookmark wins).**
 - **E2E (`e2e/`):** open a suspect chapter's preview from the generation view,
-  click "next issue", assert the playhead moved to the flagged region.
+  click "next issue", assert the playhead moved to just before the flagged
+  region.
 
 ## Files touched
 
-- `server/src/routes/chapter-audio.ts` — pass `suspect` + mapped `reasons`
+- `server/src/routes/chapter-audio.ts` — pass `suspect` + verbatim `reasons`
   through both segment mappers.
 - `openapi.yaml` — add optional `suspect` / `reasons` to
   `ChapterAudio.segments[]`; regenerate `src/lib/api-types.ts`.
+- `src/lib/chapter-issues.ts` (new) — padded-issue derivation + `PAD` constant.
 - `src/components/waveform.tsx` — optional `issues` overlay prop.
-- `src/views/generation.tsx` — render the waveform (with issues) on every done
-  chapter.
+- `src/views/generation.tsx` — waveform (with issues) on every done chapter +
+  chapter-level-suspect baseline tint; keep the narrative-order strip.
 - `src/components/mini-player.tsx` — waveform scrubber + issue bars + jump
-  control + auto-seek.
+  control + context-gated auto-seek.
+- `src/components/layout.tsx` — derive + pass `autoSeekToIssues` from `ui.stage`.
 - Paired tests listed above.
 
 ## Acceptance
 
 - A chapter with a too-long sentence / long pause / ASR mismatch shows, in the
-  generation list, the waveform with the flagged region(s) in amber; hovering a
-  region names the reason and timecodes.
+  generation list, the waveform with the flagged region(s) in amber, **bounding
+  the issue with ~2 s of margin each side**; hovering names the real reason and
+  the timecodes.
 - Every done chapter shows a waveform (consistent look across the list and the
-  preview); only flagged chapters show amber regions.
-- Opening that chapter's bottom preview lands on the first flagged region;
-  `⚠ next/prev` jumps between flagged regions; clicking the waveform seeks.
+  player); only flagged chapters show amber regions.
+- In the generation preview, opening a flagged chapter lands the playhead
+  **just before** the first issue; `⚠ next/prev` jumps to just before each
+  region; clicking the waveform seeks continuously.
+- In the **Listen** view the same waveform + amber bars + `⚠` jump appear, but
+  opening a chapter still **resumes the last listened position** (auto-seek
+  suppressed).
+- A chapter flagged suspect only at the whole-chapter level shows the amber
+  baseline tint (with reasons in the tooltip), never a blank "where is it?".
 - A clean chapter shows a plain waveform with no amber and no jump control.
-- The Listen view's waveform is visually unchanged.
 - `npm run verify` is green.
 
 ## Non-goals
 
 - No new endpoint — reuse `getChapterAudio`.
-- No per-reason colour coding (single amber issue colour; reason in tooltip).
+- No per-reason colour coding (single amber issue colour; reasons in tooltip).
 - No mid-render / live issue display (only `done` chapters have segments + QA).
 - No change to the chapter-level "Suspect" badge or its gating, and no change
-  to the Listen view.
+  to the Listen view's **resume** behaviour (the waveform/affordances are
+  additive there; the resume bookmark still wins on open).
 - No re-record / repair UI from the waveform (jump-and-listen only; repair
   stays in the existing fix-character / QA-repair flows).
+- No higher-resolution (240-bin) waveform variant — the context-padded bounding
+  box makes 48 bars sufficient.
