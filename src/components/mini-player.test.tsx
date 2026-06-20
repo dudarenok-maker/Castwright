@@ -40,6 +40,41 @@ function renderPlayer(ui: React.ReactElement) {
   return render(<Provider store={makeStore()}>{ui}</Provider>);
 }
 
+/* Convenience helper for tests that only need to vary the chapter + a few
+   MiniPlayer props. `chapterOverrides` patches chapter1; `playerOverrides`
+   passes extra props to <MiniPlayer> (e.g. autoSeekToIssues). */
+function renderMiniPlayer(
+  chapterOverrides: Partial<Chapter>,
+  playerOverrides: Record<string, unknown> = {},
+) {
+  const chapter: Chapter = { ...chapter1, ...chapterOverrides };
+  return render(
+    <Provider store={makeStore()}>
+      <MiniPlayer
+        chapter={chapter}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+        {...playerOverrides}
+      />
+    </Provider>,
+  );
+}
+
+/* vi.hoisted lets us create a vi.fn() that's available inside the vi.mock
+   factory (which is hoisted to the top of the file before imports). The
+   default pendingByChapter-based implementation is set in beforeEach so
+   existing tests keep using resolveChapter(); jump-to-issue tests override
+   with mockResolvedValue(audioWithIssues). */
+const { getChapterAudioFn } = vi.hoisted(() => ({
+  getChapterAudioFn: vi.fn<
+    (args: { chapterId: number; bookId: string; duration: string }) => Promise<unknown>
+  >(),
+}));
+
 type Resolver = (meta: ChapterAudio) => void;
 const pendingByChapter = new Map<number, Resolver>();
 const getChapterAudioMock = vi.fn();
@@ -69,12 +104,7 @@ const putListenStatsMock = vi.fn(async (_bookId: string, _body: unknown) => ({})
 
 vi.mock('../lib/api', () => ({
   api: {
-    getChapterAudio: ({ chapterId }: { chapterId: number }) => {
-      getChapterAudioMock(chapterId);
-      return new Promise<ChapterAudio>((resolve) => {
-        pendingByChapter.set(chapterId, resolve);
-      });
-    },
+    getChapterAudio: getChapterAudioFn,
     /* Plan 47 — listen-progress hooks. Defaults to "no resume point"
        so the existing test cases see the legacy seek-to-0 behaviour.
        Per-test overrides via getListenProgressMock.mockImplementation
@@ -91,6 +121,15 @@ vi.mock('../lib/api', () => ({
 beforeEach(() => {
   pendingByChapter.clear();
   getChapterAudioMock.mockReset();
+  /* Restore the default pendingByChapter implementation for every test;
+     jump-to-issue tests override with mockResolvedValue(). */
+  getChapterAudioFn.mockReset();
+  getChapterAudioFn.mockImplementation(({ chapterId }: { chapterId: number }) => {
+    getChapterAudioMock(chapterId);
+    return new Promise<ChapterAudio>((resolve) => {
+      pendingByChapter.set(chapterId, resolve);
+    });
+  });
   getListenProgressMock.mockReset();
   /* Default — no resume point. Per-test cases override via
      mockResolvedValueOnce / mockImplementationOnce. */
@@ -903,5 +942,53 @@ describe('MiniPlayer — issue waveform scrubber', () => {
     });
     expect(await screen.findByText(/Issue at 0:04: Long sentence/)).toBeInTheDocument();
     expect(screen.getByTestId('scrubber-thumb')).toBeInTheDocument();
+  });
+});
+
+describe('MiniPlayer — jump-to-issue + auto-seek', () => {
+  const audioWithIssues = {
+    url: 'blob:x', durationSec: 30, sampleRate: 44100, peaks: Array(240).fill(0.5),
+    segments: [{ start: 10, end: 12, characterId: 'n', sentenceId: 1, suspect: true, reasons: ['Long sentence'] }],
+  };
+
+  it('⚠ next seeks to the issue seekSec (10 - 2 = 8)', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    await screen.findByLabelText(/Next issue/);
+    fireEvent.click(screen.getByLabelText(/Next issue/));
+    expect(el.currentTime).toBe(8);
+  });
+
+  it('auto-seeks to the first issue in the generate context, overriding resume', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    getListenProgressMock.mockResolvedValue({ chapterId: 1, currentSec: 25 } as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' }, { autoSeekToIssues: true });
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    /* Wait for the issue scrubber marker to appear — that proves issues state
+       has settled in the component (issuesRef is populated) AND the
+       listen-progress fetch resolved (pendingSeekRef is set). Then fire
+       onLoadedMetadata: the auto-seek block runs BEFORE the resume block and
+       wins. */
+    await screen.findByLabelText(/Next issue/);
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await act(async () => { fireEvent.loadedMetadata(el); });
+    expect(el.currentTime).toBe(8); // first issue seekSec, NOT the 25s resume
+  });
+
+  it('does NOT auto-seek when autoSeekToIssues is false (Listen resumes)', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    getListenProgressMock.mockResolvedValue({ chapterId: 1, currentSec: 25 } as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' }, { autoSeekToIssues: false });
+    const el = document.querySelector('audio') as HTMLAudioElement;
+    Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
+    /* Wait for issues + listen-progress to both resolve before firing
+       loadedMetadata so pendingSeekRef carries the 25 s resume point. */
+    await screen.findByLabelText(/Next issue/);
+    await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await act(async () => { fireEvent.loadedMetadata(el); });
+    expect(el.currentTime).toBe(25); // resume bookmark wins
   });
 });

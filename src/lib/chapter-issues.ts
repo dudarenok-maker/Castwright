@@ -27,10 +27,10 @@ export function deriveIssues(
   const PAD = ISSUE_CONTEXT_PAD_SEC;
 
   const padded = audio.segments
-    .filter((s) => s.suspect)
+    .filter((s) => s.suspect && s.start != null && s.end != null)
     .map((s) => ({
-      start: Math.max(0, s.start - PAD),
-      end: Math.min(dur, s.end + PAD),
+      start: Math.max(0, (s.start as number) - PAD),
+      end: Math.min(dur, (s.end as number) + PAD),
       reasons: s.reasons ?? [],
     }))
     .sort((a, b) => a.start - b.start);

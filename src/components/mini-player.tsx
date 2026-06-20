@@ -48,6 +48,7 @@ interface MiniPlayerProps {
   onNext: () => void;
   prevAvailable: boolean;
   nextAvailable: boolean;
+  autoSeekToIssues?: boolean;
 }
 
 /* Plan 53 — playback-rate picker presets. Exposed at module scope so
@@ -85,9 +86,14 @@ export function MiniPlayer({
   onNext,
   prevAvailable,
   nextAvailable,
+  autoSeekToIssues = false,
 }: MiniPlayerProps) {
   const [audio, setAudio] = useState<ChapterAudio>({ durationSec: 0, peaks: [], url: null });
   const issues = useMemo(() => deriveIssues(audio), [audio]);
+  /* Ref so the onLoadedMetadata handler can read the latest issues list
+     even if it runs before the first render with non-empty issues. */
+  const issuesRef = useRef(issues);
+  issuesRef.current = issues;
   const [currentSec, setCurrentSec] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -472,6 +478,25 @@ export function MiniPlayer({
 
   const cancelMarkerDraft = useCallback(() => setMarkerDraft(null), []);
 
+  /* Jump to the previous (dir = -1) or next (dir = 1) issue relative to
+     the live playhead. A 0.25 s deadband prevents getting "stuck" on the
+     issue the scrubber is already sitting on. */
+  const jumpToIssue = useCallback(
+    (dir: 1 | -1) => {
+      const t = currentSecRef.current;
+      const target =
+        dir > 0
+          ? issues.find((r) => r.seekSec > t + 0.25)
+          : [...issues].reverse().find((r) => r.seekSec < t - 0.25);
+      if (!target) return;
+      const el = audioRef.current;
+      if (el) el.currentTime = target.seekSec;
+      setCurrentSec(target.seekSec);
+      currentSecRef.current = target.seekSec;
+    },
+    [issues],
+  );
+
   /* Plan 53 — `M` keyboard shortcut. Bound to window so the user can
      drop a marker without focusing the mini-player. Inputs / textareas
      get a pass so typing M inside the marker-label field doesn't trip
@@ -737,6 +762,30 @@ export function MiniPlayer({
                 </div>
               )}
             </div>
+            {/* Jump-to-issue: prev (desktop only) + next (phone ≥44px). */}
+            {issues.length > 0 && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => jumpToIssue(-1)}
+                  aria-label="Previous issue"
+                  title="Previous issue"
+                  className="hidden md:grid place-items-center p-2 rounded-full hover:bg-canvas/10 text-amber-300"
+                >
+                  <span aria-hidden>‹⚠</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => jumpToIssue(1)}
+                  aria-label="Next issue"
+                  title="Next issue"
+                  data-testid="mini-player-next-issue"
+                  className="grid place-items-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:p-2 rounded-full hover:bg-canvas/10 text-amber-300"
+                >
+                  <span aria-hidden>⚠›</span>
+                </button>
+              </div>
+            )}
             {/* Plan 53 — drop-marker button. Captures chapterId +
                 currentSec into a draft, which the inline form below
                 the player commits. `M` shortcut hits the same path. */}
@@ -955,6 +1004,16 @@ export function MiniPlayer({
                  shipped without a Xing VBR header. Adopt the element's value
                  only when the server gave us nothing. */
               setAudio((a) => (a.durationSec > 0 ? a : { ...a, durationSec: d }));
+              /* Context-gated auto-seek: in the generate view, land on
+                 the first issue rather than the resume bookmark. Setting
+                 pendingSeekRef to null suppresses the resume block below. */
+              if (autoSeekToIssues && issuesRef.current.length > 0) {
+                const first = issuesRef.current[0].seekSec;
+                target.currentTime = first;
+                setCurrentSec(first);
+                currentSecRef.current = first;
+                pendingSeekRef.current = null;
+              }
               /* Plan 47 — apply the resume bookmark now that the
                  audio element knows its duration. Cap at d - 1 so a
                  resume point parked near the end of the chapter
