@@ -24,7 +24,7 @@
    and updates each descriptor's `voiceId` + adds the inert `voiceUuid`.
    Idempotent: a character that already has a `voiceUuid` is skipped. */
 import { readFileSync, writeFileSync, existsSync, renameSync, copyFileSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const args = process.argv.slice(2);
