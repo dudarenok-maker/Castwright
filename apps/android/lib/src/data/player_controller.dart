@@ -222,6 +222,10 @@ class PlayerController {
       final i = _playlist.indexWhere((c) => c.uuid == saved.chapterUuid);
       if (i >= 0) index = i;
     }
+    // Reset the book-level guard so every openBook call (including replay)
+    // starts fresh — _loadIndex's own reset only fires on non-last chapters,
+    // which misses single-chapter books where index 0 == length-1 always.
+    _bookFinishEmitted = false;
     await _loadIndex(index, seekMs: saved?.positionMs ?? 0);
   }
 
@@ -329,6 +333,7 @@ class PlayerController {
     final book = _bookId;
     final uuid = currentChapterUuid;
     final dur = _engine.duration;
+    // Chapters shorter than kFinishThreshold rely on completionStream exclusively for ticks.
     if (book != null && uuid != null && dur != null && dur > kFinishThreshold) {
       final remaining = dur - position;
       if (remaining <= kFinishThreshold) {

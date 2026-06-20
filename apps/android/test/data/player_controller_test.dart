@@ -382,6 +382,47 @@ void main() {
       await sub.cancel();
       await pc.dispose();
     });
+
+    test(
+        'single-chapter book: replay re-emits chapterCompleted and bookCompleted',
+        () async {
+      // The only chapter (u1) is also the last (index 0 == length-1).
+      // Before the fix, _bookFinishEmitted is never cleared by _loadIndex
+      // (because `index != _playlist.length - 1` is always false), so a
+      // replay never fires bookCompletedStream a second time.
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3'),
+        ],
+      });
+      final chapters = <String>[];
+      final books = <String>[];
+      final chSub = pc.chapterCompletedStream.listen(chapters.add);
+      final bkSub = pc.bookCompletedStream.listen(books.add);
+
+      // ── First play-through ──────────────────────────────────────────────
+      await pc.openBook('b1');
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55)); // remaining 5s <= 10s
+      await Future<void>.delayed(Duration.zero);
+      expect(chapters, ['u1'], reason: 'first play: chapterCompleted once');
+      expect(books, ['b1'], reason: 'first play: bookCompleted once');
+
+      // ── Replay (simulate user tapping "play again" → openBook called again) ─
+      await pc.openBook('b1');
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55));
+      await Future<void>.delayed(Duration.zero);
+      expect(chapters, ['u1', 'u1'],
+          reason: 'replay: chapterCompleted a second time');
+      expect(books, ['b1', 'b1'],
+          reason: 'replay: bookCompleted a second time');
+
+      await chSub.cancel();
+      await bkSub.cancel();
+      await pc.dispose();
+    });
   });
 
   // ── fs-16: listen-stats accumulator wiring ────────────────────────────────
