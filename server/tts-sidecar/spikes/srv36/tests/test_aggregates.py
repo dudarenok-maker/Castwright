@@ -28,3 +28,31 @@ def test_f5_floor_and_coverage():
         {0.5: [0.6, 0.9], 2.0: [0.97, 0.98], 5.0: [1.0, 1.0]}, [0.5, 3.0], 2.0)
     assert out["min_scorable_sec"] == 2.0
     assert out["coverage"] == 0.5
+
+
+from spikes.srv36.synthesize import decide
+
+
+def test_decide_go_requires_all_four():
+    go = decide({"floor_ok": True}, {"separable": True},
+                {"residual_fraction": 0.3, "confirmed_real": 4}, {"coverage": 0.7})
+    assert go["recommendation"] == "go"
+
+
+def test_decide_nogo_when_no_residual_value():
+    nogo = decide({"floor_ok": True}, {"separable": True},
+                  {"residual_fraction": 0.0, "confirmed_real": 0}, {"coverage": 0.9})
+    assert nogo["recommendation"] == "no-go"
+    assert any("residual" in r.lower() or "redundant" in r.lower() for r in nogo["reasons"])
+
+
+def test_decide_nogo_when_floor_wide():
+    out = decide({"floor_ok": False}, {"separable": True},
+                 {"residual_fraction": 0.5, "confirmed_real": 5}, {"coverage": 0.9})
+    assert out["recommendation"] == "no-go"
+
+
+def test_decide_is_exactly_go_or_nogo():
+    out = decide({"floor_ok": True}, {"separable": False},
+                 {"residual_fraction": 0.2, "confirmed_real": 2}, {"coverage": 0.2})
+    assert out["recommendation"] in ("go", "no-go")
