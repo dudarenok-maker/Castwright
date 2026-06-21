@@ -1931,6 +1931,48 @@ class WhisperEngine:
 ASR = WhisperEngine()
 
 
+class SpeakerEngine:
+    """ECAPA-TDNN speaker embedding (srv-36). CPU-only, NOT in the synth ENGINES
+    map — like WhisperEngine, it consumes audio and emits a vector."""
+    TARGET_SR = 16000
+
+    def __init__(self):
+        self._model = None
+        self._load_lock = asyncio.Lock()
+        self._infer_lock = threading.Lock()
+        self.device = os.environ.get("SPK_DEVICE", "cpu")
+
+    async def ensure_loaded(self):
+        if self._model is not None:
+            return
+        async with self._load_lock:
+            if self._model is not None:
+                return
+            from speechbrain.inference.speaker import EncoderClassifier
+            self._model = await asyncio.to_thread(
+                EncoderClassifier.from_hparams,
+                source="speechbrain/spkrec-ecapa-voxceleb",
+                run_opts={"device": self.device},
+            )
+
+    def embed(self, pcm: bytes, sample_rate: int) -> list[float]:
+        import torch
+        audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        if sample_rate != self.TARGET_SR:  # numpy resample (no torchaudio dep)
+            n = int(round(len(audio) * self.TARGET_SR / sample_rate))
+            audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
+                              np.arange(len(audio)), audio).astype(np.float32)
+        t = torch.from_numpy(audio).unsqueeze(0)
+        with self._infer_lock, torch.no_grad():
+            emb = self._model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        norm = float(np.linalg.norm(emb))
+        return (emb / norm if norm > 0 else emb).tolist()
+
+
+# SPK is a standalone singleton (not a synth `Engine`) — audio in, embedding out.
+SPK = SpeakerEngine()
+
+
 ENGINES: dict[str, Engine] = {
     "coqui": CoquiEngine(),
     "kokoro": KokoroEngine(),

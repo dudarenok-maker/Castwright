@@ -1,0 +1,6 @@
+# srv-36 render-integrity (ECAPA speaker embedding). CPU-only in v1.
+# Placed here (NOT base.txt) because speechbrain needs torch, which lives in the
+# vendor overlays. huggingface_hub is pinned EXPLICITLY because it is otherwise
+# unpinned and speechbrain co-constrains it with transformers>=4.45,<5.0.
+speechbrain==1.0.2
+huggingface_hub>=0.23,<0.26

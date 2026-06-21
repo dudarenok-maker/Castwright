@@ -21,3 +21,4 @@ torchaudio==2.11.0
 # scripts/install-kokoro.{ps1,sh} once to fetch the model + voices manifest.
 kokoro-onnx>=0.4.0,<0.5.0
 onnxruntime
+-r speaker-qa.txt
