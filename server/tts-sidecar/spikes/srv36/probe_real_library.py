@@ -47,7 +47,7 @@ def embed_book_segments(
         return pcm_cache[audio_path]
 
     per_char_vecs: dict[str, list] = {}
-    per_char_ids: dict[str, list[str]] = {}
+    per_char_meta: dict[str, list[dict]] = {}
 
     for segf in _glob.glob(str(Path(book_dir) / segments_glob)):
         if ".previous." in segf:
@@ -60,6 +60,7 @@ def embed_book_segments(
         audio_path = segf.replace(".segments.json", ".mp3")
         if not Path(audio_path).exists():
             continue
+        chapter_stem = Path(segf).name.replace(".segments.json", "")
 
         try:
             pcm = _decode(audio_path)
@@ -91,7 +92,15 @@ def embed_book_segments(
             except Exception:
                 continue
             per_char_vecs.setdefault(ch, []).append(vec)
-            per_char_ids.setdefault(ch, []).append(sentence_id)
+            # Carry chapter + timing so the join is chapter-scoped: sentenceIds
+            # are chapter-LOCAL and collide across chapters, so a sentenceId-only
+            # key would mislocate clip extraction to the wrong chapter.
+            per_char_meta.setdefault(ch, []).append({
+                "chapter": chapter_stem,
+                "sentence_id": sentence_id,
+                "start_sec": float(st),
+                "end_sec": float(en),
+            })
 
     # Build centroids + per-sentence cosine entries
     per_char_entries: dict[str, list[dict]] = {}
@@ -100,8 +109,8 @@ def embed_book_segments(
             continue
         cen = centroid(vecs)
         per_char_entries[ch] = [
-            {"sentence_id": sid, "cosine": cosine(cen, v)}
-            for sid, v in zip(per_char_ids[ch], vecs)
+            {**meta, "cosine": cosine(cen, v)}
+            for meta, v in zip(per_char_meta[ch], vecs)
         ]
 
     return per_char_entries

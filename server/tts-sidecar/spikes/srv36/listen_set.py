@@ -142,6 +142,8 @@ def select_listen_set(
             "sentence_id": seg.get("sentence_id", ""),
             "cosine": cos,
             "predicted_verdict": verdict,
+            "start_sec": seg.get("start_sec"),
+            "end_sec": seg.get("end_sec"),
         }
         if verdict == "severe":
             severe_rows.append(row)
@@ -204,81 +206,52 @@ def emit_listen_set(
     Requires ``ffmpeg`` on PATH and ``speechbrain`` weights (via ``embed_pcm``).
     Skips segments shorter than ``cutoffs.get('min_duration_sec', 2.0)`` seconds.
     """
-    import glob as _glob
-
     from spikes.srv36.probe_real_library import embed_book_segments
     from spikes.srv36.extract_listen import extract_clip
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     floor = float(cutoffs.get("min_duration_sec", 2.0))
 
-    # Build per-character centroids and collect per-segment cosines for THIS book
-    # embed_book_segments returns {char: [{sentence_id, cosine}]} using the book's
-    # own clean segments — this is the "held-out" scoring path.
+    # Build per-character centroids and score this book's own clean segments.
+    # embed_book_segments returns {char: [{chapter, sentence_id, start_sec, end_sec,
+    # cosine}]} — chapter + timing are carried so the join is chapter-scoped
+    # (sentenceIds are chapter-LOCAL and collide across chapters).
     per_char_entries = embed_book_segments(book_dir, segments_glob, sr=sr, floor=floor)
 
-    # Flatten to scored_segments + collect per_char_clean_cosines from THIS book
     per_char_clean_cosines: dict[str, list[float]] = {}
     scored_segments: list[dict[str, Any]] = []
 
-    # We need chapter + sentence_id for each entry.  Re-walk the segments files to
-    # recover those fields (embed_book_segments returns only sentence_id + cosine).
-    # Build a sentence_id → {chapter, start_sec, end_sec} lookup first.
-    sid_meta: dict[str, dict] = {}
-    for segf in sorted(_glob.glob(str(Path(book_dir) / segments_glob))):
-        if ".previous." in segf:
-            continue
-        try:
-            data = json.loads(Path(segf).read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        chapter_stem = Path(segf).name.replace(".segments.json", "")
-        for seg in data.get("segments", []):
-            sids = seg.get("sentenceIds") or []
-            sid = "-".join(str(s) for s in sids) if sids else None
-            if sid:
-                sid_meta[sid] = {
-                    "chapter": chapter_stem,
-                    "start_sec": seg.get("startSec"),
-                    "end_sec": seg.get("endSec"),
-                    "character": seg.get("characterId") or seg.get("character", ""),
-                }
-
     for char, entries in per_char_entries.items():
-        cosines = [e["cosine"] for e in entries]
-        per_char_clean_cosines[char] = cosines
+        per_char_clean_cosines[char] = [e["cosine"] for e in entries]
         for entry in entries:
-            sid = entry["sentence_id"]
-            meta = sid_meta.get(sid, {})
             scored_segments.append({
                 "character": char,
-                "chapter": meta.get("chapter", ""),
-                "sentence_id": sid,
+                "chapter": entry.get("chapter", ""),
+                "sentence_id": entry.get("sentence_id"),
                 "cosine": entry["cosine"],
-                "start_sec": meta.get("start_sec"),
-                "end_sec": meta.get("end_sec"),
+                "start_sec": entry.get("start_sec"),
+                "end_sec": entry.get("end_sec"),
             })
 
     manifest = select_listen_set(scored_segments, per_char_clean_cosines, cutoffs, cap=cap)
 
-    # Extract wav clips
+    # Extract wav clips — chapter + timing carried on each row -> correct chapter mp3
     for row in manifest:
-        sid = row["sentence_id"]
-        meta = sid_meta.get(sid, {})
-        start_sec = meta.get("start_sec")
-        end_sec = meta.get("end_sec")
-        chapter = row.get("chapter") or meta.get("chapter", "unknown")
+        start_sec = row.get("start_sec")
+        end_sec = row.get("end_sec")
+        chapter = row.get("chapter") or "unknown"
         audio_path = str(Path(book_dir) / (chapter + ".mp3"))
         cos_str = f"{row['cosine']:.3f}"
-        sid_slug = str(sid)[:12].replace("/", "-").replace("\\", "-")
+        sid_slug = str(row.get("sentence_id"))[:12].replace("/", "-").replace("\\", "-")
         out_name = f"{row['character']}_{row['predicted_verdict']}_cos{cos_str}_{sid_slug}.wav"
         out_path = str(Path(out_dir) / out_name)
         row["wav_path"] = out_path
-
         if start_sec is not None and end_sec is not None and Path(audio_path).exists():
             ok = extract_clip(audio_path, float(start_sec), float(end_sec), out_path, sr=sr)
             if not ok:
                 row.pop("wav_path", None)
+        else:
+            row.pop("wav_path", None)
 
     manifest_path = str(Path(out_dir) / "manifest.json")
     Path(manifest_path).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
