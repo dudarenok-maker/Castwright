@@ -564,97 +564,121 @@ def write_findings() -> dict:
 ```python
 # server/tts-sidecar/spikes/srv36/analyze.py
 """On-box: turn M over-generation runs into F1/F3/F5 numbers + the F4 listen-set.
-Reads real segments.json gate verdicts; embeds real per-segment PCM."""
+Reads real segments.json gate verdicts; ffmpeg-decodes the chapter audio (MP3)
+to 16 kHz mono PCM, slices per segment, embeds. Self-contained — no undefined
+helpers. Run after Task 8 produces results/runs/<i>/."""
 from __future__ import annotations
-import json, wave
+import json, subprocess
 from pathlib import Path
-import numpy as np
 
 from spikes.srv36.embed import embed_pcm
-from spikes.srv36.metrics import cosine, centroid, eer
+from spikes.srv36.metrics import cosine, centroid
 from spikes.srv36.segments_io import load_segments, seg_key, slice_pcm
 from spikes.srv36.gates import is_gate_flagged
 from spikes.srv36.aggregates import f1_floor, f3_separability, f5_length_coverage
 
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "results"
-RUNS = RESULTS / "runs"          # runs/<i>/<slug>.segments.json + runs/<i>/<slug>.wav
-FLOOR_SEC = 2.0                  # candidate F5 floor; refined by F5 output
+RUNS = RESULTS / "runs"          # runs/<i>/<slug>.segments.json + runs/<i>/<slug>.mp3
+SR = 16000                       # decode everything to 16k mono (ECAPA's rate)
+FLOOR_SEC = 2.0                  # fixed ECAPA reliability floor (F5 REPORTS variance; it does not feed back)
+LENGTHS = [0.5, 1.0, 2.0, 3.0, 5.0]
 
 
-def _read_wav(path: Path):
-    with wave.open(str(path), "rb") as w:
-        return w.readframes(w.getnframes()), w.getframerate()
+def _decode_16k(path: Path) -> bytes:
+    """ffmpeg → mono s16le @16k. Handles MP3/M4A/WAV (the pipeline emits MP3)."""
+    return subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", str(SR),
+         "-f", "s16le", "-"],
+        capture_output=True, check=True).stdout
 
 
-def _iter_segments():
-    """Yield (run, character, key, pcm, sr, dur, flagged) for every segment in every run."""
+def _chapter_audio(run_dir: Path, segs_path: Path) -> Path | None:
+    slug = segs_path.name[: -len(".segments.json")]
+    for ext in (".mp3", ".wav", ".m4a", ".aac"):
+        p = run_dir / f"{slug}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _collect():
+    """Every segment across all runs: (run, char, key, spcm16k, dur, flagged)."""
+    rows = []
     for run_dir in sorted(RUNS.glob("*")):
         for segs_path in run_dir.glob("*.segments.json"):
-            wavs = list(run_dir.glob(f"{segs_path.stem.split('.')[0]}*.wav"))
-            if not wavs:
+            audio = _chapter_audio(run_dir, segs_path)
+            if not audio:
                 continue
-            pcm, sr = _read_wav(wavs[0])
+            pcm = _decode_16k(audio)
             for seg in load_segments(str(segs_path)):
-                spcm = slice_pcm(pcm, sr, seg["start_sec"], seg["end_sec"])
-                dur = len(spcm) / 2 / sr
-                yield (run_dir.name, seg["character"], seg_key(seg), spcm, sr, dur,
-                       is_gate_flagged(seg))
+                spcm = slice_pcm(pcm, SR, seg["start_sec"], seg["end_sec"])
+                rows.append((run_dir.name, seg["character"], seg_key(seg), spcm,
+                             len(spcm) / 2 / SR, is_gate_flagged(seg)))
+    return rows
 
 
 def main():
-    rows = [r for r in _iter_segments() if r[5] >= FLOOR_SEC]  # scorable only
-    # Per-character centroid from CLEAN (gate-passing) renders.
-    by_char_clean = {}
-    embeds = {}
-    for run, ch, key, pcm, sr, dur, flagged in rows:
-        e = embed_pcm(pcm, sr); embeds[(run, key)] = (ch, e, flagged, dur)
-        if not flagged:
-            by_char_clean.setdefault(ch, []).append(e)
-    centroids = {ch: centroid(es) for ch, es in by_char_clean.items() if len(es) >= 3}
-    K = {ch: len(es) for ch, es in by_char_clean.items()}
+    rows = _collect()
+    all_durs = [r[4] for r in rows]                       # every segment, for F5 coverage
+    scorable = [r for r in rows if r[4] >= FLOOR_SEC]
 
-    clean_sims, misfire_sims, acoustic_flagged, gate_flagged, durs = [], [], set(), set(), []
-    for (run, key), (ch, e, flagged, dur) in embeds.items():
+    emb = {}                                              # (run,key) -> (char, vec, flagged, spcm)
+    clean_by_char = {}
+    for run, ch, key, spcm, dur, flagged in scorable:
+        v = embed_pcm(spcm, SR)
+        emb[(run, key)] = (ch, v, flagged, spcm)
+        if not flagged:
+            clean_by_char.setdefault(ch, []).append(v)
+    centroids = {ch: centroid(vs) for ch, vs in clean_by_char.items() if len(vs) >= 3}
+    K = {ch: len(vs) for ch, vs in clean_by_char.items()}
+
+    clean_sims, misfire_sims, gate_flagged = [], [], set()
+    for (run, key), (ch, v, flagged, spcm) in emb.items():
         if ch not in centroids:
             continue
-        sim = cosine(centroids[ch], e); durs.append(dur)
-        (misfire_sims if flagged else clean_sims).append(sim)
+        (misfire_sims if flagged else clean_sims).append(cosine(centroids[ch], v))
         if flagged:
             gate_flagged.add((run, key))
-    # Acoustic flag = cosine below the F3 EER threshold.
+
     f3 = f3_separability(clean_sims, misfire_sims)
-    thr = f3["eer"]["threshold"]
+    thr = f3["eer"]["threshold"]                          # acoustic flag = cosine < EER threshold
+
     listen = RESULTS / "f4_listen"; listen.mkdir(parents=True, exist_ok=True)
-    for (run, key), (ch, e, flagged, dur) in embeds.items():
-        if ch in centroids and cosine(centroids[ch], e) < thr:
+    acoustic_flagged = set()
+    for (run, key), (ch, v, flagged, spcm) in emb.items():
+        if ch in centroids and cosine(centroids[ch], v) < thr:
             acoustic_flagged.add((run, key))
-            if (run, key) not in gate_flagged:   # acoustic-only → the F4 listen-set
-                (listen / f"{run}__{key.replace(':','_')}.pcm").write_bytes(
-                    slice_pcm(*_clip_for(run, key)))
+            if (run, key) not in gate_flagged:            # acoustic-only → the F4 listen-set
+                (listen / f"{run}__{key.replace(':', '_')}.pcm").write_bytes(spcm)
+
+    # F5 length sweep: clean clips that reach 5 s, truncated, cosine-to-centroid.
+    length_to_sims = {L: [] for L in LENGTHS}
+    for (run, key), (ch, v, flagged, spcm) in emb.items():
+        if flagged or ch not in centroids or len(spcm) / 2 / SR < 5.0:
+            continue
+        for L in LENGTHS:
+            length_to_sims[L].append(cosine(centroids[ch], embed_pcm(spcm[: int(L * SR) * 2], SR)))
+
     (RESULTS / "f1.json").write_text(json.dumps({**f1_floor(clean_sims), "K_per_char": K}, indent=2))
-    (RESULTS / "f3.json").write_text(json.dumps(f3, indent=2))
+    (RESULTS / "f3.json").write_text(json.dumps({**f3, "note": "EER is in-sample (no held-out split)"}, indent=2))
     (RESULTS / "f5.json").write_text(json.dumps(
-        f5_length_coverage(_length_sweep(embeds, centroids), durs, FLOOR_SEC), indent=2))
+        f5_length_coverage(length_to_sims, all_durs, FLOOR_SEC), indent=2))
     (RESULTS / "f4_pending.json").write_text(json.dumps({
         "acoustic_flagged": sorted(f"{r}|{k}" for r, k in acoustic_flagged),
         "gate_flagged": sorted(f"{r}|{k}" for r, k in gate_flagged),
         "acoustic_only_to_listen": sorted(f"{r}|{k}" for r, k in (acoustic_flagged - gate_flagged)),
+        "total_acoustic_flagged": len(acoustic_flagged),
     }, indent=2))
     print(f"F1/F3/F5 written. F4 listen-set: {len(acoustic_flagged - gate_flagged)} clips in {listen}")
-
-
-# NOTE for the implementer: _clip_for(run, key) and _length_sweep(...) are thin helpers —
-# _clip_for re-derives (pcm, sr, start, end) for a (run,key) from the run's segments.json;
-# _length_sweep truncates each clean clip to [0.5,1,2,3,5]s and returns {L: [cosine-to-centroid,...]}.
-# Both are pure-ish I/O over the same artifacts; implement alongside main() (≈15 lines each).
 
 
 if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: (On-box) implement the two thin helpers** `_clip_for` and `_length_sweep` per the inline note (each re-reads the run's segments.json; `_length_sweep` slices truncations and embeds), then run `cd server/tts-sidecar && .venv/Scripts/python.exe -m spikes.srv36.analyze` after the over-generation (Task 8). Confirm `results/f1.json`, `f3.json`, `f5.json`, `f4_pending.json`, and the `f4_listen/` clips exist.
+- [ ] **Step 2: (On-box) run the analysis** — after Task 8 produces `results/runs/`, run
+  `cd server/tts-sidecar && .venv/Scripts/python.exe -m spikes.srv36.analyze`. Requires `ffmpeg` on PATH (already a project dependency). Confirm `results/f1.json`, `f3.json`, `f5.json`, `f4_pending.json`, and the `f4_listen/*.pcm` clips exist. The driver is complete — there are no helpers left to implement.
 
 - [ ] **Step 3: Commit** — `git add server/tts-sidecar/spikes/srv36/analyze.py && git commit -m "feat(sidecar): srv-36 spike on-box analysis driver (centroids + real-label join)"`
 
@@ -666,15 +690,28 @@ if __name__ == "__main__":
 
 - [ ] **Step 1: Document + run the over-generation**
 
-In `README.md`, document and then execute on a GPU box with the fixture's designed Qwen/Coqui voices in the workspace:
+In `README.md`, document and then execute on a GPU box with the fixture's designed Qwen/Coqui voices in the workspace. **There is no one-command harness** — generation is the HTTP route `POST /api/books/:bookId/generation` (`server/src/routes/generation.ts:456`); drive it M times and copy artifacts out **between** runs (each regen overwrites in place and rotates the prior to `.previous.*`).
 
-1. Set `SEG_ASR_ENABLED=1` (real ASR-QA labels) and confirm audio-QA is on (default advisory).
-2. Generate the fixture book **M ≥ 10 times** via the real pipeline (the app's generate path / existing generation route), each run stochastically re-rendering. After each run, copy that run's `<slug>.segments.json` + the rendered chapter audio (as WAV/PCM) into `server/tts-sidecar/spikes/srv36/results/runs/<i>/`.
-3. Confirm across runs there are **real gate-flagged segments** (non-empty `asr.verdict=="drift"` / `suspect`) — if zero misfires surfaced, raise M (drift is rare; the gate needs positives to measure F3/F4).
+1. Start the server with `SEG_ASR_ENABLED=1` (real ASR-QA labels); audio-QA is on by default (advisory). Confirm the fixture book id (`BOOK=<id>`).
+2. Loop **M ≥ 30** times (drift is rare — budget 30–50; M=10 often yields an empty F4 set). Each iteration: trigger generation, wait for it to finish, then copy that run's artifacts out before the next run overwrites them:
 
-This is the real-misfire harvest (spec F2). It uses the **actual** gates, so F4's "missed by gates" is honest.
+```bash
+for i in $(seq 1 30); do
+  curl -fsS -X POST "http://localhost:8080/api/books/$BOOK/generation" \
+    -H 'content-type: application/json' -d '{"chapters":"all"}'
+  # wait until generation is done (poll book-state, or watch scripts/monitor-generation.mjs)
+  mkdir -p server/tts-sidecar/spikes/srv36/results/runs/$i
+  # copy each chapter's segments.json + its MP3 out of the workspace audiobook dir:
+  cp "$WORKSPACE/$BOOK/.audiobook/"*.segments.json  server/tts-sidecar/spikes/srv36/results/runs/$i/
+  cp "$WORKSPACE/$BOOK/.audiobook/audio/"*.mp3       server/tts-sidecar/spikes/srv36/results/runs/$i/
+done
+```
+   (`analyze.py` ffmpeg-decodes the MP3 directly — **no manual transcode needed**. Adjust the curl body / workspace paths to the real generation route + on-disk layout on the box.)
+3. Confirm across runs there are **real gate-flagged segments** (non-empty `asr.verdict=="drift"` / `suspect`). If zero misfires surfaced, raise M — the gate needs positives to measure F3/F4.
 
-- [ ] **Step 2: Sanity-check** — `ls results/runs/*/` shows M runs each with a `.segments.json` + audio. Spot-check one `segments.json` has per-segment `asr`/`suspect` fields populated.
+This is the real-misfire harvest (spec F2): the **actual** gates label the renders, so F4's "missed by gates" is honest.
+
+- [ ] **Step 2: Sanity-check** — `ls results/runs/*/` shows M runs each with a `.segments.json` + an `.mp3`. Spot-check one `segments.json` has per-segment `asr`/`suspect` fields populated (if `asr` is absent, `SEG_ASR_ENABLED` wasn't set — fix and re-run).
 
 - [ ] **Step 3: Commit the README procedure** (not the large `runs/` audio — gitignored) — `git add server/tts-sidecar/spikes/srv36/README.md && git commit -m "docs(sidecar): srv-36 spike over-generation procedure (real-gate harvest)"`
 
@@ -731,7 +768,7 @@ git commit -m "feat(sidecar): srv-36 phase-0 findings + go/no-go recommendation"
 - §2.3 #665 + §0.2 fs-51 → Task 9 Step 4. ✓
 - No synthetic injection → there is no `inject` module; all positives are real gate labels. ✓
 
-**Placeholder scan:** the only operator actions are the on-box over-generation (Task 8), the two thin analyze helpers (Task 7 Step 2, mechanism specified), and the F4 human listen (Task 9) — all explicit. All pure code is complete with tests.
+**Placeholder scan:** the only operator actions are the on-box over-generation (Task 8, with a concrete curl loop) and the F4 human listen (Task 9). `analyze.py` is complete and self-contained (ffmpeg-decodes MP3, stores sliced PCM, length-sweep inlined — no deferred helpers). All pure code is complete with tests.
 
 **Type consistency:** `embed_pcm(pcm,sr)->ndarray`, `centroid(embs)->ndarray`, `cosine`, `eer->{eer,threshold}`, `load_segments`/`seg_key`/`slice_pcm`, `is_gate_flagged(seg)->bool`, `f1_floor`/`f3_separability`/`residual_value`/`f5_length_coverage`, `decide(f1,f3,f4,f5)->{recommendation,reasons}` are consistent across tasks and tests.
 
@@ -740,6 +777,7 @@ git commit -m "feat(sidecar): srv-36 phase-0 findings + go/no-go recommendation"
 ## Notes for the implementer
 
 - **Tasks 1–6 are fully TDD'd and run anywhere** (numpy/pytest, no GPU). Do them first.
-- **Tasks 7–9 are on-box** (GPU + sidecar venv + speechbrain + designed Qwen/Coqui voices). Task 8's over-generation is the long pole — real drift is rare, so M must be large enough to surface gate-flagged misfires.
+- **Tasks 7–9 are on-box** (GPU + sidecar venv + speechbrain + designed Qwen/Coqui voices + `ffmpeg`). Task 8's over-generation is the long pole — real drift is rare, so **budget M = 30–50**; M=10 often yields an empty F4 set.
 - **The whole point is F4.** F1/F3 are necessary-condition exits; the *decision* is whether acoustic catches real drift the existing ASR + audio-QA gates miss. If the `f4_listen/` set is empty or all false positives → **no-go**, and that is a valid, valuable result.
 - If over-generation surfaces too few misfires to measure F3/F4, that itself is informative (drift may be rare enough that the existing gates suffice) — record it; don't fabricate positives.
+- **Known measurement caveats to state in FINDINGS (not blockers):** (a) F3's EER is **in-sample** — the threshold is picked and evaluated on the same pool, so it's optimistic; the spec's held-out requirement is a Phase-1 concern, F4's human-confirmed residual is the real gate and no threshold can inflate it. (b) `FLOOR_SEC=2.0` is a fixed ECAPA floor; **F5 reports** per-length variance and coverage but does not feed back into the centroid pool. (c) A character that drifts often gets a thin/absent centroid (`<3` clean renders → skipped) — `K_per_char` in `f1.json` surfaces this; minor characters may be under-covered at low M.
