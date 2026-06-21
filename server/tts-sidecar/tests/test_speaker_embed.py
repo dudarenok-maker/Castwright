@@ -1,8 +1,6 @@
 import numpy as np
 import pytest
 
-speechbrain = pytest.importorskip("speechbrain")  # weights-bound → SKIP if absent
-
 
 async def _noop_async(*a, **k):
     return None
@@ -14,6 +12,7 @@ def _sine_pcm(freq, sr=16000, secs=2.0):
 
 
 def test_embed_is_unit_norm_and_192d():
+    pytest.importorskip("speechbrain")
     from main import SPK
     emb = SPK.embed(_sine_pcm(180), 16000)
     assert len(emb) == 192
@@ -21,6 +20,7 @@ def test_embed_is_unit_norm_and_192d():
 
 
 def test_self_cosine_is_one():
+    pytest.importorskip("speechbrain")
     from main import SPK
     from spikes.srv36.metrics import cosine
     pcm = _sine_pcm(180)
@@ -37,3 +37,4 @@ def test_embed_endpoint_raw_body(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["dim"] == 192 and len(body["embedding"]) == 192
+    assert body["sample_rate"] == 16000
