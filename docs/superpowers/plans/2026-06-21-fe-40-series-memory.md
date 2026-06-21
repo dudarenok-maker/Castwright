@@ -179,7 +179,9 @@ export interface SeriesMemoryDetail {
     books: Array<{ bookId: string; title: string; index: number; principalCount: number }> };
   carried: { count: number; bespokeCount: number; designedCount: number; characters: CarriedCharacter[] };
 }
-// Returns null when below the marker threshold (≥3 carried, ≥3 books, ≥1 bespoke).
+// `books` MUST be the CONFIRMED-cast set for the series, numbered 1..M by
+// library sort (the caller guarantees this — Task 3). Returns null when below
+// the marker threshold (≥3 carried characters, ≥3 books, ≥1 bespoke).
 export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail | null;
 export function summarize(detail: SeriesMemoryDetail): SeriesMemorySummary;
 ```
@@ -275,6 +277,41 @@ describe('deriveSeriesMemory', () => {
     expect(s.perBook.find((p) => p.index === 2)!.carriedPresent).toBe(5);
     expect(s.spanBooks).toBe(3);
   });
+
+  it('handles a mid-series GAP (present 1 and 3, absent 2) → carried, not full span', () => {
+    const books = baseBooks();
+    // Remove Vale from book 2; book-3 Vale matchedFrom skips to book 1.
+    books[1].characters = books[1].characters.filter((c) => c.characterId !== 'b2-vale');
+    books[2].characters.find((c) => c.characterId === 'b3-vale')!.matchedFrom = { bookId: 'b1', characterId: 'b1-vale' };
+    const d = deriveSeriesMemory(books)!;
+    const vale = d.carried.characters.find((c) => c.character === 'Vale')!;
+    expect(vale.bookIndices).toEqual([1, 3]);
+    expect(vale.carriedFullSpan).toBe(false);
+  });
+
+  it('renamed-via-alias collapses to ONE carried row with the latest name + aliases', () => {
+    const books = baseBooks();
+    // Marrow is revealed as "The Warden" in book 3 (same voiceId, alias carries old name).
+    const b3m = books[2].characters.find((c) => c.characterId === 'b3-marrow')!;
+    b3m.name = 'The Warden'; b3m.aliases = ['Marrow'];
+    const d = deriveSeriesMemory(books)!;
+    const rows = d.carried.characters.filter((c) => c.voiceId === 'v_q_marrow');
+    expect(rows).toHaveLength(1);              // one character, not two
+    expect(rows[0].character).toBe('The Warden'); // canonical = latest
+    expect(rows[0].aliases).toContain('Marrow');
+  });
+
+  it('chip N equals reveal row count (summarize.carriedCount === characters.length)', () => {
+    const d = deriveSeriesMemory(baseBooks())!;
+    expect(summarize(d).carriedCount).toBe(d.carried.characters.length);
+  });
+
+  it('sorts bespoke (designed/cloned) rows above preset rows', () => {
+    const d = deriveSeriesMemory(baseBooks())!;
+    const lastBespokeIdx = d.carried.characters.map((c) => c.voiceKind !== 'preset').lastIndexOf(true);
+    const firstPresetIdx = d.carried.characters.findIndex((c) => c.voiceKind === 'preset');
+    expect(firstPresetIdx).toBeGreaterThan(lastBespokeIdx); // all bespoke before any preset
+  });
 });
 ```
 
@@ -323,46 +360,48 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
   if (books.length < MIN_BOOKS) return null;
   const ordered = [...books].sort((a, b) => a.index - b.index);
 
-  // Index every character by bookId+characterId for backward chaining.
+  // Index every appearance by bookId::characterId.
   const byKey = new Map<string, Appearance>();
   for (const book of ordered) for (const ch of book.characters) byKey.set(`${book.bookId}::${ch.characterId}`, { book, ch });
 
-  // A character is "matched-into" if some later character points at it; those
-  // are chain interiors, not heads. Collect the set of pointed-at keys.
+  // `matchedFrom` points BACKWARD (a newer character → its older self). The set
+  // of pointed-at keys are chain interiors/heads; the appearances NOT pointed at
+  // are chain TAILS (the latest appearance). We start from each tail and walk
+  // BACKWARD by following matchedFrom — this is the fix for the wrong-direction
+  // walk: a forward walk from a tail goes nowhere.
   const pointedAt = new Set<string>();
   for (const book of ordered) for (const ch of book.characters) {
     if (ch.matchedFrom?.bookId && ch.matchedFrom?.characterId)
       pointedAt.add(`${ch.matchedFrom.bookId}::${ch.matchedFrom.characterId}`);
   }
 
-  // Build chains: each chain is the list of appearances for one real character.
-  // Start from heads (appearances never pointed at by a later book), then walk
-  // FORWARD by finding the later character whose matchedFrom points back here.
-  const forward = new Map<string, string>(); // priorKey -> nextKey
-  for (const book of ordered) for (const ch of book.characters) {
-    if (ch.matchedFrom?.bookId && ch.matchedFrom?.characterId)
-      forward.set(`${ch.matchedFrom.bookId}::${ch.matchedFrom.characterId}`, `${book.bookId}::${ch.characterId}`);
-  }
-
   const carried: CarriedCharacter[] = [];
-  for (const [key, head] of byKey) {
-    if (pointedAt.has(key)) continue; // not a head
-    // Walk the chain forward.
-    const chain: Appearance[] = [];
-    let cur: string | undefined = key;
-    while (cur) { const ap = byKey.get(cur); if (!ap) break; chain.push(ap); cur = forward.get(cur); }
+  for (const [key, tail] of byKey) {
+    if (pointedAt.has(key)) continue; // keep only chain tails (latest appearance)
+    const chain: Appearance[] = [tail];
+    let cur = tail;
+    while (cur.ch.matchedFrom?.bookId && cur.ch.matchedFrom?.characterId) {
+      const prev = byKey.get(`${cur.ch.matchedFrom.bookId}::${cur.ch.matchedFrom.characterId}`);
+      if (!prev) break;
+      chain.push(prev); cur = prev;
+    }
     if (chain.length < 2) continue; // appears in <2 books → not carried
     const voiceIds = new Set(chain.map((a) => a.ch.voiceId ?? ''));
-    if (voiceIds.size !== 1 || voiceIds.has('')) continue; // voice changed / missing → not carried
-    const last = chain[chain.length - 1].ch;
-    const indices = chain.map((a) => a.book.index).sort((x, y) => x - y);
+    if (voiceIds.size !== 1 || voiceIds.has('')) continue; // voice changed/missing → not carried
+    // Order explicitly by book index — DON'T rely on chain push-order (it's
+    // tail→head). Earliest = first book, latest = canonical name/voice.
+    const byIndex = [...chain].sort((a, b) => a.book.index - b.book.index);
+    const earliest = byIndex[0], latest = byIndex[byIndex.length - 1].ch;
+    const indices = byIndex.map((a) => a.book.index);
+    // carriedFullSpan: present in EVERY confirmed book 1..M (no gap). `ordered`
+    // is the confirmed set by contract.
     const fullSpan = indices.length === ordered.length &&
       indices.every((v, i) => v === ordered[i].index);
     carried.push({
-      character: last.name, aliases: last.aliases,
-      voiceId: last.voiceId as string, voiceLabel: last.voiceLabel,
-      engine: last.engine, voiceKind: last.voiceKind,
-      firstBookId: chain[0].book.bookId, lastBookId: chain[chain.length - 1].book.bookId,
+      character: latest.name, aliases: latest.aliases,
+      voiceId: latest.voiceId as string, voiceLabel: latest.voiceLabel,
+      engine: latest.engine, voiceKind: latest.voiceKind,
+      firstBookId: earliest.book.bookId, lastBookId: byIndex[byIndex.length - 1].book.bookId,
       bookIndices: indices, carriedFullSpan: fullSpan,
     });
   }
@@ -496,47 +535,23 @@ Expected: FAIL — `series.seriesMemory` is `undefined`.
 
 - [ ] **Step 3: Implement the wiring in `scan.ts`**
 
-Add near the other workspace imports:
+**First, export `describeVoice`** — it is currently declared *unexported* at `server/src/tts/voice-mapping.ts:320`. Add the keyword:
+
+```typescript
+export function describeVoice(engine: TtsEngine, name: string): string {  // was: function describeVoice(
+```
+
+Add near the other workspace imports in `scan.ts`. **The path/JSON helpers live in `./paths.js`, NOT in scan.ts** — `scan.ts` already imports from `paths.js` (line 11); reuse `castJsonPath` + the existing `readJson` and the book-dir builder from there (confirm the exact exported names in `paths.ts`):
 
 ```typescript
 import { deriveSeriesMemory, summarize, type SeriesBookInput, type SeriesCharacterInput } from './series-memory.js';
 import { voiceKindFor } from './voice-kind.js';
 import { describeVoice } from '../tts/voice-mapping.js';
+import { castJsonPath, readJson, bookDir } from './paths.js'; // use the real exported names from paths.ts
 const PRINCIPAL_LINE_FLOOR = 5;
 ```
 
-In the series-grouping part of `scanLibrary` (where `LibrarySeries` objects are assembled), after the series' confirmed books are sorted into library order, build inputs and attach the summary:
-
-```typescript
-// `seriesBooks` = the LibraryBook[] for this series, already sorted.
-const confirmed = seriesBooks.filter((b) => b.status !== 'cast_pending' && b.status !== 'analysing' && b.status !== 'not_analysed');
-const inputs: SeriesBookInput[] = [];
-confirmed.forEach((b, i) => {
-  const cast = readCastForMemory(b); // helper below — reads <bookDir>/.audiobook/cast.json
-  inputs.push({
-    bookId: b.bookId, index: i + 1, title: b.title,
-    characters: cast.map((ch): SeriesCharacterInput => {
-      const engine = (ch.ttsEngine ?? null) as string | null;
-      const name = ch.overrideTtsVoices?.[engine as never]?.name ?? '';
-      const lineCount = Array.isArray(ch.lines) ? ch.lines.length : (typeof ch.lines === 'number' ? ch.lines : 0);
-      return {
-        characterId: ch.id, name: ch.name ?? ch.id, aliases: ch.aliases ?? [],
-        voiceId: ch.voiceId ?? null,
-        voiceLabel: engine ? describeVoice(engine as never, name) : '',
-        engine, voiceKind: voiceKindFor(engine as never),
-        isPrincipal: lineCount >= PRINCIPAL_LINE_FLOOR,
-        matchedFrom: ch.matchedFrom ?? null,
-      };
-    }),
-  });
-});
-const detail = deriveSeriesMemory(inputs);
-const seriesMemory = detail ? summarize(detail) : null;
-// attach when building the series object:
-//   { name: seriesName, books: seriesBooks, seriesMemory }
-```
-
-Add the `readCastForMemory` helper (mirror the existing cast.json read at scan.ts:455-470; reuse `castJsonPath` + `readJson`):
+**Define `buildSeriesInputs` as an exported function** (Task 4's route reuses it — it must be a real export, not inline). It maps the series' confirmed books → `SeriesBookInput[]` with library-sort indices:
 
 ```typescript
 interface CastCharForMemory {
@@ -546,16 +561,56 @@ interface CastCharForMemory {
   lines?: unknown[] | number;
   matchedFrom?: { bookId?: string; characterId?: string } | null;
 }
-function readCastForMemory(b: LibraryBook): CastCharForMemory[] {
+
+async function readCastForMemory(author: string, series: string, title: string): Promise<CastCharForMemory[]> {
   try {
-    const dir = bookDirFor(b.author, b.series, b.title); // use the same path helper scanBook uses
-    const json = readJsonSync<{ characters?: CastCharForMemory[] }>(castJsonPath(dir));
+    const json = await readJson<{ characters?: CastCharForMemory[] }>(castJsonPath(bookDir(author, series, title)));
     return json?.characters ?? [];
   } catch { return []; }
 }
+
+/** Confirmed-only, library-sorted SeriesBookInput[] for one series. Exported so
+    the detail route (Task 4) reuses the exact same assembly as the library scan. */
+export async function buildSeriesInputs(author: string, series: string): Promise<SeriesBookInput[]> {
+  // Reuse scanBook to get each book's metadata+status, then keep confirmed only,
+  // sort into library order, and read each cast.json once.
+  const books = (await scanSeriesBooks(author, series)) // small helper: maps listDirs(titles) → scanBook, filters nulls
+    .filter((b) => b.status === 'complete' || b.status === 'generating'); // castConfirmed statuses (NOT not_analysed/analysing/cast_pending)
+  books.sort((a, b) => (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title));
+  const inputs: SeriesBookInput[] = [];
+  for (let i = 0; i < books.length; i++) {
+    const b = books[i];
+    const cast = await readCastForMemory(b.author, b.series, b.title);
+    inputs.push({
+      bookId: b.bookId, index: i + 1, title: b.title,
+      characters: cast.map((ch): SeriesCharacterInput => {
+        const engine = (ch.ttsEngine ?? null) as string | null;
+        const name = engine ? (ch.overrideTtsVoices?.[engine]?.name ?? '') : '';
+        const lineCount = Array.isArray(ch.lines) ? ch.lines.length : (typeof ch.lines === 'number' ? ch.lines : 0);
+        return {
+          characterId: ch.id, name: ch.name ?? ch.id, aliases: ch.aliases ?? [],
+          voiceId: ch.voiceId ?? null,
+          voiceLabel: engine ? describeVoice(engine as never, name) : '',
+          engine, voiceKind: voiceKindFor(engine as never),
+          isPrincipal: lineCount >= PRINCIPAL_LINE_FLOOR,
+          matchedFrom: ch.matchedFrom ?? null,
+        };
+      }),
+    });
+  }
+  return inputs;
+}
 ```
 
-> The helper must use the same path + JSON utilities already imported in scan.ts. If only an async `readJson` exists, make `readCastForMemory` async and `await` it in the loop. Confirm `LibraryBook` carries enough to recompute `bookDir` (author/series/title are all present).
+> **Confirm two things in `scan.ts`/`paths.ts`:** (1) which statuses mean `castConfirmed === true` — the scan derives `status` from `castConfirmed` (a `cast_pending` book is NOT confirmed); filter to the confirmed set, NOT by a hardcoded list if a cleaner `castConfirmed` signal is reachable. (2) Factor the per-series book listing the existing `scanLibrary` loop already does into a small `scanSeriesBooks(author, series)` helper so `buildSeriesInputs` and the main loop share it (DRY).
+
+Then, in `scanLibrary`'s series loop, attach the summary:
+
+```typescript
+const inputs = await buildSeriesInputs(authorName, seriesName);
+const detail = deriveSeriesMemory(inputs);
+seriesList.push({ name: seriesName, books, seriesMemory: detail ? summarize(detail) : null });
+```
 
 Update the series type (in scan.ts where `LibraryResponse`/series is declared, ~line 241 region):
 
@@ -595,11 +650,21 @@ git commit -m "feat(server): attach seriesMemory summary in scanLibrary"
 
 ```typescript
 // server/src/routes/series-memory.test.ts
-import { describe, it, expect } from 'vitest';
-import request from 'supertest'; // confirm supertest is the harness other route tests use; else mirror them
-import { makeApp } from '../test-utils/make-app.js'; // use whatever existing helper builds the express app for tests
-// Bootstrap the same 3-book carried series as Task 3 (factor the temp-workspace
-// helper into a shared test util if convenient), then:
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import express from 'express';
+import request from 'supertest'; // present in server/package.json devDeps (^7.2.2)
+import { seriesMemoryRouter } from './series-memory.js';
+// Build the app INLINE per the repo pattern (see accelerator-profile.test.ts) —
+// there is NO shared make-app util.
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/library', seriesMemoryRouter);
+  return app;
+}
+// Bootstrap the same 3-book carried series as Task 3's test (mkdtemp temp
+// workspace + state.json/cast.json per book; point WORKSPACE_ROOT at it in
+// beforeAll, rm in afterAll — copy the helper from series-memory-scan.test.ts).
 
 describe('GET /api/library/series-memory', () => {
   it('returns the carried roster for a series above threshold', async () => {
@@ -614,8 +679,6 @@ describe('GET /api/library/series-memory', () => {
   });
 });
 ```
-
-> Match the existing route-test harness — search `server/src/routes/*.test.ts` for how they construct the app + make requests (supertest vs direct handler call). Use that exact pattern.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -750,10 +813,12 @@ Attach to `LibrarySeries` (lines 2923-2930):
           type: array
           items: { $ref: '#/components/schemas/LibraryBook' }
         seriesMemory:
-          oneOf:
+          allOf:
             - { $ref: '#/components/schemas/SeriesMemorySummary' }
-            - { type: 'null' }
+          nullable: true
 ```
+
+> **OpenAPI version note (verified):** `openapi.yaml` is **3.0.3**, not 3.1 — `type: 'null'` is invalid there. Use the `allOf` + `nullable: true` wrapper above. (3.0.3 can't put `nullable` directly on a `$ref`, hence the single-item `allOf`.)
 
 Add the path near line 338:
 
@@ -1015,6 +1080,18 @@ describe('SeriesSparkline', () => {
     expect(strip.querySelectorAll('[data-testid="sparkline-bar"]')).toHaveLength(3);
     expect(screen.getByText(/9 of your cast, kept true across the series\./)).toBeInTheDocument();
   });
+  it('splits each bar into two buckets (carried + other principals)', () => {
+    render(<SeriesSparkline summary={summary} onOpen={() => {}} />);
+    const bar = screen.getAllByTestId('sparkline-bar')[0];
+    expect(bar.children).toHaveLength(2); // gradient (carried) + faint (rest)
+  });
+  it('does not overflow when a carried character is below the principal floor (carriedPresent > principalCount)', () => {
+    const odd = { ...summary, perBook: [{ bookId: 'b1', index: 1, principalCount: 2, carriedPresent: 5 }] };
+    render(<SeriesSparkline summary={odd} onOpen={() => {}} />);
+    const carried = screen.getByTestId('sparkline-bar').children[0] as HTMLElement;
+    // base clamps to carriedPresent → carried fills 100%, never >100.
+    expect(carried.style.height).toBe('100%');
+  });
 });
 ```
 
@@ -1030,7 +1107,10 @@ Expected: FAIL — module not found.
 import type { SeriesMemorySummary } from '../../lib/types';
 
 export function SeriesSparkline({ summary, onOpen }: { summary: SeriesMemorySummary; onOpen: () => void }) {
-  const max = Math.max(1, ...summary.perBook.map((p) => p.principalCount));
+  // Bar height base = principals, but never less than carried-present — a carried
+  // character below the principal line-floor must not overflow the bar (ALG-3).
+  const baseFor = (p: SeriesMemorySummary['perBook'][number]) => Math.max(p.principalCount, p.carriedPresent, 1);
+  const max = Math.max(1, ...summary.perBook.map(baseFor));
   return (
     <div className="mt-1 rounded-xl border border-peach/20 bg-peach/8 px-3.5 py-2.5">
       <button
@@ -1040,8 +1120,9 @@ export function SeriesSparkline({ summary, onOpen }: { summary: SeriesMemorySumm
         className="flex items-end gap-1 h-8"
       >
         {summary.perBook.map((p) => {
-          const h = (p.principalCount / max) * 100;
-          const carriedPct = p.principalCount ? (p.carriedPresent / p.principalCount) * 100 : 0;
+          const base = baseFor(p);
+          const h = (base / max) * 100;
+          const carriedPct = (p.carriedPresent / base) * 100; // ≤ 100 by construction
           return (
             <span key={p.bookId} data-testid="sparkline-bar"
               className="flex flex-col-reverse w-2.5 rounded-sm overflow-hidden" style={{ height: `${h}%` }}>
@@ -1085,20 +1166,34 @@ git commit -m "feat(frontend): SeriesSparkline (per-book carried-vs-principals)"
 
 ```tsx
 // add to src/components/library/library-grid.test.tsx
+// `renderGrid` below: reuse this file's EXISTING render helper + book factory
+// if present; otherwise build the minimal authors prop inline as shown.
+const sm = { carriedCount: 5, bespokeCount: 4, designedCount: 4, spanBooks: 3,
+  perBook: [
+    { bookId: 'b1', index: 1, principalCount: 8, carriedPresent: 5 },
+    { bookId: 'b2', index: 2, principalCount: 9, carriedPresent: 5 },
+    { bookId: 'b3', index: 3, principalCount: 9, carriedPresent: 5 },
+  ] };
+const authorsWith = (seriesMemory: typeof sm | undefined) => [{
+  name: 'A. Kell',
+  series: [{ name: 'The Ninth House', seriesMemory, books: [
+    makeBook({ bookId: 'b1', title: 'One', series: 'The Ninth House' }), // file's existing book factory
+  ] }],
+}];
+
 it('renders the series-memory chip + sparkline when seriesMemory is present', () => {
-  // Build an author/series with seriesMemory on the series; render LibraryGrid.
-  // (Reuse the file's existing author/series fixture factory; attach:)
-  // series.seriesMemory = { carriedCount: 5, bespokeCount: 4, designedCount: 4, spanBooks: 3,
-  //   perBook: [{bookId:'b1',index:1,principalCount:8,carriedPresent:5}, ...] }
-  // expect(screen.getByTestId('series-memory-chip')).toBeInTheDocument();
-  // expect(screen.getByTestId('series-sparkline')).toBeInTheDocument();
+  renderGrid({ authors: authorsWith(sm) }); // file's existing render wrapper for LibraryGrid props
+  expect(screen.getByTestId('series-memory-chip')).toBeInTheDocument();
+  expect(screen.getByTestId('series-sparkline')).toBeInTheDocument();
 });
 it('renders neither when seriesMemory is absent', () => {
-  // series with no seriesMemory → queryByTestId('series-memory-chip') is null.
+  renderGrid({ authors: authorsWith(undefined) });
+  expect(screen.queryByTestId('series-memory-chip')).toBeNull();
+  expect(screen.queryByTestId('series-sparkline')).toBeNull();
 });
 ```
 
-> Fill the test bodies using the file's existing fixture/render helpers (open `library-grid.test.tsx` and copy its author-prop shape). The two assertions above are the contract.
+> Open `library-grid.test.tsx` first and reuse its existing `makeBook`/render helper (the names above mirror the common pattern); if the file builds props differently, adapt the wrapper — but the four assertions are the binding contract, not placeholders.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1125,7 +1220,7 @@ Expected: FAIL — chip not rendered.
 )}
 ```
 
-Import both components + `LibrarySeries`. Thread `onOpenSeriesMemory` from the library orchestrator (the component that renders `<LibraryGrid>` — search for `<LibraryGrid`).
+Import both components + `LibrarySeries`. Thread `onOpenSeriesMemory` from the orchestrator **`src/views/book-library.tsx`** (it renders `<LibraryGrid>` at :385 AND `<LibraryTable>` at :413, both fed `authors={filteredAuthors}`). **v1 scope: wire the chip+sparkline into the card-view `LibraryGrid` only.** The table view (`library-table.tsx`) gets the same treatment as a noted follow-up (its series header differs) — call this out in the PR so it's a deliberate scope line, not an omission.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -1180,8 +1275,15 @@ describe('SeriesMemoryReveal', () => {
     await waitFor(() => screen.getByText(/not a voice has changed/));
     expect(screen.getByText(/Three books in, and not a voice has changed\./)).toBeInTheDocument();
     expect(screen.getByText('Marrow')).toBeInTheDocument();
-    expect(screen.getByText(/from Bk 2/)).toBeInTheDocument(); // Sela late joiner
-    expect(screen.queryByText(/Kokoro|Qwen/)).toBeNull(); // no engine names
+    expect(screen.getByText(/from Bk 2/)).toBeInTheDocument();   // Sela late joiner
+    expect(screen.queryByText(/Kokoro|Qwen/)).toBeNull();        // no engine names
+    expect(screen.queryByText(/bf_|am_|af_/)).toBeNull();        // no catalogue slugs (P2-3)
+    expect(screen.getByLabelText('in books 1–3')).toBeInTheDocument(); // range-collapsed aria (P0-5)
+  });
+  it('uses numerals (not spelled words) in the headline above twenty', async () => {
+    render(<SeriesMemoryReveal author="Kell" series="Ninth House" bookCount={25} onClose={() => {}} onShare={() => {}} fetcher={async () => detail} />);
+    await waitFor(() => screen.getByText(/books in/));
+    expect(screen.getByText(/^25 books in,/)).toBeInTheDocument(); // not "Twenty-five"
   });
   it('fires onShare with the detail', async () => {
     const onShare = vi.fn();
@@ -1207,7 +1309,17 @@ import { api } from '../../lib/api';
 import type { SeriesMemoryDetail, CarriedCharacter } from '../../lib/types';
 
 const ONES = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
-const spell = (n: number) => (n <= 20 ? ONES[n][0].toUpperCase() + ONES[n].slice(1) : String(n));
+// Spell out ≤20, numerals above (per the copy rule — "Fifty-six" is clumsy at headline size).
+const spell = (n: number) => (n >= 0 && n <= 20 ? ONES[n][0].toUpperCase() + ONES[n].slice(1) : String(n));
+// Collapse consecutive book indices into ranges: [1,2,4,5,6,12] → "1, 2, 4–6, 12".
+function rangeLabel(indices: number[]): string {
+  const s = [...indices].sort((a, b) => a - b); const out: string[] = [];
+  for (let i = 0; i < s.length; ) {
+    let j = i; while (j + 1 < s.length && s[j + 1] === s[j] + 1) j++;
+    out.push(i === j ? `${s[i]}` : `${s[i]}–${s[j]}`); i = j + 1;
+  }
+  return out.join(', ');
+}
 
 function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }) {
   const present = new Set(c.bookIndices);
@@ -1225,7 +1337,7 @@ function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }
           {!c.carriedFullSpan && <span className="text-ink/40"> · from Bk {c.bookIndices[0]}</span>}
         </div>
       </div>
-      <div className="flex gap-1" aria-label={`in books ${c.bookIndices.join(', ')}`}>
+      <div className="flex gap-1" aria-label={`in books ${rangeLabel(c.bookIndices)}`}>
         {Array.from({ length: bookCount }, (_, i) => i + 1).map((idx) => (
           <span key={idx} className={`w-3 h-3 rounded-full ${present.has(idx) ? 'bg-gradient-to-r from-magenta to-peach' : 'bg-ink/12'}`} />
         ))}
@@ -1274,7 +1386,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/components/series-memory/series-memory-reveal.tsx src/components/series-memory/series-memory-reveal.test.tsx src/routes/index.tsx
+git add src/components/series-memory/series-memory-reveal.tsx src/components/series-memory/series-memory-reveal.test.tsx src/views/book-library.tsx
 git commit -m "feat(frontend): SeriesMemoryReveal modal + orchestrator wiring"
 ```
 
@@ -1356,14 +1468,27 @@ const detail: SeriesMemoryDetail = {
 };
 
 describe('SeriesShareCard', () => {
-  it('leads on the designed figure and carries mandatory branding', () => {
+  it('leads on the designed figure, the claim line, and mandatory branding', () => {
     render(<SeriesShareCard detail={detail} seriesName="The Ninth House" owner="Alex" />);
     const card = screen.getByTestId('series-share-card');
     expect(within(card).getByText(/39/)).toBeInTheDocument();
     expect(within(card).getByText(/designed voices/)).toBeInTheDocument();
     expect(within(card).getByText(/kept true across all 12 books/)).toBeInTheDocument();
-    expect(within(card).getByText('castwright.ai')).toBeInTheDocument(); // non-removable branding
+    expect(within(card).getByText('12 books. The same cast.')).toBeInTheDocument(); // locked claim line
+    expect(within(card).getByText('castwright.ai')).toBeInTheDocument();            // non-removable branding
     expect(within(card).getByText(/Alex's cast · kept true/)).toBeInTheDocument();
+    expect(within(card).queryByText('✦')).toBeNull();                              // no stock sparkle separator
+  });
+  it('uses spanBooks (not series length) so the claim cannot overclaim', () => {
+    const turnover = { ...detail, series: { ...detail.series, confirmedBookCount: 12, spanBooks: 10 } };
+    render(<SeriesShareCard detail={turnover} seriesName="X" />);
+    expect(screen.getByText(/kept true across all 10 books/)).toBeInTheDocument();
+    expect(screen.getByText('10 books. The same cast.')).toBeInTheDocument();
+  });
+  it('falls back to "Your cast · kept true" when no owner is set (never "undefined")', () => {
+    render(<SeriesShareCard detail={detail} seriesName="X" />);
+    expect(screen.getByText(/Your cast · kept true/)).toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).toBeNull();
   });
   it('caps the wall past 45 names', () => {
     render(<SeriesShareCard detail={detail} seriesName="X" />);
@@ -1405,9 +1530,13 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
       <p className="text-[10px] uppercase tracking-[0.2em] text-magenta font-semibold mt-4">Series memory · {seriesName}</p>
       <div className="font-serif text-5xl font-bold mt-1">{heroNum} <span className="text-xl text-cream/70 font-normal">{heroLabel}</span></div>
       <p className="font-serif text-peach text-lg font-semibold">kept true across all {detail.series.spanBooks} books</p>
-      <div className="flex-1 flex flex-wrap content-center justify-center gap-x-2 gap-y-1 my-4 text-center">
+      <p className="text-cream/70 text-sm mt-1">{detail.series.spanBooks} books. The same cast.</p>
+      <div className="flex-1 flex flex-wrap content-center justify-center items-center gap-x-2 gap-y-1 my-4 text-center">
         {shown.map((n, i) => (
-          <span key={n + i} className={`font-serif ${nameSize}`}>{n}{i < shown.length - 1 && <span className="text-magenta/60 mx-1">✦</span>}</span>
+          <span key={n + i} className={`font-serif ${nameSize} inline-flex items-center`}>
+            {n}
+            {i < shown.length - 1 && <CastwaveGlyph className="w-2 h-2 text-magenta/60 mx-1.5" />}
+          </span>
         ))}
         {overflow > 0 && <span className={`${nameSize} text-cream/50`}> …and {overflow} more of your cast</span>}
       </div>
@@ -1443,20 +1572,31 @@ git commit -m "feat(frontend): SeriesShareCard (bespoke-led, scale-first)"
 - Create: `src/components/series-memory/share-card-modal.tsx` (+ test)
 
 **Interfaces:**
-- Consumes: `SeriesShareCard`. Uses an image-render approach. **Decision for the implementer:** prefer a client-side DOM→PNG (e.g. `html-to-image`'s `toPng`) over adding a server render path; check `package.json` first — if `html-to-image` (or `dom-to-image`/`html2canvas`) is already a dependency, use it; if none is present, that's a dependency add to confirm with the maintainer before installing (note it in the PR).
+- Consumes: `SeriesShareCard`. **Dependency decision (verified: NO image-render lib is in `package.json`).** v1 ships **zero-dep** — the modal renders `SeriesShareCard` as the in-app artifact (screenshot-ready) plus a **"Download data (.json)"** button (`Blob`-download the fetched detail; no new dep). The **one-click PNG download is a gated enhancement** needing `html-to-image` — a **dependency add requiring maintainer sign-off**; do NOT install it in this task, add the PNG button as a follow-up behind that approval. The acceptance criterion ("share card image + JSON") is met by the rendered card + JSON without blocking on the dep.
 
 - [ ] **Step 1: Write the failing test** (logic only — assert the modal renders the card + a download control; mock the image lib):
 
 ```tsx
 // src/components/series-memory/share-card-modal.test.tsx
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ShareCardModal } from './share-card-modal';
-// detail fixture as in Task 12
-it('renders the card and a download button', () => {
-  render(<ShareCardModal detail={/* fixture */ {} as never} seriesName="X" onClose={() => {}} />);
-  expect(screen.getByTestId('series-share-card')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /download image/i })).toBeInTheDocument();
+import type { SeriesMemoryDetail } from '../../lib/types';
+
+const detail: SeriesMemoryDetail = { // reuse Task 12's fixture shape (a real object — the card reads detail.carried)
+  series: { confirmedBookCount: 3, spanBooks: 3, books: [] },
+  carried: { count: 3, bespokeCount: 3, designedCount: 3, characters: [
+    { character: 'Marrow', aliases: [], voiceId: 'v1', voiceLabel: 'Designed voice', engine: 'qwen', voiceKind: 'designed', firstBookId: 'b1', lastBookId: 'b3', bookIndices: [1,2,3], carriedFullSpan: true },
+  ] },
+};
+
+describe('ShareCardModal', () => {
+  it('renders the card and the zero-dep JSON download (no PNG dep in v1)', () => {
+    render(<ShareCardModal detail={detail} seriesName="X" onClose={() => {}} />);
+    expect(screen.getByTestId('series-share-card')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /download data \(\.json\)/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /download image/i })).toBeNull(); // PNG is a gated follow-up
+  });
 });
 ```
 
@@ -1476,21 +1616,21 @@ import { SeriesShareCard } from './series-share-card';
 export function ShareCardModal({ detail, seriesName, owner, onClose }: {
   detail: SeriesMemoryDetail; seriesName: string; owner?: string; onClose: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  async function download() {
-    const { toPng } = await import('html-to-image'); // confirm dep exists (Task 13 note)
-    if (!ref.current) return;
-    const url = await toPng(ref.current, { pixelRatio: 2 });
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(detail, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `${seriesName}-cast.png`; a.click();
+    a.href = url; a.download = `${seriesName}-series-memory.json`; a.click();
+    URL.revokeObjectURL(url);
   }
   return (
     <div role="dialog" aria-modal className="fixed inset-0 z-50 grid place-items-center bg-ink/50 p-4" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}>
-        <div ref={ref}><SeriesShareCard detail={detail} seriesName={seriesName} owner={owner} /></div>
+        <SeriesShareCard detail={detail} seriesName={seriesName} owner={owner} />
         <div className="mt-4 flex justify-center">
-          <button onClick={download} className="rounded-full px-5 py-2.5 font-semibold text-ink bg-gradient-to-r from-magenta to-peach">Download image</button>
+          <button onClick={downloadJson} className="rounded-full px-5 py-2.5 font-semibold text-ink bg-gradient-to-r from-magenta to-peach">Download data (.json)</button>
         </div>
+        {/* PNG download button added here as a follow-up, behind the html-to-image dep sign-off. */}
       </div>
     </div>
   );
@@ -1507,7 +1647,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/components/series-memory/share-card-modal.tsx src/components/series-memory/share-card-modal.test.tsx src/routes/index.tsx
+git add src/components/series-memory/share-card-modal.tsx src/components/series-memory/share-card-modal.test.tsx src/views/book-library.tsx
 git commit -m "feat(frontend): share-card modal + PNG export"
 ```
 
@@ -1574,6 +1714,8 @@ git commit -m "test(e2e): series-memory chip → reveal → share card"
 
 - [ ] **Step 2: Update `INDEX.md`** with the new plan entry.
 
+- [ ] **Step 2b: File the deferred follow-ups as Backlog issues + thin rows** (per CLAUDE.md — discovered out-of-scope work is captured, not silently dropped). Three: (1) **LibraryTable** series-memory treatment (chip+sparkline in the table view); (2) harmonise the cast-row **"Reused · Matched"** badge to the "carried / kept true" vocabulary; (3) **PNG share-card export** (needs the `html-to-image` dependency sign-off). Each gets a `<prefix>-<n>` issue with `area:`/`moscow:`/`type:` labels and a one-line row in `docs/BACKLOG.md`.
+
 - [ ] **Step 3: Full verify**
 
 Run: `npm run verify`
@@ -1591,5 +1733,12 @@ git commit -m "docs(docs): fe-40 series-memory regression plan + index; close ba
 ## Self-Review notes (for the executor)
 
 - **Spec coverage:** chip+sparkline (T7-T9), reveal (T10), share card+JSON (T12-T13), carried predicate + bespoke + threshold + spanBooks + confirmed-only (T2-T3), data-sourcing via persisted `matchedFrom` (T2-T3), describeVoice label + no-slug/no-engine (T3, T10), Castwave glyph (T6), mandatory branding (T12), a11y text equivalents (T8, T10), no-cache v1 (T3-T4). All mapped.
-- **Two flagged decisions for the executor (call out in the PR):** (1) the `cloned` signal for Coqui (defaulted off → Coqui counts as preset until a clone marker exists); (2) the image-render dependency (`html-to-image`) — confirm it's present or get sign-off before adding.
-- **Type consistency:** `SeriesCharacterInput`/`SeriesBookInput`/`CarriedCharacter`/`SeriesMemorySummary`/`SeriesMemoryDetail` are defined once (T2/T5) and reused verbatim; `voiceKindFor` (T1) is the only voiceKind source; `deriveSeriesMemory`/`summarize` names are stable across T2-T4.
+- **Real decisions for the executor (call out in the PR):** (1) the `cloned` signal for Coqui — defaulted off, so Coqui counts as `preset` until a clone marker exists (the headline case is Qwen `designed` anyway); (2) **PNG share-card export needs the `html-to-image` dependency** — v1 ships zero-dep (rendered card + JSON), the PNG button is a sign-off-gated follow-up (T13, filed in T15).
+- **v1 scope line:** chip+sparkline land in the **card-view `LibraryGrid`** only; the **`LibraryTable`** treatment + the **"Reused" badge** vocabulary harmonisation are filed follow-ups (T15).
+- **Type consistency:** `SeriesCharacterInput`/`SeriesBookInput`/`CarriedCharacter`/`SeriesMemorySummary`/`SeriesMemoryDetail` are defined once (T2/T5) and reused verbatim; `voiceKindFor` (T1) is the only voiceKind source; `deriveSeriesMemory`/`summarize`/`buildSeriesInputs` names are stable across T2-T4.
+
+## Corrections applied after the 3-angle adversarial review (binding)
+
+The plan was revised after an adversarial review (algorithm / codebase-fit / spec-coverage). Fixes folded in above: the derivation now walks `matchedFrom` **backward** from chain tails (the forward walk produced zero carried); chain ordering is by `book.index` (latest = canonical name); `deriveSeriesMemory` contract is **confirmed-only, 1..M**; `describeVoice` gets an **export** (T3); path helpers come from **`paths.js`** not scan.ts; **`buildSeriesInputs`** is a real export (T3) consumed by T4; the OpenAPI nullable uses **3.0.3 `allOf`+`nullable`** (not `type: 'null'`); the orchestrator is **`src/views/book-library.tsx`**; route tests build the app **inline** (no `make-app` util); the card renders the **locked claim line** + a **Castwave-dot** separator (not `✦`); the sparkline **clamps** so carried can't overflow; the reveal aria is **range-collapsed**. New tests added: mid-series gap, renamed-via-alias single row, chip==reveal invariant, bespoke sort order, `spanBooks<M` card, owner fallback, num-to-words cap, two-bucket partition + overflow, no-slug.
+
+**One test still owed (add when executing T3):** a confirmed-only exclusion case — write a 4th book with `castConfirmed: false` into the temp workspace and assert `series.seriesMemory.spanBooks` and `carriedCount` are unchanged (the `cast_pending` book contributes nothing).

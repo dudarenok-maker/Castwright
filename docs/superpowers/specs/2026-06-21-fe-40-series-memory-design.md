@@ -261,7 +261,8 @@ its keep on a long saga with a large carried cast). Top → bottom:
   books."** Uses `spanBooks` (books actually containing carried characters), **not** raw
   series length — so "all" can't overclaim when a late-series cast turnover means the
   final books carried nothing. A statement, not a footnote. (No dot/bar span device.)
-- Quiet claim line (the dry wit, e.g. *"Twenty-four books. The same cast."*).
+- Quiet claim line (the dry wit, e.g. *"24 books. The same cast."* — numeric, per the
+  copy rule; only the large reveal headline spells numbers out).
 - **Cast wall** — the hero, owning the card's middle with real air: a centered
   theatrical **credits block** of **every carried name** (Castwave-dot separators), no
   "+N more". The full wall *is* the brag — the hero number proves *depth* (the designed
