@@ -41,6 +41,7 @@ import { IconClose } from '../lib/icons';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
 import type { LibraryAuthor, LibraryBook, LibraryBookStatus, LibrarySeries, SeriesMemoryDetail } from '../lib/types';
 import { SeriesMemoryReveal } from '../components/series-memory/series-memory-reveal';
+import { ShareCardModal } from '../components/series-memory/share-card-modal';
 
 type Filter = 'all' | 'in_progress' | 'complete';
 
@@ -190,7 +191,6 @@ export function BookLibraryView({
      the modal itself is Task 10 — for now just capture the state. */
   const [openSM, setOpenSM] = useState<LibrarySeries | null>(null);
   const [shareCard, setShareCard] = useState<SeriesMemoryDetail | null>(null);
-  void shareCard; // Task 13 will render the ShareCardModal from shareCard
   useEffect(() => {
     writeStoredViewMode(viewMode);
   }, [viewMode]);
@@ -439,6 +439,13 @@ export function BookLibraryView({
           bookCount={openSM.seriesMemory.confirmedBookCount}
           onClose={() => setOpenSM(null)}
           onShare={(d) => setShareCard(d)}
+        />
+      )}
+      {shareCard && (
+        <ShareCardModal
+          detail={shareCard}
+          seriesName={openSM?.name ?? ''}
+          onClose={() => setShareCard(null)}
         />
       )}
     </div>
