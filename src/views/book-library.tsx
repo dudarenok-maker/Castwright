@@ -39,7 +39,7 @@ import { filterBooks, libraryActions, selectAllTags, selectPresentLanguages } fr
 import { PrimaryButton } from '../components/primitives';
 import { IconClose } from '../lib/icons';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
-import type { LibraryAuthor, LibraryBook, LibraryBookStatus } from '../lib/types';
+import type { LibraryAuthor, LibraryBook, LibraryBookStatus, LibrarySeries } from '../lib/types';
 
 type Filter = 'all' | 'in_progress' | 'complete';
 
@@ -185,6 +185,10 @@ export function BookLibraryView({
      render). Writes back on every change via the effect below — same
      shape as other persisted UI preferences in the app. */
   const [viewMode, setViewMode] = useState<LibraryViewMode>(() => readStoredViewMode());
+  /* Task 9 (fe-40): holds the series whose memory modal was requested;
+     the modal itself is Task 10 — for now just capture the state. */
+  const [openSM, setOpenSM] = useState<LibrarySeries | null>(null);
+  void openSM; // Task 10 will consume this
   useEffect(() => {
     writeStoredViewMode(viewMode);
   }, [viewMode]);
@@ -397,6 +401,7 @@ export function BookLibraryView({
           onTrySample={onTrySample}
           onStartTour={() => dispatch(startLinearTour())}
           tourCompleted={tourCompleted}
+          onOpenSeriesMemory={(s) => setOpenSM(s)}
         />
       ) : (
         /* Plan 81 (Wave 3, books) — wrap the dense table in an
