@@ -132,7 +132,7 @@ describe('auditionCentroid', () => {
 
     // Should produce a valid centroid (retries succeeded)
     expect(result).not.toBeNull();
-    // All K renders were retried → 2K synth calls total
+    // All K PRIMARY renders were under-floor, so each triggered one retry → 2K synth calls total
     expect(synthCallTexts.length).toBe(CENTROID_K * 2);
     // All retries returned above-floor PCM → K embeds
     expect(embedCalls).toBe(CENTROID_K);
@@ -158,6 +158,25 @@ describe('auditionCentroid', () => {
       throw new Error('sidecar down');
     };
     const embedFn = async (): Promise<Float32Array> => new Float32Array(192);
+
+    const result = await auditionCentroid(CHARACTER, { synthFn, embedFn });
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when embedFn throws mid-loop (sidecar unavailable)', async () => {
+    const synthFn = async (): Promise<SynthesizeOutput> => makeSynthOut(ABOVE_FLOOR_PCM);
+    let embedCallCount = 0;
+    const embedFn = async (): Promise<Float32Array> => {
+      embedCallCount++;
+      // Throw on the 3rd embed call to test mid-loop failure
+      if (embedCallCount === 3) {
+        throw new Error('sidecar embed unavailable');
+      }
+      const v = new Float32Array(192);
+      v[0] = 1;
+      return v;
+    };
 
     const result = await auditionCentroid(CHARACTER, { synthFn, embedFn });
 

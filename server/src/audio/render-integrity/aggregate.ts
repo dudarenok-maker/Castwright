@@ -259,7 +259,7 @@ export async function scoreBook(
         configuredEngineByChar.set(charId, snap.voiceEngine);
       }
       // Collect voice info for Option-B (first chapter's snapshot wins).
-      if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName) {
+      if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
         // Only stochastic engines can reach Option-B — safe to call canonicalModelKeyForEngine
         // with a placeholder request key (unused for local engines).
