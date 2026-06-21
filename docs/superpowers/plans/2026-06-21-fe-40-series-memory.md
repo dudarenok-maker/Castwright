@@ -171,7 +171,9 @@ export interface CarriedCharacter {
   carriedFullSpan: boolean;
 }
 export interface SeriesMemorySummary {
-  carriedCount: number; bespokeCount: number; designedCount: number; spanBooks: number;
+  carriedCount: number; bespokeCount: number; designedCount: number;
+  confirmedBookCount: number; // M for in-app surfaces (chip + reveal) — NOT series.books.length
+  spanBooks: number;          // for exported artifacts (card + JSON)
   perBook: Array<{ bookId: string; index: number; principalCount: number; carriedPresent: number }>;
 }
 export interface SeriesMemoryDetail {
@@ -339,7 +341,9 @@ export interface CarriedCharacter {
   firstBookId: string; lastBookId: string; bookIndices: number[]; carriedFullSpan: boolean;
 }
 export interface SeriesMemorySummary {
-  carriedCount: number; bespokeCount: number; designedCount: number; spanBooks: number;
+  carriedCount: number; bespokeCount: number; designedCount: number;
+  confirmedBookCount: number; // M for in-app surfaces (chip + reveal) — NOT series.books.length
+  spanBooks: number;          // for exported artifacts (card + JSON)
   perBook: Array<{ bookId: string; index: number; principalCount: number; carriedPresent: number }>;
 }
 export interface SeriesMemoryDetail {
@@ -433,7 +437,8 @@ export function summarize(detail: SeriesMemoryDetail): SeriesMemorySummary {
     carriedByIndex.set(i, (carriedByIndex.get(i) ?? 0) + 1);
   return {
     carriedCount: detail.carried.count, bespokeCount: detail.carried.bespokeCount,
-    designedCount: detail.carried.designedCount, spanBooks: detail.series.spanBooks,
+    designedCount: detail.carried.designedCount,
+    confirmedBookCount: detail.series.confirmedBookCount, spanBooks: detail.series.spanBooks,
     perBook: detail.series.books.map((b) => ({ bookId: b.bookId, index: b.index,
       principalCount: b.principalCount, carriedPresent: carriedByIndex.get(b.index) ?? 0 })),
   };
@@ -490,12 +495,12 @@ import { join } from 'node:path';
 let scanLibrary: typeof import('./scan.js').scanLibrary;
 let root: string;
 
-function writeBook(author: string, series: string, title: string, pos: number, chars: unknown[]) {
+function writeBook(author: string, series: string, title: string, pos: number, chars: unknown[], confirmed = true) {
   const dir = join(root, 'books', author, series, title);
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   writeFileSync(join(dir, 'manuscript.txt'), 'x');
   writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({
-    title, author, series, seriesPosition: pos, isStandalone: false, castConfirmed: true,
+    title, author, series, seriesPosition: pos, isStandalone: false, castConfirmed: confirmed,
     manuscriptFile: 'manuscript.txt', chapters: [{ id: 1, title: 'C1', slug: 'c1' }],
     coverGradient: ['#000', '#fff'], createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
   }));
@@ -510,18 +515,20 @@ beforeAll(async () => {
   writeBook('Kell', 'Ninth House', 'One', 1, [c('marrow', 'Marrow', 'vqm'), c('edda', 'Edda', 'vqe'), c('vale', 'Vale', 'vqv')]);
   writeBook('Kell', 'Ninth House', 'Two', 2, [c('marrow', 'Marrow', 'vqm'), c('edda', 'Edda', 'vqe'), c('vale', 'Vale', 'vqv')]);
   writeBook('Kell', 'Ninth House', 'Three', 3, [c('marrow', 'Marrow', 'vqm'), c('edda', 'Edda', 'vqe'), c('vale', 'Vale', 'vqv')]);
+  writeBook('Kell', 'Ninth House', 'Four', 4, [c('marrow', 'Marrow', 'vqm')], /* confirmed */ false); // in-flight — must be excluded
   scanLibrary = (await import('./scan.js')).scanLibrary;
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe('scanLibrary + series-memory', () => {
-  it('attaches a seriesMemory summary to a carried series', async () => {
+  it('attaches a seriesMemory summary built from CONFIRMED books only', async () => {
     const lib = await scanLibrary();
     const series = lib.authors.flatMap((a) => a.series).find((s) => s.name === 'Ninth House')!;
     expect(series.seriesMemory).toBeTruthy();
     expect(series.seriesMemory!.carriedCount).toBe(3);
     expect(series.seriesMemory!.designedCount).toBe(3);
     expect(series.seriesMemory!.spanBooks).toBe(3);
+    expect(series.seriesMemory!.confirmedBookCount).toBe(3); // the 4th (cast_pending) book is excluded
   });
 });
 ```
@@ -547,11 +554,14 @@ Add near the other workspace imports in `scan.ts`. **The path/JSON helpers live 
 import { deriveSeriesMemory, summarize, type SeriesBookInput, type SeriesCharacterInput } from './series-memory.js';
 import { voiceKindFor } from './voice-kind.js';
 import { describeVoice } from '../tts/voice-mapping.js';
-import { castJsonPath, readJson, bookDir } from './paths.js'; // use the real exported names from paths.ts
+import { castJsonPath, readJson, bookDirByDisplay } from './paths.js'; // verified export names
 const PRINCIPAL_LINE_FLOOR = 5;
+// Verified confirmed-cast mapping (LibraryBook has no `castConfirmed`, only `status`):
+// castConfirmed === true  ⟺  status === 'generating' || status === 'complete'.
+const isConfirmed = (b: LibraryBook) => b.status === 'generating' || b.status === 'complete';
 ```
 
-**Define `buildSeriesInputs` as an exported function** (Task 4's route reuses it — it must be a real export, not inline). It maps the series' confirmed books → `SeriesBookInput[]` with library-sort indices:
+**Two functions — avoid the double-scan.** `scanLibrary` already scanned every book (state.json + cast.json + per-chapter segments). Re-scanning per series would double the library-load cost. So the scan path reuses the books it *already has* and only does the one unavoidable extra read (scanBook discards the parsed cast — verified — so a second cast.json read per book is required, but NOT a re-scan). The route, which has no pre-scanned books, scans just its one series.
 
 ```typescript
 interface CastCharForMemory {
@@ -564,22 +574,20 @@ interface CastCharForMemory {
 
 async function readCastForMemory(author: string, series: string, title: string): Promise<CastCharForMemory[]> {
   try {
-    const json = await readJson<{ characters?: CastCharForMemory[] }>(castJsonPath(bookDir(author, series, title)));
+    const json = await readJson<{ characters?: CastCharForMemory[] }>(castJsonPath(bookDirByDisplay(author, series, title)));
     return json?.characters ?? [];
   } catch { return []; }
 }
 
-/** Confirmed-only, library-sorted SeriesBookInput[] for one series. Exported so
-    the detail route (Task 4) reuses the exact same assembly as the library scan. */
-export async function buildSeriesInputs(author: string, series: string): Promise<SeriesBookInput[]> {
-  // Reuse scanBook to get each book's metadata+status, then keep confirmed only,
-  // sort into library order, and read each cast.json once.
-  const books = (await scanSeriesBooks(author, series)) // small helper: maps listDirs(titles) → scanBook, filters nulls
-    .filter((b) => b.status === 'complete' || b.status === 'generating'); // castConfirmed statuses (NOT not_analysed/analysing/cast_pending)
-  books.sort((a, b) => (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title));
+/** Map ALREADY-SCANNED books → confirmed-only, library-indexed SeriesBookInput[].
+    Reads each confirmed book's cast.json once; does NOT re-scan. Used by both the
+    library scan (passes its `books`) and the route (passes freshly-scanned books). */
+export async function buildInputsFromBooks(books: LibraryBook[]): Promise<SeriesBookInput[]> {
+  const confirmed = books.filter(isConfirmed)
+    .sort((a, b) => (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title));
   const inputs: SeriesBookInput[] = [];
-  for (let i = 0; i < books.length; i++) {
-    const b = books[i];
+  for (let i = 0; i < confirmed.length; i++) {
+    const b = confirmed[i];
     const cast = await readCastForMemory(b.author, b.series, b.title);
     inputs.push({
       bookId: b.bookId, index: i + 1, title: b.title,
@@ -600,14 +608,22 @@ export async function buildSeriesInputs(author: string, series: string): Promise
   }
   return inputs;
 }
+
+/** Route-only: scan ONE series' books fresh, then build inputs. (The reveal is a
+    single user-initiated open — a one-series scan is acceptable; the library-load
+    path uses buildInputsFromBooks to avoid re-scanning.) */
+export async function buildSeriesInputs(author: string, series: string): Promise<SeriesBookInput[]> {
+  const books = await scanSeriesBooks(author, series); // small helper: listDirs(titles under author/series) → scanBook → filter nulls
+  return buildInputsFromBooks(books);
+}
 ```
 
-> **Confirm two things in `scan.ts`/`paths.ts`:** (1) which statuses mean `castConfirmed === true` — the scan derives `status` from `castConfirmed` (a `cast_pending` book is NOT confirmed); filter to the confirmed set, NOT by a hardcoded list if a cleaner `castConfirmed` signal is reachable. (2) Factor the per-series book listing the existing `scanLibrary` loop already does into a small `scanSeriesBooks(author, series)` helper so `buildSeriesInputs` and the main loop share it (DRY).
+> Factor the per-series title-listing the existing `scanLibrary` loop already does into a `scanSeriesBooks(author, series)` helper so the loop and the route share it (DRY). `isConfirmed` is the verified status mapping (top of file).
 
-Then, in `scanLibrary`'s series loop, attach the summary:
+Then, in `scanLibrary`'s series loop (it already holds the sorted `books` for the series), attach the summary using the **no-re-scan** path:
 
 ```typescript
-const inputs = await buildSeriesInputs(authorName, seriesName);
+const inputs = await buildInputsFromBooks(books);   // reuses already-scanned books
 const detail = deriveSeriesMemory(inputs);
 seriesList.push({ name: seriesName, books, seriesMemory: detail ? summarize(detail) : null });
 ```
@@ -741,11 +757,12 @@ Under `components.schemas`, add:
 ```yaml
     SeriesMemorySummary:
       type: object
-      required: [carriedCount, bespokeCount, designedCount, spanBooks, perBook]
+      required: [carriedCount, bespokeCount, designedCount, confirmedBookCount, spanBooks, perBook]
       properties:
         carriedCount: { type: integer }
         bespokeCount: { type: integer }
         designedCount: { type: integer }
+        confirmedBookCount: { type: integer }
         spanBooks: { type: integer }
         perBook:
           type: array
@@ -845,7 +862,9 @@ Expected: `src/lib/api-types.ts` updates with the new schemas; no errors.
 ```typescript
 // src/lib/types.ts — add near LibrarySeries (line 595)
 export interface SeriesMemorySummary {
-  carriedCount: number; bespokeCount: number; designedCount: number; spanBooks: number;
+  carriedCount: number; bespokeCount: number; designedCount: number;
+  confirmedBookCount: number; // M for in-app surfaces (chip + reveal) — NOT series.books.length
+  spanBooks: number;          // for exported artifacts (card + JSON)
   perBook: Array<{ bookId: string; index: number; principalCount: number; carriedPresent: number }>;
 }
 export interface CarriedCharacter {
@@ -984,7 +1003,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SeriesMemoryChip } from './series-memory-chip';
 
-const summary = { carriedCount: 9, bespokeCount: 7, designedCount: 6, spanBooks: 12, perBook: [] };
+const summary = { carriedCount: 9, bespokeCount: 7, designedCount: 6, confirmedBookCount: 12, spanBooks: 12, perBook: [] };
 
 describe('SeriesMemoryChip', () => {
   it('renders the warm carried-character label and book count', () => {
@@ -1064,7 +1083,7 @@ import { render, screen } from '@testing-library/react';
 import { SeriesSparkline } from './series-sparkline';
 
 const summary = {
-  carriedCount: 9, bespokeCount: 7, designedCount: 6, spanBooks: 3,
+  carriedCount: 9, bespokeCount: 7, designedCount: 6, confirmedBookCount: 3, spanBooks: 3,
   perBook: [
     { bookId: 'b1', index: 1, principalCount: 12, carriedPresent: 8 },
     { bookId: 'b2', index: 2, principalCount: 14, carriedPresent: 9 },
@@ -1155,8 +1174,8 @@ git commit -m "feat(frontend): SeriesSparkline (per-book carried-vs-principals)"
 ## Task 9: Wire chip + sparkline into the library series header
 
 **Files:**
-- Modify: `src/components/library/library-grid.tsx:90-99` (the series header row)
-- Test: `src/components/library/library-grid.test.tsx` (add cases — confirm the file exists; else `book-library.test.tsx`)
+- Modify: `src/components/library/library-grid.tsx:90-99` (the series header row) + add `onOpenSeriesMemory?` to its `Props` (line 41-64)
+- Create: `src/components/library/library-grid.test.tsx` (does not exist yet — build it from scratch, helpers included)
 
 **Interfaces:**
 - Consumes: `SeriesMemoryChip` (Task 7), `SeriesSparkline` (Task 8), `series.seriesMemory`.
@@ -1168,32 +1187,50 @@ git commit -m "feat(frontend): SeriesSparkline (per-book carried-vs-principals)"
 // add to src/components/library/library-grid.test.tsx
 // `renderGrid` below: reuse this file's EXISTING render helper + book factory
 // if present; otherwise build the minimal authors prop inline as shown.
-const sm = { carriedCount: 5, bespokeCount: 4, designedCount: 4, spanBooks: 3,
+const sm = { carriedCount: 5, bespokeCount: 4, designedCount: 4, confirmedBookCount: 3, spanBooks: 3,
   perBook: [
     { bookId: 'b1', index: 1, principalCount: 8, carriedPresent: 5 },
     { bookId: 'b2', index: 2, principalCount: 9, carriedPresent: 5 },
     { bookId: 'b3', index: 3, principalCount: 9, carriedPresent: 5 },
   ] };
-const authorsWith = (seriesMemory: typeof sm | undefined) => [{
+const authorsWith = (seriesMemory: typeof sm | undefined): LibraryAuthor[] => [{
   name: 'A. Kell',
-  series: [{ name: 'The Ninth House', seriesMemory, books: [
-    makeBook({ bookId: 'b1', title: 'One', series: 'The Ninth House' }), // file's existing book factory
-  ] }],
+  series: [{ name: 'The Ninth House', seriesMemory, books: [makeBook('b1', 'One')] }],
 }];
 
 it('renders the series-memory chip + sparkline when seriesMemory is present', () => {
-  renderGrid({ authors: authorsWith(sm) }); // file's existing render wrapper for LibraryGrid props
+  renderGrid(authorsWith(sm));
   expect(screen.getByTestId('series-memory-chip')).toBeInTheDocument();
   expect(screen.getByTestId('series-sparkline')).toBeInTheDocument();
 });
 it('renders neither when seriesMemory is absent', () => {
-  renderGrid({ authors: authorsWith(undefined) });
+  renderGrid(authorsWith(undefined));
   expect(screen.queryByTestId('series-memory-chip')).toBeNull();
   expect(screen.queryByTestId('series-sparkline')).toBeNull();
 });
 ```
 
-> Open `library-grid.test.tsx` first and reuse its existing `makeBook`/render helper (the names above mirror the common pattern); if the file builds props differently, adapt the wrapper — but the four assertions are the binding contract, not placeholders.
+> **`library-grid.test.tsx` does NOT exist — create it from scratch** (verified). There is no `makeBook`/`renderGrid` helper to reuse; build minimal ones at the top of the new file, modelled on `library-chrome.test.tsx`'s `renderChrome` pattern. `LibraryGrid`'s required props are in its `Props` interface (`library-grid.tsx:41-64`) — `renderGrid(authors)` must supply them all (most are `vi.fn()` no-ops):
+
+```tsx
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { LibraryGrid } from './library-grid';
+import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+
+const makeBook = (bookId: string, title: string): LibraryBook => ({
+  bookId, title, author: 'A. Kell', series: 'The Ninth House', seriesPosition: 1,
+  isStandalone: false, status: 'complete', chapterCount: 10, completedChapters: 10,
+  characterCount: 8, voiceCount: 8, lastWorkedOn: 'today', coverGradient: ['#000', '#fff'], tags: [],
+});
+function renderGrid(authors: LibraryAuthor[]) {
+  return render(<LibraryGrid loaded isLibraryEmpty={false} authors={authors} activeBookId={null}
+    onOpenBook={vi.fn()} onDeleteBook={vi.fn()} onReparseBook={vi.fn()} onReplaceManuscript={vi.fn()}
+    onEditBook={vi.fn()} onStartNew={vi.fn()} onOpenSeriesMemory={vi.fn()} />);
+}
+```
+
+> Confirm the exact `Props` against `library-grid.tsx:41-64` and add any required prop the interface gained since; the four assertions above are the binding contract.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1209,7 +1246,7 @@ Expected: FAIL — chip not rendered.
   <h3 className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink/55">{series.name}</h3>
   <div className="flex items-center gap-2.5">
     {series.seriesMemory && (
-      <SeriesMemoryChip summary={series.seriesMemory} bookCount={series.books.length}
+      <SeriesMemoryChip summary={series.seriesMemory} bookCount={series.seriesMemory.confirmedBookCount}
         onOpen={() => onOpenSeriesMemory?.(series)} />
     )}
     <span className="text-[11px] text-ink/40">{series.books.length} {series.books.length === 1 ? 'book' : 'books'}</span>
@@ -1278,7 +1315,7 @@ describe('SeriesMemoryReveal', () => {
     expect(screen.getByText(/from Bk 2/)).toBeInTheDocument();   // Sela late joiner
     expect(screen.queryByText(/Kokoro|Qwen/)).toBeNull();        // no engine names
     expect(screen.queryByText(/bf_|am_|af_/)).toBeNull();        // no catalogue slugs (P2-3)
-    expect(screen.getByLabelText('in books 1–3')).toBeInTheDocument(); // range-collapsed aria (P0-5)
+    expect(screen.getByLabelText('in books 2–3')).toBeInTheDocument(); // Sela's range-collapsed aria, unique (P0-5)
   });
   it('uses numerals (not spelled words) in the headline above twenty', async () => {
     render(<SeriesMemoryReveal author="Kell" series="Ninth House" bookCount={25} onClose={() => {}} onShare={() => {}} fetcher={async () => detail} />);
@@ -1319,6 +1356,15 @@ function rangeLabel(indices: number[]): string {
     out.push(i === j ? `${s[i]}` : `${s[i]}–${s[j]}`); i = j + 1;
   }
   return out.join(', ');
+}
+
+// Blob-download the already-fetched detail (works in mock mode; no endpoint round-trip).
+function exportJson(detail: SeriesMemoryDetail, series: string) {
+  const blob = new Blob([JSON.stringify(detail, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${series}-series-memory.json`; a.click();
+  URL.revokeObjectURL(url);
 }
 
 function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }) {
@@ -1364,7 +1410,7 @@ export function SeriesMemoryReveal({ author, series, bookCount, onClose, onShare
             {detail.carried.characters.map((c) => <CarriedRow key={c.voiceId + c.character} c={c} bookCount={bookCount} />)}
             <div className="mt-5 flex justify-between items-center">
               <button onClick={() => onShare(detail)} className="rounded-full px-5 py-2.5 font-semibold text-ink bg-gradient-to-r from-magenta to-peach">Share this cast</button>
-              <a href={`/api/library/series-memory?author=${encodeURIComponent(author)}&series=${encodeURIComponent(series)}`} download={`${series}-series-memory.json`} className="text-xs text-cream/60 underline">Export data (.json)</a>
+              <button onClick={() => exportJson(detail, series)} className="text-xs text-cream/60 underline">Export data (.json)</button>
             </div>
           </>
         )}
@@ -1381,7 +1427,7 @@ export function SeriesMemoryReveal({ author, series, bookCount, onClose, onShare
 Run: `npx vitest run src/components/series-memory/series-memory-reveal.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Wire into the orchestrator** — in the component that renders `<LibraryGrid>`, hold `const [openSM, setOpenSM] = useState<LibrarySeries | null>(null)`, pass `onOpenSeriesMemory={(s) => setOpenSM(s)}`, and render `{openSM && <SeriesMemoryReveal author={openSM.books[0].author} series={openSM.name} bookCount={openSM.books.length} onClose={() => setOpenSM(null)} onShare={(d) => setShareCard(d)} />}` (shareCard state added in Task 12).
+- [ ] **Step 5: Wire into the orchestrator** (`src/views/book-library.tsx`) — hold `const [openSM, setOpenSM] = useState<LibrarySeries | null>(null)`, pass `onOpenSeriesMemory={(s) => setOpenSM(s)}` to `<LibraryGrid>` (:385), and render `{openSM?.seriesMemory && <SeriesMemoryReveal author={openSM.books[0].author} series={openSM.name} bookCount={openSM.seriesMemory.confirmedBookCount} onClose={() => setOpenSM(null)} onShare={(d) => setShareCard(d)} />}` (shareCard state added in Task 12). **`bookCount` = `confirmedBookCount`** (not `openSM.books.length`, which includes in-flight books and would misalign the marker row).
 
 - [ ] **Step 6: Commit**
 
@@ -1400,7 +1446,20 @@ git commit -m "feat(frontend): SeriesMemoryReveal modal + orchestrator wiring"
 
 - [ ] **Step 1: Add the summary to a mock series and the detail map**
 
-Find the mock library fixture (search `MOCK_LIBRARY` / the canned `authors` tree). Attach a `seriesMemory` summary to one multi-book series and add:
+Find the mock library fixture (search `MOCK_LIBRARY` / the canned `authors` tree). Attach this `seriesMemory` **summary** (above threshold, so the chip renders in the e2e) to one multi-book series — note `confirmedBookCount`:
+
+```typescript
+seriesMemory: {
+  carriedCount: 4, bespokeCount: 3, designedCount: 3, confirmedBookCount: 3, spanBooks: 3,
+  perBook: [
+    { bookId: 'b1', index: 1, principalCount: 8, carriedPresent: 3 },
+    { bookId: 'b2', index: 2, principalCount: 9, carriedPresent: 4 },
+    { bookId: 'b3', index: 3, principalCount: 9, carriedPresent: 4 },
+  ],
+}
+```
+
+And add the detail map the reveal fetches:
 
 ```typescript
 // src/mocks/series-memory.ts
@@ -1471,8 +1530,7 @@ describe('SeriesShareCard', () => {
   it('leads on the designed figure, the claim line, and mandatory branding', () => {
     render(<SeriesShareCard detail={detail} seriesName="The Ninth House" owner="Alex" />);
     const card = screen.getByTestId('series-share-card');
-    expect(within(card).getByText(/39/)).toBeInTheDocument();
-    expect(within(card).getByText(/designed voices/)).toBeInTheDocument();
+    expect(within(card).getByTestId('card-hero-number')).toHaveTextContent('39 designed voices'); // not the wall's "Name39"
     expect(within(card).getByText(/kept true across all 12 books/)).toBeInTheDocument();
     expect(within(card).getByText('12 books. The same cast.')).toBeInTheDocument(); // locked claim line
     expect(within(card).getByText('castwright.ai')).toBeInTheDocument();            // non-removable branding
@@ -1528,7 +1586,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
       className="aspect-[4/5] w-full max-w-sm mx-auto rounded-2xl bg-[#1b1714] text-cream p-7 flex flex-col">
       <div className="flex items-center gap-1.5 font-semibold"><CastwaveGlyph className="w-3.5 h-3.5 text-magenta" /> Castwright</div>
       <p className="text-[10px] uppercase tracking-[0.2em] text-magenta font-semibold mt-4">Series memory · {seriesName}</p>
-      <div className="font-serif text-5xl font-bold mt-1">{heroNum} <span className="text-xl text-cream/70 font-normal">{heroLabel}</span></div>
+      <div data-testid="card-hero-number" className="font-serif text-5xl font-bold mt-1">{heroNum} <span className="text-xl text-cream/70 font-normal">{heroLabel}</span></div>
       <p className="font-serif text-peach text-lg font-semibold">kept true across all {detail.series.spanBooks} books</p>
       <p className="text-cream/70 text-sm mt-1">{detail.series.spanBooks} books. The same cast.</p>
       <div className="flex-1 flex flex-wrap content-center justify-center items-center gap-x-2 gap-y-1 my-4 text-center">
@@ -1741,4 +1799,9 @@ git commit -m "docs(docs): fe-40 series-memory regression plan + index; close ba
 
 The plan was revised after an adversarial review (algorithm / codebase-fit / spec-coverage). Fixes folded in above: the derivation now walks `matchedFrom` **backward** from chain tails (the forward walk produced zero carried); chain ordering is by `book.index` (latest = canonical name); `deriveSeriesMemory` contract is **confirmed-only, 1..M**; `describeVoice` gets an **export** (T3); path helpers come from **`paths.js`** not scan.ts; **`buildSeriesInputs`** is a real export (T3) consumed by T4; the OpenAPI nullable uses **3.0.3 `allOf`+`nullable`** (not `type: 'null'`); the orchestrator is **`src/views/book-library.tsx`**; route tests build the app **inline** (no `make-app` util); the card renders the **locked claim line** + a **Castwave-dot** separator (not `✦`); the sparkline **clamps** so carried can't overflow; the reveal aria is **range-collapsed**. New tests added: mid-series gap, renamed-via-alias single row, chip==reveal invariant, bespoke sort order, `spanBooks<M` card, owner fallback, num-to-words cap, two-bucket partition + overflow, no-slug.
 
-**One test still owed (add when executing T3):** a confirmed-only exclusion case — write a 4th book with `castConfirmed: false` into the temp workspace and assert `series.seriesMemory.spanBooks` and `carriedCount` are unchanged (the `cast_pending` book contributes nothing).
+**Round 2 (verified again against source, fixing the round-1 fixes):**
+- **Double-scan removed.** `buildSeriesInputs` re-ran `scanBook` for every book on the library path, doubling library-load cost. Split into `buildInputsFromBooks(books)` (scan path — reuses already-scanned books, one cheap cast.json read each; `scanBook` discards the cast, so one extra read is unavoidable but a re-scan isn't) and `buildSeriesInputs(author, series)` (route only).
+- **`bookDirByDisplay`** is the real path-builder name (not `bookDir`). `isConfirmed = status === 'generating' || 'complete'` is the verified `castConfirmed` mapping (`LibraryBook` has no `castConfirmed` field).
+- **Book-count coherence.** Added `confirmedBookCount` to the summary; chip + reveal + marker-row use it (was `series.books.length`, which counts in-flight books and misaligned the markers). Propagated through OpenAPI + all fixtures.
+- **`library-grid.test.tsx` does not exist** — Task 9 now creates it from scratch with its own `makeBook`/`renderGrid` helpers (no helper to reuse).
+- Fixed two of my own new tests that would throw on non-unique matches (reveal aria → Sela's unique "2–3"; card hero number → `data-testid`, not `/39/` which also matched a wall name). Confirmed-only exclusion test added to T3. Reveal "Export data" now Blob-downloads the in-hand detail (works in mock mode) instead of an endpoint href.
