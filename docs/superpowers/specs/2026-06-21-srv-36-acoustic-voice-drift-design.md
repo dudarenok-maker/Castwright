@@ -95,30 +95,72 @@ measured on *this product's own TTS output*):
 
 A throwaway harness (committed under `scripts/` or an opt-in sidecar test) that
 embeds clips from the canonical fixture renders and reports distributions. **No
-production code, no settings, no events.** ~2–3 days. Its findings note
-supersedes Phases 1–2 wherever reality differs.
+production code, no settings, no events.** ~3–4 days (the injection harness, §2.0,
+is real work). Its findings note supersedes Phases 1–2 wherever reality differs.
+
+### 2.0 Defect injection — what is actually producible (verified against synth code)
+
+E1's gate is only as good as the defects it can produce. Verified against the
+synth path: **there is no seed surface** (`Engine.synthesize` takes no seed),
+**Kokoro is deterministic ONNX** (never stochastically glitches), and **Qwen is
+explicitly unseeded** — so a "bad-seed glitch" is not reproducible, and
+deterministic "voice bleed" reduces to synthesising a line with another
+character's prompt, i.e. the different-character swap §0.1 rejects as redundant.
+E1 therefore uses only **deterministically producible** same-config defects:
+
+| Class | Mechanism | Tier |
+|---|---|---|
+| **Silent fallback** | force `applyQwenFallback` (Node route swap, `synthesise-chapter.ts:718`) so the line renders in Kokoro while the reference stayed Qwen-clean | gross + subtle (fallback to a near vs far Kokoro voice) |
+| **Wrong preset** | render the line with a different preset than the reference — **stratified**: same-gender same-engine near-miss (`af_*`, subtle) AND distant (gross) | subtle + gross |
+| **Constructed garble** | deterministic post-synth corruption of a clean render: truncate / clip / time-reverse a span / splice a known-bad recorded fragment | gross |
+
+**Voice bleed is observational-only**, not injected: it is an emergent
+non-deterministic artifact of batched Qwen forwards (the prompt-flatten hazard
+near `main.py:1734`). E1 does **not** depend on bleed for its go/no-go; any real
+occurrences harvested from existing renders are reported as a bonus, never as the
+gate. This is stated so the timeline and the gate aren't built on a defect we
+can't summon.
 
 | Exp | Question (risk) | What it gates |
 |---|---|---|
-| **E1 — residual value** | Inject *same-config, same-engine* defects through the **real synth path** — voice bleed, known-bad-seed glitches, a Qwen→Kokoro fallback whose reference render stayed clean — and measure what fraction land **beyond** the candidate cutoff vs clean same-config renders. (R1) | **The go/no-go.** v1 ships only if acoustic flags ≥ a stated fraction of same-config defects config-drift cannot see. |
+| **E1 — residual value** | Run the §2.0 injectable defects through the real synth path and measure, **per tier (gross / subtle)**, what fraction land **beyond** the candidate cutoff vs clean same-config renders. (R1) | **The go/no-go** (§2.1). |
 | **E2 — separability & in-domain EER** | intra-speaker spread (same voice, 50 lines) vs inter-speaker; graduated set (correct → prosody-bumped → wrong-character); measured in-domain EER; same-gender same-engine preset near-miss (`af_*`). (R2) | Whether wrong-preset/bleed is even separable; which positive pairs are fair; the EER cutoffs anchor to. |
 | **E3 — clip length & coverage** | embed the same line truncated 0.5/1/2/3/5 s → cosine variance vs length; AND the **fraction of the fixture's character (non-narrator) segments below the candidate floor**. (R3) | The min scorable **query** duration; the realistic checked-coverage %; whether short-line **windowing** is mandatory. |
 | **E4 — emotion shift** (informs Phase 2) | one character neutral/angry/sad/whisper; pairwise cosine vs cross-character. (R4) | Phase-2: is emotion-matching needed; is a global consistency centroid valid. |
 
 ### 2.1 Go condition (Phase 1 proceeds)
-E1 residual-value fraction ≥ bar (proposed ≥ 60% of injected same-config defects
-flagged at a cutoff with ≤ a stated clean-render false-positive rate), AND E3
-shows checked-coverage of character segments above a stated bar (with windowing
-if needed).
+The bar is **anchored to a measurement, not a round number, and judged on the
+subtle tier** (the gross tier clearing proves nothing — gross fallback/distant-
+preset are trivially separable and near the redundant boundary). Go requires:
+
+- the **subtle-tier** defects (near-miss preset, fallback-to-near-voice) separate
+  from clean same-config renders by a margin **clearly above the same-voice
+  intra-speaker spread measured in E2** — i.e. a real cluster gap, not noise;
+  AND
+- a clean-render false-positive rate at that cutoff ≤ a stated ceiling; AND
+- E3 character-segment checked-coverage above a stated bar (windowing if needed).
+
+E1 reports the flagged fraction **per tier**; a high *pooled* number carried by
+the gross tier alone does **not** clear the gate.
 
 ### 2.2 No-go (srv-36 is abandoned — this is a real outcome, not a descope)
-If E1's residual value is below bar (acoustic only separates different
-characters), srv-36 closes **wont-fix-acoustic**: #665 reverts to "the existing
-config-drift comparator IS the drift signal; an acoustic layer adds nothing
-over it," and fs-51 ships on its existing signals (§0.2) with **no** voice-match
-row. The findings note's recommendation field is exactly one of
-`{ go, no-go }` — there is no "descope to wrong-speaker," because that product
-is the redundant one.
+If the subtle tier does not separate (acoustic only catches the gross / different-
+character case config-drift already covers), srv-36 closes **wont-fix-acoustic**:
+#665 reverts to "the existing config-drift comparator IS the drift signal; an
+acoustic layer adds nothing over it," and fs-51 ships on its existing signals
+(§0.2) with **no** voice-match row. The findings note's recommendation field is
+exactly one of `{ go, no-go }` — there is no "descope to wrong-speaker," because
+that product is the redundant one.
+
+### 2.3 #665's literal ask, resolved in BOTH branches
+#665 literally asks to *calibrate the comparator's thresholds*. The reframe
+builds a new acoustic check instead, so the **config-drift tone cuts
+(`TONE_MODERATE = 25` / `TONE_SEVERE = 40`) stay uncalibrated under both go and
+no-go.** That loop is closed explicitly, not silently dropped: those cuts gate an
+**advisory-only, low-stakes** signal (config-drift never blocks `done`), so this
+spec **declares them good-enough-as-placeholder and retires the config-threshold
+calibration** — or, if the user prefers, re-files it as a separate low-priority
+chore. Either way #665 does not leave a dangling calibration ask. Recorded in §8.
 
 ## 3. Phase 1 — v1 render-integrity check (only if Phase 0 = go)
 
@@ -188,6 +230,12 @@ reference. The duration floor (E3 sets the number, ~3 s):
   by construction — the loop runs **at most once at full-corpus** and is never
   re-attempted (an `evidence-exhausted` marker is part of the reference cache
   key so it doesn't re-render across QA passes).
+- **Minor-character blind spot — make it VISIBLE (F5/P5).** A
+  `reference-too-short` character (typically a minor one with little dialogue) is
+  entirely unchecked — exactly where wrong-voice / bleed is *least* likely to get
+  human attention. So fs-51's report must **name** it ("N characters unchecked:
+  insufficient reference audio — *A, B, C*"), never let the QA summary read
+  "all clear" while silently skipping the riskiest cohort.
 - Reference embedding cached, keyed by voice-config hash. A never-auditioned
   character has its sample minted on first QA pass.
 - **Documented limitation (circularity):** the reference is itself a render from
@@ -209,7 +257,12 @@ reference. The duration floor (E3 sets the number, ~3 s):
   the E3 floor is **not scored** → `'inconclusive'`, never a noisy cosine
   (mirrors ASR's `minChars`→`inconclusive`). If E3 shows coverage below bar,
   consecutive same-speaker short lines are **windowed** into one ≥-floor query
-  before embedding (required mitigation, not optional).
+  before embedding (required mitigation, not optional). A windowed query mixes
+  content (and possibly emotions); that is fine for a **timbre/identity** check
+  (ECAPA is timbre-driven) but **windowed segments are excluded from any Phase-2
+  consistency/per-emotion analysis** (E4/R4) — averaging across the emotion axis
+  is precisely what Phase 2 must not do. Flag windowed queries so the two
+  mechanisms can't quietly contradict.
 - **Storage — sibling file (F6).** 192 floats/segment (~1.5–2 KB JSON each)
   would bloat `<slug>.segments.json` by ~15 MB on a big book — and that file is
   read **whole** on hot paths that ignore embeddings (`revisions.ts:128`,
@@ -288,6 +341,10 @@ Separate signals, not a replacement; `revisions.ts` untouched:
       of exactly `{ go | no-go }`.
 - [ ] On **no-go**: #665 closed wont-fix-acoustic; this spec marked `superseded`;
       fs-51 confirmed unaffected (it never depended on srv-36).
+- [ ] **#665's literal ask closed (§2.3) regardless of branch:** the config-drift
+      tone cuts (`25`/`40`) are explicitly retired as good-enough-placeholder
+      (advisory-only signal) or re-filed as a separate low-priority chore — not
+      left dangling.
 
 **Phase 1 (only if go):**
 - [ ] `SpeakerEngine` + `/embed`, CPU-only; sidecar pytest; CPU latency
@@ -321,6 +378,9 @@ is chosen.
 - Keep its Should placement (Could→Should in the 2026-06-21 triage). **Update
   the fs-51 (#973) note from "blocked on srv-36" to "optionally enriched by
   srv-36"** — fs-51 is not blocked.
+- **Close #665's original calibration ask (§2.3):** decide retire-as-placeholder
+  vs re-file the config-drift tone-cut (`25`/`40`) calibration as its own chore,
+  and record that decision on the issue so the reframe doesn't orphan it.
 
 ## Ship notes
 
