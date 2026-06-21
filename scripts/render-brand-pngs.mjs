@@ -3,7 +3,8 @@
 //
 //   node scripts/render-brand-pngs.mjs
 //
-// Re-run whenever brand/castwright-icon.svg or brand/castwright-og.svg change.
+// Re-run whenever brand/identity/logo/castwright-icon.svg or
+// brand/identity/logo/castwright-og.svg change.
 //
 // NOTE (fe-37): the small-size favicons — public/favicon-16.png, favicon-32.png
 // and favicon.svg — are HAND-DESIGNED (committed in public/, per the ≤32px glyph
@@ -15,8 +16,8 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
-const ICON = resolve(root, 'brand/castwright-icon.svg');
-const OG = resolve(root, 'brand/castwright-og.svg');
+const ICON = resolve(root, 'brand/identity/logo/castwright-icon.svg');
+const OG = resolve(root, 'brand/identity/logo/castwright-og.svg');
 
 // out, src, width, height, omitBackground (transparent outside the artwork)
 export const JOBS = [

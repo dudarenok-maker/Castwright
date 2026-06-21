@@ -24,9 +24,28 @@ Backlog-item issue AND add the thin row here linking it, in the same round.
 
 ---
 
-## Must — blocks v1 ship or hurts existing users
+## Must — the beta → full-product spine (marketability & discoverability)
 
-### Voice & cast
+_Reframed 2026-06-21 (triage record: [`docs/superpowers/specs/2026-06-21-oss-gap-backlog-triage-design.md`](superpowers/specs/2026-06-21-oss-gap-backlog-triage-design.md))._
+Must no longer means "blocks v1 ship or hurts existing beta users" — it now means
+**what moves Castwright from beta to a sellable full product**: the moats made
+visible/provable, the parity that wins comparison shoppers, and the
+adoption-friction removers that widen the funnel. Ranked top = highest priority;
+within each sub-group, ship-now-unblocked work leads.
+
+### Differentiation — the moats, made marketable
+
+#### `fe-40` — Surface & prove series memory ([#972](https://github.com/dudarenok-maker/Castwright/issues/972))
+
+- _What:_ Make the series-memory moat **visible + provable**: a "same voice, book 1 → book N" indicator in the series/library view + an exportable series-consistency summary. Surfaces data the cross-book reuse machinery already holds.
+- _Benefit (user / strategic):_ our top **unclaimed** moat is near-invisible in UI — surfacing + exporting it gives marketing a provable claim. A cheap, fast amplifier that ships ahead of `fs-38`.
+_Full detail + acceptance:_ [#972](https://github.com/dudarenok-maker/Castwright/issues/972).
+
+#### `fs-51` — Per-book performance-QA report ([#973](https://github.com/dudarenok-maker/Castwright/issues/973))
+
+- _What:_ Turn the existing acoustic + ASR + drift gate into a visible, exportable per-book QA summary ("N lines re-recorded, M transcript-verified, 0 drift"). Aggregates signals the pipeline already produces.
+- _Benefit (user / strategic):_ **proof, not promises** — epub2tts now does ASR-matching; a legible acoustic+ASR+drift report defends the QA moat. _Depends on `srv-36` (drift calibration) for trustworthy drift figures._
+_Full detail + acceptance:_ [#973](https://github.com/dudarenok-maker/Castwright/issues/973).
 
 #### `fs-38` — Voices library: standalone voice authoring + voice cloning (designed & cloned) ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
 
@@ -34,10 +53,42 @@ Backlog-item issue AND add the thin row here linking it, in the same round.
 - _Benefit (user):_ build a personal stable of named narrators — designed _or_ in your own / a family voice — to cast across the whole catalogue. The most personal, gift-able feature (a bedtime story in your own voice, or your kid as the hero); pays off the _"even in your own voice"_ promise. Pairs with `fe-12` (bulk library ops).
 _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-cloning.md) · [#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624) (folds in `fs-12` [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419)).
 
-### Onboarding, install & updates
+### Reach & perception — win the comparison
 
-_The onboarding & first-run cluster below was promoted from Could to Must on 2026-06-08 —
-first-run friction is the biggest adoption blocker for non-technical deployers._
+#### `fs-50` — Language packs: ES/FR/DE/ZH/JA end-to-end ([#974](https://github.com/dudarenok-maker/Castwright/issues/974))
+
+- _What:_ Stand up ES/FR/DE/ZH/JA end-to-end on the engines that already support them (Kokoro/Qwen3-TTS) — incremental config + per-language listener-validation, not new architecture (framework exists post-`fs-2`).
+- _Benefit (user / strategic):_ the **biggest single perception gap** — rivals market 1,158 languages, we show 2. Pairs with `fs-41` (auto-detect).
+_Full detail + acceptance:_ [#974](https://github.com/dudarenok-maker/Castwright/issues/974).
+
+#### `fs-52` — Caption/SRT export (.srt/.vtt; line/sentence/word) ([#975](https://github.com/dudarenok-maker/Castwright/issues/975))
+
+- _What:_ Emit `.srt`/`.vtt` (line + sentence + word modes) from the per-sentence alignment we already compute.
+- _Benefit (user / strategic):_ a rival's **headline feature**, near-free for us; also **feeds demo/social clips** (an awareness lever, not just parity).
+_Full detail + acceptance:_ [#975](https://github.com/dudarenok-maker/Castwright/issues/975).
+
+_`fs-2` (multi-language, Russian first) shipped — the engine half via
+[plan 108](features/108-qwen-coexistence.md), the language half via
+[plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
+polish (`fe-16`) shipped via [plan 165](features/165-fe-15-16-language-and-revision-e2e.md).
+`fs-50` extends that framework to five more languages; the remaining deferred
+follow-up is `fs-14` (Russian UI localization, now under Should → Ingest & languages)._
+
+### Adoption — widen the funnel (ship-now first)
+
+_Adoption-friction items (the onboarding & install cluster was promoted to Must on
+2026-06-08 — first-run friction is the biggest adoption blocker for non-technical
+deployers). `ops-2` leads because it's the only one with **no licensing/cert
+dependency**; `ops-1`/`ops-15`/`app-12` wait on cert + Apple-account procurement
+(the long pole, tracked privately)._
+
+#### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
+
+- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/castwright:vX.Y.Z` on tag push.
+- _First-run setup (consistency with `ops-1`/`ops-15`):_ a headless/Docker deploy still serves the web UI, so first-run setup + model install flow through the same `fs-21` wizard (at `:5173`) — no Linux-specific install script. **Mount a persistent volume for the model dirs** (Kokoro/Qwen weights + the Ollama store) so wizard-installed models survive container rebuilds.
+- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case. Linux is the third primary deployer platform alongside Windows (`ops-1`) and macOS (`ops-15`).
+- _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
+_Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
 
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
 
@@ -53,25 +104,9 @@ _Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ friction-free install for non-developer Mac users — the other primary deployer platform alongside Windows. Reduces a read-INSTALL.md-and-run-shell-commands bootstrap to drag-and-drop.
 _Full detail + acceptance:_ [#735](https://github.com/dudarenok-maker/Castwright/issues/735).
 
-#### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
-
-- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/castwright:vX.Y.Z` on tag push.
-- _First-run setup (consistency with `ops-1`/`ops-15`):_ a headless/Docker deploy still serves the web UI, so first-run setup + model install flow through the same `fs-21` wizard (at `:5173`) — no Linux-specific install script. **Mount a persistent volume for the model dirs** (Kokoro/Qwen weights + the Ollama store) so wizard-installed models survive container rebuilds.
-- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case. Linux is the third primary deployer platform alongside Windows (`ops-1`) and macOS (`ops-15`).
-- _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
-_Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
-
-_`fs-2` (multi-language, Russian first) shipped — the engine half via
-[plan 108](features/108-qwen-coexistence.md), the language half via
-[plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
-polish (`fe-16`) shipped via [plan 165](features/165-fe-15-16-language-and-revision-e2e.md).
-The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
-
----
-
-### Companion app
-
-_The Android companion shipped (plan 188); the deep-link pairing flip (`app-17`) shipped + was on-device-accepted 2026-06-19 (#729 closed) — the remaining launch-blocking gap is the iOS half of the mobile audience._
+_The Android companion shipped (plan 188); the deep-link pairing flip (`app-17`)
+shipped + was on-device-accepted 2026-06-19 (#729 closed) — the remaining
+launch-blocking gap is the iOS half of the mobile audience._
 
 #### `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555))
 
@@ -80,26 +115,52 @@ _The Android companion shipped (plan 188); the deep-link pairing flip (`app-17`)
 - _CI note (2026-06-14):_ the per-release unsigned `companion-ios` build was removed from `release.yml` (saved ~80–120 macOS-billed min/tag; `app.yml`'s `ios-compile` still guards build health). This item should add a **signed** `.ipa` release job when it lands — weighing whether it's worth the macOS minutes on every tag vs. an occasional manual build.
 _Full detail + acceptance:_ [#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555) · [plan 188](features/188-android-companion-app.md).
 
+---
+
 ## Should — important, not blocking ship
 
-Ranked top = highest priority. The agent-surface item leads (added 2026-06-11), then the
-two highest-ROI quick listener wins, then medium
-user-value polish, then the large localization item, then dependency hygiene and the
-delivered-companion follow-ups. (The 2026-06-02 dependency-major cluster shipped via plans
-167 + 170; a fresh 2026-06-08 `npm outdated` surfaced a new wave of majors — see the note
-at the bottom of this bucket.)
+Ranked top = highest priority. Ingest & languages leads (it amplifies the Must
+language push), then the agent surface (`fs-44` — a latent moat no rival ships),
+then voice/cast quality, listener magic, QA credibility, ops/maintenance, and the
+blocked companion follow-up.
+
+### Ingest & languages
+
+#### `fs-41` — Auto-detect manuscript language on ingest (filter voice library + auto-load engine) ([#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666))
+
+- _What:_ Complete the multi-language "second half": on ingest, auto-detect the manuscript language, filter the voice library to it, and auto-load the right engine (Qwen3-TTS for Russian, Kokoro for English), preserving the never-cross-language-within-a-book invariant. Today the language path works end-to-end (`fs-2`) but the user drives engine/voice selection by hand.
+- _Benefit (user):_ removes the most error-prone manual step for non-English books; one of the most-requested multi-language directions. Pairs with `fs-2` (engine half, shipped) and `fs-14` (Russian UI). _(Promoted Could → Should 2026-06-21 — pairs with the Must language packs.)_
+_Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666).
+
+#### `fs-53` — Automatic text normalisation (numbers/dates/currency/abbreviations) ([#976](https://github.com/dudarenok-maker/Castwright/issues/976))
+
+- _What:_ Speak numbers, dates, currency, abbreviations and symbols correctly before synth (NeMo-style). Distinct from `fs-24` (per-character proper-noun lexicon).
+- _Benefit (user):_ a basic **quality floor** rivals already clear; complements `fs-50` (per-language rules).
+_Full detail + acceptance:_ [#976](https://github.com/dudarenok-maker/Castwright/issues/976).
+
+#### `fs-14` — Russian UI localization (interface strings, react-i18next) ([#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396))
+
+- _What:_ Localize the application interface to Russian. Stand up an i18n framework (**react-i18next** — user-confirmed choice) + a per-user `UserSettings.uiLanguage` preference with a language switcher in Account management, then translate the high-traffic surfaces first (top nav, account, upload/confirm, listen, cast) and grow coverage incrementally. Ground truth at capture: **no i18n library today**, ~1,500 hardcoded user-facing strings across ~82 components (densest: `account.tsx` ~92, `profile-drawer.tsx` ~79, `voices.tsx` ~68, `analysing.tsx` ~59, `cast.tsx` ~58, `export-audiobook.tsx` ~52). Centralisable copy already lives in `src/data/{walkthroughs,analysis-phases,regen-reasons,match-factors,listener-apps}.ts`. Locale-sensitive formatting is minimal (`src/lib/time.ts` durations only; no currency/date pickers).
+- _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
+_Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
 ### Agents & integrations
 
 #### `fs-44` — MCP agent surface (agents drive Castwright end-to-end) ([#721](https://github.com/dudarenok-maker/Castwright/issues/721))
 
 - _What:_ An MCP server surface so any MCP-capable agent — Claude Cowork/Code, **Codex, Copilot CLI, Gemini CLI, Cursor**, whatever harness the user lives in — drives the full pipeline (upload → analyze → cast → generate → export) programmatically instead of computer-use clicking. In-process Streamable-HTTP endpoint at `/mcp` behind the existing `requireLanToken` guard, ~15 hand-designed workflow-level tools (read/inspect, pipeline actions, cast/voice parity, `wait_for_job` long-poll over the existing job state); core-spec MCP only (client-agnostic); `castwright-mcp` stdio bridge included in the main delivery (wave 4) so stdio-only harnesses work out of the box. Spec: [`2026-06-11-castwright-mcp-agent-surface-design.md`](superpowers/specs/2026-06-11-castwright-mcp-agent-surface-design.md) · plan: [`2026-06-11-fs44-mcp-agent-surface.md`](superpowers/plans/2026-06-11-fs44-mcp-agent-surface.md).
-- _Benefit (user / strategic):_ "produce this book overnight and tell me when it's exported" becomes a one-line agent prompt; aligns Castwright with the agent-first direction of every major harness, and the MCP pipeline e2e doubles as the missing whole-pipeline integration test.
+- _Benefit (user / strategic):_ "produce this book overnight and tell me when it's exported" becomes a one-line agent prompt; aligns Castwright with the agent-first direction of every major harness, and the MCP pipeline e2e doubles as the missing whole-pipeline integration test. **Latent moat — agent-driven generation is not something rivals ship; prime Should→Must candidate next round (2026-06-21).**
 _Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright/issues/721).
 
 _(fs-15 + fs-16 shipped — cross-book "Continue listening" rail + `#/stats` dashboard; see [plan 212](features/212-fs15-fs16-listening-stats.md). Companion reporter = Wave H follow-up.)_
 
 ### Voice & cast
+
+#### `fs-24` — Per-character pronunciation lexicon ([#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478))
+
+- _What:_ Per-book custom pronunciation overrides for invented names/places (term → phonetic/respelling), applied at synth time. Fiction — especially fantasy proper nouns — is where the TTS mangles the most. Net-new vs the existing chapter-title prosody handling.
+- _Benefit (user):_ fixes the #1 narration-quality complaint for fiction. _(Re-promoted Could → Should 2026-06-21 — quality is marketability.)_
+_Full detail + acceptance:_ [#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478).
 
 #### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>` ([#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416))
 
@@ -113,15 +174,29 @@ _Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
 
-### UI & accessibility
+### Listener experience & playback
 
-#### `fs-14` — Russian UI localization (interface strings, react-i18next) ([#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396))
+#### `fs-3` — Streaming audio for live playback during chapter generation ([#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414))
 
-- _What:_ Localize the application interface to Russian. Stand up an i18n framework (**react-i18next** — user-confirmed choice) + a per-user `UserSettings.uiLanguage` preference with a language switcher in Account management, then translate the high-traffic surfaces first (top nav, account, upload/confirm, listen, cast) and grow coverage incrementally. Ground truth at capture: **no i18n library today**, ~1,500 hardcoded user-facing strings across ~82 components (densest: `account.tsx` ~92, `profile-drawer.tsx` ~79, `voices.tsx` ~68, `analysing.tsx` ~59, `cast.tsx` ~58, `export-audiobook.tsx` ~52). Centralisable copy already lives in `src/data/{walkthroughs,analysis-phases,regen-reasons,match-factors,listener-apps}.ts`. Locale-sensitive formatting is minimal (`src/lib/time.ts` durations only; no currency/date pickers).
-- _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
-_Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
+- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
+- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on. _(Promoted Could → Should 2026-06-21 — a demo/marketing centerpiece.)_
+_Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414).
 
-### Maintenance & upkeep
+### Reliability & observability
+
+#### `srv-36` — Calibrate voice-drift detection thresholds against a labelled dataset ([#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665))
+
+- _What:_ The per-chapter drift comparator surfaces Severe / Moderate / Mild tiers, but its metric set and severity cutoffs are **placeholder** — never calibrated against ground truth. Gather a labelled drifted-vs-not chapter-audio set and tune the metric weights + tier thresholds so severity tracks perceived drift, with a regression test pinning the calibrated cutoffs.
+- _Benefit (user / technical):_ drift _detection_ is a free-tier trust feature; the flags have to be right or "every line checked" rings hollow. Placeholder cutoffs mean false alarms and misses. **Underpins the `fs-51` per-book QA report (Must) — promoted Could → Should 2026-06-21.**
+_Full detail + acceptance:_ [#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665).
+
+### Ops & maintenance
+
+#### `srv-40` — Non-Latin (Cyrillic) book support: on-box acceptance ([#823](https://github.com/dudarenok-maker/Castwright/issues/823))
+
+- _What:_ Plan [219](docs/features/219-non-latin-names-and-ids.md) (Unicode-aware coverage/ASR normalizers, `safe-id.ts` chokepoint, `makeBookId`/`slug`, cross-book keys, hardened sidecar/voice-sample filename boundaries) is merged with unit/pytest coverage. The off-box-unverifiable bits remain: a full analyze→generate→export of a Cyrillic book on Windows (ffmpeg + Cyrillic paths — pre-existing risk via `bookDirByDisplay`), real model-id shapes for Cyrillic names, and cross-book voice carryover for a Russian series.
+- _Benefit (user):_ non-English (Cyrillic, and other non-Latin) books work end-to-end instead of silently colliding ids / dead cross-book reuse / a stalled analysis.
+_Full detail + acceptance:_ [#823](https://github.com/dudarenok-maker/Castwright/issues/823).
 
 #### `srv-4` — Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai) ([#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431))
 
@@ -135,17 +210,11 @@ _Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
 _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
 
-#### `srv-40` — Non-Latin (Cyrillic) book support: on-box acceptance ([#823](https://github.com/dudarenok-maker/Castwright/issues/823))
-
-- _What:_ Plan [219](docs/features/219-non-latin-names-and-ids.md) (Unicode-aware coverage/ASR normalizers, `safe-id.ts` chokepoint, `makeBookId`/`slug`, cross-book keys, hardened sidecar/voice-sample filename boundaries) is merged with unit/pytest coverage. The off-box-unverifiable bits remain: a full analyze→generate→export of a Cyrillic book on Windows (ffmpeg + Cyrillic paths — pre-existing risk via `bookDirByDisplay`), real model-id shapes for Cyrillic names, and cross-book voice carryover for a Russian series.
-- _Benefit (user):_ non-English (Cyrillic, and other non-Latin) books work end-to-end instead of silently colliding ids / dead cross-book reuse / a stalled analysis.
-_Full detail + acceptance:_ [#823](https://github.com/dudarenok-maker/Castwright/issues/823).
-
 ### Companion app
 
-_The three items below are the companion-app follow-ups left after the Android v1 shipped
-(2026-06-07). `app-10` is technically **blocked** — kept here at Should priority, but it
-can't ship until its loopback-proxy prerequisite is built._
+_`app-10` is the companion-app follow-up left after the Android v1 shipped
+(2026-06-07); it's technically **blocked** — kept at Should, but can't ship until
+its loopback-proxy prerequisite is built._
 
 #### `app-10` — Stream-over-LAN instant play (companion) — **blocked on a loopback proxy** ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553))
 
@@ -157,38 +226,24 @@ _Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/AudioBook-
 
 ## Could — nice to have, low-cost wins
 
-Organised into thematic sub-groups (reliability & observability, listener experience &
-playback, cast & voice, revisions & regen, voice & cast sharing, net-new capabilities,
-security & hardening, ops & distribution, listener-app handoffs).
-Sub-groups and the items within them are ranked top = highest priority.
-
-### Reliability & observability
-
-#### `fs-45` — VRAM MB-accounting policy (Wave 4, beta 12/16 GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
-
-- _What:_ A per-(engine, mode) MB cost table vs detected VRAM, replacing Wave 1's coarse `gpu.safeCoexistMb` threshold so a 12 GB card with a heavy combo that passes the threshold but would overcommit is caught. **Deferred (Could) until a real 12/16 GB box yields measured cost numbers:** an adversarial review found that with guessed values the engine makes the same evict/coexist decisions as the threshold (and even mis-evicts on a 12 GB card during voice design), so it adds OOM risk for ~no decision-quality gain. The related two-model-split gotcha is now documented in `docs/local-llm.md` (no UI built). Revisit with telemetry from a beta tester's card.
-- _Benefit (user):_ precise coexistence on bigger cards without edge-case OOMs — once the cost table is measured rather than guessed.
-_Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-honesty.md) "Out of scope" + spec `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 · drafted plan `docs/superpowers/plans/2026-06-16-wave4-vram-mb-accounting.md` · [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
-
-#### `side-17` — Sidecar engine-dep major bump (torch · transformers · huggingface_hub · …) ([#893](https://github.com/dudarenok-maker/Castwright/issues/893))
-
-- _What:_ The Python TTS sidecar engine deps are ~24 behind, but the heavy ones are **safety-pinned** (torch 2.11→2.12 = cu130 driver bump + voids the CVE-cleared cu128 pin; transformers 4.57→5.12 breaks the `<5.0` Qwen/Kokoro/Coqui lockstep; huggingface_hub 0.36→1.19 major; kokoro-onnx, onnxruntime-gpu, fastapi/starlette/uvicorn majors). Audited in deps round 4 (plan 224) and deferred — each is a GPU-box + golden-audio validated spike, not hygiene. Supersedes the closed #883 (torch CVE bump) with a full engine-dep sweep.
-- _Benefit (technical):_ keeps the sidecar's engine stack current and CVE-clear once the bumps are validated against real model output, without risking the TTS pipeline on a blind bump.
-_Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright/issues/893).
-
-#### `srv-30` — CPU-only analyzer device (large RAM-resident model, concurrent with GPU TTS) ([#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507))
-
-- _What:_ Run the local (Ollama) analyzer **CPU-only** (`num_gpu:0`, system RAM) per-model, so a large model (e.g. **Gemma 4 12B**, which doesn't fit the 8 GB GPU) can be used without touching the GPU. A CPU model **skips the GPU semaphore**, so CPU analysis and GPU TTS run **concurrently** instead of evicting each other. Phase 0 (small GPU model) + Phase 1 (big CPU model) run side-by-side. Server-authoritative device resolver + CPU knobs (`ANALYZER_CPU_*`); required wiring so `/api/ollama/load` matches the device and the TTS auto-evict skips CPU models. Gemma 4 12B entry gated behind env until validated (brand-new).
-- _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
-_Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
-
-#### `srv-36` — Calibrate voice-drift detection thresholds against a labelled dataset ([#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665))
-
-- _What:_ The per-chapter drift comparator surfaces Severe / Moderate / Mild tiers, but its metric set and severity cutoffs are **placeholder** — never calibrated against ground truth. Gather a labelled drifted-vs-not chapter-audio set and tune the metric weights + tier thresholds so severity tracks perceived drift, with a regression test pinning the calibrated cutoffs.
-- _Benefit (user / technical):_ drift _detection_ is a free-tier trust feature; the flags have to be right or "every line checked" rings hollow. Placeholder cutoffs mean false alarms and misses.
-_Full detail + acceptance:_ [#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665).
+Organised into the shared functional sub-groups (see the triage record
+[`docs/superpowers/specs/2026-06-21-oss-gap-backlog-triage-design.md`](superpowers/specs/2026-06-21-oss-gap-backlog-triage-design.md)).
+Sub-groups and the items within them are ranked top = highest priority;
+user-visible listener/voice wins lead, infra/security/ops below.
 
 ### Listener experience & playback
+
+#### `fs-17` — Read-along: sentence highlight synced to audio ([#464](https://github.com/dudarenok-maker/AudioBook-Generator/issues/464))
+
+- _What:_ Show manuscript text beside the player and highlight the current sentence as audio plays, leveraging the per-segment timing already used for the waveform; tap a sentence to seek. Widen the API to expose per-sentence start/end if not already surfaced.
+- _Benefit (user):_ immersion / accessibility / pronunciation learning — a differentiating feature. (Large; owes its own plan — top Could → Should candidate once planned.)
+_Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/AudioBook-Generator/issues/464).
+
+#### `fs-27` — Chapter recaps / "previously…" summaries ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481))
+
+- _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front.
+- _Benefit (user):_ graceful re-entry into a long book after days away.
+_Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481).
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))
 
@@ -196,11 +251,11 @@ _Full detail + acceptance:_ [#665](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ makes re-record markers actionable outside the app (study / review / handoff to an editor).
 _Full detail + acceptance:_ [#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461).
 
-#### `fe-39` — Decorative hover-feedback parity for touch (`group-active:` mirrors) ([#799](https://github.com/dudarenok-maker/AudioBook-Generator/issues/799))
+#### `fs-10` — Render the chapter-title segment on the Listen view timeline ([#412](https://github.com/dudarenok-maker/AudioBook-Generator/issues/412))
 
-- _What:_ Optional follow-up to `fe-5` (#402): give the **decorative** hover-feedback controls fe-5 deliberately skipped (color/bg shifts on already-visible controls — revision-diff play badges, the "Add book" tile, continue-listening badge, setup "Review ›", voice-library drag icon, manuscript hit-area tint) a touch press-feedback equivalent (`group-active:` mirroring `group-hover:`), resting appearance unchanged. Caveats from the fe-5 review: don't force the "Add book" tile's full-peach hover on at rest, and the revision-diff badge mirrors may be masked by the play-state flip (verify benefit before shipping).
-- _Benefit (user):_ marginal cosmetic parity — touch users get a brief press-feedback flash on controls they can already see and use. Low priority by design.
-_Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/AudioBook-Generator/issues/799).
+- _What:_ The new title segment in `segments.json` (kind: `'title'`, empty `sentenceIds[]`) is currently filtered out at the `ChapterAudio` API boundary in `server/src/routes/chapter-audio.ts` because the wire contract types `sentenceId` as a required integer. To surface the title on the listen-view timeline (a labelled "TITLE" pill anchored at the start of the chapter, ~3 s wide including silence), widen the API segment shape so `sentenceId` is optional and add an optional `kind?: 'title' | 'sentence'` discriminator, regenerate `src/lib/api-types.ts`, then teach `src/components/listen/listen-player-region.tsx` to render title-kind segments differently from sentence-kind segments.
+- _Benefit (user):_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
+_Full detail + acceptance:_ [#412](https://github.com/dudarenok-maker/AudioBook-Generator/issues/412).
 
 #### `fs-9` — Configurable chapter-title silence durations ([#411](https://github.com/dudarenok-maker/AudioBook-Generator/issues/411))
 
@@ -208,25 +263,13 @@ _Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ lets the user pace chapter breaks to match book length / mood (a tight 0.5 s for a short kids' book, a longer 3 s for a slow-burn novel) without code changes. Today the 3.0 s default is "audiobook-standard" but not universally right.
 _Full detail + acceptance:_ [#411](https://github.com/dudarenok-maker/AudioBook-Generator/issues/411).
 
-#### `fs-10` — Render the chapter-title segment on the Listen view timeline ([#412](https://github.com/dudarenok-maker/AudioBook-Generator/issues/412))
+#### `fe-39` — Decorative hover-feedback parity for touch (`group-active:` mirrors) ([#799](https://github.com/dudarenok-maker/AudioBook-Generator/issues/799))
 
-- _What:_ The new title segment in `segments.json` (kind: `'title'`, empty `sentenceIds[]`) is currently filtered out at the `ChapterAudio` API boundary in `server/src/routes/chapter-audio.ts` because the wire contract types `sentenceId` as a required integer. To surface the title on the listen-view timeline (a labelled "TITLE" pill anchored at the start of the chapter, ~3 s wide including silence), widen the API segment shape so `sentenceId` is optional and add an optional `kind?: 'title' | 'sentence'` discriminator, regenerate `src/lib/api-types.ts`, then teach `src/components/listen/listen-player-region.tsx` to render title-kind segments differently from sentence-kind segments.
-- _Benefit (user):_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
-_Full detail + acceptance:_ [#412](https://github.com/dudarenok-maker/AudioBook-Generator/issues/412).
+- _What:_ Optional follow-up to `fe-5` (#402): give the **decorative** hover-feedback controls fe-5 deliberately skipped (color/bg shifts on already-visible controls — revision-diff play badges, the "Add book" tile, continue-listening badge, setup "Review ›", voice-library drag icon, manuscript hit-area tint) a touch press-feedback equivalent (`group-active:` mirroring `group-hover:`), resting appearance unchanged. Caveats from the fe-5 review: don't force the "Add book" tile's full-peach hover on at rest, and the revision-diff badge mirrors may be masked by the play-state flip (verify benefit before shipping).
+- _Benefit (user):_ marginal cosmetic parity — touch users get a brief press-feedback flash on controls they can already see and use. Low priority by design.
+_Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/AudioBook-Generator/issues/799).
 
-#### `fs-3` — Streaming audio for live playback during chapter generation ([#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414))
-
-- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
-- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
-_Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414).
-
-#### `fs-17` — Read-along: sentence highlight synced to audio ([#464](https://github.com/dudarenok-maker/AudioBook-Generator/issues/464))
-
-- _What:_ Show manuscript text beside the player and highlight the current sentence as audio plays, leveraging the per-segment timing already used for the waveform; tap a sentence to seek. Widen the API to expose per-sentence start/end if not already surfaced.
-- _Benefit (user):_ immersion / accessibility / pronunciation learning — a differentiating feature. (Large; owes its own plan.)
-_Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/AudioBook-Generator/issues/464).
-
-### Cast, voice & duplicates
+### Voice & cast
 
 #### `fe-12` — Bulk pin / bulk delete in voice library ([#420](https://github.com/dudarenok-maker/AudioBook-Generator/issues/420))
 
@@ -234,17 +277,17 @@ _Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ curating a large accumulated voice library stops being a per-voice click-fest.
 _Full detail + acceptance:_ [#420](https://github.com/dudarenok-maker/AudioBook-Generator/issues/420).
 
-#### `fe-30` — Voice-actor (multi-narrator) view ([#477](https://github.com/dudarenok-maker/AudioBook-Generator/issues/477))
-
-- _What:_ A voice-centric view that groups characters **by assigned voice** — "this voice plays N characters across M books" — with bulk reassign. The inverse axis of the character-centric cast view; adjacent to `fe-12` / `fs-6` but a different lens.
-- _Benefit (user):_ manage a cast at the voice level; spot overloaded voices at a glance.
-_Full detail + acceptance:_ [#477](https://github.com/dudarenok-maker/AudioBook-Generator/issues/477).
-
 #### `fs-6` — Batch voice-replace across all books ([#417](https://github.com/dudarenok-maker/AudioBook-Generator/issues/417))
 
 - _What:_ Add a "Replace voice everywhere" affordance in the voice library: pick a current voice, pick a replacement, see a preview of all (book, character) pairs that would be affected, confirm. Affected books' cast slices are mutated; audio is invalidated (regen prompt per book).
 - _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
 _Full detail + acceptance:_ [#417](https://github.com/dudarenok-maker/AudioBook-Generator/issues/417).
+
+#### `fe-30` — Voice-actor (multi-narrator) view ([#477](https://github.com/dudarenok-maker/AudioBook-Generator/issues/477))
+
+- _What:_ A voice-centric view that groups characters **by assigned voice** — "this voice plays N characters across M books" — with bulk reassign. The inverse axis of the character-centric cast view; adjacent to `fe-12` / `fs-6` but a different lens.
+- _Benefit (user):_ manage a cast at the voice level; spot overloaded voices at a glance.
+_Full detail + acceptance:_ [#477](https://github.com/dudarenok-maker/AudioBook-Generator/issues/477).
 
 #### `srv-7` — Cross-series voice linking ([#418](https://github.com/dudarenok-maker/AudioBook-Generator/issues/418))
 
@@ -258,17 +301,65 @@ _Full detail + acceptance:_ [#418](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ existing libraries can adopt the better voice-design format without re-casting by hand. Low urgency — costly (quota + GPU) and only matters for books a user wants to re-render.
 _Full detail + acceptance:_ [#423](https://github.com/dudarenok-maker/AudioBook-Generator/issues/423).
 
-#### `fs-24` — Per-character pronunciation lexicon ([#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478))
+#### `fe-35` — Voices variant-filter toggle persists across tab switches (fe-34 follow-up) ([#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644))
 
-- _What:_ Per-book custom pronunciation overrides for invented names/places (term → phonetic/respelling), applied at synth time. Fiction — especially fantasy proper nouns — is where the TTS mangles the most. Net-new vs the existing chapter-title prosody handling.
-- _Benefit (user):_ fixes the #1 narration-quality complaint for fiction. _(Demoted Should → Could 2026-06-08.)_
-_Full detail + acceptance:_ [#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478).
+- _What:_ The Voices view All/Has/Needs variants toggle keeps its active state across tab switches, and its visibility guard uses the unfiltered `qwenLibrary`, so a tab whose filtered Qwen set is empty can show an active filter with no cards. Reset `variantFilter` on tab change and/or guard visibility on the tab-filtered count.
+- _Benefit (user):_ the variant filter never silently carries over to a tab where it shows nothing.
+_Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644).
 
-#### `fs-41` — Auto-detect manuscript language on ingest (filter voice library + auto-load engine) ([#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666))
+#### `fs-36` — per-quote emotion: "manual clear sticks" sentinel (fs-33 follow-up) ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593))
 
-- _What:_ Complete the multi-language "second half": on ingest, auto-detect the manuscript language, filter the voice library to it, and auto-load the right engine (Qwen3-TTS for Russian, Kokoro for English), preserving the never-cross-language-within-a-book invariant. Today the language path works end-to-end (`fs-2`) but the user drives engine/voice selection by hand.
-- _Benefit (user):_ removes the most error-prone manual step for non-English books; one of the most-requested multi-language directions. Pairs with `fs-2` (engine half, shipped) and `fs-14` (Russian UI).
-_Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666).
+- _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
+- _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
+_Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
+
+### Ingest & languages
+
+#### `srv-46` — OCR ingest for scanned / image-only PDFs ([#977](https://github.com/dudarenok-maker/Castwright/issues/977))
+
+- _What:_ Add an OCR path for image-only PDFs (we already ingest text PDF/EPUB/MOBI/AZW3).
+- _Benefit (user):_ closes the last input-format sliver vs ebook2audiobook.
+_Full detail + acceptance:_ [#977](https://github.com/dudarenok-maker/Castwright/issues/977).
+
+### TTS engines
+
+#### `fs-49` — IndexTTS-2 expressive TTS engine (decoupled per-line emotion · 8GB bet) ([#968](https://github.com/dudarenok-maker/Castwright/issues/968))
+
+- _What:_ Opt-in TTS engine whose verified edge is **decoupled, per-line emotion** — one timbre (`spk_audio_prompt`) + emotion driven **per sentence** via IndexTTS-2's 8-float `emo_vector`, fed by our existing fs-25 per-quote `Emotion`, **collapsing the pre-baked Qwen variant-voice machinery** for this engine. Timbre via "design in Qwen, perform in IndexTTS-2" (capture a VoiceDesign clip → clone); the vector path deliberately skips the Qwen3-1.7B `emo_text` sub-model (the integration choice = the worst-case VRAM lever). **Sibling to `fs-48`** competing for the same expressive-engine slot, but an **8GB bet** (vs Fish's 16GB) on a **thinner VRAM-evidence base** (no published params/VRAM/RTF, no community quant; desk envelope ≈ 5–8 GB fp16 = plausible-but-tight). License is **lighter than Fish but contested** (source-available bilibili grant, commercial OK below 100M MAU / RMB 1B, but open ambiguity #228 + anti-distillation §4.1c + PRC arbitration). **Could now → eligible for re-triage to Should iff the 8GB spike passes** (human judgment, not auto). Go/no-go is the 8GB hardware/quality spike + a license re-verify before any paid exposure; `srv-43` (`voiceUuid`) is a soft follow-on (the field + storage-key already exist on `main`), not a spike gate.
+- _Benefit (user):_ finer per-line emotional performance from a single designed voice — what the variant-voice flow does expensively and Qwen-only — potentially on the 8GB card the user already owns. Evidenced upside over Fish is the **mechanism**; the 8GB fit, quality-vs-Qwen, and license advantage are all unverified bets.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-indextts2-engine-design.md` (brainstormed + 2 adversarial rounds) · [#968](https://github.com/dudarenok-maker/Castwright/issues/968).
+
+#### `fs-48` — Fish Audio S2-Pro TTS engine (16GB premium tier) ([#964](https://github.com/dudarenok-maker/Castwright/issues/964))
+
+- _What:_ Opt-in fourth TTS engine (alongside Kokoro/Coqui/Qwen) targeting **16GB consumer GPUs** via **BNB NF4 4-bit** (FP8 ≈ 20GB, GGUF too slow at RTF≈3). Prefer in-process PyTorch reuse; clone-from-seed voices on a Qwen-style per-character lifecycle + a bundled age×gender seed-reference library. **Parked — blocked on four gates:** legal sign-off (Fish Audio Research License — personal use OK, for-sale is the user's own licence), a physical 16GB card for the hardware-gated Task-0 spike, `srv-43` (`voiceUuid`), and the unproven make-or-break 4-bit prosody-quality question.
+- _Benefit (user):_ the best-quality, expressive, multilingual engine within reach of quality-chasers on a mainstream 16GB card (no 24GB required).
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-fish-audio-s2pro-engine-design.md` (brainstormed + 3 adversarial reviews) · [#964](https://github.com/dudarenok-maker/Castwright/issues/964).
+
+#### `side-18` — Nonverbal performance cues ((laughs)/(sighs)/breaths) — spike first ([#979](https://github.com/dudarenok-maker/Castwright/issues/979))
+
+- _What:_ A scripted-cue layer for `(laughs)`/`(sighs)`/breaths, model-native in Orpheus/Dia/Chatterbox. **Spike before committing an engine.** Rides on the expressive-engine decision (`fs-48`/`fs-49`).
+- _Benefit (user):_ extends the expressive performance lead beyond emotion sliders.
+_Full detail + acceptance:_ [#979](https://github.com/dudarenok-maker/Castwright/issues/979).
+
+### Reliability & observability
+
+#### `srv-30` — CPU-only analyzer device (large RAM-resident model, concurrent with GPU TTS) ([#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507))
+
+- _What:_ Run the local (Ollama) analyzer **CPU-only** (`num_gpu:0`, system RAM) per-model, so a large model (e.g. **Gemma 4 12B**, which doesn't fit the 8 GB GPU) can be used without touching the GPU. A CPU model **skips the GPU semaphore**, so CPU analysis and GPU TTS run **concurrently** instead of evicting each other. Phase 0 (small GPU model) + Phase 1 (big CPU model) run side-by-side. Server-authoritative device resolver + CPU knobs (`ANALYZER_CPU_*`); required wiring so `/api/ollama/load` matches the device and the TTS auto-evict skips CPU models. Gemma 4 12B entry gated behind env until validated (brand-new).
+- _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
+_Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
+
+#### `fs-45` — VRAM MB-accounting policy (Wave 4, beta 12/16 GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
+
+- _What:_ A per-(engine, mode) MB cost table vs detected VRAM, replacing Wave 1's coarse `gpu.safeCoexistMb` threshold so a 12 GB card with a heavy combo that passes the threshold but would overcommit is caught. **Deferred (Could) until a real 12/16 GB box yields measured cost numbers:** an adversarial review found that with guessed values the engine makes the same evict/coexist decisions as the threshold (and even mis-evicts on a 12 GB card during voice design), so it adds OOM risk for ~no decision-quality gain. The related two-model-split gotcha is now documented in `docs/local-llm.md` (no UI built). Revisit with telemetry from a beta tester's card.
+- _Benefit (user):_ precise coexistence on bigger cards without edge-case OOMs — once the cost table is measured rather than guessed.
+_Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-honesty.md) "Out of scope" + spec `docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md` §7 · drafted plan `docs/superpowers/plans/2026-06-16-wave4-vram-mb-accounting.md` · [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
+
+#### `side-17` — Sidecar engine-dep major bump (torch · transformers · huggingface_hub · …) ([#893](https://github.com/dudarenok-maker/Castwright/issues/893))
+
+- _What:_ The Python TTS sidecar engine deps are ~24 behind, but the heavy ones are **safety-pinned** (torch 2.11→2.12 = cu130 driver bump + voids the CVE-cleared cu128 pin; transformers 4.57→5.12 breaks the `<5.0` Qwen/Kokoro/Coqui lockstep; huggingface_hub 0.36→1.19 major; kokoro-onnx, onnxruntime-gpu, fastapi/starlette/uvicorn majors). Audited in deps round 4 (plan 224) and deferred — each is a GPU-box + golden-audio validated spike, not hygiene. Supersedes the closed #883 (torch CVE bump) with a full engine-dep sweep.
+- _Benefit (technical):_ keeps the sidecar's engine stack current and CVE-clear once the bumps are validated against real model output, without risking the TTS pipeline on a blind bump.
+_Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright/issues/893).
 
 ### Revisions & regen
 
@@ -277,6 +368,14 @@ _Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Extend plan 20's `preserveExistingAsPrevious` to write `.previous.<entryId>.<slug>.mp3` per timeline entry (not just one `.previous.<slug>.mp3` per chapter). Wire a server `POST /api/books/:bookId/revisions/:entryId/rollback` endpoint that restores a specific timeline entry's audio + flips subsequent entries to `rolled-back-from`. Add a GC pass that prunes oldest snapshots after the user commits (or when disk pressure exceeds a cap, e.g. 10 entries / chapter).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 _Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415).
+
+### Agents & integrations
+
+#### `fs-54` — Audiobookshelf export / hand-off ([#978](https://github.com/dudarenok-maker/Castwright/issues/978))
+
+- _What:_ Push or export finished books into Audiobookshelf (the OSS audience's library home). **Triage decision (2026-06-21): a bridge, not a pivot** — the companion app is the strategic library answer.
+- _Benefit (user):_ interop with the OSS field's de-facto library without diverting from the companion-app bet.
+_Full detail + acceptance:_ [#978](https://github.com/dudarenok-maker/Castwright/issues/978).
 
 ### Voice & cast sharing
 
@@ -312,45 +411,6 @@ _Full detail + acceptance:_ [#484](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ a community library — the most ambitious expression of voice sharing. The only item here that publishes data externally; treat as its own initiative after `fs-28` + `side-13` land. (Large; owes a regression plan + a privacy/licensing/abuse design.)
 _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-Generator/issues/486).
 
-### Net-new capabilities
-
-#### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
-
-- _What:_ Power-user follow-ups for the shipped `#/advanced` surface (plan 199): a "Download config.json" export of all active overrides, a complementary JSON import flow (validates keys against live descriptors), and an env-diff indicator showing when a `.env`-locked value differs from the configured default.
-- _Benefit (user / technical / architectural):_ snapshot and restore tuning profiles across machines without re-entering values; validates the descriptor schema round-trips; natural migration target for future config shape changes.
-_Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright/issues/668) · plan `docs/features/199-advanced-settings.md`.
-
-
-#### `fs-27` — Chapter recaps / "previously…" summaries ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481))
-
-- _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front.
-- _Benefit (user):_ graceful re-entry into a long book after days away.
-_Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481).
-
-#### `fs-36` — per-quote emotion: "manual clear sticks" sentinel (fs-33 follow-up) ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593))
-
-- _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
-- _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
-_Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
-
-#### `fe-35` — Voices variant-filter toggle persists across tab switches (fe-34 follow-up) ([#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644))
-
-- _What:_ The Voices view All/Has/Needs variants toggle keeps its active state across tab switches, and its visibility guard uses the unfiltered `qwenLibrary`, so a tab whose filtered Qwen set is empty can show an active filter with no cards. Reset `variantFilter` on tab change and/or guard visibility on the tab-filtered count.
-- _Benefit (user):_ the variant filter never silently carries over to a tab where it shows nothing.
-_Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644).
-
-#### `fs-48` — Fish Audio S2-Pro TTS engine (16GB premium tier) ([#964](https://github.com/dudarenok-maker/Castwright/issues/964))
-
-- _What:_ Opt-in fourth TTS engine (alongside Kokoro/Coqui/Qwen) targeting **16GB consumer GPUs** via **BNB NF4 4-bit** (FP8 ≈ 20GB, GGUF too slow at RTF≈3). Prefer in-process PyTorch reuse; clone-from-seed voices on a Qwen-style per-character lifecycle + a bundled age×gender seed-reference library. **Parked — blocked on four gates:** legal sign-off (Fish Audio Research License — personal use OK, for-sale is the user's own licence), a physical 16GB card for the hardware-gated Task-0 spike, `srv-43` (`voiceUuid`), and the unproven make-or-break 4-bit prosody-quality question.
-- _Benefit (user):_ the best-quality, expressive, multilingual engine within reach of quality-chasers on a mainstream 16GB card (no 24GB required).
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-fish-audio-s2pro-engine-design.md` (brainstormed + 3 adversarial reviews) · [#964](https://github.com/dudarenok-maker/Castwright/issues/964).
-
-#### `fs-49` — IndexTTS-2 expressive TTS engine (decoupled per-line emotion · 8GB bet) ([#968](https://github.com/dudarenok-maker/Castwright/issues/968))
-
-- _What:_ Opt-in TTS engine whose verified edge is **decoupled, per-line emotion** — one timbre (`spk_audio_prompt`) + emotion driven **per sentence** via IndexTTS-2's 8-float `emo_vector`, fed by our existing fs-25 per-quote `Emotion`, **collapsing the pre-baked Qwen variant-voice machinery** for this engine. Timbre via "design in Qwen, perform in IndexTTS-2" (capture a VoiceDesign clip → clone); the vector path deliberately skips the Qwen3-1.7B `emo_text` sub-model (the integration choice = the worst-case VRAM lever). **Sibling to `fs-48`** competing for the same expressive-engine slot, but an **8GB bet** (vs Fish's 16GB) on a **thinner VRAM-evidence base** (no published params/VRAM/RTF, no community quant; desk envelope ≈ 5–8 GB fp16 = plausible-but-tight). License is **lighter than Fish but contested** (source-available bilibili grant, commercial OK below 100M MAU / RMB 1B, but open ambiguity #228 + anti-distillation §4.1c + PRC arbitration). **Could now → eligible for re-triage to Should iff the 8GB spike passes** (human judgment, not auto). Go/no-go is the 8GB hardware/quality spike + a license re-verify before any paid exposure; `srv-43` (`voiceUuid`) is a soft follow-on (the field + storage-key already exist on `main`), not a spike gate.
-- _Benefit (user):_ finer per-line emotional performance from a single designed voice — what the variant-voice flow does expensively and Qwen-only — potentially on the 8GB card the user already owns. Evidenced upside over Fish is the **mechanism**; the 8GB fit, quality-vs-Qwen, and license advantage are all unverified bets.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-indextts2-engine-design.md` (brainstormed + 2 adversarial rounds) · [#968](https://github.com/dudarenok-maker/Castwright/issues/968).
-
 ### Security & hardening
 
 Source for the whole sub-group: the [2026-05-31 security review](security/2026-05-31-security-review.md). All are scoped to the **opt-in LAN exposure surface** (`npm run start:lan`) or local-only defense-in-depth — the app is single-user/local-first by design, so these harden the hostile-LAN and local-write threat models rather than fixing an exploited-today hole. `srv-19` (draft plan 157) is the partner default-bind fix.
@@ -367,7 +427,13 @@ _Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (architectural):_ turns the only post-mint control (manual revocation, one layer) into defence-in-depth — a leaked companion token can't do everything.
 _Full detail + acceptance:_ [#898](https://github.com/dudarenok-maker/Castwright/issues/898).
 
-### Ops, CI & distribution
+### Ops & maintenance
+
+#### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
+
+- _What:_ Power-user follow-ups for the shipped `#/advanced` surface (plan 199): a "Download config.json" export of all active overrides, a complementary JSON import flow (validates keys against live descriptors), and an env-diff indicator showing when a `.env`-locked value differs from the configured default.
+- _Benefit (user / technical / architectural):_ snapshot and restore tuning profiles across machines without re-entering values; validates the descriptor schema round-trips; natural migration target for future config shape changes.
+_Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright/issues/668) · plan `docs/features/199-advanced-settings.md`.
 
 #### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))
 
