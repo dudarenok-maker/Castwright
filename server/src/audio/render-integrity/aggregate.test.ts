@@ -11,17 +11,27 @@ import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 const vec = (θ: number) => Float32Array.from([Math.cos(θ), Math.sin(θ), 0, 0, 0, 0, 0, 0]);
 
 describe('scoreBook', () => {
-  it('flags a drifted segment + a fallback segment, passes the rest, and persists centroids', async () => {
+  it('scores all segments acoustically — including fallback renders — and correctly classifies by cosine distance', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-book-'));
-    // 12 clean Qwen segments clustered at θ≈0, one drifted at θ=1.2 rad, one fallback (kokoro) at θ≈0
+    //
+    // Fixture layout:
+    //   sentenceIds [0..11]  — 12 clean Qwen segments clustered at θ≈0  (non-fallback anchor)
+    //   sentenceIds [99]     — 1 non-fallback drifted segment at θ≈1.2  (far from centroid → voice-mismatch)
+    //   sentenceIds [100]    — 1 fallback (renderedFallbackEngine='kokoro'), vec FAR (θ≈1.2) → voice-mismatch
+    //   sentenceIds [101]    — 1 fallback (renderedFallbackEngine='kokoro'), vec CLOSE (θ≈0.01) → voice-match
+    //
+    // The discriminating test is sentenceIds[101]: the definitional (wrong) rule would have
+    // flagged it as voice-mismatch simply because renderedEngine !== configuredEngine.
+    // The acoustic rule correctly passes it because its cosine is high (near the centroid).
+    // Per spec §0.1: acoustic ≠ config; a Kokoro fallback that sounds like the voice passes
+    // the acoustic gate — the fallback itself is a config concern surfaced elsewhere.
+    //
     const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
     for (let i = 0; i < 12; i++) rows.push({ characterId: 'hero', sentenceIds: [i], vec: vec(0.02 * i) });
-    rows.push({ characterId: 'hero', sentenceIds: [99], vec: vec(1.2) });      // drifted
-    rows.push({ characterId: 'hero', sentenceIds: [100], vec: vec(0.01) });    // fallback render
+    rows.push({ characterId: 'hero', sentenceIds: [99], vec: vec(1.2) });    // non-fallback, drifted
+    rows.push({ characterId: 'hero', sentenceIds: [100], vec: vec(1.2) });   // fallback render, acoustically FAR
+    rows.push({ characterId: 'hero', sentenceIds: [101], vec: vec(0.01) });  // fallback render, acoustically CLOSE
 
-    // Write embeddings sibling into dir (the aggregate looks for <dir>/audio/<slug>.embeddings.json)
-    // The aggregate reads from audioDir(bookDir), which is <bookDir>/audio/
-    // We need to create the audio sub-dir
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(dir, 'audio'), { recursive: true });
 
@@ -33,18 +43,38 @@ describe('scoreBook', () => {
       chapterId: 1,
       segments: rows.map((r) => ({
         characterId: 'hero', sentenceIds: r.sentenceIds,
-        renderedFallbackEngine: r.sentenceIds[0] === 100 ? 'kokoro' : null,
+        renderedFallbackEngine: (r.sentenceIds[0] === 100 || r.sentenceIds[0] === 101) ? 'kokoro' : null,
       })),
-      characterSnapshots: { hero: { voiceEngine: 'qwen', renderedFallbackEngine: 'kokoro' } },
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
     }));
 
     await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
 
     const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
-    const bySent = Object.fromEntries(verdicts!.map((v) => [v.sentenceIds[0], v.verdict]));
-    expect(bySent[99]).toBe('voice-mismatch');   // drifted
-    expect(bySent[100]).toBe('voice-mismatch');  // fallback caught acoustically
-    expect(bySent[0]).toBe('voice-match');
+    expect(verdicts).not.toBeNull();
+    const bySent = Object.fromEntries(verdicts!.map((v) => [v.sentenceIds[0], v]));
+
+    // Non-fallback drifted segment flagged acoustically
+    expect(bySent[99].verdict).toBe('voice-mismatch');
+
+    // Fallback segment acoustically FAR → voice-mismatch; stored cosine is the REAL
+    // measurement (not fabricated 0), but it will be low (far from centroid)
+    expect(bySent[100].verdict).toBe('voice-mismatch');
+    // The stored cosine must be the real acoustic measurement — it will be low
+    // (far vector), but NOT necessarily exactly 0 unless perfectly orthogonal
+    expect(bySent[100].cosine).toBeLessThan(0.5);
+
+    // DISCRIMINATING TEST: fallback render that is acoustically CLOSE to the centroid
+    // must pass as voice-match. The definitional (wrong) rule would have flagged this
+    // because renderedEngine ('kokoro') !== configuredEngine ('qwen'). The acoustic
+    // rule correctly passes it — per spec §0.1, acoustic scoring is independent of
+    // config; the fallback is a config concern surfaced elsewhere.
+    expect(bySent[101].verdict).toBe('voice-match');
+    // Also confirm the stored cosine is the real high measurement
+    expect(bySent[101].cosine).toBeGreaterThan(0.9);
+
+    // Clean segments pass
+    expect(bySent[0].verdict).toBe('voice-match');
 
     const centroids = await readCentroids(dir);
     expect(centroids!['hero'].referenceKind).toBe('in-book');

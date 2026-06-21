@@ -33,8 +33,14 @@ import { buildCentroid } from './centroid.js';
 import {
   cosineToCentroid,
   percentile,
+  scoreSegment,
   CUTOFFS,
 } from './score.js';
+
+// Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
+// gate at embed time, so the duration guard inside scoreSegment never fires here.
+// 10.0 s is a safe ≥-floor proxy; embedding rows don't carry duration.
+const ASSUMED_DURATION_SEC = 10.0;
 
 // ── Type for the segments file read-view (local, minimal) ─────────────────
 
@@ -198,7 +204,9 @@ export async function scoreBook(
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
-  // Collect all character IDs and their configured engines (from characterSnapshots)
+  // Collect all character IDs and their configured engines (from characterSnapshots).
+  // First chapter's snapshot wins — a mid-book engine re-cast would mislabel, but
+  // embeddings would be re-generated on re-render, making this acceptable.
   const configuredEngineByChar = new Map<string, string>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
@@ -293,34 +301,13 @@ export async function scoreBook(
         continue;
       }
 
-      // Engine mismatch (fallback render): always voice-mismatch by definition.
-      // The segment was rendered by a different engine than configured, so regardless
-      // of acoustic similarity the render is a candidate for repair.
-      if (renderedEngine !== configuredEngine) {
-        const fixable = STOCHASTIC_ENGINES.has(configuredEngine);
-        verdictRows.push({
-          characterId: row.characterId,
-          sentenceIds: row.sentenceIds,
-          verdict: 'voice-mismatch',
-          cosine: 0,
-          severity: 'severe',
-          fixable,
-          expectedEngine: configuredEngine,
-          renderedEngine,
-          referenceKind: ref.referenceKind,
-          windowed: false,
-        });
-        continue;
-      }
-
-      // Acoustic scoring against the character's centroid
+      // Acoustic scoring against the character's centroid.
+      // ALL embedded segments — including fallback renders — are scored acoustically
+      // per spec §4.1. Fallback segments usually flag (Kokoro timbre is far from a
+      // Qwen centroid → low cosine → voice-mismatch), but via the real metric.
+      // The stored `cosine` is always the real measurement (Task 13 reads it).
       const cosine = cosineToCentroid(Array.from(row.vec), ref.centroid);
-      // scoreSegment needs durationSec — we don't have it here (embeddings don't
-      // carry duration). Use a value well above the floor so the duration guard
-      // never triggers; the embed pass (Task 6) already enforced MIN_DURATION_SEC
-      // as a pre-condition for writing the embedding row.
-      const ASSUMED_DURATION_SEC = 10.0;
-      const { verdict, severity } = scoreSegmentLocal(cosine, ref, ASSUMED_DURATION_SEC);
+      const { verdict, severity } = scoreSegment(cosine, ref, ASSUMED_DURATION_SEC);
 
       const fixable = verdict === 'voice-mismatch' && severity === 'severe'
         && STOCHASTIC_ENGINES.has(configuredEngine);
@@ -346,23 +333,3 @@ export async function scoreBook(
   }
 }
 
-// ── Local scoring helper ───────────────────────────────────────────────────
-
-/** Inline scoring using the character's ref spread. Mirrors scoreSegment but
- *  avoids importing scoreSegment's full signature (durationSec). */
-function scoreSegmentLocal(
-  cosine: number,
-  ref: CharacterReference,
-  durationSec: number,
-): { verdict: VerdictRow['verdict']; severity: VerdictRow['severity'] } {
-  if (durationSec < CUTOFFS.minDurationSec) {
-    return { verdict: 'inconclusive', severity: 'inconclusive' };
-  }
-  if (cosine < ref.pSevere) {
-    return { verdict: 'voice-mismatch', severity: 'severe' };
-  }
-  if (cosine < ref.pBand) {
-    return { verdict: 'inconclusive', severity: 'inconclusive' };
-  }
-  return { verdict: 'voice-match', severity: null };
-}
