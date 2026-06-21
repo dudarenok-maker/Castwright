@@ -1,7 +1,7 @@
 /**
  * srv-36 — acoustic candidate source + accept-check in chapter-qa-repair.ts
  *
- * Three cases:
+ * Four cases:
  *   1. Dry-run scan picks up an acoustic (voice-mismatch/fixable) candidate
  *      from the sibling render-integrity.json when qa.speaker.autoRepair is on.
  *   2. Non-dry-run: a mocked re-render with mocked /embed returning a high-cosine
@@ -10,6 +10,10 @@
  *   3. A signal/ASR-only candidate (acoustic === undefined) is NOT rejected even
  *      when the mocked embed returns a cosine BELOW cleanMean — the acoustic gate
  *      must be conditional on candidate.acoustic, not applied universally.
+ *      Also asserts embedSegment is NOT called for a signal-only candidate.
+ *   4. UNION candidate (segment flagged by signal QA AND present as voice-mismatch/
+ *      fixable in the verdict file) with NO centroids file is STILL re-rendered
+ *      and repaired on signal grounds — the pre-filter must not drop it.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -18,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { embedSegment } from '../tts/embed-client.js';
 
 // ── Module mocks (must come before any imports of the mocked modules) ────────
 
@@ -391,6 +396,9 @@ describe('audio-qa-repair acoustic candidate source (srv-36)', () => {
     // Set embed to return LOW cosine (orthogonal to centroid) — below cleanMean 0.70.
     embedReturnHighCosine = false;
 
+    // Clear prior calls from Test 2 so we get a clean call-count baseline.
+    vi.mocked(embedSegment).mockClear();
+
     // The signal scan will flag the silence. The re-render (mocked synthesiseChapter)
     // returns a loud healthy tone, which the signal QA accepts.
     // Even though embed returns a low cosine, the signal candidate (acoustic===undefined)
@@ -409,8 +417,56 @@ describe('audio-qa-repair acoustic candidate source (srv-36)', () => {
     expect(repaired).toContain(0);
     expect((done!.stillSuspect as number[]).includes(0)).toBe(false);
 
+    // embedSegment must NOT have been called — it is only invoked for acoustic candidates.
+    expect(vi.mocked(embedSegment)).not.toHaveBeenCalled();
+
     // Restore fixtures for any subsequent tests.
     writeVerdictFixture(0);
+    const heroTone = tone(2.0, 12000);
+    const mp3BytesRestored = await encodePcmToAudio(heroTone, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(audioRoot, `${SLUG}.mp3`), mp3BytesRestored);
+    embedReturnHighCosine = true;
+  });
+
+  it('union candidate (signal+acoustic) with no centroids file is still re-rendered and repaired on signal grounds', async () => {
+    // Set up: a SILENT segment (triggers signal QA flag) AND a voice-mismatch/fixable
+    // verdict row for the same segment (triggers acoustic UNION). No centroids file.
+    const { encodePcmToAudio } = await import('../tts/mp3.js');
+    const silence = Buffer.alloc(SR * 2 * 2); // 2s of silence
+    const mp3Bytes = await encodePcmToAudio(silence, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(audioRoot, `${SLUG}.mp3`), mp3Bytes);
+
+    // Write a fixable voice-mismatch verdict row for segment 0 (UNION path).
+    writeVerdictFixture(0);
+
+    // Remove the centroids file so readCentroids returns null.
+    const centroidsPath = join(audioRoot, 'render-integrity.centroids.json');
+    writeFileSync(centroidsPath, 'null'); // invalid JSON trick: just write an empty object
+    // Actually write a valid empty object so JSON.parse doesn't throw.
+    writeFileSync(centroidsPath, JSON.stringify({}));
+
+    // embedReturnHighCosine doesn't matter — embedSegment must not be called for
+    // the union candidate when there is no centroid (no centroid → no acoustic embed).
+    vi.mocked(embedSegment).mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    const repaired = done!.repaired as number[];
+    const stillSuspect = (done!.stillSuspect as number[]) ?? [];
+
+    // The segment must be re-rendered and accepted on signal grounds (loud re-render
+    // passes signal QA), NOT pushed to stillSuspect by the pre-filter.
+    expect(repaired).toContain(0);
+    expect(stillSuspect.includes(0)).toBe(false);
+
+    // Restore all fixtures for future tests.
+    writeCentroidFixture();
     const heroTone = tone(2.0, 12000);
     const mp3BytesRestored = await encodePcmToAudio(heroTone, SR, { format: 'mp3', quality: 2 });
     writeFileSync(join(audioRoot, `${SLUG}.mp3`), mp3BytesRestored);

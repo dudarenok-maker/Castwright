@@ -57,7 +57,7 @@ import { readFile } from 'node:fs/promises';
 import { configValue } from '../config/resolver.js';
 import { readVerdicts, writeVerdicts } from '../audio/render-integrity/verdicts-io.js';
 import { readCentroids, type CharacterCentroid } from '../audio/render-integrity/centroids-io.js';
-import { cosineToCentroid } from '../audio/render-integrity/score.js';
+import { cosineToCentroid, scoreSegment } from '../audio/render-integrity/score.js';
 import { embedSegment } from '../tts/embed-client.js';
 import { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION, type EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 
@@ -168,6 +168,12 @@ chapterQaRepairRouter.post(
         sentenceIds: number[];
         reasons: string[];
         acoustic?: boolean;
+        /** True only when this candidate originated EXCLUSIVELY from the acoustic
+         *  verdict file (no pre-existing signal/ASR entry). When a verdict-file row
+         *  is unioned into an existing signal/ASR candidate (existing.acoustic = true),
+         *  acousticOnly is NOT set — the candidate remains signal-backed and must not
+         *  be dropped by the centroid pre-filter. */
+        acousticOnly?: boolean;
       }> = [];
       for (let i = 0; i < segFile.segments.length; i += 1) {
         const seg = segFile.segments[i];
@@ -222,6 +228,7 @@ chapterQaRepairRouter.post(
             const existing = flagged.find((f) => f.segmentIndex === segIdx);
             if (existing) {
               // Union: the signal/ASR scan already covers this segment; mark it acoustic too.
+              // acousticOnly is NOT set — the candidate is still signal-backed.
               existing.acoustic = true;
             } else {
               flagged.push({
@@ -230,6 +237,7 @@ chapterQaRepairRouter.post(
                 sentenceIds: row.sentenceIds.slice(),
                 reasons: [`voice-mismatch cosine ${row.cosine.toFixed(3)} < E (fixable)`],
                 acoustic: true,
+                acousticOnly: true,
               });
             }
           }
@@ -326,15 +334,21 @@ chapterQaRepairRouter.post(
          Populated inside the synth callback; flushed to disk after finalize. */
       const newEmbeddingsByIndex = new Map<number, Float32Array>();
 
-      /* Edit 2 pre-filter (srv-36): for acoustic-only candidates, skip ones whose
-         engine is unavailable or whose character has no usable centroid. Mark them
-         inconclusive up front so they don't reach the re-render path. */
+      /* Edit 2 pre-filter (srv-36): for acoustic-ONLY candidates (no signal/ASR
+         backing), skip ones whose engine is unavailable or whose character has no
+         usable centroid. Mark them inconclusive up front so they don't reach the
+         re-render path.
+         UNION candidates (acoustic flag set on an existing signal/ASR entry,
+         acousticOnly === undefined/false) are NEVER filtered here — they must
+         still be re-rendered on signal grounds even when there is no centroid.
+         The conditional accept gate (Edit 5) already correctly skips the cosine
+         check when no centroid is present, so union candidates are safe. */
       const targetIndices: number[] = [];
       for (const f of flagged) {
-        if (f.acoustic) {
+        if (f.acousticOnly) {
           const charCentroid = centroids?.[f.characterId];
           if (!charCentroid || charCentroid.referenceKind === 'too-short') {
-            // No usable centroid — defensive skip.
+            // No usable centroid — acoustic-only candidate cannot be scored; skip.
             stillSuspect.push(f.segmentIndex);
             continue;
           }
@@ -531,12 +545,14 @@ chapterQaRepairRouter.post(
                 (r) => r.sentenceIds.length > 0 && seg.sentenceIds.every((id) => r.sentenceIds.includes(id)),
               );
               if (vRowIdx >= 0) {
+                const durationSec = (seg.endSec ?? 0) - (seg.startSec ?? 0);
+                const scored = scoreSegment(newCosine, { pSevere: centroid.pSevere, pBand: centroid.pBand }, durationSec);
                 verdictRows[vRowIdx] = {
                   ...verdictRows[vRowIdx],
                   cosine: newCosine,
-                  verdict: newCosine >= centroid.pBand ? 'voice-match' : newCosine >= centroid.pSevere ? 'inconclusive' : 'voice-mismatch',
-                  severity: newCosine >= centroid.pBand ? null : newCosine >= centroid.pSevere ? 'inconclusive' : 'severe',
-                  fixable: newCosine < centroid.pSevere,
+                  verdict: scored.verdict,
+                  severity: scored.severity,
+                  fixable: scored.verdict === 'voice-mismatch',
                 };
               }
             }
