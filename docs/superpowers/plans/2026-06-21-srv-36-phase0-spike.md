@@ -1,74 +1,63 @@
-# srv-36 Phase 0 — Residual-Value Spike Implementation Plan
+# srv-36 Phase 0 — Stochastic-Drift Spike Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a throwaway measurement harness that answers, on real TTS output, whether an ECAPA speaker-embedding check can flag *same-config* render defects (near-miss wrong preset, garble, and — optionally — silent fallback) that the existing config-drift detector is blind to — and emit a committed `{go|no-go}` recommendation that gates whether srv-36 Phase 1 is ever built.
+**Goal:** Measure, on real Qwen + Coqui (stochastic) output, whether an ECAPA speaker-embedding check can catch the model's own **drift** (a correctly-configured voice rendering wrong) — specifically drift that the **existing ASR + audio-QA gates miss** — and emit a committed `{go|no-go}` recommendation that gates whether srv-36 Phase 1 is ever built.
 
-**Architecture:** A self-contained Python **package** at `server/tts-sidecar/spikes/srv36/`, run in the existing sidecar venv (which already has torch + the TTS engines; we add `speechbrain`). Pure helpers (cosine, EER, residual-value-by-tier, PCM injection transforms, coverage, the go/no-go decision) are TDD'd. Experiment *drivers* (E1–E3) render the canonical fixture's real lines on a GPU box, inject defects **in code**, feed real embeddings into the pure aggregators, and write `eN.json`. A final synthesizer reads the result files and produces `FINDINGS.md`. **No production code, no settings, no events, no sidecar engine — throwaway research.**
+**Architecture:** A throwaway Python **package** at `server/tts-sidecar/spikes/srv36/`, run in the sidecar venv (+`speechbrain`). The fixture book is **over-generated M times through the real pipeline** with the ASR + audio-QA gates ON, producing, per run, chapter audio + a `segments.json` carrying the **real per-segment gate verdicts**. The Python spike reads those artifacts: it slices per-segment PCM, embeds with ECAPA, builds a per-character **centroid** from clean renders, scores every segment's cosine-to-centroid, and computes F1 (stochastic floor + centroid size K), F3 (separability of real misfires above the floor), F4 (**residual value** — drift acoustic flags that the gates missed; human-confirmed), F5 (length/coverage). Pure helpers are TDD'd; the on-box analysis reads real artifacts. **No production code, no settings, no synthetic injection.**
 
-**Tech Stack:** Python 3.11/3.12, pytest, numpy, SpeechBrain ECAPA-TDNN (`spkrec-ecapa-voxceleb`), the existing sidecar Kokoro engine.
+**Tech Stack:** Python 3.11/3.12, pytest, numpy, SpeechBrain ECAPA-TDNN (`spkrec-ecapa-voxceleb`); the real generation pipeline for the over-generation runs.
 
 ## Global Constraints
 
-- **Throwaway/committed-for-reproducibility, NOT production.** No changes to `main.py`, no new endpoint, no config keys, no `segments.json` changes. Everything under `server/tts-sidecar/spikes/srv36/`.
-- **Verified engine API (do not deviate):** `main.py:1934` exposes `ENGINES: dict[str, Engine]`. The synth method is `Engine.synthesize(self, model: str, voice: str, text: str) -> SynthResult` (`main.py:452/947`). `SynthResult` (`main.py:358`) has `.pcm: bytes` (mono int16-LE) and `.sample_rate: int`. For Kokoro, `model` is `"v1"`. **Always read `pcm`/`sample_rate` off the result — never assume 24000, never read `sample_rate` off the engine.** `import main` is side-effect-safe (no port bind, lazy model load — verified), but set `os.environ.setdefault("PRELOAD_COQUI","0")`/`setdefault("PRELOAD_KOKORO","0")` before importing it anyway.
-- **Kokoro-only spine.** Kokoro is deterministic ONNX → reproducible. The go/no-go uses only Kokoro-renderable, **in-code-scripted** defects. **Qwen→Kokoro fallback and E4 emotion are OPTIONAL on-box enrichment** (need designed Qwen voices that may be absent); they are skipped-if-absent and **never** affect the recommendation.
-- **Verified injection reality (spec §2.0):** no seed surface; Kokoro never stochastically glitches. The deterministically producible same-config defects used for the gate are: **(subtle)** same-gender near-miss preset (render a character's line with a *different female* Kokoro voice than its reference); **(gross)** distant preset (female→male) and **constructed garble** (post-synth PCM corruption). **Voice bleed is observational-only, never the gate.**
-- **The gate is judged on the SUBTLE tier** (spec §2.1). A high pooled flag-rate carried by the gross tier does NOT clear the gate. Every residual-value number is reported per tier. **`aggregate_e1` errors (not silently no-goes) if the subtle list is empty** — an empty gate input is a harness bug, not a verdict.
-- **Calibration anchor is the MEASURED in-domain EER, never VoxCeleb 0.9%** (spec §2.1/R2).
-- **Data sources (real, committed):** voices from `samples/the-coalfall-commission/.audiobook/cast.json`; lines from a committed hand-authored `spike_lines.json` (ground-truth character→line from `server/src/__fixtures__/the-coalfall-commission.md`). **No regex attribution** — the fragile parser is dropped.
-- **Recommendation field is exactly one of `{go, no-go}`** (spec §2.2) — no "descope."
-- **Tests run via direct pytest invocation**, NOT `npm run test:sidecar` (verified: `pytest.ini testpaths = tests`, `run-tests.ps1` only collects `server/tts-sidecar/tests/`, so the spike dir is not on the gate path — by design, it's throwaway). Run: `server/tts-sidecar/.venv/Scripts/python.exe -m pytest server/tts-sidecar/spikes/srv36/tests -v`. Model-dependent tests SKIP+exit-0 when weights/venv are absent.
-- All audio is mono int16-LE PCM; ECAPA wants 16 kHz float — resample at embed time via `torchaudio.functional.resample` (present + pinned; this is NOT `torchaudio.load`, so no FFmpeg/codec dependency).
+- **Throwaway/committed-for-reproducibility, NOT production.** No changes to `main.py`/server, no settings, no events. Everything under `server/tts-sidecar/spikes/srv36/`.
+- **Drift is non-deterministic (spec §1).** Engines under test are the **stochastic** ones — **Qwen and Coqui XTTS**. **Kokoro is excluded** (deterministic → cannot drift). The over-generation runs use whatever stochastic engine(s) the fixture's designed voices support.
+- **Real labels, not injection (spec §2).** The "is this render bad" labels come from the **existing gates' per-segment verdicts** already written into `segments.json` during generation (`asr` = `AsrClassification.verdict`, plus the per-segment `qa`/`suspect` signal-QA flags). The spike never fabricates a defect.
+- **Over-generation is required.** Real drift appears only at volume → generate the fixture book **M times** (M ≥ 10 to start; more is better) with `SEG_ASR_ENABLED=1` and audio-QA on. Each run re-renders stochastically.
+- **Reference is a CENTROID** (spec §2.0/§3.3): per character, the mean (re-normalised) embedding of its **clean** (gate-passing) renders across runs. Centroid size K is an F1 output.
+- **The gate is F4** (spec §2.1): acoustic must flag real drift that **ASR + audio-QA missed**, human-confirmed. Re-flagging only what the gates already catch = redundant = **no-go**. F1 (floor too wide) and F3 (can't separate) are earlier no-go exits.
+- **Calibration anchor = measured in-domain EER** (F3), never VoxCeleb 0.9%.
+- **Recommendation is exactly one of `{go, no-go}`.**
+- **Tests:** direct pytest, NOT `npm run test:sidecar` (the spike dir is not on that gate path by design). Run from the sidecar root so imports resolve: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests -v`. Model-dependent tests SKIP+exit-0 when weights/venv absent.
+- All audio mono int16-LE; ECAPA wants 16 kHz float — resample at embed time (`torchaudio.functional.resample`; not `.load`, so no FFmpeg dependency).
 
 ---
 
 ## File Structure
 
-`srv36` is a valid Python package (no hyphen — `python -m spikes.srv36.run_e1` works). Modules import as `spikes.srv36.X`.
+`srv36` is a valid package. Modules import as `spikes.srv36.X`.
 
 | File | Responsibility |
 |---|---|
-| `server/tts-sidecar/spikes/__init__.py`, `spikes/srv36/__init__.py`, `spikes/srv36/tests/__init__.py` | package markers |
-| `server/tts-sidecar/spikes/srv36/README.md` | how to run on a GPU box; what each artifact means; optional Qwen steps |
-| `server/tts-sidecar/spikes/srv36/spike_lines.json` | committed ground-truth `{character: [line, ...]}` from the fixture |
-| `server/tts-sidecar/spikes/srv36/embed.py` | ECAPA load + `embed_pcm(pcm, sr) -> np.ndarray` (192-dim, L2-normalised) |
-| `server/tts-sidecar/spikes/srv36/metrics.py` | PURE: `cosine`, `eer`, `intra_speaker_spread`, `residual_value_by_tier`, `coverage` |
-| `server/tts-sidecar/spikes/srv36/inject.py` | PURE PCM transforms: `truncate`, `clip`, `reverse_span`, `splice` |
-| `server/tts-sidecar/spikes/srv36/cast_data.py` | PURE loaders: `load_cast_voices()`, `load_lines()`, `near_miss_voice()` |
-| `server/tts-sidecar/spikes/srv36/render.py` | on-box: `render_clip(engine, model, voice, text) -> (pcm, sr)`; `build_clips()` |
-| `server/tts-sidecar/spikes/srv36/run_e1.py` | E1 residual-value: pure `aggregate_e1` + on-box driver → `results/e1.json` |
-| `server/tts-sidecar/spikes/srv36/run_e2.py` | E2 separability + in-domain EER: pure `aggregate_e2` + driver → `results/e2.json` |
-| `server/tts-sidecar/spikes/srv36/run_e3.py` | E3 clip-length + coverage: pure `aggregate_e3` + driver → `results/e3.json` |
-| `server/tts-sidecar/spikes/srv36/run_e4.py` | E4 emotion shift (OPTIONAL): pure `aggregate_e4` + driver → `results/e4.json` |
-| `server/tts-sidecar/spikes/srv36/synthesize.py` | PURE `decide(e1,e2,e3,e4) -> {recommendation, reasons}` + writes `FINDINGS.md` |
-| `server/tts-sidecar/spikes/srv36/tests/*.py` | pytest for embed / metrics / inject / cast_data / aggregates |
-| `server/tts-sidecar/spikes/srv36/results/.gitignore` | ignores `clips/`, `clips_manifest.json` (large PCM) |
-| `server/tts-sidecar/spikes/srv36/FINDINGS.md` | the committed deliverable (go/no-go + measured numbers) |
+| `spikes/__init__.py`, `spikes/srv36/__init__.py`, `spikes/srv36/tests/__init__.py` | package markers |
+| `spikes/srv36/README.md` | on-box run guide: designed voices, the M-run over-generation command, analysis, F4 listening |
+| `spikes/srv36/embed.py` | ECAPA load + `embed_pcm(pcm, sr) -> np.ndarray` (192-dim, L2-normalised) |
+| `spikes/srv36/metrics.py` | PURE: `cosine`, `eer`, `centroid`, `spread_stats`, `coverage` |
+| `spikes/srv36/segments_io.py` | PURE: `load_segments(path)`, `seg_key(seg)`, `slice_pcm(pcm, sr, start_sec, end_sec)` |
+| `spikes/srv36/gates.py` | PURE: `is_gate_flagged(seg) -> bool` (existing ASR + signal-QA verdicts) |
+| `spikes/srv36/aggregates.py` | PURE: `f1_floor`, `f3_separability`, `f5_length_coverage`, `residual_value` |
+| `spikes/srv36/synthesize.py` | PURE: `decide(f1, f3, f4, f5)` + on-box `write_findings()` |
+| `spikes/srv36/analyze.py` | on-box: read M runs → centroids, per-segment cosine, label join → `results/*.json` + exports F4 listen-set |
+| `spikes/srv36/tests/*.py` | pytest for embed / metrics / segments_io / gates / aggregates / decide |
+| `spikes/srv36/results/.gitignore` | ignores `clips/`, `runs/` (large audio) |
+| `spikes/srv36/FINDINGS.md` | committed deliverable (go/no-go + measured numbers) |
 
-**Tooling:** `PY="server/tts-sidecar/.venv/Scripts/python.exe"`. Pure-helper tests run under any Python with numpy/pytest. Run pytest with the sidecar dir as rootdir so `import main` and `import spikes.srv36.*` resolve: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests -v`.
+**Tooling:** `PY="server/tts-sidecar/.venv/Scripts/python.exe"`. Pure tests run anywhere with numpy/pytest.
 
 ---
 
-### Task 1: Package scaffold + ECAPA embed wrapper
+### Task 1: Scaffold + ECAPA embed wrapper
 
-**Files:**
-- Create: `server/tts-sidecar/spikes/__init__.py` (empty), `spikes/srv36/__init__.py` (empty), `spikes/srv36/tests/__init__.py` (empty)
-- Create: `server/tts-sidecar/spikes/srv36/results/.gitignore`
-- Create: `server/tts-sidecar/spikes/srv36/embed.py`
-- Create: `server/tts-sidecar/spikes/srv36/tests/conftest.py`
-- Create: `server/tts-sidecar/spikes/srv36/tests/test_embed.py`
-- Create: `server/tts-sidecar/spikes/srv36/README.md`
+**Files:** create `spikes/__init__.py`, `spikes/srv36/__init__.py`, `spikes/srv36/tests/__init__.py` (all empty); `spikes/srv36/results/.gitignore`; `spikes/srv36/embed.py`; `spikes/srv36/tests/conftest.py`; `spikes/srv36/tests/test_embed.py`; `spikes/srv36/README.md`.
 
-**Interfaces:**
-- Produces: `embed_pcm(pcm: bytes, sample_rate: int) -> np.ndarray` (192-dim float32, L2-normalised); `load_encoder()` (cached). Consumed by every `run_eN.py`.
+**Interfaces:** Produces `embed_pcm(pcm: bytes, sample_rate: int) -> np.ndarray` (192-dim, L2-normalised); `load_encoder()` (cached).
 
-- [ ] **Step 1: Write `.gitignore` and the embed wrapper**
+- [ ] **Step 1: `.gitignore` + embed wrapper**
 
-`server/tts-sidecar/spikes/srv36/results/.gitignore`:
+`spikes/srv36/results/.gitignore`:
 ```
 clips/
-clips_manifest.json
+runs/
 ```
 
 ```python
@@ -83,15 +72,12 @@ TARGET_SR = 16000
 
 @functools.lru_cache(maxsize=1)
 def load_encoder():
-    from speechbrain.inference.speaker import EncoderClassifier  # 1.0+ path
+    from speechbrain.inference.speaker import EncoderClassifier
     return EncoderClassifier.from_hparams(
-        source="speechbrain/spkrec-ecapa-voxceleb",
-        run_opts={"device": "cpu"},
-    )
+        source="speechbrain/spkrec-ecapa-voxceleb", run_opts={"device": "cpu"})
 
 
 def embed_pcm(pcm: bytes, sample_rate: int) -> "np.ndarray":
-    """Mono int16-LE PCM -> 192-dim L2-normalised float32 embedding."""
     import torch, torchaudio
     audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
     t = torch.from_numpy(audio).unsqueeze(0)
@@ -104,12 +90,11 @@ def embed_pcm(pcm: bytes, sample_rate: int) -> "np.ndarray":
     return emb / norm if norm > 0 else emb
 ```
 
-- [ ] **Step 2: Write the conftest (sidecar dir on path) and the SKIP-gated test**
+- [ ] **Step 2: conftest + SKIP-gated test**
 
 ```python
 # server/tts-sidecar/spikes/srv36/tests/conftest.py
 import os, sys
-# tts-sidecar root → so `import main` and `import spikes.srv36.*` both resolve.
 _SIDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _SIDE not in sys.path:
     sys.path.insert(0, _SIDE)
@@ -119,130 +104,97 @@ os.environ.setdefault("PRELOAD_KOKORO", "0")
 
 ```python
 # server/tts-sidecar/spikes/srv36/tests/test_embed.py
-import math
-import numpy as np
-import pytest
-
-pytest.importorskip("speechbrain")
-pytest.importorskip("torch")
-
+import math, numpy as np, pytest
+pytest.importorskip("speechbrain"); pytest.importorskip("torch")
 from spikes.srv36.embed import embed_pcm
 
 
 def _tone(sr=16000, secs=2.0, hz=140.0):
-    n = int(sr * secs)
-    t = np.arange(n) / sr
+    t = np.arange(int(sr * secs)) / sr
     return (np.sin(2 * math.pi * hz * t) * 8000).astype("<i2").tobytes()
 
 
 def test_embed_is_deterministic_and_unit_norm():
-    pcm = _tone()
-    a = embed_pcm(pcm, 16000)
-    b = embed_pcm(pcm, 16000)
+    a, b = embed_pcm(_tone(), 16000), embed_pcm(_tone(), 16000)
     assert a.shape == (192,)
     assert np.allclose(a, b)
     assert abs(np.linalg.norm(a) - 1.0) < 1e-4
     assert float(a @ b) > 0.999
 ```
 
-- [ ] **Step 3: Run the test**
+- [ ] **Step 3: Run** — `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_embed.py -v`. Expected: PASS (weights present) or SKIP.
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_embed.py -v`
-Expected: PASS where `speechbrain` + weights exist; SKIPPED otherwise. Both acceptable.
+- [ ] **Step 4: README** — `pip install speechbrain`; the over-generation command (Task 8); analysis (Task 7); the F4 listening step. Note the fixture's designed Qwen/Coqui voices must be in the workspace.
 
-- [ ] **Step 4: README**
-
-Create `server/tts-sidecar/spikes/srv36/README.md`: one-line `pip install speechbrain` into the sidecar venv (first run downloads ~20 MB ECAPA weights to the HF cache); the run order (`render → run_e1/e2/e3 → synthesize`); and an **Optional Qwen** section noting that `run_e4` + the fallback enrichment need the designed Qwen voices from `samples/the-coalfall-commission/.audiobook/` to be present in the workspace, and are skipped if absent.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/
-git commit -m "feat(sidecar): srv-36 phase-0 spike scaffold + ECAPA embed wrapper"
-```
+- [ ] **Step 5: Commit** — `git add server/tts-sidecar/spikes/ && git commit -m "feat(sidecar): srv-36 phase-0 stochastic spike scaffold + ECAPA embed"`
 
 ---
 
 ### Task 2: Pure metric helpers
 
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/metrics.py`
-- Create: `server/tts-sidecar/spikes/srv36/tests/test_metrics.py`
+**Files:** create `spikes/srv36/metrics.py`, `spikes/srv36/tests/test_metrics.py`.
 
-**Interfaces:**
-- Produces: `cosine(a,b)->float`; `eer(genuine,impostor)->{"eer","threshold"}`; `intra_speaker_spread(sims)->{"mean","std","p05"}`; `residual_value_by_tier(clean, defects, cutoff)->{tier:{flagged_fraction,n}, clean_false_positive_rate, cutoff}` (a defect is "flagged" when its similarity-to-reference is **below** `cutoff`); `coverage(durations, floor)->float`.
+**Interfaces:** `cosine(a,b)->float`; `eer(genuine,impostor)->{"eer","threshold"}`; `centroid(embeddings)->np.ndarray` (mean, re-L2-normalised); `spread_stats(sims)->{"mean","std","p05"}`; `coverage(durations,floor)->float`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Failing tests**
 
 ```python
 # server/tts-sidecar/spikes/srv36/tests/test_metrics.py
-from spikes.srv36.metrics import (
-    cosine, eer, intra_speaker_spread, residual_value_by_tier, coverage,
-)
+import numpy as np
+from spikes.srv36.metrics import cosine, eer, centroid, spread_stats, coverage
 
 
 def test_cosine_basic():
     assert cosine([1, 0], [1, 0]) == 1.0
     assert cosine([1, 0], [0, 1]) == 0.0
-    assert round(cosine([1, 0], [-1, 0]), 6) == -1.0
-    assert cosine([0, 0], [1, 0]) == 0.0  # zero-vector guard
+    assert cosine([0, 0], [1, 0]) == 0.0
 
 
-def test_eer_perfectly_separable():
-    out = eer(genuine=[0.9, 0.95, 0.92], impostor=[0.1, 0.2, 0.15])
-    assert out["eer"] == 0.0
-    assert 0.2 < out["threshold"] < 0.9
+def test_centroid_is_unit_norm_mean_direction():
+    c = centroid([[1.0, 0.0], [0.0, 1.0]])
+    assert abs(np.linalg.norm(c) - 1.0) < 1e-6
+    assert cosine(c, [1, 1]) > 0.999  # mean direction is the 45° axis
 
 
-def test_eer_total_overlap_is_high():
-    assert eer(genuine=[0.5, 0.5], impostor=[0.5, 0.5])["eer"] >= 0.5
+def test_eer_separable_and_overlap():
+    assert eer([0.9, 0.95], [0.1, 0.2])["eer"] == 0.0
+    assert eer([0.5, 0.5], [0.5, 0.5])["eer"] >= 0.5
 
 
-def test_intra_speaker_spread():
-    out = intra_speaker_spread([0.90, 0.92, 0.88, 0.91])
-    assert 0.88 <= out["mean"] <= 0.92
-    assert out["std"] >= 0.0
-    assert out["p05"] <= out["mean"]
-
-
-def test_residual_value_by_tier_flags_below_cutoff():
-    out = residual_value_by_tier(
-        clean=[0.95, 0.96, 0.94],
-        defects={"subtle": [0.80, 0.97, 0.78], "gross": [0.30, 0.20, 0.25]},
-        cutoff=0.85,
-    )
-    assert round(out["subtle"]["flagged_fraction"], 3) == 0.667
-    assert out["subtle"]["n"] == 3
-    assert out["gross"]["flagged_fraction"] == 1.0
-    assert out["clean_false_positive_rate"] == 0.0
+def test_spread_stats():
+    out = spread_stats([0.90, 0.92, 0.88, 0.91])
+    assert 0.88 <= out["mean"] <= 0.92 and out["std"] >= 0.0 and out["p05"] <= out["mean"]
 
 
 def test_coverage():
-    assert coverage([1.0, 2.0, 3.0, 0.5], floor=2.0) == 0.5
+    assert coverage([1.0, 2.0, 3.0, 0.5], 2.0) == 0.5
 ```
 
-- [ ] **Step 2: Run to verify failure**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_metrics.py -v`
-Expected: FAIL — `ModuleNotFoundError: spikes.srv36.metrics`.
+- [ ] **Step 2: Run to verify failure** — `... -m pytest spikes/srv36/tests/test_metrics.py -v` → FAIL (no module).
 
 - [ ] **Step 3: Implement**
 
 ```python
 # server/tts-sidecar/spikes/srv36/metrics.py
-"""Pure measurement helpers for the srv-36 Phase-0 spike. numpy only."""
+"""Pure measurement helpers for the srv-36 stochastic-drift spike. numpy only."""
 from __future__ import annotations
 import numpy as np
 
 
 def cosine(a, b) -> float:
-    a = np.asarray(a, dtype=np.float64); b = np.asarray(b, dtype=np.float64)
+    a = np.asarray(a, np.float64); b = np.asarray(b, np.float64)
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
     return float(np.dot(a, b) / (na * nb)) if na and nb else 0.0
 
 
+def centroid(embeddings) -> "np.ndarray":
+    m = np.asarray(embeddings, np.float64).mean(axis=0)
+    n = np.linalg.norm(m)
+    return (m / n) if n else m
+
+
 def eer(genuine, impostor) -> dict:
-    g = np.asarray(genuine, dtype=np.float64); im = np.asarray(impostor, dtype=np.float64)
+    g = np.asarray(genuine, np.float64); im = np.asarray(impostor, np.float64)
     cands = np.unique(np.concatenate([g, im, [g.min() - 1e-6, im.max() + 1e-6]])) \
         if g.size and im.size else np.array([0.0])
     best = {"eer": 1.0, "threshold": 0.0, "gap": 2.0}
@@ -254,925 +206,540 @@ def eer(genuine, impostor) -> dict:
     return {"eer": best["eer"], "threshold": best["threshold"]}
 
 
-def intra_speaker_spread(sims) -> dict:
-    arr = np.asarray(sims, dtype=np.float64)
-    return {"mean": float(arr.mean()), "std": float(arr.std()),
-            "p05": float(np.percentile(arr, 5))}
+def spread_stats(sims) -> dict:
+    a = np.asarray(sims, np.float64)
+    return {"mean": float(a.mean()), "std": float(a.std()), "p05": float(np.percentile(a, 5))}
 
 
-def residual_value_by_tier(clean, defects: dict, cutoff: float) -> dict:
-    out: dict = {}
-    for tier, scores in defects.items():
-        s = np.asarray(scores, dtype=np.float64)
-        out[tier] = {"flagged_fraction": float(np.mean(s < cutoff)) if s.size else 0.0,
-                     "n": int(s.size)}
-    c = np.asarray(clean, dtype=np.float64)
-    out["clean_false_positive_rate"] = float(np.mean(c < cutoff)) if c.size else 0.0
-    out["cutoff"] = float(cutoff)
-    return out
-
-
-def coverage(durations, floor: float) -> float:
-    d = np.asarray(durations, dtype=np.float64)
+def coverage(durations, floor) -> float:
+    d = np.asarray(durations, np.float64)
     return float(np.mean(d >= floor)) if d.size else 0.0
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [ ] **Step 4: Run to verify pass** — PASS (5 tests).
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_metrics.py -v`
-Expected: PASS (6 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/metrics.py server/tts-sidecar/spikes/srv36/tests/test_metrics.py
-git commit -m "feat(sidecar): srv-36 spike pure metric helpers"
-```
+- [ ] **Step 5: Commit** — `git add ...metrics.py ...test_metrics.py && git commit -m "feat(sidecar): srv-36 spike pure metric helpers (cosine/eer/centroid/coverage)"`
 
 ---
 
-### Task 3: Pure PCM injection transforms
+### Task 3: Segment I/O (load real segments.json, slice PCM)
 
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/inject.py`
-- Create: `server/tts-sidecar/spikes/srv36/tests/test_inject.py`
+**Files:** create `spikes/srv36/segments_io.py`, `spikes/srv36/tests/test_segments_io.py`.
 
 **Interfaces:**
-- Produces (mono int16-LE `bytes` in/out): `truncate(pcm, sr, keep_sec)`; `clip(pcm, ceiling=0.6)`; `reverse_span(pcm, sr, start_sec, dur_sec)`; `splice(pcm_a, pcm_b, sr, at_sec)`.
+- `load_segments(path) -> list[dict]` — reads a `<slug>.segments.json`, returns each segment with `character`, `start_sec`, `end_sec`, and the raw `asr`/`qa`/`suspect` fields preserved.
+- `seg_key(seg) -> str` — stable id `"{character}:{start_sec:.3f}-{end_sec:.3f}"`.
+- `slice_pcm(pcm, sr, start_sec, end_sec) -> bytes` — int16 byte-offset slice (mirrors `chapter-qa-repair.ts` `secToByteOffset`).
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Failing tests**
 
 ```python
-# server/tts-sidecar/spikes/srv36/tests/test_inject.py
-import numpy as np
-from spikes.srv36.inject import truncate, clip, reverse_span, splice
+# server/tts-sidecar/spikes/srv36/tests/test_segments_io.py
+import json, numpy as np
+from spikes.srv36.segments_io import load_segments, seg_key, slice_pcm
 
 SR = 16000
-def _ramp(n): return (np.linspace(-30000, 30000, n)).astype("<i2").tobytes()
 
 
-def test_truncate_keeps_only_requested_seconds():
-    assert len(truncate(_ramp(SR), SR, 0.25)) == int(SR * 0.25) * 2
+def test_load_segments_normalises_fields(tmp_path):
+    p = tmp_path / "ch.segments.json"
+    p.write_text(json.dumps({"segments": [
+        {"characterId": "wren", "startSec": 0.0, "endSec": 1.5,
+         "asr": {"verdict": "ok"}, "suspect": False},
+    ]}))
+    segs = load_segments(str(p))
+    assert segs[0]["character"] == "wren"
+    assert segs[0]["start_sec"] == 0.0 and segs[0]["end_sec"] == 1.5
+    assert segs[0]["asr"]["verdict"] == "ok"
 
 
-def test_clip_bounds_amplitude():
-    out = np.frombuffer(clip(_ramp(SR), ceiling=0.5), dtype="<i2")
-    assert out.max() <= int(0.5 * 32767) + 1
-    assert out.min() >= -int(0.5 * 32767) - 1
+def test_seg_key_stable():
+    seg = {"character": "wren", "start_sec": 0.0, "end_sec": 1.5}
+    assert seg_key(seg) == "wren:0.000-1.500"
 
 
-def test_reverse_span_changes_only_the_span():
-    pcm = _ramp(SR)
-    b = np.frombuffer(reverse_span(pcm, SR, 0.0, 0.5), dtype="<i2")
-    a = np.frombuffer(pcm, dtype="<i2"); half = SR // 2
-    assert np.array_equal(b[:half], a[:half][::-1])
-    assert np.array_equal(b[half:], a[half:])
-
-
-def test_splice_lengthens_by_inserted_clip():
-    a, b = _ramp(SR), _ramp(SR // 2)
-    assert len(splice(a, b, SR, 0.5)) == len(a) + len(b)
+def test_slice_pcm_byte_offsets():
+    pcm = (np.arange(SR) % 1000).astype("<i2").tobytes()  # 1.0 s
+    out = slice_pcm(pcm, SR, 0.25, 0.5)
+    assert len(out) == int(SR * 0.25) * 2  # 0.25 s of int16
 ```
 
-- [ ] **Step 2: Run to verify failure**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_inject.py -v`
-Expected: FAIL importing `inject`.
+- [ ] **Step 2: Run to verify failure** — FAIL (no module).
 
 - [ ] **Step 3: Implement**
 
 ```python
-# server/tts-sidecar/spikes/srv36/inject.py
-"""Deterministic PCM corruption transforms — the 'constructed garble' defect
-class for srv-36 E1 (spec §2.0). Mono int16-LE bytes in/out. numpy only."""
-from __future__ import annotations
-import numpy as np
-def _arr(pcm): return np.frombuffer(pcm, dtype="<i2").copy()
-
-
-def truncate(pcm, sample_rate, keep_sec):
-    return _arr(pcm)[: int(sample_rate * keep_sec)].astype("<i2").tobytes()
-
-
-def clip(pcm, ceiling=0.6):
-    lim = int(ceiling * 32767)
-    return np.clip(_arr(pcm).astype(np.int32), -lim, lim).astype("<i2").tobytes()
-
-
-def reverse_span(pcm, sample_rate, start_sec, dur_sec):
-    a = _arr(pcm); s = int(sample_rate * start_sec)
-    e = min(len(a), s + int(sample_rate * dur_sec)); a[s:e] = a[s:e][::-1]
-    return a.astype("<i2").tobytes()
-
-
-def splice(pcm_a, pcm_b, sample_rate, at_sec):
-    a, b = _arr(pcm_a), _arr(pcm_b); at = int(sample_rate * at_sec)
-    return np.concatenate([a[:at], b, a[at:]]).astype("<i2").tobytes()
-```
-
-- [ ] **Step 4: Run to verify pass**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_inject.py -v`
-Expected: PASS (4 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/inject.py server/tts-sidecar/spikes/srv36/tests/test_inject.py
-git commit -m "feat(sidecar): srv-36 spike deterministic PCM garble transforms"
-```
-
----
-
-### Task 4: Cast + lines data layer (real fixture, no parser)
-
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/spike_lines.json` (committed ground truth)
-- Create: `server/tts-sidecar/spikes/srv36/cast_data.py`
-- Create: `server/tts-sidecar/spikes/srv36/tests/test_cast_data.py`
-
-**Interfaces:**
-- Produces:
-  - `load_cast_voices() -> dict[str, str]` — character → Kokoro voice id, read from `samples/the-coalfall-commission/.audiobook/cast.json` (`overrideTtsVoices.kokoro.name`).
-  - `load_lines() -> dict[str, list[str]]` — character → real lines, from `spike_lines.json`.
-  - `near_miss_voice(voice: str, pool: list[str]) -> str` — a *different same-gender* Kokoro voice (same `af_`/`am_`/`bf_`/`bm_` prefix) from the pool; raises if none.
-- Consumed by: `render.py`, `run_e1`, `run_e2`.
-
-- [ ] **Step 1: Author the ground-truth lines (real quotes from chapter one)**
-
-```json
-// server/tts-sidecar/spikes/srv36/spike_lines.json
-{
-  "Wren": [
-    "It might be a customer.",
-    "A real one?",
-    "I never sigh.",
-    "I'm not crying.",
-    "You're told wrong."
-  ],
-  "Master Oduvan": [
-    "Leave it. Whoever it is can knock.",
-    "At this hour it's either a drunk or a debt. Neither pays better for being let in quickly.",
-    "If I douse the fire, I lose the weld I've been nursing since noon.",
-    "The best smith in the valley died nine years back. You'll have to make do with the second.",
-    "It'll take till morning. You'll have to keep the fire company while we work."
-  ],
-  "Maerin": [
-    "Oduvan. Bar the shutters and douse the coals.",
-    "There's a dragon on the Coalfall road. Big as a barn. It's coming down the lane.",
-    "No, child, a painted one. Real. And making straight for the only lit window in the valley, which is yours.",
-    "Douse the fire."
-  ],
-  "Coalfall": [
-    "I have come a long way.",
-    "The villages call me Coalfall. That is not my name, but it will do.",
-    "Modesty, or a sales tactic?",
-    "I do not want a sword. Everyone wants me dead, and a sword would only encourage them.",
-    "I have nothing but time. Begin."
-  ]
-}
-```
-
-- [ ] **Step 2: Write the failing tests**
-
-```python
-# server/tts-sidecar/spikes/srv36/tests/test_cast_data.py
-import pytest
-from spikes.srv36.cast_data import load_cast_voices, load_lines, near_miss_voice
-
-
-def test_load_cast_voices_has_real_characters_and_kokoro_ids():
-    v = load_cast_voices()
-    assert v["Wren"] == "af_aoede"
-    assert v["Master Oduvan"] == "bm_george"
-    assert v["Maerin"] == "af_jessica"
-    assert all(val[:3] in ("af_", "am_", "bf_", "bm_") for val in v.values())
-
-
-def test_load_lines_matches_authored_characters():
-    lines = load_lines()
-    assert set(lines) == {"Wren", "Master Oduvan", "Maerin", "Coalfall"}
-    assert all(len(v) >= 4 and all(s.strip() for s in v) for v in lines.values())
-
-
-def test_near_miss_voice_is_same_gender_and_different():
-    out = near_miss_voice("af_aoede", ["af_aoede", "af_jessica", "bm_george"])
-    assert out == "af_jessica"           # same af_ prefix, different id
-    with pytest.raises(ValueError):
-        near_miss_voice("af_aoede", ["af_aoede", "bm_george"])  # no same-gender alt
-```
-
-- [ ] **Step 3: Run to verify failure**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_cast_data.py -v`
-Expected: FAIL importing `cast_data`.
-
-- [ ] **Step 4: Implement**
-
-```python
-# server/tts-sidecar/spikes/srv36/cast_data.py
-"""Real fixture cast + lines for the srv-36 spike. Pure file reads — no regex."""
+# server/tts-sidecar/spikes/srv36/segments_io.py
+"""Pure readers for the real <slug>.segments.json + PCM slicing."""
 from __future__ import annotations
 import json
-from pathlib import Path
-
-HERE = Path(__file__).resolve().parent
-# tts-sidecar/spikes/srv36 -> repo root is parents[3]
-REPO = HERE.parents[3]
-CAST_JSON = REPO / "samples" / "the-coalfall-commission" / ".audiobook" / "cast.json"
-LINES_JSON = HERE / "spike_lines.json"
 
 
-def load_cast_voices() -> dict:
-    data = json.loads(CAST_JSON.read_text(encoding="utf-8"))
-    out = {}
-    for c in data.get("characters", []):
-        kok = ((c.get("overrideTtsVoices") or {}).get("kokoro") or {}).get("name")
-        if kok:
-            out[c.get("name")] = kok
+def load_segments(path: str) -> list:
+    data = json.loads(open(path, encoding="utf-8").read())
+    out = []
+    for s in data.get("segments", []):
+        out.append({
+            "character": s.get("characterId") or s.get("character") or "?",
+            "start_sec": float(s.get("startSec", 0.0)),
+            "end_sec": float(s.get("endSec", 0.0)),
+            "asr": s.get("asr") or {},
+            "qa": s.get("qa") or {},
+            "suspect": bool(s.get("suspect", False)),
+        })
     return out
 
 
-def load_lines() -> dict:
-    return json.loads(LINES_JSON.read_text(encoding="utf-8"))
+def seg_key(seg: dict) -> str:
+    return f"{seg['character']}:{seg['start_sec']:.3f}-{seg['end_sec']:.3f}"
 
 
-def near_miss_voice(voice: str, pool: list) -> str:
-    prefix = voice[:3]  # 'af_', 'am_', ...
-    for v in pool:
-        if v[:3] == prefix and v != voice:
-            return v
-    raise ValueError(f"no same-gender near-miss for {voice} in {pool}")
+def slice_pcm(pcm: bytes, sr: int, start_sec: float, end_sec: float) -> bytes:
+    s = int(start_sec * sr) * 2
+    e = int(end_sec * sr) * 2
+    return pcm[s:e]
 ```
 
-- [ ] **Step 5: Run to verify pass**
+- [ ] **Step 4: Run to verify pass** — PASS (3 tests).
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_cast_data.py -v`
-Expected: PASS (3 tests; pure file reads — no GPU/model).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/spike_lines.json server/tts-sidecar/spikes/srv36/cast_data.py server/tts-sidecar/spikes/srv36/tests/test_cast_data.py
-git commit -m "feat(sidecar): srv-36 spike real-fixture cast+lines data layer"
-```
+- [ ] **Step 5: Commit** — `git add ...segments_io.py ...test_segments_io.py && git commit -m "feat(sidecar): srv-36 spike segments.json reader + PCM slicing"`
 
 ---
 
-### Task 5: Render driver (on-box, correct engine API)
+### Task 4: Gate labels (the F2 real-misfire labels)
 
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/render.py`
+**Files:** create `spikes/srv36/gates.py`, `spikes/srv36/tests/test_gates.py`.
 
-**Interfaces:**
-- Produces:
-  - `render_clip(engine_name: str, model: str, voice: str, text: str) -> tuple[bytes, int]` — calls the real engine; returns `(pcm, sample_rate)` from the `SynthResult`.
-  - `build_clips() -> dict` — renders, per character: a reference (longest line) + all line clips at their assigned Kokoro voice; writes `results/clips_manifest.json` + `results/clips/*.pcm`. Returns the manifest.
-- Consumed by: every `run_eN.py`.
+**Interfaces:** `is_gate_flagged(seg) -> bool` — True when the EXISTING gates flagged this segment: `asr.verdict == "drift"` OR `suspect` truthy OR `qa.status == "suspect"`. (`inconclusive`/`ok` are not flags.)
 
-- [ ] **Step 1: Implement the render driver (no unit test — on-box I/O; the math it feeds IS tested in Tasks 6–9)**
+- [ ] **Step 1: Failing tests**
 
 ```python
-# server/tts-sidecar/spikes/srv36/render.py
-"""On-box: render the real fixture lines through the real Kokoro engine.
-Uses the VERIFIED API: ENGINES[name].synthesize(model, voice, text) -> SynthResult."""
+# server/tts-sidecar/spikes/srv36/tests/test_gates.py
+from spikes.srv36.gates import is_gate_flagged
+
+
+def test_flagged_on_asr_drift():
+    assert is_gate_flagged({"asr": {"verdict": "drift"}, "qa": {}, "suspect": False}) is True
+
+
+def test_flagged_on_suspect_or_qa_suspect():
+    assert is_gate_flagged({"asr": {}, "qa": {}, "suspect": True}) is True
+    assert is_gate_flagged({"asr": {}, "qa": {"status": "suspect"}, "suspect": False}) is True
+
+
+def test_not_flagged_on_ok_or_inconclusive():
+    assert is_gate_flagged({"asr": {"verdict": "ok"}, "qa": {"status": "ok"}, "suspect": False}) is False
+    assert is_gate_flagged({"asr": {"verdict": "inconclusive"}, "qa": {}, "suspect": False}) is False
+```
+
+- [ ] **Step 2: Run to verify failure** — FAIL.
+
+- [ ] **Step 3: Implement**
+
+```python
+# server/tts-sidecar/spikes/srv36/gates.py
+"""Real per-segment gate labels: did the EXISTING ASR + signal-QA gates flag it?"""
 from __future__ import annotations
-import json, os
-from pathlib import Path
-
-os.environ.setdefault("PRELOAD_COQUI", "0")
-os.environ.setdefault("PRELOAD_KOKORO", "0")
-
-from main import ENGINES  # side-effect-safe: lazy load, no port bind (verified)
-from spikes.srv36.cast_data import load_cast_voices, load_lines
-
-HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
-CLIPS = RESULTS / "clips"
-KOKORO_MODEL = "v1"  # main.py KokoroEngine expects model == "v1"
 
 
-def render_clip(engine_name: str, model: str, voice: str, text: str):
-    res = ENGINES[engine_name].synthesize(model, voice, text)
-    return res.pcm, res.sample_rate  # SynthResult.pcm / .sample_rate (main.py:358)
-
-
-def _dur_sec(pcm: bytes, sr: int) -> float:
-    return len(pcm) / 2 / sr
-
-
-def build_clips() -> dict:
-    CLIPS.mkdir(parents=True, exist_ok=True)
-    voices = load_cast_voices()
-    lines = load_lines()
-    manifest: dict = {}
-    for ch, texts in lines.items():
-        voice = voices[ch]
-        slot = manifest.setdefault(ch, {"voice": voice, "reference": None, "lines": []})
-        for i, text in enumerate(texts):
-            pcm, sr = render_clip("kokoro", KOKORO_MODEL, voice, text)
-            p = CLIPS / f"{ch.replace(' ', '_')}-{i}.pcm"
-            p.write_bytes(pcm)
-            slot["lines"].append({"path": str(p), "text": text,
-                                  "dur_sec": _dur_sec(pcm, sr), "sr": sr})
-        slot["reference"] = max(slot["lines"], key=lambda l: l["dur_sec"])["path"]
-    (RESULTS / "clips_manifest.json").write_text(json.dumps(manifest, indent=2))
-    return manifest
-
-
-if __name__ == "__main__":
-    m = build_clips()
-    print(f"rendered {sum(len(v['lines']) for v in m.values())} clips for {len(m)} characters")
+def is_gate_flagged(seg: dict) -> bool:
+    asr = (seg.get("asr") or {}).get("verdict")
+    qa = (seg.get("qa") or {}).get("status")
+    return asr == "drift" or bool(seg.get("suspect")) or qa == "suspect"
 ```
 
-- [ ] **Step 2: (On-box) smoke-run**
+- [ ] **Step 4: Run to verify pass** — PASS (3 tests).
 
-Run on a GPU box: `cd server/tts-sidecar && .venv/Scripts/python.exe -m spikes.srv36.render`
-Expected: prints `rendered N clips for 4 characters`; `results/clips_manifest.json` + `results/clips/*.pcm` exist. If Kokoro substitutes a missing voice, confirm the assigned ids match the installed Kokoro catalog.
-
-- [ ] **Step 3: Commit (code only — PCM is gitignored)**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/render.py
-git commit -m "feat(sidecar): srv-36 spike fixture render driver (verified engine API)"
-```
+- [ ] **Step 5: Commit** — `git add ...gates.py ...test_gates.py && git commit -m "feat(sidecar): srv-36 spike real-gate label extraction"`
 
 ---
 
-### Task 6: E1 — residual value (scripted subtle + gross tiers)
+### Task 5: Pure aggregates (F1 floor, F3 separability, F4 residual, F5 coverage)
 
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/run_e1.py`
-- Create: `server/tts-sidecar/spikes/srv36/tests/test_aggregates.py`
+**Files:** create `spikes/srv36/aggregates.py`, `spikes/srv36/tests/test_aggregates.py`.
 
 **Interfaces:**
-- Produces: `aggregate_e1(clean_sims, defect_sims_by_tier, cutoff) -> dict` — PURE; adds `subtle_clears` (subtle flagged_fraction ≥ 0.60 AND clean FP ≤ 0.10). **Raises `ValueError` if the `subtle` tier is empty or absent** (an empty gate input is a bug, not a no-go). Plus on-box `main()` writing `results/e1.json`.
+- `f1_floor(clean_sims) -> dict` → `{spread, floor_ok}` (`floor_ok` = std ≤ 0.07 AND p05 ≥ 0.5 — a *tight* correct-voice cluster). Stochastic floor.
+- `f3_separability(clean_sims, misfire_sims) -> dict` → `{eer, separable}` (`separable` = eer ≤ 0.25 on the real labels).
+- `residual_value(acoustic_flagged_keys, gate_flagged_keys, confirmed_real) -> dict` → `{missed_by_gates, residual_fraction, confirmed_real}` where `missed = acoustic − gate`, `residual_fraction = confirmed_real / max(1, |acoustic_flagged|)`.
+- `f5_length_coverage(length_to_sims, seg_durations, floor) -> dict` → `{std_by_length, min_scorable_sec, coverage}`.
 
-- [ ] **Step 1: Write the failing aggregate tests**
+- [ ] **Step 1: Failing tests**
 
 ```python
 # server/tts-sidecar/spikes/srv36/tests/test_aggregates.py
 import pytest
-from spikes.srv36.run_e1 import aggregate_e1
+from spikes.srv36.aggregates import f1_floor, f3_separability, residual_value, f5_length_coverage
 
 
-def test_aggregate_e1_subtle_gate_pass():
-    a = aggregate_e1([0.95, 0.96, 0.94], {"subtle": [0.80, 0.78, 0.97], "gross": [0.2, 0.3]}, 0.85)
-    assert a["subtle"]["flagged_fraction"] == pytest.approx(2 / 3)
-    assert a["subtle_clears"] is True
+def test_f1_floor_tight_vs_wide():
+    assert f1_floor([0.95, 0.96, 0.94, 0.95])["floor_ok"] is True
+    assert f1_floor([0.95, 0.40, 0.80, 0.55])["floor_ok"] is False  # wide → swamps drift
 
 
-def test_aggregate_e1_subtle_gate_fail_when_under_bar():
-    b = aggregate_e1([0.95, 0.96], {"subtle": [0.80, 0.97, 0.98], "gross": [0.2]}, 0.85)
-    assert b["subtle"]["flagged_fraction"] == pytest.approx(1 / 3)
-    assert b["subtle_clears"] is False
+def test_f3_separability():
+    assert f3_separability([0.95, 0.96], [0.50, 0.55])["separable"] is True
+    assert f3_separability([0.80, 0.82], [0.79, 0.81])["separable"] is False
 
 
-def test_aggregate_e1_raises_on_empty_subtle():
-    with pytest.raises(ValueError):
-        aggregate_e1([0.95], {"subtle": [], "gross": [0.2]}, 0.85)
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -v`
-Expected: FAIL importing `run_e1`.
-
-- [ ] **Step 3: Implement E1 (driver scripts BOTH tiers — no manual step)**
-
-```python
-# server/tts-sidecar/spikes/srv36/run_e1.py
-"""E1 — residual value: do same-config defects separate from clean renders?
-Subtle = same-gender near-miss preset; Gross = distant preset + garble.
-Both injected IN CODE so the gate is reproducible (spec §2.1/§3.6)."""
-from __future__ import annotations
-import json
-from pathlib import Path
-
-from spikes.srv36.metrics import residual_value_by_tier, eer, cosine
-
-SUBTLE_FLAG_BAR = 0.60
-CLEAN_FP_CEILING = 0.10
-HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
-
-
-def aggregate_e1(clean_sims, defect_sims_by_tier, cutoff) -> dict:
-    if not defect_sims_by_tier.get("subtle"):
-        raise ValueError("subtle tier is empty — harness bug, not a no-go")
-    rv = residual_value_by_tier(clean_sims, defect_sims_by_tier, cutoff)
-    rv["subtle_clears"] = bool(
-        rv["subtle"]["flagged_fraction"] >= SUBTLE_FLAG_BAR
-        and rv["clean_false_positive_rate"] <= CLEAN_FP_CEILING
+def test_residual_value_is_acoustic_minus_gates():
+    out = residual_value(
+        acoustic_flagged_keys={"a", "b", "c"},
+        gate_flagged_keys={"b"},          # gates only caught b
+        confirmed_real=1,                  # human confirmed 1 of {a,c} is real drift
     )
-    rv["bars"] = {"subtle_flag": SUBTLE_FLAG_BAR, "clean_fp_ceiling": CLEAN_FP_CEILING}
-    return rv
+    assert out["missed_by_gates"] == {"a", "c"}
+    assert out["residual_fraction"] == pytest.approx(1 / 3)
+    assert out["confirmed_real"] == 1
 
 
-def _pick_cutoff(clean):
-    import numpy as np
-    return float(np.percentile(clean, 5)) if clean else 0.5
-
-
-def main():  # on-box
-    from spikes.srv36.embed import embed_pcm
-    from spikes.srv36.cast_data import load_cast_voices, near_miss_voice
-    from spikes.srv36 import inject
-    from spikes.srv36.render import render_clip, KOKORO_MODEL
-    manifest = json.loads((RESULTS / "clips_manifest.json").read_text())
-    voices = load_cast_voices()
-    pool = sorted(set(voices.values()))
-
-    def emb_path(p):
-        d = json.loads((RESULTS / "clips_manifest.json").read_text())
-        return embed_pcm(Path(p).read_bytes(), _sr_for(d, p))
-
-    def _sr_for(d, path):
-        for slot in d.values():
-            for ln in slot["lines"]:
-                if ln["path"] == path:
-                    return ln["sr"]
-        return 24000
-
-    clean, subtle, gross = [], [], []
-    for ch, slot in manifest.items():
-        ref = embed_pcm(Path(slot["reference"]).read_bytes(), _sr_for(manifest, slot["reference"]))
-        own = voices[ch]
-        # near-miss + distant target voices
-        try:
-            near = near_miss_voice(own, pool)
-        except ValueError:
-            near = None
-        distant = next((v for v in pool if v[:3] != own[:3]), None)
-        for ln in slot["lines"]:
-            if ln["path"] == slot["reference"]:
-                continue
-            pcm = Path(ln["path"]).read_bytes()
-            clean.append(cosine(ref, embed_pcm(pcm, ln["sr"])))
-            # GROSS: garble the clean render
-            gross.append(cosine(ref, embed_pcm(inject.clip(pcm, 0.4), ln["sr"])))
-            # GROSS: distant preset render
-            if distant:
-                dp, dsr = render_clip("kokoro", KOKORO_MODEL, distant, ln["text"])
-                gross.append(cosine(ref, embed_pcm(dp, dsr)))
-            # SUBTLE: same-gender near-miss preset render
-            if near:
-                npcm, nsr = render_clip("kokoro", KOKORO_MODEL, near, ln["text"])
-                subtle.append(cosine(ref, embed_pcm(npcm, nsr)))
-    out = aggregate_e1(clean, {"subtle": subtle, "gross": gross}, _pick_cutoff(clean))
-    out["in_domain_eer_clean_vs_subtle"] = eer(genuine=clean, impostor=subtle)
-    (RESULTS / "e1.json").write_text(json.dumps(out, indent=2))
-    print("E1 subtle_clears=", out["subtle_clears"], out["bars"])
-
-
-if __name__ == "__main__":
-    main()
-```
-
-- [ ] **Step 4: Run to verify the aggregate tests pass**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -v`
-Expected: PASS (3 tests).
-
-- [ ] **Step 5: (On-box) run E1** — `.venv/Scripts/python.exe -m spikes.srv36.run_e1` after `render`. Confirm `results/e1.json` has non-empty `subtle` (`n ≥ 12`: 3+ characters × ~4 non-reference lines) and a per-tier breakdown.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/run_e1.py server/tts-sidecar/spikes/srv36/tests/test_aggregates.py
-git commit -m "feat(sidecar): srv-36 spike E1 residual-value (scripted subtle+gross tiers)"
-```
-
----
-
-### Task 7: E2 — separability + in-domain EER
-
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/run_e2.py`
-- Modify: `server/tts-sidecar/spikes/srv36/tests/test_aggregates.py`
-
-**Interfaces:**
-- Produces: `aggregate_e2(intra_sims, inter_sims, nearmiss_sims) -> dict` → `{intra, eer_inter, eer_nearmiss, nearmiss_separable}` where `nearmiss_separable = eer_nearmiss["eer"] < 0.30`. Plus on-box `main()` → `results/e2.json`.
-
-- [ ] **Step 1: Write the failing test (pins real values — not tautological)**
-
-```python
-# append to tests/test_aggregates.py
-from spikes.srv36.run_e2 import aggregate_e2
-
-
-def test_aggregate_e2_pins_separability():
-    out = aggregate_e2(
-        intra_sims=[0.93, 0.94, 0.92],
-        inter_sims=[0.10, 0.15, 0.05],
-        nearmiss_sims=[0.55, 0.60, 0.58],
-    )
-    assert out["intra"]["mean"] == pytest.approx(0.93, abs=0.01)
-    assert out["eer_inter"]["eer"] == 0.0                 # distinct chars: separable
-    assert out["eer_nearmiss"]["eer"] == 0.0              # 0.93-cluster vs 0.58: separable
-    assert out["nearmiss_separable"] is True
-
-
-def test_aggregate_e2_nearmiss_inseparable_when_overlapping():
-    out = aggregate_e2([0.6, 0.62], [0.1, 0.1], [0.6, 0.61])  # intra ~ nearmiss
-    assert out["nearmiss_separable"] is False
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -k e2 -v`
-Expected: FAIL importing `run_e2`.
-
-- [ ] **Step 3: Implement E2**
-
-```python
-# server/tts-sidecar/spikes/srv36/run_e2.py
-"""E2 — separability & in-domain EER: is the SAME voice tight, and are
-same-gender near-miss presets even separable from it?"""
-from __future__ import annotations
-import json
-from pathlib import Path
-from spikes.srv36.metrics import intra_speaker_spread, eer, cosine
-
-NEARMISS_EER_BAR = 0.30
-HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
-
-
-def aggregate_e2(intra_sims, inter_sims, nearmiss_sims) -> dict:
-    en = eer(genuine=intra_sims, impostor=nearmiss_sims)
-    return {
-        "intra": intra_speaker_spread(intra_sims),
-        "eer_inter": eer(genuine=intra_sims, impostor=inter_sims),
-        "eer_nearmiss": en,
-        "nearmiss_separable": bool(en["eer"] < NEARMISS_EER_BAR),
-        "bar": {"nearmiss_eer": NEARMISS_EER_BAR},
-    }
-
-
-def main():  # on-box
-    from spikes.srv36.embed import embed_pcm
-    from spikes.srv36.cast_data import load_cast_voices, near_miss_voice
-    from spikes.srv36.render import render_clip, KOKORO_MODEL
-    manifest = json.loads((RESULTS / "clips_manifest.json").read_text())
-    voices = load_cast_voices(); pool = sorted(set(voices.values()))
-    refs = {ch: embed_pcm(Path(s["reference"]).read_bytes(),
-            next(l["sr"] for l in s["lines"] if l["path"] == s["reference"]))
-            for ch, s in manifest.items()}
-    intra, inter, nearmiss = [], [], []
-    for ch, slot in manifest.items():
-        try:
-            near = near_miss_voice(voices[ch], pool)
-        except ValueError:
-            near = None
-        for ln in slot["lines"]:
-            e = embed_pcm(Path(ln["path"]).read_bytes(), ln["sr"])
-            intra.append(cosine(refs[ch], e))
-            for other, oref in refs.items():
-                if other != ch:
-                    inter.append(cosine(oref, e))
-            if near:
-                npcm, nsr = render_clip("kokoro", KOKORO_MODEL, near, ln["text"])
-                nearmiss.append(cosine(refs[ch], embed_pcm(npcm, nsr)))
-    out = aggregate_e2(intra, inter, nearmiss)
-    (RESULTS / "e2.json").write_text(json.dumps(out, indent=2))
-    print("E2 intra=", out["intra"], "nearmiss_separable=", out["nearmiss_separable"])
-
-
-if __name__ == "__main__":
-    main()
-```
-
-- [ ] **Step 4: Run to verify the aggregate tests pass**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -k e2 -v`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: (On-box) run E2** — `.venv/Scripts/python.exe -m spikes.srv36.run_e2`; confirm `results/e2.json` has non-empty `intra` + `nearmiss`.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/run_e2.py server/tts-sidecar/spikes/srv36/tests/test_aggregates.py
-git commit -m "feat(sidecar): srv-36 spike E2 separability + in-domain EER"
-```
-
----
-
-### Task 8: E3 — clip-length floor + coverage
-
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/run_e3.py`
-- Modify: `server/tts-sidecar/spikes/srv36/tests/test_aggregates.py`
-
-**Interfaces:**
-- Produces: `aggregate_e3(length_to_sims, char_durations, floor) -> dict` → `{std_by_length, min_scorable_sec, character_coverage, floor}` where `min_scorable_sec` = smallest length whose cosine-std vs the 5 s embedding ≤ 0.05. Plus on-box `main()` → `results/e3.json`.
-
-- [ ] **Step 1: Write the failing test**
-
-```python
-# append to tests/test_aggregates.py
-from spikes.srv36.run_e3 import aggregate_e3
-
-
-def test_aggregate_e3_picks_floor_and_coverage():
-    out = aggregate_e3(
-        length_to_sims={0.5: [0.6, 0.9, 0.7], 2.0: [0.97, 0.98, 0.96], 5.0: [1.0, 1.0, 1.0]},
-        char_durations=[0.5, 1.0, 3.0, 4.0],
-        floor=2.0,
-    )
+def test_f5_floor_and_coverage():
+    out = f5_length_coverage(
+        {0.5: [0.6, 0.9], 2.0: [0.97, 0.98], 5.0: [1.0, 1.0]}, [0.5, 3.0], 2.0)
     assert out["min_scorable_sec"] == 2.0
-    assert out["character_coverage"] == 0.5
+    assert out["coverage"] == 0.5
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 2: Run to verify failure** — FAIL.
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -k e3 -v`
-Expected: FAIL importing `run_e3`.
-
-- [ ] **Step 3: Implement E3**
+- [ ] **Step 3: Implement**
 
 ```python
-# server/tts-sidecar/spikes/srv36/run_e3.py
-"""E3 — clip length vs embedding stability, and realistic checked-coverage."""
+# server/tts-sidecar/spikes/srv36/aggregates.py
+"""Pure F1/F3/F4/F5 aggregates for the stochastic-drift spike."""
 from __future__ import annotations
-import json
-from pathlib import Path
 import numpy as np
-from spikes.srv36.metrics import coverage, cosine
+from spikes.srv36.metrics import eer, spread_stats
 
-STD_OK = 0.05
-HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
+FLOOR_STD_MAX = 0.07
+FLOOR_P05_MIN = 0.50
+SEP_EER_MAX = 0.25
+LEN_STD_OK = 0.05
 
 
-def aggregate_e3(length_to_sims: dict, char_durations, floor: float) -> dict:
+def f1_floor(clean_sims) -> dict:
+    s = spread_stats(clean_sims)
+    return {"spread": s, "floor_ok": bool(s["std"] <= FLOOR_STD_MAX and s["p05"] >= FLOOR_P05_MIN)}
+
+
+def f3_separability(clean_sims, misfire_sims) -> dict:
+    e = eer(genuine=clean_sims, impostor=misfire_sims)
+    return {"eer": e, "separable": bool(e["eer"] <= SEP_EER_MAX)}
+
+
+def residual_value(acoustic_flagged_keys, gate_flagged_keys, confirmed_real) -> dict:
+    missed = set(acoustic_flagged_keys) - set(gate_flagged_keys)
+    denom = max(1, len(set(acoustic_flagged_keys)))
+    return {"missed_by_gates": missed, "residual_fraction": confirmed_real / denom,
+            "confirmed_real": int(confirmed_real)}
+
+
+def f5_length_coverage(length_to_sims: dict, seg_durations, floor: float) -> dict:
     per_len = {float(k): float(np.std(v)) for k, v in length_to_sims.items()}
-    scorable = sorted(L for L, s in per_len.items() if s <= STD_OK)
-    return {
-        "std_by_length": per_len,
-        "min_scorable_sec": (scorable[0] if scorable else None),
-        "character_coverage": coverage(char_durations, floor),
-        "floor": floor, "std_ok": STD_OK,
-    }
-
-
-def main():  # on-box
-    from spikes.srv36.embed import embed_pcm
-    manifest = json.loads((RESULTS / "clips_manifest.json").read_text())
-    lengths = [0.5, 1.0, 2.0, 3.0, 5.0]
-    length_to_sims = {L: [] for L in lengths}
-    char_durs = []
-    for ch, slot in manifest.items():
-        for ln in slot["lines"]:
-            char_durs.append(ln["dur_sec"])  # all spike chars are non-narrator
-            if ln["dur_sec"] < 5.0:
-                continue
-            pcm, sr = Path(ln["path"]).read_bytes(), ln["sr"]
-            full = embed_pcm(pcm[: int(5.0 * sr) * 2], sr)
-            for L in lengths:
-                seg = embed_pcm(pcm[: int(L * sr) * 2], sr)
-                length_to_sims[L].append(cosine(full, seg))
-    out = aggregate_e3(length_to_sims, char_durs, floor=2.0)
-    (RESULTS / "e3.json").write_text(json.dumps(out, indent=2))
-    print("E3 min_scorable_sec=", out["min_scorable_sec"], "coverage=", out["character_coverage"])
-
-
-if __name__ == "__main__":
-    main()
+    scorable = sorted(L for L, st in per_len.items() if st <= LEN_STD_OK)
+    d = np.asarray(seg_durations, np.float64)
+    return {"std_by_length": per_len, "min_scorable_sec": (scorable[0] if scorable else None),
+            "coverage": float(np.mean(d >= floor)) if d.size else 0.0}
 ```
 
-- [ ] **Step 4: Run to verify the aggregate test passes**
+- [ ] **Step 4: Run to verify pass** — PASS (4 tests).
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -k e3 -v`
-Expected: PASS.
-
-- [ ] **Step 5: (On-box) run E3** — `.venv/Scripts/python.exe -m spikes.srv36.run_e3`. If no fixture line reaches 5 s, the README notes rendering a few concatenated lines per character to get ≥5 s references for the length sweep. Confirm `results/e3.json` reports `min_scorable_sec` + `character_coverage`.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add server/tts-sidecar/spikes/srv36/run_e3.py server/tts-sidecar/spikes/srv36/tests/test_aggregates.py
-git commit -m "feat(sidecar): srv-36 spike E3 clip-length floor + coverage"
-```
+- [ ] **Step 5: Commit** — `git add ...aggregates.py ...test_aggregates.py && git commit -m "feat(sidecar): srv-36 spike pure F1/F3/F4/F5 aggregates"`
 
 ---
 
-### Task 9: E4 (optional) + findings synthesis + go/no-go
+### Task 6: Decision + findings synthesizer
 
-**Files:**
-- Create: `server/tts-sidecar/spikes/srv36/run_e4.py`
-- Create: `server/tts-sidecar/spikes/srv36/synthesize.py`
-- Create: `server/tts-sidecar/spikes/srv36/FINDINGS.md` (filled by the on-box run)
-- Modify: `server/tts-sidecar/spikes/srv36/tests/test_aggregates.py`
+**Files:** create `spikes/srv36/synthesize.py`; append to `spikes/srv36/tests/test_aggregates.py`.
 
-**Interfaces:**
-- Produces:
-  - `aggregate_e4(cross_emotion_sims, cross_character_sims) -> dict` → `{emotion_shift_dist, cross_char_dist, emotion_matching_needed}` (needed = emotion dist ≥ 0.5 × char dist). **Optional — never affects the recommendation.**
-  - `decide(e1, e2, e3, e4) -> dict` → `{recommendation: "go"|"no-go", reasons}`. **Go** iff `e1.subtle_clears` AND `e2.nearmiss_separable` AND `e3.character_coverage ≥ 0.5`. `e4` only adds a Phase-2 note.
+**Interfaces:** `decide(f1, f3, f4, f5) -> {recommendation: "go"|"no-go", reasons}` — **go** iff `f1.floor_ok` AND `f3.separable` AND `f4.residual_fraction ≥ 0.15` (real drift caught that gates missed) AND `f5.coverage ≥ 0.5`. Plus on-box `write_findings()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Failing tests**
 
 ```python
 # append to tests/test_aggregates.py
-from spikes.srv36.run_e4 import aggregate_e4
 from spikes.srv36.synthesize import decide
 
 
-def test_aggregate_e4_flags_emotion_sensitivity():
-    assert aggregate_e4([0.6, 0.65], [0.2, 0.25])["emotion_matching_needed"] is False
-    assert aggregate_e4([0.2], [0.1])["emotion_matching_needed"] is True
-
-
-def test_decide_go_requires_all_three():
-    go = decide({"subtle_clears": True}, {"nearmiss_separable": True},
-                {"character_coverage": 0.7}, {"emotion_matching_needed": True})
+def test_decide_go_requires_all_four():
+    go = decide({"floor_ok": True}, {"separable": True},
+                {"residual_fraction": 0.3, "confirmed_real": 4}, {"coverage": 0.7})
     assert go["recommendation"] == "go"
-    assert "phase2_note" in go
 
 
-def test_decide_nogo_when_subtle_fails():
-    nogo = decide({"subtle_clears": False}, {"nearmiss_separable": True},
-                  {"character_coverage": 0.9}, {})
+def test_decide_nogo_when_no_residual_value():
+    nogo = decide({"floor_ok": True}, {"separable": True},
+                  {"residual_fraction": 0.0, "confirmed_real": 0}, {"coverage": 0.9})
     assert nogo["recommendation"] == "no-go"
-    assert any("subtle" in r for r in nogo["reasons"])
+    assert any("residual" in r.lower() or "redundant" in r.lower() for r in nogo["reasons"])
 
 
-def test_decide_recommendation_is_exactly_go_or_nogo():
-    out = decide({"subtle_clears": True}, {"nearmiss_separable": False},
-                 {"character_coverage": 0.2}, {})
+def test_decide_nogo_when_floor_wide():
+    out = decide({"floor_ok": False}, {"separable": True},
+                 {"residual_fraction": 0.5, "confirmed_real": 5}, {"coverage": 0.9})
+    assert out["recommendation"] == "no-go"
+
+
+def test_decide_is_exactly_go_or_nogo():
+    out = decide({"floor_ok": True}, {"separable": False},
+                 {"residual_fraction": 0.2, "confirmed_real": 2}, {"coverage": 0.2})
     assert out["recommendation"] in ("go", "no-go")
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 2: Run to verify failure** — FAIL (no `synthesize`).
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -k "e4 or decide" -v`
-Expected: FAIL importing `run_e4` / `synthesize`.
-
-- [ ] **Step 3: Implement E4 + synthesize**
+- [ ] **Step 3: Implement**
 
 ```python
-# server/tts-sidecar/spikes/srv36/run_e4.py
-"""E4 (OPTIONAL) — does emotion move the speaker embedding? Phase-2 input only;
-NEVER affects the go/no-go. Needs designed Qwen emotion variants; skipped if absent."""
+# server/tts-sidecar/spikes/srv36/synthesize.py
+"""Reads f1..f5 results -> go/no-go (spec §2.1/§2.2). F4 is the decisive gate."""
 from __future__ import annotations
 import json
 from pathlib import Path
-import numpy as np
 
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "results"
+RESIDUAL_BAR = 0.15
+COVERAGE_BAR = 0.50
 
 
-def aggregate_e4(cross_emotion_sims, cross_character_sims) -> dict:
-    emo = 1.0 - float(np.mean(cross_emotion_sims))
-    char = 1.0 - float(np.mean(cross_character_sims))
-    return {"emotion_shift_dist": emo, "cross_char_dist": char,
-            "emotion_matching_needed": bool(emo >= 0.5 * char)}
+def decide(f1: dict, f3: dict, f4: dict, f5: dict) -> dict:
+    reasons = []
+    floor = bool(f1.get("floor_ok"))
+    sep = bool(f3.get("separable"))
+    resid = float(f4.get("residual_fraction", 0.0)) >= RESIDUAL_BAR
+    cov = float(f5.get("coverage", 0.0)) >= COVERAGE_BAR
+    if not floor:
+        reasons.append("F1 stochastic floor is too wide — a correct voice already scatters "
+                       "as much as a misfire; no acoustic check can work.")
+    if not sep:
+        reasons.append("F3 cannot separate real misfires from clean renders above the floor.")
+    if not resid:
+        reasons.append(f"F4 residual value below {RESIDUAL_BAR:.0%} — acoustic only re-flags "
+                       "what ASR + audio-QA already catch (redundant).")
+    if not cov:
+        reasons.append(f"F5 coverage below {COVERAGE_BAR:.0%} — most dialogue inconclusive.")
+    go = floor and sep and resid and cov
+    if go:
+        reasons.append("Tight floor, real misfires separable, and acoustic catches drift the "
+                       "existing gates miss (human-confirmed) → real residual value.")
+    return {"recommendation": "go" if go else "no-go", "reasons": reasons}
 
 
-def main():  # on-box, optional — see README; writes {} if Qwen variants absent
-    edir = RESULTS / "emotions"
-    if not edir.exists():
-        (RESULTS / "e4.json").write_text(json.dumps({"skipped": "no qwen emotion clips"}))
-        print("E4 skipped (no designed Qwen emotion variants)")
-        return
-    from spikes.srv36.embed import embed_pcm
-    from spikes.srv36.metrics import cosine
-    embs = {p.stem: embed_pcm(p.read_bytes(), 24000) for p in edir.glob("*.pcm")}
-    neutral = embs["neutral"]
-    cross_emo = [cosine(neutral, v) for k, v in embs.items() if k not in ("neutral", "other_char")]
-    cross_char = [cosine(neutral, embs["other_char"])] if "other_char" in embs else [0.0]
-    out = aggregate_e4(cross_emo, cross_char)
-    (RESULTS / "e4.json").write_text(json.dumps(out, indent=2))
-    print("E4 emotion_matching_needed=", out["emotion_matching_needed"])
+def write_findings() -> dict:
+    f = {n: json.loads((RESULTS / f"{n}.json").read_text()) for n in ("f1", "f3", "f4", "f5")}
+    d = decide(f["f1"], f["f3"], f["f4"], f["f5"])
+    md = [
+        "# srv-36 Phase 0 — Findings (stochastic drift)", "",
+        f"## Recommendation: **{d['recommendation'].upper()}**", "",
+        *[f"- {r}" for r in d["reasons"]], "",
+        "## Measured numbers",
+        f"- F1 stochastic floor: `{f['f1'].get('spread')}` floor_ok=`{f['f1'].get('floor_ok')}`",
+        f"- F3 in-domain EER (clean vs REAL misfires): `{f['f3'].get('eer')}` separable=`{f['f3'].get('separable')}`",
+        f"- F4 residual value: fraction=`{f['f4'].get('residual_fraction')}` confirmed_real=`{f['f4'].get('confirmed_real')}` (drift the gates missed)",
+        f"- F5 min scorable sec / coverage: `{f['f5'].get('min_scorable_sec')}` / `{f['f5'].get('coverage')}`", "",
+        "_Anchor = the measured in-domain EER above, NOT VoxCeleb 0.9%._",
+    ]
+    (HERE / "FINDINGS.md").write_text("\n".join(md), encoding="utf-8")
+    return d
+```
+
+- [ ] **Step 4: Run to verify pass** — `... -m pytest spikes/srv36/tests/test_aggregates.py -v` → PASS.
+
+- [ ] **Step 5: Run the FULL pure suite** — `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests -v` → all PASS; `test_embed` PASS or SKIP.
+
+- [ ] **Step 6: Commit** — `git add ...synthesize.py ...test_aggregates.py && git commit -m "feat(sidecar): srv-36 spike decision (F4-gated) + findings synthesizer"`
+
+---
+
+### Task 7: On-box analysis driver
+
+**Files:** create `spikes/srv36/analyze.py`.
+
+**Interfaces (on-box; consumes Tasks 2–5):** reads `results/runs/<run>/<slug>.segments.json` + the matching chapter audio (decoded to PCM), builds per-character centroids from **clean** (gate-passing) segments across runs, scores every segment's cosine-to-centroid, joins gate labels, and writes `results/f1.json`, `f3.json`, `f5.json`, plus `results/f4_listen/` (the ECAPA-flagged-but-gate-clean clips for the human step) and `results/f4_pending.json`.
+
+- [ ] **Step 1: Implement the driver**
+
+```python
+# server/tts-sidecar/spikes/srv36/analyze.py
+"""On-box: turn M over-generation runs into F1/F3/F5 numbers + the F4 listen-set.
+Reads real segments.json gate verdicts; embeds real per-segment PCM."""
+from __future__ import annotations
+import json, wave
+from pathlib import Path
+import numpy as np
+
+from spikes.srv36.embed import embed_pcm
+from spikes.srv36.metrics import cosine, centroid, eer
+from spikes.srv36.segments_io import load_segments, seg_key, slice_pcm
+from spikes.srv36.gates import is_gate_flagged
+from spikes.srv36.aggregates import f1_floor, f3_separability, f5_length_coverage
+
+HERE = Path(__file__).resolve().parent
+RESULTS = HERE / "results"
+RUNS = RESULTS / "runs"          # runs/<i>/<slug>.segments.json + runs/<i>/<slug>.wav
+FLOOR_SEC = 2.0                  # candidate F5 floor; refined by F5 output
+
+
+def _read_wav(path: Path):
+    with wave.open(str(path), "rb") as w:
+        return w.readframes(w.getnframes()), w.getframerate()
+
+
+def _iter_segments():
+    """Yield (run, character, key, pcm, sr, dur, flagged) for every segment in every run."""
+    for run_dir in sorted(RUNS.glob("*")):
+        for segs_path in run_dir.glob("*.segments.json"):
+            wavs = list(run_dir.glob(f"{segs_path.stem.split('.')[0]}*.wav"))
+            if not wavs:
+                continue
+            pcm, sr = _read_wav(wavs[0])
+            for seg in load_segments(str(segs_path)):
+                spcm = slice_pcm(pcm, sr, seg["start_sec"], seg["end_sec"])
+                dur = len(spcm) / 2 / sr
+                yield (run_dir.name, seg["character"], seg_key(seg), spcm, sr, dur,
+                       is_gate_flagged(seg))
+
+
+def main():
+    rows = [r for r in _iter_segments() if r[5] >= FLOOR_SEC]  # scorable only
+    # Per-character centroid from CLEAN (gate-passing) renders.
+    by_char_clean = {}
+    embeds = {}
+    for run, ch, key, pcm, sr, dur, flagged in rows:
+        e = embed_pcm(pcm, sr); embeds[(run, key)] = (ch, e, flagged, dur)
+        if not flagged:
+            by_char_clean.setdefault(ch, []).append(e)
+    centroids = {ch: centroid(es) for ch, es in by_char_clean.items() if len(es) >= 3}
+    K = {ch: len(es) for ch, es in by_char_clean.items()}
+
+    clean_sims, misfire_sims, acoustic_flagged, gate_flagged, durs = [], [], set(), set(), []
+    for (run, key), (ch, e, flagged, dur) in embeds.items():
+        if ch not in centroids:
+            continue
+        sim = cosine(centroids[ch], e); durs.append(dur)
+        (misfire_sims if flagged else clean_sims).append(sim)
+        if flagged:
+            gate_flagged.add((run, key))
+    # Acoustic flag = cosine below the F3 EER threshold.
+    f3 = f3_separability(clean_sims, misfire_sims)
+    thr = f3["eer"]["threshold"]
+    listen = RESULTS / "f4_listen"; listen.mkdir(parents=True, exist_ok=True)
+    for (run, key), (ch, e, flagged, dur) in embeds.items():
+        if ch in centroids and cosine(centroids[ch], e) < thr:
+            acoustic_flagged.add((run, key))
+            if (run, key) not in gate_flagged:   # acoustic-only → the F4 listen-set
+                (listen / f"{run}__{key.replace(':','_')}.pcm").write_bytes(
+                    slice_pcm(*_clip_for(run, key)))
+    (RESULTS / "f1.json").write_text(json.dumps({**f1_floor(clean_sims), "K_per_char": K}, indent=2))
+    (RESULTS / "f3.json").write_text(json.dumps(f3, indent=2))
+    (RESULTS / "f5.json").write_text(json.dumps(
+        f5_length_coverage(_length_sweep(embeds, centroids), durs, FLOOR_SEC), indent=2))
+    (RESULTS / "f4_pending.json").write_text(json.dumps({
+        "acoustic_flagged": sorted(f"{r}|{k}" for r, k in acoustic_flagged),
+        "gate_flagged": sorted(f"{r}|{k}" for r, k in gate_flagged),
+        "acoustic_only_to_listen": sorted(f"{r}|{k}" for r, k in (acoustic_flagged - gate_flagged)),
+    }, indent=2))
+    print(f"F1/F3/F5 written. F4 listen-set: {len(acoustic_flagged - gate_flagged)} clips in {listen}")
+
+
+# NOTE for the implementer: _clip_for(run, key) and _length_sweep(...) are thin helpers —
+# _clip_for re-derives (pcm, sr, start, end) for a (run,key) from the run's segments.json;
+# _length_sweep truncates each clean clip to [0.5,1,2,3,5]s and returns {L: [cosine-to-centroid,...]}.
+# Both are pure-ish I/O over the same artifacts; implement alongside main() (≈15 lines each).
 
 
 if __name__ == "__main__":
     main()
 ```
 
-```python
-# server/tts-sidecar/spikes/srv36/synthesize.py
-"""Reads e1..e4 results -> go/no-go recommendation (spec §2.1/§2.2)."""
-from __future__ import annotations
-import json
-from pathlib import Path
+- [ ] **Step 2: (On-box) implement the two thin helpers** `_clip_for` and `_length_sweep` per the inline note (each re-reads the run's segments.json; `_length_sweep` slices truncations and embeds), then run `cd server/tts-sidecar && .venv/Scripts/python.exe -m spikes.srv36.analyze` after the over-generation (Task 8). Confirm `results/f1.json`, `f3.json`, `f5.json`, `f4_pending.json`, and the `f4_listen/` clips exist.
 
-HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
-COVERAGE_BAR = 0.50
+- [ ] **Step 3: Commit** — `git add server/tts-sidecar/spikes/srv36/analyze.py && git commit -m "feat(sidecar): srv-36 spike on-box analysis driver (centroids + real-label join)"`
 
+---
 
-def decide(e1: dict, e2: dict, e3: dict, e4: dict) -> dict:
-    reasons = []
-    subtle = bool(e1.get("subtle_clears"))
-    nearmiss = bool(e2.get("nearmiss_separable"))
-    cov_ok = float(e3.get("character_coverage", 0.0)) >= COVERAGE_BAR
-    if not subtle:
-        reasons.append("E1 subtle-tier defects do not separate from clean renders → "
-                       "acoustic only catches the gross/different-character case "
-                       "config-drift already covers.")
-    if not nearmiss:
-        reasons.append("E2 near-miss presets are not separable → wrong-preset cannot be "
-                       "honestly detected.")
-    if not cov_ok:
-        reasons.append(f"E3 character coverage below {COVERAGE_BAR:.0%} → most dialogue "
-                       "would be inconclusive.")
-    go = subtle and nearmiss and cov_ok
-    if go:
-        reasons.append("Subtle same-config defects separate, near-miss is separable, and "
-                       "coverage is adequate → acoustic adds real residual value.")
-    out = {"recommendation": "go" if go else "no-go", "reasons": reasons}
-    if e4.get("emotion_matching_needed"):
-        out["phase2_note"] = ("E4: emotion materially shifts the embedding → Phase-2 "
-                              "consistency must be per-emotion, not a global centroid.")
-    return out
+### Task 8: Over-generation orchestration (on-box, real gates)
 
+**Files:** none new — this task is the documented on-box procedure (in README) that produces `results/runs/`.
 
-def write_findings() -> dict:  # on-box
-    e = {n: json.loads((RESULTS / f"{n}.json").read_text()) for n in ("e1", "e2", "e3", "e4")}
-    d = decide(e["e1"], e["e2"], e["e3"], e["e4"])
-    lines = [
-        "# srv-36 Phase 0 — Findings", "",
-        f"## Recommendation: **{d['recommendation'].upper()}**", "",
-        *[f"- {r}" for r in d["reasons"]], "",
-        "## Measured numbers",
-        f"- In-domain EER (clean vs subtle): `{e['e1'].get('in_domain_eer_clean_vs_subtle')}`",
-        f"- E1 per-tier: `{json.dumps({k: e['e1'][k] for k in ('subtle','gross','clean_false_positive_rate','subtle_clears') if k in e['e1']})}`",
-        f"- E2 intra-speaker spread: `{e['e2'].get('intra')}` ; near-miss EER: `{e['e2'].get('eer_nearmiss')}`",
-        f"- E3 min scorable sec: `{e['e3'].get('min_scorable_sec')}` ; character coverage: `{e['e3'].get('character_coverage')}`",
-        f"- E4 (optional): `{json.dumps(e['e4'])}`", "",
-        d.get("phase2_note", ""), "",
-        "_Calibration anchor = the measured in-domain EER above, NOT VoxCeleb 0.9%._",
-    ]
-    (HERE / "FINDINGS.md").write_text("\n".join(lines), encoding="utf-8")
-    return d
+- [ ] **Step 1: Document + run the over-generation**
 
+In `README.md`, document and then execute on a GPU box with the fixture's designed Qwen/Coqui voices in the workspace:
 
-if __name__ == "__main__":
-    print(write_findings())
+1. Set `SEG_ASR_ENABLED=1` (real ASR-QA labels) and confirm audio-QA is on (default advisory).
+2. Generate the fixture book **M ≥ 10 times** via the real pipeline (the app's generate path / existing generation route), each run stochastically re-rendering. After each run, copy that run's `<slug>.segments.json` + the rendered chapter audio (as WAV/PCM) into `server/tts-sidecar/spikes/srv36/results/runs/<i>/`.
+3. Confirm across runs there are **real gate-flagged segments** (non-empty `asr.verdict=="drift"` / `suspect`) — if zero misfires surfaced, raise M (drift is rare; the gate needs positives to measure F3/F4).
+
+This is the real-misfire harvest (spec F2). It uses the **actual** gates, so F4's "missed by gates" is honest.
+
+- [ ] **Step 2: Sanity-check** — `ls results/runs/*/` shows M runs each with a `.segments.json` + audio. Spot-check one `segments.json` has per-segment `asr`/`suspect` fields populated.
+
+- [ ] **Step 3: Commit the README procedure** (not the large `runs/` audio — gitignored) — `git add server/tts-sidecar/spikes/srv36/README.md && git commit -m "docs(sidecar): srv-36 spike over-generation procedure (real-gate harvest)"`
+
+---
+
+### Task 9: F4 human confirm + findings + act
+
+**Files:** modify `spikes/srv36/synthesize.py` is not needed; this task runs the human step + `write_findings`.
+
+- [ ] **Step 1: (On-box, human) listen to the F4 acoustic-only set**
+
+Play each clip in `results/f4_listen/` (the lines ECAPA flagged that ASR + audio-QA did NOT). For each, judge: is the voice **actually drifted/wrong** (real residual value) or a false positive? Write the count of confirmed-real into `results/f4.json`:
+
+```json
+{ "residual_fraction": 0.0, "confirmed_real": 0 }
 ```
+Compute `residual_fraction = confirmed_real / (total acoustic_flagged from f4_pending.json)`. Use `residual_value(...)` from `aggregates.py` to compute it consistently, or fill it by hand from the two counts.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [ ] **Step 2: Generate FINDINGS.md**
 
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests/test_aggregates.py -k "e4 or decide" -v`
-Expected: PASS (4 tests).
+Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m spikes.srv36.synthesize`. Review `FINDINGS.md` — recommendation `go`/`no-go` with measured numbers; F4 residual value is the headline.
 
-- [ ] **Step 5: Run the FULL spike suite**
-
-Run: `cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest spikes/srv36/tests -v`
-Expected: all pure tests PASS; `test_embed.py` PASS or SKIP per weights.
-
-- [ ] **Step 6: (On-box) generate FINDINGS.md and commit the deliverable**
-
-Run after E1–E3 (E4 optional): `.venv/Scripts/python.exe -m spikes.srv36.run_e4 && .venv/Scripts/python.exe -m spikes.srv36.synthesize`. Review `FINDINGS.md` (recommendation is `go` or `no-go` with measured numbers).
+- [ ] **Step 3: Commit the deliverable**
 
 ```bash
-git add server/tts-sidecar/spikes/srv36/run_e4.py server/tts-sidecar/spikes/srv36/synthesize.py server/tts-sidecar/spikes/srv36/tests/test_aggregates.py
-git add -f server/tts-sidecar/spikes/srv36/FINDINGS.md server/tts-sidecar/spikes/srv36/results/e1.json server/tts-sidecar/spikes/srv36/results/e2.json server/tts-sidecar/spikes/srv36/results/e3.json server/tts-sidecar/spikes/srv36/results/e4.json
+git add -f server/tts-sidecar/spikes/srv36/FINDINGS.md \
+  server/tts-sidecar/spikes/srv36/results/f1.json \
+  server/tts-sidecar/spikes/srv36/results/f3.json \
+  server/tts-sidecar/spikes/srv36/results/f4.json \
+  server/tts-sidecar/spikes/srv36/results/f5.json \
+  server/tts-sidecar/spikes/srv36/results/f4_pending.json
 git commit -m "feat(sidecar): srv-36 phase-0 findings + go/no-go recommendation"
 ```
 
-- [ ] **Step 7: Act on the recommendation (spec §2.2 / §2.3 / §8)**
+- [ ] **Step 4: Act on the recommendation (spec §2.2 / §2.3 / §8)**
 
-- **no-go**: comment FINDINGS on #665; close it `wont-fix-acoustic`; mark the spec `superseded`; confirm fs-51 (#973) unaffected; record the §2.3 decision on the config-drift `25/40` cuts (retire-as-placeholder or re-file).
-- **go**: open the srv-36 Phase-1 plan (separate session, seeded by the measured EER / floor / coverage); update #665 `type:chore → type:feature`.
+- **no-go**: comment FINDINGS on #665; close `wont-fix-acoustic`; mark the spec `superseded`; confirm fs-51 (#973) unaffected; record the §2.3 decision on the config-drift `25/40` cuts.
+- **go**: open the srv-36 Phase-1 plan (separate session, seeded by the measured floor/EER/K/coverage); update #665 `type:chore → type:feature`.
 
 ---
 
 ## Self-Review
 
-**Spec coverage (Phase 0 only):**
-- §2.0 injectable defects → near-miss/distant preset + garble scripted in `run_e1` (Task 6); fallback/E4 optional. ✓
-- §2 E1–E4 → Tasks 6–9. ✓
-- §2.1 subtle-tier gate + measured anchor → `aggregate_e1.subtle_clears` (raises on empty) + E2 EER + `decide`. ✓
-- §2.2 `{go|no-go}` only → `decide` + `test_decide_recommendation_is_exactly_go_or_nogo`. ✓
-- §2.3 #665 literal ask → Task 9 Step 7. ✓
-- §0.2 fs-51 decoupling → Task 9 Step 7. ✓
-- Throwaway / no production code → File Structure confined to `spikes/srv36/`. ✓
-- R2 anchor = in-domain EER → E1/E2 EER + FINDINGS footer. ✓
-- R3 coverage honesty → E3 `character_coverage`. ✓
+**Spec coverage (Phase 0):**
+- §1 stochastic framing (Qwen/Coqui, Kokoro excluded) → Global Constraints + Task 8 (designed Qwen/Coqui voices, no Kokoro). ✓
+- §2.0 centroid reference → `metrics.centroid` (Task 2) + `analyze` builds per-char centroid from clean renders. ✓
+- §2 F1 floor → `f1_floor` (Task 5) + analyze. ✓
+- F2 real misfires → `gates.is_gate_flagged` (Task 4) + Task 8 over-generation with real gates. ✓
+- F3 separability → `f3_separability` (Task 5). ✓
+- F4 residual value (the gate) → `residual_value` (Task 5) + analyze's acoustic-only listen-set + Task 9 human confirm + `decide` (Task 6). ✓
+- F5 length/coverage → `f5_length_coverage` (Task 5). ✓
+- §2.1 go = floor_ok AND separable AND residual ≥ bar AND coverage → `decide`. ✓
+- §2.2 `{go|no-go}` only → `decide` + `test_decide_is_exactly_go_or_nogo`. ✓
+- §2.3 #665 + §0.2 fs-51 → Task 9 Step 4. ✓
+- No synthetic injection → there is no `inject` module; all positives are real gate labels. ✓
 
-**Blocker fixes from the plan review (all applied):**
-- B1 engine API → `render_clip` uses `synthesize(model, voice, text) -> SynthResult`, reads `.pcm`/`.sample_rate`; no hardcoded 24000. ✓
-- B2 false `test:sidecar` claim → Global Constraints state direct pytest invocation only. ✓
-- B3 invented cast → real voices from `cast.json`, real lines in `spike_lines.json`. ✓
-- B4 broken parser → dropped; ground-truth line map. ✓
-- B5 manual subtle tier → scripted in `run_e1.main()`; `aggregate_e1` raises on empty subtle. ✓
-- N1 vacuous tests → E2/cast tests pin real values. ✓
-- N2 raw `dot` → `metrics.cosine` everywhere. ✓
-- N3 hyphenated dir → package `srv36`. ✓
+**Placeholder scan:** the only operator actions are the on-box over-generation (Task 8), the two thin analyze helpers (Task 7 Step 2, mechanism specified), and the F4 human listen (Task 9) — all explicit. All pure code is complete with tests.
 
-**Placeholder scan:** the only operator actions are the on-box experiment RUNS (rendering needs a GPU) and the optional Qwen E4 — both fully specified, no `TODO`/`TBD`. All pure code is complete with tests.
-
-**Type consistency:** `render_clip(engine, model, voice, text)->(pcm,sr)`, `embed_pcm(pcm,sr)->ndarray`, `cosine`, `eer->{eer,threshold}`, `residual_value_by_tier->{tier:{flagged_fraction,n},clean_false_positive_rate,cutoff}`, `aggregate_e1..e4`, `decide(e1,e2,e3,e4)->{recommendation,reasons}` consistent across tasks/tests.
+**Type consistency:** `embed_pcm(pcm,sr)->ndarray`, `centroid(embs)->ndarray`, `cosine`, `eer->{eer,threshold}`, `load_segments`/`seg_key`/`slice_pcm`, `is_gate_flagged(seg)->bool`, `f1_floor`/`f3_separability`/`residual_value`/`f5_length_coverage`, `decide(f1,f3,f4,f5)->{recommendation,reasons}` are consistent across tasks and tests.
 
 ---
 
 ## Notes for the implementer
 
-- **Tasks 1–4, and the aggregate/decide halves of 6–9, are TDD'd and run anywhere** (numpy/pytest). Do these first; no GPU.
-- **On-box runs (Task 5 Step 2; Tasks 6–8 Step 5; Task 9 Step 6) need a GPU box** with the sidecar venv + `speechbrain` + Kokoro weights; they produce the committed `results/*.json` + `FINDINGS.md`.
-- **`render.py` and `run_e1`'s distant/near-miss renders are the only code touching `main.py`** — via the verified `ENGINES[name].synthesize(model, voice, text)` contract. If the installed Kokoro catalog lacks an assigned voice id, Kokoro substitutes; confirm the ids in `cast.json` are installed before trusting the numbers.
-- Run pytest from `server/tts-sidecar` (rootdir) so `import main` and `import spikes.srv36.*` resolve.
+- **Tasks 1–6 are fully TDD'd and run anywhere** (numpy/pytest, no GPU). Do them first.
+- **Tasks 7–9 are on-box** (GPU + sidecar venv + speechbrain + designed Qwen/Coqui voices). Task 8's over-generation is the long pole — real drift is rare, so M must be large enough to surface gate-flagged misfires.
+- **The whole point is F4.** F1/F3 are necessary-condition exits; the *decision* is whether acoustic catches real drift the existing ASR + audio-QA gates miss. If the `f4_listen/` set is empty or all false positives → **no-go**, and that is a valid, valuable result.
+- If over-generation surfaces too few misfires to measure F3/F4, that itself is informative (drift may be rare enough that the existing gates suffice) — record it; don't fabricate positives.
