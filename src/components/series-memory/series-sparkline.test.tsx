@@ -25,6 +25,11 @@ describe('SeriesSparkline', () => {
     const bar = screen.getAllByTestId('sparkline-bar')[0];
     expect(bar.children).toHaveLength(2); // gradient (carried) + faint (rest)
   });
+  it('renders a legend with Carried and Other principals this book entries', () => {
+    render(<SeriesSparkline summary={summary} onOpen={() => {}} />);
+    expect(screen.getByText('Carried')).toBeInTheDocument();
+    expect(screen.getByText('Other principals this book')).toBeInTheDocument();
+  });
   it('does not overflow when a carried character is below the principal floor (carriedPresent > principalCount)', () => {
     const odd = { ...summary, perBook: [{ bookId: 'b1', index: 1, principalCount: 2, carriedPresent: 5 }] };
     render(<SeriesSparkline summary={odd} onOpen={() => {}} />);

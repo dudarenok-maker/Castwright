@@ -28,6 +28,16 @@ export function SeriesSparkline({ summary, onOpen }: { summary: SeriesMemorySumm
         })}
       </button>
       <p className="mt-2 text-xs text-ink/60">{summary.carriedCount} of your cast, kept true across the series.</p>
+      <div className="mt-1.5 flex items-center gap-3 text-[11px] text-ink/50">
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-gradient-to-t from-peach to-magenta" />
+          Carried
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-ink/10" />
+          Other principals this book
+        </span>
+      </div>
     </div>
   );
 }
