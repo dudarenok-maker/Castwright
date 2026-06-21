@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { writeJsonAtomic } from '../../workspace/state-io.js';
 
 export type Verdict = 'voice-match' | 'voice-mismatch' | 'inconclusive';
@@ -24,7 +23,12 @@ export async function writeVerdicts(path: string, rows: VerdictRow[]): Promise<v
 
 /** Read verdict rows from disk. Returns null on ENOENT (torn-write tolerant). */
 export async function readVerdicts(path: string): Promise<VerdictRow[] | null> {
-  if (!existsSync(path)) return null;
-  const raw = await readFile(path, 'utf8');
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (e: any) {
+    if (e && e.code === 'ENOENT') return null;
+    throw e;
+  }
   return JSON.parse(raw) as VerdictRow[];
 }

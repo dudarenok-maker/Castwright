@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { writeJsonAtomic } from '../../workspace/state-io.js';
 export { EMBEDDINGS_VERSION } from './constants.js';
 
@@ -42,8 +41,13 @@ export async function writeEmbeddings(
 export async function readEmbeddings(
   path: string,
 ): Promise<{ version: string; rows: EmbeddingRow[] } | null> {
-  if (!existsSync(path)) return null;
-  const raw = await readFile(path, 'utf8');
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (e: any) {
+    if (e && e.code === 'ENOENT') return null;
+    throw e;
+  }
   const stored = JSON.parse(raw) as StoredFile;
   const rows: EmbeddingRow[] = stored.rows.map((r) => {
     const buf = Buffer.from(r.vec, 'base64');
