@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { IconClose } from '../../lib/icons';
 import type { SeriesMemoryDetail, CarriedCharacter } from '../../lib/types';
 
 const ONES = [
@@ -81,21 +82,35 @@ export function SeriesMemoryReveal({
   fetcher?: (a: string, s: string) => Promise<SeriesMemoryDetail>;
 }) {
   const [detail, setDetail] = useState<SeriesMemoryDetail | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let live = true;
-    fetcher(author, series).then((d) => {
-      if (live) setDetail(d);
-    });
+    fetcher(author, series)
+      .then((d) => {
+        if (live) setDetail(d);
+      })
+      .catch(() => {
+        if (live) setFailed(true);
+      });
     return () => {
       live = false;
     };
   }, [author, series, fetcher]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   return (
     <div
       role="dialog"
       aria-modal
+      aria-labelledby="sm-reveal-heading"
       className="fixed inset-0 z-50 grid sm:place-items-center bg-ink/40"
       onClick={onClose}
     >
@@ -103,14 +118,25 @@ export function SeriesMemoryReveal({
         className="bg-[#1b1714] text-cream w-full sm:max-w-xl sm:rounded-2xl p-7 min-h-screen sm:min-h-0 overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        {!detail ? (
+        <div className="flex justify-end">
+          <button
+            onClick={onClose}
+            className="p-2 rounded-full hover:bg-white/10 text-cream/60"
+            aria-label="Close"
+          >
+            <IconClose className="w-4 h-4" />
+          </button>
+        </div>
+        {failed ? (
+          <p className="text-cream/60">Couldn't load series memory.</p>
+        ) : !detail ? (
           <p className="text-cream/60">Loading…</p>
         ) : (
           <>
             <p className="text-[11px] uppercase tracking-[0.14em] text-magenta font-semibold">
               series memory · {series}
             </p>
-            <h2 className="font-serif text-2xl mt-2">
+            <h2 id="sm-reveal-heading" className="font-serif text-2xl mt-2">
               {spell(bookCount)} books in, and not a voice has changed.
             </h2>
             <p className="text-cream/60 mt-1 mb-5">

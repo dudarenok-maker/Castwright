@@ -112,4 +112,66 @@ describe('SeriesMemoryReveal', () => {
     fireEvent.click(screen.getByText('Share this cast'));
     expect(onShare).toHaveBeenCalledWith(detail);
   });
+
+  it('dialog has an accessible name matching the heading once loaded', async () => {
+    render(
+      <SeriesMemoryReveal
+        author="Kell"
+        series="Ninth House"
+        bookCount={3}
+        onClose={() => {}}
+        onShare={() => {}}
+        fetcher={async () => detail}
+      />,
+    );
+    await waitFor(() => screen.getByText(/not a voice has changed/));
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(/not a voice has changed/);
+  });
+
+  it('close button calls onClose', async () => {
+    const onClose = vi.fn();
+    render(
+      <SeriesMemoryReveal
+        author="Kell"
+        series="Ninth House"
+        bookCount={3}
+        onClose={onClose}
+        onShare={() => {}}
+        fetcher={async () => detail}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('Escape key calls onClose', async () => {
+    const onClose = vi.fn();
+    render(
+      <SeriesMemoryReveal
+        author="Kell"
+        series="Ninth House"
+        bookCount={3}
+        onClose={onClose}
+        onShare={() => {}}
+        fetcher={async () => detail}
+      />,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('shows error message when fetcher rejects', async () => {
+    render(
+      <SeriesMemoryReveal
+        author="Kell"
+        series="Ninth House"
+        bookCount={3}
+        onClose={() => {}}
+        onShare={() => {}}
+        fetcher={async () => { throw new Error('network'); }}
+      />,
+    );
+    await waitFor(() => screen.getByText(/Couldn't load/));
+    expect(screen.getByText(/Couldn't load/)).toBeInTheDocument();
+  });
 });
