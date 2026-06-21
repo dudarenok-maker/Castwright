@@ -121,4 +121,30 @@ describe('deriveSeriesMemory', () => {
     const firstPresetIdx = d.carried.characters.findIndex((c) => c.voiceKind === 'preset');
     expect(firstPresetIdx).toBeGreaterThan(lastBespokeIdx); // all bespoke before any preset
   });
+
+  it('does not hang on a cyclic matchedFrom (A→B→A self-cycle)', () => {
+    // b2-marrow points back to b1-marrow which points back to b2-marrow → cycle.
+    const books = baseBooks();
+    books[0].characters.find((c) => c.characterId === 'b1-marrow')!.matchedFrom =
+      { bookId: 'b2', characterId: 'b2-marrow' };
+    // deriveSeriesMemory must return (not hang); result may be null or a valid detail.
+    const result = deriveSeriesMemory(books);
+    expect(result === null || typeof result === 'object').toBe(true);
+  });
+
+  it('does not double-count a shared ancestor when two tails matchedFrom the same prior character', () => {
+    // Two book-3 characters both claim b1-marrow as their ancestor.
+    const books = baseBooks();
+    // Add a second tail in b3 that also matchedFrom b1-marrow.
+    books[2].characters.push(ch({
+      characterId: 'b3-marrow-alt', name: 'Marrow-Alt', voiceId: 'v_q_marrow',
+      matchedFrom: { bookId: 'b1', characterId: 'b1-marrow' },
+    }));
+    const result = deriveSeriesMemory(books);
+    if (result === null) return; // threshold not met — that is also an acceptable (non-phantom) outcome
+    // b1-marrow must appear in at most one carried character's bookIndices.
+    const appsInB1 = result.carried.characters.filter((c) => c.bookIndices.includes(1) && c.voiceId === 'v_q_marrow');
+    // One chain consumed b1-marrow; the second tail's walk stopped at the shared node → no phantom duplicate.
+    expect(appsInB1.length).toBeLessThanOrEqual(1);
+  });
 });

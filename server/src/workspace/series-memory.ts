@@ -53,13 +53,18 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
   }
 
   const carried: CarriedCharacter[] = [];
+  const seen = new Set<string>(); // guards against cycles and shared ancestors
   for (const [key, tail] of byKey) {
     if (pointedAt.has(key)) continue; // keep only chain tails (latest appearance)
     const chain: Appearance[] = [tail];
+    seen.add(key);
     let cur = tail;
     while (cur.ch.matchedFrom?.bookId && cur.ch.matchedFrom?.characterId) {
-      const prev = byKey.get(`${cur.ch.matchedFrom.bookId}::${cur.ch.matchedFrom.characterId}`);
+      const prevKey = `${cur.ch.matchedFrom.bookId}::${cur.ch.matchedFrom.characterId}`;
+      if (seen.has(prevKey)) break; // cycle or shared ancestor already consumed
+      const prev = byKey.get(prevKey);
       if (!prev) break;
+      seen.add(prevKey);
       chain.push(prev); cur = prev;
     }
     if (chain.length < 2) continue; // appears in <2 books → not carried
