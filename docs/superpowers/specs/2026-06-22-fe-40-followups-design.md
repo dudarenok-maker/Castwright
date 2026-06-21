@@ -13,9 +13,9 @@ series-memory chip in the table view, and add a PNG export to the share card.
 
 ## Scope & delivery
 
-Three independent, FE-scoped items. They share **no files except the
-orchestrator** (`src/views/book-library.tsx`, one prop wiring line), so they
-cannot collide.
+Three independent, FE-scoped items. Their file sets are disjoint: only **fe-41**
+touches the orchestrator (`src/views/book-library.tsx`, one prop-wiring line);
+fe-42 and fe-43 don't touch it at all. Nothing collides.
 
 - **One branch:** `feat/frontend-fe-40-followups`.
 - **Three commits**, one per item, in this order: fe-42 (copy) → fe-41 (table
@@ -79,14 +79,32 @@ would be a category error.
   - **Keep `data-testid="reused-badge"`** unchanged to avoid unrelated test
     churn (the testid is an internal hook, not user-facing copy). The icon
     (`IconLink`) and lighter-weight styling stay.
-- `src/views/cast.tsx` — update the single `ReusedBadge` import to
-  `CarriedBadge` and its one usage (`{reused && <CarriedBadge />}`); update the
-  filter-chip `CHIP_ORDER` entry and tally key `'Reused'` → `'Carried'` (the
-  string is both the Map key and the visible chip label, so they move
-  together); update the explanatory comments that say "Reused".
+- **`CarriedBadge` has two render sites — both must update or the rename is a
+  TypeScript build break:**
+  - `src/views/cast.tsx` — update the `ReusedBadge` import (line ~19) to
+    `CarriedBadge` and its usage `{reused && <CarriedBadge />}` (line ~1450);
+    update the filter-chip `CHIP_ORDER` entry and tally key `'Reused'` →
+    `'Carried'` (the string is both the Map key and the visible chip label, so
+    they move together — and `statusKeysFor` at cast.tsx:286 just wraps
+    `statusFilterKeys`, so the chip-definition key and the row-matching key stay
+    consistent once both producers are renamed); update the "Reused" comments.
+  - `src/modals/profile-drawer.tsx` — update the `ReusedBadge` import (line ~22)
+    to `CarriedBadge` and its usage `{reused && <CarriedBadge />}` (line ~899).
+    The drawer mirrors the cast row's badge; missing it fails `tsc`.
 - `src/lib/voice-status.ts` (~line 173) — the chip-key push `keys.push('Reused')`
   → `keys.push('Carried')` (keeps the chip count keyed consistently with
   `cast.tsx`).
+- Comments mentioning "Reused" in the touched files updated to match.
+
+**Not touched — the lifecycle `Matched` pill (separate concept, derived from
+`voiceState`, not `matchedFrom`).** Expected consequence, *not* a missed rename: a
+reused **preset** character (`voiceState:'reused'`) resolves its lifecycle label to
+`'Matched'` (`voice-status.ts:124-127`) **and** carries the badge. Today that row
+reads "Matched · Reused"; after fe-42 it reads **"Matched · Carried."** The
+lifecycle "Matched" (preset voice is ready) is a different axis from carry
+provenance, so it correctly stays. A reviewer seeing a surviving bare "Matched"
+must not read it as an incomplete rename. The confirm-cast `Matched · N%` pill is a
+separate surface; the `· N%` distinguishes it from the bare lifecycle "Matched".
 
 ### Tests
 
@@ -99,13 +117,16 @@ Update the exact-string assertions in:
 - `src/views/confirm-cast.test.tsx` — `getByText('Matched · 95%')` →
   `getByText('Carried · 95%')` and the `/Matched · /` queries.
 - `src/modals/profile-drawer.test.tsx` — the reused-badge assertions.
-- `src/test/a11y.test.tsx` and `src/modals/match-detail.test.tsx` — any
-  `Reused`/`Matched · %` assertions surfaced by a repo-wide grep at
-  implementation time.
+- `src/test/a11y.test.tsx` — any `Reused`/`Matched · %` assertions surfaced by a
+  repo-wide grep at implementation time. (`match-detail.tsx`/`.test.tsx` are
+  **not** sites — their earlier grep hits were `matchedFrom`, not the visible
+  strings.)
 
-**Acceptance:** a repo-wide grep for the visible strings `Reused` and
-`Matched · ` returns zero *user-facing* `matchedFrom`-driven sites afterward;
-the lifecycle `Matched` pill still renders `Matched`; all existing tests green.
+**Acceptance:** `npm run typecheck` is green (the `ReusedBadge → CarriedBadge`
+rename is a build concern — both `cast.tsx` and `profile-drawer.tsx` import it);
+a repo-wide grep for the visible strings `Reused` and `Matched · ` returns zero
+*user-facing* `matchedFrom`-driven sites afterward; the bare lifecycle `Matched`
+pill still renders `Matched`; all existing tests green.
 
 ---
 
@@ -151,6 +172,24 @@ it **drops** the `LibrarySeries` reference.
    `SeriesMemoryReveal` + `ShareCardModal` are already rendered globally and need
    no change.
 
+### Invariants this relies on (verified, pin them)
+
+- **Filter preserves `seriesMemory`.** The chip only renders because the
+  orchestrator builds `filteredAuthors` with `{ ...series, books: filterBooks(...) }`
+  (`book-library.tsx:316-327`) — the spread keeps `seriesMemory`, and `filterBooks`
+  only narrows the `books` array. This is an *implicit, currently-untested*
+  dependency shared with the grid: a future refactor that reconstructs series
+  objects would silently kill the chip in both views. The fe-41 test (below) locks
+  it for the table.
+- **Count is the unfiltered series total — intentional parity with the grid.**
+  The chip shows `seriesMemory.confirmedBookCount`, which is *not* recomputed on
+  filter, so with an active search/tag filter the table can show 2 rows while the
+  chip reads "5 books." This is identical to the grid's existing behaviour, so
+  fe-41 is not a regression; it is deliberate parity, not an oversight.
+- **`onOpenSeriesMemory` needs the original `LibrarySeries`** (the reveal reads
+  `series.books[0].author` + `series.name`). Pass `group.series` — the original
+  object threaded in step 1 — not a reconstructed one.
+
 ### Tests
 
 Extend `src/components/library/library-table.test.tsx`:
@@ -161,6 +200,9 @@ Extend `src/components/library/library-table.test.tsx`:
   section.
 - Clicking the chip fires `onOpenSeriesMemory` with the series and does **not**
   toggle the section's collapse state.
+- **Chip survives an active filter** — render the table with a search/tag filter
+  that narrows a qualifying series' `books`, and assert the chip still shows (locks
+  the `{ ...series }` filter-preservation invariant above).
 
 `e2e/responsive/coverage.spec.ts` already auto-runs the table at every viewport;
 no new e2e case is required for fe-41 (the chip is exercised by the grid's
@@ -192,29 +234,44 @@ no mock-mode support — wrong fit for an FE-only round).
     "Download data (.json)" button, same pill styling family.
   - Handler:
     ```ts
-    await document.fonts.ready;               // ensure self-hosted woff2 loaded
+    await document.fonts?.ready;              // optional-chain: jsdom has no document.fonts
     const url = await toPng(node, { pixelRatio: 2, cacheBust: true });
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${seriesName}-series-cast.png`;
+    a.download = `${slugifyFilename(seriesName)}-series-cast.png`;
     a.click();
     ```
-    (filename mirrors the JSON export's `${seriesName}-series-memory.json`.)
+    **The `?.` is load-bearing for the unit test:** jsdom does **not** implement
+    `document.fonts`, so a bare `document.fonts.ready` throws `TypeError` *before*
+    the mocked `toPng` is reached and the test can't exercise the path. Optional
+    chaining is a no-op in the browser (where `document.fonts` exists) and safe in
+    jsdom (where it's `undefined` → the `await undefined` resolves immediately).
+  - **Filename — `slugifyFilename` (small shared helper).** `seriesName` can hold
+    characters illegal in filenames (`:` / `/` — the mock series key even uses
+    `::`). The existing JSON download (`${seriesName}-series-memory.json`) has this
+    same latent issue. Add a tiny `slugifyFilename(s)` (strip/replace
+    `[\\/:*?"<>|]` → `-`, collapse repeats) and apply it to **both** the new PNG
+    and the existing JSON download in this file — a one-liner that fixes both
+    rather than propagating the bug. (Scoped to this file; not a new module.)
   - **States:** local `busy` flag → button shows a disabled "Rendering…" label
     during capture; local `error` flag → an inline error line under the buttons
     ("Couldn't render the image — try again.") on a rejected `toPng`. No toast
     dependency; the modal stays self-contained.
 - Fonts (General Sans + Lora) are self-hosted, same-origin woff2, so
-  html-to-image inlines them; the `document.fonts.ready` await guards against a
+  html-to-image inlines them; the `document.fonts?.ready` await guards against a
   capture firing before the faces are ready.
 
 ### Tests
 
 - **Vitest** (`share-card-modal.test.tsx`): mock `html-to-image`'s `toPng`.
   - Clicking "Download image (.png)" awaits `toPng`, creates an anchor with the
-    returned data URL and `download="${seriesName}-series-cast.png"`, and clicks
-    it (spy on `HTMLAnchorElement.prototype.click` / `createElement`).
+    returned data URL and the slugified `download` filename, and clicks it (spy on
+    `HTMLAnchorElement.prototype.click` / `createElement`). Runs under jsdom with
+    no `document.fonts` — the `?.` guard is what lets this test reach `toPng`.
   - A rejected `toPng` surfaces the inline error line and re-enables the button.
+  - `slugifyFilename` replaces illegal characters (assert a `seriesName` with `:`
+    / `/` yields a safe `.png` *and* `.json` filename — covers the shared helper
+    on both downloads).
 - **e2e** (`e2e/series-memory.spec.ts`): open the share card → click
   "Download image (.png)" → assert a Playwright `download` event fires with a
   `.png` suggested filename. Runs in mock mode.
@@ -225,9 +282,11 @@ works in mock mode, and is covered by unit + e2e tests.
 
 ## Risks & mitigations
 
-- **fe-42** — blast radius is *test strings*, not logic; risk is a missed
-  assertion site, caught by `npm test`. The lifecycle-vs-carry `Matched` overload
-  is the one trap; the spec pins which sites move and which stay.
+- **fe-42** — two failure modes: (a) the `ReusedBadge → CarriedBadge` export
+  rename is a **build break** if either importer (`cast.tsx`, `profile-drawer.tsx`)
+  is missed — caught by `npm run typecheck`; (b) a missed test-string assertion —
+  caught by `npm test`. The lifecycle-vs-carry `Matched` overload is the
+  interpretation trap; the spec pins which sites move and which stay.
 - **fe-41** — only non-trivial bit is the header restructure; chip + modal are
   pure reuse. Risk: breaking the collapse `aria-*` wiring — covered by the
   "collapse still toggles independently" test.
