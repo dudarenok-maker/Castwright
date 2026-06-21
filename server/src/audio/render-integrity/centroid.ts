@@ -37,10 +37,10 @@ export const TRIM_MAX_ITERS = 5;
  * (typical inter-cluster gap ≈ 0.3–0.7) from within-cluster scatter
  * (typical gap < 0.05). Calibration-tunable without changing the algorithm.
  */
-const BIMODAL_GAP_THRESHOLD = 0.15;
+export const BIMODAL_GAP_THRESHOLD = 0.15;
 
 /** Minimum fraction of the set each side of the gap must represent. */
-const BIMODAL_MIN_SIDE_FRACTION = 0.2;
+export const BIMODAL_MIN_SIDE_FRACTION = 0.2;
 
 // ── Internal vector helpers (Float64) ─────────────────────────────────────
 
@@ -148,12 +148,21 @@ export interface CentroidResult {
  *
  * @param eligible Pre-filtered list of Float32Array embeddings (caller
  *   ensures gate-passing AND no renderedFallbackEngine).
+ * @param opts Optional overrides for the algorithm constants (for calibration).
  * @returns CentroidResult — kind='too-thin' when there are fewer than
  *   CENTROID_MIN_N vectors; kind='in-book' otherwise.
  */
-export function buildCentroid(eligible: Float32Array[]): CentroidResult {
+export function buildCentroid(
+  eligible: Float32Array[],
+  opts?: { minN?: number; alpha?: number; eps?: number; maxIters?: number },
+): CentroidResult {
+  const minN = opts?.minN ?? CENTROID_MIN_N;
+  const alpha = opts?.alpha ?? TRIM_ALPHA;
+  const eps = opts?.eps ?? TRIM_EPS;
+  const maxIters = opts?.maxIters ?? TRIM_MAX_ITERS;
+
   // ── Too-thin fast path ──────────────────────────────────────────────────
-  if (eligible.length < CENTROID_MIN_N) {
+  if (eligible.length < minN) {
     // Return the mean of whatever we have (or an empty vector if nothing).
     let centroid: Float32Array;
     if (eligible.length === 0) {
@@ -167,17 +176,16 @@ export function buildCentroid(eligible: Float32Array[]): CentroidResult {
 
   // ── Convert to Float64 for all internal arithmetic ─────────────────────
   let working: Float64Array[] = eligible.map(toFloat64);
-  const dim = working[0].length;
 
   // ── Iterate-to-converge trimmed mean ───────────────────────────────────
   // Initial centroid from the full eligible set.
   let c = renormalizedMean(working);
 
-  for (let iter = 0; iter < TRIM_MAX_ITERS; iter++) {
+  for (let iter = 0; iter < maxIters; iter++) {
     // Compute cosines to the current centroid.
     const cosines = working.map((v) => cosine64(v, c));
 
-    // Drop the lowest TRIM_ALPHA fraction.
+    // Drop the lowest alpha fraction.
     // We need a stable sort of the indices so that ties break consistently.
     const indices = Array.from({ length: working.length }, (_, i) => i);
     indices.sort((a, b) => {
@@ -187,12 +195,15 @@ export function buildCentroid(eligible: Float32Array[]): CentroidResult {
       return diff !== 0 ? diff : a - b;
     });
 
-    const dropCount = Math.floor(working.length * TRIM_ALPHA);
+    const dropCount = Math.floor(working.length * alpha);
     // Drop the `dropCount` lowest-cosine vectors (first in sorted order).
     const keepIndices = indices.slice(dropCount);
     // Re-sort keep indices in ascending original order for reproducibility.
     keepIndices.sort((a, b) => a - b);
     const kept = keepIndices.map((i) => working[i]);
+
+    // Guard against empty kept set (degenerate: alpha≈1 or tiny working set).
+    if (kept.length === 0) break;
 
     // Recompute centroid on the kept set.
     const cNext = renormalizedMean(kept);
@@ -201,7 +212,7 @@ export function buildCentroid(eligible: Float32Array[]): CentroidResult {
     const shift = 1 - cosine64(c, cNext);
     c = cNext;
 
-    if (shift < TRIM_EPS) break;
+    if (shift < eps) break;
 
     // Update working set for next iteration.
     working = kept;

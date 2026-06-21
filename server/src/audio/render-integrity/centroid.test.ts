@@ -5,6 +5,8 @@ import {
   TRIM_ALPHA,
   TRIM_EPS,
   TRIM_MAX_ITERS,
+  BIMODAL_GAP_THRESHOLD,
+  BIMODAL_MIN_SIDE_FRACTION,
 } from './centroid.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -57,6 +59,19 @@ describe('centroid constants', () => {
     expect(TRIM_ALPHA).toBeCloseTo(0.1, 5);
     expect(TRIM_EPS).toBeCloseTo(1e-3, 8);
     expect(TRIM_MAX_ITERS).toBe(5);
+    expect(BIMODAL_GAP_THRESHOLD).toBeCloseTo(0.15, 5);
+    expect(BIMODAL_MIN_SIDE_FRACTION).toBeCloseTo(0.2, 5);
+  });
+});
+
+// ── opts parameter override ────────────────────────────────────────────────
+
+describe('buildCentroid — opts overrides', () => {
+  it('opts.minN=5 causes 6-vector set to return kind=in-book instead of too-thin', () => {
+    const sixVectors = tightCluster(6);
+    // Default minN=10 → too-thin; override to 5 → in-book
+    const result = buildCentroid(sixVectors, { minN: 5 });
+    expect(result.kind).toBe('in-book');
   });
 });
 
