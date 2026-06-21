@@ -294,4 +294,22 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);
   });
+
+  test('series-memory chip visible and tappable in library (fe-40)', async ({ page }) => {
+    /* The "Northern Coast Trilogy" series in the mock library carries a
+       seriesMemory summary, which renders the series-memory chip. Assert
+       it is visible (no overflow clips it) and that clicking it opens the
+       reveal dialog without causing horizontal scroll — the chip's
+       min-h-[44px] touch target is the main risk at phone width. */
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
+    const chip = page.getByTestId('series-memory-chip').first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await chip.click();
+    await page.getByRole('dialog').waitFor({ state: 'visible', timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
 });

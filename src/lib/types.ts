@@ -592,9 +592,27 @@ export interface LibraryBook {
 
 export type CoverCandidate = components['schemas']['CoverCandidate'];
 
+export interface SeriesMemorySummary {
+  carriedCount: number; bespokeCount: number; designedCount: number;
+  confirmedBookCount: number; // M for in-app surfaces (chip + reveal) — NOT series.books.length
+  spanBooks: number;          // for exported artifacts (card + JSON)
+  perBook: Array<{ bookId: string; index: number; principalCount: number; carriedPresent: number }>;
+}
+export interface CarriedCharacter {
+  character: string; aliases: string[]; voiceId: string; voiceLabel: string;
+  engine: string | null; voiceKind: 'designed' | 'cloned' | 'preset';
+  firstBookId: string; lastBookId: string; bookIndices: number[]; carriedFullSpan: boolean;
+}
+export interface SeriesMemoryDetail {
+  series: { confirmedBookCount: number; spanBooks: number;
+    books: Array<{ bookId: string; title: string; index: number; principalCount: number }> };
+  carried: { count: number; bespokeCount: number; designedCount: number; characters: CarriedCharacter[] };
+}
+
 export interface LibrarySeries {
   name: string;
   books: LibraryBook[];
+  seriesMemory?: SeriesMemorySummary | null;
 }
 
 export interface LibraryAuthor {
