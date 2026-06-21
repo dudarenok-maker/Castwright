@@ -4,7 +4,6 @@ The core embed/decode/segment-walk loop is exposed as ``embed_book_segments()``
 so that ``calibrate.py`` can reuse it without duplicating the logic.
 """
 import sys, json, glob, os, subprocess, random
-sys.path.insert(0, r"C:/Claude/Projects/srv36-spike-wt/server/tts-sidecar")
 import numpy as np
 from spikes.srv36.embed import embed_pcm
 from spikes.srv36.metrics import cosine, centroid, eer, spread_stats

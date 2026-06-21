@@ -17,7 +17,7 @@ slots first (lowest cosine first — worst first), then band rows fill the
 remainder (also lowest cosine first).
 
 The IO entry-point ``emit_listen_set`` wraps the pure selector, calls
-``extract_listen.grab`` for the wav extraction, and writes a
+``extract_listen.extract_clip`` for the wav extraction, and writes a
 ``manifest.json`` to *out_dir*.
 
 Design choices
@@ -36,7 +36,7 @@ Manifest row keys:
     (values: ``"severe"`` | ``"band"``).
 
 Wav extraction:
-    Reuses ``extract_listen.grab`` from the spike.  The wav files are named
+    Reuses ``extract_listen.extract_clip`` from the spike.  The wav files are named
     ``<character>_<verdict>_cos<cosine>_<sentence_id[:12]>.wav``.
 
 CLI:
@@ -49,8 +49,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +95,13 @@ def select_listen_set(
         character, chapter, sentence_id, cosine, predicted_verdict
     Ordered: severe rows (lowest cosine first) then band rows (lowest cosine first).
     Total length <= cap.
+
+    Notes
+    -----
+    This function intentionally takes ``per_char_clean_cosines`` as a separate
+    parameter (rather than the 3-arg illustrative shape in the spec).  Scored
+    segments don't carry the full clean distribution needed to compute per-character
+    percentile thresholds, so the clean cosines must be passed in explicitly.
     """
     if cap <= 0:
         return []
@@ -202,7 +207,7 @@ def emit_listen_set(
     import glob as _glob
 
     from spikes.srv36.probe_real_library import embed_book_segments
-    from spikes.srv36.metrics import centroid as _centroid, cosine as _cosine
+    from spikes.srv36.extract_listen import extract_clip
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     floor = float(cutoffs.get("min_duration_sec", 2.0))
@@ -270,27 +275,14 @@ def emit_listen_set(
         row["wav_path"] = out_path
 
         if start_sec is not None and end_sec is not None and Path(audio_path).exists():
-            _extract_wav(audio_path, float(start_sec), float(end_sec), out_path)
+            ok = extract_clip(audio_path, float(start_sec), float(end_sec), out_path, sr=sr)
+            if not ok:
+                row.pop("wav_path", None)
 
     manifest_path = str(Path(out_dir) / "manifest.json")
     Path(manifest_path).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Listen-set written to: {out_dir}  ({len(manifest)} clips)")
     return manifest
-
-
-def _extract_wav(audio_path: str, start_sec: float, end_sec: float, out_path: str) -> None:
-    """Extract a wav clip from an mp3 via ffmpeg."""
-    subprocess.run(
-        [
-            "ffmpeg", "-v", "error", "-y",
-            "-ss", str(start_sec), "-to", str(end_sec),
-            "-i", audio_path,
-            "-ar", "16000", "-ac", "1",
-            out_path,
-        ],
-        check=False,
-    )
-    print(f"  wrote {os.path.basename(out_path)}")
 
 
 # ---------------------------------------------------------------------------

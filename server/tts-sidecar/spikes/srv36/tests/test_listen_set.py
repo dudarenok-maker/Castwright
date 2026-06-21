@@ -222,7 +222,7 @@ class TestCapEnforcement:
     def test_default_cap_is_20(self):
         clean, segs = self._setup(15, 10)
         rows = select_listen_set(segs, {"alice": clean}, _cutoffs())
-        assert len(rows) <= 20, f"Expected <= 20 rows, got {len(rows)}"
+        assert len(rows) == 20, f"Expected exactly 20 rows (15 severe + 5 band up to cap), got {len(rows)}"
 
     def test_custom_cap_respected(self):
         clean, segs = self._setup(15, 10)
