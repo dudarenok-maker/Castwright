@@ -442,6 +442,26 @@ export async function buildInputsFromBooks(books: LibraryBook[]): Promise<Series
   return inputs;
 }
 
+/** Walk the title directories under `<BOOKS_ROOT>/<author>/<series>/` and
+ *  scanBook each one, filtering nulls. Used by the series-memory route so
+ *  it can enumerate a specific series without re-scanning the whole library. */
+export async function scanSeriesBooks(author: string, series: string): Promise<LibraryBook[]> {
+  ensureWorkspace();
+  const books: LibraryBook[] = [];
+  for (const titleName of listDirs(join(BOOKS_ROOT, author, series))) {
+    const book = await scanBook(author, series, titleName);
+    if (book) books.push(book);
+  }
+  return books;
+}
+
+/** Full pipeline: enumerate + scan the series, then build SeriesBookInput[]
+ *  from the resulting LibraryBook array. */
+export async function buildSeriesInputs(author: string, series: string): Promise<SeriesBookInput[]> {
+  const books = await scanSeriesBooks(author, series);
+  return buildInputsFromBooks(books);
+}
+
 /* ── end series-memory helpers ───────────────────────────────────────────── */
 
 function findManuscriptFile(bookDir: string): string | null {
