@@ -122,11 +122,24 @@ Update the exact-string assertions in:
   **not** sites — their earlier grep hits were `matchedFrom`, not the visible
   strings.)
 
+**Visual baselines (R4-2) — fe-42 busts the `confirm` snapshot.** The visual suite
+snapshots `#/books/:id/confirm`, whose fixture cast (`src/data/characters.ts`,
+`matchedFrom` on the Eliza/Marcus seeds) renders the `Matched · N%` pill. Changing
+it to `Carried · N%` changes the rendered pixels, so `confirm.png` (and
+`confirm-dark.png`, if present) **will fail `test:e2e:visual`** — green unit tests
+won't reveal it; it surfaces at pre-push / `run-ci`. Regen these per-platform
+baselines as part of fe-42: `e2e/linux/` (CI, regen on Linux via the
+`regen-visual-baselines` workflow) **and** `e2e/win32/` (local pre-push). No other
+snapshot is affected (no `cast`/`table` snapshot exists).
+
 **Acceptance:** `npm run typecheck` is green (the `ReusedBadge → CarriedBadge`
 rename is a build concern — both `cast.tsx` and `profile-drawer.tsx` import it);
 a repo-wide grep for the visible strings `Reused` and `Matched · ` returns zero
 *user-facing* `matchedFrom`-driven sites afterward; the bare lifecycle `Matched`
-pill still renders `Matched`; all existing tests green.
+pill still renders `Matched`; the `confirm` visual baselines are regenerated; all
+tests green. **`Carried · N%` at the confirm (proposal) stage is the deliberate
+choice** (R2-4) — single-word "Carried" everywhere beats re-introducing a second
+word for the pre-confirmation moment.
 
 ---
 
@@ -147,24 +160,42 @@ it **drops** the `LibrarySeries` reference.
 1. **Thread the series through `SeriesGroup`.** Add `series: LibrarySeries | null`
    (null for the synthetic `__standalones__` group). Populate it when building
    `groups` in the `useMemo`.
-2. **Restructure the section header.** A clickable chip cannot nest inside the
-   collapse `<button>` (invalid HTML; the click would also toggle collapse).
-   Wrap the header in a flex `<div>`: the existing collapse `<button>` (left,
-   `flex-1`, all current aria + book-count preserved) and the chip as a sibling
-   (right). The chip's `onOpen` is independent of the collapse toggle.
-3. **Render the chip** when `group.series?.seriesMemory` is present, identical to
-   the grid:
+2. **Restructure the section header, responsively.** A clickable chip cannot nest
+   inside the collapse `<button>` (invalid HTML; the click would also toggle
+   collapse). Wrap the header in a flex `<div>`: the existing collapse `<button>`
+   (left, `flex-1`, all current aria + book-count preserved) and the chip as a
+   sibling. The chip's `onOpen` is independent of the collapse toggle.
+   - **Phone (`<640px`):** the wrapper is `flex-wrap` (or `flex-col sm:flex-row`)
+     so the chip drops to its own line under the collapse row rather than
+     overflowing the narrow header. The mobile protocol mandates `<640px` behave,
+     and `e2e/responsive/coverage.spec.ts` runs the table at phone width.
+3. **Compact chip variant — no books clause in the table.** Add an optional
+   `showBooks?: boolean` (default `true`) to `SeriesMemoryChip`. The grid keeps the
+   default ("Your cast · N voices, M books"); the **table passes
+   `showBooks={false}`** → "Your cast · N voices". Two reasons:
+   - **Avoids a contradictory adjacent count.** The table header already renders
+     `{group.books.length} books` (the filtered group size); the chip's own
+     `confirmedBookCount` is a *different* number, so showing both inches apart
+     reads as a bug. Dropping the chip's books clause removes the clash — the
+     header owns the book count, the chip owns the voice count.
+   - Shorter text fits the narrow header (helps step 2).
+
+   Render when `group.series?.seriesMemory` is present:
    ```tsx
    {group.series?.seriesMemory && (
      <SeriesMemoryChip
        summary={group.series.seriesMemory}
        bookCount={group.series.seriesMemory.confirmedBookCount}
+       showBooks={false}
        onOpen={() => onOpenSeriesMemory?.(group.series!)}
      />
    )}
    ```
    No inline sparkline (chip-only); click opens the existing
    `SeriesMemoryReveal`. Standalones and below-threshold series render no chip.
+   (`bookCount` stays a required prop; the table just passes it and the component
+   omits the clause when `showBooks={false}` — no separate `aria-label` needed, the
+   visible "Your cast · N voices" is a complete accessible name.)
 4. **Prop + orchestrator wiring.** `LibraryTable` gains
    `onOpenSeriesMemory?: (s: LibrarySeries) => void` (same signature the grid
    already has). In `book-library.tsx`, pass
@@ -181,33 +212,46 @@ it **drops** the `LibrarySeries` reference.
   dependency shared with the grid: a future refactor that reconstructs series
   objects would silently kill the chip in both views. The fe-41 test (below) locks
   it for the table.
-- **Count is the unfiltered series total — intentional parity with the grid.**
-  The chip shows `seriesMemory.confirmedBookCount`, which is *not* recomputed on
-  filter, so with an active search/tag filter the table can show 2 rows while the
-  chip reads "5 books." This is identical to the grid's existing behaviour, so
-  fe-41 is not a regression; it is deliberate parity, not an oversight.
+- **Table chip hides its book count (`showBooks={false}`)** so it never sits a
+  `confirmedBookCount` next to the header's filtered `group.books.length` — see
+  change 3. (The grid keeps showing books; there the chip isn't adjacent to a
+  second book count.)
 - **`onOpenSeriesMemory` needs the original `LibrarySeries`** (the reveal reads
   `series.books[0].author` + `series.name`). Pass `group.series` — the original
   object threaded in step 1 — not a reconstructed one.
 
 ### Tests
 
-Extend `src/components/library/library-table.test.tsx`:
+Extend `src/components/library/library-table.test.tsx` (the table *renders* what
+it's given — it does not filter, so these prove rendering, not preservation):
 
-- Chip renders in the section header for a series carrying `seriesMemory`
-  (label + `confirmedBookCount`).
+- Chip renders in the section header for a series carrying `seriesMemory`, showing
+  the compact text "Your cast · N voices" (**no** books clause).
 - No chip for a series without `seriesMemory`, and none in the Standalones
   section.
 - Clicking the chip fires `onOpenSeriesMemory` with the series and does **not**
   toggle the section's collapse state.
-- **Chip survives an active filter** — render the table with a search/tag filter
-  that narrows a qualifying series' `books`, and assert the chip still shows (locks
-  the `{ ...series }` filter-preservation invariant above).
+- **Query scoping (R3-2):** the section now contains two buttons (collapse + chip).
+  New chip assertions must target `getByTestId('series-memory-chip')` (or the chip's
+  exact accessible name), **not** a loose `getByRole('button', { name: /…/ })`, or
+  they'll throw "multiple elements." Existing collapse-toggle tests stay green —
+  their fixtures carry no `seriesMemory`, so no chip renders there.
+
+**Filter-preservation invariant lives one layer up (R2-2).** `LibraryTable` can't
+prove the orchestrator's filter keeps `seriesMemory` — it never filters. Add the
+assertion where the spread happens: a test that runs `filteredAuthors`' logic (an
+orchestrator-level test in `book-library`, or a `library-slice` test if `filterBooks`
+is exercised there) and asserts a series retains `seriesMemory` after an active
+search/tag filter narrows its `books`.
 
 `e2e/responsive/coverage.spec.ts` already auto-runs the table at every viewport;
 no new e2e case is required for fe-41 (the chip is exercised by the grid's
 existing `e2e/series-memory.spec.ts` reveal flow, and the table render is unit
 covered).
+
+**Visual baselines:** fe-41 busts **none** — the visual suite has no `cast`/`table`
+snapshot, and `library.png` defaults to card view (whose grid chip already shipped
+in fe-40's baseline). No regen for fe-41.
 
 **Acceptance:** in table view, a qualifying series row shows the same chip as the
 card view; clicking it opens the reveal; standalone rows show no chip; the
@@ -228,12 +272,23 @@ no mock-mode support — wrong fit for an FE-only round).
 
 - **Dependency:** add `html-to-image` to `package.json`.
 - **`src/components/series-memory/share-card-modal.tsx`:**
-  - Put a `ref` on the `SeriesShareCard` wrapper element (the exact DOM node to
-    capture — card only, not the modal chrome).
+  - **Ref strategy (R2-1):** `SeriesShareCard` is a plain component, **not** a
+    `forwardRef`, so there's no node to hand `toPng`. The **surgical** approach is
+    for the modal to wrap `<SeriesShareCard/>` in its own ref'd `<div>` — *don't*
+    modify the shipped card component. The wrapper must be `w-full max-w-sm` so the
+    card (its own `mx-auto max-w-sm`, self-contained `bg-[#1b1714]` — verified
+    series-share-card.tsx:23) fills it edge-to-edge with **no transparent margin**;
+    capture `wrapperRef.current`. No `backgroundColor` capture option needed (the
+    card paints its own background).
   - Add a **"Download image (.png)"** button beside the existing
     "Download data (.json)" button, same pill styling family.
+  - **Lazy-load the lib (R4-1).** `ShareCardModal` is a *static* import in
+    `book-library.tsx`, so a static `import { toPng } from 'html-to-image'` would
+    pull ~50 KB gz into the library chunk for everyone. Dynamic-import it inside the
+    handler instead — it only loads when a user actually exports.
   - Handler:
     ```ts
+    const { toPng } = await import('html-to-image');   // lazy — keeps 50KB off the library chunk
     await document.fonts?.ready;              // optional-chain: jsdom has no document.fonts
     const url = await toPng(node, { pixelRatio: 2, cacheBust: true });
     const a = document.createElement('a');
@@ -254,9 +309,15 @@ no mock-mode support — wrong fit for an FE-only round).
     and the existing JSON download in this file — a one-liner that fixes both
     rather than propagating the bug. (Scoped to this file; not a new module.)
   - **States:** local `busy` flag → button shows a disabled "Rendering…" label
-    during capture; local `error` flag → an inline error line under the buttons
-    ("Couldn't render the image — try again.") on a rejected `toPng`. No toast
-    dependency; the modal stays self-contained.
+    during capture (also blocks double-fire); local `error` flag → an inline error
+    line under the buttons ("Couldn't render the image — try again.") on a rejected
+    `toPng`/`import`. **The error line carries `role="alert"` (R3-3)** so a
+    screen-reader user hears the failure — axe won't flag a missing live region, so
+    this only happens if specified. No toast dependency; the modal stays
+    self-contained.
+  - **Filename stem (R3-4):** PNG is `…-series-cast.png` vs the JSON's
+    `…-series-memory.json` — a deliberate distinction (the card is the *cast* story;
+    the JSON is the full *memory* detail), not an oversight.
 - Fonts (General Sans + Lora) are self-hosted, same-origin woff2, so
   html-to-image inlines them; the `document.fonts?.ready` await guards against a
   capture firing before the faces are ready.
@@ -272,9 +333,13 @@ no mock-mode support — wrong fit for an FE-only round).
   - `slugifyFilename` replaces illegal characters (assert a `seriesName` with `:`
     / `/` yields a safe `.png` *and* `.json` filename — covers the shared helper
     on both downloads).
-- **e2e** (`e2e/series-memory.spec.ts`): open the share card → click
-  "Download image (.png)" → assert a Playwright `download` event fires with a
-  `.png` suggested filename. Runs in mock mode.
+- **e2e** (`e2e/series-memory.spec.ts`): wrap the click in
+  `page.waitForEvent('download')`, open the share card → click "Download image
+  (.png)" → assert the `download` fires with a `.png` suggested filename. Runs in
+  mock mode. **This proves the wire, not pixel fidelity** — `toPng` yields a PNG
+  even on font fallback, so a green e2e means "the export button works end-to-end,"
+  not "fonts embedded perfectly." (`vi.mock('html-to-image')` still intercepts the
+  dynamic `import()` in the unit test — no change to the mock approach.)
 
 **Acceptance:** the share modal's "Download image (.png)" triggers a client-side
 download of the full `SeriesShareCard` (Castwave glyph + attribution included),
@@ -282,17 +347,23 @@ works in mock mode, and is covered by unit + e2e tests.
 
 ## Risks & mitigations
 
-- **fe-42** — two failure modes: (a) the `ReusedBadge → CarriedBadge` export
+- **fe-42** — three failure modes: (a) the `ReusedBadge → CarriedBadge` export
   rename is a **build break** if either importer (`cast.tsx`, `profile-drawer.tsx`)
   is missed — caught by `npm run typecheck`; (b) a missed test-string assertion —
-  caught by `npm test`. The lifecycle-vs-carry `Matched` overload is the
-  interpretation trap; the spec pins which sites move and which stay.
-- **fe-41** — only non-trivial bit is the header restructure; chip + modal are
-  pure reuse. Risk: breaking the collapse `aria-*` wiring — covered by the
-  "collapse still toggles independently" test.
+  caught by `npm test`; (c) the **`confirm` visual baseline bust** — *not* caught by
+  unit tests, only at pre-push/`run-ci`; the spec mandates regenerating
+  `confirm.png`/`confirm-dark.png` for `e2e/linux` + `e2e/win32`. The
+  lifecycle-vs-carry `Matched` overload is the interpretation trap; the spec pins
+  which sites move and which stay.
+- **fe-41** — non-trivial bits are the header restructure (risk: breaking the
+  collapse `aria-*` wiring — covered by the "collapse still toggles independently"
+  test) and the `showBooks` prop (keep the grid's default behaviour unchanged —
+  covered by the grid's existing chip tests staying green). Busts no visual
+  baseline.
 - **fe-43** — web-font embedding under html-to-image is the real-world risk;
-  `document.fonts.ready` + same-origin fonts mitigate it, and the e2e download
-  assertion is the proof it renders end-to-end.
+  `document.fonts?.ready` + same-origin fonts mitigate it; the e2e download
+  assertion proves the wire (not pixel fidelity). The lazy `import()` keeps the
+  ~50 KB off the library chunk.
 
 ## Out of scope (explicit)
 
