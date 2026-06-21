@@ -62,6 +62,30 @@ from normal stochastic variation. This is the key Phase-1 design finding.
   of every confirmed-drift clip.
 - The QA gap is **real and user-visible today** (operator caught it organically).
 
+## Hardening pass — cutoff-region listen (12 clips at p05)
+
+To estimate the false-positive rate *at the cutoff* (the extreme-tail clips above
+only prove drift exists), 12 fresh clips were sampled straddling each character's
+p05 and judged by listening:
+
+- **Flag-side (≤ p05, n=6): 0 clean false positives.** 3 real drift, 3 borderline
+  (mild/short) — every would-be-flagged clip had at least audible difference. The
+  gate does not cry wolf.
+- **Pass-side (> p05, n=6): 1 clear false negative** (stephanie 0.646 = real drift
+  just above the cutoff) + 2 borderline + 3 fine. ⟶ p05 is slightly **lax**; the
+  cutoff should sit ≈ p07–p08, or use a band.
+- The ambiguous zone is **dominated by short quotes** — confirming the min-duration
+  floor + `inconclusive` band are essential.
+
+**Recommended Phase-1 cutoff: 3-tier, per-character (not one global line):**
+- **Severe flag** — well below p05 (the 0.15–0.49 confirmed-drift region).
+- **Inconclusive band** — ≈ p05–p10 (borderline/short: surface softly, don't hard-flag).
+- **Pass** — above the band, with a min voiced-duration gate (short quotes →
+  `inconclusive` regardless).
+
+Net: 20 clips judged total. False-positive rate at the marginal cutoff ≈ 0 (clean),
+which is the decisive practicality number — the gate is trustworthy.
+
 ## Caveats / limitations (honest)
 
 - Small hand-picked sample (8 outliers, top 3 characters). A full Phase-1 pass
