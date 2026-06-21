@@ -448,7 +448,7 @@ export function summarize(detail: SeriesMemoryDetail): SeriesMemorySummary {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd server && npx vitest run src/workspace/series-memory.test.ts`
-Expected: PASS (6 tests). If the "shared preset voice" test fails, the bug is grouping by voiceId instead of by chain — re-check that chains are built from `matchedFrom`, not from `voiceId`.
+Expected: PASS (10 tests). If the "shared preset voice" test fails, the bug is grouping by voiceId instead of by chain — re-check that chains are built from `matchedFrom`, not from `voiceId`.
 
 - [ ] **Step 5: Commit**
 
@@ -1315,7 +1315,7 @@ describe('SeriesMemoryReveal', () => {
     expect(screen.getByText(/from Bk 2/)).toBeInTheDocument();   // Sela late joiner
     expect(screen.queryByText(/Kokoro|Qwen/)).toBeNull();        // no engine names
     expect(screen.queryByText(/bf_|am_|af_/)).toBeNull();        // no catalogue slugs (P2-3)
-    expect(screen.getByLabelText('in books 2–3')).toBeInTheDocument(); // Sela's range-collapsed aria, unique (P0-5)
+    expect(screen.getByLabelText(/in books 2.3/)).toBeInTheDocument(); // Sela's range-collapsed aria, unique (regex dodges the en-dash U+2013 codepoint trap; P0-5)
   });
   it('uses numerals (not spelled words) in the headline above twenty', async () => {
     render(<SeriesMemoryReveal author="Kell" series="Ninth House" bookCount={25} onClose={() => {}} onShare={() => {}} fetcher={async () => detail} />);
@@ -1706,7 +1706,7 @@ Expected: PASS.
 
 ```bash
 git add src/components/series-memory/share-card-modal.tsx src/components/series-memory/share-card-modal.test.tsx src/views/book-library.tsx
-git commit -m "feat(frontend): share-card modal + PNG export"
+git commit -m "feat(frontend): share-card modal + JSON export (PNG deferred behind dep)"
 ```
 
 ---
@@ -1805,3 +1805,5 @@ The plan was revised after an adversarial review (algorithm / codebase-fit / spe
 - **Book-count coherence.** Added `confirmedBookCount` to the summary; chip + reveal + marker-row use it (was `series.books.length`, which counts in-flight books and misaligned the markers). Propagated through OpenAPI + all fixtures.
 - **`library-grid.test.tsx` does not exist** — Task 9 now creates it from scratch with its own `makeBook`/`renderGrid` helpers (no helper to reuse).
 - Fixed two of my own new tests that would throw on non-unique matches (reveal aria → Sela's unique "2–3"; card hero number → `data-testid`, not `/39/` which also matched a wall name). Confirmed-only exclusion test added to T3. Reveal "Export data" now Blob-downloads the in-hand detail (works in mock mode) instead of an endpoint href.
+
+**Round 3 (final convergence review — hand-traced algorithm + type consistency; CONVERGED, no P0/P1 logic defects).** Fixed: the stale "PASS (6 tests)" → 10 (T2); the reveal aria assertion now uses a regex to dodge the en-dash codepoint trap (T10); the T13 commit subject (JSON, not PNG). **Executor notes (accepted-minor):** (1) T3 — replace `describeVoice(engine as never, …)` with a real `isTtsEngine(engine)` narrowing guard rather than the `as never` cast; (2) `matchedFrom` with only `bookId` (no `characterId`) is treated as chain-end **by design** (the walk guards on both); (3) the reveal *subtitle* spells numbers ≤20 like the headline — a deliberate consistency choice; (4) the T2 bespoke-sort test under-guards with a single preset character — correct but weak, strengthen if convenient.
