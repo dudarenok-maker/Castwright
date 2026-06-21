@@ -138,9 +138,9 @@ Run: `npm test` (full frontend) to catch any other site asserting the old string
 
 The confirm fixture renders the `Carried · N%` pill (matchedFrom seeds in `src/data/characters.ts`), so `confirm.png` / `confirm-dark.png` change.
 
-Local (Windows) — regenerate the `e2e/win32` baselines so pre-push passes:
+Local (Windows) — regenerate the `e2e/win32` baselines so pre-push passes. Use the project script (it pins `--workers=1`, which guards against the Windows font-hinting race that raw `playwright test` would re-introduce):
 ```bash
-npx playwright test e2e/responsive/visual.spec.ts --project=chromium -g "confirm" --update-snapshots
+npm run test:e2e:visual -- -g confirm --update-snapshots
 ```
 Expected: the `e2e/win32/responsive/visual.spec.ts-snapshots/confirm.png` and `confirm-dark.png` files are rewritten. (Per `docs/testing` history these confirm baselines are Windows-font-flaky; if the immediately-following verification run diffs, re-run once — see `feedback_visual_baselines_flaky_on_windows`.)
 
@@ -149,7 +149,9 @@ Expected: the `e2e/win32/responsive/visual.spec.ts-snapshots/confirm.png` and `c
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/components/primitives.tsx src/views/cast.tsx src/modals/profile-drawer.tsx src/views/confirm-cast.tsx src/views/cast.test.tsx src/views/confirm-cast.test.tsx src/modals/profile-drawer.test.tsx e2e/win32
+git add src/components/primitives.tsx src/views/cast.tsx src/modals/profile-drawer.tsx src/views/confirm-cast.tsx \
+  src/views/cast.test.tsx src/views/confirm-cast.test.tsx src/modals/profile-drawer.test.tsx \
+  'e2e/win32/responsive/visual.spec.ts-snapshots/confirm*.png'
 git commit -m "refactor(frontend): fe-42 unify series-carry vocabulary to 'Carried'
 
 Rename ReusedBadge -> CarriedBadge (testid kept), relabel the cast
@@ -158,8 +160,9 @@ filter chip via CHIP_LABELS, and change confirm-cast 'Matched · N%' ->
 unchanged. Regenerated the confirm visual baseline (win32); linux
 baseline owed via the regen workflow.
 
-Refs #984"
+Closes #984"
 ```
+(Stage the specific `confirm*.png` snapshot files, not the whole `e2e/win32` dir, so an unrelated baseline drift doesn't ride along. `Closes #984` — fe-42 is fully delivered in this single task.)
 
 ---
 
@@ -427,18 +430,26 @@ Expected: PASS (all four new cases + the existing collapse/grouping cases — th
           />
 ```
 
-- [ ] **Step 7: Add the filter-preservation invariant test (orchestrator layer)**
+- [ ] **Step 7: Add the filter-preservation invariant test (orchestrator render, not a reconstruction)**
 
-The chip only renders because `filteredAuthors` (book-library.tsx:316-327) spreads `{ ...series }`, keeping `seriesMemory` while `filterBooks` narrows `books`. Lock it where it lives. In `src/views/book-library.test.tsx`, add a test that renders the library (table view) with a search filter that narrows — but does not empty — a series carrying `seriesMemory`, and asserts the chip still shows:
+The chip only renders because `filteredAuthors` (book-library.tsx:316-327) spreads `{ ...series }`, keeping `seriesMemory` while `filterBooks` narrows `books`. This must be locked by a **real render of the orchestrator** — `LibraryTable` itself never filters, and a hand-rolled `{ ...series, books: filterBooks(...) }` test would only assert the test's own reconstruction (a fake-lock). 
+
+First read `src/views/book-library.test.tsx` and follow its existing render harness (it already renders the library from mock authors — the card view's coverage lives here per the `library-table.tsx` header comment). Add a case that drives the **real** filter path:
 ```tsx
-it('keeps the series-memory chip when an active search filter narrows the series (table view)', async () => {
-  // Arrange a library whose Northern Coast Trilogy has seriesMemory and ≥2 books,
-  // switch to table view, type a search that matches only one of its books.
-  // (Reuse this file's existing render/store setup + MOCK_LIBRARY helpers.)
-  // Assert: getByTestId('series-memory-chip') is still present after the filter.
+it('keeps the series-memory chip when an active search filter narrows a series', async () => {
+  // Using this file's existing render helper + a mock library whose series
+  // carries `seriesMemory` and has ≥2 books (e.g. the Northern Coast Trilogy
+  // shape from src/mocks/library.ts):
+  //   1. render the library (default card view is fine — same filteredAuthors
+  //      memo feeds both views, so this locks the shared spread).
+  //   2. type into the library search box a query that matches ONE book of
+  //      that series (narrows books from N→1, does NOT empty the series).
+  //   3. assert screen.getByTestId('series-memory-chip') is STILL present.
+  // The assertion exercises filteredAuthors' `{ ...series }` spread for real —
+  // if a future refactor drops seriesMemory during filtering, this goes red.
 });
 ```
-If `book-library.test.tsx` lacks a table-view harness, assert the invariant directly against the memo's logic instead: a focused test that applies the same `{ ...series, books: filterBooks(...) }` shape to a `seriesMemory`-bearing series and asserts `result.series[0].seriesMemory` is defined. Pick whichever matches the file's existing conventions; the point is the assertion lives above `LibraryTable`, which does not filter.
+Mirror the exact render call, store setup, and search-input selector from the neighbouring tests in that file — do not invent helpers. The card view is acceptable here because both views consume the same `filteredAuthors` memo; the point is to exercise the orchestrator's spread, which `LibraryTable` cannot.
 
 - [ ] **Step 8: Run the full frontend suite + typecheck**
 
@@ -611,7 +622,7 @@ Expected: PASS. (jsdom has no `document.fonts`; the `?.` lets `await document.fo
 
 - [ ] **Step 6: Add the e2e download assertion**
 
-Append to `e2e/series-memory.spec.ts`, after the share card is shown (the existing spec ends at line 56 with the card visible). Add a second test that repeats the navigation and clicks the PNG button:
+Add a second `test(...)` **inside** the existing `test.describe('series-memory: …', () => { … })` block (before its closing `});` at line 57) — not at file top level. It repeats the navigation and clicks the PNG button:
 ```ts
   test('share card exports a PNG download', async ({ page }) => {
     await page.goto('/');
@@ -650,25 +661,35 @@ Closes #985"
 
 ---
 
-## Task 5: docs — record the follow-ups + sync the spec
+## Task 5: docs — record the follow-ups, remove backlog rows, sync the spec
 
 **Files:**
 - Modify: `docs/features/archive/228-fe-40-series-memory.md`
+- Modify: `docs/BACKLOG.md`
 - Modify: `docs/superpowers/specs/2026-06-22-fe-40-followups-design.md`
 
 - [ ] **Step 1: Append a "fe-40 follow-ups (delivered)" subsection to the archived plan**
 
 In `docs/features/archive/228-fe-40-series-memory.md`, add a short subsection recording the three deltas with dates + the issues they closed (fe-41 #983 table chip, fe-42 #984 "Carried" vocabulary, fe-43 #985 PNG export), and pointing at this plan + the spec. One paragraph per item; no need to restate the spec.
 
-- [ ] **Step 2: Sync the spec's CHIP_LABELS deviation**
+- [ ] **Step 2: Remove the shipped backlog rows (CLAUDE.md ship step)**
+
+Delete the three rows from `docs/BACKLOG.md` — they are now shipped:
+- `#### \`fe-41\` …` (line ~458)
+- `#### \`fe-42\` …` (line ~464)
+- `#### \`fe-43\` …` (line ~470)
+
+Remove each item's full block (heading + its What/Benefit/Acceptance lines), not just the heading. Verify with `grep -n "fe-41\|fe-42\|fe-43" docs/BACKLOG.md` → no matches remain.
+
+- [ ] **Step 3: Sync the spec's CHIP_LABELS deviation**
 
 In the fe-42 "Render sites" of the spec, replace the `CHIP_ORDER`/`tally`/`statusFilterKeys` key-rename instruction with the `CHIP_LABELS` approach actually used (add `Reused: 'Carried'`; internal key stays stable). One-line correction so the spec matches the shipped code.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add docs/features/archive/228-fe-40-series-memory.md docs/superpowers/specs/2026-06-22-fe-40-followups-design.md
-git commit -m "docs(docs): record fe-40 follow-ups delivery + sync CHIP_LABELS approach
+git add docs/features/archive/228-fe-40-series-memory.md docs/BACKLOG.md docs/superpowers/specs/2026-06-22-fe-40-followups-design.md
+git commit -m "docs(docs): record fe-40 follow-ups delivery, drop backlog rows, sync spec
 
 Refs #983 #984 #985"
 ```
