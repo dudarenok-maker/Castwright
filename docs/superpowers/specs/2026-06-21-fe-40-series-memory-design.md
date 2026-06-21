@@ -64,8 +64,9 @@ The entire feature hinges on this, so it is defined exactly:
 their voice* across the series. Catalogue voices are shared across characters (28 Kokoro
 voices, dozens of speakers), so a *voiceId* count is a different, smaller, misleading
 number — `N` counts carried **characters**, and "voices" is only the warm everyday label
-for them. The chip number, the reveal row count, and the card's big number are therefore
-**the same `N`**. Identity across books is the **real cross-book matcher** (`scoreOne`,
+for them. The chip number and the reveal row count are therefore **the same `N`** (the
+card's *hero* number deliberately leads on the bespoke/designed figure — a subset of `N`
+— see Surface 3). Identity across books is the **real cross-book matcher** (`scoreOne`,
 `voice-match.ts:178` — name + alias + token overlap), via its already-persisted
 `matchedFrom` links — **never** an `id` or `voiceId` shortcut (character `id` is per-book
 and unstable; two different characters routinely share one catalogue voice). voiceId is
@@ -102,7 +103,8 @@ Consequences, all deliberate:
 - **Partial carry** (same voice books 1–3, different 4–6) → **not carried** (the "every
   appearance" clause fails). Same silent exclusion.
 - **Late joiner** (first appears at book 4, same voice 4→N) → **carried**. Its span
-  starts at book 4; the surfaces show that honestly (see L1/reveal).
+  starts at book 4; the reveal shows that honestly (the "from Bk 4" note + book-marker
+  row), and `carriedFullSpan` is `false`.
 
 **Computed over confirmed casts only.** The cross-book matcher already considers only
 books with `castConfirmed === true` (`library-cast-scan.ts:55`); carried inherits that —
@@ -148,9 +150,9 @@ not a two-book pair. The **bespoke clause** is the proof-not-jargon gate: a seri
 purely on shared Kokoro presets shows **nothing** — preset reuse isn't a moat, and a card
 bragging about it would be exactly the marketing jargon we're avoiding. A standalone, a
 two-book series, or an all-preset carry shows nothing — keeping the markers a genuine
-signal, never chrome. Note this
-threshold is *also* the heuristic-series guard (L4): because the gate is real
-carried-voice provenance (matcher-confirmed `voiceId` continuity), a wrongly-grouped
+signal, never chrome. This threshold is *also* the heuristic-series guard: because the
+gate is real carried-voice provenance (matcher-confirmed `voiceId` continuity), a
+wrongly-grouped
 "series" from the `seriesFromTitle` title heuristic can never trip it on its own — only
 actual cross-book voice continuity does.
 
@@ -221,10 +223,13 @@ full-screen sheet on phone (mobile protocol). Choreography carries the tone, wit
 restrained entrance motion:
 
 - **Eyebrow:** `<Castwave glyph> <Series> · series memory`.
-- **Headline** (Lora, large): **"Twelve books in, and the cast never changed."**
-  (book count per series; quiet brag, no swagger.)
-- **Subtitle:** **"Nine voices — yours since book one."** ("yours", not "you cast" — the
-  product casts; the listener owns.)
+- **Headline** (Lora, large): **"Twelve books in, and not a voice has changed."**
+  (book count = `M`, matching the chip the user just tapped; "not a voice changed" is
+  precise — the cast may have *grown* with new joiners, but no carried voice ever changed;
+  "the cast never changed" would falsely imply no additions.)
+- **Subtitle:** **"Nine voices, yours — book after book."** ("yours", not "you cast" — the
+  product casts, the listener owns; "book after book", not "since book one", because late
+  joiners didn't start at book one.)
 - **Cast roster**, staggering in: one row per carried character — name (Lora) + a voice
   **swatch + the `describeVoice()` label** (e.g. "Deep · Female · UK" for a catalogue
   voice, or the user's designed-voice name for Qwen — *never* the raw slug `bf_emma`, and
@@ -234,8 +239,8 @@ restrained entrance motion:
   rows follow, untagged. Then a **book-marker row** (one marker per book, **ordered by
   the library sort**, not raw `seriesPosition`). Two marker states: **filled** = present & carried that book;
   **faint** = not in that book — which covers *both* "before they joined" *and* a
-  **mid-series gap** (a character who sits a book out), so the round-2 gap case is
-  handled. First appearance is annotated *"· from Bk 4"*. A full run reads "carried the
+  **mid-series gap** (a character who sits a book out). First appearance is annotated
+  *"· from Bk 4"*. A full run reads "carried the
   whole way"; never a miss. Each row's markers have a text equivalent (aria-label "in
   books 1, 2, 4–12"). The panel **scrolls**, so it holds any cast size.
 - **Actions:** primary **"Share this cast"**; quiet **"Export data (.json)"** link.
@@ -244,23 +249,26 @@ restrained entrance motion:
 
 **Share card** — a premium, screenshot-perfect **portrait social card** (≈1080×1350),
 dark, brand-stamped, crediting the listener as *owner*. **Built scale-first** (this earns
-its keep on a long saga with a big recurring cast). Top → bottom:
+its keep on a long saga with a large carried cast). Top → bottom:
 
 - **Castwave wordmark** · eyebrow `Series memory · <Series>`. _Branding is **mandatory
   and non-removable** — wordmark + `castwright.ai` always present (see Sharing)._
-- **Big number** — the **bespoke** figure leads when it dominates: `39 designed voices`
-  (Lora), the unownable proof. Falls back to the total `N voices` only when there's
-  little/no bespoke carry. Only more striking as the series grows.
+- **Big number** — the **bespoke** figure leads: `39 designed voices` (Lora), the
+  unownable proof (the ≥1-bespoke threshold guarantees there's always at least one). Falls
+  back to the total `N voices` only when bespoke is a small minority of the carried set.
+  Only more striking as the series grows.
 - **Elevated line** under it (peach serif): **"kept true across all `spanBooks`
-  books."** Uses `spanBooks` (books actually containing carried voices), **not** raw
+  books."** Uses `spanBooks` (books actually containing carried characters), **not** raw
   series length — so "all" can't overclaim when a late-series cast turnover means the
   final books carried nothing. A statement, not a footnote. (No dot/bar span device.)
 - Quiet claim line (the dry wit, e.g. *"Twenty-four books. The same cast."*).
 - **Cast wall** — the hero, owning the card's middle with real air: a centered
   theatrical **credits block** of **every carried name** (Castwave-dot separators), no
-  "+N more". The full wall *is* the brag. **Auto-scales**: name size steps down with cast
-  size (~14.5px → ~10px); a tasteful cap engages only past ~45 names ("…and K more of
-  your cast"), so it stays legible.
+  "+N more". The full wall *is* the brag — the hero number proves *depth* (the designed
+  count), the wall proves *breadth* (the whole carried ensemble); they're different facets
+  of the same set, not a number that must match a row count. **Auto-scales**: name size
+  steps down with cast size (~14.5px → ~10px); a tasteful cap engages only past ~45 names
+  ("…and K more of your cast"), so it stays legible.
 - **Footer:** ownership credit — **`<user>'s cast · kept true`** (fallback when no
   display name is set: **`Your cast · kept true`**, never "undefined") · `castwright.ai`.
 
@@ -316,8 +324,8 @@ The honesty the card omits lives here. Shape:
 ```
 
 - **Books are keyed by durable `bookId`**, with `index` = the **library-sort order**
-  (1..M) — *never* raw `seriesPosition` (often null; never trusted, line 78). `firstBookId`
-  / `lastBookId` / `bookIndices` follow suit.
+  (1..M) — *never* raw `seriesPosition` (often null; never trusted — see _What "carried"
+  means_). `firstBookId` / `lastBookId` / `bookIndices` follow suit.
 - `count` = carried **characters** (the unit); `bespokeCount` = designed + cloned;
   `designedCount` = Qwen-designed (the headline figure). `voiceKind ∈
   {designed,cloned,preset}` per character; `voiceLabel` is the `describeVoice()`
@@ -335,18 +343,20 @@ The honesty the card omits lives here. Shape:
 | Chip | `Your cast · N voices, M books` _(warm; N = carried **characters**, in-app only)_ |
 | Sparkline caption | "N of your cast, kept true across the series." |
 | Sparkline legend | "Carried" / "Other principals this book" |
-| Reveal headline | "M books in, and the cast never changed." |
-| Reveal subtitle | "N voices — yours since book one." |
+| Reveal headline | "M books in, and not a voice has changed." |
+| Reveal subtitle | "N voices, yours — book after book." |
 | Reveal joiner note | "· from Bk K" |
-| Card big number | `N voices` |
+| Card big number | `D designed voices` (bespoke-led; falls back to `N voices`) |
 | Card elevated line | "kept true across all `spanBooks` books" |
-| Card claim | "M books. The same cast." |
+| Card claim | "`spanBooks` books. The same cast." |
 | Card footer | "&lt;user&gt;'s cast · kept true" (fallback "Your cast · kept true") |
 
-`N` = **carried** count, the same number on every surface (the term is always
-"carried", never "recurring"). On the warm in-app chip `M` = series book count; in every
-**shared/exported** claim the book number is `spanBooks` (books that actually carry), so
-the provable artifact never overclaims.
+`N` = **carried characters** — the number on the **chip** and the **reveal** (the term is
+always "carried", never "recurring"). The **card's hero number leads on the
+bespoke/designed figure `D`** (a subset of `N`). Book numbers split by surface: the warm
+**in-app** surfaces (chip + reveal) use `M` = series book count, so a tapped chip and its
+reveal always agree; the **exported** artifacts (card + JSON) use `spanBooks` (books that
+actually carry), so nothing shared can overclaim.
 
 Rules: no catalogue slugs (`bf_emma`) in any user-facing surface — JSON only. No "spine"
 (engineering term) in UI; the device is a **book-marker row**. Marker glyph is the
