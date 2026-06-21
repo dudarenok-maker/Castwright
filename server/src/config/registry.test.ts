@@ -92,4 +92,11 @@ describe('config registry', () => {
       apply: 'live',
     });
   });
+
+  it('qa.speaker settings registers three qa-gates keys with correct apply modes', () => {
+    const byKey = Object.fromEntries(KNOBS.map((e) => [e.key, e]));
+    expect(byKey['qa.speaker.enabled']).toMatchObject({ group: 'qa-gates', apply: 'live', default: false });
+    expect(byKey['qa.speaker.device']).toMatchObject({ apply: 'restart-sidecar', default: 'cpu' });
+    expect(byKey['qa.speaker.autoRepair']).toMatchObject({ apply: 'live', default: false });
+  });
 });
