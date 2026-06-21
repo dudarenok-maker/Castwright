@@ -5,16 +5,17 @@ function is designed to be testable on synthetic distributions.
 
 Design choices documented here:
 - severe_edge_pctl: the percentile on the CLEAN distribution below which a
-  cosine is flagged "severe" — chosen as the percentile that best separates
-  labelled drift from clean via EER. Concretely: scan candidate percentiles
-  (1,2,…,10) on the clean distribution, pick the one whose threshold minimises
-  EER(genuine=labelled_clean, impostor=labelled_drift).
-- band_upper_pctl: set one step above severe_edge_pctl (clamped to 15) to
-  create the "band" (uncertain) tier between mild and severe.
+  cosine is flagged "severe" — chosen as the percentile that minimises the
+  operating-point error rate (FAR+FRR)/2 at the percentile threshold.
+  Candidate scan: percentiles 1..13 (capped so band_upper stays <= 15).
+  Fallback p=5 when no labelled drift or no labelled clean.
+- band_upper_pctl: severe_edge_pctl + 2 (always strictly above, <= 15, since
+  the scan cap guarantees severe_edge_pctl <= 13).
 - min_duration_sec: the shortest clip length at which cosine variance (std of
-  cosine-to-centroid) drops below LEN_STD_THRESHOLD (0.07, matching F5) across
-  the labelled clips. Derived from binning labelled clips by duration and
-  measuring std-of-cosines in each bin.
+  cosine-to-centroid) drops below LEN_STD_THRESHOLD (= aggregates.LEN_STD_OK)
+  across the labelled clips. Derived from binning labelled clips by duration and
+  measuring std-of-cosines in each bin. The [0,1) bin's lower edge is 0.0 —
+  meaningless as a floor — so DEFAULT_FLOOR_SEC is returned when that bin clears.
 """
 from __future__ import annotations
 import numpy as np
@@ -23,7 +24,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Module under test — must exist for the test to pass (red until implemented)
 # ---------------------------------------------------------------------------
-from spikes.srv36.calibrate import fit_cutoffs
+from spikes.srv36.calibrate import fit_cutoffs, DEFAULT_FLOOR_SEC, LEN_STD_THRESHOLD
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ def _make_labelled_clip(cosine_to_centroid: float, duration_sec: float,
 
 class TestFitCutoffsSeparation:
     """Core contract: the returned severe_edge_pctl must be the one that best
-    separates labelled drift from labelled clean via EER."""
+    separates labelled drift from labelled clean via operating-point EER scan."""
 
     def _build_inputs(self):
         rng = np.random.default_rng(42)
@@ -99,12 +100,17 @@ class TestFitCutoffsSeparation:
         result = fit_cutoffs(char_clean, labelled)
         p = result["severe_edge_pctl"]
         assert isinstance(p, int)
-        assert 1 <= p <= 15, f"severe_edge_pctl={p} out of [1,15]"
+        assert 1 <= p <= 13, f"severe_edge_pctl={p} out of [1,13]"
 
     def test_band_upper_above_severe_edge(self):
         char_clean, labelled = self._build_inputs()
         result = fit_cutoffs(char_clean, labelled)
         assert result["band_upper_pctl"] > result["severe_edge_pctl"]
+
+    def test_band_upper_at_most_15(self):
+        char_clean, labelled = self._build_inputs()
+        result = fit_cutoffs(char_clean, labelled)
+        assert result["band_upper_pctl"] <= 15
 
     def test_n_counts_total_labelled_clips(self):
         char_clean, labelled = self._build_inputs()
@@ -117,10 +123,11 @@ class TestFitCutoffsSeparation:
         total_clean = sum(len(v) for v in char_clean.values())
         assert result["K"] == total_clean
 
-    def test_severe_pctl_separates_better_than_naive_5pct(self):
-        """The chosen percentile should achieve EER <= 0.3 on clearly separated data."""
-        from spikes.srv36.metrics import eer
+    def test_severe_pctl_separates_with_low_error_rate(self):
+        """The chosen percentile must achieve an operating-point error rate <=0.20
+        on clearly separated data AND beat the naive p=5 fallback."""
         rng = np.random.default_rng(99)
+        # Clearly separated: clean near 0.95, drift near 0.48
         char_clean = {"bob": list(rng.normal(0.95, 0.015, 200).clip(0.01, 1.0))}
         labelled = []
         for i in range(40):
@@ -136,14 +143,31 @@ class TestFitCutoffsSeparation:
                 sentence_id=f"sd-{i}", label="drift",
             ))
         result = fit_cutoffs(char_clean, labelled)
-        # At the chosen percentile threshold, EER should be low
-        all_clean_sims = [c["cosine"] for c in labelled if c["label"] == "clean"]
-        all_drift_sims = [c["cosine"] for c in labelled if c["label"] == "drift"]
-        all_clean_cosines = char_clean["bob"]
-        threshold = float(np.percentile(all_clean_cosines, result["severe_edge_pctl"]))
-        e = eer(genuine=all_clean_sims, impostor=all_drift_sims)
-        # The EER threshold from the full distribution should be near the chosen one
-        assert result["severe_edge_pctl"] <= 10  # not wildly high for well-separated data
+        chosen_p = result["severe_edge_pctl"]
+
+        all_clean_cosines = np.asarray(char_clean["bob"], np.float64)
+        lab_clean_vals = np.asarray(
+            [c["cosine"] for c in labelled if c["label"] == "clean"], np.float64)
+        lab_drift_vals = np.asarray(
+            [c["cosine"] for c in labelled if c["label"] == "drift"], np.float64)
+
+        # Operating-point error rate at the chosen percentile
+        thr = float(np.percentile(all_clean_cosines, chosen_p))
+        far = float(np.mean(lab_drift_vals >= thr))
+        frr = float(np.mean(lab_clean_vals < thr))
+        op_err_chosen = (far + frr) / 2.0
+        assert op_err_chosen <= 0.20, (
+            f"Chosen p={chosen_p} yields op_err={op_err_chosen:.3f} > 0.20 on well-separated data"
+        )
+
+        # Must also beat the naive p=5 fallback (or tie at best)
+        thr5 = float(np.percentile(all_clean_cosines, 5))
+        far5 = float(np.mean(lab_drift_vals >= thr5))
+        frr5 = float(np.mean(lab_clean_vals < thr5))
+        op_err_p5 = (far5 + frr5) / 2.0
+        assert op_err_chosen <= op_err_p5 + 1e-9, (
+            f"Chosen p={chosen_p} (err={op_err_chosen:.3f}) is worse than naive p=5 (err={op_err_p5:.3f})"
+        )
 
 
 class TestFitCutoffsHardToSeparate:
@@ -170,7 +194,7 @@ class TestFitCutoffsHardToSeparate:
         result = fit_cutoffs(char_clean, labelled)
         assert "severe_edge_pctl" in result
         assert isinstance(result["severe_edge_pctl"], int)
-        assert 1 <= result["severe_edge_pctl"] <= 15
+        assert 1 <= result["severe_edge_pctl"] <= 13
 
 
 class TestFitCutoffsEmptyOrMissingLabels:
@@ -222,37 +246,39 @@ class TestMinDurationDerivation:
         char_clean = {"greta": list(rng.normal(0.93, 0.02, 100).clip(0.01, 1.0))}
 
         labelled = []
-        # Short clips: high variance in cosine
+        # Short clips: high variance in cosine (std >> LEN_STD_THRESHOLD)
         for i in range(30):
             dur = float(rng.uniform(0.5, 1.4))
             cos = float(rng.normal(0.80, 0.12))  # high variance, noisy
             labelled.append(_make_labelled_clip(cos, dur, f"short-{i}", "clean"))
 
-        # Long clips: low variance
+        # Long clips: low variance (std << LEN_STD_THRESHOLD)
         for i in range(30):
             dur = float(rng.uniform(2.5, 6.0))
             cos = float(rng.normal(0.93, 0.015))  # low variance
             labelled.append(_make_labelled_clip(cos, dur, f"long-{i}", "clean"))
 
         result = fit_cutoffs(char_clean, labelled)
-        # min_duration_sec should be positive
-        assert result["min_duration_sec"] > 0.0
-        # It should be at least as large as the shortest clips (0.5s)
-        assert result["min_duration_sec"] >= 0.5
+        # Bin [2,3) should stabilise first (std ~0.015 < LEN_STD_THRESHOLD=0.05)
+        assert result["min_duration_sec"] == 2.0, (
+            f"Expected 2.0 (first stable bin lower edge), got {result['min_duration_sec']}"
+        )
 
-    def test_all_long_clips_yields_low_floor(self):
-        """When all labelled clips are long enough (>=2s), the floor should not
-        exceed the ECAPA reliability constant of 2.0s."""
+    def test_all_long_clips_exact_floor(self):
+        """When all labelled clips are in the [3,∞) bin with low variance,
+        min_duration_sec must equal exactly 3.0."""
         rng = np.random.default_rng(33)
         char_clean = {"hiro": list(rng.normal(0.94, 0.015, 100).clip(0.01, 1.0))}
         labelled = []
         for i in range(40):
-            dur = float(rng.uniform(2.5, 8.0))
-            cos = float(rng.normal(0.94, 0.015))
+            dur = float(rng.uniform(3.1, 8.0))
+            cos = float(rng.normal(0.94, 0.010))   # very low variance in [3,∞)
             labelled.append(_make_labelled_clip(cos, dur, f"sl-{i}", "clean"))
         result = fit_cutoffs(char_clean, labelled)
-        # All clips long — the floor should be <= 2.5 (sensible upper bound)
-        assert result["min_duration_sec"] <= 2.5
+        # [3,∞) bin clears threshold → lower edge = 3.0
+        assert result["min_duration_sec"] == 3.0, (
+            f"Expected 3.0 for all-[3,∞) stable clips, got {result['min_duration_sec']}"
+        )
 
     def test_min_duration_is_float(self):
         rng = np.random.default_rng(44)
@@ -264,6 +290,22 @@ class TestMinDurationDerivation:
         ]
         result = fit_cutoffs(char_clean, labelled)
         assert isinstance(result["min_duration_sec"], float)
+
+    def test_zero_bin_clears_returns_default_floor(self):
+        """When the [0,1) bin has very low variance and clears LEN_STD_THRESHOLD,
+        DEFAULT_FLOOR_SEC must be returned (0.0 is a meaningless floor)."""
+        rng = np.random.default_rng(77)
+        char_clean = {"leo": list(rng.normal(0.92, 0.01, 60).clip(0.01, 1.0))}
+        labelled = [
+            _make_labelled_clip(float(rng.normal(0.92, 0.001)), float(rng.uniform(0.1, 0.9)),
+                                f"tiny-{i}", "clean")
+            for i in range(30)
+        ]
+        result = fit_cutoffs(char_clean, labelled)
+        assert result["min_duration_sec"] == DEFAULT_FLOOR_SEC, (
+            f"[0,1) bin clearing threshold should return DEFAULT_FLOOR_SEC={DEFAULT_FLOOR_SEC}, "
+            f"got {result['min_duration_sec']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -307,3 +349,55 @@ class TestSentenceIdKeying:
             labelled.append(clip)
         result = fit_cutoffs(char_clean, labelled)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Test 4: band_upper boundary invariant (I4 fix)
+# ---------------------------------------------------------------------------
+
+class TestBandUpperBoundary:
+    """band_upper_pctl must always be strictly above severe_edge_pctl and <= 15,
+    even when severe_edge_pctl is at the top of the scan range (13)."""
+
+    def _force_high_severe(self):
+        """Build inputs where the scan picks p=13 (very low threshold tolerance)."""
+        rng = np.random.default_rng(88)
+        # Clean pool tightly clustered near 1.0 — p=13 threshold still very high
+        # Drift just slightly below clean so high percentiles still separate best
+        char_clean = {"mia": list(rng.normal(0.990, 0.003, 300).clip(0.80, 1.0))}
+        labelled = []
+        for i in range(40):
+            labelled.append(_make_labelled_clip(
+                cosine_to_centroid=float(rng.normal(0.989, 0.002)),
+                duration_sec=2.5,
+                sentence_id=f"sc-{i}", label="clean",
+            ))
+        for i in range(30):
+            labelled.append(_make_labelled_clip(
+                cosine_to_centroid=float(rng.normal(0.970, 0.005)),
+                duration_sec=2.5,
+                sentence_id=f"sd-{i}", label="drift",
+            ))
+        return char_clean, labelled
+
+    def test_band_upper_always_strictly_above_severe(self):
+        char_clean, labelled = self._force_high_severe()
+        result = fit_cutoffs(char_clean, labelled)
+        assert result["band_upper_pctl"] > result["severe_edge_pctl"], (
+            f"band_upper={result['band_upper_pctl']} must be > severe={result['severe_edge_pctl']}"
+        )
+
+    def test_band_upper_never_exceeds_15(self):
+        char_clean, labelled = self._force_high_severe()
+        result = fit_cutoffs(char_clean, labelled)
+        assert result["band_upper_pctl"] <= 15, (
+            f"band_upper={result['band_upper_pctl']} exceeds max 15"
+        )
+
+    def test_severe_pctl_capped_at_13(self):
+        """The scan cap at 13 means severe_edge_pctl is always <= 13."""
+        char_clean, labelled = self._force_high_severe()
+        result = fit_cutoffs(char_clean, labelled)
+        assert result["severe_edge_pctl"] <= 13, (
+            f"severe_edge_pctl={result['severe_edge_pctl']} exceeds scan cap of 13"
+        )

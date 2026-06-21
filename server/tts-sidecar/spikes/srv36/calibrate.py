@@ -3,27 +3,35 @@
 Design choices
 --------------
 severe_edge_pctl
-    Scan candidate percentiles 1..15 on the pooled per-character clean-cosine
+    Scan candidate percentiles 1..13 on the pooled per-character clean-cosine
     distribution.  For each candidate p, compute the threshold T = percentile(p)
-    on the clean pool, then evaluate EER(genuine=labelled_clean_cosines,
-    impostor=labelled_drift_cosines) using T as the operating point.  Pick the p
-    that yields the lowest EER (i.e. best separates labelled drift from clean).
-    Fallback to p=5 when labelled_drift is empty or labelled_clean is empty
-    (nothing to separate — use the conventional 5th-percentile floor).
+    and evaluate the operating-point error rate as (FAR_at_T + FRR_at_T) / 2,
+    where FAR = fraction of labelled_drift cosines >= T and FRR = fraction of
+    labelled_clean cosines < T.  Pick the p that yields the lowest error rate.
+
+    Design intent: this is a percentile grid-scan over the clean distribution,
+    NOT a full EER curve.  The output is a portable percentile (meaningful
+    across books), not an absolute cosine threshold.  metrics.eer() finds the
+    true equal-error-rate threshold across ALL possible thresholds; here we
+    deliberately restrict candidates to the clean-distribution percentile grid
+    so the result is book-portable.  Fallback to p=5 when labelled_drift is
+    empty or labelled_clean is empty (nothing to separate).
 
 band_upper_pctl
-    Set to severe_edge_pctl + 2, clamped to [severe_edge_pctl+1, 15].  This
-    creates a narrow "uncertain band" tier between the floor and the severe edge,
-    matching the F3/F4 tier structure in the spike.
+    Set to severe_edge_pctl + 2, clamped to [severe_edge_pctl+1, 15].  Because
+    the candidate scan is capped at 13, severe_edge_pctl <= 13, so band_upper
+    (severe+2) is at most 15 and the strictly-greater invariant always holds.
 
 min_duration_sec
     Derived from cosine-variance-vs-clip-length on the labelled clips.  Bin the
-    clips by duration into four bands: <1s, 1–2s, 2–3s, >=3s.  Compute the
+    clips by duration into four bands: [0,1), [1,2), [2,3), [3,∞).  Compute the
     standard deviation of cosine-to-centroid in each bin.  Return the lower edge
-    of the first bin whose std drops below LEN_STD_THRESHOLD (0.07, consistent
-    with f5_length_coverage in aggregates.py).  If no bin drops below the
-    threshold (too few clips or high variance everywhere), fall back to the ECAPA
-    reliability floor DEFAULT_FLOOR_SEC = 2.0.
+    of the first bin whose std drops below LEN_STD_THRESHOLD (imported from
+    aggregates as LEN_STD_OK).  If no bin drops below the threshold (too few
+    clips or high variance everywhere), fall back to the ECAPA reliability floor
+    DEFAULT_FLOOR_SEC = 2.0.  If the [0,1) bin clears the threshold its lower
+    edge is 0.0 — meaningless as a floor — so DEFAULT_FLOOR_SEC is returned
+    instead (the bin label for display is 0.0 but the function never returns it).
 
 CLI
 ---
@@ -47,18 +55,20 @@ from typing import Any
 
 import numpy as np
 
-from spikes.srv36.metrics import eer, spread_stats
+from spikes.srv36.aggregates import LEN_STD_OK
+from spikes.srv36.metrics import spread_stats
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 #: Candidate percentiles scanned for the severe-edge cutoff.
-_PCTL_CANDIDATES: list[int] = list(range(1, 16))   # 1..15 inclusive
+#: Capped at 13 so band_upper (severe+2) is always <= 15 and strictly above.
+_PCTL_CANDIDATES: list[int] = list(range(1, 14))   # 1..13 inclusive
 
 #: LEN_STD_THRESHOLD: cosine std below this = "stable enough to score".
-#: Matches aggregates.f5_length_coverage LEN_STD_OK.
-LEN_STD_THRESHOLD: float = 0.07
+#: Single source of truth: imported from aggregates.LEN_STD_OK.
+LEN_STD_THRESHOLD: float = LEN_STD_OK
 
 #: ECAPA reliability floor used as a fallback when we can't derive one.
 DEFAULT_FLOOR_SEC: float = 2.0
@@ -66,7 +76,10 @@ DEFAULT_FLOOR_SEC: float = 2.0
 #: Duration bin edges (seconds).  The lower edge of the first bin whose std
 #: falls below LEN_STD_THRESHOLD is returned as min_duration_sec.
 _DURATION_BINS: list[float] = [0.0, 1.0, 2.0, 3.0, float("inf")]
-_DURATION_BIN_LABELS: list[float] = [0.5, 1.0, 2.0, 3.0]   # representative lower edges
+#: Lower edges of the four duration bands: [0,1), [1,2), [2,3), [3,∞).
+#: The [0,1) band has true lower edge 0.0 — if it clears the threshold,
+#: DEFAULT_FLOOR_SEC is returned instead (a 0.0 floor is meaningless).
+_DURATION_BIN_LABELS: list[float] = [0.0, 1.0, 2.0, 3.0]
 
 #: Default severe-edge percentile when there are no labelled drift clips.
 _DEFAULT_PCTL: int = 5
@@ -120,23 +133,21 @@ def fit_cutoffs(
     if all_clean and lab_clean and lab_drift:
         clean_arr = np.asarray(all_clean, np.float64)
         best_pctl = _DEFAULT_PCTL
-        best_eer = 1.0
+        best_op_eer = 1.0
         for p in _PCTL_CANDIDATES:
             thr = float(np.percentile(clean_arr, p))
-            # EER: genuine = labelled clean cosines, impostor = labelled drift cosines
+            # Operating-point FAR/FRR grid-scan — intentional design.
+            # We want the output as a portable percentile, not an absolute
+            # cosine threshold.  The percentile grid restricts candidates to
+            # the clean distribution, making the result book-portable.
             # At threshold thr: a clip is "accepted" if cosine >= thr.
             # FAR = fraction of drift cosines that pass (>= thr) — false alarms
             # FRR = fraction of clean cosines that fail (< thr) — missed genuines
-            #
-            # Note: metrics.eer() convention: genuine > threshold = accept.
-            # We want to flag low cosines; so "impostor" = drift (low cosines).
-            e = eer(genuine=lab_clean, impostor=lab_drift)
-            # Evaluate the operating-point EER at this candidate threshold
             far_at_p = float(np.mean(np.asarray(lab_drift, np.float64) >= thr))
             frr_at_p = float(np.mean(np.asarray(lab_clean, np.float64) < thr))
             op_eer = (far_at_p + frr_at_p) / 2.0
-            if op_eer < best_eer:
-                best_eer = op_eer
+            if op_eer < best_op_eer:
+                best_op_eer = op_eer
                 best_pctl = p
         severe_edge_pctl = best_pctl
     else:
@@ -144,10 +155,11 @@ def fit_cutoffs(
         severe_edge_pctl = _DEFAULT_PCTL
 
     # --- band_upper_pctl = severe + 2, clamped --------------------------------
-    band_upper_pctl = min(severe_edge_pctl + 2, max(_PCTL_CANDIDATES))
-    # Ensure strictly above severe_edge_pctl
+    # severe_edge_pctl <= 13 (scan cap), so severe+2 <= 15 always holds.
+    band_upper_pctl = min(severe_edge_pctl + 2, max(_PCTL_CANDIDATES) + 2)
+    # Ensure strictly above severe_edge_pctl (guaranteed by cap, but belt-and-braces)
     if band_upper_pctl <= severe_edge_pctl:
-        band_upper_pctl = min(severe_edge_pctl + 1, max(_PCTL_CANDIDATES))
+        band_upper_pctl = severe_edge_pctl + 1
 
     # --- Derive min_duration_sec from cosine-variance-vs-clip-length ----------
     min_duration_sec = _derive_min_duration(labelled_clips)
@@ -166,7 +178,9 @@ def _derive_min_duration(labelled_clips: list[dict[str, Any]]) -> float:
 
     Bins clips by duration into bands [0,1), [1,2), [2,3), [3,∞).  Within each
     non-empty bin computes std(cosines).  Returns the lower edge of the first
-    bin whose std drops below LEN_STD_THRESHOLD.  Fallback: DEFAULT_FLOOR_SEC.
+    bin whose std drops below LEN_STD_THRESHOLD.  The [0,1) bin has lower edge
+    0.0 which is meaningless as a scoring floor, so DEFAULT_FLOOR_SEC is
+    returned instead.  Fallback: DEFAULT_FLOOR_SEC.
     """
     if not labelled_clips:
         return DEFAULT_FLOOR_SEC
@@ -174,7 +188,7 @@ def _derive_min_duration(labelled_clips: list[dict[str, Any]]) -> float:
     # Build bins: {bin_lower_edge: [cosines]}
     bins: dict[float, list[float]] = {lb: [] for lb in _DURATION_BIN_LABELS}
     edges = _DURATION_BINS       # [0.0, 1.0, 2.0, 3.0, inf]
-    labels = _DURATION_BIN_LABELS   # [0.5, 1.0, 2.0, 3.0]
+    labels = _DURATION_BIN_LABELS   # [0.0, 1.0, 2.0, 3.0]
 
     for clip in labelled_clips:
         dur = float(clip.get("duration_sec", 0.0))
@@ -193,7 +207,9 @@ def _derive_min_duration(labelled_clips: list[dict[str, Any]]) -> float:
         if len(vals) >= 2:
             std = float(np.std(vals))
             if std < LEN_STD_THRESHOLD:
-                return float(lb) if lb > 0.0 else DEFAULT_FLOOR_SEC
+                # lb == 0.0 means the [0,1) bin — a 0.0 floor is meaningless;
+                # return the ECAPA reliability floor instead.
+                return DEFAULT_FLOOR_SEC if lb == 0.0 else float(lb)
 
     # No bin met the threshold — fall back to ECAPA reliability floor
     return DEFAULT_FLOOR_SEC
@@ -215,85 +231,19 @@ def _char_spreads(per_char_clean_cosines: dict[str, list[float]]) -> dict[str, d
 # CLI entry — embeds a book's renders and writes the calibration report
 # ---------------------------------------------------------------------------
 
-def _embed_book(book_dir: str, segments_glob: str, sr: int = 16000) -> dict[str, list[float]]:
-    """Embed all clean segments of a book and return per-char cosine distributions.
+def _embed_book(book_dir: str, segments_glob: str, sr: int = 16000) -> dict[str, list[dict]]:
+    """Embed all clean segments of a book and return per-char sentence entries.
 
-    Re-keyed on sentenceIds (not timestamps) — the Phase-0 fix.
+    Returns ``{character_id: [{"sentence_id": str, "cosine": float}, …]}`` —
+    keyed on stable sentenceIds (the Phase-0 fix), NOT chapter/timestamp order.
 
     This function requires speechbrain + ffmpeg (not imported at module level so
     the pure fit_cutoffs tests can import calibrate.py without weights).
     """
     import glob as _glob
-    import subprocess
-    from pathlib import Path
+    from spikes.srv36.probe_real_library import embed_book_segments
 
-    # Lazy imports so the module stays importable without weights
-    from spikes.srv36.embed import embed_pcm
-    from spikes.srv36.metrics import cosine, centroid
-    from spikes.srv36.segments_io import slice_pcm
-    from spikes.srv36.gates import is_gate_flagged
-
-    FLOOR = DEFAULT_FLOOR_SEC
-    per_char_embeds: dict[str, list] = {}
-    per_char_cosines: dict[str, list[float]] = {}
-
-    pcm_cache: dict[str, bytes] = {}
-
-    def _decode(audio_path: str) -> bytes:
-        if audio_path not in pcm_cache:
-            pcm_cache[audio_path] = subprocess.run(
-                ["ffmpeg", "-v", "error", "-i", audio_path,
-                 "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
-                capture_output=True, check=True,
-            ).stdout
-        return pcm_cache[audio_path]
-
-    for segf in _glob.glob(str(Path(book_dir) / segments_glob)):
-        if ".previous." in segf:
-            continue
-        try:
-            data = json.loads(Path(segf).read_text(encoding="utf-8"))
-        except Exception:
-            continue
-
-        audio_path = segf.replace(".segments.json", ".mp3")
-        if not Path(audio_path).exists():
-            continue
-
-        try:
-            pcm = _decode(audio_path)
-        except Exception:
-            continue
-
-        for seg in data.get("segments", []):
-            ch = seg.get("characterId") or seg.get("character")
-            if not ch:
-                continue
-            # Re-key on sentenceId (stable), NOT timestamps (shift every run)
-            sentence_id = seg.get("sentenceId") or seg.get("id")
-            st = seg.get("startSec")
-            en = seg.get("endSec")
-            if st is None or en is None or (en - st) < FLOOR:
-                continue
-            if is_gate_flagged(seg):
-                continue
-
-            spcm = slice_pcm(pcm, sr, float(st), float(en))
-            try:
-                vec = embed_pcm(spcm, sr)
-            except Exception:
-                continue
-            per_char_embeds.setdefault(ch, []).append(vec)
-
-    # Build centroids + cosines
-    from spikes.srv36.metrics import centroid as _centroid
-    for ch, vecs in per_char_embeds.items():
-        if len(vecs) < 3:
-            continue
-        cen = _centroid(vecs)
-        per_char_cosines[ch] = [cosine(cen, v) for v in vecs]
-
-    return per_char_cosines
+    return embed_book_segments(book_dir, segments_glob, sr=sr)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -308,9 +258,15 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     print(f"Embedding book: {args.book_dir} ...")
-    per_char_clean_cosines = _embed_book(args.book_dir, args.segments_glob, args.sr)
-    print(f"  Embedded {sum(len(v) for v in per_char_clean_cosines.values())} clean segments "
-          f"across {len(per_char_clean_cosines)} characters.")
+    per_char_entries = _embed_book(args.book_dir, args.segments_glob, args.sr)
+
+    # Build per_char_clean_cosines for fit_cutoffs (flat cosine lists)
+    per_char_clean_cosines: dict[str, list[float]] = {
+        ch: [e["cosine"] for e in entries]
+        for ch, entries in per_char_entries.items()
+    }
+    total_segs = sum(len(v) for v in per_char_clean_cosines.values())
+    print(f"  Embedded {total_segs} clean segments across {len(per_char_clean_cosines)} characters.")
 
     labelled_clips: list[dict] = []
     if args.labelled:
@@ -323,6 +279,9 @@ def main(argv: list[str] | None = None) -> None:
     report = {
         "cutoffs": cutoffs,
         "per_char_spreads": char_spreads,
+        "per_char_sentence_entries": {
+            ch: entries for ch, entries in per_char_entries.items()
+        },
         "book_dir": str(args.book_dir),
         "labelled_path": args.labelled,
     }
