@@ -133,6 +133,7 @@ Expected: PASS (the rename reaches both importers — a missed importer would er
 Run: `npm test -- cast.test confirm-cast.test profile-drawer.test`
 Expected: PASS.
 Run: `npm test` (full frontend) to catch any other site asserting the old strings (e.g. `src/test/a11y.test.tsx`). Fix any stragglers by switching the visible string `Reused`→`Carried` / `Matched · `→`Carried · ` (never the bare lifecycle `Matched`).
+Also run `grep -rn "Matched · " e2e/` — if a non-visual e2e spec asserts the confirm pill text, update it to `Carried · ` here (so it surfaces before the full `verify` battery, not after).
 
 - [ ] **Step 8: Regenerate the `confirm` visual baselines**
 
@@ -257,12 +258,12 @@ Thread the `LibrarySeries` into the table's group model, restructure the collaps
 
 **Files:**
 - Modify: `src/components/library/library-table.tsx` (`SeriesGroup` interface ~58-71; groups `useMemo` ~91-123; section header ~140-161; `Props` ~42-56)
-- Modify: `src/views/book-library.tsx:420-432` (pass `onOpenSeriesMemory`)
+- Modify: `src/views/book-library.tsx` (pass `onOpenSeriesMemory` to `<LibraryTable>` ~420-432; extract `applyLibraryFilters` from the `filteredAuthors` memo ~314-331)
 - Test: `src/components/library/library-table.test.tsx`, `src/views/book-library.test.tsx`
 
 **Interfaces:**
 - Consumes: `SeriesMemoryChip` with `showBooks` (Task 2); `LibrarySeries` (`src/lib/types.ts:612`, has `name`, `books`, `seriesMemory?`); the orchestrator's `setOpenSM` already renders `<SeriesMemoryReveal>`/`<ShareCardModal>` (book-library.tsx:435-451).
-- Produces: `LibraryTable` prop `onOpenSeriesMemory?: (s: LibrarySeries) => void`.
+- Produces: `LibraryTable` prop `onOpenSeriesMemory?: (s: LibrarySeries) => void`; exported `applyLibraryFilters(authors, { filter, search, tags, languages }): LibraryAuthor[]` from `book-library.tsx`.
 
 - [ ] **Step 1: Write the failing table tests**
 
@@ -430,33 +431,91 @@ Expected: PASS (all four new cases + the existing collapse/grouping cases — th
           />
 ```
 
-- [ ] **Step 7: Add the filter-preservation invariant test (orchestrator render, not a reconstruction)**
+- [ ] **Step 7: Extract the filter mapping into an exported pure helper**
 
-The chip only renders because `filteredAuthors` (book-library.tsx:316-327) spreads `{ ...series }`, keeping `seriesMemory` while `filterBooks` narrows `books`. This must be locked by a **real render of the orchestrator** — `LibraryTable` itself never filters, and a hand-rolled `{ ...series, books: filterBooks(...) }` test would only assert the test's own reconstruction (a fake-lock). 
+The chip only renders because the orchestrator's `filteredAuthors` memo spreads `{ ...series }`, keeping `seriesMemory` while `filterBooks` narrows `books`. To lock that invariant cleanly — without a slow, debounce-dependent render test against an unknown harness — extract the memo body into an exported pure function and have the memo call it. Behaviour-preserving; existing `book-library.test.tsx` tests stay green.
 
-First read `src/views/book-library.test.tsx` and follow its existing render harness (it already renders the library from mock authors — the card view's coverage lives here per the `library-table.tsx` header comment). Add a case that drives the **real** filter path:
+In `src/views/book-library.tsx`, replace the inline `filteredAuthors` memo (lines ~314-331) with a call to a new exported helper defined at module scope:
 ```tsx
-it('keeps the series-memory chip when an active search filter narrows a series', async () => {
-  // Using this file's existing render helper + a mock library whose series
-  // carries `seriesMemory` and has ≥2 books (e.g. the Northern Coast Trilogy
-  // shape from src/mocks/library.ts):
-  //   1. render the library (default card view is fine — same filteredAuthors
-  //      memo feeds both views, so this locks the shared spread).
-  //   2. type into the library search box a query that matches ONE book of
-  //      that series (narrows books from N→1, does NOT empty the series).
-  //   3. assert screen.getByTestId('series-memory-chip') is STILL present.
-  // The assertion exercises filteredAuthors' `{ ...series }` spread for real —
-  // if a future refactor drops seriesMemory during filtering, this goes red.
+export function applyLibraryFilters(
+  authors: LibraryAuthor[],
+  opts: { filter: Filter; search: string; tags: string[]; languages: string[] },
+): LibraryAuthor[] {
+  return authors
+    .map((author) => ({
+      ...author,
+      series: author.series
+        .map((series) => ({
+          ...series,
+          books: filterBooks(
+            series.books.filter((b) => matchesFilter(b, opts.filter)),
+            opts.search,
+            opts.tags,
+            opts.languages,
+          ),
+        }))
+        .filter((series) => series.books.length > 0),
+    }))
+    .filter((author) => author.series.length > 0);
+}
+```
+And the memo becomes:
+```tsx
+  const filteredAuthors = useMemo<LibraryAuthor[]>(
+    () =>
+      applyLibraryFilters(authors, {
+        filter,
+        search: debouncedSearch,
+        tags: activeTags,
+        languages: activeLanguages,
+      }),
+    [authors, filter, debouncedSearch, activeTags, activeLanguages],
+  );
+```
+(`Filter` is the local `type Filter = 'all' | 'in_progress' | 'complete'`; `matchesFilter` and `filterBooks` are already imported in this file.) Run `npm run typecheck && npm test -- book-library` — existing orchestrator tests stay green (pure refactor).
+
+- [ ] **Step 8: Lock the invariant — unit-test the helper directly**
+
+In `src/views/book-library.test.tsx`, add a focused test (no render, no debounce):
+```tsx
+import { applyLibraryFilters } from './book-library';
+// ...
+it('applyLibraryFilters preserves seriesMemory when a search narrows the books', () => {
+  const summary = {
+    carriedCount: 8, bespokeCount: 5, designedCount: 5,
+    confirmedBookCount: 3, spanBooks: 3, perBook: [],
+  };
+  const authors: LibraryAuthor[] = [
+    {
+      name: 'Marin Vale',
+      series: [
+        {
+          name: 'Northern Coast Trilogy',
+          seriesMemory: summary,
+          books: [
+            // shape via this file's existing book factory if it has one;
+            // otherwise a minimal LibraryBook with title 'North One' / 'North Two'.
+            makeLibBook({ bookId: 'n1', title: 'North One' }),
+            makeLibBook({ bookId: 'n2', title: 'North Two' }),
+          ],
+        },
+      ],
+    },
+  ];
+  const out = applyLibraryFilters(authors, { filter: 'all', search: 'North One', tags: [], languages: [] });
+  // search narrowed books 2→1 but the series object kept its seriesMemory:
+  expect(out[0].series[0].books).toHaveLength(1);
+  expect(out[0].series[0].seriesMemory).toEqual(summary);
 });
 ```
-Mirror the exact render call, store setup, and search-input selector from the neighbouring tests in that file — do not invent helpers. The card view is acceptable here because both views consume the same `filteredAuthors` memo; the point is to exercise the orchestrator's spread, which `LibraryTable` cannot.
+Reuse the file's existing `LibraryBook` factory if present (mirror its name); otherwise define a tiny local `makeLibBook` like `library-table.test.tsx`'s `makeBook`. The assertion exercises the real `{ ...series }` spread — if a future refactor drops `seriesMemory` during filtering, this goes red.
 
-- [ ] **Step 8: Run the full frontend suite + typecheck**
+- [ ] **Step 9: Run the full frontend suite + typecheck**
 
 Run: `npm run typecheck && npm test`
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/components/library/library-table.tsx src/components/library/library-table.test.tsx src/views/book-library.tsx src/views/book-library.test.tsx
@@ -465,7 +524,8 @@ git commit -m "feat(frontend): fe-41 series-memory chip in the table view
 Thread LibrarySeries through SeriesGroup, restructure the section header
 (collapse toggle + chip as responsive siblings), render the compact
 showBooks=false chip, and wire onOpenSeriesMemory to the orchestrator's
-existing reveal. Filter-preservation invariant locked at the orchestrator.
+existing reveal. Extract applyLibraryFilters so the filter-preservation
+invariant (seriesMemory survives filtering) is unit-locked.
 
 Closes #983"
 ```
@@ -543,10 +603,12 @@ Expected: FAIL — no PNG button / no `role="alert"` exists yet.
 
 - [ ] **Step 4: Implement the modal changes**
 
-Edit `src/components/series-memory/share-card-modal.tsx`. Add the slug helper near `downloadJson`, apply it to the JSON filename, and add the ref/button/handler:
+Edit `src/components/series-memory/share-card-modal.tsx`. First **replace the existing line-1 import** `import { useEffect } from 'react';` with the three hooks below. Then add the slug helper at module scope (near the existing `downloadJson`, lines ~6-14) and apply it to the JSON filename:
 ```tsx
+// line 1 — replaces `import { useEffect } from 'react';`
 import { useEffect, useRef, useState } from 'react';
 
+// module scope, beside the existing downloadJson:
 export function slugifyFilename(s: string): string {
   return s.replace(/[\\/:*?"<>|]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'series';
 }
@@ -704,5 +766,5 @@ Refs #983 #984 #985"
 ## Self-review notes
 
 - **Spec coverage:** fe-42 → Task 1; fe-41 (`showBooks`) → Task 2; fe-41 (table) → Task 3; fe-43 → Task 4; docs/spec-sync → Task 5. Every spec section maps to a task. The CHIP_LABELS deviation is documented in the header and synced in Task 5.
-- **Invariants from the spec:** filter preservation → Task 3 Step 7 (orchestrator layer, per R2-2); compact chip avoids the double-count → Task 2 + Task 3 Step 4; ref wrapper / self-contained bg → Task 4 Step 4; lazy import → Task 4 Step 4; `role="alert"` → Task 4 Step 4; `document.fonts?.ready` → Task 4 Step 4; visual baseline regen → Task 1 Step 8.
+- **Invariants from the spec:** filter preservation → Task 3 Steps 7-8 (extract `applyLibraryFilters` + unit-test it directly, per R2-2 / P2-1); compact chip avoids the double-count → Task 2 + Task 3 Step 4; ref wrapper / self-contained bg → Task 4 Step 4; lazy import → Task 4 Step 4; `role="alert"` → Task 4 Step 4; `document.fonts?.ready` → Task 4 Step 4; visual baseline regen → Task 1 Step 8.
 - **Type consistency:** `SeriesMemoryChip` gains `showBooks?: boolean` in Task 2 and is consumed with `showBooks={false}` in Task 3. `onOpenSeriesMemory?: (s: LibrarySeries) => void` is declared in Task 3 (table) and supplied in Task 3 (orchestrator). `CarriedBadge` replaces `ReusedBadge` in Task 1 across all three files.
