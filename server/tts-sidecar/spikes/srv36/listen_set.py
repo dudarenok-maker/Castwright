@@ -234,7 +234,8 @@ def emit_listen_set(
             continue
         chapter_stem = Path(segf).name.replace(".segments.json", "")
         for seg in data.get("segments", []):
-            sid = seg.get("sentenceId") or seg.get("id")
+            sids = seg.get("sentenceIds") or []
+            sid = "-".join(str(s) for s in sids) if sids else None
             if sid:
                 sid_meta[sid] = {
                     "chapter": chapter_stem,

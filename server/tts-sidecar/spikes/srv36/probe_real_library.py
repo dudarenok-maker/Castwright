@@ -70,8 +70,14 @@ def embed_book_segments(
             ch = seg.get("characterId") or seg.get("character")
             if not ch:
                 continue
-            # Re-key on sentenceId (stable), NOT timestamps (shift every run)
-            sentence_id = seg.get("sentenceId") or seg.get("id")
+            # Re-key on sentenceIds (stable), NOT timestamps (shift every run).
+            # Real segments carry `sentenceIds` (a list of manuscript indices);
+            # join into one stable, globally-unique key. Non-dialogue segments
+            # (e.g. chapter titles) have an empty list and are skipped.
+            sids = seg.get("sentenceIds") or []
+            sentence_id = "-".join(str(s) for s in sids) if sids else None
+            if sentence_id is None:
+                continue
             st = seg.get("startSec")
             en = seg.get("endSec")
             if st is None or en is None or (en - st) < floor:
