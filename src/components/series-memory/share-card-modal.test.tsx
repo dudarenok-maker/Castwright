@@ -55,4 +55,19 @@ describe('ShareCardModal', () => {
     const matches = screen.getAllByText(/the coalfall commission/i);
     expect(matches.length).toBeGreaterThan(0);
   });
+
+  it('shows the personalized footer when owner is provided', () => {
+    render(<ShareCardModal detail={detail} seriesName="X" owner="Alex" onClose={() => {}} />);
+    expect(screen.getByText("Alex's cast · kept true")).toBeInTheDocument();
+  });
+
+  it('shows the fallback footer when owner is omitted', () => {
+    render(<ShareCardModal detail={detail} seriesName="X" onClose={() => {}} />);
+    expect(screen.getByText("Your cast · kept true")).toBeInTheDocument();
+  });
+
+  it('shows the fallback footer when owner is an empty string', () => {
+    render(<ShareCardModal detail={detail} seriesName="X" owner="" onClose={() => {}} />);
+    expect(screen.getByText("Your cast · kept true")).toBeInTheDocument();
+  });
 });

@@ -445,6 +445,7 @@ export function BookLibraryView({
         <ShareCardModal
           detail={shareCard}
           seriesName={openSM?.name ?? ''}
+          owner={firstName !== 'back' ? firstName : undefined}
           onClose={() => setShareCard(null)}
         />
       )}

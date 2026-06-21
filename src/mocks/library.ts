@@ -17,9 +17,9 @@ export const MOCK_LIBRARY: LibraryResponse = {
           seriesMemory: {
             carriedCount: 4, bespokeCount: 3, designedCount: 3, confirmedBookCount: 3, spanBooks: 3,
             perBook: [
-              { bookId: 'sb', index: 1, principalCount: 8, carriedPresent: 3 },
-              { bookId: 'ns', index: 2, principalCount: 9, carriedPresent: 4 },
-              { bookId: 'cc', index: 3, principalCount: 9, carriedPresent: 4 },
+              { bookId: 'sb', index: 1, principalCount: 8, carriedPresent: 4 },
+              { bookId: 'ns', index: 2, principalCount: 9, carriedPresent: 3 },
+              { bookId: 'cc', index: 3, principalCount: 9, carriedPresent: 3 },
             ],
           },
           books: [

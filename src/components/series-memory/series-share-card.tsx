@@ -67,7 +67,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
       {/* Footer */}
       <div className="flex justify-between items-end text-[11px]">
         <span className="text-cream/60">
-          {owner != null ? `${owner}'s` : 'Your'} cast · kept true
+          {owner ? `${owner}'s` : 'Your'} cast · kept true
         </span>
         <span className="text-magenta font-bold">castwright.ai</span>
       </div>
