@@ -19,8 +19,12 @@ or MP3.
 - **Full-cast performance** — every character speaks in their own voice; one
   narrator can't be everyone.
 - **Series memory** — a character keeps the same voice across every book in a
-  series.
+  series, even when an author renames someone mid-series. *(No other tool does
+  this for readers.)*
 - **Designed voices** — every character gets a unique voice designed from its persona, kept consistent across the series. (Cloning a voice from your own sample is the next major release.)
+- **Quality gate** — every line is acoustically checked, transcript-verified, and drift-checked
+  before a chapter is assembled, and any that fail are re-recorded automatically; the plainly
+  broken lines never reach your ears.
 - **On-device by default** — analysis and speech run on your machine; cloud is
   opt-in.
 - **You own the files** — export standard M4B / MP3 / AAC / Opus and keep them.
