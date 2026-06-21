@@ -54,6 +54,12 @@ import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
+import { configValue } from '../config/resolver.js';
+import { readVerdicts, writeVerdicts } from '../audio/render-integrity/verdicts-io.js';
+import { readCentroids, type CharacterCentroid } from '../audio/render-integrity/centroids-io.js';
+import { cosineToCentroid } from '../audio/render-integrity/score.js';
+import { embedSegment } from '../tts/embed-client.js';
+import { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION, type EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 
 export const chapterQaRepairRouter = Router();
 
@@ -161,6 +167,7 @@ chapterQaRepairRouter.post(
         characterId: string;
         sentenceIds: number[];
         reasons: string[];
+        acoustic?: boolean;
       }> = [];
       for (let i = 0; i < segFile.segments.length; i += 1) {
         const seg = segFile.segments[i];
@@ -189,6 +196,42 @@ chapterQaRepairRouter.post(
               sentenceIds: seg.sentenceIds.slice(),
               reasons: a.reasons,
             });
+          }
+        }
+      }
+
+      /* Edit 1 (srv-36): merge acoustic candidates from the sibling render-integrity
+         verdict file. Gate on qa.speaker.autoRepair — detection surfacing comes from
+         Task 11 (deriveBookOutline), not this route; this gate only covers the FIX path.
+         Dedupes by segmentIndex: if the signal/ASR scan already flagged a segment,
+         UNION (set acoustic: true on the existing entry) rather than adding a duplicate. */
+      if (configValue('qa.speaker.autoRepair')) {
+        const verdictPath = join(audioRoot, `${chapter.slug}.render-integrity.json`);
+        const verdictRows = await readVerdicts(verdictPath).catch(() => null);
+        if (verdictRows) {
+          for (const row of verdictRows) {
+            if (row.verdict !== 'voice-mismatch' || !row.fixable) continue;
+            // segmentIndex may live on the verdict row (added by aggregate/repair); fall
+            // back to matching by sentenceIds against the segments file.
+            const segIdx =
+              (row as { segmentIndex?: number }).segmentIndex ??
+              segFile.segments.findIndex(
+                (s) => s.sentenceIds.length > 0 && row.sentenceIds.every((id) => s.sentenceIds.includes(id)),
+              );
+            if (segIdx < 0) continue;
+            const existing = flagged.find((f) => f.segmentIndex === segIdx);
+            if (existing) {
+              // Union: the signal/ASR scan already covers this segment; mark it acoustic too.
+              existing.acoustic = true;
+            } else {
+              flagged.push({
+                segmentIndex: segIdx,
+                characterId: row.characterId,
+                sentenceIds: row.sentenceIds.slice(),
+                reasons: [`voice-mismatch cosine ${row.cosine.toFixed(3)} < E (fixable)`],
+                acoustic: true,
+              });
+            }
           }
         }
       }
@@ -270,9 +313,46 @@ chapterQaRepairRouter.post(
         return fail('No analysed sentences cached for this chapter — re-run analysis first.');
       }
 
-      const targetIndices = flagged.map((f) => f.segmentIndex);
       const stillSuspect: number[] = [];
       const repaired: number[] = [];
+
+      /* Edit 3 (srv-36): load per-character centroids once for the acoustic
+         accept-check inside the synth callback. Null when no centroid file exists
+         yet (scoredBook hasn't run) — the acoustic gate then applies no cosine
+         constraint (safe: a centroid-less character can't have a fixable verdict). */
+      const centroids: Record<string, CharacterCentroid> | null = await readCentroids(bookDir).catch(() => null);
+
+      /* Edit 6 (srv-36): capture accepted re-render embeddings by segment index.
+         Populated inside the synth callback; flushed to disk after finalize. */
+      const newEmbeddingsByIndex = new Map<number, Float32Array>();
+
+      /* Edit 2 pre-filter (srv-36): for acoustic-only candidates, skip ones whose
+         engine is unavailable or whose character has no usable centroid. Mark them
+         inconclusive up front so they don't reach the re-render path. */
+      const targetIndices: number[] = [];
+      for (const f of flagged) {
+        if (f.acoustic) {
+          const charCentroid = centroids?.[f.characterId];
+          if (!charCentroid || charCentroid.referenceKind === 'too-short') {
+            // No usable centroid — defensive skip.
+            stillSuspect.push(f.segmentIndex);
+            continue;
+          }
+          const seg = segFile.segments[f.segmentIndex];
+          const charEngine = seg
+            ? resolveCharacterEngine(
+                cast.characters.find((c) => c.id === seg.characterId) ?? {},
+                engine,
+              )
+            : engine;
+          const engineUnavailable = charEngine === 'qwen' ? qwenUnavailable : false;
+          if (engineUnavailable) {
+            stillSuspect.push(f.segmentIndex);
+            continue;
+          }
+        }
+        targetIndices.push(f.segmentIndex);
+      }
 
       const replacements: SegmentReplacement[] = await buildSynthReplacements({
         segments: segFile.segments,
@@ -280,17 +360,41 @@ chapterQaRepairRouter.post(
         chapterSampleRate: sampleRate,
         synth: async (seg) => {
           const segIndex = segFile.segments.indexOf(seg);
+          const candidate = flagged.find((f) => f.segmentIndex === segIndex);
+
           const ids = new Set(seg.sentenceIds);
           const subset = sentences.filter((s) => ids.has(s.id));
           const text = segText(seg);
           let best: { pcm: Buffer; sampleRate: number } | null = null;
           let bestVerdict: SegmentQaVerdict | null = null;
           let bestAsr: AsrClassification | null = null;
-          /* A take is acceptable when the signal gate passes AND (ASR off or the
-             content isn't drift). Among non-acceptable takes, prefer the
-             signal-better one (isBetter). */
-          const isAcceptable = (v: SegmentQaVerdict | null, a: AsrClassification | null): boolean =>
-            v != null && v.status === 'ok' && (!asrOn || a == null || a.verdict !== 'drift');
+          /* Edit 3b (srv-36): extend running best-state with bestCosine. */
+          let bestCosine: number | null = null;
+
+          /* Edit 5 (srv-36): extend isAcceptable with the conditional acoustic term.
+             The acoustic gate ONLY applies when candidate.acoustic === true AND a
+             centroid exists for the character. For signal/ASR-only candidates the
+             predicate is UNCHANGED — a pure signal repair must not be rejected
+             because its cosine is low, and a character without a centroid must not
+             be gated at all. */
+          const isAcceptable = (
+            v: SegmentQaVerdict | null,
+            a: AsrClassification | null,
+            cos: number | null,
+            cand: typeof candidate,
+          ): boolean => {
+            const signalAndAsrOk =
+              v != null && v.status === 'ok' && (!asrOn || a == null || a.verdict !== 'drift');
+            if (!signalAndAsrOk) return false;
+            // Apply acoustic term only when the candidate originated from the verdict file
+            // AND a centroid is available for this character.
+            if (cand?.acoustic && cos !== null && centroids?.[seg.characterId]) {
+              const charCentroid = centroids[seg.characterId];
+              return cos >= charCentroid.cleanMean;
+            }
+            return true;
+          };
+
           for (let attempt = 1; attempt <= maxRerecords; attempt++) {
             if (controller.signal.aborted) break;
             send({ type: 'progress', chapterId, segmentIndex: segIndex, attempt, progress: 0.5 });
@@ -310,21 +414,48 @@ chapterQaRepairRouter.post(
             });
             const v = evaluateSegmentPcm(r.pcm, r.sampleRate, text);
             const a = asrOn && text ? await verifyAsr(r.pcm, text) : null;
+            /* Edit 4 (srv-36): embed the pre-resample/pre-loudnorm PCM for the
+               acoustic accept-check. Only embed when the candidate is acoustic AND a
+               centroid exists for this character — avoid the sidecar round-trip for
+               pure signal/ASR repairs. */
+            let cos: number | null = null;
+            if (candidate?.acoustic && centroids?.[seg.characterId]) {
+              const vec = Array.from(await embedSegment(r.pcm, r.sampleRate));
+              cos = cosineToCentroid(vec, centroids[seg.characterId].centroid);
+            }
             const better =
               !best ||
               bestVerdict == null ||
-              (isAcceptable(v, a) && !isAcceptable(bestVerdict, bestAsr)) ||
-              (isAcceptable(v, a) === isAcceptable(bestVerdict, bestAsr) && isBetter(v, bestVerdict));
+              (isAcceptable(v, a, cos, candidate) && !isAcceptable(bestVerdict, bestAsr, bestCosine, candidate)) ||
+              (isAcceptable(v, a, cos, candidate) === isAcceptable(bestVerdict, bestAsr, bestCosine, candidate) &&
+                isBetter(v, bestVerdict));
             if (better) {
               best = { pcm: r.pcm, sampleRate: r.sampleRate };
               bestVerdict = v;
               bestAsr = a;
+              bestCosine = cos;
             }
-            if (isAcceptable(bestVerdict, bestAsr)) break;
+            if (isAcceptable(bestVerdict, bestAsr, bestCosine, candidate)) break;
           }
           if (!best) throw new Error('Re-record produced no audio.');
-          if (bestVerdict?.status === 'suspect' || bestAsr?.verdict === 'drift') stillSuspect.push(segIndex);
-          else repaired.push(segIndex);
+          const accepted = isAcceptable(bestVerdict, bestAsr, bestCosine, candidate);
+          if (!accepted) {
+            stillSuspect.push(segIndex);
+          } else {
+            repaired.push(segIndex);
+            /* Edit 6a (srv-36): capture the accepted take's embedding for post-finalize write. */
+            if (bestCosine !== null && candidate?.acoustic && centroids?.[seg.characterId]) {
+              // We already have the last-computed embedding via embedSegment — but to avoid
+              // storing a reference to the Float32Array from the last loop iteration (which
+              // may be the best or the last non-best), recompute from `best.pcm`.
+              try {
+                const vec = await embedSegment(best.pcm, best.sampleRate);
+                newEmbeddingsByIndex.set(segIndex, vec);
+              } catch {
+                /* non-fatal — the repair succeeded; the sibling update is best-effort */
+              }
+            }
+          }
           return best;
         },
       });
@@ -356,6 +487,65 @@ chapterQaRepairRouter.post(
         audioFormat: bookStateAudioFormat(state as BookStateJson),
         expectedSec: segFile.durationSec,
       });
+
+      /* Edit 6b (srv-36): for accepted acoustic takes, write their new embeddings
+         into the <slug>.embeddings.json sibling and update the corresponding rows
+         in <slug>.render-integrity.json. Both are best-effort — a failure here must
+         not abort the repair that already succeeded. */
+      if (newEmbeddingsByIndex.size > 0) {
+        try {
+          const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+          const existing = await readEmbeddings(embPath).catch(() => null);
+          const existingRows: EmbeddingRow[] = existing?.rows ?? [];
+
+          // Replace or append rows for the repaired segments.
+          for (const [segIdx, vec] of newEmbeddingsByIndex) {
+            const seg = segFile.segments[segIdx];
+            if (!seg) continue;
+            const rowIdx = existingRows.findIndex(
+              (r) => r.characterId === seg.characterId && r.sentenceIds.join(',') === seg.sentenceIds.join(','),
+            );
+            const newRow: EmbeddingRow = { characterId: seg.characterId, sentenceIds: seg.sentenceIds.slice(), vec };
+            if (rowIdx >= 0) {
+              existingRows[rowIdx] = newRow;
+            } else {
+              existingRows.push(newRow);
+            }
+          }
+          await writeEmbeddings(embPath, existingRows, EMBEDDINGS_VERSION);
+        } catch {
+          /* non-fatal */
+        }
+
+        try {
+          const verdictPath = join(audioRoot, `${chapter.slug}.render-integrity.json`);
+          const verdictRows = await readVerdicts(verdictPath).catch(() => null);
+          if (verdictRows) {
+            for (const [segIdx, vec] of newEmbeddingsByIndex) {
+              const seg = segFile.segments[segIdx];
+              if (!seg || !centroids?.[seg.characterId]) continue;
+              const centroid = centroids[seg.characterId];
+              const newCosine = cosineToCentroid(Array.from(vec), centroid.centroid);
+              // Update the verdict row that matches this segment's sentenceIds.
+              const vRowIdx = verdictRows.findIndex(
+                (r) => r.sentenceIds.length > 0 && seg.sentenceIds.every((id) => r.sentenceIds.includes(id)),
+              );
+              if (vRowIdx >= 0) {
+                verdictRows[vRowIdx] = {
+                  ...verdictRows[vRowIdx],
+                  cosine: newCosine,
+                  verdict: newCosine >= centroid.pBand ? 'voice-match' : newCosine >= centroid.pSevere ? 'inconclusive' : 'voice-mismatch',
+                  severity: newCosine >= centroid.pBand ? null : newCosine >= centroid.pSevere ? 'inconclusive' : 'severe',
+                  fixable: newCosine < centroid.pSevere,
+                };
+              }
+            }
+            await writeVerdicts(verdictPath, verdictRows);
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
 
       send({
         type: 'qa_repair_complete',
