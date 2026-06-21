@@ -6,7 +6,7 @@ issue: srv-36 (#665)
 depends_on: srv-31 (ASR-QA hook + qa-gates settings pattern)
 phase2_internal: fs-33 (emotion persistence), fs-25 (per-emotion variants) — Phase-2 work INSIDE srv-36, not external blockers
 relates_to: fs-51 (#973) — srv-36 OPTIONALLY enriches it; fs-51 is NOT blocked on srv-36 (see §0.1)
-revised: 2026-06-21 (3rd pass — gated on a residual-value spike with a real no-go; v1 reframed as render-integrity; fs-51 decoupled)
+revised: 2026-06-21 (4th pass — drift is a non-deterministic phenomenon: spike measures Qwen/Coqui stochastic floor + REAL misfires from the existing QA gates, no synthetic injection; Kokoro out of scope; gate decided by residual value over ASR+audio-QA)
 ---
 
 # srv-36 — Acoustic render-integrity check + calibration
@@ -72,85 +72,84 @@ it no-goes, fs-51 is unaffected.
 
 ## 1. The central risk this spec is built around
 
-The architecture is sound; the **measurement science is unvalidated.** The
-load-bearing assumptions, none answerable from the literature (they must be
-measured on *this product's own TTS output*):
+**Drift is a non-deterministic phenomenon.** A deterministic engine renders the
+same (voice, text) to identical audio — it *cannot* drift, so there is nothing
+acoustic to check. Kokoro (deterministic ONNX) is therefore **out of scope**.
+The render-integrity check exists for the **stochastic engines — Qwen and Coqui
+XTTS** (both unseeded) — where the *same correctly-configured voice* occasionally
+renders **wrong**: off-timbre, voice-bled, or degraded, with the config
+unchanged. That misfire is the model's own random output; it **cannot be injected
+on demand** (no seed surface), so the spike measures real model behaviour, not
+synthetic defects.
 
-- **R1 — residual value (the existential one).** Can an acoustic cutoff flag
-  *same-config, same-engine* defects (bleed / glitch / clean-reference fallback)
-  that config-drift provably cannot see? Or does it only separate different
-  characters (redundant)?
-- **R2 — out-of-domain & near-miss.** ECAPA's ~0.9% VoxCeleb EER is a
-  *real-human* number; TTS voices cluster tighter (shared vocoder fingerprint).
-  Two same-gender presets (`af_heart` vs `af_bella`) may be inseparable. The
-  VoxCeleb figure is **not** a valid calibration anchor — measure in-domain.
-- **R3 — short-segment reliability & coverage.** ECAPA is high-variance below
-  ~2–3 s. Audiobook **dialogue** (the content whose voice-correctness matters
-  most) is dominated by short lines, so a duration floor risks marking the
-  *majority of character lines* `inconclusive` — silently unchecked.
-- **R4 — emotion sensitivity** (Phase 2 only). If emotion shifts embeddings, a
-  neutral reference mis-scores emotional lines and a global centroid blurs.
+The load-bearing risks — none answerable from the literature; all must be
+measured on this product's own Qwen/Coqui output:
 
-## 2. Phase 0 — residual-value spike (a GATE that can say no)
+- **R1 — the stochastic floor.** A correct voice already varies render-to-render
+  (unseeded sampler). Is that natural spread tight enough that a genuine misfire
+  is distinguishable in ECAPA space — or does the floor already swamp it? If the
+  floor swamps it, no acoustic check can ever work.
+- **R2 — real-defect separability.** Measured on **real misfires** (not injected),
+  does ECAPA cosine-to-reference separate them from clean renders *above the R1
+  floor*? (ECAPA's ~0.9% VoxCeleb EER is a real-human number and is **not** a
+  valid anchor — TTS voices cluster tighter; measure in-domain.)
+- **R3 — residual value over existing gates (the existential one).** The pipeline
+  already flags many bad renders via **ASR content-QA** (wrong words) and
+  **audio-QA** (near-silent/clipped/duration). Does acoustic catch **drift they
+  miss** — voice wrong, *words right and audio clean*? If it only re-flags what
+  those gates already catch, it is **redundant → no-go**.
+- **R4 — short-segment reliability & coverage.** ECAPA is high-variance below
+  ~2–3 s; audiobook dialogue is dominated by short lines, so a duration floor
+  risks marking the *majority of character lines* `inconclusive`.
+
+## 2. Phase 0 — stochastic-drift spike (a GATE that can say no)
 
 A throwaway harness (committed under `scripts/` or an opt-in sidecar test) that
-embeds clips from the canonical fixture renders and reports distributions. **No
-production code, no settings, no events.** ~3–4 days (the injection harness, §2.0,
-is real work). Its findings note supersedes Phases 1–2 wherever reality differs.
+over-generates the canonical fixture on the **stochastic engines**, embeds with
+ECAPA, and measures real behaviour. **No production code, no settings, no events,
+no synthetic injection.** Real drift only appears at volume, so the spike needs a
+**decent over-generation run** (render every fixture line many times per engine).
+The findings note supersedes Phases 1–2 wherever reality differs.
 
-### 2.0 Defect injection — what is actually producible (verified against synth code)
-
-E1's gate is only as good as the defects it can produce. Verified against the
-synth path: **there is no seed surface** (`Engine.synthesize` takes no seed),
-**Kokoro is deterministic ONNX** (never stochastically glitches), and **Qwen is
-explicitly unseeded** — so a "bad-seed glitch" is not reproducible, and
-deterministic "voice bleed" reduces to synthesising a line with another
-character's prompt, i.e. the different-character swap §0.1 rejects as redundant.
-E1 therefore uses only **deterministically producible** same-config defects:
-
-| Class | Mechanism | Tier |
-|---|---|---|
-| **Silent fallback** | force `applyQwenFallback` (Node route swap, `synthesise-chapter.ts:718`) so the line renders in Kokoro while the reference stayed Qwen-clean | gross + subtle (fallback to a near vs far Kokoro voice) |
-| **Wrong preset** | render the line with a different preset than the reference — **stratified**: same-gender same-engine near-miss (`af_*`, subtle) AND distant (gross) | subtle + gross |
-| **Constructed garble** | deterministic post-synth corruption of a clean render: truncate / clip / time-reverse a span / splice a known-bad recorded fragment | gross |
-
-**Voice bleed is observational-only**, not injected: it is an emergent
-non-deterministic artifact of batched Qwen forwards (the prompt-flatten hazard
-near `main.py:1734`). E1 does **not** depend on bleed for its go/no-go; any real
-occurrences harvested from existing renders are reported as a bonus, never as the
-gate. This is stated so the timeline and the gate aren't built on a defect we
-can't summon.
+### 2.0 Reference under stochasticity
+Because the engine is stochastic, a *single* correct render is itself noisy. The
+per-character reference is the **centroid of K correct renders** (K from F1) of
+the character's audition sample — averaging out the sampler's noise to get a
+stable "what this voice is" anchor. How large K must be for a stable centroid is
+itself an F1 output.
 
 | Exp | Question (risk) | What it gates |
 |---|---|---|
-| **E1 — residual value** | Run the §2.0 injectable defects through the real synth path and measure, **per tier (gross / subtle)**, what fraction land **beyond** the candidate cutoff vs clean same-config renders. (R1) | **The go/no-go** (§2.1). |
-| **E2 — separability & in-domain EER** | intra-speaker spread (same voice, 50 lines) vs inter-speaker; graduated set (correct → prosody-bumped → wrong-character); measured in-domain EER; same-gender same-engine preset near-miss (`af_*`). (R2) | Whether wrong-preset/bleed is even separable; which positive pairs are fair; the EER cutoffs anchor to. |
-| **E3 — clip length & coverage** | embed the same line truncated 0.5/1/2/3/5 s → cosine variance vs length; AND the **fraction of the fixture's character (non-narrator) segments below the candidate floor**. (R3) | The min scorable **query** duration; the realistic checked-coverage %; whether short-line **windowing** is mandatory. |
-| **E4 — emotion shift** (informs Phase 2) | one character neutral/angry/sad/whisper; pairwise cosine vs cross-character. (R4) | Phase-2: is emotion-matching needed; is a global consistency centroid valid. |
+| **F1 — stochastic floor** | Render the *same* line N times, and one character across its lines, all correctly configured (Qwen AND Coqui). Distribution of cosine-to-centroid for a *correct* voice. (R1) | The noise floor; the centroid size K; **kill-switch** — if the floor is wide, no-go immediately. |
+| **F2 — harvest real misfires** | Over-generate the fixture; collect the lines the **existing ASR-QA + audio-QA gates flag** as bad. These are real drift labels, free. Record per engine. (R3 input) | The real labelled positive set — no injection. |
+| **F3 — real-defect separability** | Does ECAPA cosine-to-centroid separate the F2 misfires from clean renders, *above the F1 floor*? In-domain EER on real labels. (R2) | Whether acoustic detects real drift at all. |
+| **F4 — residual value over existing gates** | Of the lines ECAPA flags (low cosine), which did **ASR + audio-QA NOT** flag (words right, audio clean)? A human spot-listens this set: are they real voice drift? (R3) | **The go/no-go** (§2.1). |
+| **F5 — clip length & coverage** | cosine-to-centroid variance vs clip length (0.5–5 s) on real renders; fraction of character segments below the candidate floor. (R4) | min scorable duration; checked-coverage %; whether windowing is mandatory. |
 
 ### 2.1 Go condition (Phase 1 proceeds)
-The bar is **anchored to a measurement, not a round number, and judged on the
-subtle tier** (the gross tier clearing proves nothing — gross fallback/distant-
-preset are trivially separable and near the redundant boundary). Go requires:
+Anchored to measurement, not round numbers:
 
-- the **subtle-tier** defects (near-miss preset, fallback-to-near-voice) separate
-  from clean same-config renders by a margin **clearly above the same-voice
-  intra-speaker spread measured in E2** — i.e. a real cluster gap, not noise;
-  AND
-- a clean-render false-positive rate at that cutoff ≤ a stated ceiling; AND
-- E3 character-segment checked-coverage above a stated bar (windowing if needed).
+- **F1 floor is tight** — a correct voice's cosine-to-centroid clusters with a
+  spread clearly narrower than the gap to F2 misfires (a necessary condition; a
+  wide floor is an immediate no-go); AND
+- **F3 separates real misfires** above that floor (in-domain EER below a stated
+  ceiling on the real F2 labels); AND
+- **F4 shows residual value** — a non-trivial fraction of ECAPA-flagged lines were
+  **missed by ASR + audio-QA** and human listening confirms they are real voice
+  drift (not false positives); AND
+- **F5 coverage** above a stated bar (windowing if needed).
 
-E1 reports the flagged fraction **per tier**; a high *pooled* number carried by
-the gross tier alone does **not** clear the gate.
+The decisive criterion is **F4**: acoustic must catch drift the existing gates
+miss. Re-flagging only what ASR/audio-QA already catch is redundancy, not value.
 
-### 2.2 No-go (srv-36 is abandoned — this is a real outcome, not a descope)
-If the subtle tier does not separate (acoustic only catches the gross / different-
-character case config-drift already covers), srv-36 closes **wont-fix-acoustic**:
-#665 reverts to "the existing config-drift comparator IS the drift signal; an
-acoustic layer adds nothing over it," and fs-51 ships on its existing signals
-(§0.2) with **no** voice-match row. The findings note's recommendation field is
-exactly one of `{ go, no-go }` — there is no "descope to wrong-speaker," because
-that product is the redundant one.
+### 2.2 No-go (srv-36 is abandoned — a real outcome, not a descope)
+If F1's floor is too wide (correct renders scatter as much as misfires), OR F3
+can't separate real misfires, OR **F4 shows acoustic only re-flags what ASR +
+audio-QA already catch** (no residual value), srv-36 closes **wont-fix-acoustic**:
+#665 reverts to "config-drift + ASR + audio-QA ARE the QA signals; an acoustic
+voice layer adds nothing," and fs-51 ships on those existing signals (§0.2) with
+**no** voice-match row. The findings note's recommendation is exactly one of
+`{ go, no-go }`.
 
 ### 2.3 #665's literal ask, resolved in BOTH branches
 #665 literally asks to *calibrate the comparator's thresholds*. The reframe
@@ -198,7 +197,7 @@ Mirrors `qa.asr.enabled`:
   label: 'Render-integrity QA (voice match)',
   help: 'When on, each rendered line of sufficient length is embedded (ECAPA '
       + 'speaker model) and checked for acoustic match against the character\'s '
-      + 'audition sample. Off by default. CPU (zero VRAM).',
+      + 'voice centroid, flagging stochastic misfires. Off by default. CPU (zero VRAM).',
   type: 'boolean', default: false, apply: 'live', risk: 'low' },
 
 { key: 'qa.speaker.device', env: 'SPK_DEVICE', group: 'qa-gates',
@@ -214,10 +213,14 @@ Mirrors `qa.asr.enabled`:
 only **device** is `restart-sidecar`. Env threads through `spawn-sidecar.ts`
 (`...process.env`) for free.
 
-### 3.3 Reference resolution (singleton, bounded duration floor)
-Reuse the per-character voice sample (`voice-sample-cache.ts`) — a ~12 s render
-in the character's exact engine+voice, cached by voice-config — as a **single**
-reference. The duration floor (E3 sets the number, ~3 s):
+### 3.3 Reference resolution (stochastic centroid, bounded duration floor)
+Because the engines are stochastic (§1), a single render is itself noisy, so the
+reference is the **centroid of K correct renders** (K from Phase-0 F1) of the
+per-character voice sample (`voice-sample-cache.ts`) — a ~12 s render in the
+character's exact engine+voice. The centroid averages out the sampler's noise
+into a stable "what this voice is" anchor; each rendered segment is scored by
+cosine to it. The duration floor (F5 sets the number, ~3 s) applies to the
+renders that form the centroid:
 
 - Decode the rendered sample MP3 once and measure (`pcmDurationSec` over decoded
   PCM — the cache holds an MP3 with no stored duration). If under floor, **extend
@@ -238,11 +241,11 @@ reference. The duration floor (E3 sets the number, ~3 s):
   "all clear" while silently skipping the riskiest cohort.
 - Reference embedding cached, keyed by voice-config hash. A never-auditioned
   character has its sample minted on first QA pass.
-- **Documented limitation (circularity):** the reference is itself a render from
-  the same engine, so the check means *"matches the approved audition sample,"*
-  NOT *"is acoustically correct."* Engine-systematic mis-rendering (the engine
-  renders this voice subtly wrong on every line, reference included) is out of
-  scope — a synthesis-quality problem.
+- **Documented limitation (circularity):** the centroid is itself built from
+  renders of the same engine, so the check means *"matches the voice's own
+  central tendency,"* NOT *"is acoustically correct."* Engine-systematic
+  mis-rendering (every render of this voice is subtly wrong, centroid included)
+  is out of scope — a synthesis-quality problem.
 
 ### 3.4 Runtime + storage
 - **Runtime is benchmark-conditional (§3.1).** *Preferred:* inline during
@@ -253,15 +256,15 @@ reference. The duration floor (E3 sets the number, ~3 s):
   generation):* a post-pass over the rendered chapter audio (re-decode cost
   accepted, mirroring `chapter-qa-repair.ts`). The runtime is **not fixed until
   the benchmark clears.**
-- **Short-segment policy (R3 / E3):** a segment whose voiced duration is below
-  the E3 floor is **not scored** → `'inconclusive'`, never a noisy cosine
-  (mirrors ASR's `minChars`→`inconclusive`). If E3 shows coverage below bar,
+- **Short-segment policy (R4 / F5):** a segment whose voiced duration is below
+  the F5 floor is **not scored** → `'inconclusive'`, never a noisy cosine
+  (mirrors ASR's `minChars`→`inconclusive`). If F5 shows coverage below bar,
   consecutive same-speaker short lines are **windowed** into one ≥-floor query
   before embedding (required mitigation, not optional). A windowed query mixes
   content (and possibly emotions); that is fine for a **timbre/identity** check
   (ECAPA is timbre-driven) but **windowed segments are excluded from any Phase-2
-  consistency/per-emotion analysis** (E4/R4) — averaging across the emotion axis
-  is precisely what Phase 2 must not do. Flag windowed queries so the two
+  consistency/per-emotion analysis** — averaging across the emotion axis is
+  precisely what Phase 2 must not do. Flag windowed queries so the two
   mechanisms can't quietly contradict.
 - **Storage — sibling file (F6).** 192 floats/segment (~1.5–2 KB JSON each)
   would bloat `<slug>.segments.json` by ~15 MB on a big book — and that file is
@@ -284,37 +287,38 @@ acoustic segment verdict is **`'voice-match' | 'voice-mismatch' |
 badges a line "suspect voice," never gates `done` or auto-regens (auto-repair is
 the gated/paid tier; detection stays free).
 
-### 3.6 Calibration
-**Synthetic injection** from `server/src/__fixtures__/the-coalfall-commission.md`,
-scripted + committed. Positives = same lines rendered with the **defect classes
-E1/E2 proved separable** (bleed/glitch/fallback, plus acoustically-distant
-wrong-voice only where E2 says it's fair). A script embeds every clip, computes
-the cosine distribution per class, and picks `mild/moderate/severe` cutoffs
-anchored to the **measured in-domain EER** (NOT VoxCeleb 0.9%). Outputs: named
-cutoff constants; a normal-tier **regression test pinning them** against
-committed fixture embeddings; a **documented FP/FN rate** in Ship notes.
+### 3.6 Calibration (on real misfires, not injection)
+Cutoffs are picked on the **real labelled set Phase-0 produced** — the F2
+misfires (flagged by ASR + audio-QA) as positives, clean renders as negatives —
+NOT synthetic defects. The cosine-to-centroid distributions of the two classes
+set `mild/moderate/severe` cutoffs, anchored to the **measured in-domain EER**
+from F3 (NOT VoxCeleb 0.9%). Outputs: named cutoff constants; a normal-tier
+**regression test pinning them** against committed fixture embeddings; a
+**documented FP/FN rate** in Ship notes, with the **F4 residual-value fraction**
+(drift caught that ASR + audio-QA missed) as the headline number.
 
-**Single-fixture overfit risk (F9):** cutoffs picked on one book's presets can
-overfit. Ship-notes FP/FN MUST be reported on at least one **held-out**
-voice/preset pairing not used to pick the cutoffs, so the documented number is
-out-of-sample.
+**Single-fixture / single-run overfit risk:** cutoffs picked on one book's
+over-generation run can overfit. Ship-notes FP/FN MUST be reported on a
+**held-out** set of renders (a second over-generation run or a second fixture)
+not used to pick the cutoffs, so the documented number is out-of-sample.
 
 ### 3.7 Honest CI scope
-The synth-and-embed calibration is GPU/weights-bound → **opt-in golden-audio
-tier**, not `verify`. The normal-tier pinning test guards **cutoff-constant
-drift only** — it does NOT re-verify calibration correctness, so a change to the
-model / injection harness / preprocessing is invisible to normal CI. Stated as a
-known limitation: the FP/FN numbers are a periodic manual artifact, not a
-per-push gate. (Do **not** claim "CI-runnable calibration.")
+The over-generate-and-embed calibration is GPU/weights-bound → **opt-in
+golden-audio tier**, not `verify`. The normal-tier pinning test guards
+**cutoff-constant drift only** — it does NOT re-verify calibration correctness,
+so a change to the model / preprocessing / the harvest gates is invisible to
+normal CI. Stated as a known limitation: the FP/FN numbers are a periodic manual
+artifact, not a per-push gate. (Do **not** claim "CI-runnable calibration.")
 
 ## 4. Phase 2 — deferred (only after Phase 1 ships + measurements justify)
 
-- **Consistency drift** (intra-render wander) — only if E2 shows subtle-drift
-  headroom and E4 validates an anchor. **Per-emotion** or *temporal* monotonic-
-  wander, never a single global centroid (R4). Needs emotion persisted first.
+- **Consistency drift** (intra-render wander) — only if F1/F3 show headroom and a
+  Phase-2 emotion measurement validates an anchor. **Per-emotion** or *temporal*
+  monotonic-wander, never a single global centroid. Needs emotion persisted first.
 - **Per-emotion reference sets** (fs-25) + emotion-matched nearest-of-set — only
-  if E4 shows emotion materially shifts embeddings AND books carry variants
-  (fixture has **zero**; ~0–2 chars/book today — YAGNI until proven).
+  if a Phase-2 measurement shows emotion materially shifts embeddings AND books
+  carry variants (fixture cast carries a few; ~0–2 chars/book today — YAGNI until
+  proven).
 - **Emotion persistence** — `group.emotion` is NOT written to the persisted
   `ChapterSegment` (`synthesise-chapter.ts:1399-1411`); emotion-matching needs it
   threaded into `segments-io.ts` + the writer. **Internal Phase-2 work, not a
@@ -329,16 +333,18 @@ Separate signals, not a replacement; `revisions.ts` untouched:
 | Signal | Source | Meaning | fs-51 line |
 |---|---|---|---|
 | Config drift | `revisions.ts` | cast edited since this chapter rendered | "cast changes since render" |
-| Render-integrity | acoustic (v1, **if Phase 0 = go**) | line doesn't match the **approved audition sample** | "voice-match" (conditional) |
+| Render-integrity | acoustic (v1, **if Phase 0 = go**) | line strays from the voice's **own centroid** (stochastic misfire) | "voice-match" (conditional) |
 | Consistency | acoustic (**Phase 2 — conditional, may not ship**) | character wandered across the render | "voice-consistency" (conditional) |
 
 ## 6. Acceptance (maps to #665)
 
 **Phase 0 (gate — the deliverable if no-go):**
-- [ ] E1–E4 run on fixture renders; findings note committed with the measured
-      residual-value fraction, in-domain EER, min scorable duration, character-
-      segment checked-coverage %, emotion-shift magnitude, and a recommendation
-      of exactly `{ go | no-go }`.
+- [ ] F1–F5 run on a Qwen + Coqui over-generation of the fixture; findings note
+      committed with the measured stochastic floor + centroid size K (F1), the
+      real-misfire labelled set (F2), in-domain EER on real labels (F3), the
+      **residual-value fraction** (drift caught that ASR + audio-QA missed, F4 —
+      the headline), min scorable duration + checked-coverage % (F5), and a
+      recommendation of exactly `{ go | no-go }`.
 - [ ] On **no-go**: #665 closed wont-fix-acoustic; this spec marked `superseded`;
       fs-51 confirmed unaffected (it never depended on srv-36).
 - [ ] **#665's literal ask closed (§2.3) regardless of branch:** the config-drift
@@ -351,16 +357,17 @@ Separate signals, not a replacement; `revisions.ts` untouched:
       benchmarked → inline-vs-post-pass runtime chosen on evidence.
 - [ ] `qa.speaker.enabled` (`live`) + `qa.speaker.device` (`restart-sidecar`),
       group `qa-gates`, defaults off / cpu.
-- [ ] Singleton reference with a **bounded** duration-floor loop (terminal
-      `reference-too-short`→`inconclusive`); query-segment floor with windowing
-      if E3 coverage demands it; embeddings in sibling `<slug>.embeddings.json`
-      (base64 Float32, joined + written transactionally, `embeddingsVersion`).
+- [ ] Centroid reference (K correct renders) with a **bounded** duration-floor
+      loop (terminal `reference-too-short`→`inconclusive`); query-segment floor
+      with windowing if F5 coverage demands it; embeddings in sibling
+      `<slug>.embeddings.json` (base64 Float32, joined + written transactionally,
+      `embeddingsVersion`).
 - [ ] Scoring runtime per the benchmark; Node aggregator emits render-integrity
       events; verdict naming avoids the `'drift'` collision.
-- [ ] Calibration on E1/E2-proven defect classes, anchored to the in-domain EER;
-      cutoffs pinned by a normal-tier regression test; FP/FN documented on a
-      **held-out** pairing; the "calibration not re-verified in CI" limitation
-      stated.
+- [ ] Calibration on the **F2 real-misfire labels**, anchored to the F3 in-domain
+      EER; cutoffs pinned by a normal-tier regression test; FP/FN + residual-value
+      documented on a **held-out** run; the "calibration not re-verified in CI"
+      limitation stated.
 - [ ] fs-51 (#973) can consume render-integrity events as a **conditional**
       voice-match row (it ships regardless).
 
