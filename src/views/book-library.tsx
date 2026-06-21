@@ -39,7 +39,8 @@ import { filterBooks, libraryActions, selectAllTags, selectPresentLanguages } fr
 import { PrimaryButton } from '../components/primitives';
 import { IconClose } from '../lib/icons';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
-import type { LibraryAuthor, LibraryBook, LibraryBookStatus, LibrarySeries } from '../lib/types';
+import type { LibraryAuthor, LibraryBook, LibraryBookStatus, LibrarySeries, SeriesMemoryDetail } from '../lib/types';
+import { SeriesMemoryReveal } from '../components/series-memory/series-memory-reveal';
 
 type Filter = 'all' | 'in_progress' | 'complete';
 
@@ -188,7 +189,8 @@ export function BookLibraryView({
   /* Task 9 (fe-40): holds the series whose memory modal was requested;
      the modal itself is Task 10 — for now just capture the state. */
   const [openSM, setOpenSM] = useState<LibrarySeries | null>(null);
-  void openSM; // Task 10 will consume this
+  const [shareCard, setShareCard] = useState<SeriesMemoryDetail | null>(null);
+  void shareCard; // Task 13 will render the ShareCardModal from shareCard
   useEffect(() => {
     writeStoredViewMode(viewMode);
   }, [viewMode]);
@@ -429,6 +431,15 @@ export function BookLibraryView({
             onStartNew={onStartNew}
           />
         </div>
+      )}
+      {openSM?.seriesMemory && (
+        <SeriesMemoryReveal
+          author={openSM.books[0].author}
+          series={openSM.name}
+          bookCount={openSM.seriesMemory.confirmedBookCount}
+          onClose={() => setOpenSM(null)}
+          onShare={(d) => setShareCard(d)}
+        />
       )}
     </div>
   );
