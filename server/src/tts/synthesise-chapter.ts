@@ -25,6 +25,12 @@ import {
   type AsrThresholds,
 } from './segment-asr-qa.js';
 import type { TranscribeResult } from './transcribe-client.js';
+import { embedSegment } from './embed-client.js';
+import {
+  type EmbeddingRow,
+  EMBEDDINGS_VERSION as _EMBEDDINGS_VERSION,
+} from '../audio/render-integrity/embeddings-io.js';
+import { MIN_DURATION_SEC } from '../audio/render-integrity/constants.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
@@ -327,6 +333,46 @@ export interface ChapterSynthesisResult {
   sampleRate: number;
   durationSec: number;
   segments: ChapterSegment[];
+  /** srv-36 render-integrity: one embedding row per stochastic-engine group
+      of ≥ MIN_DURATION_SEC. Populated only when `qa.speaker.enabled` is on;
+      absent (undefined) when the gate is off or no eligible groups exist. */
+  embeddings?: EmbeddingRow[];
+}
+
+/** Minimal shape of a synthesis result as seen by the embed pass. */
+interface GroupPcmResult {
+  pcm: Buffer;
+  sampleRate: number;
+}
+
+/** srv-36: Collect ECAPA embeddings for stochastic-engine groups that meet the
+    duration floor. Extracted as a pure(ish) helper so it can be unit-tested
+    without running a full synthesis pipeline.
+
+    @param groups   The sentence groups in narrative order.
+    @param results  The per-group synthesis results (indexed by group.index).
+    @param resolvedEngineFor  Maps group.index → the CONFIGURED engine for that
+           group (after fallback resolution, so a Qwen→Kokoro fallback shows
+           'kokoro' and is correctly excluded).
+    @param embedFn  Injected at test time; defaults to `embedSegment`.
+    @returns        One EmbeddingRow per eligible group, in group order. */
+export async function collectGroupEmbeddings(
+  groups: SentenceGroup[],
+  results: (GroupPcmResult | undefined)[],
+  resolvedEngineFor: (index: number) => TtsEngine,
+  embedFn: (pcm: Buffer, sampleRate: number) => Promise<Float32Array> = embedSegment,
+): Promise<EmbeddingRow[]> {
+  const rows: EmbeddingRow[] = [];
+  for (const group of groups) {
+    const r = results[group.index];
+    if (!r) continue;
+    const engine = resolvedEngineFor(group.index);
+    if (engine !== 'qwen' && engine !== 'coqui') continue;
+    if (pcmDurationSec(r.pcm.length, r.sampleRate) < MIN_DURATION_SEC) continue;
+    const vec = await embedFn(r.pcm, r.sampleRate);
+    rows.push({ characterId: group.characterId, sentenceIds: group.sentenceIds.slice(), vec });
+  }
+  return rows;
 }
 
 export interface SynthesiseChapterOpts {
@@ -1375,6 +1421,27 @@ export async function synthesiseChapter(
     }
   }
 
+  /* srv-36 SPK embed pass. Runs AFTER the ASR pass (both operate on the
+     now-final per-group PCM). For each stochastic-engine group (qwen or coqui)
+     that meets the duration floor, embeds the raw PCM via ECAPA and collects an
+     EmbeddingRow; the caller persists these as a `<slug>.embeddings.json` sibling
+     via finalizeChapterAudioWrite. Gated on `qa.speaker.enabled` so it's inert
+     by default (zero overhead when off). Non-fatal: a failed embed is logged and
+     skipped so synthesis never breaks on a missing sidecar. */
+  let spkEmbeddings: EmbeddingRow[] | undefined;
+  if (configValue<boolean>('qa.speaker.enabled')) {
+    const groupByIndex = new Map(groups.map((g) => [g.index, g]));
+    try {
+      spkEmbeddings = await collectGroupEmbeddings(
+        groups,
+        results,
+        (index) => resolveGroup(groupByIndex.get(index)!).route.engine,
+      );
+    } catch (err) {
+      console.warn(`[synthesiseChapter] render-integrity embed pass failed: ${String(err)}`);
+    }
+  }
+
   /* Single index-order pass: walk `results` by group index, resample any
      mismatched rate to the anchor, append in order, and compute the final
      per-segment `startSec`/`endSec` against the now-known cumulative offset.
@@ -1418,5 +1485,6 @@ export async function synthesiseChapter(
     sampleRate,
     durationSec: pcmDurationSec(pcm.length, sampleRate),
     segments,
+    embeddings: spkEmbeddings,
   };
 }

@@ -1398,6 +1398,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioFormat,
         expectedSec: expectedSec ?? undefined,
         onEncoded: bumpProgress,
+        embeddings: result.embeddings,
       });
       if (audioQa.status === 'suspect') {
         console.warn(
