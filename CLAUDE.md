@@ -300,7 +300,13 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
 ## Suggested follow-ups (not requirements)
 
 - **Model lifecycle is split between eager and button-driven** —
-  - **Kokoro v1 (default, new in 2026-05)**: eagerly loaded at sidecar
+  _Don't confuse "default generation engine" with "eagerly-resident model":_
+  **Qwen is the default/main generation engine** (the hot path a book render
+  uses); **Kokoro is the always-available fallback** that happens to be the
+  one *eagerly resident* (it's cheap — ~1 GB), gated by the `autoPreloadKokoro`
+  setting (`server/src/config/registry.ts:382` — "Turn off if Qwen is your main
+  engine"). Resident ≠ default-for-generation.
+  - **Kokoro v1 (eagerly-resident fallback, new in 2026-05)**: eagerly loaded at sidecar
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
     the analyzer Ollama on an 8 GB GPU. NO Load/Stop pill — it's just
     always available once `scripts/install-kokoro.ps1` has dropped the
