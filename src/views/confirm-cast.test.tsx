@@ -93,10 +93,10 @@ function renderView(
 }
 
 describe('ConfirmCastView — voice-match wiring', () => {
-  it('renders a "Matched · N%" pill for characters carrying matchedFrom', () => {
+  it('renders a "Carried · N%" pill for characters carrying matchedFrom', () => {
     renderView();
     /* Pill text rounds confidence to whole percent. */
-    expect(screen.getByText('Matched · 95%')).toBeInTheDocument();
+    expect(screen.getByText('Carried · 95%')).toBeInTheDocument();
   });
 
   it("shows the source book title in the matched character's Reuse tile", () => {
@@ -115,7 +115,7 @@ describe('ConfirmCastView — voice-match wiring', () => {
     /* Wren's row should not show any Matched · % pill. */
     const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
     const wrenCard = wrenHeading.closest('article')!;
-    expect(within(wrenCard).queryByText(/Matched · /)).toBeNull();
+    expect(within(wrenCard).queryByText(/Carried · /)).toBeNull();
   });
 
   it("defaults the matched character's decision to Reuse (continuity message visible)", () => {

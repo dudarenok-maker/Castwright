@@ -432,7 +432,7 @@ function ConfirmCharacterCard({
             <h3 className="text-lg font-bold text-ink truncate">{character.name}</h3>
             {matched && character.matchedFrom?.confidence != null && (
               <Pill color="library">
-                Matched · {Math.round(character.matchedFrom.confidence * 100)}%
+                Carried · {Math.round(character.matchedFrom.confidence * 100)}%
               </Pill>
             )}
           </div>
