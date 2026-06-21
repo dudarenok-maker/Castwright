@@ -1,11 +1,20 @@
 # fe-40 — Surface & prove series memory
 
-_Design spec · 2026-06-21 · issue [#972](https://github.com/dudarenok-maker/Castwright/issues/972) (`area:fe`, `moscow:must`, `type:feature`)_
+_Design spec · 2026-06-21 · issue [#972](https://github.com/dudarenok-maker/Castwright/issues/972) (`moscow:must`, `type:feature`; **area: `fe` + `srv`** — see scope note)_
 
-> Revised after an adversarial + brand-voice review (2026-06-21). The carried
-> predicate, the sparkline's honest floor, and the data-sourcing question were the
-> three blockers; the copy was retuned to the house voice (_understated, earns its
-> claims; "kept true, kept yours, book after book"_ — not marketing swagger).
+> Revised twice after adversarial + brand-voice review (2026-06-21), the second pass
+> code-grounded. Round 1 pinned the carried predicate, the sparkline floor, and
+> data-sourcing. Round 2 corrected the sparkline's mis-partition, unified
+> carried-vs-recurring to one number, fixed the card's span claim, replaced the
+> fabricated voice name with the real `describeVoice()` descriptor, switched the spine
+> to library-sort ordering (`seriesPosition` is often null), and — the big one —
+> established that the per-series summary is **net-new server work**, so this is not a
+> frontend-only feature and "no new computation" was dropped as false.
+
+**Scope note.** Despite #972's `area:fe`, this needs a **server change**: the library
+scan is purely per-book today and does no cross-book matching, so the per-series carried
+summary is net-new server-side derivation (see _Data sourcing_). Plan + labels are
+`fe + srv`.
 
 ## Problem
 
@@ -35,7 +44,9 @@ not a new computation.**
   meaningful. v1 is **series-level only**.
 - **No action surface.** No "2 characters drifted — want to lock them?" nudge. v1 is a
   read-only *celebration + proof* surface.
-- **No re-computation.** Rides on shipped cross-book reuse data.
+- **No new *analysis*.** Rides on shipped cross-book reuse data (the matcher already
+  runs). The new work is a **presentation-layer aggregation** of it (server + frontend),
+  not new model/analysis work — see the scope note and _Data sourcing_.
 
 ## What "carried" means (the load-bearing predicate)
 
@@ -56,6 +67,18 @@ Consequences, all deliberate:
   appearance" clause fails). Same silent exclusion.
 - **Late joiner** (first appears at book 4, same voice 4→N) → **carried**. Its span
   starts at book 4; the surfaces show that honestly (see L1/reveal).
+
+**Computed over confirmed casts only.** The cross-book matcher already considers only
+books with `castConfirmed === true` (`library-cast-scan.ts:55`); carried inherits that —
+so a book still analysing/cast-pending never flickers the count, and **`M` (the book
+count in any claim) is the confirmed-cast span**, not raw series length.
+
+**Book ordering & roster source.** The series is numbered `1..M` by the library's
+existing sort (`seriesPosition ?? 0`, then title) — `seriesPosition` is `number | null`
+and null is common (`scan.ts:601`), so the raw field is **never** trusted as the book
+index. The roster comes from `GET /api/books/:id/series-cast` (whole series, confirmed
+only, **excluding the anchor book** — `series-full-cast-scan.ts`), merged with the
+anchor book's own cast to get the complete picture.
 
 **What the claim asserts — and doesn't.** "Carried" means *the same voice **profile**
 (`voiceId`) was used everywhere the character speaks*. It does **not** assert the audio
@@ -92,20 +115,27 @@ actual cross-book voice continuity does.
 
 ## Data sourcing & feasibility
 
-The chip needs a per-series carried **count**; the reveal needs the full carried
-**roster** (character → voice → which books). Neither is in today's library payload
-(which carries per-book `voiceIds`/`characterCount`, not the cross-book character→voice
-map). Resolution:
+**This is net-new server work — there is no free lunch.** The library scan
+(`scan.ts:589`) is **purely per-book today; it does zero cross-book matching.** Computing
+"which characters appear in ≥2 confirmed books with the same `voiceId`" is genuinely new
+derivation. Honest resolution:
 
-- **Library payload gains a cheap per-series `seriesMemory` summary** — `{ carriedVoiceCount, bookCount, perBook: [{ position, castSize, carriedPresent }] }` —
-  computed server-side from the same `series-cast` logic that already runs. This feeds
-  the chip + sparkline with **no extra client round-trips on library load.**
-- **The full roster is fetched lazily on reveal-open** (the existing `series-cast` data
-  for the series), so the heavy per-character payload is paid only when the user opens
-  the reveal, not for every series on the shelf.
+- **A per-series `seriesMemory` summary is added to the library payload** —
+  `{ carriedVoiceCount, spanBooks, perBook: [{ index, castSize, carriedPresent }] }` —
+  computed in a **single post-scan union-find pass** over the already-read confirmed
+  casts (group characters by `voiceId ?? id`, keep those spanning ≥2 books). That is
+  `O(characters)` per series on top of the reads the scan already does — **not** the
+  naïve `O(characters²)`. It feeds the chip + sparkline with no extra client round-trips.
+- **The result is cached server-side**, keyed off the same inputs the scan already
+  invalidates on, so repeated `GET /api/library` calls don't recompute. The initial
+  build pays the union-find once.
+- **The full reveal roster is fetched lazily on reveal-open** via `series-cast` (+ anchor
+  merge), so the heavy per-character payload is paid only when a user actually opens a
+  reveal — never for every series on the shelf.
 
-This keeps the "no new computation" promise honest (it's the same derivation, surfaced)
-while answering *where* and *when* it runs.
+`spanBooks` (not series length) is the count of confirmed books that contain ≥1 carried
+voice — this is what every "M books" claim uses, so the claim can't overrun the carried
+set's actual reach (e.g. a late-series cast turnover).
 
 ## The three surfaces
 
@@ -118,15 +148,18 @@ left, "N books" right, above the BookCard grid. fe-40 adds, **only above thresho
   marked with the **Castwave glyph** (the brand waveform — *not* a stock sparkle),
   label **`Your cast · N voices, M books`**. White label on light; **ink** label on dark
   (the gradient brightens in dark mode → ink keeps contrast, per the app's
-  ink-on-accent convention).
+  ink-on-accent convention). _`N` is the **carried** count, so "Your cast · N" slightly
+  under-counts the full cast — a **deliberate warmth-over-precision** choice, bounded to
+  this ephemeral in-app chip. The shareable card (the provable artifact) stays precise._
 - **Sparkline strip** beneath the header (full width): one bar per book, full height =
-  that book's total cast. The gradient portion = **carried voices present in that book**;
-  the faint portion = voices unique to that book. **The carried band is not claimed to
-  be flat** — it rises as late joiners arrive, which reads honestly as *the recurring
-  cast accreting*. Caption: **"N recurring voices — none ever re-cast."** Legend:
-  *Recurring* / *New to this book*. Both chip and sparkline open Surface 2. Each carries
-  an aria-label with the same facts in text (e.g. "12 recurring voices across 16 books")
-  so the proof isn't colour-only.
+  that book's total cast, split into **two buckets that partition cleanly**: gradient =
+  **carried voices in that book**; faint = **the rest of that book's cast** (new *and*
+  one-offs *and* re-cast recurrers — everything not carried). This avoids the round-2
+  bug where re-cast recurrers fell through a "carried / new" split. The carried band
+  **rises as late joiners arrive** (not flat — honest). Caption: **"N voices, kept true
+  across the series."** Legend: *Carried* / *Rest of this book's cast*. Both chip and
+  sparkline open Surface 2, with an aria-label carrying the facts in text (e.g. "9 voices
+  carried across 12 books") so the proof isn't colour-only.
 
 ### 2. The reveal (the payoff)
 
@@ -139,13 +172,17 @@ restrained entrance motion:
   (book count per series; quiet brag, no swagger.)
 - **Subtitle:** **"Nine voices — yours since book one."** ("yours", not "you cast" — the
   product casts; the listener owns.)
-- **Cast roster**, staggering in: one row per carried character — name (Lora), a voice
-  **swatch + a human voice label** (never the raw catalogue slug; the slug lives only in
-  JSON) + engine, and a **book-marker spine** (one marker per book; filled = present &
-  carried, faint = before the character joined). A full run reads "carried the whole
-  way"; a late joiner starts later, annotated *"· from Bk 4"* — honest, never a miss.
-  Each spine has a text equivalent (aria-label "books 4–12"). The panel **scrolls**, so
-  it holds any cast size.
+- **Cast roster**, staggering in: one row per carried character — name (Lora) + a voice
+  **swatch + the `describeVoice()` label** (e.g. "Deep · Female · UK" for a catalogue
+  voice, or the user's designed-voice name for Qwen — *never* the raw slug `bf_emma`, and
+  **no engine name**: "Kokoro"/"Qwen" is jargon to a listener, kept to JSON only), and a
+  **book-marker row** (one marker per book, **ordered by the library sort**, not raw
+  `seriesPosition`). Two marker states: **filled** = present & carried that book;
+  **faint** = not in that book — which covers *both* "before they joined" *and* a
+  **mid-series gap** (a character who sits a book out), so the round-2 gap case is
+  handled. First appearance is annotated *"· from Bk 4"*. A full run reads "carried the
+  whole way"; never a miss. Each row's markers have a text equivalent (aria-label "in
+  books 1, 2, 4–12"). The panel **scrolls**, so it holds any cast size.
 - **Actions:** primary **"Share this cast"**; quiet **"Export data (.json)"** link.
 
 ### 3. The share card + JSON (the artifact)
@@ -154,11 +191,14 @@ restrained entrance motion:
 dark, brand-stamped, crediting the listener as *owner*. **Built scale-first** (this earns
 its keep on a long saga with a big recurring cast). Top → bottom:
 
-- **Castwave wordmark** · eyebrow `Series memory · <Series>`.
+- **Castwave wordmark** · eyebrow `Series memory · <Series>`. _Branding is **mandatory
+  and non-removable** — wordmark + `castwright.ai` always present (see Sharing)._
 - **Big number** — `56 voices` (Lora) — the headline; only more striking as the series
   grows.
-- **Elevated line** under it (peach serif): **"kept true across all 24 books."** A
-  statement, not a footnote. (No dot/bar span device.)
+- **Elevated line** under it (peach serif): **"kept true across all `spanBooks`
+  books."** Uses `spanBooks` (books actually containing carried voices), **not** raw
+  series length — so "all" can't overclaim when a late-series cast turnover means the
+  final books carried nothing. A statement, not a footnote. (No dot/bar span device.)
 - Quiet claim line (the dry wit, e.g. *"Twenty-four books. The same cast."*).
 - **Cast wall** — the hero, owning the card's middle with real air: a centered
   theatrical **credits block** of **every carried name** (Castwave-dot separators), no
@@ -168,11 +208,15 @@ its keep on a long saga with a big recurring cast). Top → bottom:
 - **Footer:** ownership credit — **`<user>'s cast · kept true`** (fallback when no
   display name is set: **`Your cast · kept true`**, never "undefined") · `castwright.ai`.
 
-**Sharing & IP guard.** The card prints the book title + full character roster — for a
-copyrighted book that is both an IP smell (the brand's stance is *personal use only*) and
-a spoiler. v1 surfaces a one-line caution at export time ("for personal use — this names
-characters from the book"); a later pass may scope the public-share affordance to
-user-owned/original works.
+**Sharing.** End-user sharing is **first-class and unrestricted** — every card carries
+Castwright's wordmark + `castwright.ai`, so a shared cast card *is* free, branded
+marketing. We don't gate it. The one hard requirement: **the branding is mandatory and
+cannot be removed** from the artifact. (Castwright's own marketing cards are the same
+artifact, generated from owned content — Coalfall, originals.) The card names characters
+from the book; a low-key spoiler note at export is optional courtesy, never a block.
+Because the card is an **image**, its text is invisible to screen readers and
+un-indexable — so the in-app preview gets real alt text, and the **JSON is the
+machine-readable twin** of the same claim.
 
 **JSON export** (behind the quiet link) — **provisional for v1**, versioned so it can be
 reshaped when export/import is designed properly (it'll flow naturally out of that work).
@@ -199,7 +243,7 @@ The honesty the card omits lives here. Shape:
         "character": "Marrow",
         "aliases": ["The Warden"],
         "voiceId": "v_kok_bf_emma",
-        "voiceLabel": "Emma",
+        "voiceLabel": "Deep · Female · UK",
         "engine": "kokoro",
         "firstBook": 1,
         "lastBook": 24,
@@ -211,8 +255,8 @@ The honesty the card omits lives here. Shape:
 }
 ```
 
-- `voiceId` is the durable key; `voiceLabel` (human) + `engine` alongside; the catalogue
-  slug is *not* a display field.
+- `voiceId` is the durable key; `voiceLabel` is the `describeVoice()` descriptor (or the
+  designed-voice name), `engine` alongside; the catalogue slug is *not* a display field.
 - `aliases` preserves the rename chain; `carriedFullSpan`/`firstBook`/`lastBook` capture
   the joiner reality the card omits.
 - `schemaVersion` + `kind` let a later cast-export extend the shape without breaking
@@ -222,15 +266,21 @@ The honesty the card omits lives here. Shape:
 
 | Surface | Copy |
 |---|---|
-| Chip | `Your cast · N voices, M books` |
-| Sparkline caption | "N recurring voices — none ever re-cast." |
+| Chip | `Your cast · N voices, M books` _(warm; N = carried count, in-app only)_ |
+| Sparkline caption | "N voices, kept true across the series." |
+| Sparkline legend | "Carried" / "Rest of this book's cast" |
 | Reveal headline | "M books in, and the cast never changed." |
 | Reveal subtitle | "N voices — yours since book one." |
 | Reveal joiner note | "· from Bk K" |
 | Card big number | `N voices` |
-| Card elevated line | "kept true across all M books" |
+| Card elevated line | "kept true across all `spanBooks` books" |
 | Card claim | "M books. The same cast." |
 | Card footer | "&lt;user&gt;'s cast · kept true" (fallback "Your cast · kept true") |
+
+`N` = **carried** count, the same number on every surface (the term is always
+"carried", never "recurring"). On the warm in-app chip `M` = series book count; in every
+**shared/exported** claim the book number is `spanBooks` (books that actually carry), so
+the provable artifact never overclaims.
 
 Rules: no catalogue slugs (`bf_emma`) in any user-facing surface — JSON only. No "spine"
 (engineering term) in UI; the device is a **book-marker row**. Marker glyph is the
@@ -248,11 +298,16 @@ card-number; **spell out** in the large reveal headline. Ownership via *"yours"*
 - Markers appear **only** above threshold — never blanket the library.
 - Responsive per the mobile protocol: reveal = dialog (desktop) / full-screen sheet
   (phone); chip + sparkline reflow in the series header.
+- **Vocabulary coherence.** The shipped cast-row badge calls this moat "**Reused ·
+  Matched**" (`cast.tsx`). fe-40 makes **"carried / kept true"** the canonical
+  series-level language. Harmonising the older per-row badge to match is a **noted
+  follow-up**, deliberately out of this PR's scope (surgical-change discipline) — but
+  flagged so the moat doesn't keep speaking with two voices.
 
-## Data sources (no new computation)
+## Data sources (existing analysis, new aggregation)
 
 - Library shape: `authors → series → books` (`src/lib/types.ts`, `library-slice.ts`),
-  plus the new server-computed per-series `seriesMemory` summary (above).
+  plus the **new** server-computed per-series `seriesMemory` summary (above).
 - Per-series carried roster: the `series-cast` machinery
   (`GET /api/books/:bookId/series-cast`, cross-book reuse helpers), fetched lazily on
   reveal-open.
@@ -261,13 +316,19 @@ card-number; **spell out** in the large reveal headline. Ownership via *"yours"*
 
 - **Unit (Vitest):** the carried predicate against the hard cases — voice-changed
   mid-series (excluded), renamed via alias (single canonical row), partial carry
-  (excluded), late joiner (included, correct first/last book); per-book
-  carried-present count (rising floor); the **≥3-voice/≥2-book threshold gate**;
-  heuristic-series → no chip without real continuity; JSON serialization incl.
-  `carriedFullSpan` + `aliases`; byline fallback when no display name.
+  (excluded), late joiner (included, correct first/last book), **mid-series gap**
+  (faint marker, not "before joined"); **confirmed-cast-only** (a `cast_pending` book
+  doesn't move the count); the union-find summary (`O(characters)`, correct
+  `spanBooks`); per-book two-bucket partition (carried + rest = total cast, incl. a
+  re-cast recurrer landing in "rest"); the **≥3-voice/≥2-book threshold gate**;
+  heuristic-series → no chip without real continuity; **book ordering by library sort
+  when `seriesPosition` is null**; `spanBooks` span claim never exceeds carried reach;
+  JSON serialization incl. `carriedFullSpan` + `aliases` + `describeVoice` label; byline
+  fallback when no display name.
 - **Component:** chip + sparkline render only above threshold; reveal roster rows +
-  book-marker spine + joiner note; human voice label (never slug); share-card wall
-  auto-scaling + cap threshold; aria-labels on the visual proofs.
+  book-marker row + joiner note; `describeVoice` label (never slug, no engine name);
+  share-card wall auto-scaling + cap threshold; mandatory branding present on the card;
+  aria-labels on the visual proofs.
 - **E2E (Playwright):** library → chip on a series with real carryover → tap → reveal
   opens → Share/Export present. Add a case to `e2e/responsive/coverage.spec.ts` (runs at
   phone/tablet/desktop).
@@ -288,4 +349,5 @@ card-number; **spell out** in the large reveal headline. Ownership via *"yours"*
 - JSON export shape finalization → with the export/import workstream.
 - Share-card image rendering pipeline (client canvas vs server render) → an
   implementation-plan decision.
-- Scoping public-share to user-owned/original works (beyond the v1 caution) → follow-up.
+- Harmonising the cast-row "Reused · Matched" badge to the "carried / kept true"
+  vocabulary → follow-up (out of this PR's scope).
