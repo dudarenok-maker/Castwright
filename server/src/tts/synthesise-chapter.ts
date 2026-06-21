@@ -28,7 +28,6 @@ import type { TranscribeResult } from './transcribe-client.js';
 import { embedSegment } from './embed-client.js';
 import {
   type EmbeddingRow,
-  EMBEDDINGS_VERSION as _EMBEDDINGS_VERSION,
 } from '../audio/render-integrity/embeddings-io.js';
 import { MIN_DURATION_SEC } from '../audio/render-integrity/constants.js';
 import { resamplePcm16 } from './resample-pcm16.js';
@@ -915,7 +914,7 @@ export async function synthesiseChapter(
      `pickVoiceForEngine` runs at most once per group even though both consult
      it. Mixed engines reassemble cleanly because the index-order concat below
      resamples any per-engine sample-rate mismatch to the chapter anchor. */
-  type GroupRoute = { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine };
+  type GroupRoute = { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine; configuredEngine: TtsEngine };
   const resolvedByIndex = new Map<number, GroupRoute>();
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
     const cached = resolvedByIndex.get(group.index);
@@ -938,11 +937,18 @@ export async function synthesiseChapter(
       group.emotion,
       baseVoice,
     );
+    /* Capture the CONFIGURED engine before any fallback rewrite so the SPK
+       embed filter can include fallback-rendered groups (e.g. Qwen→Kokoro)
+       in the correct centroid bucket. The post-fallback `route.engine` would
+       read 'kokoro' for a fallen-back Qwen group and would erroneously exclude
+       it from the stochastic-engine embed pass (Task 9 scores those renders
+       against the Qwen centroid to detect the drift). */
+    const configuredEngine = baseRoute.engine;
     /* Resolve once (used by both the batchability partition AND the synth
        call), so the fallback is decided in one place — the partition then
        sees the post-fallback Kokoro engine and routes the group as a Kokoro
        single item, not a Qwen batch item. */
-    const r = applyQwenFallback(character, baseRoute, voiceForGroup);
+    const r = { ...applyQwenFallback(character, baseRoute, voiceForGroup), configuredEngine };
     resolvedByIndex.set(group.index, r);
     return r;
   };
@@ -1435,7 +1441,7 @@ export async function synthesiseChapter(
       spkEmbeddings = await collectGroupEmbeddings(
         groups,
         results,
-        (index) => resolveGroup(groupByIndex.get(index)!).route.engine,
+        (index) => resolveGroup(groupByIndex.get(index)!).configuredEngine,
       );
     } catch (err) {
       console.warn(`[synthesiseChapter] render-integrity embed pass failed: ${String(err)}`);
