@@ -36,6 +36,8 @@ import {
   scoreSegment,
   CUTOFFS,
 } from './score.js';
+import { auditionCentroid, type AuditionCharacter } from './audition-centroid.js';
+import { canonicalModelKeyForEngine } from '../../tts/model-keys.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -56,7 +58,14 @@ interface SegmentsEntry {
 interface SegmentsFileView {
   chapterId?: number;
   segments?: SegmentsEntry[];
-  characterSnapshots?: Record<string, { voiceEngine?: string; renderedFallbackEngine?: string }>;
+  characterSnapshots?: Record<string, {
+    voiceEngine?: string;
+    renderedFallbackEngine?: string;
+    /** Resolved voice name at render time (e.g. `qwen-<uuid>` or `af_sarah`). */
+    resolvedVoiceName?: string;
+    voiceId?: string;
+    attributes?: string[];
+  }>;
 }
 
 /** Stochastic engines (Kokoro-configured characters are skipped). */
@@ -78,16 +87,19 @@ interface CharacterReference {
  * In-book path (kind='in-book', !bimodal): compute the character's centroid
  * from anchor-eligible vectors, derive the clean spread statistics.
  *
- * Task 10 seam: the too-thin / bimodal branch currently returns
- * `referenceKind: 'too-short'` with an empty centroid (segments → inconclusive).
- * Task 10 replaces this branch with the audition-centroid (Option-B) path,
- * which fetches a pre-recorded audition embedding and uses that as the reference.
- * The function signature and return type are stable — Task 10 only replaces the
- * else-branch body.
+ * Task 10 — too-thin / bimodal path: attempt Option-B audition centroid:
+ *   render the character's approved audition sample K times, embed each,
+ *   and build the centroid from those renders. If the audition sample is
+ *   itself too short to produce reliable embeddings → `referenceKind: 'too-short'`
+ *   (all segments → inconclusive).
+ *
+ * @param anchorVecs    Anchor-eligible embedding vectors collected from the book.
+ * @param voiceInfo     Optional voice info for Option-B (absent when no snapshot).
  */
-function resolveCharacterReference(
+async function resolveCharacterReference(
   anchorVecs: Float32Array[],
-): CharacterReference {
+  voiceInfo?: AuditionCharacter,
+): Promise<CharacterReference> {
   const result = buildCentroid(anchorVecs);
 
   if (result.kind === 'in-book' && !result.bimodal) {
@@ -110,9 +122,33 @@ function resolveCharacterReference(
     };
   }
 
-  // Task 10 seam: too-thin OR bimodal → Option-B audition centroid (not yet implemented).
-  // For now: return a placeholder that causes all segments to score 'inconclusive'.
-  // Task 10 replaces this branch with the real audition-centroid lookup.
+  // Task 10: too-thin OR bimodal → Option-B audition centroid.
+  if (voiceInfo) {
+    const audition = await auditionCentroid(voiceInfo);
+    if (audition && audition.kind === 'audition') {
+      // Compute the spread (pSevere/pBand/cleanMean) over the audition embeddings'
+      // cosines — the same math as the in-book path but seeded from the K renders.
+      const centroidArr = Array.from(audition.centroid);
+      const cosines = audition.embeddings
+        .map((v) => cosineToCentroid(Array.from(v), centroidArr))
+        .sort((a, b) => a - b);
+
+      const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
+      const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
+      const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
+
+      return {
+        centroid: centroidArr,
+        cleanMean,
+        pSevere,
+        pBand,
+        referenceKind: 'audition',
+      };
+    }
+  }
+
+  // No usable reference (too-short, null sidecar, or no voiceInfo) →
+  // all segments for this character score inconclusive.
   return {
     centroid: [],
     cleanMean: 0,
@@ -164,11 +200,18 @@ export async function scoreBook(
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
 
+  type SnapshotView = {
+    voiceEngine?: string;
+    resolvedVoiceName?: string;
+    voiceId?: string;
+    attributes?: string[];
+  };
+
   type ChapterData = {
     slug: string;
     embRows: EmbeddingRow[];
     segsByKey: Map<string, SegmentsEntry>;
-    snapshots: Record<string, { voiceEngine?: string }>;
+    snapshots: Record<string, SnapshotView>;
   };
 
   const chapterData: ChapterData[] = [];
@@ -208,10 +251,28 @@ export async function scoreBook(
   // First chapter's snapshot wins — a mid-book engine re-cast would mislabel, but
   // embeddings would be re-generated on re-render, making this acceptable.
   const configuredEngineByChar = new Map<string, string>();
+  // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
+  const voiceInfoByChar = new Map<string, AuditionCharacter>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
       if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
         configuredEngineByChar.set(charId, snap.voiceEngine);
+      }
+      // Collect voice info for Option-B (first chapter's snapshot wins).
+      if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName) {
+        const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
+        // Only stochastic engines can reach Option-B — safe to call canonicalModelKeyForEngine
+        // with a placeholder request key (unused for local engines).
+        const modelKey = canonicalModelKeyForEngine(engine, 'qwen3-tts-0.6b');
+        voiceInfoByChar.set(charId, {
+          voiceName: snap.resolvedVoiceName,
+          modelKey,
+          voice: {
+            id: charId,
+            // attributes may not be in the snapshot; fall back to empty
+            attributes: snap.attributes,
+          },
+        });
       }
     }
   }
@@ -252,7 +313,7 @@ export async function scoreBook(
 
   for (const charId of stochasticChars) {
     const anchorVecs = anchorVecsByChar.get(charId)!;
-    const ref = resolveCharacterReference(anchorVecs);
+    const ref = await resolveCharacterReference(anchorVecs, voiceInfoByChar.get(charId));
     characterCentroids.set(charId, ref);
     centroidRows.push({
       characterId: charId,
