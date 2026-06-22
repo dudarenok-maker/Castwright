@@ -49,6 +49,12 @@ describe('sidecarLanguageName', () => {
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0]?.[0]).toContain('de');
   });
+
+  it('sources the language word from the registry entry', async () => {
+    const { getLanguageEntry } = await import('./language-registry.js');
+    expect(sidecarLanguageName('ru')).toBe(getLanguageEntry('ru')?.sidecarName);
+    expect(sidecarLanguageName('en')).toBe(getLanguageEntry('en')?.sidecarName);
+  });
 });
 
 describe('isNonEnglish', () => {
