@@ -1042,6 +1042,34 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     return "cpu"
 
 
+def cosine_distance(a: Any, b: Any) -> float:
+    """Cosine distance between two embedding vectors (pure numpy, no weights).
+
+    Returns 0.0 for identical vectors and 1.0 for orthogonal ones.  The inputs
+    are promoted to float64 to match the precision used by the spike metrics and
+    avoid float32 cancellation noise in near-identical embeddings."""
+    a = np.asarray(a, np.float64).ravel()
+    b = np.asarray(b, np.float64).ravel()
+    denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1.0
+    return float(1.0 - (a @ b) / denom)
+
+
+def _resample24k(wav: Any, sr: int) -> "np.ndarray":
+    """Return a float32 mono array at 24 kHz — the sample rate expected by
+    QwenEngine._base.model.extract_speaker_embedding.
+
+    Uses nearest-sample resampling (integer index stepping) so the helper
+    stays dependency-free (no librosa/torchaudio).  The ECAPA speaker encoder
+    is robust to this coarse resampling; all we need is a comparable
+    representation on *both* clips for a relative distance metric."""
+    a = np.asarray(wav, dtype=np.float32).ravel()
+    if int(sr) == 24000:
+        return a
+    idx = np.arange(0, len(a), sr / 24000.0).astype(np.int64)
+    idx = idx[idx < len(a)]
+    return a[idx]
+
+
 class QwenEngine(Engine):
     """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
 
@@ -1415,6 +1443,30 @@ class QwenEngine(Engine):
             wav = wav[cut:]
 
         return wav, int(sr)
+
+    def speaker_distance(
+        self,
+        wav_a: Any,
+        sr_a: int,
+        wav_b: Any,
+        sr_b: int,
+    ) -> float:
+        """Cosine distance between two audio clips in speaker-embedding space.
+
+        Resamples both clips to 24 kHz (the sample rate asserted by
+        extract_speaker_embedding), extracts embeddings from the resident 0.6B
+        Base model, and returns cosine_distance(embed_a, embed_b).
+
+        0.0 means the clips sound like the same speaker; 1.0 means maximally
+        different.  Used by the fs-55 identity regression to detect drift
+        between the anchored reference and an emotion-variant synthesis.
+
+        Requires the 0.6B Base model to be loaded (`_ensure_base_loaded`)."""
+        self._ensure_base_loaded()
+        m = self._base.model
+        ea = m.extract_speaker_embedding(audio=_resample24k(wav_a, sr_a), sr=24000)
+        eb = m.extract_speaker_embedding(audio=_resample24k(wav_b, sr_b), sr=24000)
+        return cosine_distance(np.asarray(ea.detach().cpu()), np.asarray(eb.detach().cpu()))
 
     def _ensure_design_loaded(self) -> None:
         if self._design is None:

@@ -940,6 +940,20 @@ def test_icl_instruct_synth_passes_instruct_and_clone(fake_qwen_runtime) -> None
     assert isinstance(wav, np.ndarray)
 
 
+# ── Task 3 (fs-55): cosine_distance pure-math helper ─────────────────────
+
+def test_cosine_distance_pure() -> None:
+    """cosine_distance is a pure numpy function — no weights, no model.
+    Identical vectors → 0.0 (self-distance); orthogonal vectors → 1.0."""
+    from main import cosine_distance
+
+    v = np.array([1.0, 0.0], np.float32)
+    assert cosine_distance(v, v) == pytest.approx(0.0, abs=1e-6)
+    assert cosine_distance(v, np.array([0.0, 1.0], np.float32)) == pytest.approx(
+        1.0, abs=1e-6
+    )
+
+
 # ── Task 2 (fs-55): qwen-tts version-pin guard ────────────────────────────
 
 def test_qwen_tts_pinned_for_raw_bypass() -> None:
