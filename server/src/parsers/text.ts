@@ -27,39 +27,6 @@ import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
    Non-English keywords from the language registry are unioned in so that
    Capítulo/Kapitel/Глава etc. split chapters without knowing the language
    at parse time. */
-const HEADING_KEYWORDS = '(?:chapter|day|part|book|act|section|scene)';
-const NUMBER_WORDS = [
-  'one',
-  'two',
-  'three',
-  'four',
-  'five',
-  'six',
-  'seven',
-  'eight',
-  'nine',
-  'ten',
-  'eleven',
-  'twelve',
-  'thirteen',
-  'fourteen',
-  'fifteen',
-  'sixteen',
-  'seventeen',
-  'eighteen',
-  'nineteen',
-  'twenty',
-  'thirty',
-  'forty',
-  'fifty',
-  'sixty',
-  'seventy',
-  'eighty',
-  'ninety',
-  'hundred',
-].join('|');
-const STANDALONE_HEADINGS =
-  '(?:prologue|epilogue|interlude|preface|introduction|afterword|foreword)';
 
 /* Union of English + non-English alternatives for language-agnostic parsing. */
 const NE_LEX = nonEnglishHeadingLexicon();
