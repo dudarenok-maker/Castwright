@@ -35,12 +35,6 @@ within each sub-group, ship-now-unblocked work leads.
 
 ### Differentiation — the moats, made marketable
 
-#### `fe-40` — Surface & prove series memory ([#972](https://github.com/dudarenok-maker/Castwright/issues/972))
-
-- _What:_ Make the series-memory moat **visible + provable**: a "same voice, book 1 → book N" indicator in the series/library view + an exportable series-consistency summary. Surfaces data the cross-book reuse machinery already holds.
-- _Benefit (user / strategic):_ our top **unclaimed** moat is near-invisible in UI — surfacing + exporting it gives marketing a provable claim. A cheap, fast amplifier that ships ahead of `fs-38`.
-_Full detail + acceptance:_ [#972](https://github.com/dudarenok-maker/Castwright/issues/972).
-
 #### `fs-51` — Per-book performance-QA report ([#973](https://github.com/dudarenok-maker/Castwright/issues/973))
 
 - _What:_ Turn the existing acoustic + ASR + drift gate into a visible, exportable per-book QA summary ("N lines re-recorded, M transcript-verified, 0 drift"). Aggregates signals the pipeline already produces.
@@ -144,6 +138,12 @@ _Full detail + acceptance:_ [#976](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
 _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
+#### `fs-58` — LLM Script Review: optional second-pass annotation correction ([#998](https://github.com/dudarenok-maker/Castwright/issues/998))
+
+- _What:_ Operator-triggered ("Review Script") second LLM pass over Phase-1 output, before `manuscript-edits.json`, repairing five annotation-error classes (strip attribution tags from dialogue; split narration out of dialogue; extract dialogue from narrator runs; merge over-split narrator runs; validate/repair `instruct` fields). Accept/reject diff. Engine-agnostic (no GPU) — shippable independently. MUST preserve sentence-ID stability (no orphaned emotion/instruct/audio).
+- _Benefit (user):_ higher annotation quality, fewer manual fixes; Alexandria parity.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.6 · [#998](https://github.com/dudarenok-maker/Castwright/issues/998).
+
 ### Agents & integrations
 
 #### `fs-44` — MCP agent surface (agents drive Castwright end-to-end) ([#721](https://github.com/dudarenok-maker/Castwright/issues/721))
@@ -173,6 +173,12 @@ _Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Add a per-chapter "Detect emotions" option (the emotion-only backfill pass scoped to the current chapter) alongside the whole-book trigger. The fs-33 v1 shipped whole-book only.
 - _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
+
+#### `fs-56` — Expressive narration: per-line free-text instruct on the Qwen 1.7B tier ([#996](https://github.com/dudarenok-maker/Castwright/issues/996))
+
+- _What:_ Free-text per-line delivery `instruct` on Qwen via a 1.7B-Base ICL clone path (raw `generate()` composes the cloned identity + `instruct_ids`), surfaced as a hardware-gated tier (Fast 0.6B / Default 1.7B-ICL, instruct optional). Adds optional `instruct?` to `Sentence` alongside `emotion` (additive). The same machinery mints identity-anchored variants at design time — **resolves `fs-55` (#993)**. Feasibility proven on-box 2026-06-22 (ICL holds identity; 1.7B > 0.6B). Sibling route to `fs-49` (per-line emotion via IndexTTS-2).
+- _Benefit (user / strategic):_ true per-line acting (Alexandria parity) with cloned-identity stability; a quality lift; the root-cause fix for emotion-variant drift.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` · depends on `side-20` · [#996](https://github.com/dudarenok-maker/Castwright/issues/996).
 
 ### Listener experience & playback
 
@@ -209,6 +215,12 @@ _Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ `flutter build apk --release` warns that `audio_session`, `flutter_foreground_task`, `mobile_scanner` still apply the standalone Kotlin Gradle Plugin; "future versions of Flutter will fail to build" once the temporary KGP allowance is removed. Per Flutter's for-app-developers guide the only app-side fix is upgrading each plugin to a built-in-Kotlin/AGP-9 release — and as of **2026-06-14** (re-confirmed **2026-06-18**, deps round 4) all three are already at their latest pub versions with no migrated release available. **Blocked upstream** (the companion analogue of `ops-14`'s eslint-10 plugin-peer cap); re-check `flutter pub outdated` periodically and bump when upstream ships support. **Guardrail landed 2026-06-19** (`feat/app-ops-17-kgp-guardrail`): `app-deps-watch.yml` runs a monthly `flutter pub outdated` watch — A1 reds on any direct/dev drift (catch-up nudge), A2 posts a dedicated ⚠️ banner + one-off @mention on #790 when one of the three KGP plugins first shows a newer version — and `app.yml` now asserts the escape-hatch flags + Flutter-pin lockstep (Trip B). The item **stays open** (still blocked upstream; the guardrail is the interim watch, not the migration). Plan: `docs/superpowers/plans/2026-06-19-ops-17-kgp-guardrail.md`.
 - _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
 _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
+
+#### `side-20` — Wire Qwen 1.7B-Base into sidecar setup ([#999](https://github.com/dudarenok-maker/Castwright/issues/999))
+
+- _What:_ Add `Qwen/Qwen3-TTS-12Hz-1.7B-Base` to the sidecar bootstrap (`install-qwen3.mjs` + `QwenEngine` ids); not fetched on a normal install today. Enabler for `fs-56` + `fs-55` anchored-variant minting (the 1.7B **Base** clones; VoiceDesign can't — a genuinely new ~3.4 GB model dependency, incl. for Fast/0.6B users at design time).
+- _Benefit (technical):_ unblocks per-line instruct + anchored variants on the default engine.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.8 · blocks `fs-56` · [#999](https://github.com/dudarenok-maker/Castwright/issues/999).
 
 ### Companion app
 
@@ -337,9 +349,15 @@ _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-fish-audio-s
 
 #### `side-18` — Nonverbal performance cues ((laughs)/(sighs)/breaths) — spike first ([#979](https://github.com/dudarenok-maker/Castwright/issues/979))
 
-- _What:_ A scripted-cue layer for `(laughs)`/`(sighs)`/breaths, model-native in Orpheus/Dia/Chatterbox. **Spike before committing an engine.** Rides on the expressive-engine decision (`fs-48`/`fs-49`).
+- _What:_ A scripted-cue layer for `(laughs)`/`(sighs)`/breaths, model-native in Orpheus/Dia/Chatterbox. **Spike before committing an engine.** Rides on the expressive-engine decision (`fs-48`/`fs-49`). **Reframed 2026-06-22:** the **Qwen** path for non-verbal sounds is now `fs-57` (pronounceable text + instruct, spike-validated); side-18 is scoped to these **other, bracket-cue-native engines** — the sibling extension, not a duplicate of fs-57.
 - _Benefit (user):_ extends the expressive performance lead beyond emotion sliders.
 _Full detail + acceptance:_ [#979](https://github.com/dudarenok-maker/Castwright/issues/979).
+
+#### `fs-57` — Non-verbal vocalizations (pronounceable text + instruct) ([#997](https://github.com/dudarenok-maker/Castwright/issues/997))
+
+- _What:_ The analysis LLM writes pronounceable vocalizations ("Ah!", "Haah…", "Haha!") into `text` + a matching `instruct`, riding the `fs-56` instruct field. The **Qwen-instruct counterpart to `side-18`** (bracket cues `(laughs)`/`(sighs)`, other engines) — the 2026-06-22 spike validated the pronounceable+instruct path. `side-18` is the **sibling** that covers non-verbal sounds for the *other* (bracket-cue-native) engines — not a duplicate.
+- _Benefit (user):_ lifelike gasps/sighs/laughter without bracket-tag hacks.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.5 · depends on `fs-56` · [#997](https://github.com/dudarenok-maker/Castwright/issues/997).
 
 ### Reliability & observability
 
@@ -367,11 +385,17 @@ _Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user):_ long books finish faster than playback by a wider margin on the engine every render uses — snappier generation, with no interactive-path or audio-quality cost.
 _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-qwen-codec-compilation-design.md` · [#988](https://github.com/dudarenok-maker/Castwright/issues/988).
 
-#### `srv-47` — GPU-accelerate the render-integrity ECAPA embed (optional CUDA, semaphore-gated) ([#992](https://github.com/dudarenok-maker/Castwright/issues/992))
+#### `side-21` — FA2: fix the stale pin + conditional auto-enable on the real stack ([#1000](https://github.com/dudarenok-maker/Castwright/issues/1000))
 
-- _What:_ `srv-36` Phase 1 embeds segment PCM with ECAPA-TDNN **CPU-only** (~60–65 ms/segment — CPU-first by design so the QA pass never competes with synth for VRAM). Add an **optional** CUDA path, off by default, opted into via the existing `SPK_DEVICE=cuda`, gated through the weighted VRAM semaphore with an idle-evict watchdog (mirrors the ASR engine, srv-31). CPU stays the default and the automatic fallback.
-- _Benefit (technical):_ removes the CPU embed cost from the post-generation QA pass on large books so the drift gate scales without adding wall-clock, and lays the GPU embed substrate `fs-55` can reuse. Not a current break (CPU is fast enough today) — hence Could.
-_Full detail + acceptance:_ [#992](https://github.com/dudarenok-maker/Castwright/issues/992).
+- _What:_ `install-qwen3.mjs` pins a cp311/torch2.6/cu124 FlashAttention-2 wheel, but the venv is **cp312/torch2.11/cu128** — so FA2 silently skips (SDPA in use). Fix the gate to the real stack; auto-install+activate only when a matching wheel exists; SDPA fallback otherwise. Do NOT downgrade torch for FA2 (modest win on short TTS decode).
+- _Benefit (technical):_ removes a silently-dead config; a modest speedup where a wheel exists.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.8 · depends on `side-22` · [#1000](https://github.com/dudarenok-maker/Castwright/issues/1000).
+
+#### `side-22` — Explore building FlashAttention-2 from source for Windows cp312/torch2.11/cu128 ([#1001](https://github.com/dudarenok-maker/Castwright/issues/1001))
+
+- _What:_ No prebuilt Windows FA2 wheel exists for torch 2.11 (lldacing ≤ 2.8; 2.11 builds are Linux-only). Explore a source build for Windows cp312/torch2.11/cu128; if it works, publish the wheel for community reuse (open demand). Blocks `side-21` enablement.
+- _Benefit (technical / community):_ unblocks FA2 on the real stack; community goodwill + visibility.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.8/§10 · [#1001](https://github.com/dudarenok-maker/Castwright/issues/1001).
 
 ### Revisions & regen
 

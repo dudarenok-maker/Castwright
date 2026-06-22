@@ -1,3 +1,10 @@
+<!-- DRAFT — v1.10.0 not yet cut (package.json is 1.9.0); covers what has merged since v1.9.0 so far. -->
+# Castwright 1.10.0
+
+- **Your cast, carried across the whole series — now you can see it.** When characters return book after book in the voices you designed, Castwright shows it: a chip on your shelf tallies how many voices have carried across how many books, and opening it reveals the returning cast, which books each one appears in, and how steady the run has been — twelve books in, and not a voice changed. It only appears once a real cast has carried, so it never crows over a shelf of stock voices.
+- **A cast card worth sharing.** From that panel you can lift a portrait card that leads with the number of voices you've designed and names every character who's carried through — yours to post, or to export as data.
+- **A new ear for a voice that wanders.** Beyond a wrong word or a bad take, Castwright can now catch a subtler fault: a line where a character's voice drifts *out of character* — sounding like someone else even when the words are right. It measures every line against that character's own established voice and flags the ones that stray. It's a check you switch on, and the groundwork for a per-book report of exactly what's worth another pass.
+
 # Castwright 1.9.0
 
 - **The app tells you when there's more.** When a newer Castwright is ready, a quiet banner lets you know and the version badge picks up a dot — so you're never unknowingly a release behind, and you can read what's new before you update.

@@ -16,73 +16,40 @@ The marker is what bump-version checks: if it doesn't match the version being
 cut, the bump refuses (so a stale file can't ship as the body). The
 user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.9.0
+release-notes-next-version: 1.10.0
+
+DRAFT IN PROGRESS — v1.10.0 is still accumulating (package.json is 1.9.0; not
+yet cut). Covers what has merged since v1.9.0 so far; extend as more lands.
 -->
 
-**A polish-and-reach release.** Listen from any browser on your home network, know the moment a new build lands, ride a steadier companion player whose finished books follow you across devices, catch a bad take right on the waveform, and meet a cast that reads truer — Russian books included — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
+**A craft-and-trust release.** See the cast you've carried across a whole series and lift a card worth sharing, switch on a new acoustic check that catches a voice drifting *out of character* even when the words are right, and — under the hood — the GPU groundwork to scale that check, all on the usual hardened footing.
 
 ---
 
 ## ✨ Headline features
 
-### 🔐 Listen from any browser on your LAN (new)
-Authorize a browser on your home network and your whole library opens there too — with the security to match (app-17).
+### 🎬 Series memory — see the cast you've carried (new) — fe-40
+The voices you designed, returning book after book, now made visible.
 
-- **Browser device authorization** — authorize a browser with a scan; the session is held in an HttpOnly `__Host-cw_lan` cookie, guarded by an Origin allow-list CSRF check, and device tokens carry a TTL so trust expires on its own (#901).
-- **Admin LAN access card** — authorize, list, and revoke trusted devices; a revoked device drops out of the list immediately (#901, #904).
-- **Redeem hardening** — the pair-redeem routes are rate-limited, body-capped at 1 KB, restricted to the local network, and answer a stale browser redeem with a 410 (#902).
+- **Carried-cast chip + consistency sparkline** — a series on your shelf shows a chip (`Your cast · N voices, M books`) and a sparkline of principal-cast consistency across its books. It surfaces only above a ≥3-carried-character / ≥3-confirmed-book / ≥1-designed-voice threshold, so an all-preset shelf stays quiet (#986).
+- **Reveal panel** — tapping the chip opens a dialog (full-screen sheet on phone) with the carried roster sorted by voice kind (designed / cloned first), a per-book marker row showing where each character appears, and share / export actions (#986).
+- **Shareable cast card + exports** — a portrait social card leads on the designed-voice count and names every carried character (the wordmark + `castwright.ai` always present); fe-43 adds client-side PNG capture (`html-to-image`, lazy-loaded) plus a schema-versioned JSON export of the series, books, and carried cast (#991).
+- **"Carried" vocabulary + table-view chip** — the reuse badge now reads **Carried** across the cast and confirm-cast screens (copy-only; the lifecycle "Matched" pill is untouched), and the chip also renders in the library table view (fe-41 / fe-42, #991).
 
-### 🔔 In-app update notifier (new) — fe-27
-- A non-blocking update banner plus a version-pill update dot, keyed to cached update fields on `/api/info`; dismissible, and it reappears when a newer version lands (#908).
+### 🎙️ Acoustic voice-drift detection (new, opt-in) — srv-36 Phase 1
+A new ear for a fault the word- and loudness-checks can't hear.
 
-### 📱 Companion player & pairing (app-17)
-- **Deep-link pairing launch** — a compact `CWP1` pairing URL that a real phone camera reads first-try, a private-host guard, and a re-entrancy guard against stacked pairing screens from deep links (#899).
-- **Listening cues** — the transport shows the current chapter name and a progress bar, finished chapters are marked, and the list auto-scrolls to where you are (#896).
-- **Playback fidelity** — the transport is synced to the real play state and now handles audio focus, pausing for calls and other apps (#906).
-- **APK build pipeline** — `npm run apk:companion` drops a signed APK with an auto-incrementing `versionCode` and a signer-cert verification so an update-install can't fail on a key/version mismatch (#897).
+- **Timbre-drift QA gate** — an opt-in check (`SEG_SPK_ENABLED`, default off) that embeds each rendered segment with an ECAPA-TDNN speaker fingerprint and compares it to a hybrid per-character voice centroid, catching lines where a character's voice drifts *out of character* even when the words are correct and the loudness is fine — drift the ASR and audio-QA gates miss (#987).
+- **Per-character 3-tier verdict** — severe / inconclusive / voice-match against each character's *own* clean-render thresholds (not a single global cosine), calibrated and pinned on real on-box renders with an operator listen (27/27 extreme-tail flags were real drift, 0 false positives across two series) (#987).
+- **Detection free, auto-fix opt-in + gated** — the issues outline is free; the acoustic auto-repair (`qa.speaker.autoRepair`, default off) re-renders a flagged segment and re-embeds with a margin-based accept, and is gated behind Cast Pass entitlement when hosted (#987, #990).
 
 ---
-
-## 🎧 Generation & listening
-
-- **Audio-QA issues surface on the waveform** — when a chapter finishes, segments that ran long, left an over-long gap, or (with ASR enabled) didn't say the right words light up as amber bands on both the generator and the player waveforms; a ⚠ jump-to-issue control walks through them and auto-seeks a moment early so you hear each one in context (fs-47, #958).
-
-### 🏁 Finished-book tracking, synced across devices (new) — app-14 / fs-cross-device
-- **Auto-finish on the web** — reaching the final listenable chapter dismisses the book from the Continue-listening rail with an optimistic, flicker-free guard, firing a single `POST /shelf-status {finished:true}` (reuses the plan-213 endpoint — no new route) (#957).
-- **Companion finished shelf** — finishing a book on the phone marks every chapter and drops the book off the Continue-listening rail; a genuine replay un-finishes it. Book-completion is gated on real playback and also fires for a short final chapter that never enters the near-end window (#953).
-- **Cross-device sync** — the sync-manifest index gains additive `finished?` / `hidden?` booleans (`SYNC_MANIFEST_SCHEMA` unchanged); the companion pulls them into Drift (schema 7) on index load and pushes shelf-status on auto-finish / long-press remove, so a book finished on one device leaves the shelf on the other (#967).
-
-## 🎭 Cast & analysis quality
-
-- **Byline author no longer enters the cast** — front-matter / boilerplate is stripped before analysis (Layer A), the resolved byline author is guarded out of stage-1 roster builds incl. cached `chapterCast` (Layer B), and the detection prompt clarifies the byline-author + first-person rule (Layer C), so a name on the title page can't surface as a phantom character (#938).
-- **Russian cast localization** — non-English manuscripts now always emit `tone` and write role / description / attributes (incl. narrator) in the manuscript's language, divergent same-id name forms fold into `aliases` instead of being dropped (#936), and descriptor fold-phrases are handled (#939). A model-independent roster dedup pass (Wave C) then folds transliterated duplicate ids onto a single survivor — carrying voice-reuse guards across — with a two-schema tone backfill for grouped roles (#962).
-- **Language-agnostic narrator default** — the narrator-default attribution guard now runs for every language and quote convention (previously non-English-only, a no-op for English) with a per-block low-confidence flag, so a non-dialogue line reliably falls to the narrator instead of a guessed speaker (#955).
-- **Voice identity decoupled from display name** — characters and voices carry an inert `voiceUuid` minted at design time and threaded through synth-key resolution, reparse, override-save, snapshots, series reuse, and the audition / sample path, so a freshly designed voice auditions as itself and a shared qwen display name can't mis-route storage (srv-43, #940).
-- **Honest analysing screen** — the two pipelined phases (cast detection + attribution) each render their own live ticker instead of clobbering one another, the section counter shows the in-progress section (1-based, clamped) rather than a stuck `0/N`, and section / sentence counts gain thousands separators (#931).
-- **A lone scene break can't stall a chapter** — a word-free `***` chunk is skipped before attribution and a zero-word source is treated as un-evaluable by the coverage guard, so a chapter built around a section break no longer flags "truncated" forever (#926).
-
-## 🖥️ Responsive UI
-
-- **Collapsing top-bar nav** — the inline nav strip folds into a hamburger drawer below `xl` (1280px) and stays inline at desktop, with reachability + visual baselines covered (#911).
-- **Phone top-bar reachability** — Help, the theme toggle, and the account avatar stay on-screen at a 412px phone width (the wordmark text is hidden below `sm` and the Admin pill moves into the hamburger drawer on nav stages) instead of being clipped off-viewport (#916).
-- **Recoverable library scan** — a failed shelf scan shows a Retry button instead of an eternal skeleton.
-
-## 🔒 Security & dependencies
-
-- **torch CVE bump** — torch / torchaudio 2.8 → 2.11 plus pytest ≥ 9, with a guardrail test that the sidecar never calls `torchaudio.load` (#884); the NVIDIA torch wheel is pre-installed from the cu128 index and the Kokoro ONNX-runtime swap is made skew-proof (#885).
-- **Maximal CodeQL remediation** — path-containment sanitizers threaded into every traversal sink, linear-time ReDoS strips, tainted log values passed as `%s` args, crypto-minted session ids, a cover `<img>` scheme allowlist, and generic sidecar errors; the CodeQL workflow now excludes test files to cut future noise (#887, #889, #890, #891, #892).
-- **Global API rate limiter** — an unconditional limiter mounted in front of the API (#887).
-- **Dependency hygiene round 4** — in-range server + frontend refresh, sharp 0.34 → 0.35, express-rate-limit 7 → 8, a js-yaml override, undici patched to 7.28.0 / 8.5.0, and esbuild / form-data bumps (#894, #912, #882).
 
 ## 🏗️ Under the hood
 
-- **Dependency-drift guardrail** — a monthly `app-deps-watch` workflow plus app-CI assertions that keep the Kotlin-Gradle-Plugin escape-hatch flags and the Flutter pin in lockstep (ops-17, #917).
-- **Test resilience** — a non-gating quarantine lane with a `quarantinedIt` helper and a flaky register; the load-sensitive `analysis-pipelining` cases were rewritten event-driven and graduated off quarantine; the release body can no longer silently become a placeholder (#879, #880). Rename-retry backoff is now jittered to de-flake concurrent `state.json` writes with the retry count aligned (#921, #928), and the e2e visual baselines were force-refreshed / regenerated and now run on label-gated PR CI (#923, #924, #933).
-- **Demo bundle** — the fs-22 demo bundle is re-keyed to uuid-keyed qwen voices and re-captured from the canonical book, with a `--copy` script mode for shared workspaces (srv-44, #942, #943).
-- **Companion deps** — `connectivity_plus` bumped 6.1.0 → 7.1.1 with the iOS compile moved to macos-26 for the iOS 26 SDK (app-18, #929).
-- **Repo hygiene** — personal / internal-only docs removed from the now-public repo (#932) and an unused Flutter import dropped to keep `flutter analyze` green (#919).
-- **Docs** — the LAN public-cert broker design + implementation plan (design only, not yet built); regression plan 225 for LAN browser device-auth; a `srv-41` device-token hardening backlog item; design specs for two parked next-gen TTS engines — Fish Audio S2-Pro (fs-48, #965) and IndexTTS-2 (fs-49, #968), both design-only and gated on hardware.
+- **Optional GPU path for the drift embed (srv-47)** — `SPK_DEVICE=cuda` is now *safe* to set: weighted-VRAM-semaphore-gated (like the ASR engine), idle-evicting (default 120 s), with load-time CPU degrade/demote and an `/embed` poison fence that now covers the model load. CPU stays the hard default; a one-time WARN fires if cuda is set under a GPU budget < 2, where the embed would serialise behind synth and run slower than the free CPU path (#1003).
+- **Design specs (not yet shipped)** — expressive-TTS Qwen instruct tiers (#1002), faster rendering via a Qwen Code2Wav `torch.compile` codec path (side-19, #989), and two parked next-gen engine designs; plus backlog triage, a README claims block, and srv-36 ship-notes / spec housekeeping (#990, #994, #995, #980, #971, #970).
 
 ---
 
-**Full changelog:** `v1.8.0...v1.9.0`
+**Full changelog:** `v1.9.0...v1.10.0`
