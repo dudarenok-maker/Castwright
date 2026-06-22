@@ -1,2 +1,10 @@
 clips/
 runs/
+# srv-36 Task 16 calibration scratch (operator-listen artifacts, reproducible):
+listen-*/
+*.log
+*.json
+*.flag
+make_batch.py
+fit_stats.py
+band_set.py

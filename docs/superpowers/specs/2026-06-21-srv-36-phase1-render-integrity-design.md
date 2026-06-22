@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 date: 2026-06-21
 topic: srv-36 Phase 1 — render-integrity check (production integration + calibration + auto-fix)
 issue: srv-36 (#665)
@@ -534,7 +534,54 @@ Separate signals; `revisions.ts` untouched.
 
 ## Ship notes
 
-_(filled on ship: date · commit SHA · centroid N/K · severe-edge percentile ·
-band width · min scorable duration · checked-coverage % · held-out FP/FN
-(Unlocked + Coalfall) · F4 residual-value fraction · CPU `/embed` latency ·
-embed runtime chosen inline|post-pass · resolved speechbrain + huggingface_hub pins)_
+**Shipped:** _(date · final SHA on merge)_ — built + calibrated on
+`feat/sidecar-srv-36-phase1` (PR #987). On-box calibration + operator listen
+completed 2026-06-22.
+
+- **Centroid params:** in-book minimum `CENTROID_MIN_N = 10` anchor renders;
+  Option-B audition fallback `CENTROID_K = 12` renders; bimodal min-side
+  fraction 0.2. Anchor set = gate-OK, per-segment `renderedFallbackEngine`
+  unset, stochastic-configured (qwen/coqui); Kokoro characters skipped
+  (deterministic engine, no drift risk).
+- **Verdict cutoffs (calibrated, retained):** per-character percentile —
+  `severeEdgePctl = 6` (E, voice-mismatch), `bandUpperPctl = 10` (U, above =
+  voice-match; E→U = inconclusive), `minDurationSec = 3.0` (sub-floor →
+  inconclusive). **Per-character percentile is mandatory, not a global absolute
+  cosine** — operator-verified drift/clean boundaries differ sharply per voice
+  (china-sorrows reads *clean* at cosine 0.478 while narrator is *drift* at
+  0.507), so no single absolute threshold separates them. An absolute-cutoff
+  alternative was prototyped during calibration and **rejected** on this
+  evidence. 6/10 fit verdicts near-exactly for stephanie/skulduggery; a thin
+  ~0.05-wide over-flag band remains for the tightest voices (narrator) — no
+  percentile value improves all characters simultaneously, so 6/10 is the
+  balance. `minDurationSec=3.0` because every operator "borderline" call was a
+  <3 s clip.
+- **Calibration data:** real on-box Qwen renders — Skulduggery/_Scepter of the
+  Ancients_ (22 characters, 4,799 gate-OK segments) + Keeper/_Unlocked_. Fit on
+  Scepter; cross-book confirmation on Unlocked.
+- **Held-out FP/FN:** **27/27 extreme-tail flags (cosine 0.05–0.27) confirmed
+  real voice drift by operator listen — 0 false positives**, across two series.
+  Decision-band listen (16 add'l clips, 0.30–0.68) mapped per-character
+  boundaries and validated the percentile structure. _Coalfall dropped from the
+  FP baseline_ — its audio is fine (operator-confirmed), but its two-pass
+  voice-ID naming fragments per-character centroids, making it unsuitable as a
+  clean-FP set (fs-22 Wave2-redo territory, not a gate defect).
+- **Residual value:** all 27 confirmed-drift segments had already passed ASR +
+  audio-QA — i.e. drift these gates structurally miss, now caught. The severe
+  tier is ~6% per character by construction; its extreme sub-tail (≤0.27) was
+  100% real drift.
+- **CPU `/embed` latency:** ~60–65 ms/segment observed during calibration
+  (4,799 Scepter segments embedded in ~5 min on CPU, incl. per-chapter cached
+  ffmpeg decode). Not a dedicated micro-benchmark, but confirms the **inline**
+  embed choice (piggybacks the ASR-QA pass with PCM already in memory) is
+  acceptable; post-pass not needed.
+- **Resolved dependency pins** (`requirements/speaker-qa.txt`): `speechbrain==1.1.0`,
+  `huggingface_hub==0.36.2` (the prior `<0.26` ceiling was a bug — would have
+  blocked the resolved version). torch 2.11.0+cu128 (already pinned in cpu.txt).
+- **Defaults:** all `qa.speaker.*` remain default-OFF. `autoRepair` stays off
+  by design — it is the paid "fix" half, turned on by the Cast Pass entitlement
+  (com-1), not a static default. Detection free, fix paid.
+- **Known v1 limitation:** the thin ~0.05-wide over-flag band on the tightest
+  voices means a small fraction (~1–2% of those characters' segments) of clean
+  low-tail reads can surface as inconclusive/mismatch. Acceptable for v1
+  (gate default-off); revisit with a z-score/per-character-σ cutoff if it bites.

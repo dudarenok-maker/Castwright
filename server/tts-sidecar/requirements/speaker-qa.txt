@@ -2,5 +2,6 @@
 # Placed here (NOT base.txt) because speechbrain needs torch, which lives in the
 # vendor overlays. huggingface_hub is pinned EXPLICITLY because it is otherwise
 # unpinned and speechbrain co-constrains it with transformers>=4.45,<5.0.
-speechbrain==1.0.2
-huggingface_hub>=0.23,<0.26
+# Versions reconciled to the on-box calibration env (srv-36 Task 16, 2026-06-22).
+speechbrain==1.1.0
+huggingface_hub==0.36.2

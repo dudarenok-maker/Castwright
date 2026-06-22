@@ -34,6 +34,17 @@ import type { Verdict } from './verdicts-io.js';
  * - `bandUpperPctl`: percentile below which a segment is flagged 'inconclusive'
  *   (and at or above which it is 'voice-match').
  * - `minDurationSec`: segments shorter than this are always 'inconclusive'.
+ *
+ * CALIBRATION (srv-36 Task 16, 2026-06-22, operator listen on real Qwen
+ * renders — Skulduggery/Scepter + Keeper/Unlocked). Per-character percentile
+ * (NOT a global absolute cosine) is required: drift/clean boundaries differ
+ * sharply per voice — e.g. china-sorrows reads clean at cosine 0.478 while
+ * narrator is drift at 0.507, so no single absolute cutoff separates them.
+ * 6/10 fit the operator's verdicts well (near-exact for stephanie/skulduggery;
+ * a thin ~0.05-wide over-flag band for the tightest voices like narrator) — no
+ * percentile value improves all characters at once, so 6/10 is the balance.
+ * minDurationSec=3.0 because every operator "borderline" call was a <3s clip.
+ * 27/27 extreme-tail flags (cosine 0.05–0.27) were confirmed real drift, 0 FP.
  */
 export const CUTOFFS = {
   severeEdgePctl: 6,

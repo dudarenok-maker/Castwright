@@ -9,6 +9,10 @@ import {
 // ── CUTOFFS pin ────────────────────────────────────────────────────────────
 
 describe('CUTOFFS', () => {
+  // Pinned values are the srv-36 Task 16 calibration result (2026-06-22 operator
+  // listen on real Qwen renders). Per-character percentile is required — drift/clean
+  // boundaries differ per voice (china-sorrows clean at 0.478 vs narrator drift at
+  // 0.507), so no global absolute cosine separates them. See score.ts CUTOFFS doc.
   it('exports the calibration-tuned cutoff constants', () => {
     expect(CUTOFFS.severeEdgePctl).toBe(6);
     expect(CUTOFFS.bandUpperPctl).toBe(10);
