@@ -44,11 +44,10 @@ export function detectManuscriptLanguage(
   if (letters === 0) return result('en');
   const cyrillic = sample.match(CYRILLIC_RE)?.length ?? 0;
   if (cyrillic / letters >= SCRIPT_THRESHOLD) return result('ru');
-  const cjk = (sample.match(HAN_RE)?.length ?? 0) + (sample.match(KANA_RE)?.length ?? 0);
-  if (cjk / letters >= SCRIPT_THRESHOLD) {
+  const han = sample.match(HAN_RE)?.length ?? 0;
+  const kana = sample.match(KANA_RE)?.length ?? 0;
+  if ((han + kana) / letters >= SCRIPT_THRESHOLD) {
     // CJK has no registry entry in this tranche → detected-but-unsupported (fs-59).
-    const han = sample.match(HAN_RE)?.length ?? 0;
-    const kana = sample.match(KANA_RE)?.length ?? 0;
     return { language: kana > han ? 'ja' : 'zh', supported: false };
   }
 
