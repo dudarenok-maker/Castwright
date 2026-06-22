@@ -83,17 +83,18 @@ would be a category error.
   TypeScript build break:**
   - `src/views/cast.tsx` — update the `ReusedBadge` import (line ~19) to
     `CarriedBadge` and its usage `{reused && <CarriedBadge />}` (line ~1450);
-    update the filter-chip `CHIP_ORDER` entry and tally key `'Reused'` →
-    `'Carried'` (the string is both the Map key and the visible chip label, so
-    they move together — and `statusKeysFor` at cast.tsx:286 just wraps
-    `statusFilterKeys`, so the chip-definition key and the row-matching key stay
-    consistent once both producers are renamed); update the "Reused" comments.
+    relabel the filter chip via the existing `CHIP_LABELS` map — add
+    `Reused: 'Carried'` (the codebase idiom: its comment states "the key stays
+    stable… only the displayed text changes", cf. `Variants: 'Has variants'`).
+    The internal `'Reused'` key in `CHIP_ORDER` / `tally.set` / `statusFilterKeys`
+    stays UNCHANGED — only its display label flips; update the "Reused" comments.
   - `src/modals/profile-drawer.tsx` — update the `ReusedBadge` import (line ~22)
     to `CarriedBadge` and its usage `{reused && <CarriedBadge />}` (line ~899).
     The drawer mirrors the cast row's badge; missing it fails `tsc`.
-- `src/lib/voice-status.ts` (~line 173) — the chip-key push `keys.push('Reused')`
-  → `keys.push('Carried')` (keeps the chip count keyed consistently with
-  `cast.tsx`).
+- `src/lib/voice-status.ts` (~line 173) — `keys.push('Reused')` stays UNCHANGED
+  (internal chip key; the relabel lives only in `CHIP_LABELS`). _(An earlier spec
+  draft renamed this key; superseded by the CHIP_LABELS approach during plan
+  authoring — see plan header "Deviation from the spec".)_
 - Comments mentioning "Reused" in the touched files updated to match.
 
 **Not touched — the lifecycle `Matched` pill (separate concept, derived from

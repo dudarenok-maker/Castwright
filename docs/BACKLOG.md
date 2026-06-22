@@ -451,28 +451,6 @@ _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ stays on a supported eslint line; clears the last row of the round-3 `npm outdated`.
 _Full detail + acceptance:_ [#711](https://github.com/dudarenok-maker/AudioBook-Generator/issues/711).
 
-### Library & discovery (fe-40 follow-ups)
-
-_(All three are deferred out-of-scope decisions from the fe-40 series-memory ship; filed 2026-06-21.)_
-
-#### `fe-41` — Series-memory chip + sparkline in LibraryTable view ([#983](https://github.com/dudarenok-maker/Castwright/issues/983))
-
-- _What:_ Extend the fe-40 `SeriesMemoryChip` + `SeriesSparkline` into the `LibraryTable` table view (`src/components/library/library-table.tsx`). The card view (`LibraryGrid`) already shows the chip; the table row for a series shows nothing yet. Add a compact chip cell (label + count, no full sparkline in the row — expand to sparkline on hover/focus) reusing the same `LibraryBook.seriesMemory` summary data.
-- _Benefit (user):_ users who prefer the dense table view get the same series-memory signal without switching to card view.
-_Full detail + acceptance:_ plan [228](features/archive/228-fe-40-series-memory.md) "Out of scope".
-
-#### `fe-42` — Harmonise cast-row "Reused · Matched" badge to "carried / kept" vocabulary ([#984](https://github.com/dudarenok-maker/Castwright/issues/984))
-
-- _What:_ The confirm-cast and cast views surface per-character status as "Reused" / "Matched" — legacy vocabulary from the series-reuse matcher. The fe-40 series-memory surface uses "carried" / "kept true" as the user-facing terms for the same concept. Align the badge wording so the whole app speaks one vocabulary: "Carried" (character was explicitly matched from a prior book) / "Kept" (voice kept from the prior cast without a new match). Audit all badge render sites + update copy; no behaviour change.
-- _Benefit (user / architectural):_ consistent vocabulary removes the "what's the difference between Reused and Carried?" confusion; future features can refer to a single term.
-_Full detail + acceptance:_ plan [228](features/archive/228-fe-40-series-memory.md) "Out of scope".
-
-#### `fe-43` — PNG share-card export (series memory) ([#985](https://github.com/dudarenok-maker/Castwright/issues/985))
-
-- _What:_ Add a "Download PNG" button to the `ShareCardModal` (fe-40) that screenshots the rendered `SeriesShareCard` via `html-to-image` (or equivalent) and triggers a client-side download. **Gated on dependency sign-off**: `html-to-image` adds ~50 KB gzipped and has a known SVG/font limitation; alternatives include `dom-to-image-more` or a server-side Playwright screenshot. Ship only after explicit dep + approach sign-off.
-- _Benefit (user):_ share the series cast story as an image on social media / in notes without needing a manual screenshot.
-_Full detail + acceptance:_ plan [228](features/archive/228-fe-40-series-memory.md) "Out of scope".
-
 ---
 
 ## Won't (this round) — explicitly parked
