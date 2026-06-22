@@ -1,73 +1,119 @@
-# fs-55 — Anchored Emotion-Variant Drift Fix — Implementation Plan
+# fs-55 — Anchored Emotion-Variant Drift Fix — Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stop Qwen emotion-variant voices (`<base>__angry`, `__sad`, `__excited`, `__whisper`) from drifting to a different-sounding person by minting each variant **from the base voice's own identity** instead of independently re-sampling VoiceDesign.
+**Goal:** Stop Qwen emotion-variant voices (`<base>__angry`, `__sad`, `__excited`, `__whisper`) from drifting to a different-sounding person by minting each variant **from the base voice's own identity** instead of independently re-sampling VoiceDesign. Resolves **fs-55 (#993)**.
 
-**Architecture:** Base voices keep today's `design_voice` path (VoiceDesign persona → 0.6B clone — a single base never drifts). **Variants** switch to a new anchored path: load the base's on-disk `.pt`, decode its `ref_code` → reference clip, re-derive a **1.7B-Base ICL** prompt, synth *the base voice performing the emotion* via the raw-`generate` clone+instruct bypass, then distil that emotion clip to a **0.6B ICL `.pt`**. Every variant now shares the base identity → drift gone by construction. Resolves **fs-55 (#993)**.
+**Architecture:** Base voices keep today's `design_voice` path (a single base never drifts). **Variants** switch to a new anchored path: load the base's on-disk `.pt`, decode its `ref_code` → reference clip, re-derive a **1.7B-Base ICL** prompt, synth *the base voice performing the emotion* via the raw-`generate` clone+instruct bypass, then distil that emotion clip to a **0.6B ICL `.pt`**. Every variant shares the base identity → drift gone by construction.
 
-**Tech Stack:** Python TTS sidecar (`server/tts-sidecar/main.py`, `qwen_tts` 0.1.1, torch 2.11/cu128), Node/Express server (`server/src/routes/qwen-voice.ts`, `cast-design.ts`), pytest + vitest.
+**Tech Stack:** Python TTS sidecar (`server/tts-sidecar/main.py`, `qwen_tts` 0.1.1, torch 2.11/cu128), Node/Express (`server/src/routes/qwen-voice.ts`, `cast-design.ts`), pytest (`fake_qwen_runtime` + `_FakeQwenModel`) + vitest (supertest + `fetchMock`).
 
 ## Global Constraints
 
-- **Installed `qwen-tts` is 0.1.1** — the raw `Qwen3TTSForConditionalGeneration.generate()` accepts both `voice_clone_prompt` and `instruct_ids` in independent additive branches (`modeling_qwen3_tts.py:2022-2080`); the public wrapper never wires them together, so we call `self._base17.model.generate(...)` directly. **Pin `qwen-tts` and add a guard test** (R2-M2) — the bypass depends on internals.
-- **VRAM invariant (hard):** never two heavy models co-resident. During minting: do all 1.7B-Base work, **unload the 1.7B**, then load the 0.6B for the distil. Variant `.pt` **must** be ICL (emotion lives in `ref_code`; x-vector-only loses it).
-- **0.6B-designed `.pt` is dim-incompatible with the 1.7B** (1024 vs 2048 speaker-embedding); the base prompt **must be re-derived** on the 1.7B from the decoded `ref_code`, never loaded directly.
-- **Name/contract stability:** variant voiceId stays `${baseVoiceId}__${emotion}`; `.pt`/`.json` paths via `_voice_paths` unchanged; the existing emotion-suffix map and `persistEmotionVariant` cast wiring stay as-is.
-- **Sidecar tests are venv/weights-gated** — GPU-dependent tests SKIP+exit-0 when the venv/weights are absent (existing `test:sidecar` convention).
-- Spec: `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` (§4.2, §4.3, §11 R2-C2).
+- **Installed `qwen-tts` is 0.1.1.** The raw `Qwen3TTSForConditionalGeneration.generate()` combines `voice_clone_prompt` (ICL) + `instruct_ids` in independent additive branches (`modeling_qwen3_tts.py:2076-2080` + concat `:2237`); the public wrapper never wires them, so we call `self._base17.model.generate(...)` directly. **Pin `qwen-tts` + guard test** (verified methods exist: `_build_assistant_text:269`, `_build_ref_text:272`, `_build_instruct_text:275`, `_tokenize_texts:278`, `_merge_generate_kwargs:287`, `_prompt_items_to_voice_clone_prompt:460`, `create_voice_clone_prompt:356` tuple form OK, `speech_tokenizer.decode:307`).
+- **VRAM invariant (hard):** never two heavy models co-resident. Minting evicts Kokoro (mirror `design_voice` main.py:1533-1536), does all 1.7B-Base work, **unloads the 1.7B**, then loads the 0.6B for the distil. Variant `.pt` **must** be ICL.
+- **0.6B `.pt` is dim-incompatible with the 1.7B** (1024 vs 2048 speaker-embedding) — re-derive the base ICL prompt on the 1.7B from the decoded `ref_code`, never load it directly.
+- **Name/contract stability:** variant id stays `${base}__${emotion}`; preview ids via `previewVoiceIdFor` (`qwen-voice.ts:222`); `.pt`/`.json` paths via `_voice_paths`.
+- **Sidecar GPU tests SKIP+exit-0 when weights/venv absent** (existing `test:sidecar` convention; gate via the new `_qwen_weights_present()` from Task 0).
+- **Spec** (on `main`, merged PR #1002): `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.2/§4.3/§11. **Setup:** this worktree was branched before #1002 (network-down fetch failed); **rebase on `origin/main` once network returns** so the spec + #1002 are present (Task 8 Step 0).
+
+### v2 changelog — adversarial-review findings folded in
+
+| Finding | Where addressed |
+|---|---|
+| Crit — invented test fixtures | All tests rewritten against real `fake_qwen_runtime`/`_FakeQwenModel` (+ explicit fake-surface extensions in Tasks 2-3) and `TestClient(main.app)` |
+| Crit — preview/A-B clobber | Task 4/5/6 thread `preview` (anchor to the REAL base; write the `-preview` id) |
+| Maj — `_load_model` typo | Task 1 uses `_load_qwen_model` |
+| Maj — version guard crashes | Task 2 uses `importlib.metadata.version("qwen-tts")` |
+| Maj — 1.7B-Base instruct unproven from repo | **Task 0** commits a reproducible smoke (also closes the R2-C1 provenance gap) |
+| Maj — no non-GPU coverage of the path | Task 4 adds a fake-runtime **call-sequence** test |
+| Maj — Node test phantom API | Task 6 uses supertest + `fetchMock` |
+| Maj — base `.pt` absent → bare 500 | Task 4 raises a typed error; Task 5 maps to 409 |
+| Mod — Kokoro evict / single-flight lock / codec compat / audition-cache | Task 1 lock; Task 4 evict + codec covered by Task 0; Task 6 verifies audition key |
+| Min — `_resample24k`, cancellation | Task 3 defines it; Task 5 documents liveness reuse |
+| "spec missing" / "Closes #993 mismatch" | Non-issues: spec is on `main` (worktree stale); `Closes #993` is the operator's explicit decision (close the detection-gate feature as obviated by prevention) |
+
+---
+
+### Task 0: Reproducible feasibility smoke (commit the evidence)
+
+**Files:**
+- Create: `server/tts-sidecar/tests/golden/instruct_smoke.py` (committed, weights-gated runner)
+- Modify: `server/tts-sidecar/tests/conftest.py` (add `_qwen_weights_present()` helper) — or `test_qwen3.py` if no conftest
+- Test: this task's deliverable IS the committed runner + a recorded result line in Ship Notes
+
+**Interfaces:**
+- Produces: `_qwen_weights_present() -> bool` (used by every GPU-gated test); a runnable `instruct_smoke.py` that prints, for one designed voice: ECAPA distance(base, instruct-variant) per emotion + reconstructs the base `ref_code` on the 1.7B (codec-compat check).
+
+- [ ] **Step 1: Add `_qwen_weights_present()`**
+
+```python
+# conftest.py (sidecar tests)
+import os
+def _qwen_weights_present() -> bool:
+    """True only when the real qwen-tts + Qwen3-TTS weights are importable/loadable.
+    Gates GPU tests so CI / dev venvs SKIP instead of failing."""
+    try:
+        import qwen_tts  # noqa: F401
+        import torch  # noqa: F401
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+```
+
+- [ ] **Step 2: Write the committed smoke runner** (`instruct_smoke.py`)
+
+It must, gated on `_qwen_weights_present()`: load 1.7B-Base, take a designed voice's `.pt`, **decode its `ref_code` → clip** (codec-compat proof), re-derive a 1.7B ICL prompt, synth the SAME line under neutral vs angry vs whisper instructs via `model.generate(voice_clone_prompt + instruct_ids)`, write WAVs + print ECAPA `speaker_distance(base, variant)` per emotion. Exit 0 + SKIP banner when weights absent.
+
+- [ ] **Step 3: Run it on the GPU box; record results**
+
+Run: `server/tts-sidecar/.venv/Scripts/python.exe server/tts-sidecar/tests/golden/instruct_smoke.py`
+Expected (on weights box): prints distances; operator **listens** — confirms identity holds + emotion audible. **Paste the distance lines into Ship Notes.** This is the reproducible replacement for the deleted spike (R2-C1) and the empirical proof the 1.7B-Base obeys instruct (Major-6).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add server/tts-sidecar/tests/golden/instruct_smoke.py server/tts-sidecar/tests/conftest.py
+git commit -m "test(side): committed reproducible 1.7B-Base instruct + codec-compat smoke (fs-55, R2-C1)"
+```
+
+> **Gate:** If Step 3 shows identity drift OR no emotion change, STOP — the anchored approach needs rethinking before Tasks 1-7. (Spike already indicated PASS; this re-establishes it reproducibly.)
 
 ---
 
 ### Task 1: Wire Qwen 1.7B-Base into setup (side-20 #999)
 
 **Files:**
-- Modify: `server/tts-sidecar/scripts/install-qwen3.mjs` (model consts ~66-68; prefetch list ~257)
-- Modify: `server/tts-sidecar/main.py` (`QwenEngine` model-id consts + a `_base17` loader, near the existing `_ensure_base_loaded` ~1284)
-- Test: `scripts/tests/install-qwen3-base17.test.mjs` (new) + `server/tts-sidecar/tests/test_qwen3.py` (loader id)
+- Modify: `server/tts-sidecar/scripts/install-qwen3.mjs` (model consts ~66-68; prefetch ~257)
+- Modify: `server/tts-sidecar/main.py` (`QwenEngine`: `BASE17_MODEL`, `_base17`, `_base17_load_lock`, `_ensure_base17_loaded`, `unload_base17`)
+- Test: `scripts/tests/install-qwen3-base17.test.mjs` (new) + `server/tts-sidecar/tests/test_qwen3.py`
 
 **Interfaces:**
-- Produces: `QwenEngine.BASE17_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"`; `QwenEngine._ensure_base17_loaded() -> None` (loads the 1.7B Base into `self._base17`, mirroring `_ensure_base_loaded`); `QwenEngine.unload_base17() -> None`.
-- Consumes: nothing.
+- Produces: `qwenPrefetchModels({skipDesign}) -> string[]` (exported); `QwenEngine.BASE17_MODEL`, `_ensure_base17_loaded()`, `unload_base17()`.
 
-- [ ] **Step 1: Write the failing test for the install model-list helper**
-
-Extract the prefetch list into a pure helper first (mirrors the existing `qwenPipInstallArgs` / `resolveFlashAttnInstall` testable-helper pattern). Test:
+- [ ] **Step 1: Failing test for the install model-list helper**
 
 ```js
 // scripts/tests/install-qwen3-base17.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { qwenPrefetchModels } from '../../server/tts-sidecar/scripts/install-qwen3.mjs';
-
-test('1.7B-Base is prefetched alongside Base + VoiceDesign by default', () => {
-  const ids = qwenPrefetchModels({ skipDesign: false });
-  assert.ok(ids.includes('Qwen/Qwen3-TTS-12Hz-1.7B-Base'), '1.7B-Base must be fetched');
-  assert.ok(ids.includes('Qwen/Qwen3-TTS-12Hz-0.6B-Base'));
-  assert.ok(ids.includes('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'));
-});
-
-test('--skip-design still fetches both Base models (needed for variant minting)', () => {
-  const ids = qwenPrefetchModels({ skipDesign: true });
-  assert.ok(ids.includes('Qwen/Qwen3-TTS-12Hz-1.7B-Base'));
-  assert.ok(ids.includes('Qwen/Qwen3-TTS-12Hz-0.6B-Base'));
-  assert.ok(!ids.includes('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'));
+test('1.7B-Base prefetched even with --skip-design (needed for variant minting)', () => {
+  const a = qwenPrefetchModels({ skipDesign: false });
+  assert.ok(a.includes('Qwen/Qwen3-TTS-12Hz-1.7B-Base'));
+  assert.ok(a.includes('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'));
+  const b = qwenPrefetchModels({ skipDesign: true });
+  assert.ok(b.includes('Qwen/Qwen3-TTS-12Hz-1.7B-Base'));
+  assert.ok(!b.includes('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'));
 });
 ```
 
-- [ ] **Step 2: Run it to confirm it fails**
+- [ ] **Step 2: Run → fail.** `node --test scripts/tests/install-qwen3-base17.test.mjs` → FAIL (not exported).
 
-Run: `node --test scripts/tests/install-qwen3-base17.test.mjs`
-Expected: FAIL — `qwenPrefetchModels` is not exported.
-
-- [ ] **Step 3: Add the helper + 1.7B-Base const in `install-qwen3.mjs`**
+- [ ] **Step 3: Implement the helper + const in `install-qwen3.mjs`**
 
 ```js
-// near the model consts (~line 66)
 const BASE_17B_MODEL = process.env.QWEN_BASE_17B_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
-
-/** Pure: the model ids to prefetch. 1.7B-Base is required for fs-55 anchored
- *  variant minting, so it is fetched even with --skip-design. */
 export function qwenPrefetchModels({ skipDesign }) {
   const ids = [BASE_MODEL, BASE_17B_MODEL];
   if (!skipDesign) ids.push(VOICEDESIGN_MODEL);
@@ -75,26 +121,23 @@ export function qwenPrefetchModels({ skipDesign }) {
 }
 ```
 
-Then replace the inline `models` array in `main()` (~257) with `const models = qwenPrefetchModels({ skipDesign: SKIP_DESIGN });` and update the size hint string to mention `+ ~3.4 GB 1.7B-Base`.
+Replace the inline `models` array in `main()` (~257) with `qwenPrefetchModels({ skipDesign: SKIP_DESIGN })`; update the size hint to add `+ ~3.4 GB 1.7B-Base`.
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [ ] **Step 4: Run → pass.** Same command → PASS.
 
-Run: `node --test scripts/tests/install-qwen3-base17.test.mjs`
-Expected: PASS (both tests).
-
-- [ ] **Step 5: Add the `_base17` loader to `QwenEngine` (main.py)**
-
-Mirror `_ensure_base_loaded`/`_load_model`. Add near line 1284:
+- [ ] **Step 5: Add `_base17` loader with single-flight lock (main.py)** — mirror `_ensure_base_loaded` (`:1284`) + `_base_load_lock` (`:1139`):
 
 ```python
 BASE17_MODEL = os.environ.get("QWEN_BASE_17B_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+# in __init__: self._base17 = None; self._base17_load_lock = threading.Lock()
 
 def _ensure_base17_loaded(self) -> None:
-    """Load the 1.7B Base (anchored-variant minting only). Heavy — callers
-    unload it before any 0.6B work to keep the one-heavy-model invariant."""
     if self._base17 is not None:
         return
-    self._base17 = self._load_model(self.BASE17_MODEL)  # reuses the shared loader
+    with self._base17_load_lock:        # single-flight (mirror _base_load_lock)
+        if self._base17 is not None:
+            return
+        self._base17 = self._load_qwen_model(self.BASE17_MODEL)  # NOTE: _load_qwen_model
 
 def unload_base17(self) -> None:
     with self._synth_lock:
@@ -102,120 +145,114 @@ def unload_base17(self) -> None:
     _reclaim_host_and_vram()
 ```
 
-Initialise `self._base17 = None` in `__init__` alongside `self._base`/`self._design`.
-
-- [ ] **Step 6: Add a weights-gated loader test (test_qwen3.py)**
+- [ ] **Step 6: Weights-gated loader test (test_qwen3.py)**
 
 ```python
-@pytest.mark.skipif(not _qwen_weights_present(), reason="1.7B-Base weights absent")
-def test_ensure_base17_loads_a_base_checkpoint(qwen_engine):
-    qwen_engine._ensure_base17_loaded()
-    assert qwen_engine._base17 is not None
-    assert getattr(qwen_engine._base17.model, "tts_model_type", None) == "base"
-    qwen_engine.unload_base17()
-    assert qwen_engine._base17 is None
+from conftest import _qwen_weights_present
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_ensure_base17_loads_a_base_checkpoint():
+    eng = main.ENGINES["qwen"]; eng._ensure_base17_loaded()
+    assert getattr(eng._base17.model, "tts_model_type", None) == "base"
+    eng.unload_base17(); assert eng._base17 is None
 ```
 
-- [ ] **Step 7: Run sidecar tests + commit**
-
-Run: `npm run test:sidecar` (SKIPs the gated test on a box without weights — that's expected).
+- [ ] **Step 7: Run + commit.** `npm run test:sidecar` (gated test SKIPs off-box).
 ```bash
 git add server/tts-sidecar/scripts/install-qwen3.mjs scripts/tests/install-qwen3-base17.test.mjs server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py
-git commit -m "feat(side): wire Qwen 1.7B-Base into setup + QwenEngine loader (side-20)"
+git commit -m "feat(side): wire Qwen 1.7B-Base into setup + single-flight loader (side-20)"
 ```
 
 ---
 
-### Task 2: Raw-`generate` ICL + instruct synth helper (the §4.2 bypass)
+### Task 2: Raw-`generate` ICL + instruct synth helper
 
 **Files:**
-- Modify: `server/tts-sidecar/main.py` (`QwenEngine`, new method near `synthesize` ~1651)
+- Modify: `server/tts-sidecar/main.py` (`QwenEngine._icl_instruct_synth`)
+- Modify: `server/tts-sidecar/tests/test_qwen3.py` (extend `_FakeQwenModel` with the wrapper internals the helper calls)
 - Test: `server/tts-sidecar/tests/test_qwen3.py`
 
 **Interfaces:**
 - Consumes: `_ensure_base17_loaded` (Task 1).
-- Produces: `QwenEngine._icl_instruct_synth(prompt_items: list, text: str, instruct: str, lang: str) -> tuple[np.ndarray, int]` — runs `self._base17.model.generate(input_ids, ref_ids, instruct_ids, voice_clone_prompt)` and returns `(wav, sample_rate)` with the ICL ref-prefix trimmed. Used by Task 4.
+- Produces: `QwenEngine._icl_instruct_synth(prompt_items, text, instruct, lang) -> tuple[np.ndarray, int]`.
 
-- [ ] **Step 1: Write the failing test (instruct_ids/ref_ids construction, model mocked)**
+- [ ] **Step 1: Extend the fake to expose the wrapper surface the helper uses**
+
+Add to `_FakeQwenModel` (so the non-GPU test can drive `_icl_instruct_synth`):
 
 ```python
-def test_icl_instruct_synth_builds_instruct_and_ref_ids(qwen_engine, monkeypatch):
-    captured = {}
-    class _FakeBase17:
-        class model:
-            @staticmethod
-            def generate(**kw):
-                captured.update(kw)
-                return ([_fake_codes()], None)
-            speech_tokenizer = _FakeTokenizer()  # .decode -> ([wav], 24000)
-    qwen_engine._base17 = _FakeBase17()
-    monkeypatch.setattr(qwen_engine, "_ensure_base17_loaded", lambda: None)
-    item = _FakePromptItem(voice_marker=_fake_codes(), ref_text="calib")
-    wav, sr = qwen_engine._icl_instruct_synth([item], "Hello.", "Delivered angrily.", "English")
-    assert "instruct_ids" in captured and captured["instruct_ids"][0] is not None
-    assert "ref_ids" in captured and "voice_clone_prompt" in captured
+# inside _FakeQwenModel
+def _build_assistant_text(self, t): return f"A:{t}"
+def _build_ref_text(self, t): return f"R:{t}"
+def _build_instruct_text(self, t): return f"I:{t}"
+def _tokenize_texts(self, texts): return [("ids", s) for s in texts]
+def _merge_generate_kwargs(self, **kw): return {}
+def _prompt_items_to_voice_clone_prompt(self, items):
+    return {"ref_code": [getattr(it, "ref_code", None) for it in items]}
+# _FakeInnerModule gains:
+def generate(self, **kw):
+    self.last_generate = kw
+    return ([__import__("numpy").array([1, 2, 3])], None)
+class _FakeTokenizerStub:
+    def decode(self, codes): return [__import__("numpy").zeros(6000, dtype="float32")], 24000
+# set self.model.speech_tokenizer = _FakeTokenizerStub() in _FakeInnerModule.__init__
+```
+
+- [ ] **Step 2: Failing test (instruct_ids/ref_ids are built + passed)**
+
+```python
+def test_icl_instruct_synth_passes_instruct_and_clone(fake_qwen_runtime):
+    eng = fake_qwen_runtime["engine"]
+    eng._base17 = main.__dict__["Qwen3TTSModel"]("1.7b") if False else eng._base  # ensure a fake wrapper
+    eng._base17 = type(eng._base)("1.7b")  # fresh fake wrapper
+    item = type("It", (), {"ref_code": 7, "ref_text": "calib"})()
+    wav, sr = eng._icl_instruct_synth([item], "Hello.", "Delivered angrily.", "English")
+    kw = eng._base17.model.last_generate
+    assert kw["instruct_ids"] is not None and "voice_clone_prompt" in kw and "ref_ids" in kw
     assert sr == 24000
 ```
 
-- [ ] **Step 2: Run it to confirm it fails**
+- [ ] **Step 3: Run → fail.** `python -m pytest ...::test_icl_instruct_synth_passes_instruct_and_clone -v` → FAIL (not defined).
 
-Run: `python -m pytest server/tts-sidecar/tests/test_qwen3.py::test_icl_instruct_synth_builds_instruct_and_ref_ids -v`
-Expected: FAIL — `_icl_instruct_synth` not defined.
-
-- [ ] **Step 3: Implement `_icl_instruct_synth` (replicates the wrapper's ICL handling + adds instruct_ids)**
+- [ ] **Step 4: Implement `_icl_instruct_synth`** (replicate the wrapper ICL trim; add instruct_ids):
 
 ```python
 def _icl_instruct_synth(self, prompt_items, text, instruct, lang):
-    """Synth `text` in the ICL-cloned identity of `prompt_items` while obeying
-    `instruct`, via the raw generate() additive branches (clone + instruct).
-    1.7B-Base only. Mirrors generate_voice_clone's ICL ref-prefix trim."""
-    w = self._base17                      # qwen_tts wrapper
-    m = w.model
+    import torch
+    w = self._base17; m = w.model
     vcp = w._prompt_items_to_voice_clone_prompt(prompt_items)
     input_ids = w._tokenize_texts([w._build_assistant_text(text)])
     rt = getattr(prompt_items[0], "ref_text", None)
     ref_ids = [w._tokenize_texts([w._build_ref_text(rt)])[0]] if rt else [None]
     instruct_ids = w._tokenize_texts([w._build_instruct_text(instruct)])
-    gen_kwargs = w._merge_generate_kwargs()
-    import torch
+    gk = w._merge_generate_kwargs()
     with torch.no_grad():
-        codes, _ = m.generate(
-            input_ids=input_ids, ref_ids=ref_ids, instruct_ids=instruct_ids,
-            voice_clone_prompt=vcp, languages=[lang], non_streaming_mode=True, **gen_kwargs,
-        )
+        codes, _ = m.generate(input_ids=input_ids, ref_ids=ref_ids, instruct_ids=instruct_ids,
+                              voice_clone_prompt=vcp, languages=[lang], non_streaming_mode=True, **gk)
     rcl = vcp.get("ref_code")
     cfd = [torch.cat([rcl[i].to(c.device), c], dim=0) if rcl and rcl[i] is not None else c
            for i, c in enumerate(codes)]
     wavs, sr = m.speech_tokenizer.decode([{"audio_codes": c} for c in cfd])
     wav = wavs[0]
     if rcl and rcl[0] is not None:
-        cut = int(int(rcl[0].shape[0]) / max(int(cfd[0].shape[0]), 1) * wav.shape[0])
-        wav = wav[cut:]
+        cut = int(int(rcl[0].shape[0]) / max(int(cfd[0].shape[0]), 1) * wav.shape[0]); wav = wav[cut:]
     return wav, int(sr)
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+(The fake's `torch.cat`/`.to`/`.shape` are exercised only on the real-weights path; for the non-GPU test, `ref_code` is an int → the `rcl[i] is not None` branch runs `torch.cat` on the fake torch — make the fake `torch.cat`/tensor ops no-op-tolerant, OR have the test set `ref_code=None` to skip the trim. Use `ref_code=None` in the unit test; the trim path is covered by Task 0's real smoke.)
 
-Run: `python -m pytest server/tts-sidecar/tests/test_qwen3.py::test_icl_instruct_synth_builds_instruct_and_ref_ids -v`
-Expected: PASS.
+- [ ] **Step 5: Run → pass.** Same command → PASS (with `ref_code=None` in the test item).
 
-- [ ] **Step 5: Add the qwen-tts version-pin guard test (R2-M2)**
+- [ ] **Step 6: Version-pin guard (correct API)**
 
 ```python
-def test_qwen_tts_pinned_version_for_raw_bypass():
-    import qwen_tts
-    # The raw-generate clone+instruct bypass depends on 0.1.x internals.
-    assert qwen_tts.__version__.startswith("0.1."), (
-        f"qwen-tts {qwen_tts.__version__} — re-verify the raw generate() "
-        "clone+instruct branches before bumping (fs-55 / spec R2-M2)."
-    )
+def test_qwen_tts_pinned_for_raw_bypass():
+    from importlib.metadata import version
+    assert version("qwen-tts").startswith("0.1."), "re-verify raw generate() branches before bumping (fs-55)"
 ```
 
-Also pin `qwen-tts==0.1.1` in `server/tts-sidecar/requirements/base.txt` if not already exact-pinned.
+Pin `qwen-tts==0.1.1` in `server/tts-sidecar/requirements/base.txt`.
 
-- [ ] **Step 6: Run + commit**
-
-Run: `npm run test:sidecar`
+- [ ] **Step 7: Run + commit.** `npm run test:sidecar`
 ```bash
 git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py server/tts-sidecar/requirements/base.txt
 git commit -m "feat(side): raw-generate ICL+instruct synth helper + qwen-tts pin guard (fs-55)"
@@ -223,119 +260,124 @@ git commit -m "feat(side): raw-generate ICL+instruct synth helper + qwen-tts pin
 
 ---
 
-### Task 3: ECAPA identity-distance helper + the fs-55 regression metric (M7)
+### Task 3: ECAPA identity-distance helper (M7)
 
-**Files:**
-- Modify: `server/tts-sidecar/main.py` (`QwenEngine`, small helper)
-- Test: `server/tts-sidecar/tests/test_qwen3.py`
+**Files:** Modify `server/tts-sidecar/main.py`; Test `server/tts-sidecar/tests/test_qwen3.py`
 
-**Interfaces:**
-- Produces: `QwenEngine.speaker_distance(wav_a, sr_a, wav_b, sr_b) -> float` — cosine distance (0 = identical speaker) between two clips' ECAPA embeddings via the Base model's `extract_speaker_embedding`. Used by Task 4's regression.
-- Module-level pure: `cosine_distance(a, b) -> float`.
+**Interfaces:** Produces module-level `cosine_distance(a, b) -> float`, `_resample24k(wav, sr) -> np.ndarray`, and `QwenEngine.speaker_distance(wav_a, sr_a, wav_b, sr_b) -> float`.
 
-- [ ] **Step 1: Write the failing test for the pure cosine helper**
+- [ ] **Step 1: Failing pure-cosine test**
 
 ```python
-import numpy as np
 def test_cosine_distance_pure():
+    import numpy as np
     from main import cosine_distance
-    v = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    v = np.array([1.0, 0.0], np.float32)
     assert cosine_distance(v, v) == pytest.approx(0.0, abs=1e-6)
-    assert cosine_distance(v, np.array([0.0, 1.0, 0.0], np.float32)) == pytest.approx(1.0, abs=1e-6)
+    assert cosine_distance(v, np.array([0.0, 1.0], np.float32)) == pytest.approx(1.0, abs=1e-6)
 ```
 
-- [ ] **Step 2: Run to confirm fail**
+- [ ] **Step 2: Run → fail.** → FAIL (not defined).
 
-Run: `python -m pytest server/tts-sidecar/tests/test_qwen3.py::test_cosine_distance_pure -v`
-Expected: FAIL — `cosine_distance` not defined.
-
-- [ ] **Step 3: Implement `cosine_distance` (module level) + `speaker_distance` (engine)**
+- [ ] **Step 3: Implement** (module level):
 
 ```python
 def cosine_distance(a, b) -> float:
     import numpy as np
-    a = np.asarray(a, dtype=np.float64).ravel(); b = np.asarray(b, dtype=np.float64).ravel()
+    a = np.asarray(a, np.float64).ravel(); b = np.asarray(b, np.float64).ravel()
     denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1.0
     return float(1.0 - (a @ b) / denom)
+
+def _resample24k(wav, sr):
+    import numpy as np
+    a = np.asarray(wav, dtype=np.float32).ravel()
+    if int(sr) == 24000:
+        return a
+    import math
+    idx = (np.arange(0, len(a), sr / 24000.0)).astype(np.int64)
+    idx = idx[idx < len(a)]
+    return a[idx]  # nearest-sample resample (embedding is robust; avoids a librosa dep)
 ```
 
 ```python
 def speaker_distance(self, wav_a, sr_a, wav_b, sr_b) -> float:
-    """ECAPA cosine distance between two clips (0 = same speaker). 0.6B Base."""
     self._ensure_base_loaded()
     m = self._base.model
     ea = m.extract_speaker_embedding(audio=_resample24k(wav_a, sr_a), sr=24000)
     eb = m.extract_speaker_embedding(audio=_resample24k(wav_b, sr_b), sr=24000)
-    return cosine_distance(ea.detach().cpu().numpy(), eb.detach().cpu().numpy())
+    import numpy as np
+    return cosine_distance(np.asarray(ea.detach().cpu()), np.asarray(eb.detach().cpu()))
 ```
 
-(`_resample24k` — small librosa/torchaudio helper; `extract_speaker_embedding` asserts sr==24000.)
-
-- [ ] **Step 4: Run to confirm pass**
-
-Run: `python -m pytest server/tts-sidecar/tests/test_qwen3.py::test_cosine_distance_pure -v`
-Expected: PASS.
+- [ ] **Step 4: Run → pass.** Pure-cosine test PASS. (A weights-gated `speaker_distance` sanity test — identical clip → ~0 — lives in Task 4's regression.)
 
 - [ ] **Step 5: Commit**
-
 ```bash
 git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py
-git commit -m "feat(side): ECAPA speaker-distance helper for the fs-55 identity regression (M7)"
+git commit -m "feat(side): ECAPA speaker-distance + 24k resample helpers (fs-55 M7)"
 ```
 
 ---
 
 ### Task 4: Anchored variant minting (`mint_variant`)
 
-**Files:**
-- Modify: `server/tts-sidecar/main.py` (`QwenEngine`, new method near `design_voice` ~1493)
-- Test: `server/tts-sidecar/tests/test_qwen3.py`
+**Files:** Modify `server/tts-sidecar/main.py` (near `design_voice` ~1493); Test `server/tts-sidecar/tests/test_qwen3.py`
 
-**Interfaces:**
-- Consumes: `_load_voice_prompt` (base `.pt`), `_ensure_base17_loaded`/`unload_base17`, `_icl_instruct_synth` (Task 2), `create_voice_clone_prompt` (0.6B), `speaker_distance` (Task 3), `_voice_paths`.
-- Produces: `QwenEngine.mint_variant(base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, voice_uuid) -> SynthResult` — writes the anchored variant `.pt`/`.json`, returns an audition preview.
+**Interfaces:** Produces `QwenEngine.mint_variant(base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, voice_uuid) -> SynthResult`. Raises `VoiceNotDesignedError` (new typed error) if the base `.pt` is absent.
 
-- [ ] **Step 1: Write the failing weights-gated regression (variant ≈ base identity)**
+- [ ] **Step 1: Non-GPU call-sequence test (the core coverage the v1 plan lacked)**
 
 ```python
-@pytest.mark.skipif(not _qwen_weights_present(), reason="Qwen weights absent")
-def test_minted_variant_holds_base_identity(qwen_engine, tmp_voices_dir):
-    # design a base voice, then mint an "angry" variant from it
-    qwen_engine.design_voice("v1", "A warm mid-30s British female narrator.", "English", None, None)
-    qwen_engine.mint_variant("v1", "v1__angry", "Delivered angrily, with raised intensity and edge.",
-                             "English", None, None)
-    base, lang, _ = qwen_engine._load_voice_prompt("v1")
-    var, _, _ = qwen_engine._load_voice_prompt("v1__angry")
-    # synth the same line on both, compare speaker identity
-    bw, bsr = qwen_engine._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=base)
-    vw, vsr = qwen_engine._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=var)
-    dist = qwen_engine.speaker_distance(bw[0], bsr, vw[0], vsr)
-    assert dist < 0.30, f"variant drifted from base (cosine {dist:.3f})"  # threshold calibrated in Step 6
+def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypatch):
+    eng = fake_qwen_runtime["engine"]; vdir = fake_qwen_runtime["dir"]
+    # base voice exists on disk (design it via the fake path)
+    eng.design_voice("v1", "A warm narrator.", "English", None, None)
+    calls = []
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: calls.append("load17"))
+    monkeypatch.setattr(eng, "unload_base17", lambda: calls.append("unload17"))
+    monkeypatch.setattr(eng, "_icl_instruct_synth",
+                        lambda items, text, instr, lang: (calls.append("instruct_synth"), (__import__("numpy").zeros(6000, "float32"), 24000))[1])
+    # base17 wrapper needed for the decode + ICL re-derive
+    eng._base17 = type(eng._base)("1.7b")
+    eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, "uuid-1")
+    assert calls.index("instruct_synth") < calls.index("unload17")     # 1.7B work before unload
+    import json, os
+    meta = json.load(open(os.path.join(vdir, "v1__angry.json"), encoding="utf-8"))
+    assert meta["anchoredTo"] == "v1" and meta["mintMethod"] == "anchored-icl-instruct"
+    assert meta["voiceUuid"] == "uuid-1"
+
+def test_mint_variant_raises_when_base_absent(fake_qwen_runtime):
+    eng = fake_qwen_runtime["engine"]
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng.mint_variant("nope", "nope__sad", "Delivered sadly.", "English", None, None)
 ```
 
-- [ ] **Step 2: Run to confirm fail**
+- [ ] **Step 2: Run → fail.** → FAIL (`mint_variant`/`VoiceNotDesignedError` undefined).
 
-Run: `python -m pytest server/tts-sidecar/tests/test_qwen3.py::test_minted_variant_holds_base_identity -v`
-Expected: FAIL — `mint_variant` not defined (or SKIP if no weights — run on the GPU box).
-
-- [ ] **Step 3: Implement `mint_variant`**
+- [ ] **Step 3: Implement `VoiceNotDesignedError` + `mint_variant`**
 
 ```python
+class VoiceNotDesignedError(RuntimeError):
+    """Base voice has no cached .pt — design it before minting a variant."""
+
 def mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct,
                  language, calibration_text, voice_uuid=None) -> "SynthResult":
-    """Mint an emotion variant ANCHORED to an already-designed base voice.
-    base ref_code -> reference clip -> 1.7B-Base ICL re-derive -> instruct-synth
-    the base voice performing the emotion -> distil to a 0.6B ICL .pt."""
     import torch
     lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
     ref_text = self.CALIBRATION_TEXT
     audition_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
-
-    base_prompt, _blang, _ = self._load_voice_prompt(base_voice_id)
+    base_pt, _json = self._voice_paths(base_voice_id)
+    if not os.path.isfile(base_pt):
+        raise VoiceNotDesignedError(f"base voice '{base_voice_id}' not designed (no {base_pt}).")
+    base_prompt, _b, _ = self._load_voice_prompt(base_voice_id)
     base_item = (base_prompt if isinstance(base_prompt, list) else [base_prompt])[0]
 
-    # --- 1.7B phase: decode base ref_code -> clip -> ICL re-derive -> instruct synth ---
+    # --- 1.7B phase (Kokoro evicted by _VD_KOKORO.design(), mirrors design_voice) ---
     with _VD_KOKORO.design():
+        # evict Kokoro the same way design_voice does (main.py:1533-1536)
+        kok = ENGINES.get("kokoro")
+        if kok is not None and hasattr(kok, "unload"):
+            kok.unload()
         self._ensure_base17_loaded()
         with self._synth_lock:
             self._ensure_base17_loaded()
@@ -345,55 +387,49 @@ def mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct,
             icl = self._base17.create_voice_clone_prompt(ref_audio=(ref_wavs[0], ref_sr), ref_text=ref_text)
             icl = icl if isinstance(icl, list) else [icl]
             emo_wav, emo_sr = self._icl_instruct_synth(icl, ref_text, emotion_instruct, lang)
-    self.unload_base17()                      # one-heavy-model invariant
+    self.unload_base17()  # one-heavy-model invariant
 
     # --- 0.6B phase: distil the emotion clip into a variant .pt ---
     with self._synth_lock:
         self._ensure_base_loaded()
         prompt = self._base.create_voice_clone_prompt(ref_audio=(emo_wav, emo_sr), ref_text=ref_text)
-
     os.makedirs(self._voices_dir, exist_ok=True)
     pt_path, json_path = self._voice_paths(variant_voice_id)
     torch.save(prompt, pt_path)
     import json as _json
     with open(json_path, "w", encoding="utf-8") as fh:
-        _json.dump({
-            "voiceId": variant_voice_id, "voiceUuid": voice_uuid,
-            "instruct": emotion_instruct, "language": lang, "refText": ref_text,
-            "baseModel": self.BASE_MODEL, "designModel": self.BASE17_MODEL,
-            "anchoredTo": base_voice_id, "mintMethod": "anchored-icl-instruct",  # fs-55 marker
-        }, fh, ensure_ascii=False, indent=2)
+        _json.dump({"voiceId": variant_voice_id, "voiceUuid": voice_uuid, "instruct": emotion_instruct,
+                    "language": lang, "refText": ref_text, "baseModel": self.BASE_MODEL,
+                    "designModel": self.BASE17_MODEL, "anchoredTo": base_voice_id,
+                    "mintMethod": "anchored-icl-instruct"}, fh, ensure_ascii=False, indent=2)
     with self._cache_lock:
         self._prompt_cache.pop(variant_voice_id, None)
-
     with self._synth_lock:
         self._ensure_base_loaded()
         wavs, sr = self._base.generate_voice_clone(text=[audition_text], language=[lang], voice_clone_prompt=prompt)
     return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 ```
 
-- [ ] **Step 4: Run the regression on the GPU box**
+- [ ] **Step 4: Run → pass.** The two non-GPU tests PASS (no weights needed).
 
-Run: `npm run test:sidecar` (on the box with weights)
-Expected: `test_minted_variant_holds_base_identity` PASS (distance < threshold). If it SKIPs, you are not on a weights box — this task MUST be run on one.
-
-- [ ] **Step 5: Add a `.json` marker assertion (runs anywhere via the existing fakes)**
+- [ ] **Step 5: Weights-gated identity regression (the fs-55 acceptance)**
 
 ```python
-def test_mint_variant_marks_json_anchored(qwen_engine_faked, tmp_voices_dir):
-    qwen_engine_faked.mint_variant("v1", "v1__sad", "Delivered sadly.", "English", None, "uuid-1")
-    import json
-    meta = json.load(open(os.path.join(tmp_voices_dir, "v1__sad.json"), encoding="utf-8"))
-    assert meta["anchoredTo"] == "v1" and meta["mintMethod"] == "anchored-icl-instruct"
-    assert meta["voiceUuid"] == "uuid-1"
+from conftest import _qwen_weights_present
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_minted_variant_holds_base_identity():
+    eng = main.ENGINES["qwen"]
+    eng.design_voice("rv1", "A warm mid-30s British female narrator.", "English", None, None)
+    eng.mint_variant("rv1", "rv1__angry", "Delivered angrily, with raised intensity and edge.", "English", None, None)
+    base, lang, _ = eng._load_voice_prompt("rv1"); var, _, _ = eng._load_voice_prompt("rv1__angry")
+    bw, bsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=base)
+    vw, vsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=var)
+    assert eng.speaker_distance(bw[0], bsr, vw[0], vsr) < 0.30  # threshold calibrated in Step 6
 ```
 
-- [ ] **Step 6: Calibrate + record the identity threshold (operator, on the box)**
-
-Mint variants for 2–3 designed voices × all 4 emotions; print `speaker_distance(base, variant)` for each AND **listen** to confirm "same person." Set the test's threshold just above the worst *good* case. Record the chosen number + the per-emotion distances in the plan's Ship Notes and as a comment on the threshold line. (This is the M7 "calibrate against perceived identity" step.)
+- [ ] **Step 6: Calibrate the threshold (operator, GPU box)** — mint 2-3 voices × 4 emotions; print `speaker_distance(base, variant)` AND **listen**; set the assert just above the worst *good* case; record numbers in Ship Notes (M7 calibration).
 
 - [ ] **Step 7: Commit**
-
 ```bash
 git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py
 git commit -m "feat(side): anchored emotion-variant minting from base identity (fs-55)"
@@ -403,125 +439,112 @@ git commit -m "feat(side): anchored emotion-variant minting from base identity (
 
 ### Task 5: Sidecar route `/qwen/mint-variant`
 
-**Files:**
-- Modify: `server/tts-sidecar/main.py` (route, near `/qwen/design-voice` ~3219)
-- Test: `server/tts-sidecar/tests/test_qwen3.py`
+**Files:** Modify `server/tts-sidecar/main.py` (route near `/qwen/design-voice` ~3219); Test `server/tts-sidecar/tests/test_qwen3.py`
 
-**Interfaces:**
-- Consumes: `mint_variant` (Task 4).
-- Produces: `POST /qwen/mint-variant` — body `{ baseVoiceId, variantVoiceId, emotionInstruct, language?, calibrationText?, voiceUuid? }`; returns audition PCM (same wire shape as `/qwen/design-voice`).
+**Interfaces:** `POST /qwen/mint-variant` body `{ baseVoiceId, variantVoiceId, emotionInstruct, language?, calibrationText?, voiceUuid? }` → audition PCM (same wire shape as `/qwen/design-voice`). `409` when the base isn't designed (`VoiceNotDesignedError`). Variant *preview* ids are passed verbatim as `variantVoiceId` (the Node side suffixes `-preview`); the route always anchors to the **real** `baseVoiceId`.
 
-- [ ] **Step 1: Write the failing route test (validation)**
+- [ ] **Step 1: Failing tests (validation + base-absent 409)** using inline `TestClient(main.app)`:
 
 ```python
-def test_mint_variant_route_requires_base_and_variant(client):
-    r = client.post("/qwen/mint-variant", json={"emotionInstruct": "x"})
-    assert r.status_code == 400
+def test_mint_variant_route_requires_fields(fake_qwen_runtime):
+    c = TestClient(main.app)
+    assert c.post("/qwen/mint-variant", json={"emotionInstruct": "x"}).status_code == 400
+
+def test_mint_variant_route_409_when_base_absent(fake_qwen_runtime):
+    c = TestClient(main.app)
+    r = c.post("/qwen/mint-variant", json={"baseVoiceId": "nope", "variantVoiceId": "nope__sad", "emotionInstruct": "Delivered sadly."})
+    assert r.status_code == 409
 ```
 
-- [ ] **Step 2: Run → fail.** Run: `python -m pytest server/tts-sidecar/tests/test_qwen3.py::test_mint_variant_route_requires_base_and_variant -v` → FAIL (404/405, route missing).
+- [ ] **Step 2: Run → fail.** → FAIL (route missing).
 
-- [ ] **Step 3: Implement the route** (mirror `/qwen/design-voice`, validate `baseVoiceId`/`variantVoiceId`/`emotionInstruct`, dispatch `asyncio.to_thread(qwen.mint_variant, ...)`, return PCM Response).
+- [ ] **Step 3: Implement the route** (mirror `/qwen/design-voice` ~3219): validate `baseVoiceId`/`variantVoiceId`/`emotionInstruct`; `try: await asyncio.to_thread(qwen.mint_variant, ...)` ; `except VoiceNotDesignedError: return JSONResponse({"detail": ...}, status_code=409)`; return PCM `Response`. Cancellation: the Node side already wraps design calls in its liveness/abort harness (`qwen-voice.ts:319-347`) — mint reuses it (Task 6), so no new sidecar-side abort needed.
 
-- [ ] **Step 4: Run → pass.** Same command → PASS.
+- [ ] **Step 4: Run → pass.** Both tests PASS.
 
 - [ ] **Step 5: Commit**
-
 ```bash
 git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py
-git commit -m "feat(side): POST /qwen/mint-variant route (fs-55)"
+git commit -m "feat(side): POST /qwen/mint-variant route (409 on undesigned base) (fs-55)"
 ```
 
 ---
 
-### Task 6: Route Node variant designs through the anchored path
+### Task 6: Route Node variant designs through the anchored path (incl. preview)
 
-**Files:**
-- Modify: `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter` ~304-430)
-- Test: `server/src/routes/qwen-voice.test.ts` (the `fs-25 emotion variants` describe ~456)
+**Files:** Modify `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter` ~304-430); Test `server/src/routes/qwen-voice.test.ts`
 
-**Interfaces:**
-- Consumes: `/qwen/mint-variant` (Task 5).
-- Produces: when `p.emotion` is set, `designQwenVoiceForCharacter` POSTs to `/qwen/mint-variant` with `{ baseVoiceId, variantVoiceId, emotionInstruct: EMOTION_INSTRUCT[emotion], language, calibrationText, voiceUuid }` instead of `/qwen/design-voice`. Base designs (no emotion) unchanged. Returned `{ voiceId, url }` shape unchanged.
+**Interfaces:** When `p.emotion` is set, POST `/qwen/mint-variant` with `{ baseVoiceId, variantVoiceId, emotionInstruct: EMOTION_INSTRUCT[emotion], language, calibrationText, voiceUuid }`. `baseVoiceId` = the **real** (non-preview) base storage key; `variantVoiceId` = `previewVoiceIdFor(\`${base}__${emotion}\`)` when `p.preview`, else `\`${base}__${emotion}\``. Base designs (no emotion) stay on `/qwen/design-voice`. Returned `{ voiceId, url }` unchanged.
 
-- [ ] **Step 1: Update the failing test**
+- [ ] **Step 1: Failing test (supertest + fetchMock, real route)**
 
 ```ts
-it('designs an emotion variant via /qwen/mint-variant anchored to the base (fs-55)', async () => {
-  const fetchMock = mockSidecarOk();
-  await designQwenVoiceForCharacter({ /* …, */ emotion: 'angry' });
-  const [url, init] = fetchMock.mock.calls.at(-1)!;
+it('designs an emotion variant via /qwen/mint-variant anchored to the real base (fs-55)', async () => {
+  fetchMock.mockResolvedValueOnce(new Response(Buffer.from(new Int16Array([1,2,3]).buffer), {
+    status: 200, headers: { 'X-Sample-Rate': '24000', 'Content-Type': 'audio/L16;rate=24000' },
+  }));
+  await request(app)
+    .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+    .send({ modelKey: QWEN_KEY, sampleVoiceId: 'char-maerin', emotion: 'angry' })
+    .expect(200);
+  const url = fetchMock.mock.calls.at(-1)![0] as string;
   expect(url).toContain('/qwen/mint-variant');
-  const body = JSON.parse(init.body);
-  expect(body.baseVoiceId).toBe(qwenStorageKey(character, characterId));
-  expect(body.variantVoiceId).toBe(`${body.baseVoiceId}__angry`);
+  const body = JSON.parse((fetchMock.mock.calls.at(-1)![1] as RequestInit).body as string);
+  expect(body.variantVoiceId).toMatch(/__angry$/);
+  expect(body.baseVoiceId).not.toMatch(/__angry/);          // anchored to the REAL base
   expect(body.emotionInstruct).toBe('Delivered angrily, with raised intensity and edge.');
 });
 ```
 
-- [ ] **Step 2: Run → fail.** Run: `cd server && npm run test -- qwen-voice` → FAIL (still hits `/qwen/design-voice`).
+- [ ] **Step 2: Run → fail.** `cd server && npm run test -- qwen-voice` → FAIL (still hits `/qwen/design-voice`).
 
-- [ ] **Step 3: Implement the branch** in `designQwenVoiceForCharacter`: when `p.emotion`, build `baseVoiceId`/`variantVoiceId`, target `/qwen/mint-variant`, send `emotionInstruct: EMOTION_INSTRUCT[p.emotion]` (the delivery clause only — the base persona is already baked into the base identity), keep `language`/`calibrationText`/`voiceUuid`. Leave the no-emotion (base) path on `/qwen/design-voice`.
+- [ ] **Step 3: Implement the branch** in `designQwenVoiceForCharacter`: compute `baseVoiceId = qwenStorageKey(...)`; `designedId = \`${baseVoiceId}__${emotion}\``; `variantVoiceId = p.preview ? previewVoiceIdFor(designedId) : designedId`; target `/qwen/mint-variant`; send `emotionInstruct: EMOTION_INSTRUCT[p.emotion]` (delivery clause only — base persona is already in the base identity), keep `language`/`calibrationText`/`voiceUuid`. Leave the no-emotion path on `/qwen/design-voice`. Keep the returned `voiceId` = `variantVoiceId` so the audition-cache key (`qwen-voice.ts:398-403`) is unchanged for variants.
 
-- [ ] **Step 4: Run → pass.** Same command → PASS; confirm the base-design test still passes.
+- [ ] **Step 4: Run → pass.** Variant + the existing base-design tests PASS.
 
-- [ ] **Step 5: Update the spec's §4.4 precedence + §4.5 carve-out note (R2-Mo)** — add the explicit emotion/instruct/manual-edit precedence ladder and confirm Script Review (fs-58) won't strip vocalizations. (Doc-only; one paragraph each.)
-
-- [ ] **Step 6: Run full server suite + commit**
-
-Run: `cd server && npm run test`
+- [ ] **Step 5: Run full server suite + commit**
 ```bash
-git add server/src/routes/qwen-voice.ts server/src/routes/qwen-voice.test.ts docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md
-git commit -m "feat(srv): route emotion-variant design through anchored /qwen/mint-variant (fs-55)"
+cd server && npm run test
+git add server/src/routes/qwen-voice.ts server/src/routes/qwen-voice.test.ts
+git commit -m "feat(srv): route emotion-variant design through anchored /qwen/mint-variant, incl. preview (fs-55)"
 ```
 
 ---
 
-### Task 7: Re-mint migration for existing books (follow-up — can ship after Tasks 1–6)
+### Task 7: Re-mint migration for existing books (can ship after Tasks 0-6)
 
-**Files:**
-- Create: `scripts/remint-anchored-variants.mjs` (dry-run + `--apply`, per the repair-script convention)
-- Test: `scripts/tests/remint-anchored-variants.test.mjs`
+**Files:** Create `scripts/remint-anchored-variants.mjs` (dry-run + `--apply`); Test `scripts/tests/remint-anchored-variants.test.mjs`
 
-**Interfaces:**
-- Produces: pure `planRemints(voices: {voiceId, mintMethod?}[]) -> string[]` returning variant voiceIds whose `.json` lacks `mintMethod === 'anchored-icl-instruct'` (i.e. old drifted variants). The script calls `/qwen/mint-variant` for each.
+**Interfaces:** `planRemints(voices: {voiceId, mintMethod?}[]) -> string[]` — variant ids (`__emotion`) whose `.json` lacks `mintMethod === 'anchored-icl-instruct'`.
 
-- [ ] **Step 1: Failing test for the pure planner**
-
+- [ ] **Step 1: Failing test**
 ```js
 import { planRemints } from '../remint-anchored-variants.mjs';
 test('selects only legacy (non-anchored) variants', () => {
-  const got = planRemints([
-    { voiceId: 'q-a', }, { voiceId: 'q-a__angry' }, // legacy variant -> remint
-    { voiceId: 'q-b__sad', mintMethod: 'anchored-icl-instruct' }, // already anchored -> skip
-  ]);
-  assert.deepEqual(got, ['q-a__angry']);
+  assert.deepEqual(planRemints([
+    { voiceId: 'q-a' }, { voiceId: 'q-a__angry' },
+    { voiceId: 'q-b__sad', mintMethod: 'anchored-icl-instruct' },
+  ]), ['q-a__angry']);
 });
 ```
-
-- [ ] **Step 2: Run → fail. Step 3: implement `planRemints` + the dry-run/apply driver. Step 4: run → pass.**
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/remint-anchored-variants.mjs scripts/tests/remint-anchored-variants.test.mjs
-git commit -m "chore(scripts): re-mint legacy emotion variants to the anchored pipeline (fs-55)"
-```
+- [ ] **Step 2: Run → fail. Step 3: implement `planRemints` + the dry-run/`--apply` driver (POSTs `/qwen/mint-variant` per legacy variant, anchored to its base). Step 4: run → pass.**
+- [ ] **Step 5: Commit** `chore(scripts): re-mint legacy emotion variants to the anchored pipeline (fs-55)`
 
 ---
 
 ### Task 8: Verify, document, close fs-55
 
-- [ ] **Step 1:** Run the full fast battery: `npm run verify:fast`. On the GPU box also `npm run test:sidecar` (the gated identity regression must PASS, not skip).
-- [ ] **Step 2:** Fill this plan's **Ship Notes** with the shipped SHA + the calibrated identity threshold + per-emotion distances.
-- [ ] **Step 3:** Update `docs/BACKLOG.md`: fs-55's resolution lands here — leave fs-56's row (instruct feature) noting the anchored-variant sub-fix shipped early via this plan.
-- [ ] **Step 4:** Open the PR with **`Closes #993`** (fs-55) and `Refs #996` (fs-56). PR title: `feat(srv,side): anchored emotion-variant minting — fix variant drift (fs-55)`.
+- [ ] **Step 0: Rebase the worktree on `main`** (once network's back) so the spec (#1002) is present: `git fetch origin main && git rebase origin/main` (resolve any `BACKLOG.md`/spec overlap). Confirm `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` now exists.
+- [ ] **Step 1:** `npm run verify:fast`; on the GPU box `npm run test:sidecar` (the identity regression must PASS, not skip).
+- [ ] **Step 2:** Fill **Ship Notes**: SHA, calibrated threshold + per-emotion distances, on-box verify result, Task-0 smoke output.
+- [ ] **Step 3:** Update the spec §4.4 precedence ladder (emotion/instruct/manual) + §4.5 carve-out note; remove fs-55's spec caveat now that it's measured.
+- [ ] **Step 4:** PR title `feat(srv,side): anchored emotion-variant minting — fix variant drift (fs-55)`; body `Closes #993` (operator-confirmed: close the fs-55 *detection-gate feature* as obviated by prevention) + `Refs #996` (fs-56). Open as **draft**; `gh pr ready` once locally green.
 
 ## Ship Notes
 
-_(fill on ship: SHA, calibrated identity threshold + per-emotion cosine distances, on-box verify result.)_
+_(fill on ship: SHA · calibrated identity threshold + per-emotion cosine distances · Task-0 smoke output · on-box verify result.)_
 
-## Open items carried from the spec (not this plan)
+## Open items carried from the spec (NOT this plan)
 
-- **R2-M4** (instruct-token batch bucketing) and **R2-M5** (0.6B↔1.7B base-swap policy) belong to the **fs-56 instruct-feature** plan, not this drift fix (this fix only touches *design-time* minting, never the per-line synth batcher).
-- **C2** broad validation + the committed perf benchmark remain fs-56 wave-0 gates.
+- **R2-M4** (instruct-token batch bucketing) + **R2-M5** (0.6B↔1.7B base-swap policy) → the **fs-56** instruct-feature plan (this fix only touches *design-time* minting, never the per-line synth batcher).
+- **C2** broad validation + the committed perf benchmark → fs-56 wave-0 gates (Task 0 here is the narrower variant-specific smoke, not the full matrix).
