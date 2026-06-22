@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Installed `qwen-tts` is 0.1.1.** The raw `Qwen3TTSForConditionalGeneration.generate()` combines `voice_clone_prompt` (ICL) + `instruct_ids` in independent additive branches (`modeling_qwen3_tts.py:2076-2080` + concat `:2237`); the public wrapper never wires them, so we call `self._base17.model.generate(...)` directly. **Pin `qwen-tts` + guard test** (verified methods exist: `_build_assistant_text:269`, `_build_ref_text:272`, `_build_instruct_text:275`, `_tokenize_texts:278`, `_merge_generate_kwargs:287`, `_prompt_items_to_voice_clone_prompt:460`, `create_voice_clone_prompt:356` tuple form OK, `speech_tokenizer.decode:307`).
-- **VRAM invariant (hard):** never two heavy models co-resident. Minting evicts Kokoro (mirror `design_voice` main.py:1533-1536), does all 1.7B-Base work, **unloads the 1.7B**, then loads the 0.6B for the distil. Variant `.pt` **must** be ICL.
+- **VRAM invariant:** at most one *VoiceDesign-class* heavy model at a time. Minting evicts Kokoro (mirror `design_voice` main.py:1533-1536), does the 1.7B-Base work, **unloads the 1.7B**, then loads the 0.6B for the distil. The 0.6B Base (~1 GB) may co-reside with the 1.7B-Base (~3.4 GB) during the 1.7B phase (~4.4 GB total — within the 8 GB budget, same envelope as today's `design_voice` 0.6B+1.7B-VoiceDesign peak). Variant `.pt` **must** be ICL.
 - **0.6B `.pt` is dim-incompatible with the 1.7B** (1024 vs 2048 speaker-embedding) — re-derive the base ICL prompt on the 1.7B from the decoded `ref_code`, never load it directly.
 - **Name/contract stability:** variant id stays `${base}__${emotion}`; preview ids via `previewVoiceIdFor` (`qwen-voice.ts:222`); `.pt`/`.json` paths via `_voice_paths`.
 - **Sidecar GPU tests SKIP+exit-0 when weights/venv absent** (existing `test:sidecar` convention; gate via the new `_qwen_weights_present()` from Task 0).
@@ -39,7 +39,7 @@
 
 **Files:**
 - Create: `server/tts-sidecar/tests/golden/instruct_smoke.py` (committed, weights-gated runner)
-- Modify: `server/tts-sidecar/tests/conftest.py` (add `_qwen_weights_present()` helper) — or `test_qwen3.py` if no conftest
+- Modify: `server/tts-sidecar/conftest.py` (the EXISTING root conftest — add `_qwen_weights_present()` here; the test files put SIDECAR_ROOT on `sys.path`, so `from conftest import …` resolves to this file, NOT a `tests/conftest.py`)
 - Test: this task's deliverable IS the committed runner + a recorded result line in Ship Notes
 
 **Interfaces:**
@@ -48,8 +48,7 @@
 - [ ] **Step 1: Add `_qwen_weights_present()`**
 
 ```python
-# conftest.py (sidecar tests)
-import os
+# server/tts-sidecar/conftest.py  (the EXISTING root conftest)
 def _qwen_weights_present() -> bool:
     """True only when the real qwen-tts + Qwen3-TTS weights are importable/loadable.
     Gates GPU tests so CI / dev venvs SKIP instead of failing."""
@@ -73,7 +72,7 @@ Expected (on weights box): prints distances; operator **listens** — confirms i
 - [ ] **Step 4: Commit**
 
 ```bash
-git add server/tts-sidecar/tests/golden/instruct_smoke.py server/tts-sidecar/tests/conftest.py
+git add server/tts-sidecar/tests/golden/instruct_smoke.py server/tts-sidecar/conftest.py
 git commit -m "test(side): committed reproducible 1.7B-Base instruct + codec-compat smoke (fs-55, R2-C1)"
 ```
 
@@ -130,6 +129,8 @@ Replace the inline `models` array in `main()` (~257) with `qwenPrefetchModels({ 
 ```python
 BASE17_MODEL = os.environ.get("QWEN_BASE_17B_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 # in __init__: self._base17 = None; self._base17_load_lock = threading.Lock()
+# ALSO update the `fake_qwen_runtime` fixture to reset engine._base17 = None on
+# setup + teardown (mirror its _base/_design reset) so a mint test can't leak _base17.
 
 def _ensure_base17_loaded(self) -> None:
     if self._base17 is not None:
@@ -156,7 +157,7 @@ def test_ensure_base17_loads_a_base_checkpoint():
     eng.unload_base17(); assert eng._base17 is None
 ```
 
-- [ ] **Step 7: Run + commit.** `npm run test:sidecar` (gated test SKIPs off-box).
+- [ ] **Step 7: Run + commit.** `npm run test:hooks` (runs the new `.mjs` node test — NOT `test:sidecar`, which is pytest, nor `test:scripts`, which is Pester) **and** `npm run test:sidecar` (the gated pytest loader test SKIPs off-box).
 ```bash
 git add server/tts-sidecar/scripts/install-qwen3.mjs scripts/tests/install-qwen3-base17.test.mjs server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py
 git commit -m "feat(side): wire Qwen 1.7B-Base into setup + single-flight loader (side-20)"
@@ -266,6 +267,8 @@ git commit -m "feat(side): raw-generate ICL+instruct synth helper + qwen-tts pin
 
 **Interfaces:** Produces module-level `cosine_distance(a, b) -> float`, `_resample24k(wav, sr) -> np.ndarray`, and `QwenEngine.speaker_distance(wav_a, sr_a, wav_b, sr_b) -> float`.
 
+> **REUSE FIRST (CLAUDE.md "don't gold-plate"):** the repo already ships a dedicated ECAPA `SpeakerEngine` as `main.SPK` (192-dim, unit-norm) plus a `cosine` helper in `spikes/srv36/metrics.py` (covered by `test_speaker_embed.py`). At execution, **verify their signatures and prefer `SPK.embed(wav, sr)` + that `cosine`** for both clips instead of pulling embeddings from the 0.6B synth model. The `cosine_distance`/`speaker_distance` below is the **fallback** only if `SPK`'s lifecycle/signature doesn't fit (it's self-consistent — same encoder both clips — so either is sound for the relative metric).
+
 - [ ] **Step 1: Failing pure-cosine test**
 
 ```python
@@ -337,7 +340,13 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     monkeypatch.setattr(eng, "unload_base17", lambda: calls.append("unload17"))
     monkeypatch.setattr(eng, "_icl_instruct_synth",
                         lambda items, text, instr, lang: (calls.append("instruct_synth"), (__import__("numpy").zeros(6000, "float32"), 24000))[1])
-    # base17 wrapper needed for the decode + ICL re-derive
+    # CRITICAL: the shared fake's create_voice_clone_prompt returns a DICT (no .ref_code),
+    # so stub _load_voice_prompt to hand back a ref_code-bearing item (ref_code=None skips the
+    # fake decode-trim cleanly). Without this, mint_variant's `base_item.ref_code` AttributeErrors.
+    import types as _types
+    monkeypatch.setattr(eng, "_load_voice_prompt",
+                        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False))
+    # base17 wrapper needed for decode + ICL re-derive (has speech_tokenizer via Task 2's fake)
     eng._base17 = type(eng._base)("1.7b")
     eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, "uuid-1")
     assert calls.index("instruct_synth") < calls.index("unload17")     # 1.7B work before unload
@@ -472,7 +481,7 @@ git commit -m "feat(side): POST /qwen/mint-variant route (409 on undesigned base
 
 ### Task 6: Route Node variant designs through the anchored path (incl. preview)
 
-**Files:** Modify `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter` ~304-430); Test `server/src/routes/qwen-voice.test.ts`
+**Files:** Modify `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter` ~304-430); Test `server/src/routes/qwen-voice.test.ts`. **NOTE:** `designQwenVoiceForCharacter` is the SHARED core also called by the bulk "Design full cast" job (`cast-design.ts:246`, `emotion` set, `preview` undefined → non-preview id), so the bulk variant path inherits this change automatically (desired). No `cast-design.ts` code change needed, but **run `cast-design.test.ts` and confirm it stays green** (its variant designs now hit `/qwen/mint-variant`).
 
 **Interfaces:** When `p.emotion` is set, POST `/qwen/mint-variant` with `{ baseVoiceId, variantVoiceId, emotionInstruct: EMOTION_INSTRUCT[emotion], language, calibrationText, voiceUuid }`. `baseVoiceId` = the **real** (non-preview) base storage key; `variantVoiceId` = `previewVoiceIdFor(\`${base}__${emotion}\`)` when `p.preview`, else `\`${base}__${emotion}\``. Base designs (no emotion) stay on `/qwen/design-voice`. Returned `{ voiceId, url }` unchanged.
 
