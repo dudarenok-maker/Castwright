@@ -1044,6 +1044,9 @@ export function Layout() {
       const st = ttsLifecycle[e].state;
       if (st === 'ready' || st === 'streaming' || st === 'loading') set.add(e);
     }
+    /* Qwen 1.7B-Base (fs-55): show alongside the Qwen pill when resident.
+       qwen1_7b is not an EngineFamily so we track it separately via the
+       ttsLifecycle — the pill renders when qwen_base17_loaded or loading. */
     return set;
   })();
   const showTtsControls = enginesToShow.size > 0;
@@ -1107,6 +1110,22 @@ export function Layout() {
           }}
           onStop={() => {
             void ttsLifecycle.qwen.onStop();
+          }}
+        />
+      )}
+      {(enginesToShow.has('qwen') ||
+        ttsLifecycle.qwen1_7b.state === 'ready' ||
+        ttsLifecycle.qwen1_7b.state === 'loading') && (
+        <ModelControlPill
+          kind="tts"
+          engineLabel="Qwen 1.7B"
+          state={ttsLifecycle.qwen1_7b.state}
+          unreachableLabel="Voice engine not running"
+          onLoad={() => {
+            void ttsLifecycle.qwen1_7b.onLoad();
+          }}
+          onStop={() => {
+            void ttsLifecycle.qwen1_7b.onStop();
           }}
         />
       )}
@@ -1273,9 +1292,10 @@ export function Layout() {
      per-second forceClockTick above keeps the "stalled" rung fresh against
      Date.now(), same as the pill IIFEs. `anyModelLoading` only counts engines
      whose pill is actually shown. */
-  const anyModelLoading = (['kokoro', 'coqui', 'qwen'] as const).some(
-    (e) => enginesToShow.has(e) && ttsLifecycle[e].state === 'loading',
-  );
+  const anyModelLoading =
+    (['kokoro', 'coqui', 'qwen'] as const).some(
+      (e) => enginesToShow.has(e) && ttsLifecycle[e].state === 'loading',
+    ) || ttsLifecycle.qwen1_7b.state === 'loading';
   /* Show the Status pill whenever a TTS model control is shown (so the default
      engine's Load/Stop is always reachable, even on book-less views) OR there's
      cross-book activity / pending revisions to surface. On a fully idle global

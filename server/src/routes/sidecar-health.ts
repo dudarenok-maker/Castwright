@@ -62,6 +62,7 @@ interface SidecarHealthBody {
      auto-evict the analyzer; its bespoke per-character voices share the
      same single /health response so useTtsLifecycle stays on one poll. */
   qwen_loaded?: boolean;
+  qwen_base17_loaded?: boolean;
   qwen_loading?: boolean;
   /* Install-state (plan: Qwen-default). Distinct from load-state: tells
      "package not pip-installed" / "installed, weights not downloaded" apart
@@ -198,6 +199,7 @@ export interface SidecarHealthResult {
   kokoroLoaded?: boolean;
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
+  qwenBase17Loaded?: boolean;
   qwenDesignEverLoaded?: boolean;
   qwenLoading?: boolean;
   qwenPackageInstalled?: boolean;
@@ -269,6 +271,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       kokoroLoaded: body.kokoro_loaded === true,
       kokoroLoading: body.kokoro_loading === true,
       qwenLoaded,
+      qwenBase17Loaded: body.qwen_base17_loaded === true,
       qwenLoading: body.qwen_loading === true,
       qwenPackageInstalled: qwenLoaded || body.qwen_package_installed === true,
       qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,

@@ -568,9 +568,11 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
     );
 
     /* Open the Status popover — the TTS controls live inside it.
-       The Qwen pill then renders once the cast hydrates from getBookState. */
+       The Qwen pill then renders once the cast hydrates from getBookState.
+       Note: a sibling "Qwen 1.7B" pill also renders (fs-55); use a strict
+       name match to select only the 0.6B-Base pill here. */
     fireEvent.click(await findByTestId('status-pill'));
-    const qwenPill = await findByRole('group', { name: /^Qwen / });
+    const qwenPill = await findByRole('group', { name: /^Qwen\s+(ready|idle|loading|unreachable)$/i });
     expect(qwenPill).toBeTruthy();
   });
 });
