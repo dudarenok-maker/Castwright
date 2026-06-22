@@ -1470,7 +1470,7 @@ class QwenEngine(Engine):
         m = self._base.model
         ea = m.extract_speaker_embedding(audio=_resample24k(wav_a, sr_a), sr=24000)
         eb = m.extract_speaker_embedding(audio=_resample24k(wav_b, sr_b), sr=24000)
-        return cosine_distance(np.asarray(ea.detach().cpu()), np.asarray(eb.detach().cpu()))
+        return cosine_distance(ea.detach().cpu().float().numpy(), eb.detach().cpu().float().numpy())
 
     def _ensure_design_loaded(self) -> None:
         if self._design is None:
