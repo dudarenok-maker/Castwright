@@ -4,6 +4,22 @@ import numpy as np
 from spikes.srv36.metrics import cosine, centroid
 
 
+def assemble_measured(per_gate: dict) -> dict:
+    """Map per-gate spike result dicts to the keys evaluate_axes consumes.
+    per_gate is keyed by gate name ('g1','g2','g3','g4','g5','g6'); each value
+    is that gate's result dict. Missing keys fall back to evaluate_axes's
+    safe-fail defaults (force no-go rather than silently pass)."""
+    return {
+        "g6_separation_auc": per_gate.get("g6", {}).get("separation_auc", 0.0),
+        "g1_genuine_drift_stds": per_gate.get("g1", {}).get("genuine_drift_stds", 1e9),
+        "g5_fp_rate": per_gate.get("g5", {}).get("fp_rate", 1.0),
+        "g2_divergence": per_gate.get("g2", {}).get("central", 0.0),
+        "g3_emotion_shift": per_gate.get("g3", {}).get("emotion_shift", 0.0),
+        "g4_wander_slope": per_gate.get("g4", {}).get("wander_slope", 0.0),
+        "g4_residual_fraction": per_gate.get("g4", {}).get("residual_fraction", 0.0),
+    }
+
+
 def evaluate_axes(measured: dict, thresholds: dict) -> dict:
     t = thresholds
     cross_book = (

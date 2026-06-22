@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from spikes.srv36.crossbook import (
     evaluate_axes,
+    assemble_measured,
     same_text_floor,
     crossbook_genuine_drift_stds,
     seed_divergence,
@@ -120,3 +121,20 @@ def test_wander_slope_flat_for_stable_voice():
 
 def test_wander_slope_negative_for_drifting_voice():
     assert wander_slope([0.95, 0.85, 0.75, 0.65]) < -0.05
+
+
+# Task 10: report assembler
+def test_assemble_measured_maps_gate_results_to_evaluator_keys():
+    per_gate = {"g6": {"separation_auc": 0.88}, "g1": {"genuine_drift_stds": 1.5},
+                "g5": {"fp_rate": 0.10}, "g2": {"central": 0.03},
+                "g3": {"emotion_shift": 0.02}, "g4": {"wander_slope": 0.001, "residual_fraction": 0.05}}
+    m = assemble_measured(per_gate)
+    assert m["g6_separation_auc"] == 0.88 and m["g1_genuine_drift_stds"] == 1.5
+    assert m["g5_fp_rate"] == 0.10 and m["g2_divergence"] == 0.03
+    assert m["g4_wander_slope"] == 0.001 and m["g4_residual_fraction"] == 0.05
+
+
+def test_assemble_measured_missing_gates_use_safe_fail_defaults():
+    m = assemble_measured({})  # nothing measured yet
+    # safe-fail: forces cross-book no-go (auc 0, drift 1e9, fp 1.0)
+    assert m["g6_separation_auc"] == 0.0 and m["g1_genuine_drift_stds"] == 1e9 and m["g5_fp_rate"] == 1.0
