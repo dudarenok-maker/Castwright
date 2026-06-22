@@ -323,6 +323,34 @@ describe('parseText — filename metadata propagation', () => {
   });
 });
 
+describe('parseText — non-English chapter splitting (seam 3a)', () => {
+  it('splits a Spanish plaintext manuscript on "Capítulo N"', () => {
+    const md = 'Capítulo 1\n\nEra una noche oscura.\n\nCapítulo 2\n\nA la mañana siguiente.\n';
+    const { chapters } = parseText(md, { format: 'plaintext' });
+    expect(chapters).toHaveLength(2);
+    expect(chapters[0].title).toMatch(/Capítulo 1/);
+  });
+
+  it('splits a German plaintext manuscript on "Kapitel N"', () => {
+    const md = 'Kapitel 1\n\nEs war eine dunkle Nacht.\n\nKapitel 2\n\nAm nächsten Morgen.\n';
+    const { chapters } = parseText(md, { format: 'plaintext' });
+    expect(chapters).toHaveLength(2);
+  });
+
+  it('splits a Russian plaintext manuscript on "Глава N" and preserves the Cyrillic title', () => {
+    const md = 'Глава 1\n\nБыла тёмная ночь.\n\nГлава 2\n\nНа следующее утро.\n';
+    const { chapters } = parseText(md, { format: 'plaintext' });
+    expect(chapters).toHaveLength(2);
+    expect(chapters[0].title).toMatch(/Глава 1/); // not stripped to empty by normaliseHeading
+  });
+
+  it('splits Spanish word-numbered + standalone headings (Capítulo Uno / Prólogo)', () => {
+    const md = 'Prólogo\n\nUnas palabras.\n\nCapítulo Uno\n\nComienza la historia.\n';
+    const { chapters } = parseText(md, { format: 'plaintext' });
+    expect(chapters).toHaveLength(2);
+  });
+});
+
 describe('parseText — audio-tag passthrough', () => {
   it('applies tagShoutingDialog to chapter bodies', () => {
     const out = parseText('Chapter 1\nShe yelled "GET OUT NOW".', { format: 'plaintext' });
