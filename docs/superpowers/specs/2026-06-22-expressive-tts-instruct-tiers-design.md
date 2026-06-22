@@ -74,10 +74,15 @@ All from the 2026-06-22 spike (throwaway scripts; deleted after this lands). Voi
 **Measured (8 GB card, SDPA, no FA2):**
 - No OOM. 1.7B Base ≈ 3.9 GB; 0.6B ≈ 1.2–2.1 GB.
 - Single-sentence RTF ≈ 2.8–3.1 for **both** models (overhead-bound — model size barely matters here).
-- **Batched (batch-8) is the lever:** 0.6B RTF **0.74** (1.35× realtime, 2.1 GB); 1.7B RTF **1.03**
-  (0.97× realtime, 4.2 GB). Batched, the 0.6B is **~1.4×** faster (16.2 vs 11.7 frames/s) — so it keeps a
-  real *speed* advantage, not just a VRAM one. (1.4× ≪ the 2.8× param ratio because batch-8 still isn't
-  fully compute-bound; larger batches widen it.)
+- **Batched (batch-8) is the lever — both tiers beat realtime.** Measured (SDPA, no FA2):
+  0.6B same-voice **RTF 0.74 / 1.35× / 2.1 GB**; 1.7B same-voice **RTF 1.03 / 0.97× / 4.2 GB**;
+  **1.7B mixed-voice + per-line instruct (the real Default path) RTF 0.67 / 1.49× / 4.22 GB.**
+- **Per-line instruct costs ~nothing** (C1, measured 2026-06-22): the 1.7B mixed batch-8 is **identical**
+  with vs without instruct (RTF 0.67, 17.9 frames/s both), and the raw-generate bypass **batches cleanly
+  with heterogeneous voices + per-item instruct** (resolves the M2 "does it even batch" risk).
+- **The 0.6B-vs-1.7B *speed* gap is within run-to-run noise** (1.7B measured 11.7 frames/s same-voice vs
+  17.9 mixed-voice across two runs). So the 0.6B is the **low-VRAM tier** (~2 GB vs ~4.2 GB), **not** a
+  proven speed tier — a controlled same-sentence A/B is needed before claiming any speed edge.
 
 ## 4. Architecture
 
@@ -85,8 +90,8 @@ All from the 2026-06-22 spike (throwaway scripts; deleted after this lands). Voi
 
 | Tier | Path | Per-line delivery | Batched perf | VRAM | Role |
 |---|---|---|---|---|---|
-| **Fast** | 0.6B Base + anchored emotion-variant `.pt` | enum variant select | 1.35× realtime | ~2.1 GB | speed / low-VRAM |
-| **Default — Quality+Expressive** | 1.7B Base + **ICL** clone, **per-line instruct optional** | live instruct (fallback: emotion) | ~0.97× realtime | ~4.2 GB | best quality; default |
+| **Fast** | 0.6B Base + anchored emotion-variant `.pt` | enum variant select | ~1.35× realtime | ~2.1 GB | **low-VRAM** (speed edge within noise) |
+| **Default — Quality+Expressive** | 1.7B Base + **ICL** clone, **per-line instruct optional** | live instruct (fallback: emotion) | **~1.5× realtime (RTF 0.67); instruct ≈ free** | ~4.2 GB | best quality; default |
 
 The earlier "three tiers" collapses to **two**: a 1.7B-ICL default that carries optional per-line
 instruct (plain when absent, expressive when present), and a 0.6B Fast/low-VRAM tier. Quality and
@@ -207,13 +212,25 @@ phases**, never together. This keeps the plan-108 8 GB OOM impossible.
 - **Perf guard**: record batched RTF for both tiers so a regression surfaces (baseline numbers in §3).
 - **Sidecar pytest**: cover the raw-generate ICL+instruct path and the dim-incompatibility re-derivation.
 
-## 10. Backlog / issue linkage
+## 10. Backlog / issue linkage (filed 2026-06-22)
 
-- **fs-55 (#993)** — `Closes #993` on the anchored-variants wave (root cause prevented; gate not built).
-- **New BACKLOG items to file** (the instruct feature, non-verbal sounds, Script Review get area:fs IDs;
-  the FA2-source-build is its own item):
-  - Wire 1.7B Base into setup.
-  - Fix the stale FA2 pin (conditional enable).
-  - **Explore: build FA2 from source for Windows cp312/torch2.11/cu128**; if it works, publish the wheel
-    for community reuse (no prebuilt Windows wheel exists for torch 2.11 — lldacing has ≤2.8; 2.11 builds
-    are Linux-only). Open community demand.
+- **fs-56 (#996)** — per-line instruct on the Qwen 1.7B tier (this design's core). **Resolves fs-55 (#993)** — `Closes #993` on the anchored-variants wave, **gated on the re-mint migration** (see §11 M4); root cause prevented, detection gate not built.
+- **fs-57 (#997)** — non-verbal vocalizations (pronounceable text + instruct). **Sibling of `side-18` (#979)** which covers the same goal for the other bracket-cue-native engines (reframed, not closed).
+- **fs-58 (#998)** — LLM Script Review.
+- **side-20 (#999)** — wire 1.7B-Base into setup. **side-21 (#1000)** — FA2 stale-pin fix + conditional enable. **side-22 (#1001)** — explore FA2 source build for Windows cp312/torch2.11/cu128 (publish wheel; no Windows torch-2.11 wheel exists today).
+
+## 11. Adversarial review — resolutions (2026-06-22)
+
+This spec stays `draft` until **C2** is satisfied. Findings below amend the sections cited.
+
+- **C1 — Default-tier perf was unmeasured → RESOLVED.** Measured 1.7B mixed-voice batch-8 **+ per-line instruct = RTF 0.67 / 1.49× / 4.22 GB**, identical to no-instruct (instruct ≈ free); raw bypass batches mixed voices + per-item instruct. §3/§4.1 updated. The 0.6B "speed tier" claim is downgraded to **low-VRAM tier** (gap within noise).
+- **C2 — Validation is thin → OUTSTANDING (gates leaving `draft`).** Audio findings are one voice / one English sentence / ~5 emotions, plus a 3-voice perf run. **Required before the plan is complete:** a validation matrix (several voices × sentence types incl. long/questions/dialogue × all emotions × language) with the identity metric of M7.
+- **M1 — Script Review can corrupt sentence IDs → amend §4.6 + §9.** Re-split/merge MUST preserve sentence-ID stability and not orphan emotion/instruct assignments or generated audio (`segments.json`); must respect prior user manual edits. Add a regression fixture.
+- **M2 — raw-`generate` bypass is version-fragile → amend §4.2.** Pin `qwen-tts` (0.1.1) and add a sidecar test that fails loudly if the raw path drifts; consider an upstream PR to expose clone+instruct officially. (Batching with mixed voices + instruct is confirmed working.)
+- **M3 — Fast tier depends on the 1.7B *Base* → amend §4.3/§4.8.** Anchored-variant minting needs the 1.7B **Base** (VoiceDesign can't clone) — a genuinely new ~3.4 GB model + design-time run, **including for Fast/0.6B users**. Not "no new dependency." (side-20 #999 notes this.)
+- **M4 — closing fs-55 leaves existing drift undetected → amend §7/§10.** `Closes #993` only after the **re-mint migration** runs over already-designed books; until then keep a lightweight fidelity check so pre-existing drifted variants aren't silently shipped.
+- **M5 — non-verbal sounds collide with two systems → amend §4.5.** Script Review (fs-58) must NOT strip intentional vocalizations; ASR content-QA (srv-31) needs a WER carve-out so inserted vocalizations don't trigger spurious re-records.
+- **M6 — FA2 "auto-enable" oversold → amend §4.8.** There is no discovery mechanism and no matching Windows wheel today, so FA2 is effectively **off until the pin is manually updated** (side-21/side-22). State it as such.
+- **M7 — identity metric undefined → amend §9.** Specify: ECAPA speaker-embedding cosine distance from the model's own encoder, with a tolerance **calibrated against perceived identity** on a small labelled set (don't assume distance ⇔ perception).
+- **M8 — `instruct?` is OpenAPI-governed → amend §4.4.** Add the field to `openapi.yaml` and regenerate `src/lib/api-types.ts`; the Zod `schemas.ts` change alone is insufficient (OpenAPI is the type source of truth).
+- **Minors:** mixed-voice batch now measured (C1); per-line **temperature** strategy is tuning debt (1.1 helped angry, may hurt whisper); **Script Review keeps a clean wave boundary** so it can ship alone first; **fs-45** VRAM telemetry (#845) should feed the §5 tier auto-selector; **non-English vocalizations** (fs-2 Russian) deferred.
