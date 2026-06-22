@@ -16,7 +16,7 @@ import {
   Avatar,
   Pill,
   VoiceSwatch,
-  ReusedBadge,
+  CarriedBadge,
 } from '../components/primitives';
 import { VariantGlyphStrip } from '../components/variant-glyph-strip';
 import {
@@ -128,6 +128,7 @@ const CHIP_ORDER = [
    only the displayed text changes. */
 const CHIP_LABELS: Record<string, string> = {
   Variants: 'Has variants',
+  Reused: 'Carried',
 };
 
 export function CastView({
@@ -1407,9 +1408,9 @@ function ttsLabel(key: TtsModelKey): string {
 /* Engine-aware Status display (plan 117 + reused-badge split). Renders two
    ORTHOGONAL markers via `resolveVoiceStatus`: the lifecycle pill (Needs voice
    → Designed → Generated for Qwen; Matched / Tuned / Locked otherwise) plus a
-   small Reused badge whenever the voice was matched from a prior book — so a
-   reused Qwen voice reads "Generated · Reused" instead of collapsing to a lone
-   "Reused" pill. See src/lib/voice-status.ts for the resolution rules. */
+   small Carried badge whenever the voice was matched from a prior book — so a
+   reused Qwen voice reads "Generated · Carried" instead of collapsing to a lone
+   "Carried" pill. See src/lib/voice-status.ts for the resolution rules. */
 function StatusPill({
   c,
   voice,
@@ -1447,7 +1448,7 @@ function StatusPill({
     <span className="inline-flex flex-col items-start gap-1.5">
       <span className="inline-flex items-center gap-1.5 flex-wrap">
         {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
-        {reused && <ReusedBadge />}
+        {reused && <CarriedBadge />}
       </span>
       {showStrip && <VariantGlyphStrip usedEmotions={usedEmotions} designedEmotions={designed} />}
     </span>

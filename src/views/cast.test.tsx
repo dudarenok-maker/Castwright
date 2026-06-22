@@ -539,12 +539,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
     );
   });
 
-  it('renders the lifecycle pill and the Reused badge as separate, coexisting markers', () => {
+  it('renders the lifecycle pill and the Carried badge as separate, coexisting markers', () => {
     renderView();
     /* marrow: coqui, voiceState 'generated', no match → "Matched" pill only.
        narrator: coqui voice, voiceState 'reused' + matchedFrom → "Matched"
-       lifecycle pill AND a Reused provenance badge (they no longer collapse
-       into a single "Reused" pill). */
+       lifecycle pill AND a Carried provenance badge (they no longer collapse
+       into a single "Carried" pill). */
     const marrowRow = rowFor('Mr. Marrow');
     expect(within(marrowRow).getByText('Matched')).toBeInTheDocument();
     expect(within(marrowRow).queryByTestId('reused-badge')).toBeNull();
@@ -552,14 +552,15 @@ describe('CastView Qwen status pill (plan 117)', () => {
     const narratorRow = rowFor('Narrator');
     expect(within(narratorRow).getByText('Matched')).toBeInTheDocument();
     expect(within(narratorRow).getByTestId('reused-badge')).toBeInTheDocument();
+    expect(within(narratorRow).getByText('Carried')).toBeInTheDocument();
   });
 
-  it('shows "Generated · Reused" together for a reused Qwen voice', () => {
+  it('shows "Generated · Carried" together for a reused Qwen voice', () => {
     /* The real-world case the badge split fixes: a character reused from a
        prior book whose matched library voice is a bespoke Qwen voice. The
        provenance lives on `matchedFrom`; the Qwen lifecycle on the matched
        voice (its `generated` flag) — both must render, where the old single
-       pill showed only "Reused". */
+       pill showed only "Carried". */
     const reusedQwen: Character = { ...narrator, voiceId: 'v_qwen_narrator' };
     const qwenLib: Voice[] = [
       {
@@ -579,6 +580,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     const row = rowFor('Narrator');
     expect(within(row).getByText('Generated')).toBeInTheDocument();
     expect(within(row).getByTestId('reused-badge')).toBeInTheDocument();
+    expect(within(row).getByText('Carried')).toBeInTheDocument();
   });
 
   it('renders a Qwen row without throwing when the library is empty (defensive)', () => {
@@ -1121,7 +1123,7 @@ describe('CastView status filter', () => {
     expect(chip(/^Needs voice/).textContent).toContain('1');
     expect(chip(/^Matched/).textContent).toContain('2'); // narrator + marrow
     expect(chip(/^Unset/).textContent).toContain('1');
-    expect(chip(/^Reused/).textContent).toContain('1'); // narrator only
+    expect(chip(/^Carried/).textContent).toContain('1'); // narrator only
   });
 
   it('filters to a single status when one chip is active', () => {
@@ -1143,9 +1145,9 @@ describe('CastView status filter', () => {
     expect(isPresent('Blank')).toBe(false); // Unset — excluded
   });
 
-  it('isolates reused characters via the Reused chip', () => {
+  it('isolates reused characters via the Carried chip', () => {
     renderFilterView();
-    fireEvent.click(chip(/^Reused/));
+    fireEvent.click(chip(/^Carried/));
     expect(isPresent('Narrator')).toBe(true);
     expect(isPresent('Ghost')).toBe(false);
     expect(isPresent('Mr. Marrow')).toBe(false);

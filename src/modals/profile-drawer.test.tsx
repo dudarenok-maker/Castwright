@@ -1534,7 +1534,7 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
     expect(playBtn.disabled).toBe(false);
   });
 
-  it('shows the lifecycle pill and the Reused badge together', () => {
+  it('shows the lifecycle pill and the Carried badge together', () => {
     renderReused();
     /* voice.generated === true ⇒ "Generated" lifecycle; matchedFrom ⇒ badge. */
     expect(screen.getByText('Generated')).toBeTruthy();

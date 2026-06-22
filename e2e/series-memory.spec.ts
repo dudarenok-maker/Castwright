@@ -54,4 +54,19 @@ test.describe('series-memory: chip → reveal → share card', () => {
     /* Footer of the share card carries the branding. */
     await expect(shareCard.getByText('castwright.ai')).toBeVisible();
   });
+
+  test('share card exports a PNG download', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('series-memory-chip').first().click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
+    await dialog.getByText('Share this cast').click();
+    await expect(page.getByTestId('series-share-card')).toBeVisible({ timeout: 5_000 });
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: /download image \(\.png\)/i }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/\.png$/);
+  });
 });

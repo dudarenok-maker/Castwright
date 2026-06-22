@@ -12,7 +12,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { librarySlice } from '../../store/library-slice';
 import { accountSlice } from '../../store/account-slice';
 import { LibraryTable } from './library-table';
-import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+import type { LibraryAuthor, LibraryBook, LibrarySeries } from '../../lib/types';
 
 function makeBook(over: Partial<LibraryBook> & Pick<LibraryBook, 'bookId' | 'title'>): LibraryBook {
   const base: LibraryBook = {
@@ -46,6 +46,7 @@ function renderTable(opts: {
   onReplaceManuscript?: (b: LibraryBook, file: File) => void;
   onEditBook?: (b: LibraryBook) => Promise<void>;
   onStartNew?: () => void;
+  onOpenSeriesMemory?: (s: LibrarySeries) => void;
 }) {
   const store = configureStore({
     reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
@@ -72,6 +73,7 @@ function renderTable(opts: {
         onReplaceManuscript={opts.onReplaceManuscript ?? vi.fn()}
         onEditBook={opts.onEditBook ?? vi.fn().mockResolvedValue(undefined)}
         onStartNew={opts.onStartNew ?? vi.fn()}
+        onOpenSeriesMemory={opts.onOpenSeriesMemory}
       />
     </Provider>,
   );
@@ -340,5 +342,57 @@ describe('LibraryTable — interactions', () => {
     expect(onReplaceManuscript).toHaveBeenCalledTimes(1);
     expect(onReplaceManuscript.mock.calls[0][0]).toBe(book);
     expect(onReplaceManuscript.mock.calls[0][1]).toBe(file);
+  });
+});
+
+const SUMMARY = {
+  carriedCount: 8, bespokeCount: 5, designedCount: 5,
+  confirmedBookCount: 3, spanBooks: 3, perBook: [],
+};
+
+describe('LibraryTable — series-memory chip (fe-41)', () => {
+  const authorsWith = (seriesMemory: typeof SUMMARY | undefined): LibraryAuthor[] => [
+    {
+      name: 'Marin Vale',
+      series: [
+        {
+          name: 'Northern Coast Trilogy',
+          seriesMemory,
+          books: [makeBook({ bookId: 'n1', title: 'North One', seriesPosition: 1 })],
+        },
+      ],
+    },
+  ];
+
+  it('renders the compact chip (no books clause) for a series with seriesMemory', () => {
+    renderTable({ authors: authorsWith(SUMMARY) });
+    const chip = screen.getByTestId('series-memory-chip');
+    expect(chip).toHaveTextContent('Your cast · 8 voices');
+    expect(chip).not.toHaveTextContent('books');
+  });
+
+  it('renders no chip when the series has no seriesMemory', () => {
+    renderTable({ authors: authorsWith(undefined) });
+    expect(screen.queryByTestId('series-memory-chip')).toBeNull();
+  });
+
+  it('renders no chip in the Standalones section', () => {
+    const authors: LibraryAuthor[] = [
+      { name: 'A', series: [{ name: 'S', seriesMemory: SUMMARY,
+        books: [makeBook({ bookId: 's1', title: 'Solo', isStandalone: true })] }] },
+    ];
+    renderTable({ authors });
+    expect(screen.queryByTestId('series-memory-chip')).toBeNull();
+  });
+
+  it('clicking the chip fires onOpenSeriesMemory without toggling collapse', () => {
+    const onOpenSeriesMemory = vi.fn();
+    renderTable({ authors: authorsWith(SUMMARY), onOpenSeriesMemory });
+    // chip scoped by testid (the section also has the collapse button) — R3-2
+    fireEvent.click(screen.getByTestId('series-memory-chip'));
+    expect(onOpenSeriesMemory).toHaveBeenCalledTimes(1);
+    expect(onOpenSeriesMemory.mock.calls[0][0].name).toBe('Northern Coast Trilogy');
+    // collapse did NOT fire: the book row is still present
+    expect(screen.getByText('North One')).toBeInTheDocument();
   });
 });

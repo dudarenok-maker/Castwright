@@ -19,7 +19,7 @@ import {
   VoiceSwatch,
   Pill,
   PrimaryButton,
-  ReusedBadge,
+  CarriedBadge,
   VariantsBadge,
 } from '../components/primitives';
 import { resolveVoiceStatus } from '../lib/voice-status';
@@ -885,9 +885,9 @@ export function ProfileDrawer({
                 Voice profile
               </p>
               <div className="flex items-center gap-2">
-                {/* Lifecycle pill + Reused badge, resolved the same way as the
+                {/* Lifecycle pill + Carried badge, resolved the same way as the
                     cast view's Status column so the two surfaces agree (a
-                    reused Qwen voice shows "Designed/Generated · Reused"). The
+                    reused Qwen voice shows "Designed/Generated · Carried"). The
                     4th arg (fe-16) surfaces "Fallback (Kokoro)" when this
                     character actually rendered in Kokoro last generation. */}
                 {(() => {
@@ -896,7 +896,7 @@ export function ProfileDrawer({
                   return (
                     <>
                       {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
-                      {reused && <ReusedBadge />}
+                      {reused && <CarriedBadge />}
                       {hasEmotionVariants && <VariantsBadge count={variantCount} />}
                     </>
                   );

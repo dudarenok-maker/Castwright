@@ -157,3 +157,11 @@ Behaviour delta vs. original spec:
 - PNG export deferred (T13 decision, Task 15 confirmed) — `html-to-image` dep requires a separate sign-off; the "Export PNG" button was intentionally omitted from the share-card modal at v1.
 - `cloned` signal for Coqui: defaulted to `preset` until an explicit `cloned` marker exists in the voice override. The headline bespoke case is Qwen `designed` anyway.
 - `buildInputsFromBooks` is the library-path variant (reuses scanned books); `buildSeriesInputs` is the route-only variant (reads from disk). The double-scan noted in the Round 2 review was fixed in T3.
+
+## fe-40 follow-ups (delivered 2026-06-22)
+
+The three "Out of scope" items above shipped as a single FE-only round — spec `docs/superpowers/specs/2026-06-22-fe-40-followups-design.md`, plan `docs/superpowers/plans/2026-06-22-fe-40-followups.md`, branch `feat/frontend-fe-40-followups-iso`.
+
+- **fe-42 (#984) — single-word "Carried" vocabulary.** `ReusedBadge` → `CarriedBadge` (stable `data-testid="reused-badge"`), the cast filter chip relabelled via `CHIP_LABELS` (`Reused: 'Carried'` — internal key unchanged), and confirm-cast `Matched · N%` → `Carried · N%`. The lifecycle `Matched` pill (from `voiceState`, not `matchedFrom`) is deliberately untouched, so a reused-preset row reads "Matched · Carried". The issue's second term "Kept" was dropped — no data distinguishes it (`reused === !!matchedFrom`). Owed at merge: regenerate the `confirm` visual baselines (text changed).
+- **fe-41 (#983) — series-memory chip in the table view.** `SeriesMemoryChip` gained `showBooks?` (default `true`); the table renders the compact `showBooks={false}` variant in a restructured section header (chip as a responsive sibling of the collapse button). The orchestrator's filter mapping was extracted into the exported pure `applyLibraryFilters`, unit-locking the "seriesMemory survives filtering" invariant. (Table-view-only — the inline sparkline stayed out of scope.)
+- **fe-43 (#985) — PNG share-card export.** A "Download image (.png)" button captures the `SeriesShareCard` via a lazily-imported `html-to-image` (2×, `document.fonts?.ready`-gated); a shared `slugifyFilename` sanitises both the PNG and the existing JSON download. Dep signed off as `html-to-image`.
