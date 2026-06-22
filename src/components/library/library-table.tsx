@@ -35,9 +35,10 @@ import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-boo
 import { CoverPicker } from '../../modals/cover-picker';
 import { computeCoverStyle } from '../../lib/cover-framing';
 import { safeImageSrc } from '../../lib/safe-url';
-import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+import type { LibraryAuthor, LibraryBook, LibrarySeries } from '../../lib/types';
 import { STATUS_UI } from './library-status-ui';
 import { EmptyLibrary, LibrarySkeleton, NoFilterMatch } from './library-empty-states';
+import { SeriesMemoryChip } from '../series-memory/series-memory-chip';
 
 interface Props {
   loaded: boolean;
@@ -53,6 +54,7 @@ interface Props {
   onEditBook: (book: LibraryBook, patch: EditBookMetaPatch) => Promise<void>;
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
+  onOpenSeriesMemory?: (s: LibrarySeries) => void;
 }
 
 interface SeriesGroup {
@@ -67,6 +69,9 @@ interface SeriesGroup {
       hides the author cell to avoid duplicating it after a series header
       that already names one author. */
   authorOverride: string | null;
+  /** Original LibrarySeries (for the series-memory chip + reveal); null for
+      the synthetic Standalones group. */
+  series: LibrarySeries | null;
   books: LibraryBook[];
 }
 
@@ -82,6 +87,7 @@ export function LibraryTable({
   onEditBook,
   onCoverChanged,
   onStartNew,
+  onOpenSeriesMemory,
 }: Props) {
   /* Group the post-filter authors into the renderable series list, then
      append a synthetic Standalones group at the bottom (no header dupe
@@ -103,6 +109,7 @@ export function LibraryTable({
             id: `${author.name}::${series.name}`,
             label: `${author.name} — ${series.name}`,
             authorOverride: null,
+            series,
             books: groupBooks,
           });
         }
@@ -115,6 +122,7 @@ export function LibraryTable({
         /* Standalones span every author with at least one standalone —
            keep the author column in the table to disambiguate. */
         authorOverride: 'show',
+        series: null,
         books: standalones,
       });
     }
@@ -138,27 +146,37 @@ export function LibraryTable({
         const isCollapsed = collapsed[group.id] === true;
         return (
           <section key={group.id} data-testid={`library-table-section-${group.id}`}>
-            <button
-              type="button"
-              onClick={() => setCollapsed((m) => ({ ...m, [group.id]: !isCollapsed }))}
-              aria-expanded={!isCollapsed}
-              aria-controls={`library-table-body-${group.id}`}
-              className="w-full flex items-center justify-between gap-3 mb-3 px-1 py-1 rounded-lg hover:bg-ink/3 transition-colors"
-            >
-              <span className="inline-flex items-center gap-2">
-                {isCollapsed ? (
-                  <IconChevR className="w-3.5 h-3.5 text-ink/60" />
-                ) : (
-                  <IconArrowDn className="w-3.5 h-3.5 text-ink/60" />
-                )}
-                <span className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink/55">
-                  {group.label}
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <button
+                type="button"
+                onClick={() => setCollapsed((m) => ({ ...m, [group.id]: !isCollapsed }))}
+                aria-expanded={!isCollapsed}
+                aria-controls={`library-table-body-${group.id}`}
+                className="flex-1 min-w-0 flex items-center justify-between gap-3 px-1 py-1 rounded-lg hover:bg-ink/3 transition-colors"
+              >
+                <span className="inline-flex items-center gap-2 min-w-0">
+                  {isCollapsed ? (
+                    <IconChevR className="w-3.5 h-3.5 text-ink/60" />
+                  ) : (
+                    <IconArrowDn className="w-3.5 h-3.5 text-ink/60" />
+                  )}
+                  <span className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink/55 truncate">
+                    {group.label}
+                  </span>
                 </span>
-              </span>
-              <span className="text-[11px] text-ink/40">
-                {group.books.length} {group.books.length === 1 ? 'book' : 'books'}
-              </span>
-            </button>
+                <span className="text-[11px] text-ink/40 shrink-0">
+                  {group.books.length} {group.books.length === 1 ? 'book' : 'books'}
+                </span>
+              </button>
+              {group.series?.seriesMemory && (
+                <SeriesMemoryChip
+                  summary={group.series.seriesMemory}
+                  bookCount={group.series.seriesMemory.confirmedBookCount}
+                  showBooks={false}
+                  onOpen={() => onOpenSeriesMemory?.(group.series!)}
+                />
+              )}
+            </div>
             {!isCollapsed && (
               <div
                 id={`library-table-body-${group.id}`}

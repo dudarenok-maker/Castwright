@@ -11,7 +11,7 @@ import { tourSlice } from '../store/tour-slice';
 import { uiSlice } from '../store/ui-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
 import { notificationsSlice } from '../store/notifications-slice';
-import { BookLibraryView } from './book-library';
+import { BookLibraryView, applyLibraryFilters } from './book-library';
 import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
 
 import type { ContinueItem } from '../store/continue-listening-slice';
@@ -875,5 +875,55 @@ describe('BookLibraryView — loading affordance', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
     ).toBeInTheDocument();
+  });
+});
+
+/* Helper for pure-function tests — mirrors makeBook in library-table.test.tsx */
+function makeLibBook(over: Partial<LibraryBook> & Pick<LibraryBook, 'bookId' | 'title'>): LibraryBook {
+  const base: LibraryBook = {
+    bookId: over.bookId,
+    title: over.title,
+    author: 'Marin Vale',
+    series: 'Northern Coast Trilogy',
+    seriesPosition: 1,
+    isStandalone: false,
+    status: 'complete',
+    chapterCount: 10,
+    completedChapters: 10,
+    characterCount: 5,
+    voiceCount: 5,
+    lastWorkedOn: 'today',
+    coverGradient: ['#000', '#fff'],
+    runtime: '5h 0m',
+    tags: [],
+  };
+  return { ...base, ...over };
+}
+
+describe('applyLibraryFilters', () => {
+  it('preserves seriesMemory when a search narrows the books', () => {
+    const summary = {
+      carriedCount: 8, bespokeCount: 5, designedCount: 5,
+      confirmedBookCount: 3, spanBooks: 3, perBook: [],
+    };
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Marin Vale',
+        series: [
+          {
+            name: 'Northern Coast Trilogy',
+            seriesMemory: summary,
+            books: [
+              makeLibBook({ bookId: 'n1', title: 'North One' }),
+              makeLibBook({ bookId: 'n2', title: 'North Two' }),
+            ],
+          },
+        ],
+      },
+    ];
+    const out = applyLibraryFilters(authors, { filter: 'all', search: 'North One', tags: [], languages: [] });
+    // search narrowed books 2→1 but the series object kept its seriesMemory:
+    expect(out[0].series[0].books).toHaveLength(1);
+    expect(out[0].series[0].seriesMemory).toEqual(summary);
   });
 });

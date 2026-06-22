@@ -106,6 +106,28 @@ function matchesFilter(book: LibraryBook, filter: Filter): boolean {
   return true;
 }
 
+export function applyLibraryFilters(
+  authors: LibraryAuthor[],
+  opts: { filter: Filter; search: string; tags: string[]; languages: string[] },
+): LibraryAuthor[] {
+  return authors
+    .map((author) => ({
+      ...author,
+      series: author.series
+        .map((series) => ({
+          ...series,
+          books: filterBooks(
+            series.books.filter((b) => matchesFilter(b, opts.filter)),
+            opts.search,
+            opts.tags,
+            opts.languages,
+          ),
+        }))
+        .filter((series) => series.books.length > 0),
+    }))
+    .filter((author) => author.series.length > 0);
+}
+
 export function BookLibraryView({
   authors,
   activeBookId,
@@ -311,24 +333,16 @@ export function BookLibraryView({
      boundary so <LibraryGrid /> stays a pure render of whatever it's
      handed. Series with no matching books are dropped, and authors with
      no matching series collapse out entirely — same pre-split semantics. */
-  const filteredAuthors = useMemo<LibraryAuthor[]>(() => {
-    return authors
-      .map((author) => ({
-        ...author,
-        series: author.series
-          .map((series) => ({
-            ...series,
-            books: filterBooks(
-              series.books.filter((b) => matchesFilter(b, filter)),
-              debouncedSearch,
-              activeTags,
-              activeLanguages,
-            ),
-          }))
-          .filter((series) => series.books.length > 0),
-      }))
-      .filter((author) => author.series.length > 0);
-  }, [authors, filter, debouncedSearch, activeTags, activeLanguages]);
+  const filteredAuthors = useMemo<LibraryAuthor[]>(
+    () =>
+      applyLibraryFilters(authors, {
+        filter,
+        search: debouncedSearch,
+        tags: activeTags,
+        languages: activeLanguages,
+      }),
+    [authors, filter, debouncedSearch, activeTags, activeLanguages],
+  );
 
   const matchedBookCount = useMemo(
     () =>
@@ -429,6 +443,7 @@ export function BookLibraryView({
             onEditBook={onEditBook}
             onCoverChanged={onCoverChanged}
             onStartNew={onStartNew}
+            onOpenSeriesMemory={(s) => setOpenSM(s)}
           />
         </div>
       )}
