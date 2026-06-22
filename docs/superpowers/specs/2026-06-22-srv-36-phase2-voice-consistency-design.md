@@ -278,7 +278,18 @@ cold-start anchor and is **exempt from the sanity gate (Branch B step 3)** (ther
 is no approval to compare to) — its canonical is flagged `seed: no-approval` so
 fs-51 can surface the weaker guarantee.
 
-### 3.2.bis Canonical self-correction (the book-1 bootstrap limit)
+### 3.2.bis Canonical self-correction — DEFERRED to a follow-up (not in v1)
+**Decision (2026-06-22): the auto-re-freeze machinery below is deferred to a
+backlog follow-up, NOT built in v1.** Rationale (YAGNI): it guards a rare
+triple-conjunction (unrepresentative audition **and** drifted debut **and** ≥2
+later books), and because a shared `voiceUuid`/config renders the voice
+near-identically *by construction*, cross-book drift is itself the rare event.
+**v1 instead surfaces the limitation, doesn't auto-fix it:** a debut canonical
+that the sanity gate withheld is already `canonical-suspect` (§4.2), and the
+worst residual case carries the `seed: single-later-book` low-confidence marker
+(below) → `inconclusive`, never a false "voice off." File the auto-re-freeze as a
+backlog item when Phase 2 ships; the rest of this section is its spec.
+
 The canonical-*establishing* book cannot be validated against anything except the
 audition — there are no other books yet. So if the audition is unrepresentative
 **and** the debut book is itself drifted, the sanity gate (which only sees the
@@ -286,7 +297,7 @@ audition) can still freeze a bad canonical. The only evidence that can expose
 this arrives **later**: if **≥2 subsequent books each show *systematic*
 disagreement** (per §4.2) with the frozen canonical, the parsimonious explanation
 is "the debut book was the outlier," not "every later book independently
-drifted." So:
+drifted." The deferred follow-up would then:
 
 - On ≥2 later-book systematic disagreements against a canonical, mark it
   **`canonical-suspect`**, stop trusting "systematic → voice off" for that key,
@@ -377,9 +388,10 @@ storage key — is the dangerous one. The contract:
    guarantees this). The debut book's post-freeze re-score/repair runs **inside
    that book's own `scoringInFlight` single-flight**, so a trailing back-matter
    chapter-done can't race the freeze pass.
-6. **Self-correction (§3.2.bis) takes the same storage-key lock** for its
-   re-freeze, and re-scores affected books each within their own per-book
-   single-flight.
+6. **If the deferred self-correction (§3.2.bis) is ever built**, its re-freeze
+   takes this same storage-key lock and re-scores affected books each within their
+   own per-book single-flight. (Out of v1 — noted so the lock design anticipates
+   it.)
 
 This section is **Wave-1 work** (it ships with the canonical store + cross-book
 scoring), not deferrable — Wave 1 introduces the shared state, so it must
@@ -484,11 +496,8 @@ Emits a distinct `metric: 'voice-consistency-wander'` event.
   cross-book — is governed solely by `enabled` + the com-1 entitlement seam.
   **This is a deliberate behavior change from Phase 1** (a user who today runs
   `enabled=true, autoRepair=false` would, post-Phase-2, get repair on) and must be
-  called out in the release notes — it is NOT a silent flip. *(If the planning
-  step prefers to preserve Phase-1's two-flag behavior, the alternative is to keep
-  `autoRepair` governing in-book repair and gate only the new cross-book repair on
-  `enabled` — but that re-introduces the "separate barrier" the design chose to
-  remove; flagged here as the one open product call for the plan.)*
+  called out in the release notes — it is NOT a silent flip. **(Decided
+  2026-06-22: fold, don't keep a second flag.)**
 - Reuses `qa.speaker.device` (the srv-47 cuda path is already merged); CPU stays
   the default.
 - **No new master flag.** Phase 2 extends the existing `qa-gates` group only if
@@ -571,9 +580,6 @@ just not silent.
 - [ ] Cross-book per-line scoring re-anchored to the canonical; **three-way**
       classifier (per-line / systematic / suspect-canonical) keyed off the sanity
       gate, calibrated + pinned; `scope: 'series-canonical'` discriminator.
-- [ ] **Canonical self-correction** (§3.2.bis): ≥2 later-book systematic
-      disagreements ⇒ `canonical-suspect` + operator-confirmed re-freeze from the
-      agreeing-book majority (Branch-B tier).
 - [ ] **Re-tune versioning** (§3.4): per-segment config-hash persisted;
       cross-book evaluated within a config-hash cohort; pre-tune books not flagged
       against the post-tune canonical.
@@ -622,8 +628,8 @@ it as one block. Indicative ordering:
 - **Wave 2 — Branch B** (maturation + sanity-gated freeze + re-score + deferred
   visible-consistency-pass repair + completion-trigger hardening), only if G2
   material.
-- **Wave 3 — three-way classifier + canonical self-correction (§3.2.bis) +
-  auto-repair wiring + com-1 seam.**
+- **Wave 3 — three-way classifier + auto-repair wiring + com-1 seam.** (Canonical
+  self-correction §3.2.bis is deferred to a backlog follow-up, not this wave.)
 - **Wave 4 — fs-51 consumption + calibration + Ship notes.**
 - **Wave 5 — temporal-wander detector**, only if G4 = go.
 
@@ -635,6 +641,10 @@ it as one block. Indicative ordering:
 - Cross-engine canonical transfer (a Qwen canonical scoring a Coqui render) —
   engine-systematic; out of scope (each engine, each storage key, its own
   canonical).
+- **Canonical self-correction (§3.2.bis)** — the auto-re-freeze-on-≥2-later-book-
+  disagreement machinery; deferred to a backlog follow-up (file when Phase 2
+  ships). v1 surfaces the residual via `canonical-suspect` / `single-later-book`
+  markers but does not auto-fix it.
 - A slope/change-point wander detector beyond the early/late-centroid v1.
 - Human-rated *perceived*-drift holdout beyond the operator-listen calibration.
 - Turning the com-1 paywall on (com-1 owns the flip; the seam is built granted).
