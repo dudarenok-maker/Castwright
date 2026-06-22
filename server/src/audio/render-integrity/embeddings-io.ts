@@ -44,8 +44,8 @@ export async function readEmbeddings(
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
-  } catch (e: any) {
-    if (e && e.code === 'ENOENT') return null;
+  } catch (e) {
+    if (e && (e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw e;
   }
   const stored = JSON.parse(raw) as StoredFile;

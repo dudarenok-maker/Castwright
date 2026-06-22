@@ -165,8 +165,8 @@ async function readSegmentsFile(path: string): Promise<SegmentsFileView | null> 
   try {
     const raw = await readFile(path, 'utf8');
     return JSON.parse(raw) as SegmentsFileView;
-  } catch (e: any) {
-    if (e && e.code === 'ENOENT') return null;
+  } catch (e) {
+    if (e && (e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     return null;
   }
 }

@@ -62,8 +62,8 @@ export async function readCentroids(
   let raw: string;
   try {
     raw = await readFile(centroidsPath(bookDir), 'utf8');
-  } catch (e: any) {
-    if (e && e.code === 'ENOENT') return null;
+  } catch (e) {
+    if (e && (e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw e;
   }
   return JSON.parse(raw) as Record<string, CharacterCentroid>;
