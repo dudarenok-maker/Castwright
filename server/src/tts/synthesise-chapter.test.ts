@@ -2594,3 +2594,96 @@ describe('srv-43 — toVoiceLike carries voiceUuid (blocker fix)', () => {
     expect(pickVoiceForEngine('qwen', toVoiceLike(c as never))).toBe('qwen-V1StGXR8Z5');
   });
 });
+
+describe('fs-56 — per-character 1.7B Quality-tier model key routing', () => {
+  /* When a Qwen character carries ttsModelKey:'qwen3-tts-1.7b', synthesiseChapter
+     must forward modelKey:'qwen3-tts-1.7b' to the provider so the sidecar routes
+     to the 1.7B-Base model instead of the 0.6B default. */
+  it('routes a Qwen character with ttsModelKey qwen3-tts-1.7b through the 1.7B model key', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        ttsEngine: 'qwen',
+        ttsModelKey: 'qwen3-tts-1.7b',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      },
+    ];
+    const calls: Array<{ modelKey: string }> = [];
+    const provider: TtsProvider = {
+      async synthesize(input) {
+        calls.push({ modelKey: input.modelKey });
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line.')],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].modelKey).toBe('qwen3-tts-1.7b');
+  });
+
+  it('routes a Qwen character without ttsModelKey through the default 0.6B model key', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      },
+    ];
+    const calls: Array<{ modelKey: string }> = [];
+    const provider: TtsProvider = {
+      async synthesize(input) {
+        calls.push({ modelKey: input.modelKey });
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line.')],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].modelKey).toBe('qwen3-tts-0.6b');
+  });
+
+  it('does not affect non-Qwen characters — ttsModelKey on a Kokoro character is ignored', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        // ttsModelKey set but engine resolves to kokoro (no ttsEngine override)
+        ttsModelKey: 'qwen3-tts-1.7b',
+      },
+    ];
+    const calls: Array<{ modelKey: string }> = [];
+    const provider: TtsProvider = {
+      async synthesize(input) {
+        calls.push({ modelKey: input.modelKey });
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line.')],
+      cast,
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].modelKey).toBe('kokoro-v1');
+  });
+});

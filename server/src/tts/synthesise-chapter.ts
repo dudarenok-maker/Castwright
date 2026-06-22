@@ -14,6 +14,7 @@ import {
   type VoiceLike,
 } from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from './index.js';
+import { canonicalModelKeyForEngine } from './model-keys.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
@@ -246,6 +247,11 @@ export interface CastCharacter {
       run's default engine; absent → the run default. The narrator typically
       leaves this unset and stays on the default (Kokoro). */
   ttsEngine?: TtsEngine | null;
+  /** fs-56 — per-character model-key override for the Qwen engine. When set
+      on a Qwen character, the synth call uses this key instead of the run
+      default (e.g. `'qwen3-tts-1.7b'` to route to the 1.7B-Base). Ignored
+      for non-Qwen characters. Absent / null → run default (0.6B). */
+  ttsModelKey?: TtsModelKey | null;
 }
 
 export interface SentenceGroup {
@@ -745,9 +751,22 @@ export async function synthesiseChapter(
     const charEngine = resolveCharacterEngine(c, engine);
     if (resolveForEngine && charEngine !== engine) {
       const r = resolveForEngine(charEngine);
-      return { engine: charEngine, provider: r.provider, modelKey: r.modelKey };
+      /* fs-56: per-character 1.7B Quality-tier — when the character carries
+         a ttsModelKey and routes to Qwen, use it as the canonical model key
+         so the sidecar can pick the 1.7B-Base over the 0.6B default. */
+      const charModelKey =
+        charEngine === 'qwen' && c.ttsModelKey
+          ? canonicalModelKeyForEngine('qwen', c.ttsModelKey)
+          : r.modelKey;
+      return { engine: charEngine, provider: r.provider, modelKey: charModelKey };
     }
-    return { engine: charEngine, provider, modelKey };
+    /* Same override for the same-engine path (character on the run-default
+       engine but still carrying an explicit ttsModelKey for Qwen). */
+    const charModelKey =
+      charEngine === 'qwen' && c.ttsModelKey
+        ? canonicalModelKeyForEngine('qwen', c.ttsModelKey)
+        : modelKey;
+    return { engine: charEngine, provider, modelKey: charModelKey };
   };
 
   type Route = { engine: TtsEngine; provider: TtsProvider; modelKey: TtsModelKey };

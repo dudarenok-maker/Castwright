@@ -53,6 +53,99 @@ describe('VoiceEnginePicker — fs-2 lockedToQwen', () => {
   });
 });
 
+describe('VoiceEnginePicker — fs-56 1.7B Quality-tier toggle', () => {
+  it('shows the 1.7B toggle when Qwen is selected and qwen17bAvailable is true', () => {
+    render(
+      <VoiceEnginePicker
+        {...baseProps}
+        value="qwen"
+        qwen17bAvailable
+        charModelKey={null}
+        onCharModelKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('qwen-1.7b-toggle')).toBeInTheDocument();
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('checks the checkbox when charModelKey is qwen3-tts-1.7b', () => {
+    render(
+      <VoiceEnginePicker
+        {...baseProps}
+        value="qwen"
+        qwen17bAvailable
+        charModelKey="qwen3-tts-1.7b"
+        onCharModelKeyChange={vi.fn()}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('hides the 1.7B toggle when qwen17bAvailable is false', () => {
+    render(
+      <VoiceEnginePicker
+        {...baseProps}
+        value="qwen"
+        qwen17bAvailable={false}
+        charModelKey={null}
+        onCharModelKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('qwen-1.7b-toggle')).not.toBeInTheDocument();
+  });
+
+  it('hides the 1.7B toggle when Qwen is not the selected engine', () => {
+    render(
+      <VoiceEnginePicker
+        {...baseProps}
+        value="default"
+        qwen17bAvailable
+        charModelKey={null}
+        onCharModelKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('qwen-1.7b-toggle')).not.toBeInTheDocument();
+  });
+
+  it('calls onCharModelKeyChange(qwen3-tts-1.7b) when toggled on', async () => {
+    const { userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <VoiceEnginePicker
+        {...baseProps}
+        value="qwen"
+        qwen17bAvailable
+        charModelKey={null}
+        onCharModelKeyChange={onChange}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox');
+    await user.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith('qwen3-tts-1.7b');
+  });
+
+  it('calls onCharModelKeyChange(null) when toggled off', async () => {
+    const { userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <VoiceEnginePicker
+        {...baseProps}
+        value="qwen"
+        qwen17bAvailable
+        charModelKey="qwen3-tts-1.7b"
+        onCharModelKeyChange={onChange}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox');
+    await user.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+});
+
 describe('VoiceEnginePicker — background design progress', () => {
   it('renders DesignProgress + the "keeps running" note while designBusy', () => {
     render(<VoiceEnginePicker {...baseProps} designBusy designPhase="rendering" />);

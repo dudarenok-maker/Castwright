@@ -2010,7 +2010,7 @@ export interface components {
              *     field directly.
              * @enum {string}
              */
-            defaultTtsModelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            defaultTtsModelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description True once the user has DELIBERATELY chosen their default TTS model
              *     (set automatically server-side when a PUT changes
@@ -2029,7 +2029,7 @@ export interface components {
              *     stored key.
              * @enum {string}
              */
-            resolvedTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            resolvedTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
              *     by the sidecar provider + health probe.
@@ -2218,7 +2218,7 @@ export interface components {
             /** @enum {string} */
             defaultTtsEngine?: "local" | "gemini";
             /** @enum {string} */
-            defaultTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            defaultTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description Set by the Account view to true when the user deliberately picks a
              *     default TTS model that differs from the resolved (Qwen-when-installed)
@@ -2782,7 +2782,7 @@ export interface components {
              *     See `docs/features/archive/35-engine-drift-detection.md`.
              * @enum {string}
              */
-            audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description Only on `chapter_complete` — distinct speaking characters per TTS
              *     engine they actually rendered in (e.g. `{ "kokoro": 1, "qwen": 6 }`).
@@ -2931,10 +2931,10 @@ export interface components {
         };
         VoiceSampleRequest: {
             /**
-             * @description UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-) drives provider selection server-side.
+             * @description UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-, qwen3-) drives provider selection server-side.
              * @enum {string}
              */
-            modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /** @description Frontend Voice payload (attributes drive the prebuilt-voice picker). */
             voice?: {
                 id?: string;
@@ -2997,7 +2997,7 @@ export interface components {
             durationSec?: number | null;
             cached: boolean;
             /** @enum {string} */
-            modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
         };
         /**
          * @description The TTS provider voice this Voice resolves to. Computed server-side by
@@ -3440,6 +3440,15 @@ export interface components {
              */
             ttsEngine?: "coqui" | "gemini" | "piper" | "kokoro" | "qwen" | null;
             /**
+             * @description Per-character model-key override for the Qwen engine (fs-56).
+             *     When set on a Qwen character, synthesis uses this model key
+             *     (e.g. `qwen3-tts-1.7b` for the higher-quality 1.7B-Base tier)
+             *     instead of the run default (0.6B). Absent / null means use the
+             *     run default. Ignored for non-Qwen characters.
+             * @enum {string|null}
+             */
+            ttsModelKey?: "coqui-xtts-v2" | "piper-en-us-medium" | "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "gemini-2.5-flash" | "gemini-3.1-flash" | null;
+            /**
              * @description Per-engine user-set voice overrides for THIS character, keyed
              *     by `TtsEngine`. Mirrors the same field on `Voice`: each slot
              *     pins a specific speaker for that engine; the active synth
@@ -3558,7 +3567,7 @@ export interface components {
              *     request default.
              * @enum {string}
              */
-            audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description Distinct speaking characters per TTS engine they actually rendered
              *     in, e.g. `{ "kokoro": 1, "qwen": 6 }`. For a uniform chapter it has
@@ -3626,7 +3635,7 @@ export interface components {
                 duration?: string;
                 excluded?: boolean;
                 /** @enum {string} */
-                audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 /** Format: date-time */
                 audioRenderedAt?: string;
                 titleOverridden?: boolean;
@@ -5777,7 +5786,7 @@ export interface operations {
                      * @description TTS model key. Local engines (kokoro-, coqui-) route to the sidecar; gemini-* keys route to Google's TTS API.
                      * @enum {string}
                      */
-                    modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                     /** @description Optional subset of chapters to (re)generate. Defaults to all chapters lacking an audio file. */
                     chapterIds?: number[];
                     /** @description Re-synthesise even if an audio file already exists on disk. */
@@ -5825,7 +5834,7 @@ export interface operations {
                      * @description Required for rerecord — TTS model key to synthesise with.
                      * @enum {string}
                      */
-                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 };
             };
         };
@@ -5875,7 +5884,7 @@ export interface operations {
                      * @description Re-record only — TTS model key to re-synthesise with. Defaults to the chapter's own rendered model when omitted.
                      * @enum {string}
                      */
-                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                     /** @description Re-record only — max re-synthesis attempts per flagged sentence, keeping the best take. Defaults to SEG_QA_MAX_RERECORDS (2). */
                     maxRerecords?: number;
                 };

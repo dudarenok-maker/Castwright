@@ -1789,6 +1789,7 @@ export function Layout() {
                 profileDuplicateOriented ? () => setDuplicateReviewOpen(true) : undefined
               }
               renderedFallbackEngine={renderedFallbackByCharacter?.[profileCharacter.id]}
+              qwen17bAvailable={ttsLifecycle.qwen1_7b.state === 'ready'}
               onClose={() => dispatch(uiActions.setOpenProfileId(null))}
               onSave={(updated, meta) => {
                 const prior = profileCharacter;
