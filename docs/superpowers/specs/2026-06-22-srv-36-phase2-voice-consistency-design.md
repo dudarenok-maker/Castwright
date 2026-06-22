@@ -136,22 +136,29 @@ are the ground truth, as in Phase-1 calibration.
   against per-line + cross-book scoring (a character whose lines each sit inside
   the per-line band but whose cumulative trend is real)? If wander is rare or
   already caught by per-line/cross-book, **no-go for the wander axis** (it is the
-  most speculative; the Phase-1 spec gated it on "F1/F3 show headroom").
+  most speculative; the Phase-0/acoustic spec §4 gated it on "F1/F3 show
+  headroom" — F1/F3/F4 are that spike's experiment labels, not Phase 1's).
 
 ## 2. The spike (the gate — per-axis go/no-go)
 
-A throwaway harness (committed under `server/tts-sidecar/spikes/srv36/`, beside
-the Phase-0 spike), operator-driven on the GPU box. **No production code, no
+A throwaway harness (added to the existing `server/tts-sidecar/spikes/srv36/`
+spike directory used in Phase 0/1, alongside its `gates.py` / `metrics.py` /
+`calibrate.py`), operator-driven on the GPU box. **No production code, no
 settings, no events.** It over-generates / re-uses real **Qwen** series renders
 (cross-book is Qwen-only, §0) for a set of recurring characters across ≥2 books,
 embeds with the shipped ECAPA `/embed`, and measures R1–R4.
 
-**Calibration series ≠ validation series (anti-overfit).** Phase 1 already
-calibrated on **Skulduggery-Scepter**, so cutoffs/thresholds here are picked on
-that series and the **operator-listen FP/FN (G5) is reported on a held-out
-series — Unlocked/Keeper —** not used to pick them (the same out-of-sample
-discipline Phase 1's §3.6 demanded). Both series have ≥2 books with recurring
-characters; the spike confirms availability before fitting.
+**Calibration series ≠ validation series (anti-overfit) — with an honest caveat.**
+The Phase-0/acoustic spec §3.6 demanded out-of-sample FP/FN. **Caveat:** Phase 1
+co-fit its per-line cutoffs on **both** Skulduggery/Scepter **and** Keeper/Unlocked
+(`score.ts:39`), so neither is a pristine hold-out for those *shared per-line
+cutoffs*. Two responses: (a) the **cross-book canonical comparison is a brand-new
+operation fit on no series**, so it is genuinely out-of-sample on either even
+though the per-line band it reuses was co-fit; and (b) for the headline G5
+operator-listen FP/FN, **prefer a series not in Phase-1's calibration set** if one
+with ≥2 books is available on-box — the spike enumerates available series and
+records which were calibration vs hold-out, rather than assuming Keeper/Unlocked
+is clean. State the chosen split explicitly in the findings note.
 
 | Exp | Question (risk) | What it gates |
 |---|---|---|
@@ -234,8 +241,11 @@ length): warm-start → mature → freeze, with a sanity gate.**
    diverges **beyond** that band, the debut book likely rendered the voice
    off-target across the board — so **do NOT canonise it**: fall back to the
    audition anchor and **flag the book** (`voice rendered off-target in its debut
-   book — canonical withheld`). This is what stops a uniformly-shifted book from
-   freezing a bad canonical that then false-flags every *correct* later book.
+   book — canonical withheld`). This stops the **common** case (a uniformly-shifted
+   debut book, *when the audition is representative*). The harder case — audition
+   *also* unrepresentative AND debut book drifted — slips past this gate and is
+   caught only later by §3.2.bis (and only once ≥2 later books exist); see that
+   section's known limitation.
 4. **Re-score, then deferred repair (I1).** With the frozen canonical, **re-score
    book 1's already-persisted embeddings** (no re-embed — embeddings are on disk;
    cheap CPU, not literally "free") for book 1's *final*, deterministic verdict.
@@ -280,13 +290,23 @@ drifted." So:
 - This mechanism is **Branch-B-tier** (skipped entirely under Branch A, where the
   audition is the canonical and no debut book can poison it).
 
+**Known limitation (state it, don't hide it):** the worst case — an
+unrepresentative audition **and** a drifted debut book **and** only **one** later
+book rendered so far — is mis-flagged until a second later book exists (the sanity
+gate can't catch it; self-correction needs ≥2). A `seed: single-later-book`
+confidence marker surfaces this in fs-51 so the guarantee isn't overstated.
+
 ### 3.3 Store
 A voice-level `<storageKey>.canonical.json` living beside the audition it is
 seeded from (the `voice-sample-cache.ts` neighbourhood), **independent of any
 book directory** — because the anchor is a property of the voice identity, not a
-book. Holds the 192-float canonical embedding (base64-packed Float32, matching
-Phase-1's `<slug>.embeddings.json` encoding), the seed provenance
-(audition-only / matured), and the source book id + render count behind it.
+book. Because a re-tune mints a new version under the **same** storage key
+(§3.4), the file holds a **map of versions keyed by voice-config hash**, not a
+single embedding: `{ anchorVersion, versions: { <configHash>: { embedding
+(base64 Float32, Phase-1 encoding), seed: 'audition' | 'matured' |
+'no-approval', sourceBookId, renderCount, status: 'frozen' | 'withheld' |
+'canonical-suspect' } } }`. A segment resolves its version by the config hash
+§7 persists. (Filename stays one-per-key; versions live inside.)
 
 ### 3.4 Versioning (and the re-tune boundary)
 - The canonical is versioned by the **voice-config hash** — a re-design/re-tune
@@ -392,8 +412,21 @@ Emits a distinct `metric: 'voice-consistency-wander'` event.
 - The render-integrity gate **`qa.speaker.enabled` stays opt-in / default-OFF**
   (it costs an embed per line + potential re-renders). When **on**, Phase 2
   detection **and** active auto-repair run — there is **no separate default-off
-  `autoRepair` barrier** to flip (the Phase-1 separate flag is *not* the Phase-2
-  shape; enabling the gate enables the loop, entitlement-permitting).
+  `autoRepair` barrier** to flip.
+- **Disposition of the shipped `qa.speaker.autoRepair` flag (C1).** Phase 1 ships
+  a live registry key `qa.speaker.autoRepair` (`registry.ts:263`, env
+  `SEG_SPK_AUTO_REPAIR`, `default: false`, gates Phase-1's in-book auto-fix).
+  Phase 2's "gate-on ⇒ repair-on" collapse **folds this flag into
+  `qa.speaker.enabled`**: the separate flag is **deprecated** (kept as a
+  no-op-with-warning for one release, then removed), and repair — in-book *and*
+  cross-book — is governed solely by `enabled` + the com-1 entitlement seam.
+  **This is a deliberate behavior change from Phase 1** (a user who today runs
+  `enabled=true, autoRepair=false` would, post-Phase-2, get repair on) and must be
+  called out in the release notes — it is NOT a silent flip. *(If the planning
+  step prefers to preserve Phase-1's two-flag behavior, the alternative is to keep
+  `autoRepair` governing in-book repair and gate only the new cross-book repair on
+  `enabled` — but that re-introduces the "separate barrier" the design chose to
+  remove; flagged here as the one open product call for the plan.)*
 - Reuses `qa.speaker.device` (the srv-47 cuda path is already merged); CPU stays
   the default.
 - **No new master flag.** Phase 2 extends the existing `qa-gates` group only if
@@ -451,12 +484,13 @@ check, never an error (matches the Phase-1 missing-embedding rule).
 
 **Spike (the deliverable even on no-go):**
 - [ ] G1–G6 run on Qwen renders of ≥2 real series; findings note committed with
-      cross-book stability vs the F1 floor (G1), seed divergence + per-voice
-      cross-book *spread* → **Branch A vs B** + sanity-gate band (G2), base-voice
-      emotion shift → go / partial-no-go (G3), wander existence + residual-value
-      fraction (G4), the **runtime-operation** per-line-vs-anchor separability
-      (G6), and an operator-listen FP/FN (G5) **on a held-out series
-      (Unlocked/Keeper) not used to pick cutoffs**.
+      cross-book stability vs the within-book F1 floor (G1), seed divergence +
+      per-voice cross-book *spread* → **Branch A vs B** + sanity-gate band (G2),
+      base-voice emotion shift → go / partial-no-go (G3), wander existence +
+      residual-value fraction (G4), the **runtime-operation** per-line-vs-anchor
+      separability (G6), and an operator-listen FP/FN (G5) **on the recorded
+      calibration/hold-out split (§2 caveat — prefer a series not in Phase-1's
+      co-fit set; state the split)**.
 - [ ] A **per-axis** `{ go | no-go }` recommendation. On full cross-book no-go:
       Phase 2 closed `wont-fix-consistency`, this spec marked `superseded`, fs-51
       confirmed unaffected.
@@ -491,10 +525,11 @@ check, never an error (matches the Phase-1 missing-embedding rule).
 - [ ] fs-51 (#973) consumes consistency events as conditional rows; unchecked /
       withheld-canonical / `no-approval` storage keys named, never hidden behind
       "all clear".
-- [ ] Calibration on **Skulduggery-Scepter**, operator-listen FP/FN reported on
-      **held-out Unlocked/Keeper**; cutoffs + classifier threshold pinned by a
-      normal-tier regression test; out-of-sample FP/FN + cross-book residual-value
-      fraction in Ship notes.
+- [ ] Calibration + operator-listen FP/FN on the recorded calibration/hold-out
+      split (§2 caveat), with the split stated; cutoffs + classifier threshold
+      pinned by a normal-tier regression test; **out-of-sample cross-book FP/FN**
+      (the cross-book headline) + the **wander** residual-value fraction (G4) in
+      Ship notes.
 
 ### 9.1 Suggested wave decomposition (for the plan, not binding)
 This is at least Phase-1's 15-task magnitude; the plan should wave it, not push
