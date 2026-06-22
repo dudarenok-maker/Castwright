@@ -127,11 +127,13 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
     # singleton, so the in-memory prompt cache must be cleared too — a stale
     # entry from another test would mask a cache miss here.
     engine._base = None
+    engine._base17 = None
     engine._design = None
     engine._loading = False
     engine._prompt_cache.clear()
     yield {"dir": tmp_path / "qwen", "engine": engine}
     engine._base = None
+    engine._base17 = None
     engine._design = None
     engine._prompt_cache.clear()
 
@@ -800,3 +802,66 @@ def test_unload_is_idempotent(fake_qwen_runtime) -> None:
     engine.unload()
     assert engine._base is None
     engine.unload()  # again — still fine
+
+
+# ── 1.7B-Base loader (fs-55) ──────────────────────────────────────────────
+
+def test_ensure_base17_loaded_uses_base17_model(fake_qwen_runtime) -> None:
+    """_ensure_base17_loaded() populates _base17 with the 1.7B-Base model,
+    leaving _base (0.6B) untouched."""
+    engine = fake_qwen_runtime["engine"]
+    assert engine._base17 is None
+    engine._ensure_base17_loaded()
+    assert engine._base17 is not None
+    assert engine._base is None  # did not load the 0.6B-Base
+
+
+def test_ensure_base17_loaded_is_idempotent(fake_qwen_runtime) -> None:
+    """A second call to _ensure_base17_loaded() is a no-op (single-flight)."""
+    engine = fake_qwen_runtime["engine"]
+    load_calls: list[str] = []
+    real_load = engine._load_qwen_model
+
+    def tracking_load(model_id: str) -> Any:
+        load_calls.append(model_id)
+        return real_load(model_id)
+
+    engine._load_qwen_model = tracking_load
+    engine._ensure_base17_loaded()
+    engine._ensure_base17_loaded()  # second call — must not reload
+    assert load_calls.count(engine.BASE17_MODEL) == 1
+
+
+def test_unload_base17_clears_base17(fake_qwen_runtime) -> None:
+    """unload_base17() sets _base17 to None without touching _base."""
+    engine = fake_qwen_runtime["engine"]
+    engine._ensure_base_loaded()
+    engine._ensure_base17_loaded()
+    assert engine._base is not None
+    assert engine._base17 is not None
+    engine.unload_base17()
+    assert engine._base17 is None
+    assert engine._base is not None  # 0.6B-Base still resident
+
+
+def test_health_exposes_qwen_base17_loaded_field() -> None:
+    """/health carries qwen_base17_loaded (False on a cold engine)."""
+    client = TestClient(main.app)
+    body = client.get("/health").json()
+    assert "qwen_base17_loaded" in body
+    assert body["qwen_base17_loaded"] is False
+
+
+# weights-gated loader test — only runs when the real qwen_tts + CUDA are present
+from conftest import _qwen_weights_present
+
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_ensure_base17_loads_a_base_checkpoint() -> None:
+    """On a GPU box with weights: loads the real 1.7B-Base model,
+    confirms _base17 is populated, then unloads cleanly."""
+    eng = main.ENGINES["qwen"]
+    assert isinstance(eng, main.QwenEngine)
+    eng._ensure_base17_loaded()
+    assert eng._base17 is not None
+    eng.unload_base17()
+    assert eng._base17 is None

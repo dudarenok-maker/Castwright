@@ -1087,6 +1087,13 @@ class QwenEngine(Engine):
     BASE_MODEL = os.environ.get(
         "QWEN_BASE_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
     )
+    # 1.7B-Base model — larger resident synth model needed for the anchored
+    # emotion-variant workflow (fs-55). Loaded on demand via /load {model:"1.7b"}
+    # or eagerly via PRELOAD_QWEN_BASE17=1. Distinct from the 0.6B-Base (clone
+    # synth) and the 1.7B-VoiceDesign (transient, design-only).
+    BASE17_MODEL = os.environ.get(
+        "QWEN_BASE_17B_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    )
     # Voice-design model — produces the reference clip from a persona. There is
     # no confirmed 0.6B VoiceDesign at time of writing, so default to the 1.7B
     # one; loaded transiently during design only. Override via env once a 0.6B
@@ -1105,7 +1112,8 @@ class QwenEngine(Engine):
     )
 
     def __init__(self) -> None:
-        self._base: Any = None  # resident clone/synth model
+        self._base: Any = None  # resident clone/synth model (0.6B-Base)
+        self._base17: Any = None  # resident 1.7B-Base model (fs-55 variant workflow)
         self._design: Any = None  # transient voice-design model
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
@@ -1147,6 +1155,10 @@ class QwenEngine(Engine):
         # dtype state → every later forward dies with "expected mat1 and mat2 to
         # have the same dtype, float != BFloat16". Double-checked inside.
         self._base_load_lock = threading.Lock()
+        # Same pattern for the 1.7B-Base single-flight load (fs-55). Mirrors
+        # _base_load_lock above; separate lock so a 0.6B-Base load and a
+        # 1.7B-Base load can proceed in parallel if both are needed at once.
+        self._base17_load_lock = threading.Lock()
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -1295,6 +1307,34 @@ class QwenEngine(Engine):
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
                 log.info("Qwen Base loaded.")
+
+    def _ensure_base17_loaded(self) -> None:
+        """Load the 1.7B-Base model (fs-55 anchored variant workflow).
+
+        Mirrors `_ensure_base_loaded` with its own single-flight lock so a
+        0.6B-Base load and a 1.7B-Base load can proceed concurrently if both
+        are needed at once. Double-checked inside to avoid a second copy."""
+        if self._base17 is not None:
+            return
+        with self._base17_load_lock:
+            if self._base17 is None:
+                self._ensure_device_resolved()
+                log.info(
+                    "Loading Qwen 1.7B-Base model=%s on %s …",
+                    self.BASE17_MODEL, self._device,
+                )
+                self._base17 = self._load_qwen_model(self.BASE17_MODEL)
+                log.info("Qwen 1.7B-Base loaded.")
+
+    def unload_base17(self) -> None:
+        """Drop the 1.7B-Base model and free VRAM. Idempotent.
+
+        Mirrors `unload` but targets only the 1.7B-Base. Acquires `_synth_lock`
+        before nulling — same rationale as `unload` (prevents a concurrent
+        synth forward from seeing a null mid-generate)."""
+        with self._synth_lock:
+            self._base17 = None
+        _reclaim_host_and_vram()
 
     def _ensure_design_loaded(self) -> None:
         if self._design is None:
@@ -2632,6 +2672,23 @@ async def _preload_default_engines() -> None:
     else:
         log.info("PRELOAD_QWEN is not set — Qwen warms on demand via POST /load.")
 
+    # Qwen 1.7B-Base: opt-in via PRELOAD_QWEN_BASE17=1 (off by default).
+    # Needed for the anchored emotion-variant workflow (fs-55). A second
+    # always-resident engine would break the 8 GB VRAM budget, so this is
+    # opt-in — the operator enables it when they want the 1.7B always ready.
+    if _parse_bool(os.environ.get("PRELOAD_QWEN_BASE17"), False):
+        qwen = ENGINES.get("qwen")
+        if isinstance(qwen, QwenEngine):
+            try:
+                log.info("Preloading Qwen 1.7B-Base at startup (PRELOAD_QWEN_BASE17=1)…")
+                await asyncio.to_thread(qwen._ensure_base17_loaded)
+                log.info("Qwen 1.7B-Base preload complete.")
+            except Exception as e:
+                log.warning(
+                    "Qwen 1.7B-Base preload failed (%s); warms on demand via /load model=1.7b.",
+                    e,
+                )
+
 
 def _qwen_package_installed() -> bool:
     """True if the `qwen_tts` package is importable WITHOUT importing it (no
@@ -2896,10 +2953,12 @@ def health() -> dict[str, Any]:
     # `_base is not None` is "ready to synth" (the resident clone model);
     # the transient VoiceDesign model isn't surfaced (it's a creation-time detail).
     qwen_loaded = False
+    qwen_base17_loaded = False
     qwen_loading = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
         qwen_loaded = qwen._base is not None
+        qwen_base17_loaded = qwen._base17 is not None
         qwen_loading = qwen._loading
     # Install-state (distinct from load-state): lets the Node proxy tell
     # "Qwen not installed" apart from "installed but cold", which drives the
@@ -2929,6 +2988,7 @@ def health() -> dict[str, Any]:
         "kokoro_loaded": kokoro_loaded,
         "kokoro_loading": kokoro_loading,
         "qwen_loaded": qwen_loaded,
+        "qwen_base17_loaded": qwen_base17_loaded,
         "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
@@ -3091,6 +3151,24 @@ async def load_model(req: Request) -> JSONResponse:
             return JSONResponse(
                 {"status": "error", "error": "qwen engine missing"}, status_code=500
             )
+        qwen_model_sel = body.get("model")
+        if qwen_model_sel == "1.7b":
+            # 1.7B-Base variant (fs-55 anchored emotion workflow). Same
+            # single-flight pattern as the 0.6B branch; uses _base17 sentinel.
+            if qwen._base17 is not None:
+                return JSONResponse({"status": "ready"})
+            async with qwen._load_lock:
+                if qwen._base17 is not None:
+                    return JSONResponse({"status": "ready"})
+                qwen._loading = True
+                try:
+                    await asyncio.to_thread(qwen._ensure_base17_loaded)
+                except Exception as e:
+                    return error_response(e, log, status=500)
+                finally:
+                    qwen._loading = False
+            return JSONResponse({"status": "ready"})
+        # Default (no model or model != "1.7b"): warm the resident 0.6B-Base.
         if qwen._base is not None:
             return JSONResponse({"status": "ready"})
         async with qwen._load_lock:
@@ -3162,7 +3240,11 @@ async def unload_model(req: Request) -> JSONResponse:
     if engine_id == "qwen":
         qwen = ENGINES.get("qwen")
         if isinstance(qwen, QwenEngine):
-            await asyncio.to_thread(qwen.unload)
+            qwen_model_sel = body.get("model")
+            if qwen_model_sel == "1.7b":
+                await asyncio.to_thread(qwen.unload_base17)
+            else:
+                await asyncio.to_thread(qwen.unload)
         return JSONResponse({"status": "idle"})
 
     coqui = ENGINES.get("coqui")

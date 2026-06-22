@@ -64,8 +64,19 @@ const INSTALL_FLASH_ATTN =
   args.includes('--flash-attn') || process.env.QWEN_INSTALL_FLASH_ATTN === '1';
 
 const BASE_MODEL = process.env.QWEN_BASE_MODEL || 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
+const BASE_17B_MODEL = process.env.QWEN_BASE_17B_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
 const VOICEDESIGN_MODEL =
   process.env.QWEN_VOICEDESIGN_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
+
+/** Returns the list of Qwen model IDs to prefetch during install.
+ *  1.7B-Base is always included — the anchored emotion-variant workflow
+ *  (fs-55) requires it even when --skip-design suppresses VoiceDesign.
+ *  Exported so the install test can verify this contract without running main(). */
+export function qwenPrefetchModels({ skipDesign }) {
+  const ids = [BASE_MODEL, BASE_17B_MODEL];
+  if (!skipDesign) ids.push(VOICEDESIGN_MODEL);
+  return ids;
+}
 
 // Pinned FlashAttention-2 prebuilt wheel. Published only for the exact stack the
 // sidecar runs (Windows AMD64 + CPython 3.11 + torch 2.6.0/cu124), so the gate
@@ -254,10 +265,10 @@ function main() {
 
   if (INSTALL_FLASH_ATTN) installFlashAttn(python, env);
 
-  const models = SKIP_DESIGN ? [BASE_MODEL] : [BASE_MODEL, VOICEDESIGN_MODEL];
+  const models = qwenPrefetchModels({ skipDesign: SKIP_DESIGN });
   step(
     `Pre-fetching ${models.length} model(s) into the default Hugging Face cache ` +
-      `(~1.8 GB Base${SKIP_DESIGN ? '' : ' + ~3.4 GB VoiceDesign'}; expect a few min)...`,
+      `(~1.8 GB 0.6B-Base + ~3.4 GB 1.7B-Base${SKIP_DESIGN ? '' : ' + ~3.4 GB VoiceDesign'}; expect a few min)...`,
   );
   // device_map="cpu" for the prefetch so a box without CUDA can still download
   // weights; runtime device is chosen separately via QWEN_DEVICE.
