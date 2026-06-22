@@ -432,6 +432,16 @@ export const KNOBS: ConfigKnob[] = [
     default: false, // ← PRELOAD_QWEN default in tts-sidecar/main.py (line 2325, _parse_bool default=False)
     apply: 'restart-sidecar', risk: 'high',
   },
+  {
+    key: 'tts.preload.qwenBase17',
+    env: 'PRELOAD_QWEN_BASE17',
+    group: 'tts-engine',
+    label: 'Preload Qwen 1.7B-Base at startup',
+    help: 'When true, the sidecar eagerly loads the Qwen 1.7B-Base model (~3.4 GB VRAM) at startup. Required for the anchored emotion-variant workflow (fs-55). When false (default), the 1.7B-Base warms on demand via the in-app Load button or POST /load {engine:"qwen", model:"1.7b"}. Changing this requires a sidecar restart.',
+    type: 'boolean',
+    default: false, // ← PRELOAD_QWEN_BASE17 default in tts-sidecar/main.py (_parse_bool default=False)
+    apply: 'restart-sidecar', risk: 'high',
+  },
 
   // ── gpu-lifecycle ─────────────────────────────────────────────────────────
   {
