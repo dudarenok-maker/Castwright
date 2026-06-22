@@ -216,9 +216,17 @@ embedding (K renders of the sample to average sampler noise, as Phase-1 did for
 its fallback), keyed by storage key, available from book 1 line 1 and identical
 across every book. This is the *simpler* design and the spec's preferred outcome
 — most of §3.2's complexity evaporates. **Cost note:** K renders × every Qwen
-character is real upfront GPU work; K must be small (G1/G6 set it — likely 3–5)
-and should **reuse the audition renders already produced at design/approve time**
-rather than re-synthesising. The build should ship this first and add Branch B
+character is real upfront GPU work on the 8 GB box, serialised against the actual
+render. K must be small (G1/G6 set it — likely 3–5), and the K **embeddings are
+persisted once per voice-config-hash** in the canonical file — never re-rendered
+on subsequent passes (the audition cache holds a single MP3, so this is a one-time
+build-the-embeddings cost per config, not per book). The spike measures
+K × cast-size audition-render wall-time on the 8 GB box and states the ceiling.
+**Robustness (both branches):** a valid anchor requires **≥K_min successful
+renders**; a sidecar crash mid-build leaving a partial K **withholds** the
+canonical (the §3.2 step-3 `withheld` status → lines `inconclusive`) rather than
+freezing a degenerate few-render centroid — mirrors Phase-1's null-on-dead-sidecar
+→ `inconclusive` handling. The build should ship Branch A first and add Branch B
 only if G2 forces it.
 
 **Branch B — G2 material (audition diverges from how the voice renders at
@@ -314,10 +322,12 @@ single embedding: `{ anchorVersion, versions: { <configHash>: { embedding
   Reuses Phase-1's reference-cache hashing.
 - **A segment must resolve the canonical *version* it was rendered against, not
   just the key.** Because the storage key is stable across re-tunes, §7 persists
-  the **voice-config hash (or render timestamp)** alongside the storage key, so
-  re-score / cross-book scoring picks the matching canonical version. Without
-  this, a pre-tune book would be scored against the post-tune canonical and
-  false-flag wholesale.
+  the **voice-config hash** alongside the storage key, so re-score / cross-book
+  scoring picks the matching canonical version. Without this, a pre-tune book
+  would be scored against the post-tune canonical and false-flag wholesale. **The
+  config hash is always persisted — no render-timestamp fallback** (a timestamp is
+  not a stable equality key, so an unchanged voice re-rendered later would resolve
+  to a spurious new cohort).
 - **Re-tune boundary:** pre-tune books are **not** judged against the post-tune
   canonical (they predate the voice change — that is an intended edit, not
   drift). Cross-book consistency is evaluated **within a config-hash cohort**;
@@ -326,6 +336,54 @@ single embedding: `{ anchorVersion, versions: { <configHash>: { embedding
 - An `anchorVersion` field invalidates on a model/preprocessing change (mirrors
   Phase-1's `embeddingsVersion`). A stale or missing canonical ⇒ the storage
   key's lines are `inconclusive`, never an error.
+- **Canonical deleted mid-series** (operator cleanup / workspace move): treated as
+  "no canonical" — later books score `inconclusive`, and the canonical is
+  **re-established at the next book completion under the §3.5 storage-key lock**.
+  No book errors; the guarantee simply degrades to "unchecked until re-established."
+
+### 3.5 Concurrency — the cross-book shared-state contract (load-bearing)
+
+**Concurrent multi-book rendering is a first-class invariant** here: jobs are
+keyed `${bookId}::${chapterId}` and N workers run across *all* books at once.
+Phase 1's guards are **per-book** — `scoringInFlight` is keyed by `bookId`
+(`generation.ts`) and `centroids.json` is per-book. Phase 2's canonical is
+**voice-level, shared across every book of a series** (`qwen-<voiceUuid>`), so
+the Phase-1 per-book assumptions **do not transfer**. The normal case — book 1
+and book 2 of the same series rendering simultaneously, both using the same
+storage key — is the dangerous one. The contract:
+
+1. **The freeze single-flight + write lock is keyed by `storageKey`, NOT by
+   book** (cross-book, process-global advisory lock). Two same-series books
+   crossing completion in the same tick must serialise on this lock.
+2. **"First-rendered-wins" tie-break is explicit:** the first book to *acquire
+   the storage-key lock* at completion freezes; ties broken by lowest `bookId`.
+   "Completion" remains all-story-chapters-rendered (§8), but the *winner* is
+   lock-acquisition order, defined even when two books complete together.
+3. **The loser must be re-scored.** A concurrently-completing sibling that scored
+   its lines against the provisional cold-start anchor is **re-scored against the
+   frozen canonical** once the winner freezes (its verdicts/inline-repairs were
+   computed against the wrong reference). This is the same re-score machinery as
+   the debut book's (§3.2 step 4).
+4. **Version-map writes are read-merge-write under the lock.** `writeJsonAtomic`
+   is atomic per file but does a whole-object overwrite with no merge — two
+   writers freezing different config-hash versions under one key would clobber
+   each other. The freeze path **loads the current version map, splices in the
+   new version, writes** — never serialises a stale in-memory snapshot. The
+   canonical file opts into `{ rotate }` backups (it is expensive-to-rebuild
+   voice-identity state, unlike cheap per-book state).
+5. **Visibility/ordering for readers.** A reader (a later/sibling book's scoring)
+   either sees the fully-frozen canonical or sees none → `inconclusive` (already
+   granted, §3.4); it never reads a half-written file (the atomic rename
+   guarantees this). The debut book's post-freeze re-score/repair runs **inside
+   that book's own `scoringInFlight` single-flight**, so a trailing back-matter
+   chapter-done can't race the freeze pass.
+6. **Self-correction (§3.2.bis) takes the same storage-key lock** for its
+   re-freeze, and re-scores affected books each within their own per-book
+   single-flight.
+
+This section is **Wave-1 work** (it ships with the canonical store + cross-book
+scoring), not deferrable — Wave 1 introduces the shared state, so it must
+introduce the lock.
 
 ## 4. Detection & scoring
 
@@ -398,7 +456,11 @@ Emits a distinct `metric: 'voice-consistency-wander'` event.
   book lines *after* completion; surface that as an explicit stage in the
   progress/QA UI, and **do not mutate audio that has already been downloaded or is
   being listened to** without an explicit re-export — flag those lines as
-  "consistency-fix available" instead.
+  "consistency-fix available" instead. **The pass is capped** (max repair lines /
+  max wall-time budget, surfaced in the stage) so a low-mismatch-fraction debut
+  book can't silently trigger a near-full second render pass; the spike records
+  the **expected repair-line count** at the calibrated cutoff so the cost is known
+  before build.
 - **com-1 Cast Pass entitlement is wired as a route-boundary seam that currently
   returns "granted"** — the paywall is open now (treat-as-on), so the loop runs
   in dev/local today. com-1 flips the seam to real entitlement enforcement later
@@ -455,7 +517,11 @@ and the config hash is what lets re-score / cross-book scoring pick the correct
 canonical **version** across a re-tune (§3.4). Together they let each persisted
 embedding be scored against the correct canonical at re-score / cross-book time.
 Absent on pre-Phase-2 files ⇒ the segment is `inconclusive` for the cross-book
-check, never an error (matches the Phase-1 missing-embedding rule).
+check, never an error (matches the Phase-1 missing-embedding rule). **Consequence
+(state it):** "first-rendered-wins" is among **Phase-2-aware renders only** — a
+series whose book 1 predates Phase 2 (no fields) won't establish a canonical from
+it, so the first *Phase-2-rendered* book becomes the de-facto debut. Acceptable;
+just not silent.
 
 ## 8. Reuse (foundations already merged — NOT built here)
 
@@ -517,7 +583,17 @@ check, never an error (matches the Phase-1 missing-embedding rule).
       ⇒ emotional base-voice lines `inconclusive` (partial no-go), not "tuned
       away"; windowed queries excluded.
 - [ ] Temporal-wander detector only if G4 = go (early/late centroid divergence).
-- [ ] Per-segment resolved-storage-key persistence (`segments-io.ts` + writer).
+- [ ] Per-segment resolved-storage-key **+ voice-config-hash** persistence
+      (`segments-io.ts` + writer).
+- [ ] **§3.5 concurrency contract:** storage-key-scoped (cross-book) freeze lock
+      with lowest-bookId tie-break; read-merge-write on the version map; rotate
+      backups; concurrently-completing sibling books re-scored against the frozen
+      canonical; debut re-score inside the book's own single-flight. A test
+      renders two same-series books concurrently and asserts one canonical, no
+      clobber, both books scored against it.
+- [ ] **Cost gates from the spike:** K × cast-size audition-embed wall-time on the
+      8 GB box stated + K_min freeze floor; post-freeze repair pass capped (max
+      lines / wall-time) with expected repair-line count recorded at the cutoff.
 - [ ] `qa.speaker.enabled` opt-in default-OFF; gate-on ⇒ detection + active
       repair (debut-book repair deferred to post-freeze in Branch B); com-1
       entitlement seam present-but-granted; on-box-ON via local override in the
@@ -537,9 +613,12 @@ it as one block. Indicative ordering:
 - **Wave 0 — the spike** (gate; everything below is conditional on its per-axis
   go).
 - **Wave 1 — storage-key + config-hash persistence** (`segments-io.ts` + writer,
-  §7/§3.4) + the canonical store + Branch-A anchor (audition-is-canonical) +
+  §7/§3.4) + the canonical store + **the §3.5 concurrency contract
+  (storage-key-scoped lock + read-merge-write + re-score-the-loser + rotate
+  backups)** + Branch-A anchor (audition-is-canonical, K embeddings persisted) +
   cross-book per-line scoring + events + within-cohort re-tune handling. Ships the
-  cross-book check for the G2-null case.
+  cross-book check for the G2-null case. **The lock ships with the shared state —
+  not a later add.**
 - **Wave 2 — Branch B** (maturation + sanity-gated freeze + re-score + deferred
   visible-consistency-pass repair + completion-trigger hardening), only if G2
   material.
