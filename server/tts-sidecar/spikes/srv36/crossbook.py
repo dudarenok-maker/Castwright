@@ -110,3 +110,47 @@ def malformed_gates(per_gate: dict) -> list:
         if d is not None and any(k not in d for k in keys):
             bad.append(gate)
     return sorted(bad)
+
+
+# --- pure aggregation/composition over the per-key/per-book embedding corpus ---
+# (the crossbook_measure I/O layer collects vectors from disk, then calls these)
+
+def _median(values) -> float:
+    a = np.asarray(list(values), np.float64)
+    return float(np.median(a)) if a.size else 0.0
+
+
+def aggregate_drift_stds(per_key_per_book: dict, floor_std: float) -> dict:
+    """G1 over the whole cast: median genuine-voice cross-book drift (in G0
+    floor-std units) across every storage key recurring in >=2 books.
+    per_key_per_book: {voiceUuid: {bookId: [vecs]}}. A key in <2 books has no
+    cross-book signal and is skipped. **Safe-fail:** if NO key recurs across >=2
+    books, returns a high drift (1e9) so cross-book forces no-go rather than a
+    spurious 'consistent'."""
+    per_key = {}
+    for key, per_book in per_key_per_book.items():
+        books = {b: v for b, v in per_book.items() if len(v)}
+        if len(books) < 2:
+            continue
+        per_key[key] = crossbook_genuine_drift_stds(books, floor_std)
+    finite = [s for s in per_key.values() if np.isfinite(s)]
+    drift = _median(finite) if finite else 1e9
+    return {"genuine_drift_stds": drift, "per_key": per_key, "n_keys": len(per_key)}
+
+
+def g6_separation(held_book_by_key: dict, anchors_by_key: dict) -> dict:
+    """G6 out-of-sample per-line separability. Each held-out-book line is scored
+    vs its OWN key's anchor (genuine) and vs every OTHER key's anchor (impostor);
+    returns the genuine-vs-impostor AUC. held_book_by_key: {key: [vecs]} (the
+    held-out book). anchors_by_key: {key: centroid} built from the OTHER books."""
+    genuine, impostor = [], []
+    for key, vecs in held_book_by_key.items():
+        own = anchors_by_key.get(key)
+        if own is None:
+            continue
+        others = [a for k, a in anchors_by_key.items() if k != key]
+        for v in vecs:
+            genuine.append(cosine(v, own))
+            for o in others:
+                impostor.append(cosine(v, o))
+    return {"separation_auc": separation_auc(genuine, impostor)}
