@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
@@ -205,7 +205,7 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
   });
 });
 
-describe('ConfirmMetadataView — fs-2 language selector', () => {
+describe('ConfirmMetadataView — fs-41/fs-50 language selector (server-detected)', () => {
   function renderWithCandidate(c: Partial<ImportCandidate>) {
     const candidateOverride: ImportCandidate = { ...candidate, ...c };
     const store = configureStore({
@@ -226,29 +226,39 @@ describe('ConfirmMetadataView — fs-2 language selector', () => {
     );
   }
 
-  it('defaults the selector to English for a Latin manuscript (no chip)', () => {
-    renderWithCandidate({ sourceText: 'The quick brown fox jumps over the lazy dog.' });
+  it('seeds the selector from the server-detected language, no chip for English', () => {
+    renderWithCandidate({ language: 'en', languageSupported: true,
+      supportedLanguages: [{ code: 'en', label: 'English' }, { code: 'ru', label: 'Russian' }] });
     const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
     expect(select.value).toBe('en');
-    expect(screen.queryByText(/auto-detected russian/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/auto-detected/i)).not.toBeInTheDocument();
   });
 
-  it('auto-detects Russian from Cyrillic text and shows the chip + Qwen note', () => {
-    renderWithCandidate({
-      sourceText: 'Съешь же ещё этих мягких французских булок да выпей чаю. Это длинный текст.',
-    });
+  it('shows the auto-detected chip + Qwen note for a supported non-English detection', () => {
+    renderWithCandidate({ language: 'ru', languageSupported: true,
+      supportedLanguages: [{ code: 'en', label: 'English' }, { code: 'ru', label: 'Russian' }] });
     const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
     expect(select.value).toBe('ru');
     expect(screen.getByText(/auto-detected russian/i)).toBeInTheDocument();
     expect(screen.getByText(/designed Qwen voices/i)).toBeInTheDocument();
   });
 
+  it('shows a detected-but-unsupported banner and defaults to English when the detection is unsupported', () => {
+    renderWithCandidate({ language: 'es', languageSupported: false,
+      supportedLanguages: [{ code: 'en', label: 'English' }, { code: 'ru', label: 'Russian' }] });
+    const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
+    expect(select.value).toBe('en'); // not yet supported → user must pick a supported language
+    expect(screen.getByText(/spanish.*not.*supported/i)).toBeInTheDocument();
+    // the unsupported language is NOT a selectable option
+    expect(within(select).queryByText('Spanish')).not.toBeInTheDocument();
+  });
+
   it('clears the auto-detected chip once the user changes the selector', async () => {
     const user = userEvent.setup();
-    renderWithCandidate({ sourceText: 'Привет мир, это русский текст для проверки определения.' });
+    renderWithCandidate({ language: 'ru', languageSupported: true,
+      supportedLanguages: [{ code: 'en', label: 'English' }, { code: 'ru', label: 'Russian' }] });
     expect(screen.getByText(/auto-detected russian/i)).toBeInTheDocument();
-    const select = screen.getByTestId('confirm-language');
-    await user.selectOptions(select, 'en');
+    await user.selectOptions(screen.getByTestId('confirm-language'), 'en');
     expect(screen.queryByText(/auto-detected russian/i)).not.toBeInTheDocument();
   });
 });

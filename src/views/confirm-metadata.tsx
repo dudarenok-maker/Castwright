@@ -15,14 +15,6 @@ import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { IconSpinner } from '../lib/icons';
 import type { ConfirmBookResponse, LibraryBook } from '../lib/types';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
-import { detectLanguage } from '../lib/detect-language';
-
-/* fs-2 — languages offered at confirm. The field is an open BCP-47 string in
-   the data model, but v1 UX offers English ↔ Russian only. */
-const LANGUAGE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'en', label: 'English' },
-  { value: 'ru', label: 'Russian' },
-];
 
 export function ConfirmMetadataView() {
   const dispatch = useAppDispatch();
@@ -37,13 +29,27 @@ export function ConfirmMetadataView() {
     candidate?.seriesPosition != null ? String(candidate.seriesPosition) : '',
   );
   const [title, setTitle] = useState(candidate?.title ?? '');
-  /* fs-2 — language seeded from the server hint (none today) or auto-detected
-     from the manuscript text (Cyrillic ratio). Tracked-touched so the
-     "auto-detected" chip clears once the user confirms or overrides. */
+  /* fs-41/fs-50 — language seeded from server detection (language/languageSupported/
+     supportedLanguages). Tracked-touched so the "auto-detected" chip clears once
+     the user confirms or overrides. Unsupported detection → default to English. */
+  const options = candidate?.supportedLanguages ?? [{ code: 'en', label: 'English' }];
+  const detectedSupported = candidate?.languageSupported !== false;
   const [language, setLanguage] = useState<string>(
-    () => candidate?.language ?? detectLanguage(candidate?.sourceText ?? ''),
+    () => (detectedSupported ? (candidate?.language ?? 'en') : 'en'),
   );
   const [languageTouched, setLanguageTouched] = useState(false);
+  const detectedLabel =
+    options.find((o) => o.code === candidate?.language)?.label ?? candidate?.language ?? '';
+  const unsupportedLabel = candidate?.languageSupported === false
+    ? (() => {
+        const code = candidate?.language ?? '';
+        try {
+          return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code.toUpperCase();
+        } catch {
+          return code.toUpperCase();
+        }
+      })()
+    : null;
   /* Bug B: server marks series/seriesPosition as title-extracted when it
      fell back to the parenthetical heuristic. Surface a small chip so the
      user knows the value is a guess; clear the flag on any edit so the
@@ -291,23 +297,27 @@ export function ConfirmMetadataView() {
               }}
               className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50"
             >
-              {LANGUAGE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
+              {options.map((o) => (
+                <option key={o.code} value={o.code}>{o.label}</option>
               ))}
             </select>
-            {!languageTouched && language === 'ru' && (
+            {!languageTouched && detectedSupported && candidate?.language && candidate.language !== 'en' && (
               <p className="mt-1.5">
                 <span className="inline-block text-[10px] uppercase tracking-widest font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
-                  Auto-detected Russian — verify
+                  Auto-detected {detectedLabel} — verify
                 </span>
               </p>
             )}
             {language !== 'en' && (
               <p className="mt-1.5 text-[11px] text-ink/55">
-                Russian books narrate with designed Qwen voices — you'll design a voice for the
-                narrator and each speaking character in the cast view.
+                {detectedLabel || 'Non-English'} books narrate with designed Qwen voices — you'll design a
+                voice for the narrator and each speaking character in the cast view.
+              </p>
+            )}
+            {unsupportedLabel && (
+              <p className="mt-1.5 text-[11px] text-magenta">
+                We detected {unsupportedLabel}, which is not supported yet — pick a supported language below,
+                or this book can't be generated.
               </p>
             )}
           </Field>
