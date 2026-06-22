@@ -23,3 +23,55 @@ def evaluate_axes(measured: dict, thresholds: dict) -> dict:
         "per_emotion": "go" if per_emotion else "no-go",
         "wander": "go" if wander else "no-go",
     }
+
+
+def same_text_floor(same_text_embeddings) -> dict:
+    embs = [np.asarray(e, np.float64) for e in same_text_embeddings]
+    if len(embs) < 2:
+        return {"mean": 0.0, "std": 0.0}
+    dists = [1.0 - cosine(embs[i], embs[j])
+             for i in range(len(embs)) for j in range(i + 1, len(embs))]
+    return {"mean": float(np.mean(dists)), "std": float(np.std(dists))}
+
+
+def crossbook_genuine_drift_stds(per_book_clean_embeddings: dict, floor_std: float) -> float:
+    book_centroids = [centroid(embs) for embs in per_book_clean_embeddings.values() if len(embs)]
+    if len(book_centroids) < 2:
+        return 0.0
+    dists = [1.0 - cosine(book_centroids[i], book_centroids[j])
+             for i in range(len(book_centroids)) for j in range(i + 1, len(book_centroids))]
+    mean_dist = float(np.mean(dists))
+    if floor_std <= 0.0:
+        return 0.0 if mean_dist == 0.0 else float("inf")
+    return mean_dist / floor_std
+
+
+def seed_divergence(audition_centroid, per_book_centroids) -> dict:
+    aud = np.asarray(audition_centroid, np.float64)
+    divs = [1.0 - cosine(aud, np.asarray(c, np.float64)) for c in per_book_centroids]
+    if not divs:
+        return {"central": 0.0, "spread": 0.0}
+    return {"central": float(np.mean(divs)), "spread": float(np.std(divs))}
+
+
+def separation_auc(genuine, impostor) -> float:
+    g = np.asarray(genuine, np.float64)
+    im = np.asarray(impostor, np.float64)
+    if not g.size or not im.size:
+        return 0.5
+    wins = sum(float(np.sum(gi > im)) + 0.5 * float(np.sum(gi == im)) for gi in g)
+    return float(wins / (g.size * im.size))
+
+
+def emotion_shift(neutral_embeddings, emotional_embeddings) -> float:
+    if not len(neutral_embeddings) or not len(emotional_embeddings):
+        return 0.0
+    return float(1.0 - cosine(centroid(neutral_embeddings), centroid(emotional_embeddings)))
+
+
+def wander_slope(cosines_in_render_order) -> float:
+    y = np.asarray(cosines_in_render_order, np.float64)
+    if y.size < 2:
+        return 0.0
+    x = np.arange(y.size, dtype=np.float64)
+    return float(np.polyfit(x, y, 1)[0])  # slope
