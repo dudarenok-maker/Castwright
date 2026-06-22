@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 date: 2026-06-21
 topic: srv-36 Phase 1 — render-integrity check (production integration + calibration + auto-fix)
 issue: srv-36 (#665)
@@ -534,9 +534,10 @@ Separate signals; `revisions.ts` untouched.
 
 ## Ship notes
 
-**Shipped:** _(date · final SHA on merge)_ — built + calibrated on
-`feat/sidecar-srv-36-phase1` (PR #987). On-box calibration + operator listen
-completed 2026-06-22.
+**Shipped:** 2026-06-22 · merged to `main` as `372eeeae` (PR #987) — built +
+calibrated on `feat/sidecar-srv-36-phase1`. On-box calibration + operator listen
+completed 2026-06-22. fs-51 (per-book QA report UI) + com-1 (entitlement / paid
+auto-repair) remain as separate follow-on work.
 
 - **Centroid params:** in-book minimum `CENTROID_MIN_N = 10` anchor renders;
   Option-B audition fallback `CENTROID_K = 12` renders; bimodal min-side
