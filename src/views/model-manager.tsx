@@ -32,7 +32,14 @@ const INVENTORY_POLL_MS = 30_000;
 const TTS_ENGINE_BY_ID: Partial<Record<string, 'coqui' | 'kokoro' | 'qwen'>> = {
   kokoro: 'kokoro',
   'qwen-base': 'qwen',
+  'qwen-base17': 'qwen',
   coqui: 'coqui',
+};
+
+/* For rows that need a specific model qualifier on the sidecar load/unload call
+   (e.g. qwen-base17 → { engine: 'qwen', model: '1.7b' }). */
+const TTS_LOAD_MODEL_BY_ID: Partial<Record<string, '1.7b'>> = {
+  'qwen-base17': '1.7b',
 };
 
 /* Inventory ids with an in-app installer, rendered inline under the row (fs-23
@@ -434,6 +441,7 @@ function ModelRow({
   const [installerOpen, setInstallerOpen] = useState(false);
   const Installer = INSTALLER_BY_ID[item.id];
   const engine = TTS_ENGINE_BY_ID[item.id];
+  const loadModel = TTS_LOAD_MODEL_BY_ID[item.id];
   const isAnalyzer = item.kind === 'analyzer';
   /* A Load/Unload pill is meaningful only when the engine is actually usable.
      For analyzer/ollama rows installState is undefined — keep them working by
@@ -464,13 +472,13 @@ function ModelRow({
   const doLoad = () =>
     onAction(() =>
       engine
-        ? api.loadSidecar({ engine })
+        ? api.loadSidecar({ engine, ...(loadModel ? { model: loadModel } : {}) })
         : api.loadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
     );
   const doStop = () =>
     onAction(() =>
       engine
-        ? api.unloadSidecar({ engine })
+        ? api.unloadSidecar({ engine, ...(loadModel ? { model: loadModel } : {}) })
         : api.unloadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
     );
 

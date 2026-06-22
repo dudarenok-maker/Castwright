@@ -37,6 +37,7 @@ import {
   kokoroWeightDir,
   coquiWeightDir,
   qwenBaseRepoDir,
+  qwenBase17RepoDir,
   qwenDesignRepoDir,
   whisperRepoDir,
   dirSizeBytes,
@@ -60,6 +61,7 @@ const OLLAMA_TIMEOUT_MS = 2_000;
 export type ModelInventoryId =
   | 'kokoro'
   | 'qwen-base'
+  | 'qwen-base17'
   | 'qwen-design'
   | 'coqui'
   | 'whisper'
@@ -201,6 +203,32 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       present: weightsPresent,
       sizeBytes: weightsPresent ? qwenDesignSize.bytes : null,
       diskPath: qwenDesignPath,
+      loaded,
+      installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
+      tier: engineTier('qwen'),
+      isDefaultEngine: false,
+      isFallbackEngine: false,
+      removable: weightsPresent,
+      updatable: true,
+      integrity: engineIntegrity('qwen', repoRoot),
+    });
+  }
+
+  /* ── Qwen3-TTS Base 1.7B (button-driven synth model, pr-1008) ──────── */
+  const qwenBase17Path = qwenBase17RepoDir();
+  const qwenBase17Size = dirSizeBytes(qwenBase17Path);
+  const qwenBase17Present = qwenBase17Size.bytes > 0;
+  {
+    const weightsPresent = qwenBase17Present;
+    const loaded = sidecar.qwenBase17Loaded === true;
+    const packageInstalled = pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot));
+    items.push({
+      id: 'qwen-base17',
+      kind: 'tts',
+      label: 'Qwen3-TTS Base (1.7B)',
+      present: weightsPresent,
+      sizeBytes: weightsPresent ? qwenBase17Size.bytes : null,
+      diskPath: qwenBase17Path,
       loaded,
       installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
       tier: engineTier('qwen'),
@@ -380,6 +408,8 @@ function removalPaths(id: string, repoRoot: string): string[] {
       return [qwenBaseRepoDir()];
     case 'qwen-design':
       return [qwenDesignRepoDir()];
+    case 'qwen-base17':
+      return [qwenBase17RepoDir()];
     case 'coqui':
       return [coquiWeightDir()];
     case 'whisper':

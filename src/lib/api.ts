@@ -4860,6 +4860,7 @@ async function mockPauseAnalysis(_: { manuscriptId: string }): Promise<void> {
 export type ModelInventoryId =
   | 'kokoro'
   | 'qwen-base'
+  | 'qwen-base17'
   | 'qwen-design'
   | 'coqui'
   | 'whisper'

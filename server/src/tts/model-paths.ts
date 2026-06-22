@@ -18,6 +18,7 @@ import { coquiModelDir } from './coqui-install-detect.js';
 /* Same repo ids the sidecar engines resolve (main.py), env-overridable in
    lockstep so a relocated model is sized/removed where it actually lives. */
 const QWEN_BASE_MODEL = process.env.QWEN_BASE_MODEL || 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
+const QWEN_BASE17_MODEL = process.env.QWEN_BASE_17B_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
 const QWEN_DESIGN_MODEL =
   process.env.QWEN_VOICEDESIGN_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
 const ASR_MODEL = process.env.ASR_MODEL || 'base';
@@ -70,9 +71,12 @@ export function coquiWeightDir(): string {
   return coquiModelDir();
 }
 
-/** Qwen Base / VoiceDesign HF snapshot repo dirs. */
+/** Qwen Base / Base-1.7B / VoiceDesign HF snapshot repo dirs. */
 export function qwenBaseRepoDir(): string {
   return hfRepoDir(QWEN_BASE_MODEL);
+}
+export function qwenBase17RepoDir(): string {
+  return hfRepoDir(QWEN_BASE17_MODEL);
 }
 export function qwenDesignRepoDir(): string {
   return hfRepoDir(QWEN_DESIGN_MODEL);
