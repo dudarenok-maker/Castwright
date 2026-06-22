@@ -1336,6 +1336,86 @@ class QwenEngine(Engine):
             self._base17 = None
         _reclaim_host_and_vram()
 
+    def _icl_instruct_synth(
+        self,
+        prompt_items: list,
+        text: str,
+        instruct: str,
+        lang: str,
+    ) -> "tuple[Any, int]":
+        """Synth `text` via the 1.7B-Base raw `model.generate()` bypass.
+
+        Combines a voice-clone ICL prompt (from `prompt_items`, derived from the
+        base voice's stored `.pt`) with an instruct clause so the model performs
+        `text` in the emotion/style described by `instruct`.  The public
+        `qwen_tts` wrapper never wires these two additive branches together, so
+        we call `self._base17.model.generate()` directly.
+
+        The call sequence mirrors `modeling_qwen3_tts.py` lines 2076-2080 +
+        2237 in qwen_tts 0.1.1 — **pin `qwen-tts==0.1.1`** and re-verify the
+        private method signatures before bumping (fs-55 guard test
+        `test_qwen_tts_pinned_for_raw_bypass`).
+
+        Requires `_base17` to be loaded before calling (the caller is
+        responsible via `_ensure_base17_loaded()`).
+
+        `ref_code=None` on a prompt item skips the ICL trim (the "trim" strips
+        the reference audio from the decoded output so only the generation
+        remains). When ref_code is a real tensor (GPU path, tested by Task 0's
+        instruct_smoke.py), `torch.cat` prepends it so the tokenizer can decode
+        it then the trim cuts it back off. The non-GPU unit test passes
+        ref_code=None to skip this branch cleanly."""
+        import torch  # noqa: PLC0415
+
+        w = self._base17
+        m = w.model
+
+        vcp = w._prompt_items_to_voice_clone_prompt(prompt_items)
+        input_ids = w._tokenize_texts([w._build_assistant_text(text)])
+
+        rt = getattr(prompt_items[0], "ref_text", None)
+        ref_ids = [w._tokenize_texts([w._build_ref_text(rt)])[0]] if rt else [None]
+
+        instruct_ids = w._tokenize_texts([w._build_instruct_text(instruct)])
+
+        gk = w._merge_generate_kwargs()
+
+        with torch.no_grad():
+            codes, _ = m.generate(
+                input_ids=input_ids,
+                ref_ids=ref_ids,
+                instruct_ids=instruct_ids,
+                voice_clone_prompt=vcp,
+                languages=[lang],
+                non_streaming_mode=True,
+                **gk,
+            )
+
+        # ICL trim: prepend the ref_code tokens so the decoder produces the
+        # reference clip before the generation, then cut those samples off —
+        # leaving only the instructed generation. Skip when ref_code is None
+        # (non-GPU unit test) or when codes is a bare scalar sentinel.
+        rcl = vcp.get("ref_code")
+        if rcl and rcl[0] is not None and hasattr(codes[0], "shape"):
+            cfd = [
+                torch.cat([rcl[i].to(c.device), c], dim=0)
+                for i, c in enumerate(codes)
+            ]
+        else:
+            cfd = codes
+
+        wavs, sr = m.speech_tokenizer.decode([{"audio_codes": c} for c in cfd])
+        wav = wavs[0]
+
+        # Trim the reconstructed reference prefix from the waveform.
+        if rcl and rcl[0] is not None and hasattr(cfd[0], "shape"):
+            total = max(int(cfd[0].shape[0]), 1)
+            ref_len = int(rcl[0].shape[0])
+            cut = int(ref_len / total * wav.shape[0])
+            wav = wav[cut:]
+
+        return wav, int(sr)
+
     def _ensure_design_loaded(self) -> None:
         if self._design is None:
             self._ensure_device_resolved()

@@ -37,6 +37,14 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
+class _FakeTokenizerStub:
+    """Stand-in for model.speech_tokenizer used by _icl_instruct_synth (Task 2).
+    decode() returns a flat-zero 24 kHz clip — same shape as the real decode."""
+
+    def decode(self, codes: Any) -> tuple[list[Any], int]:  # type: ignore[return]
+        return [np.zeros(6000, dtype=np.float32)], 24000
+
+
 class _FakeInnerModule:
     """Stand-in for the real nn.Module at Qwen3TTSModel.model. The WRAPPER is
     not an nn.Module and has no `.to()`; only this inner object does. Faithful
@@ -46,10 +54,20 @@ class _FakeInnerModule:
     def __init__(self) -> None:
         self.device: Any = None
         self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+        # Task 2 (fs-55): tokenizer stub so _icl_instruct_synth can call
+        # m.speech_tokenizer.decode without real weights.
+        self.speech_tokenizer = _FakeTokenizerStub()
+        self.last_generate: dict[str, Any] = {}
 
     def to(self, device: Any) -> "_FakeInnerModule":
         self.device = device
         return self
+
+    def generate(self, **kwargs: Any) -> tuple[list[Any], None]:
+        """Fake raw-generate used by _icl_instruct_synth (Task 2).
+        Returns a single-element code list + None (no loss)."""
+        self.last_generate = kwargs
+        return ([np.array([1, 2, 3])], None)
 
 
 class _FakeQwenModel:
@@ -87,6 +105,28 @@ class _FakeQwenModel:
         self.clone_calls.append((text, voice_clone_prompt))
         return [np.zeros(12000, dtype=np.float32)], 24000
 
+    # ── Task 2 (fs-55): wrapper internals used by _icl_instruct_synth ────
+    # The real qwen_tts 0.1.1 wrapper has these as private helpers; the sidecar
+    # calls them directly because the public API never wires ICL+instruct together.
+
+    def _build_assistant_text(self, t: str) -> str:
+        return f"A:{t}"
+
+    def _build_ref_text(self, t: str) -> str:
+        return f"R:{t}"
+
+    def _build_instruct_text(self, t: str) -> str:
+        return f"I:{t}"
+
+    def _tokenize_texts(self, texts: list[str]) -> list[tuple[str, str]]:
+        return [("ids", s) for s in texts]
+
+    def _merge_generate_kwargs(self, **kw: Any) -> dict[str, Any]:
+        return {}
+
+    def _prompt_items_to_voice_clone_prompt(self, items: Any) -> dict[str, Any]:
+        return {"ref_code": [getattr(it, "ref_code", None) for it in items]}
+
 
 @pytest.fixture
 def fake_qwen_runtime(monkeypatch, tmp_path):
@@ -118,6 +158,9 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
     fake_torch.device = lambda d: d  # type: ignore[attr-defined]  # loader resyncs model.device
     fake_cuda = types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None)
     fake_torch.cuda = fake_cuda  # type: ignore[attr-defined]
+    # Task 2 (fs-55): _icl_instruct_synth wraps the generate call in no_grad.
+    import contextlib
+    fake_torch.no_grad = contextlib.nullcontext  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     engine = main.ENGINES["qwen"]
@@ -866,3 +909,46 @@ def test_ensure_base17_loads_a_base_checkpoint() -> None:
     assert getattr(eng._base17.model, "tts_model_type", None) == "base"
     eng.unload_base17()
     assert eng._base17 is None
+
+
+# ── Task 2 (fs-55): raw-generate ICL+instruct synth helper ───────────────
+
+def test_icl_instruct_synth_passes_instruct_and_clone(fake_qwen_runtime) -> None:
+    """_icl_instruct_synth() calls model.generate() with instruct_ids,
+    voice_clone_prompt, and ref_ids all populated, and returns a (wav, sr)
+    pair with the sidecar's native 24 kHz sample rate.
+
+    The test item carries ref_code=None so the ICL trim branch (torch.cat) is
+    skipped — that path requires real tensor ops and is covered by Task 0's
+    on-box instruct_smoke.py runner. Without ref_code the trim is a no-op and
+    the full generate+decode path still exercises every other branch."""
+    engine = fake_qwen_runtime["engine"]
+    # Provision a fresh fake 1.7B-Base wrapper (same class as the 0.6B fake).
+    engine._base17 = _FakeQwenModel("1.7b")
+
+    # A minimal prompt item: ref_code=None skips the decode-trim, ref_text
+    # supplies the text tokenised into ref_ids.
+    item = types.SimpleNamespace(ref_code=None, ref_text="calib")
+
+    wav, sr = engine._icl_instruct_synth([item], "Hello.", "Delivered angrily.", "English")
+
+    kw = engine._base17.model.last_generate
+    assert "instruct_ids" in kw and kw["instruct_ids"] is not None
+    assert "voice_clone_prompt" in kw
+    assert "ref_ids" in kw
+    assert sr == 24000
+    assert isinstance(wav, np.ndarray)
+
+
+# ── Task 2 (fs-55): qwen-tts version-pin guard ────────────────────────────
+
+def test_qwen_tts_pinned_for_raw_bypass() -> None:
+    """The raw model.generate() bypass depends on qwen_tts 0.1.x internal
+    method signatures (_build_assistant_text, _prompt_items_to_voice_clone_prompt,
+    etc.) that a major bump could break silently. Pin to 0.1.x and fail loudly
+    so a future upgrade is a conscious decision with re-verification (fs-55)."""
+    from importlib.metadata import version
+
+    assert version("qwen-tts").startswith("0.1."), (
+        "re-verify raw generate() branches before bumping qwen-tts past 0.1.x (fs-55)"
+    )
