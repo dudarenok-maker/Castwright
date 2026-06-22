@@ -1482,7 +1482,7 @@ paths:
               properties:
                 modelKey:
                   type: string
-                  enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
                   description: TTS model key. Local engines (kokoro-, coqui-) route to the sidecar; gemini-* keys route to Google's TTS API.
                 chapterIds:
                   type: array
@@ -1540,7 +1540,7 @@ paths:
                   description: 'rerecord only — optional subset of the character''s segments to re-record; omitted = all of them.'
                 modelKey:
                   type: string
-                  enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
                   description: Required for rerecord — TTS model key to synthesise with.
       responses:
         '200':
@@ -1594,7 +1594,7 @@ paths:
                   description: 'When true (default) only scan and report `flagged`; no GPU, no write. False re-records the flagged sentences and re-splices.'
                 modelKey:
                   type: string
-                  enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
                   description: 'Re-record only — TTS model key to re-synthesise with. Defaults to the chapter''s own rendered model when omitted.'
                 maxRerecords:
                   type: integer
@@ -2616,7 +2616,7 @@ components:
             Used to filter the model dropdown's initial state.
         defaultTtsModelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             STORED TTS model key from src/lib/tts-models.ts — what the Account
             picker shows and round-trips. Default for new accounts is
@@ -2634,7 +2634,7 @@ components:
             unchanged.
         resolvedTtsModelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             READ-ONLY effective default after the Qwen-when-installed
             resolution: equals `defaultTtsModelKey` when the user made an
@@ -2849,7 +2849,7 @@ components:
         defaultTtsEngine: { type: string, enum: [local, gemini] }
         defaultTtsModelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
         defaultTtsModelKeyExplicit:
           type: boolean
           description: |
@@ -3602,7 +3602,7 @@ components:
             the next page reload.
         audioModelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             Only on `chapter_complete` — the TTS model key that produced
             this chapter's audio. Carries the engine forward so the
@@ -3807,8 +3807,8 @@ components:
       properties:
         modelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
-          description: UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-) drives provider selection server-side.
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          description: UI-stable TTS model key. The engine prefix (kokoro-, coqui-, gemini-, qwen3-) drives provider selection server-side.
         voice:
           type: object
           description: Frontend Voice payload (attributes drive the prebuilt-voice picker).
@@ -3883,7 +3883,7 @@ components:
         cached: { type: boolean }
         modelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
 
     # --- Voice library ---------------------------------------------
     TtsVoiceAssignment:
@@ -4549,6 +4549,16 @@ components:
             "use the project default engine" (back-compat: pre-108 cast.json
             files have no signal here). Resolved server-side by
             `resolveCharacterEngine`.
+        ttsModelKey:
+          type: string
+          enum: [coqui-xtts-v2, piper-en-us-medium, kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, gemini-2.5-flash, gemini-3.1-flash]
+          nullable: true
+          description: |
+            Per-character model-key override for the Qwen engine (fs-56).
+            When set on a Qwen character, synthesis uses this model key
+            (e.g. `qwen3-tts-1.7b` for the higher-quality 1.7B-Base tier)
+            instead of the run default (0.6B). Absent / null means use the
+            run default. Ignored for non-Qwen characters.
         overrideTtsVoices:
           type: object
           nullable: true
@@ -4715,7 +4725,7 @@ components:
           }
         audioModelKey:
           type: string
-          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
           description: |
             TTS model key that produced this chapter's existing audio
             file. Stamped at render time and backfilled from the
@@ -4805,7 +4815,7 @@ components:
               excluded: { type: boolean }
               audioModelKey:
                 type: string
-                enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
               audioRenderedAt: { type: string, format: date-time }
               titleOverridden: { type: boolean }
         sentenceRemap:

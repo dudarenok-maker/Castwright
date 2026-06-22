@@ -20,7 +20,7 @@
    controlled presentational component. */
 
 import { IconSparkle, IconRefresh, IconWaveform, IconSpinner, IconPause } from '../lib/icons';
-import type { TtsEngine } from '../lib/types';
+import type { TtsEngine, TtsModelKey } from '../lib/types';
 import { DesignProgress } from './design-progress';
 
 /* Engine value the selector emits. 'default' maps to "no per-character
@@ -75,6 +75,13 @@ interface Props {
   designedVoiceId: string | null;
   /** Inline error from the persona generate / design calls. */
   error: string | null;
+  /** fs-56 — when true, the Qwen 1.7B-Base is resident and the "Higher
+      quality (1.7B)" toggle should appear below the engine selector. */
+  qwen17bAvailable?: boolean;
+  /** fs-56 — the current per-character model key (drives the 1.7B toggle). */
+  charModelKey?: TtsModelKey | null;
+  /** fs-56 — called when the user toggles the 1.7B tier on/off. */
+  onCharModelKeyChange?: (next: TtsModelKey | null) => void;
 }
 
 export function VoiceEnginePicker({
@@ -93,6 +100,9 @@ export function VoiceEnginePicker({
   designPlaying,
   designedVoiceId,
   error,
+  qwen17bAvailable = false,
+  charModelKey,
+  onCharModelKeyChange,
 }: Props) {
   return (
     <div className="mt-3 p-3 rounded-2xl bg-canvas border border-ink/10">
@@ -128,6 +138,27 @@ export function VoiceEnginePicker({
           This book isn't English, so every character — including the narrator — needs a designed
           Qwen voice. English voices can't read the book's language.
         </p>
+      )}
+
+      {/* fs-56 — 1.7B Quality-tier toggle. Shown only when Qwen is the effective
+          engine AND the 1.7B-Base model is resident on the sidecar. */}
+      {(value === 'qwen' || lockedToQwen) && qwen17bAvailable && onCharModelKeyChange && (
+        <label
+          className="mt-2 flex items-center gap-2 cursor-pointer select-none"
+          data-testid="qwen-1.7b-toggle"
+        >
+          <input
+            type="checkbox"
+            checked={charModelKey === 'qwen3-tts-1.7b'}
+            onChange={(e) =>
+              onCharModelKeyChange(e.target.checked ? 'qwen3-tts-1.7b' : null)
+            }
+            className="accent-magenta w-4 h-4"
+          />
+          <span className="text-[11px] text-ink/70 font-medium">
+            Higher quality (1.7B) — uses the larger Qwen model for this character
+          </span>
+        </label>
       )}
 
       {value === 'qwen' && (

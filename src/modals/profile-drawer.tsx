@@ -151,6 +151,9 @@ interface Props {
       surfaces the "Fallback (Kokoro)" status pill. Threaded into
       `resolveVoiceStatus` as the 4th arg. */
   renderedFallbackEngine?: string | null;
+  /** fs-56 — whether the Qwen 1.7B-Base is currently resident on the sidecar.
+      When true, the engine picker shows the "Higher quality (1.7B)" toggle. */
+  qwen17bAvailable?: boolean;
 }
 
 export interface PriorMergeCandidate {
@@ -209,6 +212,7 @@ export function ProfileDrawer({
   duplicateOther,
   onReviewDuplicate,
   renderedFallbackEngine,
+  qwen17bAvailable = false,
 }: Props) {
   const [tone, setTone] = useState(
     character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 },
@@ -274,6 +278,11 @@ export function ProfileDrawer({
   const lockedToQwen = bookLanguage !== 'en';
   const [engineChoice, setEngineChoice] = useState<EngineChoice>(
     lockedToQwen ? 'qwen' : (character.ttsEngine ?? 'default'),
+  );
+  /* fs-56 — per-character 1.7B Quality-tier model key. Seeded from the character's
+     existing ttsModelKey (if any) so a re-open shows the prior selection. */
+  const [charModelKey, setCharModelKey] = useState<'qwen3-tts-1.7b' | null>(
+    character.ttsModelKey === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null,
   );
   const [persona, setPersona] = useState<string>(character.voiceStyle ?? '');
   const [personaBusy, setPersonaBusy] = useState(false);
@@ -1037,6 +1046,9 @@ export function ProfileDrawer({
               designPlaying={designPlaying}
               designedVoiceId={designedVoiceId}
               error={engineError}
+              qwen17bAvailable={qwen17bAvailable}
+              charModelKey={charModelKey}
+              onCharModelKeyChange={(k) => setCharModelKey(k === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null)}
             />
 
             {/* fs-25 — Qwen-only emotion variant design (gated on the base voice
@@ -1677,6 +1689,10 @@ export function ProfileDrawer({
                 voiceState: 'tuned',
                 ttsEngine: nextEngine ?? null,
                 voiceStyle: personaTrimmed || character.voiceStyle,
+                /* fs-56 — persist 1.7B Quality-tier selection. Only relevant
+                   for Qwen characters; null clears back to the 0.6B default. */
+                ttsModelKey:
+                  (engineChoice === 'qwen' || lockedToQwen) ? (charModelKey ?? null) : null,
               };
               /* When Qwen is selected with a designed voice, pin it into
                  the character's per-engine override map so the cast view +

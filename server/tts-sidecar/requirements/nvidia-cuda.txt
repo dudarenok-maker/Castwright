@@ -46,5 +46,8 @@ torchaudio==2.11.0
 kokoro-onnx>=0.4.0,<0.5.0
 
 # Qwen3-TTS — per-character bespoke voices; weights fetched by install-qwen3.mjs.
-qwen-tts
+# Pinned to 0.1.1: the raw model.generate() bypass in _icl_instruct_synth (fs-55)
+# depends on private method signatures that a major bump could change silently.
+# Re-verify before bumping (see test_qwen_tts_pinned_for_raw_bypass in test_qwen3.py).
+qwen-tts==0.1.1
 -r speaker-qa.txt

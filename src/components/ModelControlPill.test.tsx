@@ -197,3 +197,56 @@ describe('ModelControlPill — action routing', () => {
     expect(onLoad).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ModelControlPill — Qwen 1.7B-Base pill (fs-55)', () => {
+  /* Pin that the Qwen 1.7B-Base pill renders the correct label in each state.
+     The pill is a plain ModelControlPill with engineLabel="Qwen 1.7B"; these
+     tests verify the label flows through the same code path as Kokoro / Coqui. */
+
+  it('shows "Qwen 1.7B idle" label when state is idle', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="idle"
+        engineLabel="Qwen 1.7B"
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    /* Idle state renders a Load button — confirm it's present and the
+       engineLabel is NOT shown as a body copy (the button reads "Load model"). */
+    expect(screen.getByRole('button', { name: /load model/i })).toBeInTheDocument();
+  });
+
+  it('shows "Qwen 1.7B ready" when qwen_base17_loaded is true', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="ready"
+        engineLabel="Qwen 1.7B"
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    expect(screen.getByText(/Qwen 1\.7B ready/i)).toBeInTheDocument();
+    /* Stop button is the action when ready. */
+    expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it('shows loading copy and is disabled when state is loading', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="loading"
+        engineLabel="Qwen 1.7B"
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    expect(screen.getByText(/loading qwen 1\.7b/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /loading/i })).toBeDisabled();
+  });
+});

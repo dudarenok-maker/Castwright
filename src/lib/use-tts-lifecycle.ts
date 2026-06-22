@@ -51,9 +51,13 @@ export interface TtsLifecycle {
   /** Kokoro v1 — eager-loaded at sidecar startup, ~1 GB VRAM, does NOT auto-
       evict the analyzer (fits alongside Ollama on an 8 GB GPU per plan 14a). */
   kokoro: EngineLifecycle;
-  /** Qwen — bespoke per-character engine (plan 108), button-driven. Treated
-      like Kokoro for residency: does NOT auto-evict the analyzer. */
+  /** Qwen 0.6B-Base — bespoke per-character engine (plan 108), button-driven.
+      Treated like Kokoro for residency: does NOT auto-evict the analyzer. */
   qwen: EngineLifecycle;
+  /** Qwen 1.7B-Base — larger synth model for the anchored emotion-variant
+      workflow (fs-55). Button-driven via POST /load {engine:"qwen",model:"1.7b"}.
+      Does NOT auto-evict the analyzer. */
+  qwen1_7b: EngineLifecycle;
   /** Whisper ASR content-QA engine (srv-31). Display-only — no Load/Stop. */
   asr: AsrLifecycle;
   /** Inline banner copy: "Analyzer unloaded to free VRAM for TTS." Shared
@@ -82,7 +86,7 @@ export interface TtsLifecycle {
   gpuInFlight?: number;
 }
 
-type EngineId = 'coqui' | 'kokoro' | 'qwen';
+type EngineId = 'coqui' | 'kokoro' | 'qwen' | 'qwen1_7b';
 
 export function useTtsLifecycle(): TtsLifecycle {
   const [sidecarHealth, setSidecarHealth] = useState<SidecarHealth | null>(null);
@@ -95,6 +99,7 @@ export function useTtsLifecycle(): TtsLifecycle {
   const [pendingCoqui, setPendingCoqui] = useState<ModelControlState | null>(null);
   const [pendingKokoro, setPendingKokoro] = useState<ModelControlState | null>(null);
   const [pendingQwen, setPendingQwen] = useState<ModelControlState | null>(null);
+  const [pendingQwen17b, setPendingQwen17b] = useState<ModelControlState | null>(null);
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
 
@@ -109,6 +114,7 @@ export function useTtsLifecycle(): TtsLifecycle {
           setPendingCoqui(null);
           setPendingKokoro(null);
           setPendingQwen(null);
+          setPendingQwen17b(null);
         })
         .catch(() => {
           if (cancelled) return;
@@ -116,6 +122,7 @@ export function useTtsLifecycle(): TtsLifecycle {
           setPendingCoqui(null);
           setPendingKokoro(null);
           setPendingQwen(null);
+          setPendingQwen17b(null);
         });
 
       /* GPU queue state — same cadence, separate endpoint. Permissive
@@ -169,6 +176,14 @@ export function useTtsLifecycle(): TtsLifecycle {
     return 'idle';
   })();
 
+  const qwen1_7bState: ModelControlState = (() => {
+    if (pendingQwen17b) return pendingQwen17b;
+    if (!sidecarHealth) return 'idle';
+    if (sidecarHealth.status === 'unreachable') return 'unreachable';
+    if (sidecarHealth.qwenBase17Loaded) return 'ready';
+    return 'idle';
+  })();
+
   /* ASR is display-only: 'ready' when the Whisper model is resident, 'idle'
      otherwise (it loads lazily on /transcribe + idle-evicts, so there's no
      'loading' state to surface and no Load/Stop). */
@@ -182,6 +197,7 @@ export function useTtsLifecycle(): TtsLifecycle {
   const setPending = (engine: EngineId, next: ModelControlState | null) => {
     if (engine === 'kokoro') setPendingKokoro(next);
     else if (engine === 'qwen') setPendingQwen(next);
+    else if (engine === 'qwen1_7b') setPendingQwen17b(next);
     else setPendingCoqui(next);
   };
 
@@ -216,7 +232,11 @@ export function useTtsLifecycle(): TtsLifecycle {
        the body either way and only throws if fetch itself fails. So we
        inspect AND catch — both paths can be the failure. */
     try {
-      const result = await api.loadSidecar({ engine });
+      const loadOpts =
+        engine === 'qwen1_7b'
+          ? ({ engine: 'qwen' as const, model: '1.7b' } as const)
+          : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
+      const result = await api.loadSidecar(loadOpts);
       if (result.status === 'error') {
         setLoadErrorNotice(result.error || 'Voice engine failed to load. Check the voice engine logs.');
         setPending(engine, null);
@@ -233,7 +253,11 @@ export function useTtsLifecycle(): TtsLifecycle {
     setEvictionNotice(null);
     setLoadErrorNotice(null);
     try {
-      const result = await api.unloadSidecar({ engine });
+      const stopOpts =
+        engine === 'qwen1_7b'
+          ? ({ engine: 'qwen' as const, model: '1.7b' } as const)
+          : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
+      const result = await api.unloadSidecar(stopOpts);
       if (result.status === 'error') {
         setLoadErrorNotice(result.error || 'TTS model failed to unload.');
         setPending(engine, null);
@@ -265,6 +289,11 @@ export function useTtsLifecycle(): TtsLifecycle {
       state: qwenState,
       onLoad: () => doLoad('qwen'),
       onStop: () => doStop('qwen'),
+    },
+    qwen1_7b: {
+      state: qwen1_7bState,
+      onLoad: () => doLoad('qwen1_7b'),
+      onStop: () => doStop('qwen1_7b'),
     },
     asr: {
       enabled: sidecarHealth?.asrEnabled === true,

@@ -454,7 +454,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 });
 
 describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
-  it('designs an emotion variant under <base>__<emotion>, augments the instruct, and records it on the cast', async () => {
+  it('fs-55: routes emotion variant to /qwen/mint-variant with baseVoiceId + emotionInstruct (not full instruct)', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, emotion: 'angry' });
@@ -462,11 +462,19 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     expect(res.status).toBe(200);
     expect(res.body.voiceId).toBe('qwen-v_maerin__angry');
 
-    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.voiceId).toBe('qwen-v_maerin__angry');
-    // base persona is preserved AND an emotion delivery clause is appended.
-    expect(sent.instruct).toContain('a poised, confident teenage girl, clear and warm');
-    expect(sent.instruct.toLowerCase()).toContain('angr');
+    // fs-55: variant design hits /qwen/mint-variant, not /qwen/design-voice.
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://localhost:9000/qwen/mint-variant');
+    const sent = JSON.parse(init.body);
+    // baseVoiceId is the real (non-preview, non-emotion) storage key.
+    expect(sent.baseVoiceId).toBe('qwen-v_maerin');
+    // variantVoiceId carries the __emotion suffix.
+    expect(sent.variantVoiceId).toBe('qwen-v_maerin__angry');
+    // emotionInstruct is the delivery clause ONLY — no persona re-description.
+    expect(sent.emotionInstruct).toContain('anger');
+    expect(sent.emotionInstruct).not.toContain('a poised, confident teenage girl');
+    // no legacy `instruct` field on the mint-variant body.
+    expect(sent.instruct).toBeUndefined();
 
     // the variant is persisted onto the character's qwen slot.
     const cast = readCast();

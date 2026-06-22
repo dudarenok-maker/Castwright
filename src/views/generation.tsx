@@ -36,6 +36,7 @@ const INERT_TTS_LIFECYCLE: TtsLifecycle = {
   coqui: INERT_ENGINE_LIFECYCLE,
   kokoro: INERT_ENGINE_LIFECYCLE,
   qwen: INERT_ENGINE_LIFECYCLE,
+  qwen1_7b: INERT_ENGINE_LIFECYCLE,
   asr: { enabled: false, state: 'idle', device: null },
   evictionNotice: null,
   loadErrorNotice: null,
