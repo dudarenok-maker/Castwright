@@ -229,6 +229,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/library/series-memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-series carried-character roster (series memory) */
+        get: operations["getSeriesMemory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/library/sync-manifest": {
         parameters: {
             query?: never;
@@ -2249,6 +2266,7 @@ export interface components {
         LibrarySeries: {
             name: string;
             books: components["schemas"]["LibraryBook"][];
+            seriesMemory?: components["schemas"]["SeriesMemorySummary"] | null;
         };
         CoverCandidate: {
             /**
@@ -4018,6 +4036,50 @@ export interface components {
              */
             updatedAt: string;
         };
+        SeriesMemorySummary: {
+            carriedCount: number;
+            bespokeCount: number;
+            designedCount: number;
+            confirmedBookCount: number;
+            spanBooks: number;
+            perBook: {
+                bookId: string;
+                index: number;
+                principalCount: number;
+                carriedPresent: number;
+            }[];
+        };
+        CarriedCharacter: {
+            character: string;
+            aliases: string[];
+            voiceId: string;
+            voiceLabel: string;
+            engine?: string | null;
+            /** @enum {string} */
+            voiceKind: "designed" | "cloned" | "preset";
+            firstBookId: string;
+            lastBookId: string;
+            bookIndices: number[];
+            carriedFullSpan: boolean;
+        };
+        SeriesMemoryDetail: {
+            series: {
+                confirmedBookCount: number;
+                spanBooks: number;
+                books: {
+                    bookId: string;
+                    title: string;
+                    index: number;
+                    principalCount: number;
+                }[];
+            };
+            carried: {
+                count: number;
+                bespokeCount: number;
+                designedCount: number;
+                characters: components["schemas"]["CarriedCharacter"][];
+            };
+        };
     };
     responses: never;
     parameters: never;
@@ -4343,6 +4405,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LibraryResponse"];
                 };
+            };
+        };
+    };
+    getSeriesMemory: {
+        parameters: {
+            query: {
+                author: string;
+                series: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Carried roster */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesMemoryDetail"];
+                };
+            };
+            /** @description Series below threshold or not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -317,7 +317,7 @@ function catalogForEngine(engine: TtsEngine): Record<VoiceProfile, string[]> {
   return COQUI_PROFILE_VOICES;
 }
 
-function describeVoice(engine: TtsEngine, name: string): string {
+export function describeVoice(engine: TtsEngine, name: string): string {
   if (engine === 'gemini') return GEMINI_VOICE_DESCRIPTIONS[name] ?? 'Prebuilt voice';
   if (engine === 'coqui') return COQUI_VOICE_DESCRIPTIONS[name] ?? 'Local voice';
   if (engine === 'kokoro') return KOKORO_VOICE_DESCRIPTIONS[name] ?? 'Local voice';

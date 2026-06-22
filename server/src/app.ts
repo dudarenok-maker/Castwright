@@ -31,6 +31,7 @@ import { voiceSampleRouter } from './routes/voice-sample.js';
 import { voicesRouter } from './routes/voices.js';
 import { libraryRouter } from './routes/library.js';
 import { syncManifestRouter } from './routes/library-sync-manifest.js';
+import { seriesMemoryRouter } from './routes/series-memory.js';
 import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { coverRouter } from './routes/cover.js';
@@ -130,6 +131,7 @@ app.use('/api', devicesRouter); // srv-33 — companion per-device tokens: GET/P
 app.use('/api/pair', pairSessionRouter); // QR pairing — loopback-only session mint (post-guard)
 app.use('/api/library', libraryRouter);
 app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest
+app.use('/api/library', seriesMemoryRouter); // fe-40 — GET /api/library/series-memory
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis

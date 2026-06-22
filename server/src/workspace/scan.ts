@@ -23,6 +23,15 @@ import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { formatDuration } from '../audio/format-duration.js';
 import { engineBreakdownFromSnapshots } from '../audio/engine-breakdown.js';
 import { normaliseBookLanguage } from '../tts/language.js';
+import {
+  deriveSeriesMemory,
+  summarize,
+  type SeriesBookInput,
+  type SeriesCharacterInput,
+  type SeriesMemorySummary,
+} from './series-memory.js';
+import { voiceKindFor } from './voice-kind.js';
+import { describeVoice } from '../tts/voice-mapping.js';
 
 export type LibraryBookStatus =
   | 'not_analysed'
@@ -286,6 +295,7 @@ export interface LibraryBook {
 export interface LibrarySeries {
   name: string;
   books: LibraryBook[];
+  seriesMemory?: SeriesMemorySummary | null;
 }
 
 export interface LibraryAuthor {
@@ -346,6 +356,113 @@ function listFiles(path: string): string[] {
     return [];
   }
 }
+
+/* ── Series-memory helpers ───────────────────────────────────────────────────
+   buildInputsFromBooks: converts ALREADY-SCANNED LibraryBook[] → SeriesBookInput[],
+   reading each confirmed book's cast.json once (scanBook discards cast characters,
+   so this one extra read per book is required). Used by scanLibrary to avoid
+   re-scanning the whole tree a second time.                                        */
+
+const PRINCIPAL_LINE_FLOOR = 5;
+
+/** A confirmed cast means `generating` or `complete` (LibraryBook has no `castConfirmed`
+    field — only `status` — so this is the correct mapping). */
+const isConfirmed = (b: LibraryBook) => b.status === 'generating' || b.status === 'complete';
+
+interface CastCharForMemory {
+  id: string;
+  name?: string;
+  aliases?: string[];
+  voiceId?: string;
+  ttsEngine?: string | null;
+  overrideTtsVoices?: Record<string, { name: string }> | null;
+  lines?: unknown[] | number;
+  matchedFrom?: { bookId?: string; characterId?: string } | null;
+}
+
+/** isTtsEngine: narrows a string | null to TtsEngine so we can call describeVoice and
+    voiceKindFor without unsafe casts. Add new engines here when they land. */
+function isTtsEngine(
+  e: string | null | undefined,
+): e is 'coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen' {
+  return e === 'coqui' || e === 'piper' || e === 'kokoro' || e === 'gemini' || e === 'qwen';
+}
+
+async function readCastForMemory(
+  author: string,
+  series: string,
+  title: string,
+): Promise<CastCharForMemory[]> {
+  try {
+    const json = await readJson<{ characters?: CastCharForMemory[] }>(
+      castJsonPath(bookDirByDisplay(author, series, title)),
+    );
+    return json?.characters ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Map ALREADY-SCANNED books → confirmed-only, library-indexed SeriesBookInput[].
+    Reads each confirmed book's cast.json once; does NOT re-scan the book tree. */
+export async function buildInputsFromBooks(books: LibraryBook[]): Promise<SeriesBookInput[]> {
+  const confirmed = books
+    .filter(isConfirmed)
+    .sort((a, b) => (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title));
+  const inputs: SeriesBookInput[] = [];
+  for (let i = 0; i < confirmed.length; i++) {
+    const b = confirmed[i];
+    const cast = await readCastForMemory(b.author, b.series, b.title);
+    inputs.push({
+      bookId: b.bookId,
+      index: i + 1,
+      title: b.title,
+      characters: cast.map((ch): SeriesCharacterInput => {
+        const engine = ch.ttsEngine ?? null;
+        const voiceName = isTtsEngine(engine) ? (ch.overrideTtsVoices?.[engine]?.name ?? '') : '';
+        const lineCount = Array.isArray(ch.lines)
+          ? ch.lines.length
+          : typeof ch.lines === 'number'
+            ? ch.lines
+            : 0;
+        return {
+          characterId: ch.id,
+          name: ch.name ?? ch.id,
+          aliases: ch.aliases ?? [],
+          voiceId: ch.voiceId ?? null,
+          voiceLabel: isTtsEngine(engine) ? describeVoice(engine, voiceName) : '',
+          engine,
+          voiceKind: voiceKindFor(isTtsEngine(engine) ? engine : null),
+          isPrincipal: lineCount >= PRINCIPAL_LINE_FLOOR,
+          matchedFrom: ch.matchedFrom ?? null,
+        };
+      }),
+    });
+  }
+  return inputs;
+}
+
+/** Walk the title directories under `<BOOKS_ROOT>/<author>/<series>/` and
+ *  scanBook each one, filtering nulls. Used by the series-memory route so
+ *  it can enumerate a specific series without re-scanning the whole library. */
+export async function scanSeriesBooks(author: string, series: string): Promise<LibraryBook[]> {
+  ensureWorkspace();
+  const books: LibraryBook[] = [];
+  for (const titleName of listDirs(join(BOOKS_ROOT, author, series))) {
+    const book = await scanBook(author, series, titleName);
+    if (book) books.push(book);
+  }
+  return books;
+}
+
+/** Full pipeline: enumerate + scan the series, then build SeriesBookInput[]
+ *  from the resulting LibraryBook array. */
+export async function buildSeriesInputs(author: string, series: string): Promise<SeriesBookInput[]> {
+  const books = await scanSeriesBooks(author, series);
+  return buildInputsFromBooks(books);
+}
+
+/* ── end series-memory helpers ───────────────────────────────────────────── */
 
 function findManuscriptFile(bookDir: string): string | null {
   const files = listFiles(bookDir);
@@ -602,7 +719,10 @@ export async function scanLibrary(): Promise<LibraryResponse> {
           (a, b) =>
             (a.seriesPosition ?? 0) - (b.seriesPosition ?? 0) || a.title.localeCompare(b.title),
         );
-        seriesList.push({ name: seriesName, books });
+        // Attach series-memory summary using the already-scanned books (no re-scan).
+        const inputs = await buildInputsFromBooks(books);
+        const detail = deriveSeriesMemory(inputs);
+        seriesList.push({ name: seriesName, books, seriesMemory: detail ? summarize(detail) : null });
       }
     }
     if (seriesList.length) {

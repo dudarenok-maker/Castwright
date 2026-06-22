@@ -351,6 +351,17 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LibraryResponse' }
 
+  /api/library/series-memory:
+    get:
+      summary: Per-series carried-character roster (series memory)
+      operationId: getSeriesMemory
+      parameters:
+        - { in: query, name: author, required: true, schema: { type: string } }
+        - { in: query, name: series, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Carried roster, content: { application/json: { schema: { $ref: '#/components/schemas/SeriesMemoryDetail' } } } }
+        '404': { description: Series below threshold or not found }
+
   /api/library/sync-manifest:
     get:
       summary: Two-level delta-sync manifest for the companion app (srv-32)
@@ -2928,6 +2939,10 @@ components:
         books:
           type: array
           items: { $ref: '#/components/schemas/LibraryBook' }
+        seriesMemory:
+          allOf:
+            - { $ref: '#/components/schemas/SeriesMemorySummary' }
+          nullable: true
 
     CoverCandidate:
       type: object
@@ -5355,3 +5370,65 @@ components:
           type: string
           format: date-time
           description: ISO timestamp when the listen-progress record was last updated.
+
+    SeriesMemorySummary:
+      type: object
+      required: [carriedCount, bespokeCount, designedCount, confirmedBookCount, spanBooks, perBook]
+      properties:
+        carriedCount: { type: integer }
+        bespokeCount: { type: integer }
+        designedCount: { type: integer }
+        confirmedBookCount: { type: integer }
+        spanBooks: { type: integer }
+        perBook:
+          type: array
+          items:
+            type: object
+            required: [bookId, index, principalCount, carriedPresent]
+            properties:
+              bookId: { type: string }
+              index: { type: integer }
+              principalCount: { type: integer }
+              carriedPresent: { type: integer }
+    CarriedCharacter:
+      type: object
+      required: [character, aliases, voiceId, voiceLabel, voiceKind, firstBookId, lastBookId, bookIndices, carriedFullSpan]
+      properties:
+        character: { type: string }
+        aliases: { type: array, items: { type: string } }
+        voiceId: { type: string }
+        voiceLabel: { type: string }
+        engine: { type: string, nullable: true }
+        voiceKind: { type: string, enum: [designed, cloned, preset] }
+        firstBookId: { type: string }
+        lastBookId: { type: string }
+        bookIndices: { type: array, items: { type: integer } }
+        carriedFullSpan: { type: boolean }
+    SeriesMemoryDetail:
+      type: object
+      required: [series, carried]
+      properties:
+        series:
+          type: object
+          required: [confirmedBookCount, spanBooks, books]
+          properties:
+            confirmedBookCount: { type: integer }
+            spanBooks: { type: integer }
+            books:
+              type: array
+              items:
+                type: object
+                required: [bookId, title, index, principalCount]
+                properties:
+                  bookId: { type: string }
+                  title: { type: string }
+                  index: { type: integer }
+                  principalCount: { type: integer }
+        carried:
+          type: object
+          required: [count, bespokeCount, designedCount, characters]
+          properties:
+            count: { type: integer }
+            bespokeCount: { type: integer }
+            designedCount: { type: integer }
+            characters: { type: array, items: { $ref: '#/components/schemas/CarriedCharacter' } }

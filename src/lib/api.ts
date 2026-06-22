@@ -53,12 +53,14 @@ import type {
   PublicDevice,
   LibraryStats,
   ContinueListeningItem,
+  SeriesMemoryDetail,
 } from './types';
 import type { components as ApiComponents } from './api-types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
+import { MOCK_SERIES_MEMORY } from '../mocks/series-memory';
 import {
   HOLLOW_TIDE_LIBRARY,
   HOLLOW_TIDE_BOOK_STATES,
@@ -1749,6 +1751,13 @@ async function realGetLibrary(): Promise<LibraryResponse> {
   const res = await fetch('/api/library');
   if (!res.ok)
     throw new Error(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realGetSeriesMemory(author: string, series: string): Promise<SeriesMemoryDetail> {
+  const q = new URLSearchParams({ author, series });
+  const res = await fetch(`/api/library/series-memory?${q}`);
+  if (!res.ok) throw new Error(`series-memory failed (${res.status})`);
   return res.json();
 }
 
@@ -6733,6 +6742,7 @@ const real = {
   upgradeState: realUpgradeState,
   testSyncFolderPath: realTestSyncFolderPath,
   getLibrary: realGetLibrary,
+  getSeriesMemory: realGetSeriesMemory,
   getVoices: realGetVoices,
   setVoicePin: realSetVoicePin,
   getBaseVoices: realGetBaseVoices,
@@ -6993,6 +7003,7 @@ const mock = {
   upgradeState: mockUpgradeState,
   testSyncFolderPath: mockTestSyncFolderPath,
   getLibrary: mockGetLibrary,
+  getSeriesMemory: async (a: string, s: string) => MOCK_SERIES_MEMORY[`${a}::${s}`],
   getVoices: mockGetVoices,
   setVoicePin: mockSetVoicePin,
   getBaseVoices: mockGetBaseVoices,

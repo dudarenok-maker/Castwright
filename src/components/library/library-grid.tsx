@@ -33,10 +33,12 @@ import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
 import { safeImageSrc } from '../../lib/safe-url';
 import { useAppSelector } from '../../store';
 import { selectPausedSnapshotForBook } from '../../store/library-slice';
-import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+import type { LibraryAuthor, LibraryBook, LibrarySeries } from '../../lib/types';
 import { SAMPLE } from '../../lib/tour-steps';
 import { STATUS_UI } from './library-status-ui';
 import { EmptyLibrary, LibrarySkeleton } from './library-empty-states';
+import { SeriesMemoryChip } from '../series-memory/series-memory-chip';
+import { SeriesSparkline } from '../series-memory/series-sparkline';
 
 interface Props {
   loaded: boolean;
@@ -61,6 +63,7 @@ interface Props {
   onTrySample?: () => void | Promise<void>;
   onStartTour?: () => void;
   tourCompleted?: boolean;
+  onOpenSeriesMemory?: (series: LibrarySeries) => void;
 }
 
 export function LibraryGrid({
@@ -78,6 +81,7 @@ export function LibraryGrid({
   onTrySample,
   onStartTour,
   tourCompleted,
+  onOpenSeriesMemory,
 }: Props) {
   if (!loaded) return <LibrarySkeleton />;
   if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} onTrySample={onTrySample} onStartTour={onStartTour} tourCompleted={tourCompleted} />;
@@ -93,10 +97,25 @@ export function LibraryGrid({
                   <h3 className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink/55">
                     {series.name}
                   </h3>
-                  <span className="text-[11px] text-ink/40">
-                    {series.books.length} {series.books.length === 1 ? 'book' : 'books'}
-                  </span>
+                  <div className="flex items-center gap-2.5">
+                    {series.seriesMemory && (
+                      <SeriesMemoryChip
+                        summary={series.seriesMemory}
+                        bookCount={series.seriesMemory.confirmedBookCount}
+                        onOpen={() => onOpenSeriesMemory?.(series)}
+                      />
+                    )}
+                    <span className="text-[11px] text-ink/40">
+                      {series.books.length} {series.books.length === 1 ? 'book' : 'books'}
+                    </span>
+                  </div>
                 </div>
+                {series.seriesMemory && (
+                  <SeriesSparkline
+                    summary={series.seriesMemory}
+                    onOpen={() => onOpenSeriesMemory?.(series)}
+                  />
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                   {series.books.map((b) => (
                     <BookCard
