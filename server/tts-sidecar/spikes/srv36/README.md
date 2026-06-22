@@ -102,3 +102,30 @@ A file present but missing these keys produces a silent safe-fail default in
 **G2 gotcha:** the `seed_divergence()` helper returns `{"central": ..., "spread": ...}`
 and the evaluator key is `g2_divergence` — but the result file key is `central`
 (NOT `divergence`). The `--g2` writer must emit `{"central": ..., "spread": ...}`.
+
+## Phase-2 operator run order (on the GPU box)
+
+The `--gN` writers (`crossbook_measure.py`, wired into `crossbook_run.py`) are
+implemented — run them in this order from the sidecar root (`server/tts-sidecar`),
+with `<BOOKS_ROOT>` pointing at the re-rendered Keeper library:
+
+1. **Re-render** 2 Keeper books through the app (`SEG_SPK_ENABLED=1`) so recurring
+   characters carry a `voiceUuid` (series-reuse).
+2. **`python -m spikes.srv36.crossbook_run <BOOKS_ROOT>`** — inventory; confirm
+   Keeper shows ≥2 books with a recurring `voiceUuid` key (kind `voiceUuid`).
+3. **G0** (needs the live sidecar): prepare `results/g0_keys_cfg.json` =
+   `{"<voiceUuid>": {"text": "<audition text>", "voice": "qwen-<voiceUuid>"}}` —
+   *confirm the audition-text source + `/synthesize` contract on-box* — then
+   `… crossbook_run <BOOKS_ROOT> --g0`. Writes `crossbook_g0.json` (the floor std
+   G1 divides by) + `crossbook_audition_centroids.json` (reused by G2).
+4. **`--g1`**, **`--g2`**, **`--g6`**, **`--g4`**, **`--g3`** (g3 is a documented
+   stub — emotion isn't on-disk; needs a manuscript-emotion join).
+5. **G5**: build the blind set from G1/G6 low-cosine candidates + matched controls
+   via `blind_listen.build_blind_set` + `extract_listen.extract_clip`, listen blind,
+   then `score_blind` → write `crossbook_g5.json` (`{"fp_rate": …}`).
+6. **`--report`** → per-axis `{go|no-go}`; copy the numbers into the FINDINGS
+   Phase-2 section (the raw `results/*.json` are git-ignored / machine-specific).
+
+The pure scoring is unit-tested (`test_crossbook.py`); this measurement layer is
+operator-run (ffmpeg + weights + sidecar) and validated end-to-end on a no-audio
+fixture (walk + collect + runners + report), not against real renders.

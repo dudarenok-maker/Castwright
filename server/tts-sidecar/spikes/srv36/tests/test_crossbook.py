@@ -162,3 +162,35 @@ def test_same_text_floor_single_input_returns_zero():
     # single embedding → no pairs → mean and std both 0.0
     out = same_text_floor([np.array([1.0, 0.0])])
     assert out == {"mean": 0.0, "std": 0.0}
+
+
+# --- measurement-wiring aggregation helpers (G1 over the cast, G6 separability) ---
+from spikes.srv36.crossbook import aggregate_drift_stds, g6_separation
+
+
+def test_aggregate_drift_stds_skips_single_book_keys_and_medians():
+    per_key_per_book = {
+        "keyA": {1: [np.array([1.0, 0.0]), np.array([0.99, 0.01])],
+                 2: [np.array([0.98, 0.02]), np.array([1.0, 0.0])]},  # 2 books → counted
+        "keyB": {1: [np.array([0.0, 1.0])]},                          # 1 book → skipped
+    }
+    out = aggregate_drift_stds(per_key_per_book, floor_std=0.01)
+    assert out["n_keys"] == 1 and out["genuine_drift_stds"] < 5.0
+
+
+def test_aggregate_drift_stds_safe_fail_when_no_recurring_keys():
+    # no key recurs across >=2 books → safe-fail high drift forces cross-book no-go
+    out = aggregate_drift_stds({"k": {1: [np.array([1.0, 0.0])]}}, floor_std=0.01)
+    assert out["n_keys"] == 0 and out["genuine_drift_stds"] == 1e9
+
+
+def test_g6_separation_perfect_when_voices_distinct():
+    anchors = {"a": np.array([1.0, 0.0]), "b": np.array([0.0, 1.0])}
+    held = {"a": [np.array([1.0, 0.0])], "b": [np.array([0.0, 1.0])]}
+    assert g6_separation(held, anchors)["separation_auc"] == pytest.approx(1.0)
+
+
+def test_g6_separation_half_when_anchors_identical():
+    anchors = {"a": np.array([1.0, 0.0]), "b": np.array([1.0, 0.0])}
+    held = {"a": [np.array([1.0, 0.0])], "b": [np.array([1.0, 0.0])]}
+    assert g6_separation(held, anchors)["separation_auc"] == pytest.approx(0.5)
