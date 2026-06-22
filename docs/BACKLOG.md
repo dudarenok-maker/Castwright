@@ -49,11 +49,23 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 
 ### Reach & perception — win the comparison
 
-#### `fs-50` — Language packs: ES/FR/DE/ZH/JA end-to-end ([#974](https://github.com/dudarenok-maker/Castwright/issues/974))
+#### `fs-50` — Language packs: ES/FR/DE end-to-end, Latin Qwen tranche ([#974](https://github.com/dudarenok-maker/Castwright/issues/974))
 
-- _What:_ Stand up ES/FR/DE/ZH/JA end-to-end on the engines that already support them (Kokoro/Qwen3-TTS) — incremental config + per-language listener-validation, not new architecture (framework exists post-`fs-2`).
-- _Benefit (user / strategic):_ the **biggest single perception gap** — rivals market 1,158 languages, we show 2. Pairs with `fs-41` (auto-detect).
-_Full detail + acceptance:_ [#974](https://github.com/dudarenok-maker/Castwright/issues/974).
+- _What:_ Stand up **ES/FR/DE** end-to-end through **Qwen design** (Latin-script tranche), folding in `fs-41` (auto-detect on ingest + voice-library language filtering). Keeps the shipped `non-English ⇒ Qwen, fail-loud` invariant unchanged; the bulk is the engine-independent **analyze half** (detection, chapter/quote/attribution/token + the English prompt skills) plus the Qwen design-path i18n. **CJK (ZH/JA) split to `fs-59`; the Kokoro/XTTS engine relaxation split to `fs-60`.**
+- _Benefit (user / strategic):_ the **biggest single perception gap** — rivals market 1,158 languages, we show 2. Now spec'd + decomposed into 5 desk-verifiable seams.
+_Spec:_ [`2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md`](superpowers/specs/2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md) · _Detail:_ [#974](https://github.com/dudarenok-maker/Castwright/issues/974).
+
+#### `fs-59` — CJK (Chinese/Japanese) language support ([#1004](https://github.com/dudarenok-maker/Castwright/issues/1004))
+
+- _What:_ ZH/JA end-to-end — the deferred CJK follow-on to `fs-50`. Needs its own foundations: a server-side word segmenter (`Intl.Segmenter`/jieba/fugashi), CJK quote handling (「」), a CJK token divisor, per-language prompt examples, and fluent ZH/JA labelers for the attribution gate.
+- _Benefit (user / strategic):_ the two highest-population CJK languages — breadth Latin alone can't reach. Deferred until the `fs-50` Latin framework lands.
+_Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwright/issues/1004).
+
+#### `fs-60` — Kokoro/XTTS per-language engine eligibility (gap-fill beyond Qwen) ([#1005](https://github.com/dudarenok-maker/Castwright/issues/1005))
+
+- _What:_ Let non-English books use Kokoro-native / Coqui-XTTS voices instead of forced Qwen — the gap-fill tail. Owns the Kokoro non-English G2P deps, per-language default voices, the 3-engine VRAM constraint, Coqui per-synth language threading, and a cross-language voice-identity check (srv-36 ECAPA).
+- _Benefit (user / strategic):_ languages + voice variety beyond Qwen's reach; same engine choice for non-English books. Lowest strategic priority.
+_Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwright/issues/1005).
 
 #### `fs-52` — Caption/SRT export (.srt/.vtt; line/sentence/word) ([#975](https://github.com/dudarenok-maker/Castwright/issues/975))
 
@@ -65,8 +77,10 @@ _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
 [plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
 polish (`fe-16`) shipped via [plan 165](features/165-fe-15-16-language-and-revision-e2e.md).
-`fs-50` extends that framework to five more languages; the remaining deferred
-follow-up is `fs-14` (Russian UI localization, now under Should → Ingest & languages)._
+`fs-50` extends that framework to ES/FR/DE (the Latin Qwen tranche, folding in
+`fs-41`); CJK (ZH/JA) is split to `fs-59` and the Kokoro/XTTS engine relaxation to
+`fs-60`; the remaining deferred follow-up is `fs-14` (Russian UI localization, now
+under Should → Ingest & languages)._
 
 ### Adoption — widen the funnel (ship-now first)
 
@@ -120,11 +134,9 @@ blocked companion follow-up.
 
 ### Ingest & languages
 
-#### `fs-41` — Auto-detect manuscript language on ingest (filter voice library + auto-load engine) ([#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666))
+#### `fs-41` — Auto-detect manuscript language on ingest — **folded into `fs-50`** ([#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666))
 
-- _What:_ Complete the multi-language "second half": on ingest, auto-detect the manuscript language, filter the voice library to it, and auto-load the right engine (Qwen3-TTS for Russian, Kokoro for English), preserving the never-cross-language-within-a-book invariant. Today the language path works end-to-end (`fs-2`) but the user drives engine/voice selection by hand.
-- _Benefit (user):_ removes the most error-prone manual step for non-English books; one of the most-requested multi-language directions. Pairs with `fs-2` (engine half, shipped) and `fs-14` (Russian UI). _(Promoted Could → Should 2026-06-21 — pairs with the Must language packs.)_
-_Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666).
+- _Folded:_ the detect + auto-load halves shipped via `fs-2`/`fe-16`; the remaining voice-library language filtering is now part of the `fs-50` Latin-Qwen initiative spec (§6, `docs/superpowers/specs/2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md`). Tracked there; row kept for ID continuity. _Detail:_ [#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666).
 
 #### `fs-53` — Automatic text normalisation (numbers/dates/currency/abbreviations) ([#976](https://github.com/dudarenok-maker/Castwright/issues/976))
 
