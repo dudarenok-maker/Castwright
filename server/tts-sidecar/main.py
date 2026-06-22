@@ -3593,6 +3593,62 @@ async def qwen_design_voice(req: Request) -> Response:
     )
 
 
+@app.post("/qwen/mint-variant")
+async def qwen_mint_variant(req: Request) -> Response:
+    """Mint an emotion variant anchored to an existing base voice and return an
+    audition preview (PCM, same wire shape as /synthesize).
+
+    Body: `{ baseVoiceId, variantVoiceId, emotionInstruct, language?,
+    calibrationText?, voiceUuid? }`. `baseVoiceId` must have been designed first
+    via POST /qwen/design-voice; `emotionInstruct` is the natural-language emotion
+    modifier (e.g. "Delivered angrily, with raised intensity and edge.").
+
+    Returns 409 when `baseVoiceId` has no cached embedding (design it first)."""
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+    base_voice_id = body.get("baseVoiceId")
+    variant_voice_id = body.get("variantVoiceId")
+    emotion_instruct = body.get("emotionInstruct")
+    language = body.get("language")
+    calibration_text = body.get("calibrationText")
+    voice_uuid = body.get("voiceUuid") if isinstance(body.get("voiceUuid"), str) else None
+    if not isinstance(base_voice_id, str) or not base_voice_id.strip():
+        raise HTTPException(status_code=400, detail="`baseVoiceId` is required.")
+    if not isinstance(variant_voice_id, str) or not variant_voice_id.strip():
+        raise HTTPException(status_code=400, detail="`variantVoiceId` is required.")
+    if not isinstance(emotion_instruct, str) or not emotion_instruct.strip():
+        raise HTTPException(status_code=400, detail="`emotionInstruct` is required.")
+
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine):
+        return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
+
+    try:
+        result = await asyncio.to_thread(
+            qwen.mint_variant,
+            base_voice_id.strip(),
+            variant_voice_id.strip(),
+            emotion_instruct.strip(),
+            language if isinstance(language, str) else None,
+            calibration_text if isinstance(calibration_text, str) else None,
+            voice_uuid,
+        )
+    except VoiceNotDesignedError as exc:
+        log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Exception:
+        log.exception("/qwen/mint-variant failed (baseVoiceId=%s)", base_voice_id)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
+
+    return Response(
+        content=result.pcm,
+        media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
+        headers={"X-Sample-Rate": str(result.sample_rate)},
+    )
+
+
 @app.post("/qwen/evict-voice")
 async def qwen_evict_voice(req: Request) -> Response:
     """Drop a designed voice from the in-memory clone-prompt cache so the next

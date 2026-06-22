@@ -1037,3 +1037,88 @@ def test_minted_variant_holds_base_identity() -> None:
     bw, bsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=base)
     vw, vsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=var)
     assert eng.speaker_distance(bw[0], bsr, vw[0], vsr) < 0.30  # threshold calibrated in Step 6
+
+
+# ── Task 5 (fs-55): POST /qwen/mint-variant HTTP surface ─────────────────
+
+def _fake_mint_variant(fake_qwen_runtime, monkeypatch):
+    """Patch QwenEngine.mint_variant on the global engine so the route tests
+    never touch the real model path. Returns the engine."""
+    engine = fake_qwen_runtime["engine"]
+    import types as _types
+
+    def _stub_mint(base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, voice_uuid=None):
+        from main import SynthResult
+        return SynthResult(pcm=b"\x00" * 48000, sample_rate=24000)
+
+    monkeypatch.setattr(engine, "mint_variant", _stub_mint)
+    return engine
+
+
+def test_mint_variant_route_returns_preview_pcm(fake_qwen_runtime, monkeypatch) -> None:
+    """Happy-path: valid body → 200 with PCM content + X-Sample-Rate header."""
+    engine = fake_qwen_runtime["engine"]
+    # Design the base voice so the route can find it (or bypass via stub).
+    engine.design_voice("v1", "A warm narrator.", "English", None)
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={
+            "baseVoiceId": "v1",
+            "variantVoiceId": "v1__angry",
+            "emotionInstruct": "Delivered angrily, with raised intensity.",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["X-Sample-Rate"] == "24000"
+    assert len(resp.content) > 0
+
+
+def test_mint_variant_route_400_missing_base_voice_id(fake_qwen_runtime, monkeypatch) -> None:
+    """Missing baseVoiceId → 400."""
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={"variantVoiceId": "v1__angry", "emotionInstruct": "angrily"},
+    )
+    assert resp.status_code == 400
+
+
+def test_mint_variant_route_400_missing_variant_voice_id(fake_qwen_runtime, monkeypatch) -> None:
+    """Missing variantVoiceId → 400."""
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={"baseVoiceId": "v1", "emotionInstruct": "angrily"},
+    )
+    assert resp.status_code == 400
+
+
+def test_mint_variant_route_400_missing_emotion_instruct(fake_qwen_runtime, monkeypatch) -> None:
+    """Missing emotionInstruct → 400."""
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={"baseVoiceId": "v1", "variantVoiceId": "v1__angry"},
+    )
+    assert resp.status_code == 400
+
+
+def test_mint_variant_route_409_base_absent(fake_qwen_runtime) -> None:
+    """VoiceNotDesignedError from mint_variant → 409 (base voice not designed)."""
+    client = TestClient(main.app)
+    # No base voice designed → real mint_variant raises VoiceNotDesignedError.
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={
+            "baseVoiceId": "no-such-base",
+            "variantVoiceId": "no-such-base__sad",
+            "emotionInstruct": "Delivered sadly.",
+        },
+    )
+    assert resp.status_code == 409
