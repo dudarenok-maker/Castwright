@@ -966,3 +966,74 @@ def test_qwen_tts_pinned_for_raw_bypass() -> None:
     assert version("qwen-tts").startswith("0.1."), (
         "re-verify raw generate() branches before bumping qwen-tts past 0.1.x (fs-55)"
     )
+
+
+# ── Task 4 (fs-55): anchored emotion-variant minting ─────────────────────
+
+def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypatch) -> None:
+    """mint_variant() chains: load-1.7B → decode ref_code → ICL re-derive →
+    instruct-synth → unload-1.7B → 0.6B distil → write .pt + .json.
+
+    The call-sequence assertion (`instruct_synth` BEFORE `unload17`) is the
+    core invariant: the 1.7B work must complete before the model is freed.
+    The JSON manifest must carry `anchoredTo`, `mintMethod`, and `voiceUuid`
+    so the Node side can distinguish anchored variants from independent designs.
+    """
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    # base voice exists on disk (design it via the fake path)
+    eng.design_voice("v1", "A warm narrator.", "English", None, None)
+    calls: list[str] = []
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: calls.append("load17"))
+    monkeypatch.setattr(eng, "unload_base17", lambda: calls.append("unload17"))
+    monkeypatch.setattr(
+        eng,
+        "_icl_instruct_synth",
+        lambda items, text, instr, lang: (
+            calls.append("instruct_synth"),
+            (np.zeros(6000, "float32"), 24000),
+        )[1],
+    )
+    # CRITICAL: the shared fake's create_voice_clone_prompt returns a DICT (no
+    # .ref_code), so stub _load_voice_prompt to hand back a ref_code-bearing
+    # item (ref_code=None skips the fake decode-trim cleanly). Without this,
+    # mint_variant's `base_item.ref_code` AttributeErrors.
+    import types as _types
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    # base17 wrapper needed for decode + ICL re-derive (has speech_tokenizer via Task 2's fake)
+    eng._base17 = type(eng._base)("1.7b")
+    eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, "uuid-1")
+    assert calls.index("instruct_synth") < calls.index("unload17")  # 1.7B work before unload
+    import json as _json
+    meta = _json.load(open(os.path.join(vdir, "v1__angry.json"), encoding="utf-8"))
+    assert meta["anchoredTo"] == "v1" and meta["mintMethod"] == "anchored-icl-instruct"
+    assert meta["voiceUuid"] == "uuid-1"
+
+
+def test_mint_variant_raises_when_base_absent(fake_qwen_runtime) -> None:
+    """mint_variant() raises VoiceNotDesignedError when the base .pt is absent."""
+    eng = fake_qwen_runtime["engine"]
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng.mint_variant("nope", "nope__sad", "Delivered sadly.", "English", None, None)
+
+
+# weights-gated identity regression (calibration owed on the GPU box)
+from conftest import _qwen_weights_present
+
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_minted_variant_holds_base_identity() -> None:
+    """On a GPU box with weights: base and variant share speaker identity
+    (cosine distance < 0.30 — threshold calibrated in Task 4 Step 6)."""
+    eng = main.ENGINES["qwen"]
+    assert isinstance(eng, main.QwenEngine)
+    eng.design_voice("rv1", "A warm mid-30s British female narrator.", "English", None, None)
+    eng.mint_variant("rv1", "rv1__angry", "Delivered angrily, with raised intensity and edge.", "English", None, None)
+    base, lang, _ = eng._load_voice_prompt("rv1")
+    var, _, _ = eng._load_voice_prompt("rv1__angry")
+    bw, bsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=base)
+    vw, vsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=var)
+    assert eng.speaker_distance(bw[0], bsr, vw[0], vsr) < 0.30  # threshold calibrated in Step 6

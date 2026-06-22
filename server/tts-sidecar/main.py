@@ -1070,6 +1070,10 @@ def _resample24k(wav: Any, sr: int) -> "np.ndarray":
     return a[idx]
 
 
+class VoiceNotDesignedError(RuntimeError):
+    """Base voice has no cached .pt — design it before minting a variant."""
+
+
 class QwenEngine(Engine):
     """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
 
@@ -1776,6 +1780,106 @@ class QwenEngine(Engine):
             return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
         finally:
             self._design_in_flight -= 1
+
+    def mint_variant(
+        self,
+        base_voice_id: str,
+        variant_voice_id: str,
+        emotion_instruct: str,
+        language: Optional[str],
+        calibration_text: Optional[str],
+        voice_uuid: Optional[str] = None,
+    ) -> "SynthResult":
+        """Mint an emotion variant anchored to `base_voice_id`'s identity.
+
+        Decodes the base `.pt`'s `ref_code` through the 1.7B-Base model,
+        re-derives an ICL prompt (preserving the base speaker identity), applies
+        `emotion_instruct` via instruct-synth, then distils the result to a new
+        0.6B clone prompt saved as `variant_voice_id`.
+
+        Raises `VoiceNotDesignedError` if the base `.pt` is absent — design
+        the base voice first via `design_voice`.
+
+        The audition preview speaks `calibration_text` (or `CALIBRATION_TEXT`)
+        in the new variant voice."""
+        import torch  # type: ignore
+
+        lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
+        ref_text = self.CALIBRATION_TEXT
+        audition_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
+
+        base_pt, _base_json = self._voice_paths(base_voice_id)
+        if not os.path.isfile(base_pt):
+            raise VoiceNotDesignedError(
+                f"base voice '{base_voice_id}' not designed (no {base_pt})."
+            )
+        base_prompt, _b, _ = self._load_voice_prompt(base_voice_id)
+        base_items = base_prompt if isinstance(base_prompt, list) else [base_prompt]
+        base_item = base_items[0]
+
+        # --- 1.7B phase: decode ref_code from base identity → ICL re-derive ---
+        # Evict Kokoro before the 1.7B load (mirrors design_voice lines ~1704-1708).
+        with _VD_KOKORO.design():
+            kok = ENGINES.get("kokoro")
+            if kok is not None and hasattr(kok, "unload"):
+                kok.unload()
+            self._ensure_base17_loaded()
+            with self._synth_lock:
+                self._ensure_base17_loaded()
+                rc = base_item.ref_code
+                rc = rc.to(self._device) if hasattr(rc, "to") else rc
+                ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+                    [{"audio_codes": rc}]
+                )
+                icl = self._base17.create_voice_clone_prompt(
+                    ref_audio=(ref_wavs[0], ref_sr), ref_text=ref_text
+                )
+                icl = icl if isinstance(icl, list) else [icl]
+                emo_wav, emo_sr = self._icl_instruct_synth(icl, ref_text, emotion_instruct, lang)
+        self.unload_base17()  # one-heavy-model invariant
+
+        # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
+        with self._synth_lock:
+            self._ensure_base_loaded()
+            prompt = self._base.create_voice_clone_prompt(
+                ref_audio=(emo_wav, emo_sr), ref_text=ref_text
+            )
+        os.makedirs(self._voices_dir, exist_ok=True)
+        pt_path, json_path = self._voice_paths(variant_voice_id)
+        torch.save(prompt, pt_path)
+        import json as _json
+
+        with open(json_path, "w", encoding="utf-8") as fh:
+            _json.dump(
+                {
+                    "voiceId": variant_voice_id,
+                    "voiceUuid": voice_uuid,
+                    "instruct": emotion_instruct,
+                    "language": lang,
+                    "refText": ref_text,
+                    "baseModel": self.BASE_MODEL,
+                    "designModel": self.BASE17_MODEL,
+                    "anchoredTo": base_voice_id,
+                    "mintMethod": "anchored-icl-instruct",
+                },
+                fh,
+                ensure_ascii=False,
+                indent=2,
+            )
+        log.info(
+            "Minted anchored variant '%s' from base '%s' (instruct=%r).",
+            variant_voice_id, base_voice_id, emotion_instruct[:80],
+        )
+        with self._cache_lock:
+            self._prompt_cache.pop(variant_voice_id, None)
+
+        # audition preview — speak the calibration line in the new variant voice
+        with self._synth_lock:
+            self._ensure_base_loaded()
+            wavs, sr = self._base.generate_voice_clone(
+                text=[audition_text], language=[lang], voice_clone_prompt=prompt
+            )
+        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
         """Return (clone_prompt, language, cache_hit) for a designed voice.
