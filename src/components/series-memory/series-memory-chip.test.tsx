@@ -15,4 +15,22 @@ describe('SeriesMemoryChip', () => {
     fireEvent.click(screen.getByTestId('series-memory-chip'));
     expect(onOpen).toHaveBeenCalledOnce();
   });
+  it('omits the books clause when showBooks is false', () => {
+    const testSummary = {
+      carriedCount: 8, bespokeCount: 5, designedCount: 5,
+      confirmedBookCount: 3, spanBooks: 3, perBook: [],
+    };
+    render(<SeriesMemoryChip summary={testSummary} bookCount={3} showBooks={false} onOpen={() => {}} />);
+    const chip = screen.getByTestId('series-memory-chip');
+    expect(chip).toHaveTextContent('Your cast · 8 voices');
+    expect(chip).not.toHaveTextContent('books');
+  });
+  it('keeps the books clause by default', () => {
+    const testSummary = {
+      carriedCount: 8, bespokeCount: 5, designedCount: 5,
+      confirmedBookCount: 3, spanBooks: 3, perBook: [],
+    };
+    render(<SeriesMemoryChip summary={testSummary} bookCount={3} onOpen={() => {}} />);
+    expect(screen.getByTestId('series-memory-chip')).toHaveTextContent('Your cast · 8 voices, 3 books');
+  });
 });
