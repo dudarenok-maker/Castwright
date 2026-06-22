@@ -2151,6 +2151,60 @@ async def _stop_asr_idle_watchdog() -> None:
         _asr_idle_task = None
 
 
+# Default seconds of speaker-embed inactivity before the watchdog frees the
+# ECAPA model (cuda path only). Override via SPK_IDLE_TTL. Must match the
+# registry sidecar.spkIdleTtl default (srv-47 R2-A invariant).
+_SPK_IDLE_TTL_DEFAULT = 120.0
+_spk_idle_task: "Optional[asyncio.Task[None]]" = None
+
+
+def _spk_idle_ttl() -> float:
+    """Resolve SPK_IDLE_TTL (seconds) with a safe default + 5 s floor."""
+    try:
+        ttl = float(os.environ.get("SPK_IDLE_TTL", _SPK_IDLE_TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return _SPK_IDLE_TTL_DEFAULT
+    return ttl if ttl >= 5.0 else _SPK_IDLE_TTL_DEFAULT
+
+
+async def _spk_idle_watchdog() -> None:
+    """Free the ECAPA speaker model once it idles past the TTL — reclaims VRAM
+    on the cuda path between chapters without churning it mid-pass (a no-op on
+    cpu). The free runs on a worker thread so the event loop and /health stay
+    live."""
+    ttl = _spk_idle_ttl()
+    interval = min(30.0, max(5.0, ttl / 4))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            freed = await asyncio.to_thread(SPK.maybe_free_idle, ttl)
+            if freed:
+                log.info("ECAPA speaker model freed after >%.0fs idle (watchdog).", ttl)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # a watchdog must never die on a transient error
+            log.warning("SPK idle watchdog tick failed (%s).", e)
+
+
+@app.on_event("startup")
+async def _start_spk_idle_watchdog() -> None:
+    global _spk_idle_task
+    _spk_idle_task = asyncio.create_task(_spk_idle_watchdog())
+    log.info("ECAPA speaker idle watchdog started (ttl=%.0fs).", _spk_idle_ttl())
+
+
+@app.on_event("shutdown")
+async def _stop_spk_idle_watchdog() -> None:
+    global _spk_idle_task
+    if _spk_idle_task is not None:
+        _spk_idle_task.cancel()
+        try:
+            await _spk_idle_task
+        except asyncio.CancelledError:
+            pass
+        _spk_idle_task = None
+
+
 @app.on_event("startup")
 async def _start_device_probe() -> None:
     """side-14 — resolve per-engine devices in the background. Runs on a worker

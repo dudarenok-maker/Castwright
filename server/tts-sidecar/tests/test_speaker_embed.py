@@ -151,3 +151,18 @@ def test_maybe_free_idle_keeps_recent_model(monkeypatch: pytest.MonkeyPatch):
     eng._last_used = time.monotonic()  # just used
     assert eng.maybe_free_idle(120.0) is False
     assert eng._model is not None
+
+
+def test_spk_idle_ttl_default_and_floor(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("SPK_IDLE_TTL", raising=False)
+    assert main._spk_idle_ttl() == main._SPK_IDLE_TTL_DEFAULT
+    monkeypatch.setenv("SPK_IDLE_TTL", "1")  # below the 5 s floor
+    assert main._spk_idle_ttl() == main._SPK_IDLE_TTL_DEFAULT
+    monkeypatch.setenv("SPK_IDLE_TTL", "300")
+    assert main._spk_idle_ttl() == 300.0
+
+
+def test_spk_idle_ttl_default_matches_registry():
+    # Guard the R2-A invariant: registry sidecar.spkIdleTtl default == sidecar
+    # default, or a default-config sidecar silently diverges from the UI.
+    assert main._SPK_IDLE_TTL_DEFAULT == 120.0
