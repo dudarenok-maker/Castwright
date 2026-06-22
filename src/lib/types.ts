@@ -162,10 +162,12 @@ export interface ImportCandidate {
   sourceText: string;
   wordCount: number;
   byteSize: number;
-  /* fs-2 — BCP-47 language auto-detected from the manuscript text (Cyrillic
-     ratio). Seeds the confirm-view language selector; user-overridable.
-     Optional because detection runs client-side and older flows omit it. */
+  /** fs-41/fs-50 — server-detected BCP-47 language (always set since seam 2). */
   language?: string;
+  /** Whether the detected language is supported (false ⇒ detected-but-unsupported). */
+  languageSupported?: boolean;
+  /** Languages offered in the confirm selector (registry-supplied). */
+  supportedLanguages?: Array<{ code: string; label: string }>;
   /* Per-chapter wordCount is what powers the confirm view's auto-suggest
      heuristic (front-matter detection by length). Optional because older
      server builds didn't expose it. */

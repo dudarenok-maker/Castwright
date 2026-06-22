@@ -2545,11 +2545,26 @@ export interface components {
              */
             seriesFromTitle?: boolean;
             /**
-             * @description fs-2 — BCP-47 language auto-detected from the manuscript text
-             *     (≥30% Cyrillic letters → `ru`, else `en`). Seeds the confirm-view
-             *     language selector; the user can override before confirming.
+             * @description fs-41/fs-50 — BCP-47 language server-detected on import (script
+             *     pre-pass + franc). Seeds the confirm-view language selector; the
+             *     user can override before confirming.
              */
             language?: string;
+            /**
+             * @description fs-41/fs-50 — Whether the detected language has passed its
+             *     validation gate (false ⇒ detected-but-unsupported).
+             */
+            languageSupported?: boolean;
+            /**
+             * @description fs-41/fs-50 — Languages available in the confirm-view selector
+             *     (registry-supplied, supported:true entries only).
+             */
+            supportedLanguages?: {
+                /** @description BCP-47 primary subtag. */
+                code: string;
+                /** @description Display name. */
+                label: string;
+            }[];
             sourceText: string;
             wordCount: number;
             byteSize: number;

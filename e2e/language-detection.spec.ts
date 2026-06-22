@@ -1,7 +1,7 @@
-/* Browser-level golden path for fs-2 language auto-detection on the
- * confirm-metadata view. Mocks the import path (mock importManuscript echoes
- * the pasted text as sourceText), so detectLanguage runs over the real
- * manuscript text in the browser:
+/* Browser-level golden path for fs-41/fs-50 server-driven language detection
+ * on the confirm-metadata view. Mock importManuscript mirrors the server's
+ * Cyrillic-ratio heuristic and sets language/languageSupported/supportedLanguages
+ * on the candidate so the confirm selector is server-driven even in mock mode:
  *   - a Cyrillic manuscript → the Language selector auto-selects Russian and
  *     shows the "Auto-detected Russian — verify" chip + the Qwen-voices note;
  *     overriding to English clears the chip.

@@ -45,9 +45,9 @@ describe('sidecarLanguageName', () => {
 
   it('falls back to English with a warning for an unknown code', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(sidecarLanguageName('de')).toBe('English');
+    expect(sidecarLanguageName('xy')).toBe('English');
     expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0]?.[0]).toContain('de');
+    expect(warn.mock.calls[0]?.[0]).toContain('xy');
   });
 
   it('sources the language word from the registry entry', async () => {

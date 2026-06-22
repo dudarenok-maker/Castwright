@@ -396,3 +396,18 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
     expect(res.body.candidate.seriesFromTitle).toBe(false);
   });
 });
+
+/* fs-41/fs-50 seam 2 — server-side language detection wired into POST /api/import. */
+describe('POST /api/import — language detection (fs-41/fs-50)', () => {
+  it('detects the manuscript language and stamps the supported-list on the candidate', async () => {
+    const es =
+      'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller.';
+    const res = await request(app).post('/api/import').send({ text: es }).expect(200);
+    expect(res.body.candidate.language).toBe('es');
+    expect(res.body.candidate.languageSupported).toBe(false);
+    expect(res.body.candidate.supportedLanguages).toEqual([
+      { code: 'en', label: 'English' },
+      { code: 'ru', label: 'Russian' },
+    ]);
+  });
+});

@@ -768,6 +768,16 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
       seriesFromTitle = true;
     }
   }
+  /* fs-41/fs-50 — mirror server-side language detection in mock mode so e2e
+     specs exercise the server-driven confirm selector path without a live server.
+     Cyrillic ratio ≥30% → Russian; otherwise English. */
+  const mockSupportedLanguages = [
+    { code: 'en', label: 'English' },
+    { code: 'ru', label: 'Russian' },
+  ];
+  const cyrillicCount = (effectiveText.match(/[Ѐ-ӿ]/g) ?? []).length;
+  const letterCount = (effectiveText.match(/\p{L}/gu) ?? []).length;
+  const mockLanguage = letterCount > 0 && cyrillicCount / letterCount >= 0.3 ? 'ru' : 'en';
   const candidate = {
     format: (inferFormat(effectiveName ?? undefined) ?? 'markdown') as UploadResponse['format'],
     title,
@@ -779,6 +789,9 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
     wordCount: effectiveText.trim().split(/\s+/).filter(Boolean).length,
     byteSize: file ? file.size : new Blob([effectiveText]).size,
     chapters: [{ id: 1, title: 'Chapter 1' }],
+    language: mockLanguage,
+    languageSupported: true,
+    supportedLanguages: mockSupportedLanguages,
   };
   return { tempId: 'imp_' + Math.random().toString(36).slice(2, 10), candidate };
 }

@@ -149,35 +149,47 @@ LanguageEntry {
   validated under fs-2; a regression test asserts a `ru` book still forces Qwen +
   `forbidKokoroFallback`). No `engines{}` map — non-English is always Qwen (§0.1).
 - **Frontend/server sharing seam (specified, not hand-mirrored).** The full registry
-  lives server-side; only the **detection slice** (`code`, `detect`, `sidecarName`,
-  `supported`) is exposed to the browser via the existing `openapi.yaml` →
-  `api-types.ts` generated path. The heavy `text`/`refText`/lexicon data never
-  enters the bundle. ("Adding a language = one entry" holds only with this seam.)
+  lives server-side. Because detection now runs server-side (§3), the frontend
+  runs no detection and needs only two small things, both typed via `openapi.yaml`
+  → `api-types.ts`: the per-import result `{ language, languageSupported }` (on the
+  import response) and the **supported-list** (`{ code, label }[]`) for the confirm
+  selector. No `detect`/`text`/`refText`/lexicon data ever enters the bundle.
+  ("Adding a language = one entry" holds.)
 - CJK adds the same shape **plus** a segmenter (the §11.1 sub-spec owns it).
 
-## 3. Detection (Latin + script pre-pass, fails safe)
+## 3. Detection — server-side on ingest (Latin + script pre-pass, fails safe)
 
-- **Script pre-pass is authoritative** (deterministic): Cyrillic⇒ru. This preserves
-  the shipped Russian path exactly and never depends on franc. (Han/Kana⇒block-as-
-  unsupported now; the §11.1 sub-spec turns them into zh/ja.)
-- **franc-min only disambiguates Latin** (en/es/fr/de), with a **confidence floor**
-  below which it falls back to `en`, and an explicit **"English never misdetects"**
-  regression test (an English chapter dense with French proper nouns must stay en).
-  Map franc ISO 639-3 → registry BCP-47 via `detect.iso6393`.
-- **Strip front-matter BEFORE detecting** (registry `frontMatterLexicon`), sampling
-  the book body, not the raw first 20k chars — translated editions carry English
-  copyright pages that misdetect to `en`.
+**Detection runs on the SERVER during `POST /api/import`** (revised from the
+fs-2 client-side seed — review showed the server already holds the registry,
+`strip-front-matter.ts`, and the full `sourceText`, and can run `franc` as a Node
+dep with **no browser-bundle cost**; import is already the one hop, so this adds
+none). The import response carries `{ language, languageSupported }`; the confirm
+screen **displays** the result and builds its selector from a server-supplied
+supported-list. The client `detect-language.ts` heuristic is **retired**. Mechanics:
+- **Script pre-pass is authoritative** (deterministic): Cyrillic⇒ru. Preserves the
+  shipped Russian path exactly, never depends on franc. (Han/Kana⇒
+  `detected-but-unsupported`; the §11.1 sub-spec turns them into zh/ja.)
+- **franc (Node) only disambiguates Latin** (en/es/fr/de), with a **confidence
+  floor** below which it falls back to `en`, and an explicit **"English never
+  misdetects"** regression test (an English chapter dense with French proper nouns
+  stays en). Map franc ISO 639-3 → registry BCP-47 via `detect.iso6393`.
+- **Strip front-matter BEFORE detecting** — reuse the server's `strip-front-matter.ts`
+  (registry-driven per §4.7) on a body sample, not the raw head — translated
+  editions carry English copyright pages that misdetect to `en`.
 - **Fail safe — never silent `en`.** A confident detection of a non-`supported`
-  language lands in a distinct **`detected-but-unsupported`** state that **blocks
-  generation** (or forces an explicit override). `en` must never be the
-  safe-harbour default — `isNonEnglish('en')===false` disarms the guard.
-- **The confirm selector is BUILT, not gated.** Today it is a hardcoded 2-item
-  `<select>` (`confirm-metadata.tsx:22`) with Russian-specific copy
-  (`:300-312`) — there is no open-text field. Generate the options from
-  `registry.supported`; generalise the "Auto-detected Russian — verify" copy to the
-  detected language. (Updates `detect-language.test.ts` thresholds,
-  `confirm-metadata.test.tsx`, `e2e/language-detection.spec.ts` — see §10
-  test-contract list.)
+  language returns `{ language: <code>, languageSupported: false }` → the confirm
+  screen shows a **`detected-but-unsupported`** banner and the user must pick a
+  supported language (the hard generation block is seam 5's `sidecarLanguageName`
+  throw). `en` must never be the silent safe-harbour — `isNonEnglish('en')===false`
+  disarms the guard.
+- **The confirm selector is BUILT from the server's supported-list, not gated.**
+  Today it is a hardcoded 2-item `<select>` (`confirm-metadata.tsx:22`) with
+  Russian-specific copy (`:300-312`) — there is no open-text field. Generate the
+  options from the supported entries; generalise the "Auto-detected Russian —
+  verify" copy + the Qwen note to the detected language. (Updates
+  `confirm-metadata.test.tsx`, `e2e/language-detection.spec.ts`; the client
+  `detect-language.ts` + `detect-language.test.ts` are **removed/superseded** — see
+  §10 test-contract list.)
 
 ## 4. Analyze-half i18n (the bulk — engine-independent, Latin)
 
@@ -276,8 +288,12 @@ desk-verifiable on synthetic fixtures:
 
 1. **Registry module + en/ru seeding + the frontend/server sharing seam** — no
    behaviour change; `ru` no-regression test.
-2. **Detection upgrade + confirm-selector rebuild** — frontend-only; script pre-pass
-   + franc-for-Latin + block-unsupported + generalised copy.
+2. **Server-side detection on `/api/import` + confirm-selector rebuild** — registry
+   `detect` field + es/fr/de entries; a server detection module (script pre-pass +
+   franc-for-Latin + front-matter strip + clamp/block-unsupported); the import
+   response carries `{ language, languageSupported }` + the supported-list; the
+   confirm screen consumes them, builds the selector, and shows the
+   detected-but-unsupported banner. Retires the client `detect-language.ts`.
 3. **Analyze-half primitives** (§4.1–4.7) — server-only, one PR per 1–2 primitives,
    synthetic-ES-fixture-gated; each lists the shipped tests whose contract changes.
 4. **Voice filtering + early-warning transport** — frontend+server.
@@ -302,9 +318,9 @@ operator's ears, AND the labelled attribution sample — it cannot be desk-verif
 ## 8. Settings & cost posture
 - No new master flag; the registry's `supported` set + the `detected-but-unsupported`
   block are the only gates. Engine auto-load unchanged (non-English ⇒ Qwen).
-- **No new runtime deps for the Latin tranche** — `franc-min` (frontend, tiny) is the
-  only addition; no G2P backend, no word segmenter (that is the CJK sub-spec's), no
-  extra VRAM beyond Qwen's existing footprint.
+- **One new runtime dep for the Latin tranche** — `franc` (a **server-side** Node
+  dep, not in the browser bundle); no G2P backend, no word segmenter (that is the
+  CJK sub-spec's), no extra VRAM beyond Qwen's existing footprint.
 
 ## 9. Reuse (NOT built here)
 - fs-2 data-model + Qwen design-time baking + the never-cross-language enforcement
@@ -328,16 +344,18 @@ operator's ears, AND the labelled attribution sample — it cannot be desk-verif
       (not silently inverted): `language.test.ts:46` (de→word, no warn),
       `parsers/text.test.ts` (heading lexicon), `narrator-default`/`audio-tags`
       (quote chars + Unicode case), `roster-coverage.test.ts` + the
-      `dialogue-verbs` drift test, `detect-language.test.ts:35` (script-rule cases,
-      not franc short-string thresholds), `confirm-metadata.test.tsx:236` +
-      `e2e/language-detection.spec.ts` (generalised copy).
+      `dialogue-verbs` drift test, the client `detect-language.ts` +
+      `detect-language.test.ts` **removed** (detection moved server-side; replaced by
+      a new server detection test), `confirm-metadata.test.tsx:236` +
+      `e2e/language-detection.spec.ts` (server-driven flow + generalised copy).
 
 **Phase 1 — framework + Spanish canary (the build DoD):**
-- [ ] Detection: script pre-pass authoritative (ru preserved); franc-for-Latin with a
-      confidence floor + an **English-never-misdetects** test; 639-3→BCP-47 map;
-      front-matter stripped before detect; a confident unsupported language **blocks**
-      (`detected-but-unsupported`), never clamps to `en` (regression test: a French
-      manuscript never reaches a synth call as English).
+- [ ] Detection runs **server-side on `/api/import`**: script pre-pass authoritative
+      (ru preserved); franc-for-Latin with a confidence floor + an
+      **English-never-misdetects** test; 639-3→BCP-47 map; front-matter stripped
+      before detect (reuses `strip-front-matter.ts`); a confident unsupported language
+      returns `languageSupported:false` → confirm shows `detected-but-unsupported`,
+      never clamps to `en` (regression test: a French manuscript is not silently `en`).
 - [ ] Analyze-half §4.1–4.7 registry-driven; synthetic-ES-fixture tests (chapter
       split + title normalisation, quote/dialogue + audio-tag case, roster guard,
       minor-cast fold, token divisor, prompt examples + `sidecarName` preamble,

@@ -10,6 +10,7 @@ import {
   tagMarkdownEmphasis,
   tagShoutingDialog,
 } from './audio-tags.js';
+import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
 
 /* Heading detection — built from three alternatives:
    1) Markdown H1/H2 (`# Foo` or `## Foo`).
@@ -21,46 +22,35 @@ import {
       `Foreword`. The `\b` boundary avoids matching `Prologueia` etc.
 
    Length cap on the calling side (≤120 chars) keeps mid-paragraph lines
-   that happen to start with one of these tokens from misfiring. */
-const HEADING_KEYWORDS = '(?:chapter|day|part|book|act|section|scene)';
-const NUMBER_WORDS = [
-  'one',
-  'two',
-  'three',
-  'four',
-  'five',
-  'six',
-  'seven',
-  'eight',
-  'nine',
-  'ten',
-  'eleven',
-  'twelve',
-  'thirteen',
-  'fourteen',
-  'fifteen',
-  'sixteen',
-  'seventeen',
-  'eighteen',
-  'nineteen',
-  'twenty',
-  'thirty',
-  'forty',
-  'fifty',
-  'sixty',
-  'seventy',
-  'eighty',
-  'ninety',
-  'hundred',
+   that happen to start with one of these tokens from misfiring.
+
+   Non-English keywords from the language registry are unioned in so that
+   Capítulo/Kapitel/Глава etc. split chapters without knowing the language
+   at parse time. */
+
+/* Union of English + non-English alternatives for language-agnostic parsing. */
+const NE_LEX = nonEnglishHeadingLexicon();
+const ALL_HEADING_KEYWORDS = [
+  ...['chapter', 'day', 'part', 'book', 'act', 'section', 'scene'],
+  ...NE_LEX.keywords,
 ].join('|');
-/* Numbered-section number: Arabic digit, Roman numeral, or English word
+const ALL_NUMBER_WORDS = [
+  'one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen',
+  'fifteen','sixteen','seventeen','eighteen','nineteen','twenty','thirty','forty','fifty','sixty','seventy',
+  'eighty','ninety','hundred',
+  ...NE_LEX.numberWords,
+].join('|');
+const ALL_STANDALONE = [
+  ...['prologue','epilogue','interlude','preface','introduction','afterword','foreword'],
+  ...NE_LEX.standalone,
+].join('|');
+
+/* Numbered-section number: Arabic digit, Roman numeral, or English/non-English word
    form (with optional compound for 21–99: "twenty-one", "thirty two", …). */
-const NUMBER_PART = `(?:[ivxlcdm\\d]+|(?:${NUMBER_WORDS})(?:[-\\s](?:${NUMBER_WORDS}))?)`;
-const STANDALONE_HEADINGS =
-  '(?:prologue|epilogue|interlude|preface|introduction|afterword|foreword)';
+const NUMBER_PART = `(?:[ivxlcdm\\d]+|(?:${ALL_NUMBER_WORDS})(?:[-\\s](?:${ALL_NUMBER_WORDS}))?)`;
 const CHAPTER_HEADING_RE = new RegExp(
-  `^(?:#{1,2}\\s+\\S|${HEADING_KEYWORDS}\\s+${NUMBER_PART}\\b|${STANDALONE_HEADINGS}\\b)`,
-  'i',
+  `^(?:#{1,2}\\s+\\S|(?:${ALL_HEADING_KEYWORDS})\\s+${NUMBER_PART}\\b|(?:${ALL_STANDALONE})\\b)`,
+  'iu',
 );
 
 /* "Bare" heading detection — used to decide whether to look ahead for a
@@ -68,8 +58,11 @@ const CHAPTER_HEADING_RE = new RegExp(
    `Day Two`, or `Prologue` with no descriptive text; books commonly put
    the chapter name on a separate line below. A heading like
    `Chapter 3: The Beginning` is already self-descriptive — no merge. */
-const BARE_NUMBERED_HEADING_RE = new RegExp(`^${HEADING_KEYWORDS}\\s+${NUMBER_PART}\\s*$`, 'i');
-const BARE_STANDALONE_HEADING_RE = new RegExp(`^${STANDALONE_HEADINGS}\\s*$`, 'i');
+const BARE_NUMBERED_HEADING_RE = new RegExp(
+  `^(?:${ALL_HEADING_KEYWORDS})\\s+${NUMBER_PART}\\s*$`,
+  'iu',
+);
+const BARE_STANDALONE_HEADING_RE = new RegExp(`^(?:${ALL_STANDALONE})\\s*$`, 'iu');
 
 /* Cap on subtitle line length. Real chapter names rarely exceed 80 chars;
    anything longer is almost certainly a body sentence. Re-used by the
@@ -110,11 +103,11 @@ const TITLE_STOPWORDS = new Set([
 export function looksLikeTitle(s: string): boolean {
   const words = s.split(/\s+/);
   for (let i = 0; i < words.length; i++) {
-    const word = words[i].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9']+$/g, '');
+    const word = words[i].replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}']+$/gu, '');
     if (word.length === 0) continue;
     const first = word[0];
-    if (first >= 'A' && first <= 'Z') continue;
-    if (first >= '0' && first <= '9') continue;
+    if (/\p{Lu}/u.test(first)) continue; // uppercase letter (any script)
+    if (/\p{Nd}/u.test(first)) continue; // decimal digit
     if (i === 0) return false;
     if (TITLE_STOPWORDS.has(word.toLowerCase())) continue;
     return false;
@@ -132,7 +125,7 @@ const MAX_HEADING_LEN = 120;
    `~~ Part I ~~`. Preserves `#` so markdown H1/H2 still match the regex's
    markdown branch. Symmetric strip on both ends. */
 function normaliseHeading(line: string): string {
-  return line.replace(/^[^A-Za-z0-9#]+/, '').replace(/[^A-Za-z0-9]+$/, '');
+  return line.replace(/^[^\p{L}\p{N}#]+/u, '').replace(/[^\p{L}\p{N}]+$/u, '');
 }
 
 /* Filename pattern used to auto-detect Author / Series / Position / Title.
