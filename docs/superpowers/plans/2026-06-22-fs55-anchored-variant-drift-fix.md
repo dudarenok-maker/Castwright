@@ -618,15 +618,31 @@ Per operator decision, expose the 1.7B-Base as a **per-character-selectable synt
 ### Task 11: Verify, document, close (fs-55 + 1.7B Quality tier)
 
 - [ ] **Step 0: Rebase the worktree on `main`** (once network's back) so the spec (#1002) is present: `git fetch origin main && git rebase origin/main` (resolve any `BACKLOG.md`/spec overlap). Confirm `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` now exists.
-- [ ] **Step 1:** `npm run verify:fast` (frontend + server: model-keys, synth-routing, qwen-voice, pill tests) + `npm run test:hooks` (the install `.mjs` test); on the GPU box `npm run test:sidecar` (the fs-55 identity regression AND the 1.7B-synth/prompt-cache weights-gated tests must PASS, not skip). **Operator listens once to the whole thing** (drift-fixed variants + a 1.7B-tier chapter) — final intensity call on whisper/angry here.
+- [ ] **Step 1 — FULL release-style battery (large change → run everything).** Local: `npm run verify` (typecheck + all tests + e2e chromium + build) + `npm run test:hooks` + on the GPU box `npm run test:sidecar` (the fs-55 identity regression AND the 1.7B-synth/prompt-cache weights-gated tests must PASS, not skip) + **`npm run test:e2e:all`** (all 3 Playwright projects: chromium + mobile-chrome + tablet-chrome) + `npm run test:e2e:visual`. **Operator listens once to the whole thing** (drift-fixed variants + a 1.7B-tier chapter) — final intensity call on whisper/angry here.
 - [ ] **Step 1b — exercise the re-mint migration on the bundled sample book (Coalfall):** with the sidecar up (0.6B + 1.7B-Base), run `node scripts/remint-anchored-variants.mjs` (dry-run) against the Coalfall sample voices (`samples/the-coalfall-commission/voices/qwen/`) and confirm it lists the existing legacy (pre-anchored) variants. Then `--apply` and re-listen to one re-minted variant to confirm an EXISTING book's drifted variant is now the same person as its base. (Back up `voices/qwen/` first — the script overwrites in place.)
 - [ ] **Step 2:** Fill **Ship Notes**: SHA, calibrated threshold + per-emotion distances, on-box verify result, Task-0 smoke output.
 - [ ] **Step 3:** Update the spec §4.4 precedence ladder (emotion/instruct/manual) + §4.5 carve-out note; remove fs-55's spec caveat now that it's measured.
 - [ ] **Step 4:** PR title `feat(srv,side,fe): anchored variant minting (fs-55) + selectable 1.7B Quality tier (fs-56)`; body `Closes #993` (operator-confirmed: close the fs-55 *detection-gate feature* as obviated by prevention) + `Refs #996` (fs-56 — this delivers the Quality-tier slice; instruct/non-verbal remain). Open as **draft**; `gh pr ready` once locally green.
+- [ ] **Step 5 — FULL release-style CI on the PR (large change).** This must run the COMPLETE battery, NOT the default scope-filtered `run-ci` legs. Add the **`run-ci`** label AND **manually dispatch `verify.yml`** (`gh workflow run verify.yml --ref feat/sidecar-fs55-anchored-variants`) — a manual dispatch runs the full (non-scope-filtered) battery. Then trigger the e2e/cross-OS tiers that `verify.yml` doesn't cover by default: dispatch **`cross-os.yml`** (`gh workflow run cross-os.yml --ref <branch>`) which runs full `verify` + `test:e2e:mobile` on Ubuntu + `verify:quick`+build on macOS **and** Windows — i.e. the same battery `release.yml` gates a tag on. **Confirm the exact knobs against the actual `.github/workflows/{verify,cross-os}.yml` first** (the scope-filter + which e2e projects each runs), since the sidecar/GPU legs are venv-gated and SKIP in CI — note that explicitly so a SKIP isn't mistaken for coverage.
+
+### Task 12: Merge → pull local → build (after the full battery is green)
+
+**GATED** on Task 11 Step 5 (the full release-style CI battery) passing AND the operator's on-box listen. Network-deferred (push/PR/merge need connectivity).
+
+- [ ] **Step 1:** Confirm the full battery is green — `verify.yml` (manual full dispatch) + `cross-os.yml` (Ubuntu full `verify` + `test:e2e:mobile`; macOS + Windows `verify:quick`+build) all ✅; venv-gated sidecar legs noted as SKIP (not coverage).
+- [ ] **Step 2:** `gh pr merge <#> --merge` (merge commit per repo convention; squash/rebase disabled; head branch auto-deletes). This auto-closes #993 (fs-55) via the PR body.
+- [ ] **Step 3:** Update local `main` to the merged commit. **Caveat:** the main checkout is owned by a concurrent session (uncommitted work) — coordinate before pulling there; do not clobber their tree. Pull into a clean checkout if needed.
+- [ ] **Step 4:** `npm run build` (production build into `dist/`) — confirm it succeeds on the merged `main`.
 
 ## Ship Notes
 
-_(fill on ship: SHA · calibrated identity threshold + per-emotion cosine distances · Task-0 smoke output · on-box verify result.)_
+- **Branch:** `feat/sidecar-fs55-anchored-variants` (worktree `C:\Claude\wt-wave0`), 22 commits off `origin/main` `6f9a6137`. HEAD `8a36c4c5`.
+- **fs-55 acceptance: GREEN** — `test_minted_variant_holds_base_identity` PASSES on-box, ECAPA cosine distance **0.0139** (threshold `< 0.30`). Operator confirmed by ear: "same person, definitely fixed." Codec-compat smoke (Task 0) PASS.
+- **Key commits:** mint_variant `dc39dc75`; fix-live (Node→mint-variant) `bf4c8636`; re-mint migration `46714b86`; 1.7B model key `2f7eee07`; 1.7B synth + lazy prompt `331ccf06`; Node 1.7B selection `dfc205c4`; bf16 metric fix `b949af45`; **batch-path critical fix `8a36c4c5`**.
+- **Reviews:** spec — 3 adversarial rounds (merged PR #1002); per-task reviews on all 11 tasks; **final whole-branch review caught a Critical** (1.7B tier no-op in the batch/production path) → fixed + re-reviewed merge-ready.
+- **On ship (when network back):** rebase on `main` (Step 0) to pick up the spec #1002; update spec §4.4 precedence / §4.5 carve-out; run the full release CI battery (Task 11 Step 5); merge + pull + build (Task 12).
+- **Owed by operator:** the combined on-box LISTEN (final intensity tuning on whisper/angry) + the Coalfall re-mint dry-run (Task 11 Step 1b).
+- **Deferred follow-ups (non-blocking):** `_load_voice_prompt_17b` should READ `<voice>__1.7b.pt` on cold start (currently re-derives per restart); the per-task Minors (all triaged DEFER by the final review).
 
 ## Open items carried from the spec (NOT this plan)
 
