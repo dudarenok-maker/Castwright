@@ -6,6 +6,9 @@ import {
   getLanguageEntry,
   isSupportedLanguage,
   type LanguageEntry,
+  allLanguageEntries,
+  supportedLanguages,
+  nonEnglishHeadingLexicon,
 } from './language-registry.js';
 
 describe('getLanguageEntry', () => {
@@ -21,11 +24,18 @@ describe('getLanguageEntry', () => {
 
   it('returns the ru entry, supported (grandfathered under fs-2)', () => {
     const ru = getLanguageEntry('ru');
-    expect(ru?.code).toBe('ru');
-    expect(ru?.sidecarName).toBe('Russian');
-    expect(ru?.supported).toBe(true);
-    expect(ru?.detect).toEqual({ script: 'cyrillic', iso6393: 'rus' });
-    expect(ru?.headingLexicon).toBeDefined();
+    expect(ru).toEqual<LanguageEntry>({
+      code: 'ru',
+      sidecarName: 'Russian',
+      supported: true,
+      detect: { script: 'cyrillic', iso6393: 'rus' },
+      headingLexicon: {
+        keywords: ['глава', 'часть', 'день', 'книга', 'действие', 'сцена', 'раздел'],
+        numberWords: ['один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять', 'десять',
+          'одиннадцать', 'двенадцать', 'двадцать', 'тридцать'],
+        standalone: ['пролог', 'эпилог', 'предисловие', 'введение', 'интерлюдия', 'послесловие'],
+      },
+    });
   });
 
   it('returns undefined for a code not in the registry', () => {
@@ -42,11 +52,6 @@ describe('isSupportedLanguage', () => {
     expect(isSupportedLanguage('')).toBe(false);
   });
 });
-
-import {
-  allLanguageEntries,
-  supportedLanguages,
-} from './language-registry.js';
 
 describe('detect field + Latin entries', () => {
   it('en/ru carry a detect script + iso6393', () => {
@@ -85,8 +90,6 @@ describe('allLanguageEntries', () => {
     expect(allLanguageEntries().map((e) => e.code).sort()).toEqual(['de', 'en', 'es', 'fr', 'ru']);
   });
 });
-
-import { nonEnglishHeadingLexicon } from './language-registry.js';
 
 describe('nonEnglishHeadingLexicon', () => {
   it('unions the non-English heading keywords (es/fr/de/ru), deduped', () => {
