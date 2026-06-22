@@ -81,7 +81,7 @@ if __name__ == "__main__":
                 g0 = m.RESULTS / "crossbook_g0.json"
                 floor = (json.loads(g0.read_text("utf-8")).get("floor_std_median")
                          if g0.exists() else None)
-                if not floor:
+                if floor is None:  # absent file/key — NOT a legitimate zero floor (review M-1)
                     print("WARNING: no G0 floor (run --g0 first); using 1.0 placeholder — "
                           "G1 stds are NOT trustworthy until G0 runs.", file=sys.stderr)
                     floor = 1.0

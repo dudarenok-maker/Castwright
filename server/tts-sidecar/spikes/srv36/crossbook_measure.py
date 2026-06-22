@@ -168,9 +168,13 @@ def run_g6(by_book: dict, held_out_book: str | None = None) -> dict:
     if len(book_ids) < 2:
         return _write("g6", {"separation_auc": 0.5, "note": "need >=2 books for held-out G6"})
     held = held_out_book or book_ids[-1]
-    held_by_key = {vu: rec["vecs"] for vu, rec in by_book.get(held, {}).items()}
+    recurring = _recurring_keys(by_book)
+    # restrict to recurring keys only — a voice present in just the held-out book
+    # has no anchor and must not enter the genuine/impostor scoring (review I-1)
+    held_by_key = {vu: by_book.get(held, {}).get(vu, {}).get("vecs", [])
+                   for vu in recurring if vu in by_book.get(held, {})}
     anchors: dict = {}
-    for vu in _recurring_keys(by_book):
+    for vu in recurring:
         other_vecs = [v for b, by_key in by_book.items() if b != held
                       for v in by_key.get(vu, {}).get("vecs", [])]
         if other_vecs:
