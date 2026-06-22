@@ -128,6 +128,18 @@ describe('buildModelInventory', () => {
       5000,
     );
   }
+  function installQwenBase17() {
+    writeFile(
+      join(
+        hfCache,
+        'models--Qwen--Qwen3-TTS-12Hz-1.7B-Base',
+        'snapshots',
+        'abc',
+        'model.safetensors',
+      ),
+      8000,
+    );
+  }
 
   it('reports a present Kokoro with size, path, residency, and fallback flag', () => {
     installKokoro();
@@ -185,6 +197,46 @@ describe('buildModelInventory', () => {
     const row = inv.items.find((i) => i.id === 'qwen-base')!;
     expect(row.installState).toBe('package-missing');
     expect(row.tier).toBe('standard');
+  });
+
+  it('qwen-base17: present when HF snapshot exists, label matches, kind tts', () => {
+    installQwenBase17();
+    const inv = buildModelInventory(baseDeps());
+    const row = inv.items.find((i) => i.id === 'qwen-base17')!;
+    expect(row).toBeDefined();
+    expect(row.label).toBe('Qwen3-TTS Base (1.7B)');
+    expect(row.kind).toBe('tts');
+    expect(row.present).toBe(true);
+    expect(row.sizeBytes).toBe(8000);
+    expect(row.removable).toBe(true);
+    expect(row.isDefaultEngine).toBe(false);
+    expect(row.isFallbackEngine).toBe(false);
+  });
+
+  it('qwen-base17: absent when snapshot dir is missing', () => {
+    const inv = buildModelInventory(baseDeps());
+    const row = inv.items.find((i) => i.id === 'qwen-base17')!;
+    expect(row.present).toBe(false);
+    expect(row.sizeBytes).toBeNull();
+    expect(row.removable).toBe(false);
+  });
+
+  it('qwen-base17: loaded reflects sidecar.qwenBase17Loaded', () => {
+    installQwenBase17();
+    const inv = buildModelInventory(
+      baseDeps({
+        sidecar: { ...reachableSidecar, qwenBase17Loaded: true },
+      }),
+    );
+    const row = inv.items.find((i) => i.id === 'qwen-base17')!;
+    expect(row.loaded).toBe(true);
+  });
+
+  it('qwen-base17: not loaded when qwenBase17Loaded is false/undefined', () => {
+    installQwenBase17();
+    const inv = buildModelInventory(baseDeps());
+    const row = inv.items.find((i) => i.id === 'qwen-base17')!;
+    expect(row.loaded).toBe(false);
   });
 
   it('coqui row tier is secondary and carries an integrity verdict', () => {
@@ -351,6 +403,19 @@ describe('performRemoval', () => {
     const res = await performRemoval('coqui', repoRoot);
     expect(res).toEqual({ removed: true, freedBytes: 0 });
   });
+
+  it('deletes the qwen-base17 HF snapshot dir and reports freed bytes', async () => {
+    writeFile(
+      join(hfCache, 'models--Qwen--Qwen3-TTS-12Hz-1.7B-Base', 'snapshots', 'abc', 'model.safetensors'),
+      8000,
+    );
+    const res = await performRemoval('qwen-base17', repoRoot);
+    expect(res.removed).toBe(true);
+    expect(res.freedBytes).toBe(8000);
+    expect(
+      dirSizeBytes(join(hfCache, 'models--Qwen--Qwen3-TTS-12Hz-1.7B-Base')).bytes,
+    ).toBe(0);
+  });
 });
 
 describe('POST /api/models/:id/remove', () => {
@@ -384,7 +449,7 @@ describe('GET /api/models/inventory', () => {
     /* The five fixed engine rows are always present even with no sidecar. */
     const ids = res.body.items.map((i: { id: string }) => i.id);
     expect(ids).toEqual(
-      expect.arrayContaining(['kokoro', 'qwen-base', 'qwen-design', 'coqui', 'whisper']),
+      expect.arrayContaining(['kokoro', 'qwen-base', 'qwen-base17', 'qwen-design', 'coqui', 'whisper']),
     );
   });
 });

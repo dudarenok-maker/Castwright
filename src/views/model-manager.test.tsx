@@ -235,6 +235,76 @@ describe('ModelManagerView — inventory', () => {
   });
 });
 
+describe('ModelManagerView — qwen-base17 row', () => {
+  const QWEN_BASE17_ITEM = {
+    id: 'qwen-base17' as const,
+    kind: 'tts' as const,
+    label: 'Qwen3-TTS Base (1.7B)',
+    present: true,
+    sizeBytes: 2_000_000_000,
+    diskPath: 'hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base',
+    loaded: false,
+    installState: 'ready' as const,
+    isDefaultEngine: false,
+    isFallbackEngine: false,
+    removable: true,
+    updatable: true,
+  };
+
+  beforeEach(() => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [...INVENTORY.items, QWEN_BASE17_ITEM],
+    });
+  });
+
+  it('renders a qwen-base17 row with label and disk path', async () => {
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    expect(within(row).getByText('Qwen3-TTS Base (1.7B)')).toBeInTheDocument();
+    expect(within(row).getByText(/1.7B-Base/)).toBeInTheDocument();
+  });
+
+  it('Load calls api.loadSidecar with { engine: "qwen", model: "1.7b" }', async () => {
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    within(row).getByRole('button', { name: /load model/i }).click();
+    await waitFor(() =>
+      expect(mockLoad).toHaveBeenCalledWith({ engine: 'qwen', model: '1.7b' }),
+    );
+  });
+
+  it('Unload calls api.unloadSidecar with { engine: "qwen", model: "1.7b" }', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [...INVENTORY.items, { ...QWEN_BASE17_ITEM, loaded: true }],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    within(row).getByRole('button', { name: /stop/i }).click();
+    await waitFor(() =>
+      expect(mockUnload).toHaveBeenCalledWith({ engine: 'qwen', model: '1.7b' }),
+    );
+  });
+
+  it('Remove opens the confirm modal and calls api.removeModel("qwen-base17")', async () => {
+    mockRemove.mockResolvedValue({ ok: true, id: 'qwen-base17', removed: true, freedBytes: 2_000_000_000 });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    within(row).getByTestId('model-remove-qwen-base17').click();
+    const modal = await screen.findByTestId('model-remove-confirm');
+    within(modal).getByTestId('model-remove-confirm-button').click();
+    await waitFor(() => expect(mockRemove).toHaveBeenCalledWith('qwen-base17'));
+  });
+
+  it('qwen-base Load still calls without model qualifier (not affected by 1.7b change)', async () => {
+    renderManager();
+    const qwen = await screen.findByTestId('model-row-qwen-base');
+    within(qwen).getByRole('button', { name: /load model/i }).click();
+    await waitFor(() => expect(mockLoad).toHaveBeenCalledWith({ engine: 'qwen' }));
+  });
+});
+
 describe('ModelManagerView — remove', () => {
   it('removes an idle, non-default, non-fallback model via the confirm modal', async () => {
     renderManager();
