@@ -863,5 +863,6 @@ def test_ensure_base17_loads_a_base_checkpoint() -> None:
     assert isinstance(eng, main.QwenEngine)
     eng._ensure_base17_loaded()
     assert eng._base17 is not None
+    assert getattr(eng._base17.model, "tts_model_type", None) == "base"
     eng.unload_base17()
     assert eng._base17 is None
