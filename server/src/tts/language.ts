@@ -7,14 +7,9 @@
    wired in v1 — adding a language is a one-line table entry here, not a
    contract migration (the field stays an open string everywhere else). */
 
-export const DEFAULT_LANGUAGE = 'en';
+import { getLanguageEntry } from './language-registry.js';
 
-/* Primary-subtag → sidecar language word. Keep keys lower-cased primary
-   subtags; the lookup normalises before indexing. */
-const SIDECAR_LANGUAGE_NAMES: Record<string, string> = {
-  en: 'English',
-  ru: 'Russian',
-};
+export const DEFAULT_LANGUAGE = 'en';
 
 /** Lower-cased primary subtag of a BCP-47 tag (`'ru-RU'` → `'ru'`). */
 function primarySubtag(bcp47: string): string {
@@ -30,17 +25,19 @@ export function normaliseBookLanguage(raw: string | undefined | null): string {
 
 /** The sidecar's language word for a BCP-47 book language. Unknown codes fall
     back to `'English'` with a warning — a stray code must never throw and break
-    generation, but it also must never silently mis-route, so we log it. */
+    generation, but it also must never silently mis-route, so we log it.
+    (Seam 5 replaces this fallback with a throw gated on the registry's
+    `supported` set; seam 1 preserves the shipped behaviour.) */
 export function sidecarLanguageName(bcp47: string): string {
   const primary = normaliseBookLanguage(bcp47);
-  const name = SIDECAR_LANGUAGE_NAMES[primary];
-  if (!name) {
+  const entry = getLanguageEntry(primary);
+  if (!entry) {
     console.warn(
       `[language] no sidecar language name for "${bcp47}" (primary "${primary}") — falling back to English`,
     );
     return 'English';
   }
-  return name;
+  return entry.sidecarName;
 }
 
 /** True when the book is not English (primary subtag ≠ `'en'`). Drives the
