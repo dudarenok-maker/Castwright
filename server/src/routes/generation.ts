@@ -88,8 +88,30 @@ import { describeSynthesisError, newCascadeState, recordNonFatal } from './gener
 import type { FailureCode } from './failure-taxonomy.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
+import { scoreBook } from '../audio/render-integrity/aggregate.js';
 
 export const generationRouter = Router();
+
+/* srv-36 — render-integrity score pass, wired to every chapter-done seam.
+   Re-scores the WHOLE book on each chapter completion so centroids incorporate
+   all rendered audio (not just the single just-finished chapter). Single-flight
+   per bookId so concurrent chapter-done events coalesce into one scoreBook run
+   instead of racing duplicate work + the centroids.json write. Non-fatal: a
+   scoring failure must never break generation. */
+const scoringInFlight = new Map<string, Promise<void>>();
+
+export async function afterChapterFinalized(
+  ctx: { bookId: string; bookDir: string; chapters: { id: number; slug: string }[] },
+) {
+  if (!configValue('qa.speaker.enabled')) return;
+  if (scoringInFlight.has(ctx.bookId)) return scoringInFlight.get(ctx.bookId);
+  const run = scoreBook(ctx.bookDir, ctx.chapters)
+    // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
+    .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
+    .finally(() => scoringInFlight.delete(ctx.bookId));
+  scoringInFlight.set(ctx.bookId, run);
+  return run;
+}
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
    recycle (plan 143), a crash, or an OOM drops the connection on the in-flight
@@ -1398,6 +1420,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioFormat,
         expectedSec: expectedSec ?? undefined,
         onEncoded: bumpProgress,
+        embeddings: result.embeddings,
       });
       if (audioQa.status === 'suspect') {
         console.warn(
@@ -1405,6 +1428,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             audioQa.reasons.join(' '),
         );
       }
+
+      /* srv-36 — trigger the render-integrity score pass for the whole book
+         now that this chapter's embeddings are on disk. Passes the FULL
+         state.chapters list (not `chapter` / `targetChapters`) so the
+         centroid is built from all rendered chapters, not just the one that
+         just finished. Single-flight + non-fatal (see afterChapterFinalized). */
+      await afterChapterFinalized({
+        bookId,
+        bookDir,
+        chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
+      });
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
          that arrives between this chapter and the next doesn't see a stale

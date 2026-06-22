@@ -38,6 +38,11 @@ import {
   type AudioEngineBreakdown,
 } from './engine-breakdown.js';
 import type { CharacterSnapshot } from './segments-io.js';
+import {
+  writeEmbeddings,
+  type EmbeddingRow,
+  EMBEDDINGS_VERSION,
+} from './render-integrity/embeddings-io.js';
 
 /** Strict on-disk shape of `<slug>.segments.json` (the write view; the loose
     read view lives in segments-io.ts). Mirrors generation.ts's local copy. */
@@ -77,6 +82,11 @@ export interface FinalizeChapterAudioInput {
       `bumpProgress` here so the per-chapter no-progress watchdog sees the long
       encode step land. No-op for callers that don't need it. */
   onEncoded?: () => void | Promise<void>;
+  /** srv-36 render-integrity: per-group ECAPA embedding rows collected by
+      synthesiseChapter's spk pass. When present, written as a separate atomic
+      `<slug>.embeddings.json` sibling after the segments write. Optional — absent
+      when `qa.speaker.enabled` is off or no stochastic-engine groups qualified. */
+  embeddings?: EmbeddingRow[];
 }
 
 export interface FinalizeChapterAudioResult {
@@ -197,6 +207,10 @@ export async function finalizeChapterAudioWrite(
      auditions the preserved pair (A) vs this render (B). */
   await preserveExistingAsPrevious(audioRoot, chapter.slug);
   await writeJsonAtomic(segPath, segmentsFile);
+  if (input.embeddings) {
+    const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+    await writeEmbeddings(embPath, input.embeddings, EMBEDDINGS_VERSION);
+  }
   await rename(tmpAudio, audioPath);
   try {
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);

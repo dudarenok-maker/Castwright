@@ -47,3 +47,4 @@ kokoro-onnx>=0.4.0,<0.5.0
 
 # Qwen3-TTS — per-character bespoke voices; weights fetched by install-qwen3.mjs.
 qwen-tts
+-r speaker-qa.txt

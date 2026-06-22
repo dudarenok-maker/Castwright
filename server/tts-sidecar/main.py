@@ -1931,6 +1931,50 @@ class WhisperEngine:
 ASR = WhisperEngine()
 
 
+class SpeakerEngine:
+    """ECAPA-TDNN speaker embedding (srv-36). CPU-only, NOT in the synth ENGINES
+    map — like WhisperEngine, it consumes audio and emits a vector."""
+    TARGET_SR = 16000
+
+    def __init__(self):
+        self._model = None
+        self._load_lock = asyncio.Lock()
+        self._infer_lock = threading.Lock()
+        self.device = os.environ.get("SPK_DEVICE", "cpu")
+
+    async def ensure_loaded(self):
+        if self._model is not None:
+            return
+        async with self._load_lock:
+            if self._model is not None:
+                return
+            from speechbrain.inference.speaker import EncoderClassifier
+            self._model = await asyncio.to_thread(
+                EncoderClassifier.from_hparams,
+                source="speechbrain/spkrec-ecapa-voxceleb",
+                run_opts={"device": self.device},
+            )
+
+    def embed(self, pcm: bytes, sample_rate: int) -> list[float]:
+        if self._model is None:
+            raise RuntimeError("call await ensure_loaded() before embed()")
+        import torch
+        audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        if sample_rate != self.TARGET_SR:  # numpy resample (no torchaudio dep)
+            n = int(round(len(audio) * self.TARGET_SR / sample_rate))
+            audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
+                              np.arange(len(audio)), audio).astype(np.float32)
+        t = torch.from_numpy(audio).unsqueeze(0)
+        with self._infer_lock, torch.no_grad():
+            emb = self._model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        norm = float(np.linalg.norm(emb))
+        return (emb / norm if norm > 0 else emb).tolist()
+
+
+# SPK is a standalone singleton (not a synth `Engine`) — audio in, embedding out.
+SPK = SpeakerEngine()
+
+
 ENGINES: dict[str, Engine] = {
     "coqui": CoquiEngine(),
     "kokoro": KokoroEngine(),
@@ -2898,6 +2942,8 @@ def health() -> dict[str, Any]:
         # operator confirm whether transcription is on the GPU or CPU.
         "asr_loaded": ASR._model is not None,
         "asr_device": ASR._device,
+        "spk_loaded": SPK._model is not None,
+        "spk_device": SPK.device,
         "devices": devices,
         "devices_state": _device_probe_state,
         "device": device,
@@ -3446,6 +3492,55 @@ async def transcribe(req: Request) -> Response:
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
     return JSONResponse(result)
+
+
+@app.post("/embed")
+async def embed(req: Request) -> Response:
+    """Speaker embedding (srv-36). Accepts raw int16 LE mono PCM and returns a
+    192-d unit-norm ECAPA-TDNN embedding for speaker-similarity scoring.
+
+    Body: raw int16 LE mono PCM. Header: `X-Sample-Rate` (required).
+    Returns JSON `{ "embedding": float[192], "dim": 192, "sample_rate": 16000 }`.
+
+    Offloaded to a worker thread so /health stays sub-50 ms while an embed
+    runs. Honours the same poison + recycle-drain fences as /transcribe."""
+    if _process_poisoned:
+        return JSONResponse(
+            {
+                "detail": (
+                    "Voice engine is in a poisoned CUDA state and must be restarted."
+                ),
+                "poisoned": True,
+            },
+            status_code=503,
+        )
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    pcm = await req.body()
+    if not pcm:
+        raise HTTPException(status_code=400, detail="empty PCM body")
+    try:
+        sample_rate = int(req.headers.get("X-Sample-Rate", "0"))
+    except (TypeError, ValueError):
+        sample_rate = 0
+    if sample_rate <= 0:
+        raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
+
+    await SPK.ensure_loaded()
+    try:
+        embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
+    except Exception as e:
+        err_str = f"{e}"
+        log.exception("embed failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
+        if _CUDA_POISON_RE.search(err_str):
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
+    return JSONResponse({"embedding": embedding, "dim": len(embedding), "sample_rate": SPK.TARGET_SR})
 
 
 @app.post("/synthesize-batch")

@@ -46,8 +46,12 @@ export interface SegmentsFile {
       sentence→speaker mapping is recoverable. Used to detect a chapter whose
       sentences were reassigned AFTER it rendered (precise, net-diff staleness).
       Absent on pre-108 / title-only files; a `kind: 'title'` segment carries an
-      empty `sentenceIds`. */
-  segments?: Array<{ characterId?: string; sentenceIds?: number[] }>;
+      empty `sentenceIds`.
+      `renderedFallbackEngine` is the per-SEGMENT fallback engine (srv-36 aggregate
+      reads this to exclude individual fallback lines from anchor-eligible set;
+      do NOT use `characterSnapshots[id].renderedFallbackEngine` for this — that
+      is a per-CHARACTER collapse that over-excludes). */
+  segments?: Array<{ characterId?: string; sentenceIds?: number[]; renderedFallbackEngine?: string | null }>;
 }
 
 /* Load every rendered chapter's segments file for a book, in chapter order.

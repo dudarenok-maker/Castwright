@@ -231,6 +231,44 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'low',
   },
   {
+    key: 'qa.speaker.enabled',
+    env: 'SEG_SPK_ENABLED',
+    group: 'qa-gates',
+    label: 'Render-integrity QA (voice match)',
+    help: 'When on, each rendered line of a stochastic-engine character is embedded '
+        + '(ECAPA speaker model) and checked for acoustic match against the '
+        + "character's voice centroid, flagging misfires. Off by default. CPU (zero VRAM).",
+    type: 'boolean',
+    default: false,
+    apply: 'live',
+    risk: 'low',
+  },
+  {
+    key: 'qa.speaker.device',
+    env: 'SPK_DEVICE',
+    group: 'qa-gates',
+    label: 'Voice-QA device',
+    help: '"cpu" (default) uses zero VRAM and never competes with synthesis. '
+        + '"cuda" is Phase 2. Changing the device restarts the sidecar.',
+    type: 'enum',
+    options: ['cpu', 'cuda'],
+    default: 'cpu',
+    apply: 'restart-sidecar',
+    risk: 'medium',
+  },
+  {
+    key: 'qa.speaker.autoRepair',
+    env: 'SEG_SPK_AUTO_REPAIR',
+    group: 'qa-gates',
+    label: 'Auto-fix voice mismatches',
+    help: 'When on, severe voice-mismatch lines are re-rendered and replaced if the '
+        + 'fresh take matches. Off until calibration confirms a low false-positive rate.',
+    type: 'boolean',
+    default: false,
+    apply: 'live',
+    risk: 'medium',
+  },
+  {
     key: 'qa.asr.maxDeletionRun',
     env: 'SEG_ASR_MAX_DELETION_RUN',
     group: 'qa-gates',
