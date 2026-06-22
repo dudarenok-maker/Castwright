@@ -20,6 +20,7 @@ def _sine_pcm(freq, sr=16000, secs=2.0):
 def test_embed_is_unit_norm_and_192d():
     pytest.importorskip("speechbrain")
     from main import SPK
+    asyncio.run(SPK.ensure_loaded())  # embed() requires the model be loaded first
     emb = SPK.embed(_sine_pcm(180), 16000)
     assert len(emb) == 192
     assert abs(float(np.linalg.norm(emb)) - 1.0) < 1e-4
@@ -29,6 +30,7 @@ def test_self_cosine_is_one():
     pytest.importorskip("speechbrain")
     from main import SPK
     from spikes.srv36.metrics import cosine
+    asyncio.run(SPK.ensure_loaded())  # embed() requires the model be loaded first
     pcm = _sine_pcm(180)
     assert cosine(SPK.embed(pcm, 16000), SPK.embed(pcm, 16000)) > 0.999
 
