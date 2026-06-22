@@ -82,3 +82,23 @@ measured floor / EER / K / coverage; re-file #665 `type:chore → type:feature`.
 Caveats to state in FINDINGS: F3 EER is in-sample; `FLOOR_SEC=2.0` is fixed (F5
 reports variance, doesn't feed back); thin/absent centroids for often-drifting
 characters show up as `K_per_char` in `f1.json`.
+
+## Phase-2 per-gate result schema
+
+Each `--gN` measurement writer must emit `spikes/srv36/results/crossbook_gN.json`
+with at least the following keys (enforced by `malformed_gates()` in `crossbook.py`).
+A file present but missing these keys produces a silent safe-fail default in
+`assemble_measured` — the `--report` command now warns on stderr when this happens.
+
+| Gate | File | Required key(s) |
+|------|------|-----------------|
+| G1 | `crossbook_g1.json` | `genuine_drift_stds` |
+| G2 | `crossbook_g2.json` | `central` |
+| G3 | `crossbook_g3.json` | `emotion_shift` |
+| G4 | `crossbook_g4.json` | `wander_slope`, `residual_fraction` |
+| G5 | `crossbook_g5.json` | `fp_rate` |
+| G6 | `crossbook_g6.json` | `separation_auc` |
+
+**G2 gotcha:** the `seed_divergence()` helper returns `{"central": ..., "spread": ...}`
+and the evaluator key is `g2_divergence` — but the result file key is `central`
+(NOT `divergence`). The `--g2` writer must emit `{"central": ..., "spread": ...}`.

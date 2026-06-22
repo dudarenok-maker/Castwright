@@ -1,0 +1,10 @@
+{
+  "_comment": "PRE-REGISTERED 2026-06-22 before any measurement. FIXED BARS only. Data-derived inputs (the G0 same-text floor mean+std) are MEASURED in Task 3 and plugged into the rule below — they are inputs, not goalposts. A rule change is a logged FINDINGS.md amendment, never a silent edit.",
+  "g6_min_separation_auc": 0.80,
+  "g1_max_genuine_drift_stds": 3.0,
+  "g5_max_fp_rate": 0.20,
+  "g2_material_divergence": 0.08,
+  "g3_material_emotion_shift": 0.08,
+  "g4_min_wander_slope": 0.02,
+  "g4_min_residual_fraction": 0.20
+}
