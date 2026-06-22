@@ -84,11 +84,13 @@ git commit -m "test(side): committed reproducible 1.7B-Base instruct + codec-com
 
 **Files:**
 - Modify: `server/tts-sidecar/scripts/install-qwen3.mjs` (model consts ~66-68; prefetch ~257)
-- Modify: `server/tts-sidecar/main.py` (`QwenEngine`: `BASE17_MODEL`, `_base17`, `_base17_load_lock`, `_ensure_base17_loaded`, `unload_base17`)
-- Test: `scripts/tests/install-qwen3-base17.test.mjs` (new) + `server/tts-sidecar/tests/test_qwen3.py`
+- Modify: `server/tts-sidecar/main.py` (`QwenEngine`: `BASE17_MODEL`, `_base17`, `_base17_load_lock`, `_ensure_base17_loaded`, `unload_base17`; startup preload block ~2566-2633; `/load`~3088 + `/unload`~3162 qwen branch; `/health`~2894-2935)
+- Modify: `server/.env.example` (`PRELOAD_QWEN_BASE17`); `src/components/layout.tsx` (Qwen-1.7B pill)
+- Test: `scripts/tests/install-qwen3-base17.test.mjs` (new) + `server/tts-sidecar/tests/test_qwen3.py` + `src/components/ModelControlPill.test.tsx`
 
 **Interfaces:**
-- Produces: `qwenPrefetchModels({skipDesign}) -> string[]` (exported); `QwenEngine.BASE17_MODEL`, `_ensure_base17_loaded()`, `unload_base17()`.
+- Produces: `qwenPrefetchModels({skipDesign}) -> string[]` (exported); `QwenEngine.BASE17_MODEL`, `_ensure_base17_loaded()`, `unload_base17()`; `/load`+`/unload` accept `{engine:"qwen", model:"1.7b"}`; `/health.qwen_base17_loaded`; `PRELOAD_QWEN_BASE17` boot flag.
+- **First-class like other models** (operator decision): preload flag + load/unload + health + pill, mirroring the existing Qwen/Kokoro/Coqui patterns (per the seam map).
 
 - [ ] **Step 1: Failing test for the install model-list helper**
 
@@ -161,6 +163,35 @@ def test_ensure_base17_loads_a_base_checkpoint():
 ```bash
 git add server/tts-sidecar/scripts/install-qwen3.mjs scripts/tests/install-qwen3-base17.test.mjs server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py
 git commit -m "feat(side): wire Qwen 1.7B-Base into setup + single-flight loader (side-20)"
+```
+
+> **Lifecycle wiring (operator chose: make the 1.7B-Base first-class like the other models).** Steps 8–12 mirror the EXISTING patterns the seam map identified — copy them, don't invent. Target the 1.7B-Base with a `model: "1.7b"` selector on the existing qwen `/load`/`/unload` (the 0.6B stays the default when `model` is absent).
+
+- [ ] **Step 8: `PRELOAD_QWEN_BASE17` boot flag.** In the startup preload block (`main.py` `_preload_default_engines`, ~2566-2633, mirror the `PRELOAD_QWEN` branch ~2613-2633):
+
+```python
+if _parse_bool(os.environ.get("PRELOAD_QWEN_BASE17"), False):
+    qwen = ENGINES.get("qwen")
+    if isinstance(qwen, QwenEngine):
+        try:
+            log.info("Preloading Qwen 1.7B-Base at startup (PRELOAD_QWEN_BASE17=1)…")
+            await asyncio.to_thread(qwen._ensure_base17_loaded)
+            log.info("Qwen 1.7B-Base preload complete.")
+        except Exception as e:
+            log.warning("Qwen 1.7B-Base preload failed (%s); warms on demand via /load model=1.7b.", e)
+```
+Document `PRELOAD_QWEN_BASE17` in `server/.env.example`.
+
+- [ ] **Step 9: `/load` + `/unload` target.** In the qwen branch of `POST /load` (~3088-3108) and `POST /unload` (~3162-3166), read `body.get("model")`: when it's `"1.7b"`, route to `_ensure_base17_loaded` / `unload_base17` (under `qwen._load_lock`); otherwise keep the existing 0.6B `_ensure_base_loaded` / `unload`. **Test (TestClient):** `POST /load {engine:"qwen", model:"1.7b"}` returns `{status:"ready"}` (gated/mocked) and a no-model call still loads the 0.6B.
+
+- [ ] **Step 10: `/health` flag.** In `GET /health` (~2894-2935) add `qwen_base17_loaded = qwen._base17 is not None` (mirror `qwen_loaded` ~2902) and surface it in the response dict + `devices["qwen"]` already covers device. **Test:** `/health` JSON contains `qwen_base17_loaded` (False on a cold engine).
+
+- [ ] **Step 11: `ModelControlPill` (frontend).** Add a "Qwen 1.7B" pill in `src/components/layout.tsx` alongside the existing Qwen pill, `engineLabel="Qwen 1.7B"`, reading `qwen_base17_loaded`/loading from the health poll and calling `/load`/`/unload` with `{engine:"qwen", model:"1.7b"}`. Mirror the existing Qwen pill wiring (no new component). **Test:** a focused RTL test that the pill renders the loaded/idle label off the `qwen_base17_loaded` flag (mirror the existing pill test).
+
+- [ ] **Step 12: Run + commit.** `npm run test:sidecar` + `cd server && npm run test` (route/health) + `npm run test` (frontend pill).
+```bash
+git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_qwen3.py server/.env.example src/components/layout.tsx src/components/ModelControlPill.test.tsx
+git commit -m "feat(side,fe): 1.7B-Base lifecycle — PRELOAD flag, load/unload, health, pill (side-20)"
 ```
 
 ---
@@ -541,13 +572,56 @@ test('selects only legacy (non-anchored) variants', () => {
 
 ---
 
-### Task 8: Verify, document, close fs-55
+## Part B — 1.7B-Base selectable Quality synth tier (fs-56 slice, folded in 2026-06-22)
+
+Per operator decision, expose the 1.7B-Base as a **per-character-selectable synth tier** (higher-quality clone). Independent of the drift fix (Tasks 1–7) — but shares the 1.7B-Base + the loader/lifecycle from Task 1. Lazy per-voice prompt derivation (decode the voice's 0.6B `.pt` `ref_code` → re-derive on the 1.7B → cache `<voice>__1.7b.pt`).
+
+### Task 8: Add `qwen3-tts-1.7b` model key + selection
+
+**Files:** Modify `server/src/tts/model-keys.ts`; Test `server/src/tts/index.test.ts`
+
+**Interfaces:** Produces the `qwen3-tts-1.7b` `TtsModelKey` → engine `qwen`, `sidecarModelId` → `"1.7b"`.
+
+- [ ] **Step 1: Failing tests (index.test.ts)** — add: `engineForModelKey('qwen3-tts-1.7b') === 'qwen'`; `sidecarModelId('qwen3-tts-1.7b') === '1.7b'`; `isTtsModelKey('qwen3-tts-1.7b') === true`.
+- [ ] **Step 2: Run → fail.** `cd server && npm run test -- index` → FAIL.
+- [ ] **Step 3: Implement in `model-keys.ts`:** add `'qwen3-tts-1.7b'` to the `TtsModelKey` union (~27); `TTS_MODEL_LABELS` entry `'Qwen3-TTS 1.7B (local, higher quality)'` (~35); `isTtsModelKey` check (~58); `sidecarModelId` → `if (key === 'qwen3-tts-1.7b') return '1.7b';` (~104); fix `canonicalModelKeyForEngine` qwen case (~86) to **preserve the qwen variant**: `case 'qwen': return requestModelKey.startsWith('qwen') ? requestModelKey : 'qwen3-tts-0.6b';`. (`engineForModelKey` already routes `qwen*` → `'qwen'`.)
+- [ ] **Step 4: Run → pass.** Same command → PASS.
+- [ ] **Step 5: Commit** `feat(srv): qwen3-tts-1.7b model key + selection plumbing (fs-56 Quality tier)`
+
+### Task 9: Sidecar 1.7B synth routing + lazy 1.7B-native prompt
+
+**Files:** Modify `server/tts-sidecar/main.py` (`QwenEngine.synthesize` ~1651, new `_load_voice_prompt_17b`); Test `server/tts-sidecar/tests/test_qwen3.py`
+
+**Interfaces:** `QwenEngine._load_voice_prompt_17b(voice) -> (prompt, lang, cache_hit)` — caches `<voice>__1.7b.pt`, deriving it on miss from the 0.6B `.pt`'s `ref_code`. `synthesize(model, voice, text)` routes `model == '1.7b'` to `_base17` with that prompt.
+
+- [ ] **Step 1: Non-GPU test (fake_qwen_runtime + spies)** — `synthesize('1.7b', voice, text)` calls `_ensure_base17_loaded`, derives+caches `<voice>__1.7b.pt` on first call (a `<voice>__1.7b.pt` file appears), reuses it on the second (no re-derive), and synths via `_base17.generate_voice_clone`. Use the same `_load_voice_prompt` stub pattern as Task 4 (base item with `ref_code`).
+- [ ] **Step 2: Run → fail.**
+- [ ] **Step 3: Implement.** Add `_load_voice_prompt_17b(voice)`: return cached `<voice>__1.7b.pt` if present (via `_voice_paths(f"{voice}__1.7b")`); else load the base prompt (`_load_voice_prompt(voice)`), `rc = base_item.ref_code`, decode on `_base17.model.speech_tokenizer`, `_base17.create_voice_clone_prompt(ref_audio=(clip,sr), ref_text=...)`, `torch.save` to `<voice>__1.7b.pt`, return it. In `synthesize`, when the sidecar `model` arg is `'1.7b'`: `_ensure_base17_loaded()`; `prompt,lang,_ = _load_voice_prompt_17b(voice)`; under `_synth_lock` `wavs,sr = self._base17.generate_voice_clone(text=[text], language=[lang], voice_clone_prompt=prompt)`. Else keep the 0.6B path. (Note: 1.7B synth keeps `_base17` resident during a 1.7B-tier chapter — ~4.2 GB, within budget; the design-time mint still unloads it.)
+- [ ] **Step 4: Run → pass.**
+- [ ] **Step 5: Weights-gated test** (`@skipif not _qwen_weights_present`): a designed voice synths on `model='1.7b'`, produces audio, and the `<voice>__1.7b.pt` cache appears.
+- [ ] **Step 6: Commit** `feat(side): 1.7B-Base synth routing + lazy per-voice 1.7B prompt cache (fs-56 Quality tier)`
+
+### Task 10: Node synth routing + per-character 1.7B selection
+
+**Files:** Modify `server/src/tts/synthesise-chapter.ts` (`CastCharacter` ~200-249, `routeFor` ~742), `src/components/voice-engine-picker.tsx`; Test `server/src/tts/synthesise-chapter.test.ts`
+
+**Interfaces:** `CastCharacter.ttsModelKey?: TtsModelKey | null`; when set (and engine resolves to qwen), the group routes with that `modelKey` → sidecar `model:'1.7b'`.
+
+- [ ] **Step 1: Failing test (synthesise-chapter.test.ts)** — a character with `ttsModelKey: 'qwen3-tts-1.7b'` produces a synth call whose `modelKey` is `'qwen3-tts-1.7b'` (and a 0.6B/default character still routes `'qwen3-tts-0.6b'`).
+- [ ] **Step 2: Run → fail.**
+- [ ] **Step 3: Implement.** Add `ttsModelKey?: TtsModelKey | null` to `CastCharacter`; in `routeFor` (~742), when the resolved engine is `'qwen'` and `c.ttsModelKey` is set, use `canonicalModelKeyForEngine('qwen', c.ttsModelKey)` as the `modelKey` (else the default `qwen3-tts-0.6b`). In `voice-engine-picker.tsx`, when Qwen is chosen and the 1.7B-Base is installed (health `qwen_base17_*`), add a "Higher quality (1.7B)" toggle that writes `ttsModelKey: 'qwen3-tts-1.7b'` (else clears it).
+- [ ] **Step 4: Run → pass.**
+- [ ] **Step 5: Commit** `feat(srv,fe): per-character 1.7B Quality-tier selection + synth routing (fs-56)`
+
+---
+
+### Task 11: Verify, document, close (fs-55 + 1.7B Quality tier)
 
 - [ ] **Step 0: Rebase the worktree on `main`** (once network's back) so the spec (#1002) is present: `git fetch origin main && git rebase origin/main` (resolve any `BACKLOG.md`/spec overlap). Confirm `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` now exists.
-- [ ] **Step 1:** `npm run verify:fast`; on the GPU box `npm run test:sidecar` (the identity regression must PASS, not skip).
+- [ ] **Step 1:** `npm run verify:fast` (frontend + server: model-keys, synth-routing, qwen-voice, pill tests) + `npm run test:hooks` (the install `.mjs` test); on the GPU box `npm run test:sidecar` (the fs-55 identity regression AND the 1.7B-synth/prompt-cache weights-gated tests must PASS, not skip). **Operator listens once to the whole thing** (drift-fixed variants + a 1.7B-tier chapter) — final intensity call on whisper/angry here.
 - [ ] **Step 2:** Fill **Ship Notes**: SHA, calibrated threshold + per-emotion distances, on-box verify result, Task-0 smoke output.
 - [ ] **Step 3:** Update the spec §4.4 precedence ladder (emotion/instruct/manual) + §4.5 carve-out note; remove fs-55's spec caveat now that it's measured.
-- [ ] **Step 4:** PR title `feat(srv,side): anchored emotion-variant minting — fix variant drift (fs-55)`; body `Closes #993` (operator-confirmed: close the fs-55 *detection-gate feature* as obviated by prevention) + `Refs #996` (fs-56). Open as **draft**; `gh pr ready` once locally green.
+- [ ] **Step 4:** PR title `feat(srv,side,fe): anchored variant minting (fs-55) + selectable 1.7B Quality tier (fs-56)`; body `Closes #993` (operator-confirmed: close the fs-55 *detection-gate feature* as obviated by prevention) + `Refs #996` (fs-56 — this delivers the Quality-tier slice; instruct/non-verbal remain). Open as **draft**; `gh pr ready` once locally green.
 
 ## Ship Notes
 
