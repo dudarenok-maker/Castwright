@@ -263,6 +263,46 @@ describe('ConfirmMetadataView — fs-41/fs-50 language selector (server-detected
   });
 });
 
+describe('ConfirmMetadataView — seam 3b front-matter pre-tick (server-computed flag)', () => {
+  /* The confirm view pre-ticks chapters for exclusion based on the server-computed
+     isLikelyFrontMatter flag (seam 3b). The client no longer runs a regex — it
+     just reads ch.isLikelyFrontMatter from the import candidate. */
+  function renderWithFrontMatterChapters() {
+    const candidateWithFlags: ImportCandidate = {
+      ...candidate,
+      series: null,
+      seriesPosition: null,
+      chapters: [
+        { id: 1, title: 'Dedication', wordCount: 50, isLikelyFrontMatter: true },
+        { id: 2, title: 'Chapter One', wordCount: 3000, isLikelyFrontMatter: false },
+        { id: 3, title: 'About the Author', wordCount: 200, isLikelyFrontMatter: true },
+      ],
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidateWithFlags },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+  }
+
+  it('pre-ticks chapters whose server-side isLikelyFrontMatter=true for exclusion', () => {
+    renderWithFrontMatterChapters();
+    /* The chapter count stat reflects only the included chapters (total - excluded). */
+    expect(screen.getByText('1')).toBeInTheDocument(); // 1 of 3 included
+  });
+});
+
 describe('ConfirmMetadataView — input theme classes', () => {
   /* Regression: in dark mode `--ink` flips near-white, so an input without
      an explicit `bg-white text-ink` pair gets a browser-default white

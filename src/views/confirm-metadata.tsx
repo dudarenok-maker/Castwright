@@ -14,7 +14,7 @@ import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primiti
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { IconSpinner } from '../lib/icons';
 import type { ConfirmBookResponse, LibraryBook } from '../lib/types';
-import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
+import { chapterSlug } from '../lib/chapter-heuristics';
 
 export function ConfirmMetadataView() {
   const dispatch = useAppDispatch();
@@ -71,7 +71,7 @@ export function ConfirmMetadataView() {
     if (!candidate) return new Set<string>();
     const out = new Set<string>();
     for (const ch of candidate.chapters) {
-      if (isLikelyFrontMatter(ch.title, ch.wordCount)) {
+      if (ch.isLikelyFrontMatter) {
         out.add(chapterSlug(ch.id, ch.title));
       }
     }

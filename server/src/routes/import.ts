@@ -145,15 +145,24 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         language: detected.language,
         languageSupported: detected.supported,
         supportedLanguages: supportedLanguages(),
-        chapters: entry.chapters.map((c) => ({
-          id: c.id,
-          title: c.title,
-          /* Per-chapter wordCount lets the confirm view auto-suggest
-             front/back-matter exclusion (short Dedication/Copyright
-             pages stand out). Stripped to int to keep the wire shape
-             simple. */
-          wordCount: countWords(c.body),
-        })),
+        chapters: entry.chapters.map((c) => {
+          const wordCount = countWords(c.body);
+          return {
+            id: c.id,
+            title: c.title,
+            /* Per-chapter wordCount lets the confirm view auto-suggest
+               front/back-matter exclusion (short Dedication/Copyright
+               pages stand out). Stripped to int to keep the wire shape
+               simple. */
+            wordCount,
+            /* seam 3b — server-computed flag so the confirm view can
+               pre-tick front/back-matter chapters without a client-side
+               regex mirror. Title union (language-aware) OR short body. */
+            isLikelyFrontMatter:
+              isLikelyFrontMatterTitle(c.title) ||
+              (wordCount > 0 && wordCount <= 150),
+          };
+        }),
       },
     });
   } catch (e) {
