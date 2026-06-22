@@ -196,11 +196,11 @@ _Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/AudioBook-
 
 ### Reliability & observability
 
-#### `srv-36` — Calibrate voice-drift detection thresholds against a labelled dataset ([#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665))
+#### `fs-55` — Acoustic variant-fidelity gate: flag variants that don't sound like the base character ([#993](https://github.com/dudarenok-maker/Castwright/issues/993))
 
-- _What:_ The per-chapter drift comparator surfaces Severe / Moderate / Mild tiers, but its metric set and severity cutoffs are **placeholder** — never calibrated against ground truth. Gather a labelled drifted-vs-not chapter-audio set and tune the metric weights + tier thresholds so severity tracks perceived drift, with a regression test pinning the calibrated cutoffs.
-- _Benefit (user / technical):_ drift _detection_ is a free-tier trust feature; the flags have to be right or "every line checked" rings hollow. Placeholder cutoffs mean false alarms and misses. **Underpins the `fs-51` per-book QA report (Must) — promoted Could → Should 2026-06-21.**
-_Full detail + acceptance:_ [#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665).
+- _What:_ Reuse the shipped `srv-36` ECAPA per-character centroid machinery to validate that an emotion/style variant still sounds like _that_ character. Variants designed via Qwen VoiceDesign (and fs-25 emotion variants) sometimes **slip** — the timbre drifts far enough to read as a different person. Embed the variant's audition render, compare timbre-only cosine to the base character, flag those below a per-character fidelity cutoff so the operator can redesign before it ships. Design questions (where to hook, reference, isolating timbre from the intentional expressive delta) resolve in the plan (`needs-plan`).
+- _Benefit (user):_ "every variant still sounds like your character" — protects the core casting promise once expressive variants are in play, catching the slip before the listener hears it.
+_Full detail + acceptance:_ [#993](https://github.com/dudarenok-maker/Castwright/issues/993).
 
 ### Ops & maintenance
 
@@ -390,6 +390,12 @@ _Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright
 - _What:_ Speed up batched chapter rendering on our **default Qwen engine** by `torch.compile`-ing the **Code2Wav** codec decoder (token→waveform). Low-risk — a self-contained feed-forward module, **distinct from the parked `side-7`** LM-loop fork. **Phase 0 sizes the win first** (Code2Wav's share of batch wall-time on the 8 GB box); Phase 1 (`QWEN_COMPILE_CODEC`, batch-path-only, default-OFF on Windows) ships only if it clears the bar + stays 8 GB VRAM-neutral + golden-audio output-preserving.
 - _Benefit (user):_ long books finish faster than playback by a wider margin on the engine every render uses — snappier generation, with no interactive-path or audio-quality cost.
 _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-qwen-codec-compilation-design.md` · [#988](https://github.com/dudarenok-maker/Castwright/issues/988).
+
+#### `srv-47` — GPU-accelerate the render-integrity ECAPA embed (optional CUDA, semaphore-gated) ([#992](https://github.com/dudarenok-maker/Castwright/issues/992))
+
+- _What:_ `srv-36` Phase 1 embeds segment PCM with ECAPA-TDNN **CPU-only** (~60–65 ms/segment — CPU-first by design so the QA pass never competes with synth for VRAM). Add an **optional** CUDA path, off by default, opted into via the existing `SPK_DEVICE=cuda`, gated through the weighted VRAM semaphore with an idle-evict watchdog (mirrors the ASR engine, srv-31). CPU stays the default and the automatic fallback.
+- _Benefit (technical):_ removes the CPU embed cost from the post-generation QA pass on large books so the drift gate scales without adding wall-clock, and lays the GPU embed substrate `fs-55` can reuse. Not a current break (CPU is fast enough today) — hence Could.
+_Full detail + acceptance:_ [#992](https://github.com/dudarenok-maker/Castwright/issues/992).
 
 #### `side-21` — FA2: fix the stale pin + conditional auto-enable on the real stack ([#1000](https://github.com/dudarenok-maker/Castwright/issues/1000))
 
