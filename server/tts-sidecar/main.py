@@ -3634,8 +3634,8 @@ async def embed(req: Request) -> Response:
     if sample_rate <= 0:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
 
-    await SPK.ensure_loaded()
     try:
+        await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
         embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
     except Exception as e:
         err_str = f"{e}"

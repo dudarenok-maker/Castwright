@@ -166,3 +166,32 @@ def test_spk_idle_ttl_default_matches_registry():
     # Guard the R2-A invariant: registry sidecar.spkIdleTtl default == sidecar
     # default, or a default-config sidecar silently diverges from the UI.
     assert main._SPK_IDLE_TTL_DEFAULT == 120.0
+
+
+def test_embed_load_poison_is_fenced(monkeypatch: pytest.MonkeyPatch):
+    """A cuda LOAD poison must return 503/poisoned (not an unclassified 500),
+    so the supervisor recycles the corrupt context."""
+    from fastapi.testclient import TestClient  # import inside, like test_embed_endpoint_raw_body
+
+    def from_hparams(**kw):
+        raise RuntimeError("CUDA error: device-side assert triggered")
+
+    _install_speechbrain_stub(monkeypatch, from_hparams=from_hparams)
+    _stub_torch_cuda(monkeypatch, available=True)
+
+    # Fresh engine on cuda; clear BOTH guard flags so the route reaches the
+    # load (the recycle fence returns early on _restart_pending too).
+    monkeypatch.setattr(main, "SPK", main.SpeakerEngine())
+    main.SPK.device = "cuda"
+    monkeypatch.setattr(main, "_process_poisoned", False, raising=False)
+    monkeypatch.setattr(main, "_restart_pending", False, raising=False)
+    monkeypatch.setattr(main, "_mark_cuda_poisoned", lambda reason: None)
+
+    pcm = (b"\x00\x00" * 8)
+    # Bare TestClient (no `with`) — matches this file's existing
+    # test_embed_endpoint_raw_body; the route doesn't need lifespan, and bare
+    # avoids running the startup preload/watchdog hooks.
+    client = TestClient(main.app)
+    res = client.post("/embed", content=pcm, headers={"X-Sample-Rate": "24000"})
+    assert res.status_code == 503
+    assert res.json().get("poisoned") is True
