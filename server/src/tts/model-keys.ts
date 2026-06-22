@@ -25,6 +25,7 @@ export type TtsModelKey =
   | 'piper-en-us-medium' // future local
   | 'kokoro-v1' // future local
   | 'qwen3-tts-0.6b' // local bespoke-voice engine (plan 108)
+  | 'qwen3-tts-1.7b' // local higher-quality Qwen variant (fs-55)
   | 'gemini-2.5-flash' // cloud fallback
   | 'gemini-3.1-flash';
 
@@ -33,6 +34,7 @@ export const TTS_MODEL_LABELS: Record<TtsModelKey, string> = {
   'piper-en-us-medium': 'Piper en-US medium (local)',
   'kokoro-v1': 'Kokoro v1 (local)',
   'qwen3-tts-0.6b': 'Qwen3-TTS 0.6B (local)',
+  'qwen3-tts-1.7b': 'Qwen3-TTS 1.7B (local, higher quality)',
   'gemini-2.5-flash': 'Gemini 2.5 Flash TTS',
   'gemini-3.1-flash': 'Gemini 3.1 Flash TTS',
 };
@@ -56,6 +58,7 @@ export function isTtsModelKey(value: unknown): value is TtsModelKey {
     value === 'piper-en-us-medium' ||
     value === 'kokoro-v1' ||
     value === 'qwen3-tts-0.6b' ||
+    value === 'qwen3-tts-1.7b' ||
     value === 'gemini-2.5-flash' ||
     value === 'gemini-3.1-flash'
   );
@@ -83,7 +86,7 @@ export function canonicalModelKeyForEngine(
     case 'kokoro':
       return 'kokoro-v1';
     case 'qwen':
-      return 'qwen3-tts-0.6b';
+      return requestModelKey.startsWith('qwen') ? requestModelKey : 'qwen3-tts-0.6b';
     case 'coqui':
       return 'coqui-xtts-v2';
     case 'piper':
@@ -102,5 +105,6 @@ export function sidecarModelId(key: TtsModelKey): string {
   // Qwen ignores the model field at synth (voice = designed voiceId), but the
   // sidecar /synthesize contract requires a non-empty model string.
   if (key === 'qwen3-tts-0.6b') return '0.6b';
+  if (key === 'qwen3-tts-1.7b') return '1.7b';
   throw new Error(`sidecarModelId called with non-local key: ${key}`);
 }
