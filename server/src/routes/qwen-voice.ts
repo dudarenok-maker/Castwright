@@ -99,14 +99,14 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
   'neutral'
 >[];
 
-/* Emotion delivery clause appended to a character's persona when designing an
-   emotion variant, so the heavy VoiceDesign model bakes the delivery into the
-   variant's cached embedding (Qwen has no synth-time emotion lever). The base
-   persona is preserved verbatim; only the delivery is added. */
+/* Emotion delivery clause sent to /qwen/mint-variant as `emotionInstruct`.
+   The base persona is already baked into the base voice identity; this clause
+   adds only the delivery modifier on top. Phrasings calibrated for the
+   anchored-mint approach (Task 6): stronger contrast vs. base voice. */
 const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
-  whisper: 'Delivered in a soft, hushed whisper.',
-  angry: 'Delivered angrily, with raised intensity and edge.',
-  excited: 'Delivered with bright, energetic excitement.',
+  whisper: 'Delivered in a very soft, breathy whisper — barely audible, hushed and faint.',
+  angry: 'Delivered with loud, forceful anger — shouting, sharp and intense.',
+  excited: 'Delivered with bright, high-energy excitement.',
   sad: 'Delivered sadly — subdued, downcast, and heavy.',
 };
 
@@ -307,7 +307,6 @@ export async function designQwenVoiceForCharacter(
   const baseVoiceId = qwenStorageKey(p.character, p.characterId);
   const designedId = p.emotion ? `${baseVoiceId}__${p.emotion}` : baseVoiceId;
   const voiceId = p.preview ? previewVoiceIdFor(designedId) : designedId;
-  const instructForDesign = p.emotion ? buildVariantInstruct(p.persona, p.emotion) : p.persona;
   const calibrationText = buildSampleText(toVoiceLike(p.character), buildHintFromCast(p.character));
 
   return withDesignLock(p.bookDir, async () => {
@@ -315,7 +314,12 @@ export async function designQwenVoiceForCharacter(
     return withGpuLoad(async () => {
       const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
       const sidecarUrl = getResolvedSidecarUrl();
-      const target = `${sidecarUrl}/qwen/design-voice`;
+      /* fs-55: emotion variants go to /qwen/mint-variant (anchored to the base
+         identity, so the base persona is not re-described — only the delivery
+         clause is added). Base voice design still goes to /qwen/design-voice. */
+      const target = p.emotion
+        ? `${sidecarUrl}/qwen/mint-variant`
+        : `${sidecarUrl}/qwen/design-voice`;
       const controller = new AbortController();
       const startedAt = Date.now();
       let abortReason: 'unreachable' | 'absolute' | null = null;
@@ -348,17 +352,30 @@ export async function designQwenVoiceForCharacter(
       try {
         let upstream: Awaited<ReturnType<typeof fetch>>;
         try {
+          /* fs-55: emotion variant path sends { baseVoiceId, variantVoiceId,
+             emotionInstruct, ... } to /qwen/mint-variant. The base path sends
+             { voiceId, instruct, ... } to /qwen/design-voice unchanged. */
+          const fetchBody = p.emotion
+            ? JSON.stringify({
+                baseVoiceId,
+                variantVoiceId: voiceId,
+                emotionInstruct: EMOTION_INSTRUCT[p.emotion],
+                voiceUuid: p.character.voiceUuid ?? null,
+                language: p.language,
+                calibrationText,
+              })
+            : JSON.stringify({
+                voiceId,
+                voiceUuid: p.character.voiceUuid ?? null,
+                instruct: p.persona,
+                language: p.language,
+                calibrationText,
+              });
           upstream = await fetch(target, {
             method: 'POST',
             signal: controller.signal,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              voiceId,
-              voiceUuid: p.character.voiceUuid ?? null,
-              instruct: instructForDesign,
-              language: p.language,
-              calibrationText,
-            }),
+            body: fetchBody,
           });
         } catch (e) {
           const err = e as { name?: string; message?: string };
