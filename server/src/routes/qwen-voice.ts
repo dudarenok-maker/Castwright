@@ -389,7 +389,7 @@ export async function designQwenVoiceForCharacter(
               );
             }
             throw new Error(
-              `Sidecar /qwen/design-voice did not complete within ${DESIGN_ABSOLUTE_MAX_MS}ms — voice design is unusually slow or the process is stuck.`,
+              `Sidecar ${target} did not complete within ${DESIGN_ABSOLUTE_MAX_MS}ms — voice design is unusually slow or the process is stuck.`,
             );
           }
           throw new Error(
@@ -406,7 +406,7 @@ export async function designQwenVoiceForCharacter(
           }
           throw new Error(
             detail ||
-              `Sidecar /qwen/design-voice returned ${upstream.status} ${upstream.statusText}.`,
+              `Sidecar ${target} returned ${upstream.status} ${upstream.statusText}.`,
           );
         }
         const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
