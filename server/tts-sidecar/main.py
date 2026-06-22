@@ -1932,15 +1932,27 @@ ASR = WhisperEngine()
 
 
 class SpeakerEngine:
-    """ECAPA-TDNN speaker embedding (srv-36). CPU-only, NOT in the synth ENGINES
-    map — like WhisperEngine, it consumes audio and emits a vector."""
+    """ECAPA-TDNN speaker embedding (srv-36). Defaults to CPU (zero VRAM); the
+    optional cuda path (srv-47, SPK_DEVICE=cuda) is VRAM-semaphore-gated on the
+    Node side and idle-evicted here. NOT in the synth ENGINES map — like
+    WhisperEngine it consumes audio and emits a vector."""
     TARGET_SR = 16000
 
     def __init__(self):
         self._model = None
         self._load_lock = asyncio.Lock()
         self._infer_lock = threading.Lock()
+        # Monotonic timestamp of the last embed — drives the idle watchdog.
+        self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
+
+    def _load_on(self, device: str):
+        """Synchronous ECAPA load on a concrete device. Run via to_thread."""
+        from speechbrain.inference.speaker import EncoderClassifier
+        return EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            run_opts={"device": device},
+        )
 
     async def ensure_loaded(self):
         if self._model is not None:
@@ -1948,12 +1960,29 @@ class SpeakerEngine:
         async with self._load_lock:
             if self._model is not None:
                 return
-            from speechbrain.inference.speaker import EncoderClassifier
-            self._model = await asyncio.to_thread(
-                EncoderClassifier.from_hparams,
-                source="speechbrain/spkrec-ecapa-voxceleb",
-                run_opts={"device": self.device},
-            )
+            # srv-47: a requested cuda device that isn't actually present
+            # degrades to cpu rather than crashing.
+            if self.device == "cuda":
+                try:
+                    import torch  # type: ignore
+                    if not torch.cuda.is_available():
+                        log.warning("SPK_DEVICE=cuda but no CUDA device — using cpu.")
+                        self.device = "cpu"
+                except Exception:
+                    self.device = "cpu"
+            try:
+                self._model = await asyncio.to_thread(self._load_on, self.device)
+            except Exception as e:
+                # A poison-class load failure corrupts the shared CUDA context —
+                # re-raise so the /embed fence marks poison + recycles. Any other
+                # cuda failure (cuDNN/driver mismatch on a "present" GPU) demotes
+                # to cpu once and reloads.
+                if self.device == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
+                    log.warning("ECAPA cuda load failed (%s) — demoting to cpu.", e)
+                    self.device = "cpu"
+                    self._model = await asyncio.to_thread(self._load_on, self.device)
+                else:
+                    raise
 
     def embed(self, pcm: bytes, sample_rate: int) -> list[float]:
         if self._model is None:
@@ -1967,8 +1996,29 @@ class SpeakerEngine:
         t = torch.from_numpy(audio).unsqueeze(0)
         with self._infer_lock, torch.no_grad():
             emb = self._model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        self._last_used = time.monotonic()
         norm = float(np.linalg.norm(emb))
         return (emb / norm if norm > 0 else emb).tolist()
+
+    def unload(self) -> bool:
+        """Drop the model + reclaim. Idempotent. Returns True iff a model was
+        actually freed (so the watchdog can log only real frees)."""
+        if self._model is None:
+            return False
+        self._model = None
+        _reclaim_host_and_vram()
+        log.info("ECAPA speaker model unloaded.")
+        return True
+
+    def maybe_free_idle(self, ttl_seconds: float) -> bool:
+        """Free the model once it has idled past the TTL. Reclaims VRAM only on
+        the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
+        freeing ~80–200 MB of host RAM. No-op while recently used."""
+        if self.device != "cuda" or self._model is None:
+            return False
+        if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
+            return False
+        return self.unload()
 
 
 # SPK is a standalone singleton (not a synth `Engine`) — audio in, embedding out.
