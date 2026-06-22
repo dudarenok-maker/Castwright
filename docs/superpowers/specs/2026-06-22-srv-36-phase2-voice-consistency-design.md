@@ -11,8 +11,10 @@ depends_on: >
 relates_to: >
   fs-51 (#973) per-book QA report UI — consumes the consistency events as
   conditional rows; com-1 Cast Pass entitlement seam — gates auto-repair when
-  hosted; fs-55 (#993) variant-fidelity gate — SUBSUMED by storage-key keying
-  (see §4.3); fs-25 (per-emotion variants) — supplies the variant storage keys
+  hosted; fs-55 (#993) variant-fidelity gate — this spec provides the SUBSTRATE
+  (variant-canonical vs base-canonical is one comparison away) but does NOT
+  perform fs-55's check; keep #993 open (see §0.2); fs-25 (per-emotion variants)
+  — supplies the variant storage keys
 supersedes_in_part: >
   the Phase-1 acoustic spec §4 "Phase 2 — deferred" bullets (consistency drift,
   per-emotion reference sets, cross-book/series consistency) — this spec is their
@@ -48,16 +50,30 @@ character or the raw `voiceUuid`, then:
 
 - **Cross-book consistency** is "does this book's render of `qwen-<voiceUuid>`
   still match the canonical anchor that storage key established?" — automatic for
-  every carried (series-reused) voice.
+  every carried (series-reused) voice. **Verified load-bearing fact:**
+  `resolveReusedVoiceFields` walks the `matchedFrom` chain and carries
+  `voiceUuid: source.voiceUuid` onto the reused row (`hydrate-reused-voice.ts:110`),
+  so a series-reused character resolves to the **same** storage key across books.
+  When the reuse link is absent (re-cast / re-design), the key differs — §0.1.
 - **Per-emotion fidelity** needs *no separate subsystem*: a designed variant
   `qwen-<voiceUuid>__angry` is a first-class anchor of its own, checked by the
-  exact same comparison. This also **subsumes fs-55** (a designed variant whose
-  timbre slips from intent is just a storage key drifting from its own anchor).
+  exact same comparison. (This is the *substrate* for fs-55 but **not** fs-55
+  itself — see §0.2.)
 - **Temporal wander** is a trend statistic over the same per-line cosine series.
+
+**Engine scope (load-bearing): cross-book is Qwen-only in v1.** The unique,
+collision-free identity that makes the whole scheme work is the Qwen
+`voiceUuid`. Coqui voices are *shared catalog speakers* (XTTS built-ins) with no
+per-character unique key — two characters can use the same speaker, so a
+Coqui-keyed canonical would cross-contaminate. Qwen is the default/main
+generation engine anyway (CLAUDE.md), so v1 cross-book scopes to Qwen; Coqui
+cross-book is deferred (§10). The spike still measures Coqui's *within-book*
+floor (Phase 1 already covers Coqui there).
 
 This is `type:feature`, Large, and — like Phase 0 — **gated on a spike that can
 say no, per axis** (§2). Detection stays advisory-and-free; the *fix* is the
-gated tier (§5).
+gated tier (§5). The build decomposes into waves for the plan (§9.1), not one
+undifferentiated push.
 
 ### 0.1 What this is NOT
 - **Not a re-cast detector.** Cross-book consistency only fires for storage keys
@@ -73,6 +89,15 @@ gated tier (§5).
   canonical anchor *supersedes the book-local centroid as the reference* for
   carried voices, but the scoring/verdict machinery is reused.
 
+### 0.2 fs-55 is a sibling, not a casualty
+fs-55 (#993) wants *"does this designed variant still sound like the **base
+character**?"* — a **variant-canonical vs base-canonical** comparison. This spec
+instead checks *"does each storage key match **its own** established canonical?"*
+— a different comparison pair. The two share the exact same anchor machinery
+(both are cosines between two canonicals/embeddings), so this spec **provides the
+substrate** for fs-55 — but it does **not** perform fs-55's check, and #993 must
+stay open. Do not close fs-55 against this spec.
+
 ## 1. The central risks (all measured on this product's real series data)
 
 None are answerable from the literature; all are measured on **real on-box
@@ -85,16 +110,27 @@ are the ground truth, as in Phase-1 calibration.
   than the gap that would signal real drift? If book-to-book scatter is as wide
   as the within-book stochastic floor (Phase-0 F1), cross-book consistency is
   undetectable → **no-go for the cross-book axis**.
-- **R2 — seed divergence.** How far does the approved-audition centroid sit from
-  the first-book empirical centroid, per storage key? Near-identical → the
-  maturation step (§3.2) is a no-op and should be dropped (YAGNI). Materially
-  different → maturation earns its keep, *and* the divergence is itself a useful
-  signal that the audition sample was unrepresentative of the voice at length.
-- **R3 — per-emotion timbre shift.** Does a **base** voice reading emotional
-  lines (no designed variant) shift ECAPA timbre materially vs the neutral
-  canonical? ECAPA is timbre-driven, so the prior is "small." If material → add
-  a per-emotion tolerance on the base anchor (§4.3); if not → emotional delivery
-  on the base voice needs no special handling.
+- **R2 — seed divergence (and its cross-book spread).** How far does the
+  approved-audition centroid sit from each book's empirical centroid, per storage
+  key — and how *stable* is that divergence across books? Near-identical
+  everywhere → the maturation step (§3.2) is a no-op and should be dropped
+  (YAGNI). Materially different → maturation earns its keep, *and* the divergence
+  is itself a useful signal that the audition sample was unrepresentative; the
+  *spread* of the divergence across books sets the sanity-gate band (Branch B
+  step 3) that distinguishes a normally-diverging voice from an anomalously-off
+  debut book.
+- **R3 — per-emotion timbre shift (a *partial-no-go* risk, not a tunable knob).**
+  Does a **base** voice reading emotional lines (no designed variant) shift ECAPA
+  timbre materially vs the neutral canonical? ECAPA is timbre-driven, so the prior
+  is "small." But note the asymmetry: a *designed variant* gets its own key and
+  its own clean anchor; an *un-designed emotional delivery* on the base voice has
+  **no separate render target, so no separate key, so no sub-anchor is possible**.
+  If G3 shows the shift is material, a "tolerance" on the base anchor is only a
+  band-aid (it widens the band → more false negatives; it does not de-blend the
+  emotion). The honest outcome is then a **partial no-go**: cross-book stays
+  reliable for designed-variant keys and neutral lines, while emotional base-voice
+  lines are scored `inconclusive`. The spec must not pretend a tolerance "solves"
+  a material G3.
 - **R4 — temporal-wander existence + residual value.** Does monotonic intra-book
   drift exist *above the floor*, AND does it survive a residual-value test
   against per-line + cross-book scoring (a character whose lines each sit inside
@@ -106,22 +142,33 @@ are the ground truth, as in Phase-1 calibration.
 
 A throwaway harness (committed under `server/tts-sidecar/spikes/srv36/`, beside
 the Phase-0 spike), operator-driven on the GPU box. **No production code, no
-settings, no events.** It over-generates / re-uses real series renders for a set
-of recurring characters across ≥2 books, embeds with the shipped ECAPA
-`/embed`, and measures R1–R4.
+settings, no events.** It over-generates / re-uses real **Qwen** series renders
+(cross-book is Qwen-only, §0) for a set of recurring characters across ≥2 books,
+embeds with the shipped ECAPA `/embed`, and measures R1–R4.
+
+**Calibration series ≠ validation series (anti-overfit).** Phase 1 already
+calibrated on **Skulduggery-Scepter**, so cutoffs/thresholds here are picked on
+that series and the **operator-listen FP/FN (G5) is reported on a held-out
+series — Unlocked/Keeper —** not used to pick them (the same out-of-sample
+discipline Phase 1's §3.6 demanded). Both series have ≥2 books with recurring
+characters; the spike confirms availability before fitting.
 
 | Exp | Question (risk) | What it gates |
 |---|---|---|
 | **G1 — cross-book stability** | Per storage key, cosine spread of book-A vs book-B clean-render centroids vs the within-book F1 floor. (R1) | **Kill-switch for cross-book** — wide ⇒ no-go. |
-| **G2 — seed divergence** | cosine(approved-audition centroid, first-book empirical centroid) per storage key. (R2) | Whether the §3.2 maturation step ships at all. |
+| **G2 — seed divergence + per-voice spread** | cosine(approved-audition centroid, **each** book's empirical centroid) per storage key — both the central divergence (audition vs renders) AND the **spread of that divergence across books** (so the sanity gate (Branch B step 3) has a per-voice band to flag an *outlier* debut book, not a single point). (R2) | Whether the maturation machinery ships at all (Branch decision, §3.2) AND the sanity-gate band. |
 | **G3 — per-emotion shift** | For base voices reading emotional lines (no variant): timbre delta vs the neutral canonical. (R3) | Whether a per-emotion tolerance is needed on the base anchor. |
 | **G4 — wander existence + residual** | Monotonic slope of cosine-to-canonical over render position, above the floor; fraction of wander cases NOT already flagged by per-line/cross-book. (R4) | **Go/no-go for the wander detector.** |
-| **G5 — operator listen** | Operator audits the ECAPA-flagged cross-book mismatches (~15–20 clips, two series): real drift vs false positive. | The headline FP/FN; confirms R1 with human ground truth. |
+| **G5 — operator listen** | Operator audits the ECAPA-flagged cross-book mismatches (~15–20 clips, held-out series): real drift vs false positive. | The headline FP/FN; confirms R1 with human ground truth. |
+| **G6 — runtime-operation fidelity** | The *actual production op*: score **individual** book-B lines against the **book-1 (or audition) anchor** across books — not centroid-vs-centroid (G1). Confirms per-line scatter around the anchor doesn't swamp the cross-book signal even when centroids agree. | Whether the per-line cross-book check (§4.1) is viable, distinct from G1's centroid-stability necessary-condition. |
 
 **Go condition (per axis):**
-- *Cross-book ships* iff G1 floor is tight AND G5 confirms real, human-audible
-  drift at low FP.
-- *Maturation ships* iff G2 shows material approved-vs-empirical divergence.
+- *Cross-book ships* iff G1 floor is tight AND **G6 shows per-line scoring vs the
+  anchor separates real drift from clean across books** AND G5 confirms real,
+  human-audible drift at low FP.
+- *Maturation (Branch B) ships* iff G2 shows material approved-vs-empirical
+  divergence across the cast distribution (§3.2); its sanity-gate band comes from
+  G2's per-voice cross-book divergence spread.
 - *Per-emotion tolerance ships* iff G3 shows material base-voice emotion shift.
 - *Wander detector ships* iff G4 shows wander exists above the floor AND is
   non-redundant with per-line/cross-book.
@@ -138,38 +185,100 @@ Keyed by the **resolved render-target storage key** as produced by
 `qwenStorageKey` (`voice-mapping.ts:20`) composed with `pickEmotionVariantVoice`
 (`voice-mapping.ts:30`):
 `qwen-<voiceUuid>` for base/neutral renders, `qwen-<voiceUuid>__<emotion>` for a
-designed variant. Engine-agnostic embed (the same ECAPA model for reference and
-rendered segment); only **stochastic** engines are in scope (Qwen, Coqui) —
-Kokoro is deterministic, hence nothing to drift, and out of scope (Phase-1 rule).
+designed variant. The embed itself is engine-agnostic (same ECAPA model for
+reference and rendered segment), but **cross-book keying is Qwen-only in v1**
+(§0): only Qwen's `voiceUuid` gives a collision-free per-voice identity. Coqui
+(shared catalog speakers, no unique key) is deferred for cross-book; Kokoro is
+deterministic — nothing to drift — and out of scope (Phase-1 rule).
 
-### 3.2 Lifecycle: warm-start → mature → freeze → forward
-1. **Cold-start (pre-render, always available):** the anchor is the embedding of
-   the **approved audition sample** for that storage key (the voice the user
-   signed off on; designed variants have their own audition). So book 1, line 1
-   already has something to score against.
-2. **Maturation across book 1 (conditional on G2):** the anchor matures toward
-   the **clean, trimmed-majority** centroid of book-1 renders — reusing Phase-1's
-   robust centroid logic (trimmed mean; `renderedFallbackEngine` segments
-   excluded; bimodal large-drift cluster ⇒ prefer the audition anchor). It
-   **never matures toward fallback/outlier/drift renders** — the guard that
-   stops the anchor from "learning the disease" (the same poisoning class as
-   Phase-1's C1 fix).
-3. **Freeze at book-1 completion:** compute the frozen canonical from the clean
-   majority (audition as tiebreak/fallback), **persist it**, then **re-score
-   book 1's already-persisted embeddings against the frozen canonical** for book
-   1's *final* verdict. Re-scoring is free (embeddings already on disk, no
-   re-embed), makes scoring **deterministic w.r.t. render order** (pinnable in a
-   regression test), and gives book 1 the *same* canonical treatment as every
-   later book — so book 1 is not an unchecked seed-only throwaway.
-4. **Forward:** every later book scores against the frozen canonical and **never
+### 3.2 Lifecycle — two branches, decided by G2
+
+**The maturation/freeze machinery is conditional on G2 and must not be built
+before the spike runs.** G2 measures, per storage key, how far the
+approved-audition centroid sits from each book's empirical centroid. **Branch B
+is a superset of Branch A** — a voice whose audition ≈ empirical simply freezes a
+canonical ≈ its audition. So the choice is **not per-voice runtime branching**;
+it is a single build decision read off the **cast-wide divergence distribution**:
+if divergence is universally negligible, skip the maturation machinery entirely
+(Branch A); if a meaningful fraction of voices diverge, build Branch B and let it
+handle the negligible ones for free. The two branches:
+
+**Branch A — G2 null (audition ≈ empirical): the audition *is* the canonical.**
+No maturation, no freeze, no re-score. The anchor is the approved-audition
+embedding (K renders of the sample to average sampler noise, as Phase-1 did for
+its fallback), keyed by storage key, available from book 1 line 1 and identical
+across every book. This is the *simpler* design and the spec's preferred outcome
+— most of §3.2's complexity evaporates. **Cost note:** K renders × every Qwen
+character is real upfront GPU work; K must be small (G1/G6 set it — likely 3–5)
+and should **reuse the audition renders already produced at design/approve time**
+rather than re-synthesising. The build should ship this first and add Branch B
+only if G2 forces it.
+
+**Branch B — G2 material (audition diverges from how the voice renders at
+length): warm-start → mature → freeze, with a sanity gate.**
+1. **Cold-start:** anchor = approved-audition embedding (as Branch A), so book 1
+   has something to score against from line 1.
+2. **Mature across book 1:** the anchor moves toward the **clean, trimmed-majority**
+   centroid of book-1 renders — Phase-1's robust centroid (trimmed mean;
+   `renderedFallbackEngine` segments excluded). It **never matures toward
+   fallback/outlier/drift renders** (the anti-"learn-the-disease" guard, Phase-1's
+   C1 class). **Outlier-exclusion seeds from the render distribution's *own mode*,
+   not the (possibly-diverging) audition** — otherwise, in exactly the Branch-B
+   case where the audition is far from the render cluster, anchoring exclusion on
+   the audition would mis-classify the true cluster. The audition is used **only**
+   as the bimodal tiebreak (a large second cluster ⇒ keep the cluster nearer the
+   audition).
+3. **Sanity gate at freeze (C2 — prevents canonising a drifted debut book).**
+   Before freezing, compare the matured centroid to the approved audition. If it
+   is **within G2's measured divergence band**, freeze and persist it. If it
+   diverges **beyond** that band, the debut book likely rendered the voice
+   off-target across the board — so **do NOT canonise it**: fall back to the
+   audition anchor and **flag the book** (`voice rendered off-target in its debut
+   book — canonical withheld`). This is what stops a uniformly-shifted book from
+   freezing a bad canonical that then false-flags every *correct* later book.
+4. **Re-score, then deferred repair (I1).** With the frozen canonical, **re-score
+   book 1's already-persisted embeddings** (no re-embed — embeddings are on disk;
+   cheap CPU, not literally "free") for book 1's *final*, deterministic verdict.
+   **Auto-repair for book 1 runs in this post-freeze pass, not live during book
+   1** — so every book-1 repair decision is made against the *canonical*, not the
+   immature/noisy pre-freeze anchor. (Live during book 1 we *detect* provisionally
+   for progress UI, but defer the repair action.) Later books, which already have
+   the frozen canonical at render time, repair inline as usual.
+5. **Forward:** every later book scores against the frozen canonical and **never
    alters it**.
 
 **Which book is "book 1": first-rendered-wins (chronological), not
-lowest-seriesPosition.** You may render book 2 before book 1; the first storage
-key to *complete a render* freezes the canonical, and the audition covers the
-pre-freeze window for every book regardless of series order. (Re-freeze is only
-triggered by a voice re-tune, §3.4 — not by later rendering an
-earlier-in-series book.)
+lowest-seriesPosition** — you may render book 2 before book 1; the first storage
+key to *complete* a render establishes the canonical (subject to the sanity gate,
+Branch B step 3), and the audition covers the pre-freeze window regardless of series
+order. Re-freeze is triggered only by a voice re-tune (§3.4).
+
+**Never-auditioned voices (M1).** A character minted without an approved audition
+(Phase-1 mints a sample on first QA pass) has no approval to cold-start from or
+to sanity-gate against. Such a voice uses its first minted sample as the
+cold-start anchor and is **exempt from the sanity gate (Branch B step 3)** (there
+is no approval to compare to) — its canonical is flagged `seed: no-approval` so
+fs-51 can surface the weaker guarantee.
+
+### 3.2.bis Canonical self-correction (the book-1 bootstrap limit)
+The canonical-*establishing* book cannot be validated against anything except the
+audition — there are no other books yet. So if the audition is unrepresentative
+**and** the debut book is itself drifted, the sanity gate (which only sees the
+audition) can still freeze a bad canonical. The only evidence that can expose
+this arrives **later**: if **≥2 subsequent books each show *systematic*
+disagreement** (per §4.2) with the frozen canonical, the parsimonious explanation
+is "the debut book was the outlier," not "every later book independently
+drifted." So:
+
+- On ≥2 later-book systematic disagreements against a canonical, mark it
+  **`canonical-suspect`**, stop trusting "systematic → voice off" for that key,
+  and **surface a re-freeze prompt** (operator-confirmed; auto-re-freeze is a
+  later refinement — re-freezing silently could itself chase drift).
+- Re-freezing recomputes the canonical from the **agreeing majority of books**
+  (not just book 1), then re-scores affected books. This is the cross-book
+  analogue of Branch B's within-book trimmed majority.
+- This mechanism is **Branch-B-tier** (skipped entirely under Branch A, where the
+  audition is the canonical and no debut book can poison it).
 
 ### 3.3 Store
 A voice-level `<storageKey>.canonical.json` living beside the audition it is
@@ -179,9 +288,21 @@ book. Holds the 192-float canonical embedding (base64-packed Float32, matching
 Phase-1's `<slug>.embeddings.json` encoding), the seed provenance
 (audition-only / matured), and the source book id + render count behind it.
 
-### 3.4 Versioning
-- Keyed/invalidated by the **voice-config hash** (re-mint the canonical when the
-  voice is re-designed/tuned) — reuses Phase-1's reference-cache hashing.
+### 3.4 Versioning (and the re-tune boundary)
+- The canonical is versioned by the **voice-config hash** — a re-design/re-tune
+  mints a **new** canonical version under the *same* (immutable) storage key.
+  Reuses Phase-1's reference-cache hashing.
+- **A segment must resolve the canonical *version* it was rendered against, not
+  just the key.** Because the storage key is stable across re-tunes, §7 persists
+  the **voice-config hash (or render timestamp)** alongside the storage key, so
+  re-score / cross-book scoring picks the matching canonical version. Without
+  this, a pre-tune book would be scored against the post-tune canonical and
+  false-flag wholesale.
+- **Re-tune boundary:** pre-tune books are **not** judged against the post-tune
+  canonical (they predate the voice change — that is an intended edit, not
+  drift). Cross-book consistency is evaluated **within a config-hash cohort**;
+  the report notes "voice re-tuned at book N" rather than flagging the older
+  books inconsistent.
 - An `anchorVersion` field invalidates on a model/preprocessing change (mirrors
   Phase-1's `embeddingsVersion`). A stale or missing canonical ⇒ the storage
   key's lines are `inconclusive`, never an error.
@@ -189,8 +310,10 @@ Phase-1's `<slug>.embeddings.json` encoding), the seed provenance
 ## 4. Detection & scoring
 
 ### 4.1 Cross-book per-line
-`cosine(segment embedding, emotion-matched frozen canonical)`; below the
-calibrated cutoff ⇒ `voice-mismatch` **against series canonical**. Reuses
+`cosine(segment embedding, the canonical for that segment's own storage key)` —
+the storage key already encodes the emotion variant (§3.1/§7), so the lookup
+**is** the match; there is no separate nearest-emotion step. Below the calibrated
+cutoff ⇒ `voice-mismatch` **against series canonical**. Reuses
 Phase-1's per-character percentile band machinery and `score.ts`, re-anchored
 from the book-local centroid to the frozen canonical. Verdict vocabulary stays
 `'voice-match' | 'voice-mismatch' | 'inconclusive'` (avoids the `AsrVerdict
@@ -198,20 +321,34 @@ from the book-local centroid to the frozen canonical. Verdict vocabulary stays
 `scope: 'series-canonical'` discriminator so fs-51 can distinguish a Phase-1
 in-book misfire from a Phase-2 cross-book mismatch.
 
-### 4.2 Systematic-vs-per-line classifier
-Per character per book, compute the **mismatched-line fraction**. Above a
-calibrated threshold ⇒ **systematic** (the voice itself is off in this book) ⇒
-**escalate to advisory, do NOT run the repair loop** (per-line re-rendering is
-futile when every render misses the canonical). Below ⇒ **per-line** ⇒
-repairable (§5). The threshold is a calibrated, pinned constant (G5 informs it).
+### 4.2 Systematic-vs-per-line classifier (three-way)
+Per character per book, compute the **mismatched-line fraction**:
+- **Low** ⇒ **per-line** ⇒ repairable (§5).
+- **High** ⇒ either the *voice is off in this book* **or** *the canonical itself
+  is wrong*. These produce the **identical** signal, so the classifier cannot
+  separate them on the fraction alone. It leans on the **sanity gate (Branch B step 3)**:
+  - if the canonical passed the sanity gate (it sits within G2's band of the
+    approved audition) ⇒ trust "**systematic** — voice off in this book" ⇒
+    **escalate to advisory, do NOT run the repair loop** (re-rendering every line
+    is futile when each render misses the canonical);
+  - if the canonical was **withheld/flagged** by the sanity gate ⇒ emit
+    "**suspect-canonical**" instead, and do not blame the book's voice.
 
-### 4.3 Per-emotion (collapsed)
-No separate per-emotion subsystem. Designed variants are first-class anchors via
-§3.1 keying. The **only** per-emotion addition — and only if G3 shows it is
-needed — is a tolerance on the **base** anchor for emotional delivery without a
-designed variant. Windowed short-segment queries (Phase-1's coverage mitigation)
-remain **excluded** from per-emotion and wander analysis (averaging across the
-emotion axis is exactly what these must not do — Phase-1 rule, carried forward).
+So the C2 gate is what makes a high fraction trustworthy as "voice off" rather
+than "canonical off." The fraction threshold is a calibrated, pinned constant
+(G5 informs it).
+
+### 4.3 Per-emotion (collapsed — with an honest gap)
+No separate per-emotion subsystem: designed variants are first-class anchors via
+§3.1 keying. The residual is **un-designed emotional delivery on the base voice**
+(R3). If G3 is null, nothing more is needed. **If G3 is material, this is a
+partial no-go, not a tuning exercise:** emotional base-voice lines are scored
+`inconclusive` (you cannot sub-anchor an emotion that has no separate render
+target). A widened tolerance on the base anchor is offered *only* as an optional,
+clearly-labelled "score-anyway-with-lower-confidence" mode — never presented as
+having de-blended the emotion. Windowed short-segment queries (Phase-1's coverage
+mitigation) remain **excluded** from per-emotion and wander analysis (averaging
+across the emotion axis is exactly what these must not do — Phase-1 rule).
 
 ### 4.4 Temporal wander (conditional on G4)
 Only built if G4 = go. The v1 statistic is the **simplest viable**: early-half
@@ -231,8 +368,17 @@ Emits a distinct `metric: 'voice-consistency-wander'` event.
   existing `chapter-qa-repair.ts` best-of-N loop: a **per-line** cross-book
   mismatch re-renders the line and accepts a candidate only if its cosine to the
   **canonical** clears the accept margin (re-embed the pre-resample PCM,
-  replacing the stale row). **Systematic** findings skip the loop and escalate
-  (§4.2).
+  replacing the stale row). **Systematic** findings skip the loop and escalate;
+  **suspect-canonical** findings repair nothing (§4.2). **Timing:** later books
+  repair **inline** (the canonical already exists); the **debut/seed book repairs
+  in the post-freeze pass** (Branch B step 4) or inline (Branch A, where the
+  audition is already the canonical) — never against an immature anchor.
+- **The post-freeze pass is a *visible* "consistency pass" stage**, not silent
+  mutation of a book the user already saw "done." Branch B re-renders some debut-
+  book lines *after* completion; surface that as an explicit stage in the
+  progress/QA UI, and **do not mutate audio that has already been downloaded or is
+  being listened to** without an explicit re-export — flag those lines as
+  "consistency-fix available" instead.
 - **com-1 Cast Pass entitlement is wired as a route-boundary seam that currently
   returns "granted"** — the paywall is open now (treat-as-on), so the loop runs
   in dev/local today. com-1 flips the seam to real entitlement enforcement later
@@ -259,15 +405,21 @@ Emits a distinct `metric: 'voice-consistency-wander'` event.
   override, **not** a default change — it preserves the honest cost posture while
   letting the operator live with the feature. (Flipped on this box as the first
   dogfood step once Phase 2 is built; not before — there is no Phase-2 code to
-  exercise yet.)
+  exercise yet.) **Caveat: fs-51 (#973) is not yet built**, so until it lands the
+  detection is *event-only* (no report UI) — the dogfood "story" is validated via
+  the emitted events / logs and the repair actions actually firing, not a visible
+  report. Phase-2 detection emitting into a UI-less void until fs-51 is the same
+  posture Phase 1 shipped with.
 
 ## 7. Emotion / storage-key persistence (the small schema work)
 
-Per-segment, persist the **resolved render-target storage key** — one field
-added to the `{ characterId, sentenceIds, renderedFallbackEngine }` record
-(`segments-io.ts:54`) and its writer. This is cleaner than persisting
-`group.emotion` (the storage key already encodes variant-selection **and**
-`voiceUuid` resolution in one value), and it is what lets each persisted
+Per-segment, persist the **resolved render-target storage key** plus the
+**voice-config hash** active at render time — two fields added to the
+`{ characterId, sentenceIds, renderedFallbackEngine }` record (`segments-io.ts:54`)
+and its writer. The storage key is cleaner than persisting `group.emotion` (it
+already encodes variant-selection **and** `voiceUuid` resolution in one value),
+and the config hash is what lets re-score / cross-book scoring pick the correct
+canonical **version** across a re-tune (§3.4). Together they let each persisted
 embedding be scored against the correct canonical at re-score / cross-book time.
 Absent on pre-Phase-2 files ⇒ the segment is `inconclusive` for the cross-book
 check, never an error (matches the Phase-1 missing-embedding rule).
@@ -282,46 +434,90 @@ check, never an error (matches the Phase-1 missing-embedding rule).
   Float32), robust per-character centroid, `score.ts` band machinery, verdict
   vocabulary, `chapter-qa-repair.ts` repair loop (srv-36 Phase 1, #987).
 - Optional GPU embed path (srv-47) — embedding cost is not a blocker.
-- fs-51 (#973) event consumer.
+- fs-51 (#973) event consumer — **not yet built**; Phase-2 detection emits events
+  it will later render (event-only until #973 lands, §6).
 - **Known seam to harden here:** the **book-completion trigger** (a Phase-1
-  follow-up: "last-chapter single-flight book-completion trigger") — the §3.2
-  freeze depends on a reliable single-flight "book N finished rendering" signal,
-  so this spec hardens it rather than assuming it.
+  follow-up: "last-chapter single-flight book-completion trigger"). The Branch-B
+  freeze (§3.2) depends on a reliable signal, defined here as **all
+  story-chapters rendered** (back-matter excluded — count story-chapter titles,
+  not raw chapter count, since trailing back-matter chapters can otherwise read
+  as "stalled N from done"), guarded **single-flight per (storage-key, book)**. A
+  **partially-rendered book must NOT freeze** a thin canonical (user stops at
+  chapter 5): until completion the anchor stays in cold-start/maturing state and
+  no canonical is persisted. (Branch A needs none of this — the audition is the
+  canonical from the start.)
 
 ## 9. Acceptance
 
 **Spike (the deliverable even on no-go):**
-- [ ] G1–G5 run on ≥2 real series (Skulduggery + one held-out); findings note
-      committed with cross-book stability vs the F1 floor (G1), seed divergence
-      (G2), base-voice emotion shift (G3), wander existence + residual-value
-      fraction (G4), and an operator-listen FP/FN (G5).
+- [ ] G1–G6 run on Qwen renders of ≥2 real series; findings note committed with
+      cross-book stability vs the F1 floor (G1), seed divergence + per-voice
+      cross-book *spread* → **Branch A vs B** + sanity-gate band (G2), base-voice
+      emotion shift → go / partial-no-go (G3), wander existence + residual-value
+      fraction (G4), the **runtime-operation** per-line-vs-anchor separability
+      (G6), and an operator-listen FP/FN (G5) **on a held-out series
+      (Unlocked/Keeper) not used to pick cutoffs**.
 - [ ] A **per-axis** `{ go | no-go }` recommendation. On full cross-book no-go:
       Phase 2 closed `wont-fix-consistency`, this spec marked `superseded`, fs-51
       confirmed unaffected.
 
 **Build (per the axes that went go):**
-- [ ] Canonical anchor keyed by render-target storage key; warm-start →
-      (conditional) mature → freeze-and-re-score at book-1 completion; forward
-      books read-only; voice-level `<storageKey>.canonical.json`, versioned by
-      voice-config hash + `anchorVersion`.
-- [ ] Cross-book per-line scoring re-anchored to the canonical;
-      systematic-vs-per-line classifier with calibrated, pinned threshold;
-      `scope: 'series-canonical'` event discriminator.
-- [ ] Per-emotion handled by keying (designed variants first-class); base-voice
-      emotion tolerance only if G3 demands it; windowed queries excluded.
+- [ ] Canonical anchor keyed by render-target storage key, **Qwen-only**;
+      **Branch A** (audition *is* canonical) if G2 null, else **Branch B**
+      (warm-start → mature → **sanity-gated** freeze → re-score → deferred
+      debut-book repair); forward books read-only; voice-level
+      `<storageKey>.canonical.json`, versioned by voice-config hash +
+      `anchorVersion`; never-auditioned voices flagged `seed: no-approval`.
+- [ ] Cross-book per-line scoring re-anchored to the canonical; **three-way**
+      classifier (per-line / systematic / suspect-canonical) keyed off the sanity
+      gate, calibrated + pinned; `scope: 'series-canonical'` discriminator.
+- [ ] **Canonical self-correction** (§3.2.bis): ≥2 later-book systematic
+      disagreements ⇒ `canonical-suspect` + operator-confirmed re-freeze from the
+      agreeing-book majority (Branch-B tier).
+- [ ] **Re-tune versioning** (§3.4): per-segment config-hash persisted;
+      cross-book evaluated within a config-hash cohort; pre-tune books not flagged
+      against the post-tune canonical.
+- [ ] Branch-B debut-book repair runs as a **visible post-freeze consistency
+      pass**; never silently mutates downloaded/in-listening audio (§5).
+- [ ] Per-emotion handled by keying (designed variants first-class); material G3
+      ⇒ emotional base-voice lines `inconclusive` (partial no-go), not "tuned
+      away"; windowed queries excluded.
 - [ ] Temporal-wander detector only if G4 = go (early/late centroid divergence).
 - [ ] Per-segment resolved-storage-key persistence (`segments-io.ts` + writer).
 - [ ] `qa.speaker.enabled` opt-in default-OFF; gate-on ⇒ detection + active
-      repair; com-1 entitlement seam present-but-granted; on-box-ON via local
-      override documented in the test protocol.
-- [ ] fs-51 (#973) consumes consistency events as conditional rows; unchecked
-      storage keys named.
-- [ ] Calibration on real series labels with an **operator listen**; cutoffs +
-      systematic threshold pinned by a normal-tier regression test; out-of-sample
-      FP/FN + the cross-book residual-value fraction documented in Ship notes.
+      repair (debut-book repair deferred to post-freeze in Branch B); com-1
+      entitlement seam present-but-granted; on-box-ON via local override in the
+      test protocol.
+- [ ] fs-51 (#973) consumes consistency events as conditional rows; unchecked /
+      withheld-canonical / `no-approval` storage keys named, never hidden behind
+      "all clear".
+- [ ] Calibration on **Skulduggery-Scepter**, operator-listen FP/FN reported on
+      **held-out Unlocked/Keeper**; cutoffs + classifier threshold pinned by a
+      normal-tier regression test; out-of-sample FP/FN + cross-book residual-value
+      fraction in Ship notes.
+
+### 9.1 Suggested wave decomposition (for the plan, not binding)
+This is at least Phase-1's 15-task magnitude; the plan should wave it, not push
+it as one block. Indicative ordering:
+- **Wave 0 — the spike** (gate; everything below is conditional on its per-axis
+  go).
+- **Wave 1 — storage-key + config-hash persistence** (`segments-io.ts` + writer,
+  §7/§3.4) + the canonical store + Branch-A anchor (audition-is-canonical) +
+  cross-book per-line scoring + events + within-cohort re-tune handling. Ships the
+  cross-book check for the G2-null case.
+- **Wave 2 — Branch B** (maturation + sanity-gated freeze + re-score + deferred
+  visible-consistency-pass repair + completion-trigger hardening), only if G2
+  material.
+- **Wave 3 — three-way classifier + canonical self-correction (§3.2.bis) +
+  auto-repair wiring + com-1 seam.**
+- **Wave 4 — fs-51 consumption + calibration + Ship notes.**
+- **Wave 5 — temporal-wander detector**, only if G4 = go.
 
 ## 10. Out of scope (this spec)
 
+- **Coqui cross-book** (§0): no collision-free per-voice key (shared catalog
+  speakers), so v1 is Qwen-only. Revisit if/when Coqui voices gain a unique
+  identity, or via a `(characterId, speaker)` composite — deferred.
 - Cross-engine canonical transfer (a Qwen canonical scoring a Coqui render) —
   engine-systematic; out of scope (each engine, each storage key, its own
   canonical).
