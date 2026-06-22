@@ -35,12 +35,6 @@ within each sub-group, ship-now-unblocked work leads.
 
 ### Differentiation — the moats, made marketable
 
-#### `fe-40` — Surface & prove series memory ([#972](https://github.com/dudarenok-maker/Castwright/issues/972))
-
-- _What:_ Make the series-memory moat **visible + provable**: a "same voice, book 1 → book N" indicator in the series/library view + an exportable series-consistency summary. Surfaces data the cross-book reuse machinery already holds.
-- _Benefit (user / strategic):_ our top **unclaimed** moat is near-invisible in UI — surfacing + exporting it gives marketing a provable claim. A cheap, fast amplifier that ships ahead of `fs-38`.
-_Full detail + acceptance:_ [#972](https://github.com/dudarenok-maker/Castwright/issues/972).
-
 #### `fs-51` — Per-book performance-QA report ([#973](https://github.com/dudarenok-maker/Castwright/issues/973))
 
 - _What:_ Turn the existing acoustic + ASR + drift gate into a visible, exportable per-book QA summary ("N lines re-recorded, M transcript-verified, 0 drift"). Aggregates signals the pipeline already produces.
