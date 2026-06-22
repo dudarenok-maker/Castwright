@@ -33,8 +33,8 @@ export const ENGINE_VRAM_COST: Record<string, number> = {
 
 import { configValue } from '../config/resolver.js';
 
-/** VRAM token cost for an engine name (or 'analyzer'). For the five engines
-    with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr) the
+/** VRAM token cost for an engine name (or 'analyzer'). For the six engines
+    with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr/spk) the
     value is read live through the registry so env vars and app overrides take
     effect. Gemini has no VRAM cost and stays at 0. Unknown engines fall back
     to cost 1 so a new engine never silently grabs the whole budget. */

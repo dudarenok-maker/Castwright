@@ -98,6 +98,22 @@ describe('embedSegment', () => {
     expect((err as { transient?: boolean }).transient).toBe(true);
   });
 
+  it('rejects with an "empty" error and does not call fetch when given a zero-length PCM buffer', async () => {
+    const err = await embedSegment(Buffer.alloc(0), 24000, { sidecarUrl: URL }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/empty/i);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does NOT warn on the cpu path even when budget < 2', async () => {
+    delete process.env.SPK_DEVICE;
+    sem.value = 1;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockFetch.mockImplementation((async () => embedResponse([1])) as unknown as typeof undiciFetch);
+    await embedSegment(PCM, 24000, { sidecarUrl: URL });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   // NOTE: `budgetWarned` is module-level state in embed-client.ts and can't be
   // reset from here. This test relies on running AFTER the budget>=2 cuda tests
   // above (which never flip the flag), so the flag is still false on entry.
