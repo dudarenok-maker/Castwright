@@ -361,6 +361,12 @@ _Full detail + acceptance:_ plan [222](features/222-gpu-residency-and-analysing-
 - _Benefit (technical):_ keeps the sidecar's engine stack current and CVE-clear once the bumps are validated against real model output, without risking the TTS pipeline on a blind bump.
 _Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright/issues/893).
 
+#### `side-19` — Faster book rendering: `torch.compile` the Qwen Code2Wav decoder ([#988](https://github.com/dudarenok-maker/Castwright/issues/988))
+
+- _What:_ Speed up batched chapter rendering on our **default Qwen engine** by `torch.compile`-ing the **Code2Wav** codec decoder (token→waveform). Low-risk — a self-contained feed-forward module, **distinct from the parked `side-7`** LM-loop fork. **Phase 0 sizes the win first** (Code2Wav's share of batch wall-time on the 8 GB box); Phase 1 (`QWEN_COMPILE_CODEC`, batch-path-only, default-OFF on Windows) ships only if it clears the bar + stays 8 GB VRAM-neutral + golden-audio output-preserving.
+- _Benefit (user):_ long books finish faster than playback by a wider margin on the engine every render uses — snappier generation, with no interactive-path or audio-quality cost.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-qwen-codec-compilation-design.md` · [#988](https://github.com/dudarenok-maker/Castwright/issues/988).
+
 ### Revisions & regen
 
 #### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history) ([#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415))
