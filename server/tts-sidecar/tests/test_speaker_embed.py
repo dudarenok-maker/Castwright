@@ -58,7 +58,11 @@ def _install_speechbrain_stub(monkeypatch: pytest.MonkeyPatch, *, from_hparams) 
     mod_speaker = types.ModuleType("speechbrain.inference.speaker")
 
     class _EncoderClassifier:
-        from_hparams = staticmethod(from_hparams)
+        pass
+
+    # Assign AFTER the class body — referencing the `from_hparams` param inside
+    # the class body would shadow it (class-local) and raise NameError.
+    _EncoderClassifier.from_hparams = staticmethod(from_hparams)
 
     mod_speaker.EncoderClassifier = _EncoderClassifier
     mod_inference.speaker = mod_speaker
