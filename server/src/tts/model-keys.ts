@@ -102,8 +102,8 @@ export function sidecarModelId(key: TtsModelKey): string {
   if (key === 'coqui-xtts-v2') return 'xtts_v2';
   if (key === 'piper-en-us-medium') return 'en-us-medium';
   if (key === 'kokoro-v1') return 'v1';
-  // Qwen ignores the model field at synth (voice = designed voiceId), but the
-  // sidecar /synthesize contract requires a non-empty model string.
+  // Qwen uses the model field to select the 0.6B vs 1.7B Base at both the
+  // single /synthesize and batch /synthesize-batch paths (fs-56).
   if (key === 'qwen3-tts-0.6b') return '0.6b';
   if (key === 'qwen3-tts-1.7b') return '1.7b';
   throw new Error(`sidecarModelId called with non-local key: ${key}`);

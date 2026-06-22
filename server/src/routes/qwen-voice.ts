@@ -110,14 +110,6 @@ const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
   sad: 'Delivered sadly — subdued, downcast, and heavy.',
 };
 
-/** Append the emotion delivery clause to a persona for variant design. */
-export function buildVariantInstruct(
-  persona: string,
-  emotion: Exclude<Emotion, 'neutral'>,
-): string {
-  return `${persona.trim()} ${EMOTION_INSTRUCT[emotion]}`.trim();
-}
-
 /* fs-25 / fe-32 / srv-37 — record a designed emotion variant onto a
    character's qwen slot. A variant voiceId is derived from the series-unified
    base voiceId (`qwen-<voiceId>__<emotion>`), so — exactly like the base voice

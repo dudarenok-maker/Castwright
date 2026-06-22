@@ -350,7 +350,7 @@ def test_empty_batch_raises(qwen_batch_runtime) -> None:
 # ── batch-path perf log ──────────────────────────────────────────────────
 
 _BATCH_LOG = re.compile(
-    r"qwen batch synth: items=(\d+) voices=(\d+) text_len=(\d+) "
+    r"qwen batch synth: model=\S+ items=(\d+) voices=(\d+) text_len=(\d+) "
     r"load_ms=[0-9.]+ gen_ms=[0-9.]+ audio_ms=[0-9.]+ rtf=([0-9.]+)"
 )
 
@@ -655,3 +655,125 @@ def test_route_batch_cuda_error_poisons_and_503s(qwen_batch_runtime, monkeypatch
     assert resp.json().get("poisoned") is True
     assert main._process_poisoned is True
     assert len(timer_calls) == 1  # batched CUDA error scheduled the supervised exit
+
+
+# ── fs-56 Quality tier: synthesize_batch routes 1.7b model to _base17 ───────
+#
+# The 1.7b branch of synthesize_batch must:
+#   - call _ensure_base17_loaded (not _ensure_base_loaded) before the forward;
+#   - derive each item's prompt via _load_voice_prompt_17b (not _load_voice_prompt);
+#   - call _base17.generate_voice_clone (NOT _base.generate_voice_clone).
+#
+# We stub _ensure_base17_loaded + _load_voice_prompt_17b to avoid needing the
+# full 1.7B model internals, and record which generate_voice_clone is called.
+
+
+def test_synthesize_batch_1_7b_routes_to_base17(qwen_batch_runtime, monkeypatch) -> None:
+    """synthesize_batch(model='1.7b') must call _base17.generate_voice_clone,
+    NOT _base.generate_voice_clone — the critical regression this fixes."""
+    engine = qwen_batch_runtime["engine"]
+
+    # Design a 0.6b voice so the base manifest + prompt exist (needed by
+    # _load_voice_prompt_17b's internal call to _load_voice_prompt).
+    markers = {v: _design(engine, v) for v in ("p", "q")}
+
+    # Stub _base17 as a _BatchFakeQwen so we can assert it receives the call.
+    fake17 = _BatchFakeQwen("qwen3-1.7b-fake")
+    monkeypatch.setattr(engine, "_base17", fake17)
+
+    # Stub _ensure_base17_loaded to a no-op (base17 already set above).
+    monkeypatch.setattr(engine, "_ensure_base17_loaded", lambda: None)
+
+    # Stub _load_voice_prompt_17b to return a recognisable fake prompt built
+    # from the voice name so per-item prompt isolation is verifiable. The
+    # prompt shape mirrors _BatchFakeQwen.create_voice_clone_prompt output: a
+    # length-1 list of _FakePromptItem.
+    def _fake_prompt_17b(voice: str):
+        marker = markers.get(voice, 0)
+        return [_FakePromptItem(marker + 1000, "pangram")], "English", False
+
+    monkeypatch.setattr(engine, "_load_voice_prompt_17b", _fake_prompt_17b)
+
+    # Clear calls accumulated during voice design (design auditions use _base).
+    engine._base.clone_calls.clear()
+
+    items = [{"voice": "p", "text": "Hello."}, {"voice": "q", "text": "World."}]
+    res = engine.synthesize_batch("1.7b", items)
+
+    # _base17 received the call, not _base.
+    assert len(fake17.clone_calls) == 1, (
+        f"_base17.generate_voice_clone should have been called once, got {len(fake17.clone_calls)}"
+    )
+    assert len(engine._base.clone_calls) == 0, (
+        "_base.generate_voice_clone must NOT be called for model='1.7b'"
+    )
+
+    # Correct number of outputs returned.
+    assert len(res.pcms) == 2
+    assert res.sample_rate == 24000
+
+
+def test_synthesize_batch_1_7b_derives_per_item_prompts_from_load_voice_prompt_17b(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """Each item's prompt must come from _load_voice_prompt_17b (not the 0.6B
+    _load_voice_prompt). We verify by making the two functions return distinct
+    prompt markers and asserting the 1.7B marker is what reaches generate_voice_clone."""
+    engine = qwen_batch_runtime["engine"]
+    markers = {v: _design(engine, v) for v in ("x", "y")}
+
+    fake17 = _BatchFakeQwen("qwen3-1.7b-fake")
+    monkeypatch.setattr(engine, "_base17", fake17)
+    monkeypatch.setattr(engine, "_ensure_base17_loaded", lambda: None)
+
+    # 1.7B prompts carry marker+2000; 0.6B prompts carry marker (from _design).
+    # If the batch mistakenly calls _load_voice_prompt, the marker recorded in
+    # generate_voice_clone will be marker, not marker+2000.
+    def _fake_prompt_17b(voice: str):
+        marker = markers.get(voice, 0)
+        return [_FakePromptItem(marker + 2000, "pangram")], "English", False
+
+    monkeypatch.setattr(engine, "_load_voice_prompt_17b", _fake_prompt_17b)
+
+    # Clear design-time calls so only synth calls are counted below.
+    engine._base.clone_calls.clear()
+
+    items = [{"voice": "x", "text": "Alpha."}, {"voice": "y", "text": "Beta."}]
+    engine.synthesize_batch("1.7b", items)
+
+    assert len(fake17.clone_calls) == 1
+    call = fake17.clone_calls[0]
+    # prompt items carry the 1.7B-specific markers (not the raw 0.6B design markers).
+    assert call["prompt"][0].ref_code == markers["x"] + 2000
+    assert call["prompt"][1].ref_code == markers["y"] + 2000
+
+
+def test_synthesize_batch_0_6b_does_not_touch_base17(qwen_batch_runtime, monkeypatch) -> None:
+    """Regression guard: model='0.6b' (the existing path) must NOT call _base17
+    after the refactor split the branches."""
+    engine = qwen_batch_runtime["engine"]
+    for v in ("a", "b"):
+        _design(engine, v)
+
+    base17_calls: list[Any] = []
+
+    class _Sentry:
+        """Raises immediately if any method is called — proves base17 is untouched."""
+        def __getattr__(self, name: str) -> Any:
+            def _boom(*_a: Any, **_k: Any) -> Any:
+                base17_calls.append(name)
+                raise AssertionError(f"_base17.{name} called during 0.6b batch")
+            return _boom
+
+    monkeypatch.setattr(engine, "_base17", _Sentry())
+    base17_loaded_calls: list[int] = []
+    monkeypatch.setattr(
+        engine, "_ensure_base17_loaded", lambda: base17_loaded_calls.append(1)
+    )
+
+    res = engine.synthesize_batch(
+        "0.6b", [{"voice": "a", "text": "Hi."}, {"voice": "b", "text": "Bye."}]
+    )
+    assert not base17_calls, f"0.6b batch touched _base17 methods: {base17_calls}"
+    assert not base17_loaded_calls, "_ensure_base17_loaded called during 0.6b batch"
+    assert len(res.pcms) == 2

@@ -1990,6 +1990,122 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       b.batchCalls.map((c) => c.items.map((i) => i.text)),
     );
   });
+
+  /* ── fs-56 Quality tier: 1.7B batch partitioning (critical bug fix) ──────
+     A chapter mixing 0.6B and 1.7B characters MUST NOT co-batch them — the
+     sidecar runs a single-model forward and mixing tiers causes a prompt-tensor
+     dim mismatch. The partition must put 0.6B groups into 0.6B-only batches and
+     1.7B groups into 1.7B-only batches; the modelKey forwarded to synthesizeBatch
+     for every batch must match every member of that batch. */
+
+  it('never co-batches 1.7B and 0.6B characters (critical: single-model forward)', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+        /* 0.6B tier (default) — no ttsModelKey */
+      },
+      {
+        id: 'quality',
+        name: 'Quality',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-quality' } },
+        ttsModelKey: 'qwen3-tts-1.7b',
+      },
+    ];
+    const batchModelKeys: string[] = [];
+    const provider: TtsProvider & { batchCalls: SynthesizeBatchInput['items'][] } = {
+      batchCalls: [],
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({ items, modelKey }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        provider.batchCalls.push(items);
+        if (modelKey) batchModelKeys.push(modelKey);
+        return { pcms: items.map((it) => Buffer.alloc(it.text.length * 2)), sampleRate: 24000 };
+      },
+    };
+
+    /* Interleave narrator (0.6B) and quality (1.7B) sentences so a naive
+       single-bucket implementation would mix them. */
+    await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'Narrator anchor.'),
+        sentence(2, 'quality', 'Quality one.'),
+        sentence(3, 'narrator', 'Narrator body.'),
+        sentence(4, 'quality', 'Quality two.'),
+        sentence(5, 'narrator', 'Narrator end.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchBucket: false, // index-order so composition is deterministic
+    });
+
+    /* Every batch must be homogeneous: no batch may contain both 0.6B narrator
+       voices and 1.7B quality voices. */
+    expect(provider.batchCalls.length).toBeGreaterThan(0);
+    for (const batchItems of provider.batchCalls) {
+      const voiceNames = batchItems.map((it) => it.voiceName);
+      const has06b = voiceNames.some((v) => v === 'qwen-narrator');
+      const has17b = voiceNames.some((v) => v === 'qwen-quality');
+      expect(has06b && has17b).toBe(false);
+    }
+
+    /* The modelKey forwarded to synthesizeBatch must match the tier of every
+       member: 0.6B batches carry 'qwen3-tts-0.6b', 1.7B batches 'qwen3-tts-1.7b'. */
+    for (const mk of batchModelKeys) {
+      expect(['qwen3-tts-0.6b', 'qwen3-tts-1.7b']).toContain(mk);
+    }
+    /* At least one 1.7B batch must have been dispatched. */
+    expect(batchModelKeys.some((mk) => mk === 'qwen3-tts-1.7b')).toBe(true);
+  });
+
+  it('dispatches a 1.7B batch with modelKey qwen3-tts-1.7b (not 0.6b)', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+        ttsModelKey: 'qwen3-tts-1.7b',
+      },
+    ];
+    const batchModelKeys: string[] = [];
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({ items, modelKey }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        if (modelKey) batchModelKeys.push(modelKey);
+        return { pcms: items.map((it) => Buffer.alloc(it.text.length * 2)), sampleRate: 24000 };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'First sentence.'),
+        sentence(2, 'narrator', 'Second sentence.'),
+        sentence(3, 'narrator', 'Third sentence.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b', // chapter-level default is 0.6b
+      engine: 'qwen',
+      qwenBatchSize: 8,
+    });
+
+    /* Every batch for a 1.7B character must carry the 1.7B key, not the
+       chapter-level 0.6B default. */
+    expect(batchModelKeys.length).toBeGreaterThan(0);
+    for (const mk of batchModelKeys) {
+      expect(mk).toBe('qwen3-tts-1.7b');
+    }
+  });
 });
 
 describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {

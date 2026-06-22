@@ -2062,6 +2062,11 @@ class QwenEngine(Engine):
           - each sentence is an INDEPENDENT sequence (not concatenated text) →
             no shared decode context, so no mid-chunk voice drift.
 
+        A batch must be SINGLE-MODEL: the Node partition (synthesise-chapter.ts)
+        ensures 1.7B and 0.6B groups never share a batch (the prompt tensor
+        shapes differ between models; mixing would cause a dim mismatch inside
+        generate_voice_clone).
+
         Fails fast (RuntimeError naming the item index) if any voice hasn't
         been designed — the whole batch fails and the caller retries / fails
         the chapter exactly as a single call would."""
@@ -2077,45 +2082,80 @@ class QwenEngine(Engine):
         texts: list[str] = []
         langs: list[str] = []
         prompts: list[Any] = []
-        for i, item in enumerate(items):
-            voice = item.get("voice")
-            text = item.get("text")
-            if not isinstance(voice, str) or not voice:
-                raise RuntimeError(f"batch item {i}: `voice` is required.")
-            if not isinstance(text, str) or not text.strip():
-                raise RuntimeError(f"batch item {i}: `text` is required.")
-            try:
-                prompt, lang, _cache_hit = self._load_voice_prompt(voice)
-            except RuntimeError as e:
-                raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
-            texts.append(text)
-            langs.append(lang)
-            # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
-            # (qwen_tts create_voice_clone_prompt's return shape), normally
-            # length 1. generate_voice_clone wants a FLAT prompt-item list with
-            # one item per text — it does `[it.ref_code for it in items]`
-            # internally. Appending the per-voice list verbatim builds a
-            # list-of-LISTS, so `it` is a list → "'list' object has no attribute
-            # 'ref_code'". Flatten so prompt item i lines up with text i. (The
-            # single /synthesize path passes the whole length-1 list for its one
-            # text, which is why it never tripped this.)
-            prompts.extend(prompt if isinstance(prompt, list) else [prompt])
-        load_ms = (time.perf_counter() - load_start) * 1000.0
 
-        self._ensure_base_loaded()
-        # Serialise the forward — see `_synth_lock` in __init__. Without this,
-        # two concurrent batches of different sizes (e.g. a full 8 overlapping a
-        # 7-item remainder, which GPU_VRAM_BUDGET>1 schedules in parallel) race
-        # on shared model state → "size of tensor a (8) must match tensor b (7)".
-        gen_start = time.perf_counter()
-        with self._synth_lock:
-            # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
-            # to null `_base`; see synthesize(). No-op on the warm path.
+        if model == "1.7b":
+            # ── 1.7B-Base batch path (fs-56 Quality tier) ────────────────────
+            # Ensure the 1.7B-Base model is resident before deriving any prompt.
+            # Prompt derivation must happen BEFORE the _synth_lock so we don't
+            # hold the synth lock during potentially slow prompt loading.
+            self._ensure_base17_loaded()
+            for i, item in enumerate(items):
+                voice = item.get("voice")
+                text = item.get("text")
+                if not isinstance(voice, str) or not voice:
+                    raise RuntimeError(f"batch item {i}: `voice` is required.")
+                if not isinstance(text, str) or not text.strip():
+                    raise RuntimeError(f"batch item {i}: `text` is required.")
+                try:
+                    prompt, lang, _cache_hit = self._load_voice_prompt_17b(voice)
+                except RuntimeError as e:
+                    raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+                texts.append(text)
+                langs.append(lang)
+                # Flatten per-voice prompt-item list (same rationale as the 0.6B
+                # path below; see comment there for the list-of-lists danger).
+                prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+            load_ms = (time.perf_counter() - load_start) * 1000.0
+
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock (same rationale as synthesize()).
+                self._ensure_base17_loaded()
+                wavs, sr = self._base17.generate_voice_clone(
+                    text=texts, language=langs, voice_clone_prompt=prompts
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+        else:
+            # ── 0.6B-Base batch path (default) ───────────────────────────────
+            for i, item in enumerate(items):
+                voice = item.get("voice")
+                text = item.get("text")
+                if not isinstance(voice, str) or not voice:
+                    raise RuntimeError(f"batch item {i}: `voice` is required.")
+                if not isinstance(text, str) or not text.strip():
+                    raise RuntimeError(f"batch item {i}: `text` is required.")
+                try:
+                    prompt, lang, _cache_hit = self._load_voice_prompt(voice)
+                except RuntimeError as e:
+                    raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+                texts.append(text)
+                langs.append(lang)
+                # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
+                # (qwen_tts create_voice_clone_prompt's return shape), normally
+                # length 1. generate_voice_clone wants a FLAT prompt-item list with
+                # one item per text — it does `[it.ref_code for it in items]`
+                # internally. Appending the per-voice list verbatim builds a
+                # list-of-LISTS, so `it` is a list → "'list' object has no attribute
+                # 'ref_code'". Flatten so prompt item i lines up with text i. (The
+                # single /synthesize path passes the whole length-1 list for its one
+                # text, which is why it never tripped this.)
+                prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+            load_ms = (time.perf_counter() - load_start) * 1000.0
+
             self._ensure_base_loaded()
-            wavs, sr = self._base.generate_voice_clone(
-                text=texts, language=langs, voice_clone_prompt=prompts
-            )
-        gen_ms = (time.perf_counter() - gen_start) * 1000.0
+            # Serialise the forward — see `_synth_lock` in __init__. Without this,
+            # two concurrent batches of different sizes (e.g. a full 8 overlapping a
+            # 7-item remainder, which GPU_VRAM_BUDGET>1 schedules in parallel) race
+            # on shared model state → "size of tensor a (8) must match tensor b (7)".
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
+                # to null `_base`; see synthesize(). No-op on the warm path.
+                self._ensure_base_loaded()
+                wavs, sr = self._base.generate_voice_clone(
+                    text=texts, language=langs, voice_clone_prompt=prompts
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
         # Hard invariant: one wav per input item, in order. A mismatch means a
         # library API drift — fail loudly rather than silently misalign audio
         # with sentences (which would scramble the chapter).
@@ -2136,9 +2176,9 @@ class QwenEngine(Engine):
         audio_ms = sum(_audio_duration_ms(w, int(sr)) for w in wavs)
         n_voices = len({item.get("voice") for item in items})
         log.info(
-            "qwen batch synth: items=%d voices=%d text_len=%d load_ms=%.1f "
+            "qwen batch synth: model=%s items=%d voices=%d text_len=%d load_ms=%.1f "
             "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
-            len(items), n_voices, sum(len(t) for t in texts), load_ms,
+            model, len(items), n_voices, sum(len(t) for t in texts), load_ms,
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
         pcms = [_float_audio_to_int16_le(w) for w in wavs]
