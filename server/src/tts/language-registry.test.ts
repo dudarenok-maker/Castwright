@@ -9,6 +9,7 @@ import {
   allLanguageEntries,
   supportedLanguages,
   nonEnglishHeadingLexicon,
+  nonEnglishFrontMatterKeywords,
 } from './language-registry.js';
 
 describe('getLanguageEntry', () => {
@@ -35,6 +36,9 @@ describe('getLanguageEntry', () => {
           'одиннадцать', 'двенадцать', 'двадцать', 'тридцать'],
         standalone: ['пролог', 'эпилог', 'предисловие', 'введение', 'интерлюдия', 'послесловие'],
       },
+      frontMatterKeywords: ['посвящение', 'авторские права', 'благодарности', 'содержание', 'оглавление',
+        'об авторе', 'предисловие', 'послесловие', 'приложение', 'глоссарий', 'библиография', 'указатель',
+        'примечания', 'выходные данные', 'эпиграф'],
     });
   });
 
@@ -116,5 +120,18 @@ describe('nonEnglishHeadingLexicon', () => {
     for (const c of ['ru', 'es', 'fr', 'de']) {
       expect(getLanguageEntry(c)?.headingLexicon).toBeDefined();
     }
+  });
+});
+
+describe('nonEnglishFrontMatterKeywords', () => {
+  it('unions non-English front-matter terms (deduped), no English', () => {
+    const fm = nonEnglishFrontMatterKeywords();
+    for (const w of ['dedicatoria', 'dédicace', 'widmung', 'посвящение']) expect(fm).toContain(w);
+    expect(fm).not.toContain('dedication'); // English stays inline in front-matter.ts
+    expect(new Set(fm).size).toBe(fm.length);
+  });
+  it('ru/es/fr/de carry frontMatterKeywords; en does not', () => {
+    expect(getLanguageEntry('en')?.frontMatterKeywords).toBeUndefined();
+    for (const c of ['ru', 'es', 'fr', 'de']) expect(getLanguageEntry(c)?.frontMatterKeywords).toBeDefined();
   });
 });
