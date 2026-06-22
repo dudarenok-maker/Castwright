@@ -1122,3 +1122,178 @@ def test_mint_variant_route_409_base_absent(fake_qwen_runtime) -> None:
         },
     )
     assert resp.status_code == 409
+
+
+# ── Task 9 (fs-55): synthesize() routes model='1.7b' through 1.7B-Base ──────
+
+def test_synth_17b_calls_ensure_base17_and_derives_native_prompt(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """synthesize('1.7b', voice, text) must:
+      1. call _ensure_base17_loaded (loads the 1.7B-Base model),
+      2. derive a native 1.7B prompt via create_voice_clone_prompt on first call
+         and write it to <voice>__1.7b.pt,
+      3. REUSE the cached <voice>__1.7b.pt on the second call (no re-derive),
+      4. synth via _base17.generate_voice_clone (NOT _base).
+    """
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    # Design the base voice so _load_voice_prompt can find it.
+    eng.design_voice("tara", "A warm British narrator.", "English", None)
+
+    # Provide a ref_code-bearing item from _load_voice_prompt so _load_voice_prompt_17b
+    # can access base_item.ref_code.  (The shared fake's create_voice_clone_prompt
+    # returns a DICT, not a PromptItem, so we monkeypatch like mint_variant's test.)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+
+    # Attach a fresh 1.7B-Base fake (same class; has speech_tokenizer + create_voice_clone_prompt).
+    eng._base17 = type(eng._base)("1.7b")
+
+    ensure17_calls: list[str] = []
+    real_ensure17 = eng._ensure_base17_loaded
+    monkeypatch.setattr(
+        eng,
+        "_ensure_base17_loaded",
+        lambda: (ensure17_calls.append("called"), real_ensure17())[1],
+    )
+
+    # Reset counters after design_voice (which may call _base.generate_voice_clone
+    # for the audition preview — we only want to track the synthesize() call).
+    if eng._base is not None:
+        eng._base.clone_calls.clear()
+
+    # ── First call: cache MISS — should derive and write <voice>__1.7b.pt ─────
+    prompt_calls_before = len(eng._base17.prompt_calls)
+    res1 = eng.synthesize("1.7b", "tara", "Hello, world.")
+
+    assert len(ensure17_calls) >= 1, "_ensure_base17_loaded not called"
+    # The 1.7B native cache file must exist.
+    pt_17b = os.path.join(str(vdir), "tara__1.7b.pt")
+    assert os.path.isfile(pt_17b), f"<voice>__1.7b.pt not written ({pt_17b})"
+    # create_voice_clone_prompt was called on _base17 (derive step).
+    prompt_calls_after_first = len(eng._base17.prompt_calls)
+    assert prompt_calls_after_first > prompt_calls_before, (
+        "1.7B prompt not derived on first call"
+    )
+    # Synth used _base17, not _base.
+    assert len(eng._base17.clone_calls) == 1
+    assert eng._base is None or len(eng._base.clone_calls) == 0, (
+        "0.6B _base.generate_voice_clone should NOT be called on model='1.7b'"
+    )
+    assert isinstance(res1.pcm, bytes) and len(res1.pcm) > 0
+
+    # ── Second call: cache HIT — must NOT call create_voice_clone_prompt again ──
+    prompt_calls_before_second = len(eng._base17.prompt_calls)
+    res2 = eng.synthesize("1.7b", "tara", "Second sentence.")
+    prompt_calls_after_second = len(eng._base17.prompt_calls)
+
+    assert prompt_calls_after_second == prompt_calls_before_second, (
+        "create_voice_clone_prompt called again on cache HIT — re-derive not expected"
+    )
+    assert len(eng._base17.clone_calls) == 2, "Second synth should still call generate_voice_clone"
+    assert isinstance(res2.pcm, bytes) and len(res2.pcm) > 0
+
+
+def test_synth_17b_does_not_call_ensure_base_loaded(fake_qwen_runtime, monkeypatch) -> None:
+    """synthesize('1.7b') must NOT call _ensure_base_loaded (the 0.6B loader).
+    Only _ensure_base17_loaded should be called — the 0.6B path is unchanged."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    eng.design_voice("kira", "A teen girl.", "English", None)
+    # Clear any state from design_voice before the real assertion.
+    eng._design = None
+
+    eng._base17 = type(eng._base)("1.7b")
+
+    ensure_base_calls: list[str] = []
+    real_ensure_base = eng._ensure_base_loaded
+    monkeypatch.setattr(
+        eng,
+        "_ensure_base_loaded",
+        lambda: (ensure_base_calls.append("called"), real_ensure_base())[1],
+    )
+
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+
+    res = eng.synthesize("1.7b", "kira", "Test sentence.")
+    assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+    assert ensure_base_calls == [], (
+        "_ensure_base_loaded (0.6B loader) must NOT be called when model='1.7b'"
+    )
+
+
+def test_synth_17b_unloads_design_model_before_synth(fake_qwen_runtime, monkeypatch) -> None:
+    """When _design is resident, synthesize('1.7b') must call unload_design()
+    BEFORE acquiring _synth_lock (mirrors the 0.6B path invariant)."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    eng.design_voice("zara", "A mature narrator.", "English", None)
+
+    # Manually set _design to a non-None sentinel to simulate a resident design.
+    eng._design = _FakeQwenModel("design")
+
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+
+    unload_called: list[bool] = []
+    real_unload = eng.unload_design
+    monkeypatch.setattr(eng, "unload_design", lambda: (unload_called.append(True), real_unload())[1])
+
+    eng.synthesize("1.7b", "zara", "Hello.")
+    assert unload_called, "unload_design() not called when _design was resident"
+
+
+# weights-gated 1.7B synth integration test
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_synth_17b_on_gpu_produces_audio_and_writes_cache() -> None:
+    """On a GPU box with weights: synthesize('1.7b', voice, text) produces PCM
+    audio and writes the <voice>__1.7b.pt native cache file."""
+    eng = main.ENGINES["qwen"]
+    assert isinstance(eng, main.QwenEngine)
+
+    # Design the base voice first (required for the 1.7B prompt derivation).
+    eng.design_voice("cw_gpu_17b", "A warm mid-30s British female narrator.", "English", None, None)
+
+    # Synthesise one sentence via the 1.7B path.
+    result = eng.synthesize("1.7b", "cw_gpu_17b", "The coalfall commission was underway.")
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+
+    # The 1.7B native cache file must have been written.
+    pt_17b, _ = eng._voice_paths("cw_gpu_17b__1.7b")
+    assert os.path.isfile(pt_17b), f"<voice>__1.7b.pt not found at {pt_17b}"

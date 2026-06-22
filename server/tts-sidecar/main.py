@@ -1924,10 +1924,64 @@ class QwenEngine(Engine):
             self._prompt_cache[voice] = (prompt, lang)
         return prompt, lang, False
 
+    def _load_voice_prompt_17b(self, voice: str) -> tuple[Any, str, bool]:
+        """Return (clone_prompt_17b, language, cache_hit) for a designed voice,
+        using the 1.7B-Base model's native prompt format.
+
+        Cache key is `<voice>__1.7b` — stored as `<voice>__1.7b.pt` alongside
+        the standard 0.6B prompt.  On a cache MISS the 0.6B prompt's `ref_code`
+        is decoded through the 1.7B-Base's speech_tokenizer, re-derived as a
+        1.7B-native clone prompt via `create_voice_clone_prompt`, and saved so
+        subsequent calls are cache hits.
+
+        Requires `_base17` to already be loaded before calling (the caller is
+        responsible via `_ensure_base17_loaded()`).
+
+        Language is inherited from the base voice's manifest — the same language
+        used for the 0.6B path."""
+        import torch  # type: ignore
+
+        cache_key = f"{voice}__1.7b"
+        with self._cache_lock:
+            cached = self._prompt_cache.get(cache_key)
+        if cached is not None:
+            prompt, lang = cached
+            return prompt, lang, True
+
+        # Load the base (0.6B) prompt to get ref_code + language.
+        base_items, lang, _ = self._load_voice_prompt(voice)
+        base_items = base_items if isinstance(base_items, list) else [base_items]
+        base_item = base_items[0]
+
+        # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
+        # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
+        rc = base_item.ref_code
+        rc = rc.to(self._device) if hasattr(rc, "to") else rc
+        ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+            [{"audio_codes": rc}]
+        )
+        prompt = self._base17.create_voice_clone_prompt(
+            ref_audio=(ref_wavs[0], ref_sr), ref_text=base_item.ref_text
+        )
+
+        # Persist to disk so re-runs and restarts skip the derivation step.
+        pt_path, _json_path = self._voice_paths(cache_key)
+        os.makedirs(self._voices_dir, exist_ok=True)
+        torch.save(prompt, pt_path)
+        with self._cache_lock:
+            self._prompt_cache[cache_key] = (prompt, lang)
+        log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
+        return prompt, lang, False
+
     def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
         """`voice` is a designed voiceId. Loads its cached clone prompt and
         reuses it — identical identity across the book. Fails fast (no
-        catalog fallback) if the voice hasn't been designed."""
+        catalog fallback) if the voice hasn't been designed.
+
+        When `model` is ``'1.7b'`` the synthesis runs through the resident
+        1.7B-Base model with a lazily derived native prompt (cached as
+        ``<voice>__1.7b.pt``).  The 0.6B path is used for all other model
+        values."""
         # Leaving design mode: a real synth means generation/sampling, not
         # designing — free the heavy VoiceDesign model so it can't squeeze
         # generation VRAM. Auditions inside design_voice use _base directly
@@ -1936,6 +1990,35 @@ class QwenEngine(Engine):
         # lock; it is non-reentrant).
         if self._design is not None:
             self.unload_design()
+
+        if model == "1.7b":
+            # ── 1.7B-Base path (fs-55 Quality tier) ──────────────────────────
+            # Ensure the 1.7B-Base model is resident before deriving the prompt.
+            self._ensure_base17_loaded()
+            load_start = time.perf_counter()
+            prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
+            load_ms = (time.perf_counter() - load_start) * 1000.0
+
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock (same rationale as the 0.6B path).
+                self._ensure_base17_loaded()
+                wavs, sr = self._base17.generate_voice_clone(
+                    text=[text], language=[lang], voice_clone_prompt=prompt
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+
+            audio = wavs[0]
+            audio_ms = _audio_duration_ms(audio, int(sr))
+            log.info(
+                "qwen synth (1.7b): voice=%s text_len=%d cache=%s load_ms=%.1f "
+                "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+                voice, len(text), "hit" if cache_hit else "miss", load_ms,
+                gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+            )
+            return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+
+        # ── 0.6B-Base path (default) ──────────────────────────────────────────
         # Resolve the voice prompt first so an undesigned voice still fails
         # fast WITHOUT paying the (heavy) Base-model load.
         load_start = time.perf_counter()
