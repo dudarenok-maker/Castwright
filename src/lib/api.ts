@@ -4938,6 +4938,7 @@ export interface SidecarHealth {
   kokoroLoaded?: boolean;
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
+  qwenBase17Loaded?: boolean;
   qwenLoading?: boolean;
   /* Qwen install-state, distinct from load-state (qwenLoaded). Drives the
      conditional default (Qwen-when-installed) + the install-check warning:
@@ -6208,12 +6209,15 @@ const MOCK_SIDECAR_QWEN_INSTALL_STATE: 'not-installed' | 'weights-missing' | 're
 const MOCK_OLLAMA_RESIDENT = new Set<string>(['qwen3.5:4b']);
 
 async function realLoadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen'; model?: string } = {},
 ): Promise<ModelControlResult> {
   /* Default to Coqui when the caller omits `engine` — preserves back-compat
      with the original signature. The Kokoro / Qwen pills always pass
-     `{ engine: 'kokoro' | 'qwen' }` explicitly. */
-  const body = opts.engine ? { engine: opts.engine } : {};
+     `{ engine: 'kokoro' | 'qwen' }` explicitly. For the Qwen 1.7B-Base pill,
+     `{ engine: 'qwen', model: '1.7b' }` routes the sidecar to the 1.7B loader. */
+  const body: Record<string, string> = {};
+  if (opts.engine) body.engine = opts.engine;
+  if (opts.model) body.model = opts.model;
   const res = await fetch('/api/sidecar/load', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -6225,9 +6229,11 @@ async function realLoadSidecar(
 }
 
 async function realUnloadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen'; model?: string } = {},
 ): Promise<ModelControlResult> {
-  const body = opts.engine ? { engine: opts.engine } : {};
+  const body: Record<string, string> = {};
+  if (opts.engine) body.engine = opts.engine;
+  if (opts.model) body.model = opts.model;
   const res = await fetch('/api/sidecar/unload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -6269,7 +6275,7 @@ async function realGetOllamaHealth(): Promise<OllamaHealth> {
 }
 
 async function mockLoadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen'; model?: string } = {},
 ): Promise<ModelControlResult> {
   await wait(60);
   if (opts.engine === 'kokoro') {
@@ -6283,7 +6289,7 @@ async function mockLoadSidecar(
 }
 
 async function mockUnloadSidecar(
-  opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
+  opts: { engine?: 'coqui' | 'kokoro' | 'qwen'; model?: string } = {},
 ): Promise<ModelControlResult> {
   await wait(40);
   if (opts.engine === 'kokoro') {

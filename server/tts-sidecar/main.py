@@ -1042,6 +1042,38 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     return "cpu"
 
 
+def cosine_distance(a: Any, b: Any) -> float:
+    """Cosine distance between two embedding vectors (pure numpy, no weights).
+
+    Returns 0.0 for identical vectors and 1.0 for orthogonal ones.  The inputs
+    are promoted to float64 to match the precision used by the spike metrics and
+    avoid float32 cancellation noise in near-identical embeddings."""
+    a = np.asarray(a, np.float64).ravel()
+    b = np.asarray(b, np.float64).ravel()
+    denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1.0
+    return float(1.0 - (a @ b) / denom)
+
+
+def _resample24k(wav: Any, sr: int) -> "np.ndarray":
+    """Return a float32 mono array at 24 kHz — the sample rate expected by
+    QwenEngine._base.model.extract_speaker_embedding.
+
+    Uses nearest-sample resampling (integer index stepping) so the helper
+    stays dependency-free (no librosa/torchaudio).  The ECAPA speaker encoder
+    is robust to this coarse resampling; all we need is a comparable
+    representation on *both* clips for a relative distance metric."""
+    a = np.asarray(wav, dtype=np.float32).ravel()
+    if int(sr) == 24000:
+        return a
+    idx = np.arange(0, len(a), sr / 24000.0).astype(np.int64)
+    idx = idx[idx < len(a)]
+    return a[idx]
+
+
+class VoiceNotDesignedError(RuntimeError):
+    """Base voice has no cached .pt — design it before minting a variant."""
+
+
 class QwenEngine(Engine):
     """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
 
@@ -1087,6 +1119,13 @@ class QwenEngine(Engine):
     BASE_MODEL = os.environ.get(
         "QWEN_BASE_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
     )
+    # 1.7B-Base model — larger resident synth model needed for the anchored
+    # emotion-variant workflow (fs-55). Loaded on demand via /load {model:"1.7b"}
+    # or eagerly via PRELOAD_QWEN_BASE17=1. Distinct from the 0.6B-Base (clone
+    # synth) and the 1.7B-VoiceDesign (transient, design-only).
+    BASE17_MODEL = os.environ.get(
+        "QWEN_BASE_17B_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    )
     # Voice-design model — produces the reference clip from a persona. There is
     # no confirmed 0.6B VoiceDesign at time of writing, so default to the 1.7B
     # one; loaded transiently during design only. Override via env once a 0.6B
@@ -1105,7 +1144,8 @@ class QwenEngine(Engine):
     )
 
     def __init__(self) -> None:
-        self._base: Any = None  # resident clone/synth model
+        self._base: Any = None  # resident clone/synth model (0.6B-Base)
+        self._base17: Any = None  # resident 1.7B-Base model (fs-55 variant workflow)
         self._design: Any = None  # transient voice-design model
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
@@ -1147,6 +1187,10 @@ class QwenEngine(Engine):
         # dtype state → every later forward dies with "expected mat1 and mat2 to
         # have the same dtype, float != BFloat16". Double-checked inside.
         self._base_load_lock = threading.Lock()
+        # Same pattern for the 1.7B-Base single-flight load (fs-55). Mirrors
+        # _base_load_lock above; separate lock so a 0.6B-Base load and a
+        # 1.7B-Base load can proceed in parallel if both are needed at once.
+        self._base17_load_lock = threading.Lock()
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -1295,6 +1339,138 @@ class QwenEngine(Engine):
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
                 log.info("Qwen Base loaded.")
+
+    def _ensure_base17_loaded(self) -> None:
+        """Load the 1.7B-Base model (fs-55 anchored variant workflow).
+
+        Mirrors `_ensure_base_loaded` with its own single-flight lock so a
+        0.6B-Base load and a 1.7B-Base load can proceed concurrently if both
+        are needed at once. Double-checked inside to avoid a second copy."""
+        if self._base17 is not None:
+            return
+        with self._base17_load_lock:
+            if self._base17 is None:
+                self._ensure_device_resolved()
+                log.info(
+                    "Loading Qwen 1.7B-Base model=%s on %s …",
+                    self.BASE17_MODEL, self._device,
+                )
+                self._base17 = self._load_qwen_model(self.BASE17_MODEL)
+                log.info("Qwen 1.7B-Base loaded.")
+
+    def unload_base17(self) -> None:
+        """Drop the 1.7B-Base model and free VRAM. Idempotent.
+
+        Mirrors `unload` but targets only the 1.7B-Base. Acquires `_synth_lock`
+        before nulling — same rationale as `unload` (prevents a concurrent
+        synth forward from seeing a null mid-generate)."""
+        with self._synth_lock:
+            self._base17 = None
+        _reclaim_host_and_vram()
+
+    def _icl_instruct_synth(
+        self,
+        prompt_items: list,
+        text: str,
+        instruct: str,
+        lang: str,
+    ) -> "tuple[Any, int]":
+        """Synth `text` via the 1.7B-Base raw `model.generate()` bypass.
+
+        Combines a voice-clone ICL prompt (from `prompt_items`, derived from the
+        base voice's stored `.pt`) with an instruct clause so the model performs
+        `text` in the emotion/style described by `instruct`.  The public
+        `qwen_tts` wrapper never wires these two additive branches together, so
+        we call `self._base17.model.generate()` directly.
+
+        The call sequence mirrors `modeling_qwen3_tts.py` lines 2076-2080 +
+        2237 in qwen_tts 0.1.1 — **pin `qwen-tts==0.1.1`** and re-verify the
+        private method signatures before bumping (fs-55 guard test
+        `test_qwen_tts_pinned_for_raw_bypass`).
+
+        Requires `_base17` to be loaded before calling (the caller is
+        responsible via `_ensure_base17_loaded()`).
+
+        `ref_code=None` on a prompt item skips the ICL trim (the "trim" strips
+        the reference audio from the decoded output so only the generation
+        remains). When ref_code is a real tensor (GPU path, tested by Task 0's
+        instruct_smoke.py), `torch.cat` prepends it so the tokenizer can decode
+        it then the trim cuts it back off. The non-GPU unit test passes
+        ref_code=None to skip this branch cleanly."""
+        import torch  # noqa: PLC0415
+
+        w = self._base17
+        m = w.model
+
+        vcp = w._prompt_items_to_voice_clone_prompt(prompt_items)
+        input_ids = w._tokenize_texts([w._build_assistant_text(text)])
+
+        rt = getattr(prompt_items[0], "ref_text", None)
+        ref_ids = [w._tokenize_texts([w._build_ref_text(rt)])[0]] if rt else [None]
+
+        instruct_ids = w._tokenize_texts([w._build_instruct_text(instruct)])
+
+        gk = w._merge_generate_kwargs()
+
+        with torch.no_grad():
+            codes, _ = m.generate(
+                input_ids=input_ids,
+                ref_ids=ref_ids,
+                instruct_ids=instruct_ids,
+                voice_clone_prompt=vcp,
+                languages=[lang],
+                non_streaming_mode=True,
+                **gk,
+            )
+
+        # ICL trim: prepend the ref_code tokens so the decoder produces the
+        # reference clip before the generation, then cut those samples off —
+        # leaving only the instructed generation. Skip when ref_code is None
+        # (non-GPU unit test) or when codes is a bare scalar sentinel.
+        rcl = vcp.get("ref_code")
+        if rcl and rcl[0] is not None and hasattr(codes[0], "shape"):
+            cfd = [
+                torch.cat([rcl[i].to(c.device), c], dim=0)
+                for i, c in enumerate(codes)
+            ]
+        else:
+            cfd = codes
+
+        wavs, sr = m.speech_tokenizer.decode([{"audio_codes": c} for c in cfd])
+        wav = wavs[0]
+
+        # Trim the reconstructed reference prefix from the waveform.
+        if rcl and rcl[0] is not None and hasattr(cfd[0], "shape"):
+            total = max(int(cfd[0].shape[0]), 1)
+            ref_len = int(rcl[0].shape[0])
+            cut = int(ref_len / total * wav.shape[0])
+            wav = wav[cut:]
+
+        return wav, int(sr)
+
+    def speaker_distance(
+        self,
+        wav_a: Any,
+        sr_a: int,
+        wav_b: Any,
+        sr_b: int,
+    ) -> float:
+        """Cosine distance between two audio clips in speaker-embedding space.
+
+        Resamples both clips to 24 kHz (the sample rate asserted by
+        extract_speaker_embedding), extracts embeddings from the resident 0.6B
+        Base model, and returns cosine_distance(embed_a, embed_b).
+
+        0.0 means the clips sound like the same speaker; 1.0 means maximally
+        different.  Used by the fs-55 identity regression to detect drift
+        between the anchored reference and an emotion-variant synthesis.
+
+        Requires the 0.6B Base model to be loaded (`_ensure_base_loaded`)."""
+        self._ensure_base_loaded()
+        m = self._base.model
+        ea = m.extract_speaker_embedding(audio=_resample24k(wav_a, sr_a), sr=24000)
+        eb = m.extract_speaker_embedding(audio=_resample24k(wav_b, sr_b), sr=24000)
+        return cosine_distance(ea.detach().cpu().float().numpy(), eb.detach().cpu().float().numpy())
 
     def _ensure_design_loaded(self) -> None:
         if self._design is None:
@@ -1605,6 +1781,106 @@ class QwenEngine(Engine):
         finally:
             self._design_in_flight -= 1
 
+    def mint_variant(
+        self,
+        base_voice_id: str,
+        variant_voice_id: str,
+        emotion_instruct: str,
+        language: Optional[str],
+        calibration_text: Optional[str],
+        voice_uuid: Optional[str] = None,
+    ) -> "SynthResult":
+        """Mint an emotion variant anchored to `base_voice_id`'s identity.
+
+        Decodes the base `.pt`'s `ref_code` through the 1.7B-Base model,
+        re-derives an ICL prompt (preserving the base speaker identity), applies
+        `emotion_instruct` via instruct-synth, then distils the result to a new
+        0.6B clone prompt saved as `variant_voice_id`.
+
+        Raises `VoiceNotDesignedError` if the base `.pt` is absent — design
+        the base voice first via `design_voice`.
+
+        The audition preview speaks `calibration_text` (or `CALIBRATION_TEXT`)
+        in the new variant voice."""
+        import torch  # type: ignore
+
+        lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
+        ref_text = self.CALIBRATION_TEXT
+        audition_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
+
+        base_pt, _base_json = self._voice_paths(base_voice_id)
+        if not os.path.isfile(base_pt):
+            raise VoiceNotDesignedError(
+                f"base voice '{base_voice_id}' not designed (no {base_pt})."
+            )
+        base_prompt, _b, _ = self._load_voice_prompt(base_voice_id)
+        base_items = base_prompt if isinstance(base_prompt, list) else [base_prompt]
+        base_item = base_items[0]
+
+        # --- 1.7B phase: decode ref_code from base identity → ICL re-derive ---
+        # Evict Kokoro before the 1.7B load (mirrors design_voice lines ~1704-1708).
+        with _VD_KOKORO.design():
+            kok = ENGINES.get("kokoro")
+            if kok is not None and hasattr(kok, "unload"):
+                kok.unload()
+            self._ensure_base17_loaded()
+            with self._synth_lock:
+                self._ensure_base17_loaded()
+                rc = base_item.ref_code
+                rc = rc.to(self._device) if hasattr(rc, "to") else rc
+                ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+                    [{"audio_codes": rc}]
+                )
+                icl = self._base17.create_voice_clone_prompt(
+                    ref_audio=(ref_wavs[0], ref_sr), ref_text=ref_text
+                )
+                icl = icl if isinstance(icl, list) else [icl]
+                emo_wav, emo_sr = self._icl_instruct_synth(icl, ref_text, emotion_instruct, lang)
+        self.unload_base17()  # one-heavy-model invariant
+
+        # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
+        with self._synth_lock:
+            self._ensure_base_loaded()
+            prompt = self._base.create_voice_clone_prompt(
+                ref_audio=(emo_wav, emo_sr), ref_text=ref_text
+            )
+        os.makedirs(self._voices_dir, exist_ok=True)
+        pt_path, json_path = self._voice_paths(variant_voice_id)
+        torch.save(prompt, pt_path)
+        import json as _json
+
+        with open(json_path, "w", encoding="utf-8") as fh:
+            _json.dump(
+                {
+                    "voiceId": variant_voice_id,
+                    "voiceUuid": voice_uuid,
+                    "instruct": emotion_instruct,
+                    "language": lang,
+                    "refText": ref_text,
+                    "baseModel": self.BASE_MODEL,
+                    "designModel": self.BASE17_MODEL,
+                    "anchoredTo": base_voice_id,
+                    "mintMethod": "anchored-icl-instruct",
+                },
+                fh,
+                ensure_ascii=False,
+                indent=2,
+            )
+        log.info(
+            "Minted anchored variant '%s' from base '%s' (instruct=%r).",
+            variant_voice_id, base_voice_id, emotion_instruct[:80],
+        )
+        with self._cache_lock:
+            self._prompt_cache.pop(variant_voice_id, None)
+
+        # audition preview — speak the calibration line in the new variant voice
+        with self._synth_lock:
+            self._ensure_base_loaded()
+            wavs, sr = self._base.generate_voice_clone(
+                text=[audition_text], language=[lang], voice_clone_prompt=prompt
+            )
+        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
         """Return (clone_prompt, language, cache_hit) for a designed voice.
 
@@ -1648,10 +1924,64 @@ class QwenEngine(Engine):
             self._prompt_cache[voice] = (prompt, lang)
         return prompt, lang, False
 
+    def _load_voice_prompt_17b(self, voice: str) -> tuple[Any, str, bool]:
+        """Return (clone_prompt_17b, language, cache_hit) for a designed voice,
+        using the 1.7B-Base model's native prompt format.
+
+        Cache key is `<voice>__1.7b` — stored as `<voice>__1.7b.pt` alongside
+        the standard 0.6B prompt.  On a cache MISS the 0.6B prompt's `ref_code`
+        is decoded through the 1.7B-Base's speech_tokenizer, re-derived as a
+        1.7B-native clone prompt via `create_voice_clone_prompt`, and saved so
+        subsequent calls are cache hits.
+
+        Requires `_base17` to already be loaded before calling (the caller is
+        responsible via `_ensure_base17_loaded()`).
+
+        Language is inherited from the base voice's manifest — the same language
+        used for the 0.6B path."""
+        import torch  # type: ignore
+
+        cache_key = f"{voice}__1.7b"
+        with self._cache_lock:
+            cached = self._prompt_cache.get(cache_key)
+        if cached is not None:
+            prompt, lang = cached
+            return prompt, lang, True
+
+        # Load the base (0.6B) prompt to get ref_code + language.
+        base_items, lang, _ = self._load_voice_prompt(voice)
+        base_items = base_items if isinstance(base_items, list) else [base_items]
+        base_item = base_items[0]
+
+        # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
+        # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
+        rc = base_item.ref_code
+        rc = rc.to(self._device) if hasattr(rc, "to") else rc
+        ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+            [{"audio_codes": rc}]
+        )
+        prompt = self._base17.create_voice_clone_prompt(
+            ref_audio=(ref_wavs[0], ref_sr), ref_text=base_item.ref_text
+        )
+
+        # Persist to disk so re-runs and restarts skip the derivation step.
+        pt_path, _json_path = self._voice_paths(cache_key)
+        os.makedirs(self._voices_dir, exist_ok=True)
+        torch.save(prompt, pt_path)
+        with self._cache_lock:
+            self._prompt_cache[cache_key] = (prompt, lang)
+        log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
+        return prompt, lang, False
+
     def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
         """`voice` is a designed voiceId. Loads its cached clone prompt and
         reuses it — identical identity across the book. Fails fast (no
-        catalog fallback) if the voice hasn't been designed."""
+        catalog fallback) if the voice hasn't been designed.
+
+        When `model` is ``'1.7b'`` the synthesis runs through the resident
+        1.7B-Base model with a lazily derived native prompt (cached as
+        ``<voice>__1.7b.pt``).  The 0.6B path is used for all other model
+        values."""
         # Leaving design mode: a real synth means generation/sampling, not
         # designing — free the heavy VoiceDesign model so it can't squeeze
         # generation VRAM. Auditions inside design_voice use _base directly
@@ -1660,6 +1990,35 @@ class QwenEngine(Engine):
         # lock; it is non-reentrant).
         if self._design is not None:
             self.unload_design()
+
+        if model == "1.7b":
+            # ── 1.7B-Base path (fs-55 Quality tier) ──────────────────────────
+            # Ensure the 1.7B-Base model is resident before deriving the prompt.
+            self._ensure_base17_loaded()
+            load_start = time.perf_counter()
+            prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
+            load_ms = (time.perf_counter() - load_start) * 1000.0
+
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock (same rationale as the 0.6B path).
+                self._ensure_base17_loaded()
+                wavs, sr = self._base17.generate_voice_clone(
+                    text=[text], language=[lang], voice_clone_prompt=prompt
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+
+            audio = wavs[0]
+            audio_ms = _audio_duration_ms(audio, int(sr))
+            log.info(
+                "qwen synth (1.7b): voice=%s text_len=%d cache=%s load_ms=%.1f "
+                "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+                voice, len(text), "hit" if cache_hit else "miss", load_ms,
+                gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+            )
+            return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+
+        # ── 0.6B-Base path (default) ──────────────────────────────────────────
         # Resolve the voice prompt first so an undesigned voice still fails
         # fast WITHOUT paying the (heavy) Base-model load.
         load_start = time.perf_counter()
@@ -1703,6 +2062,11 @@ class QwenEngine(Engine):
           - each sentence is an INDEPENDENT sequence (not concatenated text) →
             no shared decode context, so no mid-chunk voice drift.
 
+        A batch must be SINGLE-MODEL: the Node partition (synthesise-chapter.ts)
+        ensures 1.7B and 0.6B groups never share a batch (the prompt tensor
+        shapes differ between models; mixing would cause a dim mismatch inside
+        generate_voice_clone).
+
         Fails fast (RuntimeError naming the item index) if any voice hasn't
         been designed — the whole batch fails and the caller retries / fails
         the chapter exactly as a single call would."""
@@ -1718,45 +2082,80 @@ class QwenEngine(Engine):
         texts: list[str] = []
         langs: list[str] = []
         prompts: list[Any] = []
-        for i, item in enumerate(items):
-            voice = item.get("voice")
-            text = item.get("text")
-            if not isinstance(voice, str) or not voice:
-                raise RuntimeError(f"batch item {i}: `voice` is required.")
-            if not isinstance(text, str) or not text.strip():
-                raise RuntimeError(f"batch item {i}: `text` is required.")
-            try:
-                prompt, lang, _cache_hit = self._load_voice_prompt(voice)
-            except RuntimeError as e:
-                raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
-            texts.append(text)
-            langs.append(lang)
-            # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
-            # (qwen_tts create_voice_clone_prompt's return shape), normally
-            # length 1. generate_voice_clone wants a FLAT prompt-item list with
-            # one item per text — it does `[it.ref_code for it in items]`
-            # internally. Appending the per-voice list verbatim builds a
-            # list-of-LISTS, so `it` is a list → "'list' object has no attribute
-            # 'ref_code'". Flatten so prompt item i lines up with text i. (The
-            # single /synthesize path passes the whole length-1 list for its one
-            # text, which is why it never tripped this.)
-            prompts.extend(prompt if isinstance(prompt, list) else [prompt])
-        load_ms = (time.perf_counter() - load_start) * 1000.0
 
-        self._ensure_base_loaded()
-        # Serialise the forward — see `_synth_lock` in __init__. Without this,
-        # two concurrent batches of different sizes (e.g. a full 8 overlapping a
-        # 7-item remainder, which GPU_VRAM_BUDGET>1 schedules in parallel) race
-        # on shared model state → "size of tensor a (8) must match tensor b (7)".
-        gen_start = time.perf_counter()
-        with self._synth_lock:
-            # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
-            # to null `_base`; see synthesize(). No-op on the warm path.
+        if model == "1.7b":
+            # ── 1.7B-Base batch path (fs-56 Quality tier) ────────────────────
+            # Ensure the 1.7B-Base model is resident before deriving any prompt.
+            # Prompt derivation must happen BEFORE the _synth_lock so we don't
+            # hold the synth lock during potentially slow prompt loading.
+            self._ensure_base17_loaded()
+            for i, item in enumerate(items):
+                voice = item.get("voice")
+                text = item.get("text")
+                if not isinstance(voice, str) or not voice:
+                    raise RuntimeError(f"batch item {i}: `voice` is required.")
+                if not isinstance(text, str) or not text.strip():
+                    raise RuntimeError(f"batch item {i}: `text` is required.")
+                try:
+                    prompt, lang, _cache_hit = self._load_voice_prompt_17b(voice)
+                except RuntimeError as e:
+                    raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+                texts.append(text)
+                langs.append(lang)
+                # Flatten per-voice prompt-item list (same rationale as the 0.6B
+                # path below; see comment there for the list-of-lists danger).
+                prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+            load_ms = (time.perf_counter() - load_start) * 1000.0
+
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock (same rationale as synthesize()).
+                self._ensure_base17_loaded()
+                wavs, sr = self._base17.generate_voice_clone(
+                    text=texts, language=langs, voice_clone_prompt=prompts
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+        else:
+            # ── 0.6B-Base batch path (default) ───────────────────────────────
+            for i, item in enumerate(items):
+                voice = item.get("voice")
+                text = item.get("text")
+                if not isinstance(voice, str) or not voice:
+                    raise RuntimeError(f"batch item {i}: `voice` is required.")
+                if not isinstance(text, str) or not text.strip():
+                    raise RuntimeError(f"batch item {i}: `text` is required.")
+                try:
+                    prompt, lang, _cache_hit = self._load_voice_prompt(voice)
+                except RuntimeError as e:
+                    raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+                texts.append(text)
+                langs.append(lang)
+                # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
+                # (qwen_tts create_voice_clone_prompt's return shape), normally
+                # length 1. generate_voice_clone wants a FLAT prompt-item list with
+                # one item per text — it does `[it.ref_code for it in items]`
+                # internally. Appending the per-voice list verbatim builds a
+                # list-of-LISTS, so `it` is a list → "'list' object has no attribute
+                # 'ref_code'". Flatten so prompt item i lines up with text i. (The
+                # single /synthesize path passes the whole length-1 list for its one
+                # text, which is why it never tripped this.)
+                prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+            load_ms = (time.perf_counter() - load_start) * 1000.0
+
             self._ensure_base_loaded()
-            wavs, sr = self._base.generate_voice_clone(
-                text=texts, language=langs, voice_clone_prompt=prompts
-            )
-        gen_ms = (time.perf_counter() - gen_start) * 1000.0
+            # Serialise the forward — see `_synth_lock` in __init__. Without this,
+            # two concurrent batches of different sizes (e.g. a full 8 overlapping a
+            # 7-item remainder, which GPU_VRAM_BUDGET>1 schedules in parallel) race
+            # on shared model state → "size of tensor a (8) must match tensor b (7)".
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
+                # to null `_base`; see synthesize(). No-op on the warm path.
+                self._ensure_base_loaded()
+                wavs, sr = self._base.generate_voice_clone(
+                    text=texts, language=langs, voice_clone_prompt=prompts
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
         # Hard invariant: one wav per input item, in order. A mismatch means a
         # library API drift — fail loudly rather than silently misalign audio
         # with sentences (which would scramble the chapter).
@@ -1777,9 +2176,9 @@ class QwenEngine(Engine):
         audio_ms = sum(_audio_duration_ms(w, int(sr)) for w in wavs)
         n_voices = len({item.get("voice") for item in items})
         log.info(
-            "qwen batch synth: items=%d voices=%d text_len=%d load_ms=%.1f "
+            "qwen batch synth: model=%s items=%d voices=%d text_len=%d load_ms=%.1f "
             "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
-            len(items), n_voices, sum(len(t) for t in texts), load_ms,
+            model, len(items), n_voices, sum(len(t) for t in texts), load_ms,
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
         pcms = [_float_audio_to_int16_le(w) for w in wavs]
@@ -2736,6 +3135,23 @@ async def _preload_default_engines() -> None:
     else:
         log.info("PRELOAD_QWEN is not set — Qwen warms on demand via POST /load.")
 
+    # Qwen 1.7B-Base: opt-in via PRELOAD_QWEN_BASE17=1 (off by default).
+    # Needed for the anchored emotion-variant workflow (fs-55). A second
+    # always-resident engine would break the 8 GB VRAM budget, so this is
+    # opt-in — the operator enables it when they want the 1.7B always ready.
+    if _parse_bool(os.environ.get("PRELOAD_QWEN_BASE17"), False):
+        qwen = ENGINES.get("qwen")
+        if isinstance(qwen, QwenEngine):
+            try:
+                log.info("Preloading Qwen 1.7B-Base at startup (PRELOAD_QWEN_BASE17=1)…")
+                await asyncio.to_thread(qwen._ensure_base17_loaded)
+                log.info("Qwen 1.7B-Base preload complete.")
+            except Exception as e:
+                log.warning(
+                    "Qwen 1.7B-Base preload failed (%s); warms on demand via /load model=1.7b.",
+                    e,
+                )
+
 
 def _qwen_package_installed() -> bool:
     """True if the `qwen_tts` package is importable WITHOUT importing it (no
@@ -3000,10 +3416,12 @@ def health() -> dict[str, Any]:
     # `_base is not None` is "ready to synth" (the resident clone model);
     # the transient VoiceDesign model isn't surfaced (it's a creation-time detail).
     qwen_loaded = False
+    qwen_base17_loaded = False
     qwen_loading = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
         qwen_loaded = qwen._base is not None
+        qwen_base17_loaded = qwen._base17 is not None
         qwen_loading = qwen._loading
     # Install-state (distinct from load-state): lets the Node proxy tell
     # "Qwen not installed" apart from "installed but cold", which drives the
@@ -3033,6 +3451,7 @@ def health() -> dict[str, Any]:
         "kokoro_loaded": kokoro_loaded,
         "kokoro_loading": kokoro_loading,
         "qwen_loaded": qwen_loaded,
+        "qwen_base17_loaded": qwen_base17_loaded,
         "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
@@ -3195,6 +3614,24 @@ async def load_model(req: Request) -> JSONResponse:
             return JSONResponse(
                 {"status": "error", "error": "qwen engine missing"}, status_code=500
             )
+        qwen_model_sel = body.get("model")
+        if qwen_model_sel == "1.7b":
+            # 1.7B-Base variant (fs-55 anchored emotion workflow). Same
+            # single-flight pattern as the 0.6B branch; uses _base17 sentinel.
+            if qwen._base17 is not None:
+                return JSONResponse({"status": "ready"})
+            async with qwen._load_lock:
+                if qwen._base17 is not None:
+                    return JSONResponse({"status": "ready"})
+                qwen._loading = True
+                try:
+                    await asyncio.to_thread(qwen._ensure_base17_loaded)
+                except Exception as e:
+                    return error_response(e, log, status=500)
+                finally:
+                    qwen._loading = False
+            return JSONResponse({"status": "ready"})
+        # Default (no model or model != "1.7b"): warm the resident 0.6B-Base.
         if qwen._base is not None:
             return JSONResponse({"status": "ready"})
         async with qwen._load_lock:
@@ -3266,7 +3703,11 @@ async def unload_model(req: Request) -> JSONResponse:
     if engine_id == "qwen":
         qwen = ENGINES.get("qwen")
         if isinstance(qwen, QwenEngine):
-            await asyncio.to_thread(qwen.unload)
+            qwen_model_sel = body.get("model")
+            if qwen_model_sel == "1.7b":
+                await asyncio.to_thread(qwen.unload_base17)
+            else:
+                await asyncio.to_thread(qwen.unload)
         return JSONResponse({"status": "idle"})
 
     coqui = ENGINES.get("coqui")
@@ -3370,6 +3811,62 @@ async def qwen_design_voice(req: Request) -> Response:
         )
     except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
+
+    return Response(
+        content=result.pcm,
+        media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
+        headers={"X-Sample-Rate": str(result.sample_rate)},
+    )
+
+
+@app.post("/qwen/mint-variant")
+async def qwen_mint_variant(req: Request) -> Response:
+    """Mint an emotion variant anchored to an existing base voice and return an
+    audition preview (PCM, same wire shape as /synthesize).
+
+    Body: `{ baseVoiceId, variantVoiceId, emotionInstruct, language?,
+    calibrationText?, voiceUuid? }`. `baseVoiceId` must have been designed first
+    via POST /qwen/design-voice; `emotionInstruct` is the natural-language emotion
+    modifier (e.g. "Delivered angrily, with raised intensity and edge.").
+
+    Returns 409 when `baseVoiceId` has no cached embedding (design it first)."""
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+    base_voice_id = body.get("baseVoiceId")
+    variant_voice_id = body.get("variantVoiceId")
+    emotion_instruct = body.get("emotionInstruct")
+    language = body.get("language")
+    calibration_text = body.get("calibrationText")
+    voice_uuid = body.get("voiceUuid") if isinstance(body.get("voiceUuid"), str) else None
+    if not isinstance(base_voice_id, str) or not base_voice_id.strip():
+        raise HTTPException(status_code=400, detail="`baseVoiceId` is required.")
+    if not isinstance(variant_voice_id, str) or not variant_voice_id.strip():
+        raise HTTPException(status_code=400, detail="`variantVoiceId` is required.")
+    if not isinstance(emotion_instruct, str) or not emotion_instruct.strip():
+        raise HTTPException(status_code=400, detail="`emotionInstruct` is required.")
+
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine):
+        return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
+
+    try:
+        result = await asyncio.to_thread(
+            qwen.mint_variant,
+            base_voice_id.strip(),
+            variant_voice_id.strip(),
+            emotion_instruct.strip(),
+            language if isinstance(language, str) else None,
+            calibration_text if isinstance(calibration_text, str) else None,
+            voice_uuid,
+        )
+    except VoiceNotDesignedError as exc:
+        log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Exception:
+        log.exception("/qwen/mint-variant failed (baseVoiceId=%s)", base_voice_id)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
 
     return Response(

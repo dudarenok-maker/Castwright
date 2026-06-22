@@ -43,12 +43,19 @@ A new ear for a fault the word- and loudness-checks can't hear.
 - **Per-character 3-tier verdict** — severe / inconclusive / voice-match against each character's *own* clean-render thresholds (not a single global cosine), calibrated and pinned on real on-box renders with an operator listen (27/27 extreme-tail flags were real drift, 0 false positives across two series) (#987).
 - **Detection free, auto-fix opt-in + gated** — the issues outline is free; the acoustic auto-repair (`qa.speaker.autoRepair`, default off) re-renders a flagged segment and re-embeds with a margin-based accept, and is gated behind Cast Pass entitlement when hosted (#987, #990).
 
+### 🎭 Truer emotion variants + a selectable Quality voice tier (new) — fs-55 / fs-56
+Qwen character voices keep their identity when they perform emotion, and a higher-quality tier is a click away.
+
+- **Emotion variants that still sound like the character** — angry / sad / whisper and the rest are now *minted from the character's own voice* (decode the base voice's reference codes → re-derive on the 1.7B model → instruct the emotion → distil back to the fast 0.6B), instead of being independently re-sampled by VoiceDesign. The drift where an emotion variant became a different-sounding voice is gone — measured at **0.014 ECAPA cosine distance** from the base (threshold 0.30), operator-confirmed by ear (#1008, closes fs-55).
+- **Selectable 1.7B "Quality" tier per character** — a new `qwen3-tts-1.7b` engine option (cast voice picker → "Higher quality (1.7B)") routes that character's synthesis through the larger, more expressive Qwen model on both the single and batch render paths, with a lazy per-voice prompt cache. The fast 0.6B model stays the default; the 1.7B loads on demand (`PRELOAD_QWEN_BASE17` keeps it warm) and is offloaded under the one-heavy-model-at-a-time VRAM rule (#1008).
+- **Re-mint existing books** — `scripts/remint-anchored-variants.mjs` re-mints already-designed (drifted) emotion variants through the new anchored pipeline (#1008).
+
 ---
 
 ## 🏗️ Under the hood
 
 - **Optional GPU path for the drift embed (srv-47)** — `SPK_DEVICE=cuda` is now *safe* to set: weighted-VRAM-semaphore-gated (like the ASR engine), idle-evicting (default 120 s), with load-time CPU degrade/demote and an `/embed` poison fence that now covers the model load. CPU stays the hard default; a one-time WARN fires if cuda is set under a GPU budget < 2, where the embed would serialise behind synth and run slower than the free CPU path (#1003).
-- **Design specs (not yet shipped)** — expressive-TTS Qwen instruct tiers (#1002), faster rendering via a Qwen Code2Wav `torch.compile` codec path (side-19, #989), and two parked next-gen engine designs; plus backlog triage, a README claims block, and srv-36 ship-notes / spec housekeeping (#990, #994, #995, #980, #971, #970).
+- **Design specs (not yet shipped)** — the remaining expressive-TTS tiers (per-line instruct, non-verbal sounds, LLM script review; specced in #1002 — the anchored-variant fix + 1.7B Quality tier from that spec shipped above in #1008), faster rendering via a Qwen Code2Wav `torch.compile` codec path (side-19, #989), and two parked next-gen engine designs; plus backlog triage, a README claims block, and srv-36 ship-notes / spec housekeeping (#990, #994, #995, #980, #971, #970).
 
 ---
 

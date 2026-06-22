@@ -37,6 +37,14 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
+class _FakeTokenizerStub:
+    """Stand-in for model.speech_tokenizer used by _icl_instruct_synth (Task 2).
+    decode() returns a flat-zero 24 kHz clip — same shape as the real decode."""
+
+    def decode(self, codes: Any) -> tuple[list[Any], int]:  # type: ignore[return]
+        return [np.zeros(6000, dtype=np.float32)], 24000
+
+
 class _FakeInnerModule:
     """Stand-in for the real nn.Module at Qwen3TTSModel.model. The WRAPPER is
     not an nn.Module and has no `.to()`; only this inner object does. Faithful
@@ -46,10 +54,20 @@ class _FakeInnerModule:
     def __init__(self) -> None:
         self.device: Any = None
         self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+        # Task 2 (fs-55): tokenizer stub so _icl_instruct_synth can call
+        # m.speech_tokenizer.decode without real weights.
+        self.speech_tokenizer = _FakeTokenizerStub()
+        self.last_generate: dict[str, Any] = {}
 
     def to(self, device: Any) -> "_FakeInnerModule":
         self.device = device
         return self
+
+    def generate(self, **kwargs: Any) -> tuple[list[Any], None]:
+        """Fake raw-generate used by _icl_instruct_synth (Task 2).
+        Returns a single-element code list + None (no loss)."""
+        self.last_generate = kwargs
+        return ([np.array([1, 2, 3])], None)
 
 
 class _FakeQwenModel:
@@ -87,6 +105,28 @@ class _FakeQwenModel:
         self.clone_calls.append((text, voice_clone_prompt))
         return [np.zeros(12000, dtype=np.float32)], 24000
 
+    # ── Task 2 (fs-55): wrapper internals used by _icl_instruct_synth ────
+    # The real qwen_tts 0.1.1 wrapper has these as private helpers; the sidecar
+    # calls them directly because the public API never wires ICL+instruct together.
+
+    def _build_assistant_text(self, t: str) -> str:
+        return f"A:{t}"
+
+    def _build_ref_text(self, t: str) -> str:
+        return f"R:{t}"
+
+    def _build_instruct_text(self, t: str) -> str:
+        return f"I:{t}"
+
+    def _tokenize_texts(self, texts: list[str]) -> list[tuple[str, str]]:
+        return [("ids", s) for s in texts]
+
+    def _merge_generate_kwargs(self, **kw: Any) -> dict[str, Any]:
+        return {}
+
+    def _prompt_items_to_voice_clone_prompt(self, items: Any) -> dict[str, Any]:
+        return {"ref_code": [getattr(it, "ref_code", None) for it in items]}
+
 
 @pytest.fixture
 def fake_qwen_runtime(monkeypatch, tmp_path):
@@ -118,6 +158,9 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
     fake_torch.device = lambda d: d  # type: ignore[attr-defined]  # loader resyncs model.device
     fake_cuda = types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None)
     fake_torch.cuda = fake_cuda  # type: ignore[attr-defined]
+    # Task 2 (fs-55): _icl_instruct_synth wraps the generate call in no_grad.
+    import contextlib
+    fake_torch.no_grad = contextlib.nullcontext  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     engine = main.ENGINES["qwen"]
@@ -127,11 +170,13 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
     # singleton, so the in-memory prompt cache must be cleared too — a stale
     # entry from another test would mask a cache miss here.
     engine._base = None
+    engine._base17 = None
     engine._design = None
     engine._loading = False
     engine._prompt_cache.clear()
     yield {"dir": tmp_path / "qwen", "engine": engine}
     engine._base = None
+    engine._base17 = None
     engine._design = None
     engine._prompt_cache.clear()
 
@@ -800,3 +845,455 @@ def test_unload_is_idempotent(fake_qwen_runtime) -> None:
     engine.unload()
     assert engine._base is None
     engine.unload()  # again — still fine
+
+
+# ── 1.7B-Base loader (fs-55) ──────────────────────────────────────────────
+
+def test_ensure_base17_loaded_uses_base17_model(fake_qwen_runtime) -> None:
+    """_ensure_base17_loaded() populates _base17 with the 1.7B-Base model,
+    leaving _base (0.6B) untouched."""
+    engine = fake_qwen_runtime["engine"]
+    assert engine._base17 is None
+    engine._ensure_base17_loaded()
+    assert engine._base17 is not None
+    assert engine._base is None  # did not load the 0.6B-Base
+
+
+def test_ensure_base17_loaded_is_idempotent(fake_qwen_runtime) -> None:
+    """A second call to _ensure_base17_loaded() is a no-op (single-flight)."""
+    engine = fake_qwen_runtime["engine"]
+    load_calls: list[str] = []
+    real_load = engine._load_qwen_model
+
+    def tracking_load(model_id: str) -> Any:
+        load_calls.append(model_id)
+        return real_load(model_id)
+
+    engine._load_qwen_model = tracking_load
+    engine._ensure_base17_loaded()
+    engine._ensure_base17_loaded()  # second call — must not reload
+    assert load_calls.count(engine.BASE17_MODEL) == 1
+
+
+def test_unload_base17_clears_base17(fake_qwen_runtime) -> None:
+    """unload_base17() sets _base17 to None without touching _base."""
+    engine = fake_qwen_runtime["engine"]
+    engine._ensure_base_loaded()
+    engine._ensure_base17_loaded()
+    assert engine._base is not None
+    assert engine._base17 is not None
+    engine.unload_base17()
+    assert engine._base17 is None
+    assert engine._base is not None  # 0.6B-Base still resident
+
+
+def test_health_exposes_qwen_base17_loaded_field() -> None:
+    """/health carries qwen_base17_loaded (False on a cold engine)."""
+    client = TestClient(main.app)
+    body = client.get("/health").json()
+    assert "qwen_base17_loaded" in body
+    assert body["qwen_base17_loaded"] is False
+
+
+# weights-gated loader test — only runs when the real qwen_tts + CUDA are present
+from conftest import _qwen_weights_present
+
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_ensure_base17_loads_a_base_checkpoint() -> None:
+    """On a GPU box with weights: loads the real 1.7B-Base model,
+    confirms _base17 is populated, then unloads cleanly."""
+    eng = main.ENGINES["qwen"]
+    assert isinstance(eng, main.QwenEngine)
+    eng._ensure_base17_loaded()
+    assert eng._base17 is not None
+    assert getattr(eng._base17.model, "tts_model_type", None) == "base"
+    eng.unload_base17()
+    assert eng._base17 is None
+
+
+# ── Task 2 (fs-55): raw-generate ICL+instruct synth helper ───────────────
+
+def test_icl_instruct_synth_passes_instruct_and_clone(fake_qwen_runtime) -> None:
+    """_icl_instruct_synth() calls model.generate() with instruct_ids,
+    voice_clone_prompt, and ref_ids all populated, and returns a (wav, sr)
+    pair with the sidecar's native 24 kHz sample rate.
+
+    The test item carries ref_code=None so the ICL trim branch (torch.cat) is
+    skipped — that path requires real tensor ops and is covered by Task 0's
+    on-box instruct_smoke.py runner. Without ref_code the trim is a no-op and
+    the full generate+decode path still exercises every other branch."""
+    engine = fake_qwen_runtime["engine"]
+    # Provision a fresh fake 1.7B-Base wrapper (same class as the 0.6B fake).
+    engine._base17 = _FakeQwenModel("1.7b")
+
+    # A minimal prompt item: ref_code=None skips the decode-trim, ref_text
+    # supplies the text tokenised into ref_ids.
+    item = types.SimpleNamespace(ref_code=None, ref_text="calib")
+
+    wav, sr = engine._icl_instruct_synth([item], "Hello.", "Delivered angrily.", "English")
+
+    kw = engine._base17.model.last_generate
+    assert "instruct_ids" in kw and kw["instruct_ids"] is not None
+    assert "voice_clone_prompt" in kw
+    assert "ref_ids" in kw
+    assert sr == 24000
+    assert isinstance(wav, np.ndarray)
+
+
+# ── Task 3 (fs-55): cosine_distance pure-math helper ─────────────────────
+
+def test_cosine_distance_pure() -> None:
+    """cosine_distance is a pure numpy function — no weights, no model.
+    Identical vectors → 0.0 (self-distance); orthogonal vectors → 1.0."""
+    from main import cosine_distance
+
+    v = np.array([1.0, 0.0], np.float32)
+    assert cosine_distance(v, v) == pytest.approx(0.0, abs=1e-6)
+    assert cosine_distance(v, np.array([0.0, 1.0], np.float32)) == pytest.approx(
+        1.0, abs=1e-6
+    )
+
+
+# ── Task 2 (fs-55): qwen-tts version-pin guard ────────────────────────────
+
+def test_qwen_tts_pinned_for_raw_bypass() -> None:
+    """The raw model.generate() bypass depends on qwen_tts 0.1.x internal
+    method signatures (_build_assistant_text, _prompt_items_to_voice_clone_prompt,
+    etc.) that a major bump could break silently. Pin to 0.1.x and fail loudly
+    so a future upgrade is a conscious decision with re-verification (fs-55)."""
+    from importlib.metadata import version
+
+    assert version("qwen-tts").startswith("0.1."), (
+        "re-verify raw generate() branches before bumping qwen-tts past 0.1.x (fs-55)"
+    )
+
+
+# ── Task 4 (fs-55): anchored emotion-variant minting ─────────────────────
+
+def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypatch) -> None:
+    """mint_variant() chains: load-1.7B → decode ref_code → ICL re-derive →
+    instruct-synth → unload-1.7B → 0.6B distil → write .pt + .json.
+
+    The call-sequence assertion (`instruct_synth` BEFORE `unload17`) is the
+    core invariant: the 1.7B work must complete before the model is freed.
+    The JSON manifest must carry `anchoredTo`, `mintMethod`, and `voiceUuid`
+    so the Node side can distinguish anchored variants from independent designs.
+    """
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    # base voice exists on disk (design it via the fake path)
+    eng.design_voice("v1", "A warm narrator.", "English", None, None)
+    calls: list[str] = []
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: calls.append("load17"))
+    monkeypatch.setattr(eng, "unload_base17", lambda: calls.append("unload17"))
+    monkeypatch.setattr(
+        eng,
+        "_icl_instruct_synth",
+        lambda items, text, instr, lang: (
+            calls.append("instruct_synth"),
+            (np.zeros(6000, "float32"), 24000),
+        )[1],
+    )
+    # CRITICAL: the shared fake's create_voice_clone_prompt returns a DICT (no
+    # .ref_code), so stub _load_voice_prompt to hand back a ref_code-bearing
+    # item (ref_code=None skips the fake decode-trim cleanly). Without this,
+    # mint_variant's `base_item.ref_code` AttributeErrors.
+    import types as _types
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    # base17 wrapper needed for decode + ICL re-derive (has speech_tokenizer via Task 2's fake)
+    eng._base17 = type(eng._base)("1.7b")
+    eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, "uuid-1")
+    assert calls.index("instruct_synth") < calls.index("unload17")  # 1.7B work before unload
+    import json as _json
+    meta = _json.load(open(os.path.join(vdir, "v1__angry.json"), encoding="utf-8"))
+    assert meta["anchoredTo"] == "v1" and meta["mintMethod"] == "anchored-icl-instruct"
+    assert meta["voiceUuid"] == "uuid-1"
+
+
+def test_mint_variant_raises_when_base_absent(fake_qwen_runtime) -> None:
+    """mint_variant() raises VoiceNotDesignedError when the base .pt is absent."""
+    eng = fake_qwen_runtime["engine"]
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng.mint_variant("nope", "nope__sad", "Delivered sadly.", "English", None, None)
+
+
+# weights-gated identity regression (calibration owed on the GPU box)
+from conftest import _qwen_weights_present
+
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_minted_variant_holds_base_identity() -> None:
+    """On a GPU box with weights: base and variant share speaker identity
+    (cosine distance < 0.30 — threshold calibrated in Task 4 Step 6)."""
+    eng = main.ENGINES["qwen"]
+    assert isinstance(eng, main.QwenEngine)
+    eng.design_voice("rv1", "A warm mid-30s British female narrator.", "English", None, None)
+    eng.mint_variant("rv1", "rv1__angry", "Delivered angrily, with raised intensity and edge.", "English", None, None)
+    base, lang, _ = eng._load_voice_prompt("rv1")
+    var, _, _ = eng._load_voice_prompt("rv1__angry")
+    bw, bsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=base)
+    vw, vsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=var)
+    assert eng.speaker_distance(bw[0], bsr, vw[0], vsr) < 0.30  # threshold calibrated in Step 6
+
+
+# ── Task 5 (fs-55): POST /qwen/mint-variant HTTP surface ─────────────────
+
+def _fake_mint_variant(fake_qwen_runtime, monkeypatch):
+    """Patch QwenEngine.mint_variant on the global engine so the route tests
+    never touch the real model path. Returns the engine."""
+    engine = fake_qwen_runtime["engine"]
+    import types as _types
+
+    def _stub_mint(base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, voice_uuid=None):
+        from main import SynthResult
+        return SynthResult(pcm=b"\x00" * 48000, sample_rate=24000)
+
+    monkeypatch.setattr(engine, "mint_variant", _stub_mint)
+    return engine
+
+
+def test_mint_variant_route_returns_preview_pcm(fake_qwen_runtime, monkeypatch) -> None:
+    """Happy-path: valid body → 200 with PCM content + X-Sample-Rate header."""
+    engine = fake_qwen_runtime["engine"]
+    # Design the base voice so the route can find it (or bypass via stub).
+    engine.design_voice("v1", "A warm narrator.", "English", None)
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={
+            "baseVoiceId": "v1",
+            "variantVoiceId": "v1__angry",
+            "emotionInstruct": "Delivered angrily, with raised intensity.",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["X-Sample-Rate"] == "24000"
+    assert len(resp.content) > 0
+
+
+def test_mint_variant_route_400_missing_base_voice_id(fake_qwen_runtime, monkeypatch) -> None:
+    """Missing baseVoiceId → 400."""
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={"variantVoiceId": "v1__angry", "emotionInstruct": "angrily"},
+    )
+    assert resp.status_code == 400
+
+
+def test_mint_variant_route_400_missing_variant_voice_id(fake_qwen_runtime, monkeypatch) -> None:
+    """Missing variantVoiceId → 400."""
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={"baseVoiceId": "v1", "emotionInstruct": "angrily"},
+    )
+    assert resp.status_code == 400
+
+
+def test_mint_variant_route_400_missing_emotion_instruct(fake_qwen_runtime, monkeypatch) -> None:
+    """Missing emotionInstruct → 400."""
+    _fake_mint_variant(fake_qwen_runtime, monkeypatch)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={"baseVoiceId": "v1", "variantVoiceId": "v1__angry"},
+    )
+    assert resp.status_code == 400
+
+
+def test_mint_variant_route_409_base_absent(fake_qwen_runtime) -> None:
+    """VoiceNotDesignedError from mint_variant → 409 (base voice not designed)."""
+    client = TestClient(main.app)
+    # No base voice designed → real mint_variant raises VoiceNotDesignedError.
+    resp = client.post(
+        "/qwen/mint-variant",
+        json={
+            "baseVoiceId": "no-such-base",
+            "variantVoiceId": "no-such-base__sad",
+            "emotionInstruct": "Delivered sadly.",
+        },
+    )
+    assert resp.status_code == 409
+
+
+# ── Task 9 (fs-55): synthesize() routes model='1.7b' through 1.7B-Base ──────
+
+def test_synth_17b_calls_ensure_base17_and_derives_native_prompt(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """synthesize('1.7b', voice, text) must:
+      1. call _ensure_base17_loaded (loads the 1.7B-Base model),
+      2. derive a native 1.7B prompt via create_voice_clone_prompt on first call
+         and write it to <voice>__1.7b.pt,
+      3. REUSE the cached <voice>__1.7b.pt on the second call (no re-derive),
+      4. synth via _base17.generate_voice_clone (NOT _base).
+    """
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    # Design the base voice so _load_voice_prompt can find it.
+    eng.design_voice("tara", "A warm British narrator.", "English", None)
+
+    # Provide a ref_code-bearing item from _load_voice_prompt so _load_voice_prompt_17b
+    # can access base_item.ref_code.  (The shared fake's create_voice_clone_prompt
+    # returns a DICT, not a PromptItem, so we monkeypatch like mint_variant's test.)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+
+    # Attach a fresh 1.7B-Base fake (same class; has speech_tokenizer + create_voice_clone_prompt).
+    eng._base17 = type(eng._base)("1.7b")
+
+    ensure17_calls: list[str] = []
+    real_ensure17 = eng._ensure_base17_loaded
+    monkeypatch.setattr(
+        eng,
+        "_ensure_base17_loaded",
+        lambda: (ensure17_calls.append("called"), real_ensure17())[1],
+    )
+
+    # Reset counters after design_voice (which may call _base.generate_voice_clone
+    # for the audition preview — we only want to track the synthesize() call).
+    if eng._base is not None:
+        eng._base.clone_calls.clear()
+
+    # ── First call: cache MISS — should derive and write <voice>__1.7b.pt ─────
+    prompt_calls_before = len(eng._base17.prompt_calls)
+    res1 = eng.synthesize("1.7b", "tara", "Hello, world.")
+
+    assert len(ensure17_calls) >= 1, "_ensure_base17_loaded not called"
+    # The 1.7B native cache file must exist.
+    pt_17b = os.path.join(str(vdir), "tara__1.7b.pt")
+    assert os.path.isfile(pt_17b), f"<voice>__1.7b.pt not written ({pt_17b})"
+    # create_voice_clone_prompt was called on _base17 (derive step).
+    prompt_calls_after_first = len(eng._base17.prompt_calls)
+    assert prompt_calls_after_first > prompt_calls_before, (
+        "1.7B prompt not derived on first call"
+    )
+    # Synth used _base17, not _base.
+    assert len(eng._base17.clone_calls) == 1
+    assert eng._base is None or len(eng._base.clone_calls) == 0, (
+        "0.6B _base.generate_voice_clone should NOT be called on model='1.7b'"
+    )
+    assert isinstance(res1.pcm, bytes) and len(res1.pcm) > 0
+
+    # ── Second call: cache HIT — must NOT call create_voice_clone_prompt again ──
+    prompt_calls_before_second = len(eng._base17.prompt_calls)
+    res2 = eng.synthesize("1.7b", "tara", "Second sentence.")
+    prompt_calls_after_second = len(eng._base17.prompt_calls)
+
+    assert prompt_calls_after_second == prompt_calls_before_second, (
+        "create_voice_clone_prompt called again on cache HIT — re-derive not expected"
+    )
+    assert len(eng._base17.clone_calls) == 2, "Second synth should still call generate_voice_clone"
+    assert isinstance(res2.pcm, bytes) and len(res2.pcm) > 0
+
+
+def test_synth_17b_does_not_call_ensure_base_loaded(fake_qwen_runtime, monkeypatch) -> None:
+    """synthesize('1.7b') must NOT call _ensure_base_loaded (the 0.6B loader).
+    Only _ensure_base17_loaded should be called — the 0.6B path is unchanged."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    eng.design_voice("kira", "A teen girl.", "English", None)
+    # Clear any state from design_voice before the real assertion.
+    eng._design = None
+
+    eng._base17 = type(eng._base)("1.7b")
+
+    ensure_base_calls: list[str] = []
+    real_ensure_base = eng._ensure_base_loaded
+    monkeypatch.setattr(
+        eng,
+        "_ensure_base_loaded",
+        lambda: (ensure_base_calls.append("called"), real_ensure_base())[1],
+    )
+
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+
+    res = eng.synthesize("1.7b", "kira", "Test sentence.")
+    assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+    assert ensure_base_calls == [], (
+        "_ensure_base_loaded (0.6B loader) must NOT be called when model='1.7b'"
+    )
+
+
+def test_synth_17b_unloads_design_model_before_synth(fake_qwen_runtime, monkeypatch) -> None:
+    """When _design is resident, synthesize('1.7b') must call unload_design()
+    BEFORE acquiring _synth_lock (mirrors the 0.6B path invariant)."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    eng.design_voice("zara", "A mature narrator.", "English", None)
+
+    # Manually set _design to a non-None sentinel to simulate a resident design.
+    eng._design = _FakeQwenModel("design")
+
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+
+    unload_called: list[bool] = []
+    real_unload = eng.unload_design
+    monkeypatch.setattr(eng, "unload_design", lambda: (unload_called.append(True), real_unload())[1])
+
+    eng.synthesize("1.7b", "zara", "Hello.")
+    assert unload_called, "unload_design() not called when _design was resident"
+
+
+# weights-gated 1.7B synth integration test
+@pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
+def test_synth_17b_on_gpu_produces_audio_and_writes_cache() -> None:
+    """On a GPU box with weights: synthesize('1.7b', voice, text) produces PCM
+    audio and writes the <voice>__1.7b.pt native cache file."""
+    eng = main.ENGINES["qwen"]
+    assert isinstance(eng, main.QwenEngine)
+
+    # Design the base voice first (required for the 1.7B prompt derivation).
+    eng.design_voice("cw_gpu_17b", "A warm mid-30s British female narrator.", "English", None, None)
+
+    # Synthesise one sentence via the 1.7B path.
+    result = eng.synthesize("1.7b", "cw_gpu_17b", "The coalfall commission was underway.")
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+
+    # The 1.7B native cache file must have been written.
+    pt_17b, _ = eng._voice_paths("cw_gpu_17b__1.7b")
+    assert os.path.isfile(pt_17b), f"<voice>__1.7b.pt not found at {pt_17b}"

@@ -19,6 +19,7 @@ describe('engineForModelKey routes each model key to its engine', () => {
     ['coqui-xtts-v2', 'coqui'],
     ['kokoro-v1', 'kokoro'],
     ['qwen3-tts-0.6b', 'qwen'],
+    ['qwen3-tts-1.7b', 'qwen'],
     ['gemini-2.5-flash', 'gemini'],
     ['gemini-3.1-flash', 'gemini'],
     ['piper-en-us-medium', 'piper'],
@@ -32,6 +33,7 @@ describe('sidecarModelId', () => {
     expect(sidecarModelId('coqui-xtts-v2')).toBe('xtts_v2');
     expect(sidecarModelId('kokoro-v1')).toBe('v1');
     expect(sidecarModelId('qwen3-tts-0.6b')).toBe('0.6b');
+    expect(sidecarModelId('qwen3-tts-1.7b')).toBe('1.7b');
   });
 
   it('throws for cloud (non-local) keys', () => {
@@ -40,12 +42,13 @@ describe('sidecarModelId', () => {
 });
 
 describe('isTtsModelKey', () => {
-  it('accepts every known key incl. qwen3-tts-0.6b', () => {
+  it('accepts every known key incl. qwen3-tts-0.6b and qwen3-tts-1.7b', () => {
     const keys: TtsModelKey[] = [
       'coqui-xtts-v2',
       'piper-en-us-medium',
       'kokoro-v1',
       'qwen3-tts-0.6b',
+      'qwen3-tts-1.7b',
       'gemini-2.5-flash',
       'gemini-3.1-flash',
     ];
@@ -62,6 +65,23 @@ describe('isTtsModelKey', () => {
 describe('TTS_MODEL_LABELS', () => {
   it('has a human label for the qwen key', () => {
     expect(TTS_MODEL_LABELS['qwen3-tts-0.6b']).toBe('Qwen3-TTS 0.6B (local)');
+  });
+
+  it('has a human label for the qwen3-tts-1.7b key', () => {
+    expect(TTS_MODEL_LABELS['qwen3-tts-1.7b']).toBe('Qwen3-TTS 1.7B (local, higher quality)');
+  });
+});
+
+describe('canonicalModelKeyForEngine', () => {
+  it('preserves the qwen variant when the request is already a qwen key', () => {
+    const { canonicalModelKeyForEngine } = indexModule;
+    expect(canonicalModelKeyForEngine('qwen', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+    expect(canonicalModelKeyForEngine('qwen', 'qwen3-tts-0.6b')).toBe('qwen3-tts-0.6b');
+  });
+
+  it('falls back to qwen3-tts-0.6b when the request key is not a qwen key', () => {
+    const { canonicalModelKeyForEngine } = indexModule;
+    expect(canonicalModelKeyForEngine('qwen', 'kokoro-v1')).toBe('qwen3-tts-0.6b');
   });
 });
 

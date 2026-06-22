@@ -89,6 +89,13 @@ def test_package_installed_returns_bool():
 def test_health_includes_qwen_install_state(monkeypatch):
     monkeypatch.setattr(main, "_qwen_package_installed", lambda: True)
     monkeypatch.setattr(main, "_qwen_weights_present", lambda: True)
+    # Pin load-state: a full real-weights run can leave the Base model resident
+    # from a prior weights-gated test, which flips /health's install-state to
+    # 'loaded'. Force not-resident so this test deterministically exercises the
+    # 'ready' (pkg+weights present, cold) branch regardless of test order.
+    qwen = main.ENGINES.get("qwen")
+    if isinstance(qwen, main.QwenEngine):
+        monkeypatch.setattr(qwen, "_base", None)
     client = TestClient(main.app)
     body = client.get("/health").json()
     assert body["qwen_install_state"] in ("not-installed", "weights-missing", "ready", "loaded")
