@@ -101,9 +101,14 @@ stay open. Do not close fs-55 against this spec.
 ## 1. The central risks (all measured on this product's real series data)
 
 None are answerable from the literature; all are measured on **real on-box
-series renders** (Skulduggery: recurring characters across multiple books — the
-single-book Coalfall fixture cannot exercise cross-book). The operator's ears
-are the ground truth, as in Phase-1 calibration.
+series renders**. **On-box data reality (verified, load-bearing — corrects an
+earlier assumption):** of the rendered series, only **Keeper of the Lost Cities
+(7 books) has ≥2 Qwen-rendered books** with recurring characters. Skulduggery
+(Scepter) and Night Watch are **single rendered books**; Castwright/Coalfall are
+standalones. **So Keeper is effectively the *only* cross-book corpus on-box** —
+the spike's cross-book experiments (G1/G2/G6) are **single-series** and their
+calibration is **provisional** until a second ≥2-book Qwen series exists (§2 C-row).
+The operator's ears are the ground truth, as in Phase-1 calibration.
 
 - **R1 — cross-book stability (the existential one).** Is the same storage key's
   centroid stable *across books*, with book-to-book variance clearly narrower
@@ -144,38 +149,61 @@ are the ground truth, as in Phase-1 calibration.
 A throwaway harness (added to the existing `server/tts-sidecar/spikes/srv36/`
 spike directory used in Phase 0/1, alongside its `gates.py` / `metrics.py` /
 `calibrate.py`), operator-driven on the GPU box. **No production code, no
-settings, no events.** It over-generates / re-uses real **Qwen** series renders
-(cross-book is Qwen-only, §0) for a set of recurring characters across ≥2 books,
-embeds with the shipped ECAPA `/embed`, and measures R1–R4.
+settings, no events.** It re-uses real **Qwen** series renders (cross-book is
+Qwen-only, §0), embeds with the shipped ECAPA `/embed`, and measures R1–R4.
 
-**Calibration series ≠ validation series (anti-overfit) — with an honest caveat.**
-The Phase-0/acoustic spec §3.6 demanded out-of-sample FP/FN. **Caveat:** Phase 1
-co-fit its per-line cutoffs on **both** Skulduggery/Scepter **and** Keeper/Unlocked
-(`score.ts:39`), so neither is a pristine hold-out for those *shared per-line
-cutoffs*. Two responses: (a) the **cross-book canonical comparison is a brand-new
-operation fit on no series**, so it is genuinely out-of-sample on either even
-though the per-line band it reuses was co-fit; and (b) for the headline G5
-operator-listen FP/FN, **prefer a series not in Phase-1's calibration set** if one
-with ≥2 books is available on-box — the spike enumerates available series and
-records which were calibration vs hold-out, rather than assuming Keeper/Unlocked
-is clean. State the chosen split explicitly in the findings note.
+**Pre-registration (C4 — non-negotiable; Phase-1's own history is the warning).**
+Phase-1's `FINDINGS.md` records that its *pre-registered* F3 gate proved the wrong
+test, returned a poor EER, and was **discarded and replaced mid-spike** with a
+human-listen criterion that supported go. That is post-hoc rationalisation. To
+not repeat it, **G1 and G6 numeric thresholds are committed to `FINDINGS.md`
+*before* the spike runs** (e.g. "no-go if the G1 centroid-spread/floor ratio > X
+regardless of G6"; "G6 separation AUC ≥ Y"), and the go-conditions are evaluated
+against those committed numbers. Changing a threshold mid-spike must be logged as
+a recorded protocol amendment with its rationale, not a silent swap.
+
+**Keying caveat (C2 — the spike validates the legacy key, not the production one).**
+Every series book on-box predates srv-43's `voiceUuid` minting, so
+`qwenStorageKey` falls back to `qwen-<voiceId>` (e.g. `qwen-sophie`), **not** the
+`qwen-<voiceUuid>` the current code mints. The slug happens to be stable across
+Keeper books (same `voiceId`), so cross-book stability *is* exercised — but on the
+**legacy voiceId key**, and the `matchedFrom`-chain `voiceUuid` carry
+(`hydrate-reused-voice.ts:110`) is **assumed equivalent, not measured**. The spike
+must either re-render ≥2 Keeper books through the current voiceUuid-minting path,
+or the findings note must state plainly: *"cross-book validated on voiceId-keyed
+legacy renders; voiceUuid path assumed equivalent."*
+
+**Single-series calibration (C3).** Because Keeper is the only ≥2-book Qwen series
+(§1), G1/G2/G6 and the Branch-B **sanity-gate band are fit on one series' cast
+distribution** — weaker than Phase-1's two-series co-fit, and the
+"prefer-a-held-out-series" hedge is moot (there is no second ≥2-book Qwen series).
+Either **gate Branch B's *shipping* on G2 being recomputed across ≥2 series later**,
+or ship Branch B with the band marked **provisional/single-series** and say so.
+Phase-1 co-fit its per-line cutoffs on both Scepter and Keeper (`score.ts:39`), so
+the reused per-line band is not pristine-held-out either; the *cross-book op* is
+new (fit on no series) and so out-of-sample in that narrow sense. State the actual
+split in the findings note.
 
 | Exp | Question (risk) | What it gates |
 |---|---|---|
-| **G1 — cross-book stability** | Per storage key, cosine spread of book-A vs book-B clean-render centroids vs the within-book F1 floor. (R1) | **Kill-switch for cross-book** — wide ⇒ no-go. |
-| **G2 — seed divergence + per-voice spread** | cosine(approved-audition centroid, **each** book's empirical centroid) per storage key — both the central divergence (audition vs renders) AND the **spread of that divergence across books** (so the sanity gate (Branch B step 3) has a per-voice band to flag an *outlier* debut book, not a single point). (R2) | Whether the maturation machinery ships at all (Branch decision, §3.2) AND the sanity-gate band. |
-| **G3 — per-emotion shift** | For base voices reading emotional lines (no variant): timbre delta vs the neutral canonical. (R3) | Whether a per-emotion tolerance is needed on the base anchor. |
-| **G4 — wander existence + residual** | Monotonic slope of cosine-to-canonical over render position, above the floor; fraction of wander cases NOT already flagged by per-line/cross-book. (R4) | **Go/no-go for the wander detector.** |
-| **G5 — operator listen** | Operator audits the ECAPA-flagged cross-book mismatches (~15–20 clips, held-out series): real drift vs false positive. | The headline FP/FN; confirms R1 with human ground truth. |
-| **G6 — runtime-operation fidelity** | The *actual production op*: score **individual** book-B lines against the **book-1 (or audition) anchor** across books — not centroid-vs-centroid (G1). Confirms per-line scatter around the anchor doesn't swamp the cross-book signal even when centroids agree. | Whether the per-line cross-book check (§4.1) is viable, distinct from G1's centroid-stability necessary-condition. |
+| **G0 — same-text content control (C1, prerequisite)** | Re-render the **identical audition text** in each book's config and embed: this isolates *timbre* drift from *phonetic-content* differences. The genuine cross-book signal = G1 distance **minus** the G0 same-text floor. Without it, G1 conflates "different sentences" with "different voice." | Whether any G1 distance is even interpretable as drift. A large G0 ⇒ ECAPA is too content-sensitive here ⇒ cross-book no-go. |
+| **G1 — cross-book stability** | Per storage key, cosine spread of book-A vs book-B clean-render centroids — **interpreted only against the G0 same-text floor**, and **per-character-relative** (Phase-1 proved the absolute floor is wide, std 0.09–0.14; only per-char-relative cutoffs work), not against a single global F1 number. (R1) | **Kill-switch for cross-book** — drift-above-G0 indistinct ⇒ no-go. |
+| **G2 — seed divergence + per-voice spread** | cosine(approved-audition centroid, **each** book's empirical centroid) per storage key — central divergence AND its **spread across books** (so the sanity gate, Branch B step 3, has a per-voice band). **Single-series (Keeper) only on-box (C3).** (R2) | Whether maturation ships (Branch decision, §3.2) AND the sanity-gate band (marked provisional). |
+| **G3 — per-emotion shift** | For base voices reading emotional lines (no variant): timbre delta vs the neutral canonical, where the **neutral canonical is built from manuscript/emotion-metadata neutral-tagged lines, NOT merely gate-OK lines** (else emotional-but-ASR-clean lines contaminate the baseline and G3 under-measures the shift, M3). (R3) | Whether a per-emotion tolerance is needed on the base anchor. |
+| **G4 — wander existence + residual** | Monotonic slope of cosine-to-canonical over render position, above the floor; fraction of wander cases NOT already flagged by per-line/cross-book. (R4) | **Go/no-go for the wander detector** (prior: probably no-go — a single config renders the voice near-identically). |
+| **G5 — operator listen (BLIND, C5)** | Operator audits ~15–20 clips that are **flagged + matched, interleaved, randomized, and unlabelled** (operator does not know which are drift); FP/FN scored against the blind labels; a **second listener** on a subset where feasible. Not the primed "audit the flagged set" of Phase 1. | The headline FP/FN; confirms R1 with **unbiased** human ground truth. |
+| **G6 — runtime-operation fidelity** | The *actual production op*: score **individual** lines of a **held-out Keeper book** (one NOT used to build the G1 anchor) against the anchor — genuinely out-of-sample vs G1, not a second statistic of the same renders (I1). Confirms per-line scatter doesn't swamp the signal. | Whether the per-line cross-book check (§4.1) is viable, **independently** of G1. |
 
-**Go condition (per axis):**
-- *Cross-book ships* iff G1 floor is tight AND **G6 shows per-line scoring vs the
-  anchor separates real drift from clean across books** AND G5 confirms real,
-  human-audible drift at low FP.
+**Go condition (per axis) — evaluated against the pre-registered numbers (C4):**
+- *Cross-book ships* iff **G0 same-text floor is small** (drift is separable from
+  content) AND **G1 drift-above-G0 clears its pre-registered ratio** AND **G6
+  (held-out book) clears its pre-registered separation AUC** AND **blind G5**
+  confirms real, human-audible drift at low FP. A loose G1 cannot be rescued by
+  G6 — both pre-registered thresholds must hold.
 - *Maturation (Branch B) ships* iff G2 shows material approved-vs-empirical
-  divergence across the cast distribution (§3.2); its sanity-gate band comes from
-  G2's per-voice cross-book divergence spread.
+  divergence across the (single-series, provisional — C3) cast distribution
+  (§3.2); its sanity-gate band comes from G2's per-voice spread and ships marked
+  provisional until recomputed across ≥2 series.
 - *Per-emotion tolerance ships* iff G3 shows material base-voice emotion shift.
 - *Wander detector ships* iff G4 shows wander exists above the floor AND is
   non-redundant with per-line/cross-book.
@@ -217,11 +245,16 @@ its fallback), keyed by storage key, available from book 1 line 1 and identical
 across every book. This is the *simpler* design and the spec's preferred outcome
 — most of §3.2's complexity evaporates. **Cost note:** K renders × every Qwen
 character is real upfront GPU work on the 8 GB box, serialised against the actual
-render. K must be small (G1/G6 set it — likely 3–5), and the K **embeddings are
+render. **K reconciliation (I5):** the shipped Phase-1 audition centroid uses
+`CENTROID_K = 12` (`audition-centroid.ts:24`), NOT the 3–5 an earlier draft
+guessed. So the real upfront cost is **12 renders × cast-size** unless the spike
+shows a smaller K gives an equally stable centroid (an explicit spike output — if
+so, lower K *and re-validate stability at that K*). The K **embeddings are
 persisted once per voice-config-hash** in the canonical file — never re-rendered
 on subsequent passes (the audition cache holds a single MP3, so this is a one-time
 build-the-embeddings cost per config, not per book). The spike measures
-K × cast-size audition-render wall-time on the 8 GB box and states the ceiling.
+**K=12 × cast-size** audition-render wall-time on the 8 GB box and states the
+ceiling (the cost gate in §9 uses the real K, not 5).
 **Robustness (both branches):** a valid anchor requires **≥K_min successful
 renders**; a sidecar crash mid-build leaving a partial K **withholds** the
 canonical (the §3.2 step-3 `withheld` status → lines `inconclusive`) rather than
@@ -366,6 +399,12 @@ storage key — is the dangerous one. The contract:
 1. **The freeze single-flight + write lock is keyed by `storageKey`, NOT by
    book** (cross-book, process-global advisory lock). Two same-series books
    crossing completion in the same tick must serialise on this lock.
+   **Precondition (I3):** this is sound *only because generation is single-process*
+   (async-concurrent within one Node process; sidecar is a separate process but
+   does no canonical writes). A module-scope `Map` lock therefore suffices. If
+   generation ever moves to `worker_threads`/`cluster`/child processes, this lock
+   silently becomes a no-op and the read-merge-write race returns — so a
+   start-up assert (or test) **fails loudly if generation forks workers**.
 2. **"First-rendered-wins" tie-break is explicit:** the first book to *acquire
    the storage-key lock* at completion freezes; ties broken by lowest `bookId`.
    "Completion" remains all-story-chapters-rendered (§8), but the *winner* is
@@ -558,14 +597,16 @@ just not silent.
 ## 9. Acceptance
 
 **Spike (the deliverable even on no-go):**
-- [ ] G1–G6 run on Qwen renders of ≥2 real series; findings note committed with
-      cross-book stability vs the within-book F1 floor (G1), seed divergence +
-      per-voice cross-book *spread* → **Branch A vs B** + sanity-gate band (G2),
-      base-voice emotion shift → go / partial-no-go (G3), wander existence +
-      residual-value fraction (G4), the **runtime-operation** per-line-vs-anchor
-      separability (G6), and an operator-listen FP/FN (G5) **on the recorded
-      calibration/hold-out split (§2 caveat — prefer a series not in Phase-1's
-      co-fit set; state the split)**.
+- [ ] **Pre-registered G1/G6 thresholds committed to FINDINGS.md *before* running**
+      (C4); any mid-spike change logged as a recorded protocol amendment.
+- [ ] **G0 same-text content control** measured first (C1); G1 interpreted as
+      drift-above-G0, per-character-relative (not vs a single global floor).
+- [ ] G0–G6 on **Keeper (the only ≥2-book Qwen series on-box — C3, single-series,
+      band marked provisional)**; findings note records G2 spread, G3 (neutral
+      canonical from neutral-tagged lines), G4 residual, G6 on a **held-out Keeper
+      book**, and a **blind/interleaved/randomized G5** FP/FN (C5).
+- [ ] **Keying caveat stated (C2):** which key the spike exercised
+      (`qwen-<voiceId>` legacy vs re-rendered `qwen-<voiceUuid>`).
 - [ ] A **per-axis** `{ go | no-go }` recommendation. On full cross-book no-go:
       Phase 2 closed `wont-fix-consistency`, this spec marked `superseded`, fs-51
       confirmed unaffected.
@@ -579,7 +620,10 @@ just not silent.
       `anchorVersion`; never-auditioned voices flagged `seed: no-approval`.
 - [ ] Cross-book per-line scoring re-anchored to the canonical; **three-way**
       classifier (per-line / systematic / suspect-canonical) keyed off the sanity
-      gate, calibrated + pinned; `scope: 'series-canonical'` discriminator.
+      gate, calibrated + pinned; `scope: 'series-canonical'` discriminator. (M2:
+      the `suspect-canonical` branch is only reachable when the sanity gate
+      withholds, i.e. under Branch B — its test is unreachable / N/A until Branch B
+      ships.)
 - [ ] **Re-tune versioning** (§3.4): per-segment config-hash persisted;
       cross-book evaluated within a config-hash cohort; pre-tune books not flagged
       against the post-tune canonical.
@@ -594,9 +638,15 @@ just not silent.
 - [ ] **§3.5 concurrency contract:** storage-key-scoped (cross-book) freeze lock
       with lowest-bookId tie-break; read-merge-write on the version map; rotate
       backups; concurrently-completing sibling books re-scored against the frozen
-      canonical; debut re-score inside the book's own single-flight. A test
-      renders two same-series books concurrently and asserts one canonical, no
-      clobber, both books scored against it.
+      canonical; debut re-score inside the book's own single-flight; start-up
+      assert if generation ever forks workers (I3). **Verified by a GPU-free
+      *unit* test** (I2) — mock the synth/embed seams (the codebase already injects
+      `synthFn`/`embedFn`, `audition-centroid.ts:41`) and drive two interleaved
+      `afterChapterFinalized`-equivalent calls on one storage key, asserting
+      single-freeze + no clobber + loser-re-scored — **NOT** a GPU-bound e2e render.
+- [ ] **Re-score is no-re-embed (I4):** a unit test asserts the embed client is
+      called **zero times** during a re-score (else the "cheap CPU" cost posture is
+      unverified — a tautological "verdicts changed" test would not catch it).
 - [ ] **Cost gates from the spike:** K × cast-size audition-embed wall-time on the
       8 GB box stated + K_min freeze floor; post-freeze repair pass capped (max
       lines / wall-time) with expected repair-line count recorded at the cutoff.
@@ -609,9 +659,13 @@ just not silent.
       "all clear".
 - [ ] Calibration + operator-listen FP/FN on the recorded calibration/hold-out
       split (§2 caveat), with the split stated; cutoffs + classifier threshold
-      pinned by a normal-tier regression test; **out-of-sample cross-book FP/FN**
-      (the cross-book headline) + the **wander** residual-value fraction (G4) in
-      Ship notes.
+      pinned by a normal-tier regression test against committed fixture embeddings.
+      **Inherit Phase-0 §3.7's disclaimer verbatim (M1):** the pin guards
+      cutoff-/threshold-constant drift **only** — it does NOT re-verify calibration
+      correctness in CI (a change to the model / preprocessing / harvest is
+      invisible to normal CI); the FP/FN are a periodic manual artifact. Do not
+      claim CI-runnable calibration. **out-of-sample cross-book FP/FN** + the
+      **wander** residual-value fraction (G4) in Ship notes.
 
 ### 9.1 Suggested wave decomposition (for the plan, not binding)
 This is at least Phase-1's 15-task magnitude; the plan should wave it, not push
