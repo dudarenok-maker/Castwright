@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 date: 2026-06-22
 topic: srv-47 — optional CUDA path for the render-integrity ECAPA embed
 issue: srv-47 (#992)
@@ -279,4 +279,8 @@ arbitration).
 
 ## Ship notes
 
-_(filled at ship time)_
+**Shipped 2026-06-22** — PR #1003, merge commit `a1f58744`. Built via subagent-driven development (6 tasks + opus whole-branch review, all clean). All three components landed: Node `embed-client.ts` semaphore gate + budget WARN, sidecar `SpeakerEngine` load-time degrade/demote + idle-evict watchdog, and the R2-B `/embed` load-poison-fence fix. `SPK_DEVICE` stays `cpu` by default; `gpu.weight.spk` (default 1) + `sidecar.spkIdleTtl` (default 120) added.
+
+**On-box validation:** full `npm run verify` green including the REAL sidecar pytest (`test:sidecar` ran, not skipped); `test_speaker_embed.py` 12/12. Running the tests on a venv box caught two bugs the no-venv `py_compile` gate + reviews missed — a `from_hparams` shadowing `NameError` in the new stub helper, and two pre-existing srv-36 tests calling `SPK.embed()` without `ensure_loaded()` (failing on `main` too) — both fixed in this PR.
+
+**Owed (non-blocking, DoD §4):** operator CPU-vs-cuda ms/segment + end-to-end throughput measurement with `SEG_SPK_ENABLED=1 SPK_DEVICE=cuda GPU_VRAM_BUDGET=4` (reboot first), confirming the default-budget WARN fires. The functional path is validated; this is the perf-number step. fs-55 reuses the GPU embed substrate this lays.
