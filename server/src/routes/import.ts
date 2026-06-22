@@ -37,6 +37,8 @@ import {
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { normaliseBookLanguage } from '../tts/language.js';
+import { detectManuscriptLanguage } from '../tts/detect-language.js';
+import { supportedLanguages } from '../tts/language-registry.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/store.js';
 
@@ -123,6 +125,11 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
     };
     putStaging(entry);
 
+    const detected = detectManuscriptLanguage(entry.sourceText, {
+      author: entry.author,
+      title: entry.title,
+    });
+
     res.json({
       tempId,
       candidate: {
@@ -135,6 +142,9 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         sourceText: entry.sourceText,
         wordCount: countWords(entry.sourceText),
         byteSize: entry.byteSize,
+        language: detected.language,
+        languageSupported: detected.supported,
+        supportedLanguages: supportedLanguages(),
         chapters: entry.chapters.map((c) => ({
           id: c.id,
           title: c.title,
