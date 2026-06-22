@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseManuscript, UnsupportedFormatError, DrmProtectedError } from '../parsers/index.js';
-import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
+import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
 import { putManuscript, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
@@ -160,7 +160,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
                regex mirror. Title union (language-aware) OR short body. */
             isLikelyFrontMatter:
               isLikelyFrontMatterTitle(c.title) ||
-              (wordCount > 0 && wordCount <= 150),
+              (wordCount > 0 && wordCount <= FRONT_MATTER_WORD_THRESHOLD),
           };
         }),
       },

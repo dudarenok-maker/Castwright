@@ -15,6 +15,11 @@
 
 import { nonEnglishFrontMatterKeywords } from '../tts/language-registry.js';
 
+/* Word-count floor below which a chapter is treated as likely front-/back-matter
+   (e.g. a short Dedication or Copyright page). Mirrored in
+   src/lib/chapter-heuristics.ts for the client-side reparse-dialog fallback. */
+export const FRONT_MATTER_WORD_THRESHOLD = 150;
+
 /* English alternation -- kept as a literal string so it reads exactly as
    it did in the original literal regex. The character class ['’]
    matches both straight and curly apostrophes in publisher/author/translator

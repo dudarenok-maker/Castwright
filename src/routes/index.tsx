@@ -90,7 +90,7 @@ const StatsView = lazy(() =>
 );
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
-import { chapterSlug } from '../lib/chapter-heuristics';
+import { chapterSlug, FRONT_MATTER_WORD_THRESHOLD } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
 
 const VALID_VIEWS: View[] = [
@@ -1000,7 +1000,7 @@ function ReparseResultBody({
          view reads the server-computed flag. Here (reparse dialog) the server
          doesn't return the flag, so we fall back to the word-count gate only
          (language-agnostic; the title regex was English-only anyway). */
-      if (ch.wordCount > 0 && ch.wordCount <= 150) out.add(slug);
+      if (ch.wordCount > 0 && ch.wordCount <= FRONT_MATTER_WORD_THRESHOLD) out.add(slug);
     }
     return out;
   }, [chapters, initialExcludedSlugs]);

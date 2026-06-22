@@ -298,8 +298,9 @@ describe('ConfirmMetadataView — seam 3b front-matter pre-tick (server-computed
 
   it('pre-ticks chapters whose server-side isLikelyFrontMatter=true for exclusion', () => {
     renderWithFrontMatterChapters();
-    /* The chapter count stat reflects only the included chapters (total - excluded). */
-    expect(screen.getByText('1')).toBeInTheDocument(); // 1 of 3 included
+    /* The chapter count stat label shows "Chapters (N of total)" when any are excluded.
+       With 2 of 3 chapters pre-ticked as front-matter, the stat reads "Chapters (1 of 3)". */
+    expect(screen.getByText('Chapters (1 of 3)')).toBeInTheDocument();
   });
 });
 

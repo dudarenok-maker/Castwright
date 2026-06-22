@@ -6,6 +6,11 @@
    This file retains only the slug helpers needed to build the excludedSlugs
    wire payload for POST /api/books. */
 
+/* Word-count floor below which a chapter is treated as likely front-/back-matter.
+   Mirrors the server gate in server/src/parsers/front-matter.ts; used by the
+   reparse-dialog fallback (where the server-computed flag is not available). */
+export const FRONT_MATTER_WORD_THRESHOLD = 150;
+
 /* Match the server’s slug derivation in server/src/workspace/paths.ts so
    confirm-stage exclusion lists reach `/api/books` with slugs the server
    recognises. The combined form is `${id-pad}-${slug(title)}`. */
