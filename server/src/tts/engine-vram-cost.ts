@@ -24,12 +24,17 @@ export const ENGINE_VRAM_COST: Record<string, number> = {
      analyzer (4). ONLY charged when ASR runs on the GPU (ASR_DEVICE=cuda); the
      CPU-default path takes no token at all (see transcribe-client.ts). */
   asr: 1,
+  /* Render-integrity ECAPA speaker embed (srv-47). The speechbrain ECAPA-TDNN
+     model is ~80–200 MB — a single token like Kokoro/Qwen/ASR. ONLY charged
+     when the embed runs on the GPU (SPK_DEVICE=cuda); the CPU-default path
+     takes no token at all (see embed-client.ts). */
+  spk: 1,
 };
 
 import { configValue } from '../config/resolver.js';
 
-/** VRAM token cost for an engine name (or 'analyzer'). For the five engines
-    with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr) the
+/** VRAM token cost for an engine name (or 'analyzer'). For the six engines
+    with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr/spk) the
     value is read live through the registry so env vars and app overrides take
     effect. Gemini has no VRAM cost and stays at 0. Unknown engines fall back
     to cost 1 so a new engine never silently grabs the whole budget. */
@@ -45,6 +50,8 @@ export function costForEngine(engine: string): number {
       return configValue<number>('gpu.weight.analyzer');
     case 'asr':
       return configValue<number>('gpu.weight.asr');
+    case 'spk':
+      return configValue<number>('gpu.weight.spk');
     case 'gemini':
       return 0; // no VRAM: always free
     default:

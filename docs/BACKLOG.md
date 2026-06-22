@@ -391,12 +391,6 @@ _Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user):_ long books finish faster than playback by a wider margin on the engine every render uses — snappier generation, with no interactive-path or audio-quality cost.
 _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-qwen-codec-compilation-design.md` · [#988](https://github.com/dudarenok-maker/Castwright/issues/988).
 
-#### `srv-47` — GPU-accelerate the render-integrity ECAPA embed (optional CUDA, semaphore-gated) ([#992](https://github.com/dudarenok-maker/Castwright/issues/992))
-
-- _What:_ `srv-36` Phase 1 embeds segment PCM with ECAPA-TDNN **CPU-only** (~60–65 ms/segment — CPU-first by design so the QA pass never competes with synth for VRAM). Add an **optional** CUDA path, off by default, opted into via the existing `SPK_DEVICE=cuda`, gated through the weighted VRAM semaphore with an idle-evict watchdog (mirrors the ASR engine, srv-31). CPU stays the default and the automatic fallback.
-- _Benefit (technical):_ removes the CPU embed cost from the post-generation QA pass on large books so the drift gate scales without adding wall-clock, and lays the GPU embed substrate `fs-55` can reuse. Not a current break (CPU is fast enough today) — hence Could.
-_Full detail + acceptance:_ [#992](https://github.com/dudarenok-maker/Castwright/issues/992).
-
 #### `side-21` — FA2: fix the stale pin + conditional auto-enable on the real stack ([#1000](https://github.com/dudarenok-maker/Castwright/issues/1000))
 
 - _What:_ `install-qwen3.mjs` pins a cp311/torch2.6/cu124 FlashAttention-2 wheel, but the venv is **cp312/torch2.11/cu128** — so FA2 silently skips (SDPA in use). Fix the gate to the real stack; auto-install+activate only when a matching wheel exists; SDPA fallback otherwise. Do NOT downgrade torch for FA2 (modest win on short TTS decode).

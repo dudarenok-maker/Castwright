@@ -249,7 +249,10 @@ export const KNOBS: ConfigKnob[] = [
     group: 'qa-gates',
     label: 'Voice-QA device',
     help: '"cpu" (default) uses zero VRAM and never competes with synthesis. '
-        + '"cuda" is Phase 2. Changing the device restarts the sidecar.',
+        + '"cuda" runs the embed on the GPU — only worthwhile with '
+        + 'GPU_VRAM_BUDGET >= 2 (at the default budget of 1 it serialises '
+        + 'behind synth and is likely slower than cpu). Changing the device '
+        + 'restarts the sidecar.',
     type: 'enum',
     options: ['cpu', 'cuda'],
     default: 'cpu',
@@ -505,6 +508,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
   },
   {
+    key: 'gpu.weight.spk',
+    env: 'GPU_WEIGHT_SPK',
+    group: 'gpu-lifecycle',
+    label: 'GPU weight: Speaker embed (ECAPA)',
+    help: 'VRAM token cost for a render-integrity ECAPA speaker-embed op. Only charged when SPK_DEVICE=cuda; the CPU-default path takes no token. Read live per-op via costForEngine(); changes take effect on the next embed without a restart.',
+    type: 'integer', min: 0,
+    default: 1, // ← ENGINE_VRAM_COST.spk in tts/engine-vram-cost.ts
+    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
+  },
+  {
     key: 'gpu.safeCoexistMb',
     env: 'GPU_SAFE_COEXIST_MB',
     group: 'gpu-lifecycle',
@@ -532,6 +545,16 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Seconds of ASR inactivity before the sidecar frees the Whisper model. Mainly reclaims VRAM on ASR_DEVICE=cuda; on cpu it frees host RAM. Values below 5 fall back to the default (120) to avoid reload thrash.',
     type: 'integer', min: 0,
     default: 120, // ← _ASR_IDLE_TTL_DEFAULT in tts-sidecar/main.py (line 1775)
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
+    key: 'sidecar.spkIdleTtl',
+    env: 'SPK_IDLE_TTL',
+    group: 'gpu-lifecycle',
+    label: 'Speaker-embed (ECAPA) idle TTL (s)',
+    help: 'Seconds of speaker-embed inactivity before the sidecar frees the ECAPA model. Reclaims VRAM only on SPK_DEVICE=cuda (a no-op on cpu). Values below 5 fall back to the default (120) to avoid reload thrash.',
+    type: 'integer', min: 0,
+    default: 120, // ← _SPK_IDLE_TTL_DEFAULT in tts-sidecar/main.py (Task 4)
     apply: 'restart-sidecar', risk: 'high',
   },
   {
