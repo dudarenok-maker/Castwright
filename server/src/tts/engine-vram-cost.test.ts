@@ -3,7 +3,7 @@
    visible diff here) and the unknown-engine fallback (cost 1, never grabs
    the whole budget by accident). */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { ENGINE_VRAM_COST, costForEngine, DEFAULT_GPU_VRAM_BUDGET } from './engine-vram-cost.js';
 
 describe('engine-vram-cost', () => {
@@ -38,5 +38,24 @@ describe('engine-vram-cost', () => {
     );
     /* Two Coqui ops would spill the budget → serialise. */
     expect(ENGINE_VRAM_COST.coqui * 2).toBeGreaterThan(DEFAULT_GPU_VRAM_BUDGET);
+  });
+});
+
+describe('engine-vram-cost: spk (srv-47)', () => {
+  afterEach(() => {
+    delete process.env.GPU_WEIGHT_SPK;
+  });
+
+  it('registers spk at cost 1 in the static map', () => {
+    expect(ENGINE_VRAM_COST.spk).toBe(1);
+  });
+
+  it('costForEngine("spk") reads the live gpu.weight.spk knob (default 1)', () => {
+    expect(costForEngine('spk')).toBe(1);
+  });
+
+  it('costForEngine("spk") honours a GPU_WEIGHT_SPK override', () => {
+    process.env.GPU_WEIGHT_SPK = '2';
+    expect(costForEngine('spk')).toBe(2);
   });
 });
