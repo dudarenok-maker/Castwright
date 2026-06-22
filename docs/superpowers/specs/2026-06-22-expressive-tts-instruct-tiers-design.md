@@ -22,8 +22,9 @@ Two capabilities, one combined spec, both **additive** (off → today's behaviou
 2. **LLM Script Review** — an optional, engine-agnostic second LLM pass that repairs common
    annotation errors after Phase-1 attribution.
 
-The instruct work is grounded in an on-box feasibility spike (2026-06-22, RTX-class 8 GB card)
-whose findings are recorded in §3 — every load-bearing claim was measured or heard, not assumed.
+The instruct work is grounded in an on-box feasibility spike (2026-06-22, 8 GB card); findings in §3.
+Engine-mechanics claims are re-verified against the `qwen-tts` source; the audio + perf findings came
+from operator-run spikes whose scripts were **not committed** (see §3 provenance caveat + §11 R2-C1).
 
 ## 2. Background
 
@@ -34,7 +35,7 @@ whose findings are recorded in §3 — every load-bearing claim was measured or 
   voice direction sent straight to the engine.
 
 **Castwright today:**
-- A `Sentence` is `{ id, chapterId, characterId, text, emotion? }`; `emotion` is a fixed 5-value enum
+- A `Sentence` is `{ id, chapterId, characterId, text, emotion?, confidence? }` (+ `startMs/endMs` in the OpenAPI shape); `emotion` is a fixed 5-value enum
   (`neutral|whisper|angry|excited|sad`, `server/src/handoff/schemas.ts`). There is **no free-text instruct**.
 - Per-line emotion is implemented as **pre-baked emotion-variant voices** (`maerin__angry`, `maerin__sad`):
   each is a *separately designed* Qwen voice; synthesis just selects the variant `.pt` to clone
@@ -45,8 +46,12 @@ whose findings are recorded in §3 — every load-bearing claim was measured or 
 
 ## 3. Feasibility findings (the evidence base)
 
-All from the 2026-06-22 spike (throwaway scripts; deleted after this lands). Voice under test:
-`qwen-8434989a52184d08be265` (a designed ICL voice with angry/sad/excited/whisper variants).
+All from the 2026-06-22 on-box spike. **Provenance caveat (R2-C1):** the *engine-mechanics* claims
+below were independently re-verified against the installed `qwen-tts` 0.1.1 source; the **audio**
+findings ("Heard") and **perf numbers** ("Measured") came from operator-run *throwaway* scripts that
+are **not committed** — so they are **not currently reproducible from the repo**, and rest on operator
+testimony. Re-establishing them as a committed benchmark/fixture is a **hard pre-implementation gate**
+(§9). Voice under test: `qwen-8434989a52184d08be265` (a designed ICL voice with angry/sad/excited/whisper variants).
 
 **Engine mechanics:**
 - `qwen-tts`'s public wrapper keeps clone and instruct as **separate, non-combinable modes**
@@ -115,11 +120,22 @@ the `.json` sidecars: persona text is preserved, only "Delivered angrily…"/"�
 appended; the drift comes from re-sampling + the suffix biasing the sampled identity, worst at the
 extremes).
 
-**Fix (validated by ear):** mint each emotion's reference clip via the **same instruct machinery at
-*design* time** — 1.7B-ICL-clones the *base* identity + emotion instruct on calibration text → a clip of
-*the base voice performing that emotion* → distill to a **0.6B ICL `.pt`** (the variant **must** be ICL;
-the emotion lives in `ref_code`, x-vector-only loses it). All variants now share one identity → drift
-gone by construction, including for Fast-tier (0.6B) users who never touch the 1.7B at synth.
+**Fix (validated by ear).** Mint each emotion's reference clip from the **base identity** (not a fresh
+persona sample), then distil to a Fast-tier `.pt`. This differs materially from today's `design_voice`
+(`server/tts-sidecar/main.py:~1553-1561`, which does VoiceDesign-*persona* → `create_voice_clone_prompt`
+on the 0.6B). The full pipeline (R2-C2):
+1. Take the base voice's existing `.pt` (`ref_code` = the reference clip's codec tokens).
+2. **Re-derive a 1.7B-native ICL prompt** from it — decode `ref_code` → reference clip →
+   `create_voice_clone_prompt` on the **1.7B Base** (mandatory: the 0.6B `.pt`'s 1024-dim speaker
+   embedding is dim-incompatible with the 1.7B; see §3).
+3. **1.7B-ICL synth** that base identity speaking calibration text **+ the emotion instruct** (the
+   raw-`generate` bypass of §4.2) → a clip of *the base voice performing that emotion*.
+4. `create_voice_clone_prompt` on the **0.6B Base** from that clip → a **0.6B ICL `.pt`** (the variant
+   **must** be ICL; the emotion lives in `ref_code`, x-vector-only loses it).
+
+All variants now share one identity → drift gone by construction, including for Fast-tier (0.6B) users
+who never touch the 1.7B at synth. Note this is more involved than the current `design_voice` and depends
+on side-20 (1.7B-Base wiring) + the step-2 re-derivation.
 
 So the instruct capability does **double duty**: live per-line direction (Default tier) and anchored
 variant minting (Fast tier).
@@ -234,3 +250,17 @@ This spec stays `draft` until **C2** is satisfied. Findings below amend the sect
 - **M7 — identity metric undefined → amend §9.** Specify: ECAPA speaker-embedding cosine distance from the model's own encoder, with a tolerance **calibrated against perceived identity** on a small labelled set (don't assume distance ⇔ perception).
 - **M8 — `instruct?` is OpenAPI-governed → amend §4.4.** Add the field to `openapi.yaml` and regenerate `src/lib/api-types.ts`; the Zod `schemas.ts` change alone is insufficient (OpenAPI is the type source of truth).
 - **Minors:** mixed-voice batch now measured (C1); per-line **temperature** strategy is tuning debt (1.1 helped angry, may hurt whisper); **Script Review keeps a clean wave boundary** so it can ship alone first; **fs-45** VRAM telemetry (#845) should feed the §5 tier auto-selector; **non-English vocalizations** (fs-2 Russian) deferred.
+
+### Round 2 — independent adversarial review (2026-06-22)
+
+An independent reviewer **verified the core bypass claim against the code** (raw `generate()` takes both `instruct_ids` + `voice_clone_prompt`, no `tts_model_type` guard — `modeling_qwen3_tts.py:2022-2080`; `.pt` identity-only; bypass recipe + infra/schema claims all accurate) and surfaced:
+
+- **R2-C1 (Critical) — perf evidence not reproducible → FIXED in §3.** The "Measured" numbers came from since-deleted operator scripts; engine-mechanics were re-verified against source, but audio/perf are not re-runnable from the repo. §3 now carries a provenance caveat; **committing a reproducible benchmark is a hard pre-implementation gate** (§9).
+- **R2-C2 (Critical) — §4.3 minting contradicted current `design_voice` → FIXED in §4.3.** Rewritten as the full base→1.7B-ICL-re-derive→instruct-synth→0.6B-distil pipeline, reconciled against `main.py:~1553-1561`.
+- **R2-M3 (Major) — Script Review ID contract under-specified → amend §4.6.** "One fixture" undersells the collision with `book-state.ts` ID machinery (orphan detection, `maxId+1` split rule, surviving-ID reparse) + `segments.json` audio binding. Define the ID-allocation contract (reuse `splitSentence`'s rule; how a merge reconciles two sentences' emotion/instruct/audio).
+- **R2-M4 (Major) — instruct tokens perturb the length-bucket batcher** (`synthesise-chapter.ts:~536`). Per-line instruct adds variable per-item tokens → changes bucket packing (distinct from per-forward cost). §9 perf guard must add a heterogeneous-instruct-length batch case + decide whether instruct counts against `qwenBatchTokenBudget`.
+- **R2-M5 (Major) — 0.6B↔1.7B Base swap thrash unanalyzed** under the concurrent-multi-book invariant → add a §7 Base-tier swap policy (pin one Base per session? reject mixed tiers concurrently?).
+- **R2-Mo (Moderate):** (a) Russian/mixed-language instruct untested — instruct *phrasing* is English-coupled; §7: validate on Russian or scope English-only first. (b) `instruct?` blast-radius: `sentenceSchema` is `.strict()` (add an absent-still-parses test); manuscript edits are **not** cross-tab broadcast (`broadcast-middleware.ts`) so there's no sync worry — state both in §4.4. (c) emotion/instruct/**manual-edit** precedence is 3-way, not 2 — spell the ladder in §4.4.
+- **R2-Mi (Minor):** `temperature` is one value per batched forward — per-emotion temperature may not be achievable within a batch (§7). Make the re-mint migration an explicit **Wave-4 sub-step** so `Closes #993`'s gate isn't split across §7/§10.
+
+**Merge verdict (reviewer):** safe to merge as `draft` once the two Criticals are fixed (done above); the rest are documented amendments resolved at plan time, with **C2 still gating execution**.
