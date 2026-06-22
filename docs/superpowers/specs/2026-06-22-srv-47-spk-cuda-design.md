@@ -6,7 +6,8 @@ issue: srv-47 (#992)
 depends_on: srv-36 (#665 — shipped the SpeakerEngine + /embed + embed-client this hardens) · srv-31 (the ASR cuda pattern this mirrors: semaphore gate + idle watchdog)
 relates_to: fs-55 (#993 — variant-fidelity gate; reuses the GPU substrate this lays) · fs-45 (#861 — VRAM telemetry; the gpuSemaphore budget this charges against)
 moscow: Could (scale optimisation — CPU embed ~60–65 ms/segment is comfortably fast today on the 8 GB box)
-revised: 2026-06-22 (adversarial round, code-grounded vs origin/main). Corrected: SPK_DEVICE is ALREADY a registry knob `qa.speaker.device` + already in .env.example (don't re-add); sidecar env propagation is GENERIC (spawn-sidecar.ts Layer-2 loop auto-injects any non-default restart-sidecar knob — no manual wiring); the runtime CPU-demote is narrowed to FIRST-USE-ONLY (steady-state failures are poison→recycle or input-deterministic, so a per-embed wrapper is mostly dead path); watchdog mirrors ASR's SIMPLE maybe_free_idle (mid-inference free is benign under refcounting — no Qwen-style in-flight counter); help-text flip for `qa.speaker.device` ("cuda is Phase 2" → shipped).
+revised: 2026-06-22 R1 (adversarial, code-grounded vs origin/main). Corrected: SPK_DEVICE is ALREADY a registry knob `qa.speaker.device` + already in .env.example (don't re-add); sidecar env propagation is GENERIC (spawn-sidecar.ts Layer-2 loop auto-injects any non-default restart-sidecar knob — no manual wiring); watchdog mirrors ASR's SIMPLE maybe_free_idle (mid-inference free is benign under refcounting — no Qwen-style in-flight counter); help-text flip for `qa.speaker.device` ("cuda is Phase 2" → shipped).
+revised: 2026-06-22 R2 (deeper adversarial). R2-A (serious, corrects an R1 error): GPU budget DEFAULT is 1, not 4 (gpu.vramBudget=0→gpu.concurrency=1), so cuda embed serialises against synth at default budget and is likely SLOWER than the free parallel cpu embed — only worth it at GPU_VRAM_BUDGET≥2; added a one-time WARN guard + budget≥2 prerequisite + measurement-under-set-budget. R2-B (correctness): /embed's poison fence does NOT cover model load (ensure_loaded is outside the try) — a cuda load poison would escape unclassified; move ensure_loaded inside the fence. R2-C (simplification): all device handling collapses into ensure_loaded() (load-time degrade/demote); the R1 "first-embed synchronous reload under _infer_lock" path (F8) is dropped. R2-D: re-verified the embed IS gated by qa.speaker.enabled (claim holds).
 ---
 
 # srv-47 — optional CUDA path for the render-integrity ECAPA embed
@@ -33,6 +34,20 @@ and adding a GPU model during synth is exactly the co-residence pressure point
 on an 8 GB card — so this ships behind a default-off switch and lays the GPU
 substrate **fs-55** can reuse, rather than changing the default path.
 
+### Prerequisite: `SPK_DEVICE=cuda` is only worth it with `GPU_VRAM_BUDGET ≥ 2` (R2-A)
+
+The honest perf reality, surfaced by the adversarial round: the **CPU** embed
+costs **zero** VRAM tokens, so it runs **concurrently** with synth. The **cuda**
+embed costs `spk: 1`. At the **default budget of 1** (`GPU_VRAM_BUDGET` unset →
+`gpu.concurrency` = 1), one `spk` token consumes the whole budget, so the cuda
+embed **serialises behind every synth/analyzer op** — almost certainly *slower*
+end-to-end than the free, parallel CPU embed. The cuda path only helps when the
+operator has set `GPU_VRAM_BUDGET ≥ 2` so `spk` can co-reside with one synth
+(`1 + 1 ≤ budget`). srv-47 therefore ships a **one-time WARN** (R2-A guard, see
+component 1) when `SPK_DEVICE=cuda` and the effective budget < 2, and the
+operator-owed measurement (DoD §4) must run under a set budget. This is the
+core reason srv-47 is a measure-first **Could**, not a default flip.
+
 ## What is NOT in scope (carried in from srv-36, not re-litigated)
 
 1. **Detection scoring is unchanged.** A 192-d unit-norm ECAPA vector is
@@ -54,9 +69,11 @@ substrate **fs-55** can reuse, rather than changing the default path.
   `EncoderClassifier.from_hparams(..., run_opts={"device": self.device})`;
   `embed()` runs under a `threading.Lock`. **No `_last_used`, no `unload()`, no
   idle watchdog.** `/health` already reports `"spk_device": SPK.device`.
-- **`/embed` endpoint (`main.py:3497`)** — already honours the CUDA-poison +
-  recycle-drain fences exactly like `/transcribe` (returns 503 + `poisoned:true`
-  and schedules the supervised exit when `_CUDA_POISON_RE` matches).
+- **`/embed` endpoint (`main.py:3497`)** — honours the CUDA-poison +
+  recycle-drain fences for the **embed call** (returns 503 + `poisoned:true`
+  and schedules the supervised exit when `_CUDA_POISON_RE` matches), **but
+  `await SPK.ensure_loaded()` sits OUTSIDE that `try`** — so a cuda *load*
+  poison is currently unfenced (harmless on cpu; the R2-B gap srv-47 fixes).
 - **`embed-client.ts` (`server/src/tts/embed-client.ts`)** — a **bare `fetch`**
   with **no VRAM arbitration**. This is the safety gap vs. `transcribe-client.ts`.
 - **`transcribe-client.ts`** — the pattern to mirror: an `asrRunsOnGpu()` gate
@@ -65,9 +82,12 @@ substrate **fs-55** can reuse, rather than changing the default path.
   guaranteed `release?.()` in `finally`; uses an `undici` `Agent` dispatcher
   (headers/body timeout 0, connect 10 s); tags unreachable/5xx as `transient`.
 - **VRAM semaphore (`server/src/gpu/semaphore.ts`)** — FIFO weighted token
-  pool; `acquire(cost)` → release fn; budget resolved from `gpu.vramBudget`
-  (default ~4 on the 8 GB box). **`engine-vram-cost.ts`** maps engine → weight
-  (`asr: 1`) and `costForEngine()` reads `gpu.weight.*` live from the registry.
+  pool; `acquire(cost)` → release fn. **Budget default is `1`, NOT 4 (R2-A):**
+  `gpu.vramBudget` defaults to `0` → fall back to `gpu.concurrency`, which
+  defaults to `1` (`registry.ts:447,457`). The "4" is only a *suggested* value
+  the operator must set explicitly via `GPU_VRAM_BUDGET`. **`engine-vram-cost.ts`**
+  maps engine → weight (`asr: 1`) and `costForEngine()` reads `gpu.weight.*`
+  live from the registry.
 - **Idle watchdog precedent** — `_asr_idle_watchdog()` / Qwen's
   `_qwen_design_idle_watchdog()` in `main.py`: an async loop
   (`interval = min(30, max(5, ttl/4))`) that calls `maybe_free_idle(ttl)` on a
@@ -78,7 +98,7 @@ substrate **fs-55** can reuse, rather than changing the default path.
   to MISS a poison — over-classifying is harmless"_). This is load-bearing for
   the fallback design.
 
-## Design — four components
+## Design — three components (+ tests)
 
 ### 1. Node — `embed-client.ts`: semaphore gate (mirror `transcribe-client.ts`)
 
@@ -92,14 +112,44 @@ substrate **fs-55** can reuse, rather than changing the default path.
   sidecar under cuda contention never aborts an in-flight embed mid-call.
 - Tag sidecar-unreachable and 5xx errors as `transient` (mirrors
   `transcribe-client.ts`) so the existing retry/queue logic treats them right.
+- **R2-A budget-misconfig WARN:** on the first cuda-path acquire, if
+  `spkRunsOnGpu()` and the effective GPU budget < 2 (`resolveGpuBudget()`),
+  emit a one-time WARN — _"SPK_DEVICE=cuda but GPU budget < 2: the speaker
+  embed will serialise behind synth and may be slower than the free cpu path;
+  set GPU_VRAM_BUDGET ≥ 2."_ One-shot (module-level `let warned = false`), no
+  behavior change. The budget is a Node concept, so this lives Node-side, not
+  in the sidecar.
 
-### 2. Sidecar — `SpeakerEngine`: load-time degrade + idle evict + first-use demote
+### 2. Sidecar — `SpeakerEngine`: load-time degrade/demote + idle evict + load-poison fence
 
-**(a) Load-time graceful degrade.** In `ensure_loaded()`, if `self.device ==
-"cuda"` and `not torch.cuda.is_available()` → set `self.device = "cpu"` and log
-a warning, then load on CPU. A misconfigured env degrades instead of crashing.
+**(a) All device handling lives in `ensure_loaded()` — load-time only (R2-C).**
+The realistic broken-but-"available" cuda fails at `from_hparams(device="cuda")`
+(the load is the first thing to touch CUDA), not at a later encode — so there is
+**no** per-embed try/reload wrapper and **no** synchronous reload under
+`_infer_lock` (the round-1 F8 hazard is dropped entirely). `ensure_loaded()`:
+1. **Degrade if unavailable:** `self.device == "cuda"` and `not
+   torch.cuda.is_available()` → `self.device = "cpu"` + warn, load on CPU.
+2. **Try cuda, demote on non-poison failure:** attempt the cuda load; on an
+   exception that does **not** match `_CUDA_POISON_RE` → sticky-demote
+   `self.device = "cpu"`, reload on CPU, log the demotion. (This is the
+   genuinely-CPU-fixable case: cuda present but broken at load — cuDNN/driver
+   mismatch.)
+3. **Re-raise poison:** an exception matching `_CUDA_POISON_RE` (device-side
+   assert, cublas, **CUDA OOM**, HIP) → **re-raise** so the `/embed` fence (b)
+   classifies it and triggers the supervised recycle. A CPU retry would mask a
+   corrupt shared context that's about to crash in-flight synth.
 
-**(b) Idle-evict watchdog** (mirror `_asr_idle_watchdog`):
+**(b) `/embed` poison fence must cover the LOAD (R2-B — correctness gap).**
+Today `await SPK.ensure_loaded()` sits **outside** the poison-fenced `try` in
+the `/embed` handler (`main.py:3497`), so a cuda **load** poison escapes as an
+unclassified 500 with **no** recycle — the poisoned context then silently
+persists for every later embed. (ASR avoids this because `WhisperEngine`
+loads *inside* `transcribe()`, which runs inside the fenced `to_thread`.) Fix:
+move `await SPK.ensure_loaded()` **inside** the existing `try` so the same
+`except _CUDA_POISON_RE → _mark_cuda_poisoned` path catches a re-raised load
+poison from (a.3).
+
+**(c) Idle-evict watchdog** (mirror `_asr_idle_watchdog`):
 - Add `self._last_used: float` (stamped at the end of each `embed()`), an
   `unload()`, and `maybe_free_idle(ttl)`.
 - `unload()` reuses ASR's `_reclaim_host_and_vram()` helper (drop ref + a
@@ -118,23 +168,6 @@ a warning, then load on CPU. A misconfigured env degrades instead of crashing.
   structured identically to the ASR watchdog (same defensive `try/except`, same
   `interval = min(30, max(5, ttl/4))` formula). TTL via `SPK_IDLE_TTL`
   (default `120`, 5 s floor) using the same resolver shape as `_asr_idle_ttl()`.
-
-**(c) First-use CPU degrade — non-poison errors ONLY** (narrowed from "every
-embed" after the adversarial round, F5). The realistic CPU-fixable failure is a
-cuda that reports `is_available()==True` but is actually broken at load /
-first use (cuDNN / driver mismatch) — which §2a's `is_available()` check can't
-catch. Steady-state failures are either poison (→recycle) or input-deterministic
-(a CPU retry fails identically), so wrapping every embed is mostly dead path.
-- Guard **`ensure_loaded()` + the first `embed()`** (not steady-state calls):
-  on a non-poison exception there, sticky-demote `self.device = "cpu"`, reload
-  on CPU **synchronously** via `EncoderClassifier.from_hparams(...,
-  run_opts={"device": "cpu"})` under the already-held `_infer_lock` (the embed
-  runs in a worker thread and cannot await the asyncio `_load_lock` — F8), retry
-  once, and proceed on cpu for the process lifetime. Log the demotion.
-- If `_CUDA_POISON_RE.search(err)` matches (device-side assert, cublas, **CUDA
-  OOM**, HIP) → **unchanged**, even at first use: `_mark_cuda_poisoned` + 503 +
-  supervised recycle. The shared CUDA context is corrupt; a "successful" CPU
-  retry would mask a sidecar about to crash in-flight synth.
 
 ### 3. Config — `engine-vram-cost.ts` + `registry.ts` + `.env.example`
 
@@ -175,7 +208,7 @@ co-reside more freely.
 ## Known limitation (documented, not fixed in v1)
 
 The Node gate reads the **`SPK_DEVICE` env**, not live sidecar state. After a
-runtime CPU-demote (§2c), the Node side keeps acquiring a `spk` token
+load-time CPU-demote (§2a.2), the Node side keeps acquiring a `spk` token
 needlessly — a minor serialisation, not a correctness bug. This is the same
 env-coupling ASR already lives with. `/health` already exposes the live
 `spk_device`, so a future enhancement could poll it to close the gap; out of
@@ -204,13 +237,14 @@ arbitration).
 **pytest** (`server/tts-sidecar/tests/test_embed.py` — new, or extend; stub
 `speechbrain…EncoderClassifier` + `torch.cuda.is_available` like
 `test_transcribe.py`):
-- load-time degrade: `SPK_DEVICE=cuda` + `is_available()==False` → loads on cpu,
-  warns, `SPK.device == "cpu"`.
-- first-use non-poison degrade: a non-poison exception at `ensure_loaded()` /
-  first `embed()` → sticky-demotes to cpu, reloads, retries, returns a vector;
-  `SPK.device == "cpu"` after, and a subsequent embed does NOT re-attempt cuda.
-- poison error: a `_CUDA_POISON_RE`-matching exception (incl. OOM) → poisons
-  (503/poisoned), **no** demote, **no** CPU retry — even at first use.
+- load degrade (unavailable): `SPK_DEVICE=cuda` + `is_available()==False` →
+  loads on cpu, warns, `SPK.device == "cpu"`.
+- load demote (non-poison, R2-C): a non-poison exception from the cuda
+  `from_hparams` in `ensure_loaded()` → sticky-demotes to cpu, reloads, loads
+  successfully; `SPK.device == "cpu"` after.
+- load poison fenced (R2-B): a `_CUDA_POISON_RE`-matching exception during the
+  cuda load is **re-raised** and the `/embed` handler (with `ensure_loaded`
+  moved inside the try) returns 503/poisoned + marks poison — **no** demote.
 - watchdog: `maybe_free_idle` frees after TTL on the cuda path; **no-ops on
   cpu**; never throws on a transient tick; the simple recency check (no
   in-flight counter) is asserted.
@@ -220,11 +254,13 @@ arbitration).
 - token acquired **only** when `SPK_DEVICE=cuda`; **none** on cpu.
 - `release` called in `finally` on both success **and** a thrown error.
 - cost passed == `costForEngine('spk')`.
+- R2-A WARN: `SPK_DEVICE=cuda` + effective budget < 2 → one-time WARN; budget
+  ≥ 2 → silent; the WARN fires at most once across many embeds.
 - plus an `engine-vram-cost` case asserting `spk` resolves to `gpu.weight.spk`.
 
 ## Definition of Done
 
-1. Four components above implemented; both test tiers green.
+1. Three components above implemented; both test tiers green.
 2. `npm run verify` green on the integrated tree.
 3. PR off `feat/sidecar-srv-47-spk-cuda` with `Closes #992`; remove the srv-47
    row from `docs/BACKLOG.md`; stamp this spec's Ship notes + flip `status:
@@ -232,12 +268,14 @@ arbitration).
    srv-36, which used no archive subdir).
 4. **Operator-owed acceptance (does NOT block the PR merge — mirrors how
    srv-43/fs-45 ship):** on the GPU box, with `SEG_SPK_ENABLED=1
-   SPK_DEVICE=cuda`, record CPU-vs-cuda ms/segment and confirm no synth
-   throughput regression from contention (reboot first per the perf-baseline
-   practice). Note the numbers on the PR. If cuda shows no real win at current
-   scale, that's an expected outcome for a Could-tier substrate item — the
-   value is the safe switch + the substrate fs-55 reuses, not a guaranteed
-   speedup today.
+   SPK_DEVICE=cuda` **and `GPU_VRAM_BUDGET=4`** (NOT the default 1 — at budget 1
+   the cuda embed serialises and the measurement is meaningless, R2-A), record
+   CPU-vs-cuda ms/segment **and** end-to-end chapter throughput, confirming no
+   synth regression from contention (reboot first per the perf-baseline
+   practice). Also sanity-check the default-budget case shows the R2-A WARN.
+   Note the numbers on the PR. If cuda shows no real win even at budget 4,
+   that's an expected outcome for a Could-tier substrate item — the value is the
+   safe switch + the substrate fs-55 reuses, not a guaranteed speedup today.
 
 ## Ship notes
 
