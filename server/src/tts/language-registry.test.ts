@@ -21,12 +21,11 @@ describe('getLanguageEntry', () => {
 
   it('returns the ru entry, supported (grandfathered under fs-2)', () => {
     const ru = getLanguageEntry('ru');
-    expect(ru).toEqual<LanguageEntry>({
-      code: 'ru',
-      sidecarName: 'Russian',
-      supported: true,
-      detect: { script: 'cyrillic', iso6393: 'rus' },
-    });
+    expect(ru?.code).toBe('ru');
+    expect(ru?.sidecarName).toBe('Russian');
+    expect(ru?.supported).toBe(true);
+    expect(ru?.detect).toEqual({ script: 'cyrillic', iso6393: 'rus' });
+    expect(ru?.headingLexicon).toBeDefined();
   });
 
   it('returns undefined for a code not in the registry', () => {
@@ -84,5 +83,35 @@ describe('supportedLanguages', () => {
 describe('allLanguageEntries', () => {
   it('includes all five codes', () => {
     expect(allLanguageEntries().map((e) => e.code).sort()).toEqual(['de', 'en', 'es', 'fr', 'ru']);
+  });
+});
+
+import { nonEnglishHeadingLexicon } from './language-registry.js';
+
+describe('nonEnglishHeadingLexicon', () => {
+  it('unions the non-English heading keywords (es/fr/de/ru), deduped', () => {
+    const lex = nonEnglishHeadingLexicon();
+    for (const kw of ['capítulo', 'chapitre', 'kapitel', 'глава']) {
+      expect(lex.keywords).toContain(kw);
+    }
+    // English keywords are NOT in here (English stays inline in text.ts)
+    expect(lex.keywords).not.toContain('chapter');
+    // deduped
+    expect(new Set(lex.keywords).size).toBe(lex.keywords.length);
+  });
+
+  it('includes non-English number words and standalone markers', () => {
+    const lex = nonEnglishHeadingLexicon();
+    expect(lex.numberWords).toContain('uno');   // es
+    expect(lex.numberWords).toContain('drei');  // de
+    expect(lex.standalone).toContain('пролог'); // ru prologue
+    expect(lex.standalone).toContain('prólogo');// es prologue
+  });
+
+  it('en has no headingLexicon; ru/es/fr/de do', () => {
+    expect(getLanguageEntry('en')?.headingLexicon).toBeUndefined();
+    for (const c of ['ru', 'es', 'fr', 'de']) {
+      expect(getLanguageEntry(c)?.headingLexicon).toBeDefined();
+    }
   });
 });
