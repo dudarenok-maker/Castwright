@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, sys
 from pathlib import Path
 from spikes.srv36.voice_index import iter_series_books, resolve_voice_uuid
-from spikes.srv36.crossbook import assemble_measured, evaluate_axes
+from spikes.srv36.crossbook import assemble_measured, evaluate_axes, malformed_gates
 
 def build_inventory(books_root: str) -> dict:
     series = {}
@@ -43,6 +43,14 @@ if __name__ == "__main__":
             print("ERROR: spikes/srv36/crossbook_thresholds.json not found", file=sys.stderr)
             sys.exit(1)
         thresholds = json.loads(thresholds_file.read_text("utf-8-sig"))
+
+        bad = malformed_gates(per_gate)
+        if bad:
+            print(
+                f"WARNING: result file(s) present but missing expected keys — verdict may be wrong: "
+                + ", ".join(bad),
+                file=sys.stderr,
+            )
 
         measured = assemble_measured(per_gate)
         verdict = evaluate_axes(measured, thresholds)

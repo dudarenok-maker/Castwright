@@ -18,7 +18,7 @@ def iter_series_books(books_root: str) -> Iterator[dict]:
                        "segments_path": str(segs[0]), "cast_path": str(book_dir / "cast.json")}
 
 
-def resolve_voice_uuid(character_id: str, cast: dict):
+def resolve_voice_uuid(character_id: str, cast: dict) -> str | None:
     for c in cast.get("characters", []):
         if c.get("id") == character_id:
             v = c.get("voice") or {}

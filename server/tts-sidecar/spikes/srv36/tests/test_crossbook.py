@@ -9,6 +9,7 @@ from spikes.srv36.crossbook import (
     separation_auc,
     emotion_shift,
     wander_slope,
+    malformed_gates,
 )
 
 THRESH = {
@@ -138,3 +139,26 @@ def test_assemble_measured_missing_gates_use_safe_fail_defaults():
     m = assemble_measured({})  # nothing measured yet
     # safe-fail: forces cross-book no-go (auc 0, drift 1e9, fp 1.0)
     assert m["g6_separation_auc"] == 0.0 and m["g1_genuine_drift_stds"] == 1e9 and m["g5_fp_rate"] == 1.0
+
+
+# Fix I-1: malformed_gates — result-schema validation
+def test_malformed_gates_flags_present_but_wrong_shape():
+    # g2 present but with the wrong key ('divergence' instead of 'central') → flagged
+    assert malformed_gates({"g2": {"divergence": 0.03}, "g6": {"separation_auc": 0.9}}) == ["g2"]
+
+def test_malformed_gates_ignores_absent_gates():
+    # absent gates are not-yet-measured, not malformed
+    assert malformed_gates({"g6": {"separation_auc": 0.9}}) == []
+
+
+# Fix M-2: crossbook_genuine_drift_stds non-zero-distance + zero-floor branch
+def test_drift_stds_nonzero_distance_zero_floor_returns_inf():
+    # non-zero inter-book distance + zero floor → inf (not divide-by-zero)
+    assert crossbook_genuine_drift_stds({1: [[1.0, 0.0]], 2: [[0.0, 1.0]]}, floor_std=0.0) == float("inf")
+
+
+# Fix M-2: same_text_floor single-input edge case
+def test_same_text_floor_single_input_returns_zero():
+    # single embedding → no pairs → mean and std both 0.0
+    out = same_text_floor([np.array([1.0, 0.0])])
+    assert out == {"mean": 0.0, "std": 0.0}

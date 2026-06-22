@@ -91,3 +91,22 @@ def wander_slope(cosines_in_render_order) -> float:
         return 0.0
     x = np.arange(y.size, dtype=np.float64)
     return float(np.polyfit(x, y, 1)[0])  # slope
+
+
+# expected key within each gate's result dict (the contract the --gN writers must satisfy)
+GATE_EXPECTED_KEYS = {
+    "g1": ["genuine_drift_stds"], "g2": ["central"], "g3": ["emotion_shift"],
+    "g4": ["wander_slope", "residual_fraction"], "g5": ["fp_rate"], "g6": ["separation_auc"],
+}
+
+
+def malformed_gates(per_gate: dict) -> list:
+    """Gate names whose result dict is PRESENT but missing an expected key —
+    i.e. a writer emitted the wrong shape (would silently become a safe-fail
+    default). Absent gates are not malformed (not yet measured). Returns sorted names."""
+    bad = []
+    for gate, keys in GATE_EXPECTED_KEYS.items():
+        d = per_gate.get(gate)
+        if d is not None and any(k not in d for k in keys):
+            bad.append(gate)
+    return sorted(bad)
