@@ -312,4 +312,23 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);
   });
+
+  test('script-review modal (fs-58)', async ({ page }) => {
+    /* Navigate to Solway Bay manuscript. The "Review Script" button is in the
+       chapter header area. Click it and assert the modal renders without
+       horizontal overflow at every viewport. */
+    await page.goto('/#/books/sb/manuscript');
+    await expect(page.getByRole('heading', { name: /^Chapter \d+/i, level: 1 })).toBeVisible({
+      timeout: 10_000,
+    });
+    const reviewBtn = page.getByTestId('review-script-chapter');
+    await expect(reviewBtn).toBeVisible({ timeout: 5_000 });
+    await reviewBtn.click();
+    /* Wait for the ScriptReviewDiff modal (mock resolves in ~60 ms). */
+    await expect(page.getByRole('heading', { name: /Script review suggestions/i })).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
 });
