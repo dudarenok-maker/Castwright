@@ -1178,7 +1178,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                     className={`min-h-[44px] sm:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
                       active
                         ? 'bg-ink text-canvas'
-                        : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
+                        : 'border border-ink/10 bg-canvas text-ink/70 hover:text-ink hover:bg-ink/4'
                     }`}
                   >
                     {label}
