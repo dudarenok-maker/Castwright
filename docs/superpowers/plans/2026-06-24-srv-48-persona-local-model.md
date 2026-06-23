@@ -29,7 +29,7 @@
 - `server/src/config/registry.ts` — add 2 knobs (`analyzer.personaGeneration.engine`, `analyzer.personaGeneration.localModel`); the `analyzer.gemini.voiceStyleModel` knob already exists.
 - `server/src/analyzer/voice-style.ts` — the dispatcher, new resolvers, `<think>` strip, `onCpu`/`keepAlive` threading. Persona-gen home.
 - `server/src/analyzer/ollama.ts` — `export` `classifyConnectError`; add `generatePersonaViaOllama`.
-- `server/src/analyzer/persona-gpu-plan.ts` *(new)* — `resolvePersonaGpuPlan` + `unloadResidentSidecar` (GPU/concurrency decision + reverse-evict). Kept out of `voice-style.ts` so the LLM-call file stays focused.
+- `server/src/tts/persona-gpu-plan.ts` *(new)* — `resolvePersonaGpuPlan` + `unloadResidentSidecar` (GPU/concurrency decision + reverse-evict). **Placed under `tts/` (peer to `design-lock.ts`), NOT `analyzer/`,** to avoid an analyzer→routes layering inversion — it needs `gpu/`, `tts/design-lock`, and the generation-busy signal. **Cycle guard:** it imports `activeGenerationBooks` from `../routes/generation.js`; before coding, verify `generation.ts` does not transitively import `persona-gpu-plan`/`voice-style`/`cast-design` (no cycle today). If a cycle ever appears, lazy-`await import('../routes/generation.js')` inside the function, or hoist `activeGenerationBooks`/`isGenerationActive` into a neutral state module both layers import.
 - `server/src/tts/design-lock.ts` — add `isOtherBookDesignBusy(bookDir)`.
 - `server/src/routes/generation.ts` — reuse existing `activeGenerationBooks()` (no change; imported by the plan).
 - `server/src/routes/voice-style.ts` — single-character persona-gen site: thread the plan.
@@ -81,8 +81,9 @@ describe('persona generation config', () => {
     expect(resolvePersonaEngine()).toBe('local');
   });
 
-  it('resolvePersonaLocalModel: blank inherits the analyzer model; explicit wins', () => {
-    expect(resolvePersonaLocalModel()).toMatch(/:/); // inherited Ollama tag contains ':'
+  it('resolvePersonaLocalModel: blank inherits the analyzer model; explicit wins', async () => {
+    const { getResolvedOllamaModel } = await import('../workspace/user-settings.js');
+    expect(resolvePersonaLocalModel()).toBe(getResolvedOllamaModel()); // blank ⇒ inherit
     process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
     expect(resolvePersonaLocalModel()).toBe('qwen3.5:9b');
   });
@@ -589,8 +590,8 @@ git commit -m "feat(server): srv-48 isOtherBookDesignBusy (self-excluding design
 ## Task 6: Reverse-evict primitive — `unloadResidentSidecar`
 
 **Files:**
-- Create: `server/src/analyzer/persona-gpu-plan.ts`
-- Test: `server/src/analyzer/persona-gpu-plan.test.ts`
+- Create: `server/src/tts/persona-gpu-plan.ts`
+- Test: `server/src/tts/persona-gpu-plan.test.ts`
 
 **Interfaces:**
 - Produces: `class GpuBusyForPersonaError extends Error` and `unloadResidentSidecar(): Promise<void>` — acquires the FULL `gpuSemaphore` budget, re-checks the durable generation flag, and if a render is active throws `GpuBusyForPersonaError` (releasing the budget); otherwise POSTs `/unload {engine:'qwen'}` to the sidecar and verifies via `/api/sidecar/health`.
@@ -598,7 +599,7 @@ git commit -m "feat(server): srv-48 isOtherBookDesignBusy (self-excluding design
 
 - [ ] **Step 1: Write the failing test**
 
-Create `server/src/analyzer/persona-gpu-plan.test.ts`:
+Create `server/src/tts/persona-gpu-plan.test.ts` (imports use `../` for `gpu/`, `routes/`, `workspace/` — same depth as before):
 
 ```typescript
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -635,12 +636,12 @@ describe('unloadResidentSidecar', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/analyzer/persona-gpu-plan.test.ts`
+Run: `cd server && npx vitest run src/tts/persona-gpu-plan.test.ts`
 Expected: FAIL — module does not exist.
 
 - [ ] **Step 3: Implement the primitive**
 
-Create `server/src/analyzer/persona-gpu-plan.ts`:
+Create `server/src/tts/persona-gpu-plan.ts`:
 
 ```typescript
 import { gpuSemaphore } from '../gpu/semaphore.js';
@@ -692,14 +693,14 @@ export async function unloadResidentSidecar(): Promise<void> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd server && npx vitest run src/analyzer/persona-gpu-plan.test.ts`
+Run: `cd server && npx vitest run src/tts/persona-gpu-plan.test.ts`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Typecheck + commit**
 
 ```bash
 cd server && npm run typecheck
-git add server/src/analyzer/persona-gpu-plan.ts server/src/analyzer/persona-gpu-plan.test.ts
+git add server/src/tts/persona-gpu-plan.ts server/src/tts/persona-gpu-plan.test.ts
 git commit -m "feat(server): srv-48 unloadResidentSidecar (full-budget, fail-closed reverse-evict)"
 ```
 
@@ -708,8 +709,8 @@ git commit -m "feat(server): srv-48 unloadResidentSidecar (full-budget, fail-clo
 ## Task 7: `resolvePersonaGpuPlan` decision function
 
 **Files:**
-- Modify: `server/src/analyzer/persona-gpu-plan.ts`
-- Test: `server/src/analyzer/persona-gpu-plan.test.ts`
+- Modify: `server/src/tts/persona-gpu-plan.ts`
+- Test: `server/src/tts/persona-gpu-plan.test.ts`
 
 **Interfaces:**
 - Produces: `type PersonaGpuPlan = { onCpu: boolean; evict: boolean; keepAlive: string | number }` and `resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan`.
@@ -733,7 +734,7 @@ describe('resolvePersonaGpuPlan', () => {
     vi.spyOn(gpuSemaphore, 'inFlight', 'get').mockReturnValue(inFlight);
     const gen2 = await import('../routes/generation.js');
     vi.spyOn(gen2, 'activeGenerationBooks').mockReturnValue(gen);
-    const dl = await import('../tts/design-lock.js');
+    const dl = await import('./design-lock.js');
     vi.spyOn(dl, 'isOtherBookDesignBusy').mockReturnValue(false);
     vi.spyOn(dl, 'isAnyAnalysisBusy').mockReturnValue(false);
     return import('./persona-gpu-plan.js');
@@ -765,18 +766,19 @@ describe('resolvePersonaGpuPlan', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/analyzer/persona-gpu-plan.test.ts -t "resolvePersonaGpuPlan"`
+Run: `cd server && npx vitest run src/tts/persona-gpu-plan.test.ts -t "resolvePersonaGpuPlan"`
 Expected: FAIL — function not defined.
 
 - [ ] **Step 3: Implement**
 
-Append to `server/src/analyzer/persona-gpu-plan.ts`:
+Append to `server/src/tts/persona-gpu-plan.ts` (note: `design-lock` is now a
+sibling `./design-lock.js`; `ollama` lives in `../analyzer/ollama.js`):
 
 ```typescript
 import { shouldEvictBeforeSidecarLoad } from '../gpu/residency.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
-import { isOtherBookDesignBusy, isAnyAnalysisBusy } from '../tts/design-lock.js';
-import { resolveAnalyzerKeepAlive } from './ollama.js';
+import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
+import { resolveAnalyzerKeepAlive } from '../analyzer/ollama.js';
 
 export interface PersonaGpuPlan {
   onCpu: boolean;
@@ -805,14 +807,14 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd server && npx vitest run src/analyzer/persona-gpu-plan.test.ts`
+Run: `cd server && npx vitest run src/tts/persona-gpu-plan.test.ts`
 Expected: PASS (all).
 
 - [ ] **Step 5: Typecheck + commit**
 
 ```bash
 cd server && npm run typecheck
-git add server/src/analyzer/persona-gpu-plan.ts server/src/analyzer/persona-gpu-plan.test.ts
+git add server/src/tts/persona-gpu-plan.ts server/src/tts/persona-gpu-plan.test.ts
 git commit -m "feat(server): srv-48 resolvePersonaGpuPlan decision (idle→GPU+evict, busy→CPU)"
 ```
 
@@ -837,7 +839,7 @@ describe('voice-style route persona GPU plan', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('evict plan: unloads the sidecar then generates on GPU', async () => {
-    const plan = await import('../analyzer/persona-gpu-plan.js');
+    const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
     const evict = vi.spyOn(plan, 'unloadResidentSidecar').mockResolvedValue();
     const vs = await import('../analyzer/voice-style.js');
@@ -850,7 +852,7 @@ describe('voice-style route persona GPU plan', () => {
   });
 
   it('evict refused (GpuBusyForPersonaError) → CPU generation', async () => {
-    const plan = await import('../analyzer/persona-gpu-plan.js');
+    const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
     vi.spyOn(plan, 'unloadResidentSidecar').mockRejectedValue(new plan.GpuBusyForPersonaError('busy'));
     const vs = await import('../analyzer/voice-style.js');
@@ -876,7 +878,7 @@ import {
   resolvePersonaGpuPlan,
   unloadResidentSidecar,
   GpuBusyForPersonaError,
-} from '../analyzer/persona-gpu-plan.js';
+} from '../tts/persona-gpu-plan.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { resolvePersonaEngine } from '../analyzer/voice-style.js';
 
@@ -938,7 +940,7 @@ describe('cast-design persona pre-pass', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('local idle: evict + all personas before the first design; variants skipped', async () => {
-    const plan = await import('../analyzer/persona-gpu-plan.js');
+    const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
     const evict = vi.spyOn(plan, 'unloadResidentSidecar').mockResolvedValue();
     const vs = await import('../analyzer/voice-style.js');
@@ -960,7 +962,7 @@ describe('cast-design persona pre-pass', () => {
   });
 
   it('generation in flight: no evict, personas on CPU, designs still run', async () => {
-    const plan = await import('../analyzer/persona-gpu-plan.js');
+    const plan = await import('../tts/persona-gpu-plan.js');
     vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: true, evict: false, keepAlive: 0 });
     const evict = vi.spyOn(plan, 'unloadResidentSidecar');
     // …drive; expect(evict).not.toHaveBeenCalled(); assert generateVoiceStylePersona called with {onCpu:true}…
@@ -969,7 +971,7 @@ describe('cast-design persona pre-pass', () => {
   it('gemini engine: no pre-pass batch (lazy interleave preserved)', async () => {
     const vs = await import('../analyzer/voice-style.js');
     vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('gemini');
-    const plan = await import('../analyzer/persona-gpu-plan.js');
+    const plan = await import('../tts/persona-gpu-plan.js');
     const evict = vi.spyOn(plan, 'unloadResidentSidecar');
     // …drive; expect(evict).not.toHaveBeenCalled()…
   });
@@ -994,11 +996,12 @@ In `server/src/routes/cast-design.ts`, add the imports and a `runPersonaPrePass`
 
 ```typescript
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
+import { LocalUnreachableError } from '../analyzer/ollama.js';
 import {
   resolvePersonaGpuPlan,
   unloadResidentSidecar,
   GpuBusyForPersonaError,
-} from '../analyzer/persona-gpu-plan.js';
+} from '../tts/persona-gpu-plan.js';
 
 const PERSONA_HEARTBEAT_MS = 6000; // < the pill's 30s stall heuristic
 
@@ -1022,10 +1025,13 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
     }
   }
 
-  const beat = setInterval(
-    () => broadcast(job, { type: 'persona_pass', characterId: job.currentCharacterId }),
-    PERSONA_HEARTBEAT_MS,
-  );
+  // Emit the SAME `heartbeat` event the design loop uses (cast-design.ts:212) —
+  // the pill's stall heuristic resets on that known type, NOT on a novel one.
+  // `persona_pass` is emitted alongside as an optional hook for a future UI label.
+  const beat = setInterval(() => {
+    broadcast(job, { type: 'heartbeat', characterId: job.currentCharacterId });
+    broadcast(job, { type: 'persona_pass' });
+  }, PERSONA_HEARTBEAT_MS);
   try {
     for (const characterId of baseIds) {
       if (job.controller.signal.aborted) return;
@@ -1035,10 +1041,32 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
       if ((character.voiceStyle ?? '').trim()) continue; // already has one — idempotent
       if (character.overrideTtsVoices?.qwen?.name) continue; // already designed — skip
 
-      const persona = await generateVoiceStylePersona(character, {
-        onCpu: plan.onCpu,
-        keepAlive: plan.keepAlive,
-      });
+      let persona: string;
+      try {
+        persona = await generateVoiceStylePersona(character, {
+          onCpu: plan.onCpu,
+          keepAlive: plan.keepAlive,
+        });
+      } catch (err) {
+        // Wholesale failure (engine unreachable) → let it propagate so runDesignJob's
+        // catch ends the job with a clear error. A per-character failure → record it
+        // and skip (the design loop skips characters with no persona), matching the
+        // existing character_failed behaviour.
+        if (err instanceof LocalUnreachableError) throw err;
+        job.failures.push({
+          characterId,
+          name: character.name ?? characterId,
+          error: (err as Error).message || 'Persona generation failed.',
+        });
+        broadcast(job, {
+          type: 'character_failed',
+          characterId,
+          name: character.name ?? characterId,
+          errorReason: (err as Error).message,
+        });
+        continue;
+      }
+
       const fresh = await readJson<CastFile>(castJsonPath(job.bookDir));
       const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
       if (fresh && idx !== -1) {
@@ -1137,6 +1165,33 @@ Expected: PASS (typecheck + tests + e2e + build). If a pre-existing unrelated fa
 
 ## Notes for the executor
 
-- **Verify two anchors before coding:** `gpuSemaphore.budget` getter exists (`semaphore.ts:120`); the sidecar health path used by `unloadResidentSidecar` (Node route is `/api/sidecar/health`; the sidecar process exposes `/health`).
-- **`@google/genai` mock** in Task 4's rate-limiter test is the most fragile spot — prefer a `vi.mock('@google/genai', …)` factory if prototype spying misbehaves.
-- Tasks are dependency-ordered. 1→2→3→4 are the core LLM path; 5→6→7 the GPU/concurrency substrate; 8→9 the two call sites; 10 finalizes.
+- **Mocking ES named exports (cross-cutting).** Tasks 4/8/9 intercept named
+  exports (`generateVoiceStylePersona`, `resolvePersonaEngine`,
+  `resolvePersonaGpuPlan`, `unloadResidentSidecar`) that are *called internally
+  by the module under test*. `vi.spyOn(ns, 'fn')` on a live ESM binding is flaky
+  in this repo (see the known `importOriginal` flake). **Prefer
+  `vi.mock('../path.js', async (importOriginal) => ({ ...(await importOriginal()), fn: vi.fn() }))`**
+  at the top of the file for those modules, and import the mocked symbol to
+  assert on it. Fall back to `vi.spyOn` only where the call crosses a module
+  boundary cleanly.
+- **`@google/genai` mock** in Task 4's rate-limiter test is the most fragile
+  spot — use a `vi.mock('@google/genai', …)` factory returning a fake
+  `GoogleGenAI` whose `models.generateContent` resolves `{ text: '…' }`; the
+  load-bearing assertion is that `geminiRateLimiter.acquire` was called.
+- **Registry snapshot.** Adding two knobs may trip a registry shape/count
+  snapshot test (search `registry.test.ts` / `__snapshots__`). If so, update the
+  snapshot in Task 1 (`vitest -u` scoped to that file) — it's an expected,
+  reviewed change, not a regression.
+- **Verify three anchors before coding:** `gpuSemaphore.budget` getter
+  (`semaphore.ts:120`); the sidecar health path (`unloadResidentSidecar` posts to
+  the sidecar's `/unload`; the Node route is `/api/sidecar/health`, the sidecar
+  process exposes `/health`); the voice-style route already resolves a `bookDir`
+  to pass into `generatePersonaWithPlan` (Task 8) and the `gemini` engine's
+  `voiceStyleModel` knob is read via `resolveVoiceStyleModel` (Task 1).
+- **Deferred (optional UI follow-up, not in this plan):** the spec's
+  `resume_from` *phase marker* and the `persona_pass` **frontend label** are
+  out of scope here — the server emits `heartbeat` (Task 9) so a reload doesn't
+  false-stall, and `persona_pass` is broadcast for a future label. File a thin
+  follow-up if the UI polish is wanted.
+- Tasks are dependency-ordered. 1→2→3→4 are the core LLM path; 5→6→7 the
+  GPU/concurrency substrate; 8→9 the two call sites; 10 finalizes.
