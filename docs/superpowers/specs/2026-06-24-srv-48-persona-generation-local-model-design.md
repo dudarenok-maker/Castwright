@@ -69,17 +69,22 @@ in code, not in settings.
 
 ## Architecture
 
-`generateVoiceStylePersona(character)` becomes a dispatcher over a resolved
-engine; both branches share `buildVoiceStylePrompt()` and `cleanPersona()`, so
-only the model call differs:
+`generateVoiceStylePersona(character, opts?)` becomes a dispatcher over a
+resolved engine; both branches share `buildVoiceStylePrompt()` and
+`cleanPersona()`, so only the model call differs. `opts.onCpu` is forwarded to
+the local branch (default false) so callers control the CPU-pin:
 
 ```
-generateVoiceStylePersona(character)
+generateVoiceStylePersona(character, opts?)   // opts.onCpu?: boolean
   → resolvePersonaEngine()                    // 'local' | 'gemini', from registry
   → engine === 'gemini'
        ? generateViaGemini(character)         // existing inline GoogleGenAI path
-       : generateViaOllama(character)         // new thin Ollama path
+       : generateViaOllama(character, opts)   // new thin Ollama path (onCpu → num_gpu:0)
 ```
+
+Two callers thread `onCpu` differently (see "GPU coexistence"): the
+single-design route passes `shouldEvictBeforeSidecarLoad(...)`; the bulk
+pre-pass passes `false` (it evicts the sidecar up front instead).
 
 ### Registry knobs
 
@@ -111,11 +116,14 @@ Three `ConfigKnob` entries in the `KNOBS` array (`registry.ts`), group
 flow (Zod `format`, validation-retry loop, handoff inbox/error files) — the
 wrong shape for a single freeform sentence. So add a small standalone helper:
 
-`generatePersonaViaOllama(prompt: string, model: string): Promise<string>`
+`generatePersonaViaOllama(prompt: string, model: string, opts?: { onCpu?: boolean }): Promise<string>`
 
 - POSTs to `${getResolvedOllamaUrl()}/api/chat` with the prompt as a single
   user message, `stream: false`, **no `format`**, `think: false`, and a low
-  `temperature`.
+  `temperature`. When `opts.onCpu` is set, sends `num_gpu: 0` to keep the call
+  off the GPU (the single-design CPU-pin path). Callers decide: the single-design
+  route passes `onCpu: shouldEvictBeforeSidecarLoad(getLastKnownVram())`; the
+  bulk pre-pass passes `onCpu: false` (it has already evicted the sidecar).
 - On connection failure, reuses `classifyConnectError()` to raise
   `LocalUnreachableError` with its existing operator message. This requires
   **exporting** `classifyConnectError` from `ollama.ts` (currently
@@ -156,11 +164,32 @@ Mirrors the analyzer's deliberate asymmetry (Q2):
 - Empty model response → the existing per-branch "returned an empty persona"
   error.
 
-## GPU coexistence — an UNRESOLVED design question (constrained cards)
+## GPU coexistence — RESOLVED (path-specific)
 
-> **Status: OPEN.** This is the one part of the design not yet settled. The
-> simple "mirror the analyzer" framing in #1038 missed it; the adversarial
-> review surfaced it. A decision is required before the plan is written.
+> **Status: DECIDED (user, 2026-06-24).** The adversarial review surfaced this;
+> the simple "mirror the analyzer" framing in #1038 missed it. The two call
+> sites get **different** strategies because they have different shapes:
+>
+> - **Bulk "Design full cast"** → **persona pre-pass** (resolution 3). Generate
+>   every needed persona up front (Ollama resident), then run the design loop;
+>   the first design's `withGpuLoad` evicts Ollama before VoiceDesign loads. One
+>   Ollama-resident window, no per-character thrash. On a constrained card, do a
+>   **single up-front sidecar evict** first so the GPU pre-pass has room if a
+>   prior single-design already warmed VoiceDesign (one reverse-evict per run,
+>   not 2N).
+> - **Single design (drawer)** → **CPU-pin** (resolution 1). For one persona a
+>   pre-pass is meaningless; on a constrained card issue the persona `/api/chat`
+>   with `num_gpu: 0` so a seconds-scale CPU call never competes with the
+>   (possibly warm) VoiceDesign for VRAM. Roomy card → GPU.
+>
+> "Constrained card" = `shouldEvictBeforeSidecarLoad(getLastKnownVram())` is
+> true (`residency.ts:7-11`: GPU below `gpu.safeCoexistMb`, or unknown total).
+> A ≥12/16 GB card coexists fine and takes neither special path; CPU never
+> touches VRAM.
+>
+> **Scope note:** this lifts srv-48 above a pure "chore" — the bulk path is a
+> real (small) restructure of `cast-design.ts`'s loop, not just a new branch in
+> `voice-style.ts`. Accepted as part of this design.
 
 Today persona generation is off-GPU (Gemini), so it needs no GPU arbitration.
 The local path introduces a **new on-GPU consumer** at a point in the flow that
@@ -199,45 +228,45 @@ analysis always precedes generation. Cast-design inverts that ordering.
 coexists fine — no problem there. **CPU** Ollama never touches VRAM — fine
 (slow). The hazard is precisely the **8 GB GPU**, this project's primary target.
 
-### Candidate resolutions (pick one)
+### Decided strategy
 
-1. **CPU-pin the local persona call on constrained cards (recommended).** When
-   `shouldEvictBeforeSidecarLoad(getLastKnownVram())` is true, issue the persona
-   `/api/chat` with `num_gpu: 0` (CPU). A single 15–40-word persona is a
-   seconds-scale CPU task, so it never competes with VoiceDesign for VRAM and
-   "just works" offline — which is the whole point of the issue. On a roomy card
-   it runs on GPU normally. Smallest, safest, no cast-design restructure.
-   - *Cost:* a few seconds per persona on CPU; negligible for a one-shot, and
-     local is the opt-in fallback anyway.
-2. **Reverse eviction.** Add the missing symmetric path: before a constrained
-   local persona load, force the sidecar to unload its warm models (a
-   `unloadResidentSidecar` analog), verify, then load Ollama. Correct and
-   general, but it is real new GPU machinery and reintroduces the ~2N
-   load/evict **thrash** (Ollama ↔ VoiceDesign per character) for a full-cast
-   design.
-3. **Batch persona pre-pass.** Restructure cast-design so that under the local
-   engine *all* personas are generated first (Ollama resident), then *all*
-   designs run (the first design's `withGpuLoad` evicts Ollama). Respects the
-   existing one-directional eviction and avoids thrash, but it's a real
-   restructure of `cast-design.ts` (scope creep beyond a "chore") and still
-   needs an up-front sidecar unload if a prior design already warmed VoiceDesign.
-4. **Gate it off.** On a constrained card, refuse `engine: local` with a clear
-   message (use Gemini, or a ≥12 GB card, or CPU). Simplest, but it defeats the
-   issue's offline-install goal on the exact hardware most offline installs run.
+**Single design (drawer) — CPU-pin on constrained cards.** When
+`shouldEvictBeforeSidecarLoad(getLastKnownVram())` is true, `generateViaOllama`
+issues the persona `/api/chat` with `num_gpu: 0` (CPU). A single 15–40-word
+persona is a seconds-scale CPU task, so it never competes with a warm
+VoiceDesign for VRAM and "just works" offline. On a roomy card it runs on GPU.
+No cast-design restructure for this path.
 
-**Recommendation: option 1 (CPU-pin on constrained cards).** It directly serves
-the offline goal, needs no eviction machinery or loop restructure, and keeps the
-"thin helper" shape. The persona's quality is unaffected by CPU vs GPU — only
-latency, which is trivial for one sentence.
+**Bulk "Design full cast" — persona pre-pass.** `runDesignJob`
+(`cast-design.ts:159`) gains a pre-pass that, **before** the design loop touches
+the sidecar, generates personas for every task character that lacks one (same
+freshness/skip rules as the main loop) and persists each. Sequence:
+
+1. If the engine is `local` **and** the card is constrained, evict the sidecar
+   once up front (reverse-evict, so the GPU pre-pass has room even if a prior
+   single-design warmed VoiceDesign). Reuse the existing eviction primitives —
+   a `unloadResidentSidecar` analog of `unloadResidentOllama`, or the sidecar's
+   `POST /api/sidecar/unload` — verified before proceeding.
+2. Generate all needed personas with Ollama **resident on GPU** (fast; one
+   resident window; persisted per character via the existing minimal-patch
+   write).
+3. Run the existing design loop. The first `designQwenVoiceForCharacter` →
+   `withGpuLoad` evicts the resident Ollama before loading VoiceDesign — the
+   normal one-directional path. No per-character Ollama↔VoiceDesign thrash.
+
+For the `gemini` engine the pre-pass is a no-op restructure (personas can still
+be generated inline as today, or in the same pre-pass off-GPU — behaviour
+identical). The pre-pass branch is only load-bearing for `local`.
 
 ## Known limitations & caveats
 
 - **Persona quality.** Per the issue, a small local model may produce weaker
   personas than `gemini-3.1-flash-lite`. `local` is positioned as an opt-in /
   offline fallback, not a quality-equal peer — hence the `gemini` default.
-- **GPU coexistence on an 8 GB card** — the open question above; its chosen
-  resolution determines whether any latency/thrash caveat applies (option 1:
-  a few seconds of CPU latency per persona; options 2/3: model-swap overhead).
+- **GPU coexistence on an 8 GB card** — resolved per-path above. Single design:
+  a few seconds of CPU latency per persona. Bulk: one up-front sidecar evict per
+  run, no per-character thrash. ≥12/16 GB cards and CPU installs take neither
+  special path.
 - **Malformed local model id.** A `PERSONA_GEN_LOCAL_MODEL` without a `:`
   (a Gemini-style id) is passed straight to Ollama → a reachable-but-errored
   hard fail at the daemon. The analyzer never hits this because it *infers*
@@ -252,14 +281,26 @@ latency, which is trivial for one sentence.
   `geminiRateLimiter` on the Gemini branch, and a `<think>…</think>` strip added
   to `cleanPersona()`.
 - `server/src/analyzer/ollama.ts` — export `classifyConnectError`; add
-  `generatePersonaViaOllama` (acquires `gpuSemaphore`, `keep_alive: 0`) — or
-  co-locate it in `voice-style.ts` and import the exported
-  `classifyConnectError` + `getResolvedOllamaUrl` + `gpuSemaphore`/
-  `costForEngine`.
+  `generatePersonaViaOllama` (acquires `gpuSemaphore`, `keep_alive: 0`,
+  optional `num_gpu: 0` via `opts.onCpu`) — or co-locate it in `voice-style.ts`
+  and import the exported `classifyConnectError` + `getResolvedOllamaUrl` +
+  `gpuSemaphore`/`costForEngine`.
 - `server/src/config/registry.ts` — the two new knobs (engine, localModel).
-- `server/src/analyzer/voice-style.test.ts` — paired tests (below).
+- `server/src/routes/cast-design.ts` — bulk persona **pre-pass** (constrained
+  local → up-front sidecar evict, then GPU persona gen for all needed
+  characters, then the existing design loop).
+- `server/src/routes/ollama-health.ts` (or a sibling) — a reverse-evict
+  primitive (`unloadResidentSidecar` + verify), analogous to the existing
+  `unloadResidentOllama`/`verifyOllamaEvicted`, used only by the bulk pre-pass
+  on constrained cards. *(Or call the sidecar's `POST /api/sidecar/unload`
+  directly — the plan picks.)*
+- The single-design caller (`single-design.ts` / the voice-style route) — pass
+  `onCpu` based on `shouldEvictBeforeSidecarLoad`.
+- `server/src/analyzer/voice-style.test.ts` + a `cast-design` test — paired
+  tests (below).
 
-No frontend, no e2e.
+No frontend, no e2e (the config UI auto-renders the knobs; the GPU paths are
+server-internal).
 
 ## Testing
 
@@ -277,13 +318,20 @@ No frontend, no e2e.
 5. **`<think>` strip** — a mocked Ollama response prefixed with
    `<think>…</think>` yields a clean persona with the block removed (locks the
    `cleanPersona` change; fails before, passes after).
-6. **GPU semaphore acquired** — the local path acquires/releases
-   `gpuSemaphore` around its call (spy/mock the semaphore; assert acquire is
-   called once and released, and that `keep_alive: 0` is in the request body).
-   This is the regression net for the OOM-safety fix.
+6. **GPU semaphore + keep_alive** — the local path acquires/releases
+   `gpuSemaphore` around its call and sends `keep_alive: 0` (spy/mock the
+   semaphore; assert acquire-once + release; assert the request body).
 7. **Gemini rate-limiter retained** — the `gemini` branch still calls
    `geminiRateLimiter.acquire` (spy; assert called), so the branch split can't
    silently drop it.
+8. **CPU-pin on constrained card (single design)** — with
+   `shouldEvictBeforeSidecarLoad` mocked true, `onCpu` is set and the request
+   body carries `num_gpu: 0`; mocked false → no `num_gpu: 0` (GPU path).
+9. **Bulk pre-pass ordering** (`cast-design` test) — for a `local`-engine job
+   on a mocked constrained card: the sidecar evict + all persona generations
+   happen **before** the first `designQwenVoiceForCharacter` call (assert call
+   order with spies), and personas are persisted. On a roomy card / `gemini`
+   engine, no up-front evict is issued.
 
 ## Acceptance
 
@@ -299,4 +347,6 @@ No frontend, no e2e.
   card — a measurement this design treats as a hard gate, not an assumption.
 - The `gemini` branch still rate-limits (no 429 regression from the split), and
   a `<think>`-prefixed local response still yields a clean persona.
-- All seven paired tests green; `npm run verify` passes.
+- Bulk local cast-design runs the persona pre-pass (evict → all personas → all
+  designs) — no per-character Ollama↔VoiceDesign thrash.
+- All nine paired tests green; `npm run verify` passes.
