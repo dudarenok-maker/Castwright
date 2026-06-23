@@ -106,7 +106,7 @@ export function tagExcitedDialog(text: string): string {
    tagged. Excitement takes precedence — a line with both `!` and `…`
    stays excited, not hesitant. */
 const HESITATION_LEADING_RE = /^\s*(?:…|\.{2,})/;
-const HESITATION_TRAILING_RE = /(?:…|\.{2,})\s*[“»”]?\s*$/;
+const HESITATION_TRAILING_RE = /(?:…|\.{2,})\s*["”»“]?\s*$/;
 
 export function tagHesitantDialog(text: string): string {
   return rewriteQuoteSpans(text, (inner) => {
