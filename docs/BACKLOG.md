@@ -338,6 +338,12 @@ _Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
 
+#### `srv-48` — Local-model option for voice-design persona generation (Gemini-only today; fails offline) ([#1038](https://github.com/dudarenok-maker/Castwright/issues/1038))
+
+- _What:_ `generateVoiceStylePersona()` is Gemini-only and throws hard without an API key, so a fully-local install can analyze + synthesize but cannot design voices. Add a `local | gemini` provider toggle mirroring the analyzer's `ANALYZER` switch (default Gemini for persona quality; local Ollama as fallback/opt-in), with mutual fallback.
+- _Benefit (user):_ offline / no-Gemini installs can design Qwen voices end-to-end. _(Distinct from fs-62 #1034 persona-i18n — that's the persona's language, this is its provider.)_
+_Full detail + acceptance:_ [#1038](https://github.com/dudarenok-maker/Castwright/issues/1038).
+
 ### Ingest & languages
 
 #### `srv-46` — OCR ingest for scanned / image-only PDFs ([#977](https://github.com/dudarenok-maker/Castwright/issues/977))
