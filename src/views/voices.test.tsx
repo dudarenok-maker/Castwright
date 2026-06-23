@@ -1995,3 +1995,108 @@ describe('fe-34 — variant filter toggle', () => {
     expect(screen.getByTestId('variants-badge')).toHaveTextContent('Variants');
   });
 });
+
+describe('fs-41/fs-50 seam 4b — language facet on the global #/voices view', () => {
+  /* Test-local makeVoice that adds languageCode support on top of the
+     module-level makeVoice without modifying it. */
+  function makeLangVoice(
+    over: Partial<Voice> & Pick<Voice, 'id' | 'character' | 'bookId' | 'bookTitle' | 'source'>,
+  ): Voice {
+    return makeVoice(over);
+  }
+
+  function renderLangView(lib: Voice[]) {
+    return render(
+      <Provider store={makeStore()}>
+        <LibraryView library={lib} />
+      </Provider>,
+    );
+  }
+
+  it('shows no language facet when all voices lack a languageCode (English-only library)', async () => {
+    /* Preset English voices carry no languageCode. The facet must not appear. */
+    const lib: Voice[] = [
+      makeLangVoice({ id: 'v_narrator', character: 'Narrator', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+      makeLangVoice({ id: 'v_marlow', character: 'Marlow', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    ];
+    renderLangView(lib);
+    await act(async () => {});
+    expect(screen.queryByRole('group', { name: 'Filter by language' })).toBeNull();
+    /* Both voices visible — nothing filtered. */
+    expect(screen.getByText('Narrator')).toBeInTheDocument();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
+  });
+
+  it('shows the language facet when at least one voice has a non-English languageCode', async () => {
+    const lib: Voice[] = [
+      makeLangVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'ru' }),
+      makeLangVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    ];
+    renderLangView(lib);
+    await act(async () => {});
+    expect(screen.getByRole('group', { name: 'Filter by language' })).toBeInTheDocument();
+    /* "All" and "Russian" buttons present. */
+    const group = screen.getByRole('group', { name: 'Filter by language' });
+    expect(within(group).getByRole('button', { name: 'All' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Russian' })).toBeInTheDocument();
+  });
+
+  it('filters the voice list to the selected language when a facet is clicked', async () => {
+    /* One Russian-designed voice + one preset (no languageCode = English). */
+    const lib: Voice[] = [
+      makeLangVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'ru' }),
+      makeLangVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    ];
+    renderLangView(lib);
+    await act(async () => {});
+    /* Default "All": both voices present. */
+    expect(screen.getByText('Ivan')).toBeInTheDocument();
+    expect(screen.getByText('Preset')).toBeInTheDocument();
+    /* Click "Russian" → only Ivan stays. */
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.getByText('Ivan')).toBeInTheDocument();
+    expect(screen.queryByText('Preset')).not.toBeInTheDocument();
+  });
+
+  it('restores all voices when "All" is clicked after a language selection', async () => {
+    const lib: Voice[] = [
+      makeLangVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'ru' }),
+      makeLangVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    ];
+    renderLangView(lib);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.queryByText('Preset')).not.toBeInTheDocument();
+    const group = screen.getByRole('group', { name: 'Filter by language' });
+    fireEvent.click(within(group).getByRole('button', { name: 'All' }));
+    expect(screen.getByText('Preset')).toBeInTheDocument();
+    expect(screen.getByText('Ivan')).toBeInTheDocument();
+  });
+
+  it('labels known language codes with their English word (Russian, Spanish, French, German)', async () => {
+    const lib: Voice[] = [
+      makeLangVoice({ id: 'v_ru', character: 'Ru', bookId: 'b1', bookTitle: 'B1', source: 'current', languageCode: 'ru' }),
+      makeLangVoice({ id: 'v_es', character: 'Es', bookId: 'b1', bookTitle: 'B1', source: 'current', languageCode: 'es' }),
+      makeLangVoice({ id: 'v_fr', character: 'Fr', bookId: 'b1', bookTitle: 'B1', source: 'current', languageCode: 'fr' }),
+      makeLangVoice({ id: 'v_de', character: 'De', bookId: 'b1', bookTitle: 'B1', source: 'current', languageCode: 'de' }),
+    ];
+    renderLangView(lib);
+    await act(async () => {});
+    const group = screen.getByRole('group', { name: 'Filter by language' });
+    expect(within(group).getByRole('button', { name: 'Russian' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Spanish' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'French' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'German' })).toBeInTheDocument();
+  });
+
+  it('falls back to the raw BCP-47 code when the language is not in the label map', async () => {
+    const lib: Voice[] = [
+      makeLangVoice({ id: 'v_ja', character: 'Tanaka', bookId: 'b1', bookTitle: 'B1', source: 'current', languageCode: 'ja' }),
+    ];
+    renderLangView(lib);
+    await act(async () => {});
+    const group = screen.getByRole('group', { name: 'Filter by language' });
+    /* 'ja' is not in the label map → rendered as-is. */
+    expect(within(group).getByRole('button', { name: 'ja' })).toBeInTheDocument();
+  });
+});

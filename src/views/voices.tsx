@@ -165,6 +165,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [unmarkBusyKey, setUnmarkBusyKey] = useState<string | null>(null);
   /* fe-34 — variant filter for the Qwen "Designed voices" section. */
   const [variantFilter, setVariantFilter] = useState<'all' | 'has' | 'needs'>('all');
+  /* fs-41/fs-50 seam 4b — language facet. null = show all. */
+  const [languageFilter, setLanguageFilter] = useState<string | null>(null);
   /* fe-34 — sentences per foreign book, cached from the same getBookState the
      duplicate/compare flows already fetch. The open book reads redux below. */
   const [sentencesByBookId, setSentencesByBookId] = useState<Map<string, Sentence[]>>(
@@ -241,7 +243,26 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     () => library.filter((v) => v.ttsVoice?.provider === 'qwen'),
     [library],
   );
-  const families = useMemo(() => buildFamilies(presetLibrary, tab), [presetLibrary, tab]);
+  /* fs-41/fs-50 seam 4b — unique non-English languageCodes present in the
+     full library. The facet only renders when this is non-empty (English-only
+     or no-languageCode libraries show no facet). */
+  const languages = useMemo(
+    () => [...new Set(library.map((v) => v.languageCode).filter(Boolean))] as string[],
+    [library],
+  );
+  /* fs-41/fs-50 seam 4b — language-filtered preset library fed into
+     buildFamilies; mirrors how variantFilter narrows filteredQwenLibrary. */
+  const languageFilteredPresetLibrary = useMemo(
+    () =>
+      languageFilter === null
+        ? presetLibrary
+        : presetLibrary.filter((v) => v.languageCode === languageFilter),
+    [presetLibrary, languageFilter],
+  );
+  const families = useMemo(
+    () => buildFamilies(languageFilteredPresetLibrary, tab),
+    [languageFilteredPresetLibrary, tab],
+  );
   /* fs-34 — per-voice designed-variant count for the cross-book Voices badge.
      Resolve each Qwen voice to its character (redux for the open book, the
      global cast cache for others) and count its qwen.variants. */
@@ -275,10 +296,14 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     return map;
   }, [qwenLibrary, currentBookId, characters, globalCastCache, openBookSentences, sentencesByBookId]);
   const filteredQwenLibrary = useMemo(() => {
-    if (variantFilter === 'all') return qwenLibrary;
+    const langFiltered =
+      languageFilter === null
+        ? qwenLibrary
+        : qwenLibrary.filter((v) => v.languageCode === languageFilter);
+    if (variantFilter === 'all') return langFiltered;
     const map = variantFilter === 'has' ? variantCountByVoiceId : missingVariantCountByVoiceId;
-    return qwenLibrary.filter((v) => (map.get(v.id) ?? 0) > 0);
-  }, [qwenLibrary, variantFilter, variantCountByVoiceId, missingVariantCountByVoiceId]);
+    return langFiltered.filter((v) => (map.get(v.id) ?? 0) > 0);
+  }, [qwenLibrary, languageFilter, variantFilter, variantCountByVoiceId, missingVariantCountByVoiceId]);
   const qwenGroups = useMemo(
     () => buildQwenStatusGroups(filteredQwenLibrary, tab),
     [filteredQwenLibrary, tab],
@@ -1125,6 +1150,43 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               </div>
             )}
           </div>
+          {/* fs-41/fs-50 seam 4b — language facet. Only shown when ≥1 voice
+              carries a non-English languageCode; an all-English library shows
+              nothing here, preserving the existing view byte-for-byte. */}
+          {languages.length > 0 && (
+            <div
+              className="flex items-center gap-2 flex-wrap"
+              role="group"
+              aria-label="Filter by language"
+            >
+              <span className="text-xs text-ink/50">Language:</span>
+              {([null, ...languages] as Array<string | null>).map((code) => {
+                const LANGUAGE_LABELS: Record<string, string> = {
+                  ru: 'Russian',
+                  es: 'Spanish',
+                  fr: 'French',
+                  de: 'German',
+                };
+                const label = code === null ? 'All' : (LANGUAGE_LABELS[code] ?? code);
+                const active = languageFilter === code;
+                return (
+                  <button
+                    key={code ?? '__all__'}
+                    type="button"
+                    onClick={() => setLanguageFilter(code)}
+                    aria-pressed={active}
+                    className={`min-h-[44px] sm:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
+                      active
+                        ? 'bg-ink text-canvas'
+                        : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {qwenLibrary.length > 0 && (
             <div
               className="flex items-center gap-2 flex-wrap"
