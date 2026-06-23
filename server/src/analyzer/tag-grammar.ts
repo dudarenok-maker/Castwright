@@ -44,9 +44,9 @@ const RU_STOPWORDS = [
 ] as const;
 
 // English name token — IDENTICAL to the historical makeTagRegex character class.
-const EN_NAME = "[A-Z][A-Za-z''-]+";
+const EN_NAME = "[A-Z][A-Za-z’'-]+";
 // Unicode name token (es/ru): a capital letter + letters/apostrophes/hyphens.
-const UNI_NAME = "\\p{Lu}[\\p{L}''-]+";
+const UNI_NAME = "\\p{Lu}[\\p{L}’'-]+";
 
 const TAG_GRAMMARS: Record<string, TagGrammar> = {
   en: { verbs: DIALOGUE_VERBS, order: 'name-verb', nameCapture: EN_NAME, flipStrategy: 'preceding' },

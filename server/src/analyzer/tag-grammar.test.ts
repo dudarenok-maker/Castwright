@@ -18,11 +18,16 @@ describe('grammarFor', () => {
 describe('tagRegexFor — English is byte-identical to the historical regex', () => {
   it('reproduces makeTagRegex source with no u/g flag', () => {
     const re = tagRegexFor(grammarFor('en')!);
-    expect(re.source).toBe(`\\b([A-Z][A-Za-z''-]+)\\s+(?:${DIALOGUE_VERBS.join('|')})\\b`);
+    expect(re.source).toBe(`\\b([A-Z][A-Za-z’'-]+)\\s+(?:${DIALOGUE_VERBS.join('|')})\\b`);
     expect(re.flags).toBe('');
   });
   it('captures the name before the verb', () => {
     expect(tagRegexFor(grammarFor('en')!).exec('Behnam noted.')?.[1]).toBe('Behnam');
+  });
+  it('captures an English name containing a typographic apostrophe (byte-identity guard)', () => {
+    // Historical regex class is [A-Za-z’'-]; a curly-apostrophe name must capture in full.
+    const name = 'D’Artagnan';
+    expect(tagRegexFor(grammarFor('en')!).exec(`${name} said hello`)?.[1]).toBe(name);
   });
 });
 
