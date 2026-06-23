@@ -84,7 +84,8 @@ generateVoiceStylePersona(character, opts?)   // opts.onCpu?: boolean
 
 Both callers compute their plan via the shared `resolvePersonaGpuPlan(bookDir)`
 (see "GPU coexistence") and thread `onCpu` + `keepAlive` into the local branch;
-the GPU plan also evicts the idle sidecar first under the load-mutex.
+the GPU plan also reverse-evicts the idle sidecar first via a fail-closed,
+full-`gpuSemaphore`-budget primitive.
 
 ### Registry knobs
 
@@ -243,36 +244,56 @@ per persona — so it is reserved for the genuinely-unsafe case, not the default
 | constrained | **no** (sidecar idle) | **evict** idle warm sidecar model, then **GPU** persona (~15 s) |
 | constrained | **yes** (synthesis/design/analysis) | **CPU** persona (`num_gpu:0`, ~60 s+); **no evict** — never disturb a live render |
 
-"Other GPU work in flight" = `gpuSemaphore.inFlight > 0` OR `isAnyDesignBusy()`
-(excluding this `bookDir`) OR `isAnyAnalysisBusy()`. "Constrained" =
-`shouldEvictBeforeSidecarLoad(getLastKnownVram())`.
+**"Other GPU work in flight"** combines a durable and an instantaneous signal —
+the probe found neither alone suffices:
+- `gpuSemaphore.inFlight > 0` — **instantaneous**: an active `/synthesize` or
+  analyzer call right now (held per-chunk, `sidecar.ts:118-156`).
+- a **global** generation flag — **durable**: a render is mid-job even between
+  chunks. `isGenerationActive(bookId)` (`generation.ts:290-297`) is per-book;
+  this needs an "any book" variant (iterate `inFlightByBook`).
+- `isAnyDesignBusy()` (excluding this `bookDir`) and `isAnyAnalysisBusy()`.
 
-**Single design (drawer) — the decision, N=1.** The single-design persona call
-runs `resolvePersonaGpuPlan` and threads the result into `generateViaOllama`
-(`onCpu`, and whether to evict first under the load-mutex). No batch machinery,
-no `runDesignJob` changes — just the shared decision so a constrained-but-idle
-box gets the 15 s GPU path instead of a 60 s CPU wait, and a busy box stays
-safe. (CPU calls use `keep_alive: 0` and do **not** acquire the GPU semaphore —
-they aren't GPU ops.)
+"Constrained" = `shouldEvictBeforeSidecarLoad(getLastKnownVram())`.
 
-**Bulk "Design full cast" — guarded persona pre-pass.** `runDesignJob`
-(`cast-design.ts:159`) gains a pre-pass that, **before** the design loop touches
-the sidecar, generates personas for every task character that lacks one (same
-freshness/skip rules as the main loop) and persists each. It runs
-`resolvePersonaGpuPlan(job.bookDir)` once:
+**The reverse-evict is fail-closed and holds the FULL GPU budget.** It acquires
+the **full `gpuSemaphore` budget** — NOT merely `withGpuLoadLock`. Synthesis
+holds the semaphore *per chunk* and never takes the load-mutex, so the mutex
+alone would let a `/synthesize` run *during* the unload and fail that render's
+chapter. Holding the full budget guarantees no `/synthesize` is in flight or can
+start while we unload. Inside that hold it re-checks the durable generation flag
+and, if a render is active, **refuses** (throws a `GpuBusyError`-style signal)
+rather than forcing a reload — the caller then takes the CPU path. Reassurance:
+synthesis is **stateless per `/synthesize` call** and embeddings are persisted,
+so the worst case of an ill-timed unload is a *reload* of another render's next
+chunk (perf), never corrupted audio.
+
+**Single design (drawer) — the decision, N=1.** Persona *generation* for a
+single character is the **`voice-style.ts` route** (`qwen-voice.ts` takes the
+persona from the request body and never generates one — `qwen-voice.ts:506-513`,
+and it's outside any design-lock). That route runs `resolvePersonaGpuPlan` and
+threads the result into `generateViaOllama`. No batch machinery, no
+`runDesignJob` changes — just the shared decision so a constrained-but-idle box
+gets the 15 s GPU path instead of a 60 s CPU wait, and a busy box stays safe.
+(CPU calls use `keep_alive: 0` and do **not** acquire the GPU semaphore.)
+
+**Bulk "Design full cast" — guarded persona pre-pass (`local` engine only).**
+`runDesignJob` (`cast-design.ts:159`) gains a pre-pass that, **before** the
+design loop touches the sidecar, generates personas for the **base** task
+characters that lack one (variants always reuse the base persona — the pre-pass
+skips them) and persists each, with the same freshness/skip rules as the main
+loop. It runs `resolvePersonaGpuPlan(job.bookDir)` once:
 
 1. **GPU plan (idle constrained card).** Reverse-evict the idle warm sidecar
-   model once (a `unloadResidentSidecar` analog of `unloadResidentOllama`, or
-   `POST /api/sidecar/unload`, verified via `/api/sidecar/health`), under the
-   GPU **load-mutex** (`withGpuLoadLock`) so the evict+first-Ollama-load is
-   atomic w.r.t. other GPU loads. Then generate all personas with Ollama
-   **resident on GPU** — `keep_alive` set to the analyzer's resident window
-   (NOT 0) so the model stays warm across the N calls (one resident window, ~15 s
-   each, no per-call reload). The batching is the bulk path's only addition over
-   the single-design decision.
-2. **CPU plan (generation in flight).** Skip the evict; generate personas on CPU
-   (`num_gpu: 0`, `keep_alive: 0`, no semaphore) — safe, ~60 s+ each, never
-   disturbs another book's render.
+   model once — a `unloadResidentSidecar` primitive (`POST /api/sidecar/unload`
+   with `engine:'qwen'`, which must free **both** Qwen Base + VoiceDesign;
+   verified via `/api/sidecar/health`) — **holding the full `gpuSemaphore`
+   budget** and fail-closed per the rule above. Then generate all personas with
+   Ollama **resident on GPU** — `keep_alive` set to the analyzer's resident
+   window (NOT 0) so the model stays warm across the N calls (~15 s each, no
+   per-call reload).
+2. **CPU plan (generation in flight, or evict refused).** Skip the evict;
+   generate personas on CPU (`num_gpu: 0`, `keep_alive: 0`, no semaphore) —
+   safe, ~60 s+ each, never disturbs another book's render.
 3. **Then the existing design loop runs.** The first `designQwenVoiceForCharacter`
    → `withGpuLoad` evicts the now-resident Ollama before loading VoiceDesign —
    the normal one-directional path. No per-character Ollama↔VoiceDesign thrash.
@@ -281,10 +302,13 @@ If a generation *starts* mid-pre-pass, its `withGpuLoad` may evict the pre-pass'
 resident Ollama; the next persona call simply reloads (degrades to a reload, not
 a corruption). The common single-book case never hits this.
 
-For the `gemini` engine the pre-pass is off-GPU (Gemini is remote) and the
-safety probe / evict are skipped — behaviour identical to today, just relocated
-ahead of the design loop. The pre-pass's GPU machinery is load-bearing only for
-`local` on a constrained card.
+**The `gemini` engine pre-pass is untouched.** Hoisting N Gemini calls up front
+would change the default path's failure profile (a Gemini outage would fail the
+whole pre-pass before any design, vs today's lazy interleave where characters
+with personas still design). So the pre-pass fires **only for `local`**; the
+gemini path keeps generating personas lazily inside the design loop exactly as
+today. The pre-pass + its GPU machinery is load-bearing only for `local` on a
+constrained card.
 
 ### Pre-pass resume / progress / error semantics
 
@@ -325,6 +349,12 @@ must not break re-attach:
   engine from the `:`; here the engine is explicit, so the id is trusted. We do
   not add validation — the daemon's error is surfaced verbatim — but it is
   noted so the failure mode is understood.
+- **Blank-inherit assumes the analyzer model is pulled.** Inheriting
+  `getResolvedOllamaModel()` is zero-download *if local analysis has run* (the
+  model is already pulled). A design-only box that never ran local analysis, or
+  one whose default model isn't pulled, 404s on the persona call — surfaced
+  verbatim. Acceptable for the offline analyze-then-design flow; noted for the
+  design-only edge.
 
 ## Files touched
 
@@ -339,18 +369,23 @@ must not break re-attach:
   `getResolvedOllamaUrl` + `gpuSemaphore`/`costForEngine`.
 - A new `resolvePersonaGpuPlan(bookDir)` helper (in `voice-style.ts` or a small
   GPU-side module) implementing the decision table — reads
-  `shouldEvictBeforeSidecarLoad`, `gpuSemaphore.inFlight`, `isAnyDesignBusy`,
-  `isAnyAnalysisBusy`.
+  `shouldEvictBeforeSidecarLoad`, `gpuSemaphore.inFlight`, a **global**
+  generation flag, `isAnyDesignBusy` (excl. self), `isAnyAnalysisBusy`.
+- `server/src/routes/generation.ts` — export a **global** `isAnyGenerationActive()`
+  (iterate `inFlightByBook`); `isGenerationActive(bookId)` is per-book today.
 - `server/src/config/registry.ts` — the two new knobs (engine, localModel).
-- `server/src/routes/cast-design.ts` — bulk persona **pre-pass** (run
-  `resolvePersonaGpuPlan` → GPU-evict-then-resident or CPU; then the existing
-  design loop) plus the `persona_pass` progress event + resume marker.
-- `server/src/routes/ollama-health.ts` (or a sibling) — a reverse-evict
-  primitive (`unloadResidentSidecar` + verify, under `withGpuLoadLock`),
-  analogous to `unloadResidentOllama`/`verifyOllamaEvicted`. *(Or call the
-  sidecar's `POST /api/sidecar/unload` directly — the plan picks.)*
-- The single-design caller (`qwen-voice.ts` / the voice-style route) — run
-  `resolvePersonaGpuPlan` and thread the result.
+- `server/src/routes/cast-design.ts` — `local`-only bulk persona **pre-pass**
+  (base tasks lacking a persona; run `resolvePersonaGpuPlan` → GPU-evict-then-
+  resident or CPU; then the existing design loop) plus the `persona_pass`
+  progress event + resume marker. The `gemini` path is left lazy-interleaved.
+- A reverse-evict primitive `unloadResidentSidecar` (e.g. in `sidecar-health.ts`)
+  — acquires the **full `gpuSemaphore` budget**, re-checks the generation flag
+  (refuse → `GpuBusyError`), `POST /unload {engine:'qwen'}` (must free Base +
+  VoiceDesign), verifies via `/api/sidecar/health`. *(Not just `withGpuLoadLock`
+  — synthesis holds the semaphore per-chunk, not the mutex.)*
+- The **voice-style route** (`server/src/routes/voice-style.ts`) — the
+  single-character persona-gen site — runs `resolvePersonaGpuPlan` and threads
+  the result. (`qwen-voice.ts` does **not** generate personas; no change there.)
 - `server/src/analyzer/voice-style.test.ts` + a `cast-design` test — paired
   tests (below).
 
@@ -382,16 +417,23 @@ server-internal).
 8. **Gemini rate-limiter retained** — the `gemini` branch still calls
    `geminiRateLimiter.acquire` (spy; assert called), so the branch split can't
    silently drop it.
-9. **`resolvePersonaGpuPlan` decision table** — drive the three rows: roomy card
-   → GPU/no-evict; constrained + idle (`gpuSemaphore.inFlight===0`,
-   not-busy) → evict + GPU; constrained + generation-in-flight
-   (`inFlight>0` or `isAnyDesignBusy`/`isAnyAnalysisBusy`) → CPU/no-evict.
-10. **Bulk pre-pass ordering** (`cast-design` test) — for a `local`-engine job on
+9. **`resolvePersonaGpuPlan` decision table** — drive every row: roomy card →
+   GPU/no-evict; constrained + idle → evict + GPU; constrained + `inFlight>0`
+   → CPU/no-evict; constrained + **durable** generation flag set but
+   `inFlight===0` (between chunks) → **still** CPU/no-evict (locks the
+   instantaneous-vs-durable distinction); constrained + another book's
+   design/analysis busy → CPU.
+10. **Reverse-evict is fail-closed + full-budget** — `unloadResidentSidecar`
+    acquires the full `gpuSemaphore` budget (assert), and when the generation
+    flag flips true it **refuses** (throws, no `/unload` sent) so the caller
+    falls back to CPU. A unit test asserts no `/unload` fetch fires while
+    generation is active.
+11. **Bulk pre-pass ordering** (`cast-design` test) — for a `local`-engine job on
     a mocked constrained + idle card: the sidecar evict + all persona generations
-    happen **before** the first `designQwenVoiceForCharacter` (assert call order
-    with spies) and personas are persisted. On a mocked generation-in-flight box:
-    **no** evict, personas generated on CPU, designs still run. Roomy card /
-    `gemini`: no evict.
+    happen **before** the first `designQwenVoiceForCharacter` (assert call order),
+    personas persisted, **variants skipped**. On a mocked generation-in-flight
+    box: **no** evict, personas on CPU, designs still run. `gemini` engine: no
+    pre-pass — personas stay lazy-interleaved (assert no up-front batch).
 
 ## Acceptance
 
@@ -406,9 +448,12 @@ server-internal).
   flight → CPU persona (~60 s+), which never disturbs the live render. Verified
   on-box on an 8 GB card — treated as a hard gate, not an assumption.
 - A bulk cast-design started **while another book is rendering** completes
-  without interrupting that render (the pre-pass takes the CPU path).
-- The `gemini` branch still rate-limits (no 429 regression from the split), and
-  a `<think>`-prefixed local response still yields a clean persona.
+  without interrupting that render — the reverse-evict refuses (full-budget +
+  generation-flag check) and the pre-pass takes the CPU path.
+- The default `gemini` path is byte-for-byte unchanged: personas still generated
+  lazily inside the design loop, still rate-limited, no up-front batch.
+- A `<think>`-prefixed local response yields a clean persona.
 - Bulk local cast-design runs the persona pre-pass (one resident GPU window, or
-  CPU when busy) — no per-character Ollama↔VoiceDesign thrash.
-- All ten paired tests green; `npm run verify` passes.
+  CPU when busy) — no per-character Ollama↔VoiceDesign thrash; variants reuse the
+  base persona.
+- All eleven paired tests green; `npm run verify` passes.
