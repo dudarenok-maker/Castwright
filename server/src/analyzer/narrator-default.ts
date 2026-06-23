@@ -30,8 +30,8 @@ export function isSpokenLine(text: string): boolean {
   const t = (text ?? '').trimStart();
   if (!t) return false;
   if (/^(&mdash;|&ndash;|[-–—])/i.test(t)) return true; // dash entities + literal dashes
-  if (/^[«"“‘']/.test(t)) return true; // any opening quote: guillemet / straight+smart double / smart+straight single
-  if (/«[^»]+»/.test(t) || /"[^"]+"/.test(t) || /“[^”]+”/.test(t) || /‘[^’]+’/.test(t)) return true; // embedded span: guillemet / straight+smart double / smart single
+  if (/^[«„"“‘']/.test(t)) return true; // any opening quote: guillemet / German open / straight+smart double / smart+straight single
+  if (/«[^»]+»/.test(t) || /„[^“]+“/.test(t) || /"[^"]+"/.test(t) || /“[^”]+”/.test(t) || /‘[^’]+’/.test(t)) return true; // embedded span: guillemet / German „…“ / straight+smart double / smart single
   // embedded STRAIGHT single, word-boundary-anchored: opens after start/space/bracket/dash, closes before space/punct.
   // Avoids apostrophes (don't, O'Brien, dogs') whose ' is never at a word boundary.
   if (/(?:^|[\s([{<«—–-])'(?=\S)[^']*?\S'(?=[\s.,!?;:)\]}>»]|$)/.test(t)) return true;

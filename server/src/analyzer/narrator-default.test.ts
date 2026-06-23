@@ -62,6 +62,10 @@ describe('isSpokenLine', () => {
   it('narration quoting a sign with straight double quotes still reads as spoken (documented false-negative)', () => {
     expect(isSpokenLine('She read the sign that said "Exit".')).toBe(true);
   });
+  it('treats German „…“ dialogue as spoken (leading and embedded)', () => {
+    expect(isSpokenLine('„Schnell!“')).toBe(true);                 // leading German open-quote
+    expect(isSpokenLine('Er sagte „komm her“ leise.')).toBe(true); // embedded German span
+  });
 });
 
 describe('forceNarratorOnNonSpokenLines', () => {
