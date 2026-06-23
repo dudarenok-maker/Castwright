@@ -27,6 +27,7 @@ import {
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
+import { getLanguageEntry } from '../tts/language-registry.js';
 import { AnalysisAbortedError } from './ollama.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
@@ -174,11 +175,23 @@ Return ONLY a single JSON object that matches the schema in the SKILL section. N
    regardless — only the manuscript text is in another language. */
 export function languagePreamble(language?: string): string {
   if (!language || !isNonEnglish(language)) return '';
-  const ru = normaliseBookLanguage(language) === 'ru';
-  const where = ru ? 'Russian (Cyrillic script)' : `${language} (a non-English language)`;
+  const primary = normaliseBookLanguage(language);
+  const ru = primary === 'ru';
+  const entry = getLanguageEntry(primary);
+  const where = entry
+    ? `${entry.sidecarName}${entry.detect.script === 'cyrillic' ? ' (Cyrillic script)' : ''}`
+    : `${language} (a non-English language)`;
+  /* Per-language dialogue conventions for the Latin tranche (Russian keeps its own
+     tuned string below). The German caution is load-bearing: every German noun is
+     capitalised, so the model must not infer a speaker from capitalisation. */
+  const LATIN_CONVENTIONS: Record<string, string> = {
+    es: ' Dialogue is marked with «…» or an em-dash —, and questions/exclamations open with ¿ ¡. Characters may be named by first name or surname.',
+    fr: ' Dialogue is marked with « … » (with spaces) or an em-dash —, not English "quotes".',
+    de: ' Dialogue is marked with „…" (low/high quotes) or «…». NOTE: every German noun is capitalised, so a capitalised word is NOT necessarily a character name.',
+  };
   const conventions = ru
     ? ' Dialogue is often marked with guillemets «…» or an em-dash —, not English "quotes". Characters may be named by first name, patronymic, surname, or diminutive (e.g. "Соня" for "Софья") — treat these as the same person. IMPORTANT: a dashed line that is a narrative TAG describing who spoke or what they did — e.g. «— сказал юноша.», «— тихо произнесла девушка.», «— Девушка улыбнулась.» (verbs like сказал/произнёс(ла)/воскликнул(а)/спросил(а)/засмеялся/улыбнулась/нахмурился) — is the narrator, NOT the speaker. Only the actually-spoken words belong to the speaker.'
-    : '';
+    : (LATIN_CONVENTIONS[primary] ?? '');
   /* Cast-field guards for any non-English manuscript (validated on Russian +
      gemma4-e4b, 2026-06-19: without these the local model emits gender/age
      100% but `tone` 0% and writes role/description in mixed English/target
