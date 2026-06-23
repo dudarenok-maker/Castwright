@@ -1106,12 +1106,15 @@ export function GenerationView({
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               stale={
-                /* Precise diff when the server shipped this chapter's render
-                   map (#650); otherwise the time-based change-log heuristic
-                   (Bug 2) so older servers / mocks still flag staleness. */
-                renderedSpeakersByChapter[ch.id]
-                  ? reassignedSinceRenderSet.has(ch.id)
-                  : isChapterStaleFromReassign(ch, activityEvents)
+                /* OR-gate (fs-58 Task 3): stale if the precise render-map diff
+                   flags a speaker change OR a post-render boundary_move was
+                   logged (covers text/emotion edits the characterId-only precise
+                   diff can't see — strip_tag / fix_emotion + the retained
+                   split/extract piece). Intentionally conservative: a
+                   move-then-undo still reads stale, trading that rare false
+                   positive for catching edits that don't change characterIds. */
+                (renderedSpeakersByChapter[ch.id] ? reassignedSinceRenderSet.has(ch.id) : false) ||
+                isChapterStaleFromReassign(ch, activityEvents)
               }
               subsetProgress={subsetByChapter[ch.id] ?? null}
               activeModelKey={modelKey}
