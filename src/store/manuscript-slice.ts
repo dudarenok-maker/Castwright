@@ -167,6 +167,10 @@ export const manuscriptSlice = createSlice({
         sentences: Sentence[] | null;
         wordCount?: number | null;
         format?: UploadResponse['format'] | null;
+        /** fs-58 — tombstone of merged-away sentence keys for this book.
+            The `?? []` also book-scopes the tombstone: loading Book B with
+            no keys clears Book A's tombstone from the prior load. */
+        mergedAwayKeys?: string[];
       }>,
     ) => {
       const { state, sentences, wordCount, format } = a.payload;
@@ -177,6 +181,7 @@ export const manuscriptSlice = createSlice({
       if (typeof wordCount === 'number' && wordCount > 0) s.wordCount = wordCount;
       if (format) s.format = format;
       if (sentences?.length) s.sentences = sentences;
+      s.mergedAwayKeys = a.payload.mergedAwayKeys ?? [];
     },
     reset: (s) => {
       s.bookId = null;

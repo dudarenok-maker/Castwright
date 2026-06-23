@@ -728,6 +728,8 @@ export function Layout() {
             sentences: res.manuscriptEdits?.sentences ?? null,
             wordCount: res.manuscript?.wordCount ?? null,
             format: res.manuscript?.format ?? null,
+            // fs-58 — rehydrate the merge tombstone so re-analysis can't resurrect merged ids.
+            mergedAwayKeys: res.manuscriptEdits?.mergedAwayKeys,
           }),
         );
         /* Always overwrite the cast slice from disk — including the empty

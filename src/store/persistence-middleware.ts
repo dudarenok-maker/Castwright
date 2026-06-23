@@ -80,27 +80,40 @@ const PERSIST_RULES: Record<
 
   'manuscript/setSentenceCharacter': {
     slice: 'manuscript',
-    build: (s) => ({ sentences: s.manuscript.sentences }),
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
   'manuscript/setSentencesCharacter': {
     slice: 'manuscript',
-    build: (s) => ({ sentences: s.manuscript.sentences }),
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
   /* fs-25 — a hand-set per-quote emotion persists like a reassignment, so the
      manual override survives reload and wins over analyzer/seed emotion. */
   'manuscript/setSentenceEmotion': {
     slice: 'manuscript',
-    build: (s) => ({ sentences: s.manuscript.sentences }),
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
   /* fs-33 — the bulk emotion backfill persists like a manual tag so detected
      emotions survive reload and reach synth via manuscript-edits.json. */
   'manuscript/applyDetectedEmotions': {
     slice: 'manuscript',
-    build: (s) => ({ sentences: s.manuscript.sentences }),
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
   'manuscript/splitSentence': {
     slice: 'manuscript',
-    build: (s) => ({ sentences: s.manuscript.sentences }),
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
+  /* fs-58 — a merge is a committed edit; the tombstone must survive reload
+     so a re-analysis cannot resurrect the merged-away sentence id.
+     Persisted alongside sentences in manuscript-edits.json. */
+  'manuscript/mergeSentences': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
+  /* fs-58 — text edit (strip_tag review op). Persisted the same way as other
+     sentence edits so the corrected text survives reload. */
+  'manuscript/setSentenceText': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
 
   /* dismissed ids ride with every revisions persist so the backend drift

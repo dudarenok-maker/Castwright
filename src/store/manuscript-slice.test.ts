@@ -19,6 +19,7 @@ const baseState = (initial: Sentence[]) => ({
   sentences: initial,
   importCandidate: null,
   pendingReupload: null,
+  mergedAwayKeys: [] as string[],
 });
 
 describe('manuscriptSlice — splitSentence', () => {
@@ -814,5 +815,22 @@ describe('mergeSentences', () => {
     const s = start([{ id: 5, chapterId: 3, characterId: 'narrator', text: 'A.' }]);
     expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 9] })).sentences).toHaveLength(1);
     expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5] })).sentences).toHaveLength(1);
+  });
+});
+
+describe('hydrateFromBookState — merge tombstone persistence (task-2b)', () => {
+  it('rehydrates and book-scopes the merge tombstone', () => {
+    const a = reducer(undefined, manuscriptActions.hydrateFromBookState({
+      state: { bookId: 'A', manuscriptId: 'mns_a', title: 'Book A' } as never,
+      sentences: null,
+      mergedAwayKeys: ['3:6'],
+    }));
+    expect(a.mergedAwayKeys).toEqual(['3:6']);
+    // Loading a different book with no mergedAwayKeys clears the prior book's tombstone.
+    const b = reducer(a, manuscriptActions.hydrateFromBookState({
+      state: { bookId: 'B', manuscriptId: 'mns_b', title: 'Book B' } as never,
+      sentences: null,
+    }));
+    expect(b.mergedAwayKeys).toEqual([]); // B's load doesn't inherit A's tombstone
   });
 });

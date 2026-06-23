@@ -38,6 +38,7 @@ function makeStore({
         sentences,
         importCandidate: null,
         pendingReupload: null,
+        mergedAwayKeys: [],
       },
     },
   });

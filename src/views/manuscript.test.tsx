@@ -490,6 +490,7 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
           sentences: twoChapterSentences,
           importCandidate: null,
           pendingReupload: null,
+          mergedAwayKeys: [],
         },
       },
     });
@@ -585,6 +586,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
           sentences: [sentence],
           importCandidate: null,
           pendingReupload: null,
+          mergedAwayKeys: [],
         },
       },
     });
