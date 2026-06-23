@@ -1,0 +1,98 @@
+{
+  "note": "Canonical cast for The Coalfall Commission (English and Spanish translations are 1:1). Used by scripts/eval-attribution.mjs.",
+  "allowedAnonymous": ["unknown male", "unknown female", "unknown"],
+  "speakers": [
+    {
+      "id": "narrator",
+      "name": "Narrator",
+      "aliases": [],
+      "expectedLines": 140,
+      "lineRange": [70, 280]
+    },
+    {
+      "id": "coalfall",
+      "name": "Coalfall",
+      "aliases": ["Dragón", "Dragon", "El Dragón", "the dragon", "The Dragon"],
+      "expectedLines": 22,
+      "lineRange": [11, 44],
+      "entitySplitAliases": ["Dragón", "Dragon", "El Dragón", "the dragon", "The Dragon"]
+    },
+    {
+      "id": "oduvan",
+      "name": "Oduvan",
+      "aliases": [],
+      "expectedLines": 18,
+      "lineRange": [9, 36]
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "aliases": [],
+      "expectedLines": 11,
+      "lineRange": [5, 22]
+    },
+    {
+      "id": "maerin",
+      "name": "Maerin",
+      "aliases": [],
+      "expectedLines": 7,
+      "lineRange": [3, 14]
+    },
+    {
+      "id": "sela",
+      "name": "Sela",
+      "aliases": [],
+      "expectedLines": 7,
+      "lineRange": [3, 14]
+    },
+    {
+      "id": "pell-hollis",
+      "name": "Pell Hollis",
+      "aliases": ["Pell", "Hollis"],
+      "expectedLines": 8,
+      "lineRange": [4, 16]
+    },
+    {
+      "id": "widow-casper",
+      "name": "Widow Casper",
+      "aliases": ["Viuda Casper", "Casper"],
+      "expectedLines": 7,
+      "lineRange": [3, 14]
+    },
+    {
+      "id": "brann-weir",
+      "name": "Brann Weir",
+      "aliases": ["Brann"],
+      "expectedLines": 7,
+      "lineRange": [3, 14]
+    },
+    {
+      "id": "berrin-weir",
+      "name": "Berrin Weir",
+      "aliases": ["Berrin"],
+      "expectedLines": 7,
+      "lineRange": [3, 14]
+    },
+    {
+      "id": "father-lessom",
+      "name": "Father Lessom",
+      "aliases": ["Padre Lessom", "Lessom"],
+      "expectedLines": 4,
+      "lineRange": [2, 8]
+    },
+    {
+      "id": "hart",
+      "name": "Hart",
+      "aliases": [],
+      "expectedLines": 5,
+      "lineRange": [2, 10]
+    },
+    {
+      "id": "ivo",
+      "name": "Ivo",
+      "aliases": [],
+      "expectedLines": 3,
+      "lineRange": [1, 6]
+    }
+  ]
+}
