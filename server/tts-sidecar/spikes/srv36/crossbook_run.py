@@ -55,6 +55,34 @@ if __name__ == "__main__":
         measured = assemble_measured(per_gate)
         verdict = evaluate_axes(measured, thresholds)
         print(json.dumps(verdict, indent=2))
+    elif len(sys.argv) > 2 and sys.argv[2] == "--counts":
+        # GPU-free sizing: python -m spikes.srv36.crossbook_run <BOOKS_ROOT> --counts [series] [target]
+        # Counts clean >=3s dialogue segments per recurring voiceUuid per book so
+        # you can decide whether the re-render has enough lines for stable centroids.
+        from spikes.srv36 import crossbook_measure as m
+        books_root = sys.argv[1]
+        series = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].isdigit() else None
+        target = next((int(a) for a in sys.argv[3:] if a.isdigit()), 20)
+        counts = m.count_clean_segments(books_root, series)
+        recurring = {vu: r for vu, r in counts.items() if len(r["by_book"]) >= 2}
+        print(f"{len(recurring)} voiceUuid key(s) recur in >=2 books "
+              f"(target >={target} clean >=3s segments per book for a stable centroid):")
+        for vu, r in sorted(recurring.items(), key=lambda kv: min(kv[1]["by_book"].values())):
+            worst = min(r["by_book"].values())
+            flag = "OK  " if worst >= target else "THIN"
+            books_str = "  ".join(f"{b}={n}" for b, n in sorted(r["by_book"].items()))
+            print(f"  [{flag}] {r['character_id']:<22} {books_str}   ({vu})")
+        thin = sorted(r["character_id"] for r in recurring.values()
+                      if min(r["by_book"].values()) < target)
+        if not recurring:
+            print("NO recurring voiceUuid keys across >=2 books — re-render the SAME "
+                  "characters in both books (carried voiceUuid via series-reuse).",
+                  file=sys.stderr)
+        elif thin:
+            print(f"render more chapters featuring: {', '.join(thin)}", file=sys.stderr)
+        else:
+            print("all recurring characters meet the target — ready to run --g1..--g6.",
+                  file=sys.stderr)
     elif len(sys.argv) > 2 and sys.argv[2].startswith("--g"):
         # Measurement gate: python -m spikes.srv36.crossbook_run <BOOKS_ROOT> --gN [series]
         from spikes.srv36 import crossbook_measure as m

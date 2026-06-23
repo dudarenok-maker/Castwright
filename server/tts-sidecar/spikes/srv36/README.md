@@ -113,6 +113,12 @@ with `<BOOKS_ROOT>` pointing at the re-rendered Keeper library:
    characters carry a `voiceUuid` (series-reuse).
 2. **`python -m spikes.srv36.crossbook_run <BOOKS_ROOT>`** — inventory; confirm
    Keeper shows ≥2 books with a recurring `voiceUuid` key (kind `voiceUuid`).
+2b. **`… crossbook_run <BOOKS_ROOT> --counts [target]`** (GPU-free, no embed) —
+   clean ≥3 s dialogue-segment counts per recurring `voiceUuid` per book, flagged
+   `OK`/`THIN` vs `target` (default 20). **Sizing tool: you do NOT need all
+   chapters.** Render a bounded matched subset (~5–8 chapters/book to start),
+   run `--counts`, and render more only for characters flagged `THIN` (or if no
+   keys recur — then re-render the SAME characters in both books).
 3. **G0** (needs the live sidecar): prepare `results/g0_keys_cfg.json` =
    `{"<voiceUuid>": {"text": "<audition text>", "voice": "qwen-<voiceUuid>"}}` —
    *confirm the audition-text source + `/synthesize` contract on-box* — then
