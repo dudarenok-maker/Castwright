@@ -31,6 +31,11 @@
  *   - The Qwen sidecar must be running and the 0.6B + 1.7B-Base models must
  *     be loaded (or loadable) — /qwen/mint-variant blocks until the mint
  *     completes.  Each base voice must have been designed already.
+ *   - LARGE LIBRARIES: repeated minting accumulates GPU VRAM; on an 8 GB card
+ *     the sidecar can stall or OOM-crash after ~60 mints. This script is
+ *     IDEMPOTENT (skips already-anchored variants), so if mints stall, restart
+ *     the sidecar (clears VRAM) and re-run to resume where it left off.
+ *     (Follow-up: per-mint VRAM cleanup so a whole library re-mints in one pass.)
  *   - The sidecar URL defaults to http://localhost:9000; override with
  *     SIDECAR_URL or LOCAL_TTS_URL.
  *   - The qwen voices directory defaults to <AudiobookWorkspace>/voices/qwen;
