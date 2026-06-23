@@ -98,6 +98,13 @@ Three `ConfigKnob` entries in the `KNOBS` array (`registry.ts`), group
 | `analyzer.gemini.voiceStyleModel` | `VOICE_STYLE_MODEL` | string | `gemini-3.1-flash-lite` | exists — wire the resolver to read it |
 | `analyzer.personaGeneration.localModel` | `PERSONA_GEN_LOCAL_MODEL` | string | `''` | new — blank ⇒ inherit `getResolvedOllamaModel()` |
 
+**Namespace note (conscious choice):** the gemini model stays at its existing
+`analyzer.gemini.voiceStyleModel` key (reused, not renamed — avoids migrating a
+live knob), while the new toggle + local model live under
+`analyzer.personaGeneration.*`. Slightly split, but renaming the shipped knob
+would be churn for no behaviour gain. All three sit in the `analyzer-models` UI
+group.
+
 ### Resolvers (`voice-style.ts`)
 
 - `resolveVoiceStyleModel()` — replace its hardcoded-literal body with
@@ -251,7 +258,12 @@ the probe found neither alone suffices:
 - a **global** generation flag — **durable**: a render is mid-job even between
   chunks. `isGenerationActive(bookId)` (`generation.ts:290-297`) is per-book;
   this needs an "any book" variant (iterate `inFlightByBook`).
-- `isAnyDesignBusy()` (excluding this `bookDir`) and `isAnyAnalysisBusy()`.
+- "any **other** book is design-busy" and `isAnyAnalysisBusy()`. NB
+  `isAnyDesignBusy()` is arg-less and the bulk job marks *itself* busy before the
+  pre-pass, so this needs a real "other-book" helper
+  (`[...designBusy].some(d => d !== bookDir)`), not the existing global
+  predicate. (The single-design voice-style route holds no design-lock, so
+  self-exclusion is moot there.)
 
 "Constrained" = `shouldEvictBeforeSidecarLoad(getLastKnownVram())`.
 
@@ -261,7 +273,8 @@ holds the semaphore *per chunk* and never takes the load-mutex, so the mutex
 alone would let a `/synthesize` run *during* the unload and fail that render's
 chapter. Holding the full budget guarantees no `/synthesize` is in flight or can
 start while we unload. Inside that hold it re-checks the durable generation flag
-and, if a render is active, **refuses** (throws a `GpuBusyError`-style signal)
+and, if a render is active, **refuses** (throws a `GpuBusyError`-style signal,
+**releasing the budget in `finally`** so a refused evict never wedges the GPU)
 rather than forcing a reload — the caller then takes the CPU path. Reassurance:
 synthesis is **stateless per `/synthesize` call** and embeddings are persisted,
 so the worst case of an ill-timed unload is a *reload* of another render's next
@@ -310,19 +323,29 @@ gemini path keeps generating personas lazily inside the design loop exactly as
 today. The pre-pass + its GPU machinery is load-bearing only for `local` on a
 constrained card.
 
-### Pre-pass resume / progress / error semantics
+### Pre-pass lifecycle — heartbeats, pause, resume, errors
 
-The bulk job is sticky and resumable (`cast-design.ts:9-14`), so the pre-pass
-must not break re-attach:
+The bulk job is sticky, resumable, and watched by a 30 s stall heuristic
+(`cast-design.ts:9-14`, `:128-130`), so the pre-pass must not break re-attach or
+false-stall:
 
-- **Progress.** Emit a distinct `persona_pass` phase event (e.g.
-  `{ type: 'persona_pass', done, total }`) so the pill can show "Preparing
-  personas…" without polluting the design `done/total` counters. The
-  `resume_from` payload gains a phase marker so a reload mid-pre-pass re-attaches
-  correctly.
+- **Heartbeats (required, server-only).** The existing heartbeat fires *inside*
+  the per-character design loop (`cast-design.ts:212`); the pre-pass runs before
+  it and can take minutes (GPU ~15 s × N, CPU ~60 s × N). Without heartbeats the
+  pill's 30 s stall heuristic would mark a healthy pre-pass "stalled." So the
+  pre-pass emits a heartbeat (`{ type: 'heartbeat' }` and/or a `persona_pass`
+  progress event) at **< 30 s cadence**. This is server-only and keeps the spec
+  "no frontend": the dedicated **"Preparing personas…"** label (rendering the
+  `persona_pass` event) is an **optional frontend follow-up**, not part of this
+  change.
+- **Pause/abort (required).** The pre-pass loop checks
+  `job.controller.signal.aborted` each iteration and bails — same as the design
+  loop (`cast-design.ts:167`) — and the reverse-evict's full-budget acquire is
+  abortable so a pause during the (multi-minute) pass stops promptly.
 - **Idempotent on resume.** Personas are persisted as generated; a re-run /
   resume skips characters that already have a `voiceStyle`, so the pre-pass is
-  safe to re-enter.
+  safe to re-enter. The `resume_from` payload may carry a phase marker (additive;
+  unknown-field-safe for the current frontend).
 - **Per-character failure.** A persona-gen failure for one character records a
   `job.failures` entry and is **skipped** in the design loop (can't design
   without a persona) — the run continues for the rest, matching the existing
@@ -434,6 +457,10 @@ server-internal).
     personas persisted, **variants skipped**. On a mocked generation-in-flight
     box: **no** evict, personas on CPU, designs still run. `gemini` engine: no
     pre-pass — personas stay lazy-interleaved (assert no up-front batch).
+12. **Pre-pass heartbeat + pause** (`cast-design` test) — the pre-pass broadcasts
+    a heartbeat/`persona_pass` event at < 30 s cadence (assert ≥1 event before
+    the first design), and aborting the job mid-pre-pass (`controller.abort()`)
+    stops it before the design loop starts (assert no design call fires).
 
 ## Acceptance
 
@@ -456,4 +483,5 @@ server-internal).
 - Bulk local cast-design runs the persona pre-pass (one resident GPU window, or
   CPU when busy) — no per-character Ollama↔VoiceDesign thrash; variants reuse the
   base persona.
-- All eleven paired tests green; `npm run verify` passes.
+- A multi-minute pre-pass keeps the pill alive (heartbeats) and honours pause.
+- All twelve paired tests green; `npm run verify` passes.
