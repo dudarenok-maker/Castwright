@@ -249,11 +249,21 @@ chapterSpliceRouter.post(
              baked manifest language ≠ this book's is cleared so the
              forbidKokoroFallback gate blocks it (undesigned) rather than
              re-recording the line in the wrong language. */
-          await clearMismatchedDesignedVoices(
+          const clearedVoices = await clearMismatchedDesignedVoices(
             cast.characters,
             sidecarLanguageName(bookLanguage),
             bookLanguage,
           );
+          if (clearedVoices.length > 0) {
+            const names = clearedVoices.map((c) => c.name).join(', ');
+            send({
+              type: 'warning',
+              code: 'voice_language_mismatch',
+              message:
+                `${clearedVoices.length} designed voice(s) were cleared because they were designed for a ` +
+                `different language than this book — re-design ${names} before generating.`,
+            });
+          }
         }
         const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
         const qwenInUse = requiredEngines.has('qwen');

@@ -563,11 +563,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        splice re-record path: clears any designed Qwen voice whose baked
        manifest language ≠ the book's, so the forbidKokoroFallback gate blocks
        it as undesigned rather than reading wrong-language audio. */
-    await clearMismatchedDesignedVoices(
+    const clearedVoices = await clearMismatchedDesignedVoices(
       cast.characters,
       sidecarLanguageName(bookLanguage),
       bookLanguage,
     );
+    if (clearedVoices.length > 0) {
+      const names = clearedVoices.map((c) => c.name).join(', ');
+      send({
+        type: 'warning',
+        code: 'voice_language_mismatch',
+        message:
+          `${clearedVoices.length} designed voice(s) were cleared because they were designed for a ` +
+          `different language than this book — re-design ${names} before generating.`,
+      });
+    }
   }
 
   /* Per-character engine routing (plan 108). Engine is no longer one global

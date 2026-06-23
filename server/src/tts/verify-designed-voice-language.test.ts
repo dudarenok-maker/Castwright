@@ -102,4 +102,39 @@ describe('clearMismatchedDesignedVoices', () => {
     /* No crash, and the non-existent qwen slot remains absent. */
     expect(cast[0].overrideTtsVoices?.qwen).toBeUndefined();
   });
+
+  /* seam-4b — the function returns the cleared characters so call sites can
+     emit a user-facing warning SSE tick. */
+  it('returns the characters whose mismatched voices were cleared', async () => {
+    /* Character id 'ivan-return' → storage key 'qwen-ivan-return'. */
+    writeManifest('qwen-ivan-return', 'English'); // designed under an English book
+    const cast = [char('ivan-return', 'Ivan')];
+
+    const cleared = await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+
+    expect(cleared).toEqual([{ id: 'ivan-return', name: 'ivan-return', designedLanguage: 'English' }]);
+    expect(cast[0].overrideTtsVoices?.qwen).toBeUndefined(); // still cleared in place
+  });
+
+  it('returns [] when every designed voice matches the book language', async () => {
+    /* Character id 'ivan-match-return' → storage key 'qwen-ivan-match-return'. */
+    writeManifest('qwen-ivan-match-return', 'Russian');
+    const cast = [char('ivan-match-return', 'Ivan')];
+
+    const cleared = await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+
+    expect(cleared).toEqual([]);
+    expect(cast[0].overrideTtsVoices?.qwen?.name).toBe('Ivan'); // voice untouched
+  });
+
+  it('returns "unknown" as designedLanguage when the manifest file is missing', async () => {
+    /* No manifest written for 'ivan-missing-return' → missing → cleared with unknown. */
+    const cast = [char('ivan-missing-return', 'no-such-voice')];
+
+    const cleared = await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+
+    expect(cleared).toEqual([
+      { id: 'ivan-missing-return', name: 'ivan-missing-return', designedLanguage: 'unknown' },
+    ]);
+  });
 });

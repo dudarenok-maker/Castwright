@@ -17,16 +17,27 @@ import { qwenVoiceSidecarPath } from '../workspace/paths.js';
 import type { CastCharacter } from './synthesise-chapter.js';
 import { qwenStorageKey } from './voice-mapping.js';
 
+/** A character whose designed Qwen voice was cleared because its baked manifest
+    language didn't match the book's language. */
+export interface ClearedVoice {
+  id: string;
+  name: string;
+  /** The manifest's `language` word, or `'unknown'` when the manifest was missing. */
+  designedLanguage: string;
+}
+
 /** Clear any reused designed Qwen voice whose baked manifest language doesn't
     match the book's. `expectedLang` is the sidecar language WORD
     (`sidecarLanguageName(bookLanguage)`); `bookLanguage` is the raw BCP-47 tag,
-    used only for the warning text. Mutates the cast in place. No-op for English
-    books (callers gate this behind `isNonEnglish`). */
+    used only for the warning text. Mutates the cast in place and returns the
+    list of characters whose voices were cleared. Returns `[]` when nothing was
+    cleared. No-op for English books (callers gate this behind `isNonEnglish`). */
 export async function clearMismatchedDesignedVoices(
   cast: CastCharacter[],
   expectedLang: string,
   bookLanguage: string,
-): Promise<void> {
+): Promise<ClearedVoice[]> {
+  const cleared: ClearedVoice[] = [];
   for (const c of cast) {
     const designedName = c.overrideTtsVoices?.qwen?.name;
     if (!designedName) continue;
@@ -40,6 +51,12 @@ export async function clearMismatchedDesignedVoices(
           `is not ${expectedLang} (manifest: ${manifest?.language ?? 'missing'}) — ` +
           `treating as undesigned, re-design required for this ${bookLanguage} book.`,
       );
+      cleared.push({
+        id: c.id,
+        name: c.name ?? c.id,
+        designedLanguage: manifest?.language ?? 'unknown',
+      });
     }
   }
+  return cleared;
 }
