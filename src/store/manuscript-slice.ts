@@ -37,6 +37,10 @@ export interface ManuscriptState {
       sentences, etc.) remain untouched while this is non-null — that's
       the "preview before apply" invariant. */
   pendingReupload: PendingReupload | null;
+  /** fs-58 — tombstone of merged-away (chapterId:sentenceId) keys.
+      Prevents a re-analysis from resurrecting sentence ids that were
+      deliberately merged away by the user. Format: `"${chapterId}:${id}"`. */
+  mergedAwayKeys: string[];
 }
 
 export interface PendingReupload {
@@ -77,6 +81,7 @@ const initialState: ManuscriptState = {
   sentences: initialSentences,
   importCandidate: null,
   pendingReupload: null,
+  mergedAwayKeys: [],
 };
 
 export const manuscriptSlice = createSlice({
@@ -146,8 +151,9 @@ export const manuscriptSlice = createSlice({
           merged.push(x);
         }
       }
+      const tomb = new Set(s.mergedAwayKeys);
       for (const inc of incoming) {
-        if (!stateKeys.has(key(inc))) merged.push(inc);
+        if (!stateKeys.has(key(inc)) && !tomb.has(key(inc))) merged.push(inc);
       }
       s.sentences = merged;
     },
@@ -182,6 +188,7 @@ export const manuscriptSlice = createSlice({
       s.sentences = initialSentences;
       s.importCandidate = null;
       s.pendingReupload = null;
+      s.mergedAwayKeys = [];
     },
 
     /* Plan 74 — capture the user's re-uploaded manuscript without
@@ -238,6 +245,7 @@ export const manuscriptSlice = createSlice({
       s.title = newCandidate.title;
       s.format = newCandidate.format;
       s.pendingReupload = null;
+      s.mergedAwayKeys = [];
     },
 
     /* Plan 74 — drop the pending re-upload without touching anything
@@ -406,6 +414,25 @@ export const manuscriptSlice = createSlice({
       }
       next.sort((x, y) => x.chapterId - y.chapterId || x.id - y.id);
       s.sentences = next;
+    },
+
+    /* fs-58 — User edit: merge adjacent sentences into the lowest id.
+       sentenceIds are sorted ascending; the lowest becomes the survivor
+       (its text = all members joined by a space). Dropped ids are recorded
+       in mergedAwayKeys so a subsequent re-analysis cannot resurrect them.
+       No-op if any named id is missing or only one id is given. */
+    mergeSentences: (s, a: PayloadAction<{ chapterId: number; sentenceIds: number[] }>) => {
+      const ids = [...a.payload.sentenceIds].sort((x, y) => x - y);
+      if (ids.length < 2) return;
+      const members = ids.map((id) => s.sentences.find((x) => x.chapterId === a.payload.chapterId && x.id === id));
+      if (members.some((m) => !m)) return;
+      const live = members as NonNullable<(typeof members)[number]>[];
+      live[0].text = live.map((m) => m.text).join(' ');
+      for (const m of live.slice(1)) {
+        const i = s.sentences.findIndex((x) => x.chapterId === a.payload.chapterId && x.id === m.id);
+        if (i >= 0) s.sentences.splice(i, 1);
+        s.mergedAwayKeys.push(`${a.payload.chapterId}:${m.id}`);
+      }
     },
   },
 });

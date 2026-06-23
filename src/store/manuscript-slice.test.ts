@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import type { Sentence } from '../lib/types';
+import { start } from './manuscript-slice.test-helpers';
 
 const sentences = (
   xs: Array<Partial<Sentence> & { id: number; text: string; characterId: string }>,
@@ -761,16 +762,7 @@ describe('manuscriptSlice — applyChapterRestructure', () => {
   });
 });
 
-const seeded = (sentencesArray: Array<{ id: number; chapterId: number; characterId: string; text: string; emotion?: string }>) =>
-  manuscriptSlice.reducer(undefined, manuscriptActions.reset());
-
-// Helper: a real starting state with manuscriptId set + sentences present.
-function start(sentencesArray: Parameters<typeof seeded>[0]) {
-  return manuscriptSlice.reducer(
-    { ...manuscriptSlice.reducer(undefined, manuscriptActions.reset()), manuscriptId: 'm1', bookId: 'b1', sentences: sentencesArray } as never,
-    { type: '@@noop' } as never,
-  );
-}
+const reducer = manuscriptSlice.reducer;
 
 describe('setSentenceText', () => {
   it('replaces the matching sentence text, leaves others untouched', () => {
@@ -778,8 +770,49 @@ describe('setSentenceText', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'He ran. "Stop," she said.' },
       { id: 2, chapterId: 1, characterId: 'narrator', text: 'Quiet.' },
     ]);
-    const next = manuscriptSlice.reducer(s, manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'He ran. "Stop,"' }));
+    const next = reducer(s, manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'He ran. "Stop,"' }));
     expect(next.sentences.find((x) => x.id === 1)?.text).toBe('He ran. "Stop,"');
     expect(next.sentences.find((x) => x.id === 2)?.text).toBe('Quiet.');
+  });
+});
+
+describe('mergeSentences', () => {
+  it('merges into the lowest id, concatenates in order, drops the rest, tombstones', () => {
+    const s = start([
+      { id: 5, chapterId: 3, characterId: 'narrator', text: 'The hall was dark.' },
+      { id: 6, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+    ]);
+    const next = reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 6] }));
+    const ch3 = next.sentences.filter((x) => x.chapterId === 3);
+    expect(ch3.map((x) => x.id)).toEqual([5]);
+    expect(ch3[0].text).toBe('The hall was dark. Dust hung in the air.');
+    expect(next.mergedAwayKeys).toContain('3:6');
+  });
+
+  it('does NOT resurrect the merged-away id on a subsequent re-analysis', () => {
+    const merged = reducer(
+      start([
+        { id: 5, chapterId: 3, characterId: 'narrator', text: 'The hall was dark.' },
+        { id: 6, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+      ]),
+      manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 6] }),
+    );
+    // manuscriptId is set (via start()), so hydrateFromAnalysis takes the merge/append branch:
+    const reanalysed = reducer(merged, manuscriptActions.hydrateFromAnalysis({
+      bookId: 'b1',
+      sentences: [
+        { id: 5, chapterId: 3, characterId: 'narrator', text: 'The hall was dark.' },
+        { id: 6, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+      ],
+    } as never));
+    const ch3 = reanalysed.sentences.filter((x) => x.chapterId === 3);
+    expect(ch3.map((x) => x.id)).toEqual([5]); // 6 stays dead
+    expect(ch3[0].text).toBe('The hall was dark. Dust hung in the air.');
+  });
+
+  it('rejects a merge naming a missing id, and a single-id merge', () => {
+    const s = start([{ id: 5, chapterId: 3, characterId: 'narrator', text: 'A.' }]);
+    expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 9] })).sentences).toHaveLength(1);
+    expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5] })).sentences).toHaveLength(1);
   });
 });
