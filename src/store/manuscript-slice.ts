@@ -261,6 +261,14 @@ export const manuscriptSlice = createSlice({
       if (sent) sent.characterId = a.payload.characterId;
     },
 
+    /* fs-58 — User edit: replace a sentence's text (strip_tag review op target).
+       Scoped by (chapterId, sentenceId) like setSentenceCharacter. No-op if the
+       sentence is not found. */
+    setSentenceText: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; text: string }>) => {
+      const sent = s.sentences.find((x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
+      if (sent) sent.text = a.payload.text;
+    },
+
     /* fs-25 — User edit: set (or clear) a quote's delivery emotion. Scoped by
        (chapterId, sentenceId) like setSentenceCharacter. `'neutral'` clears the
        field back to undefined (the default render on every engine) so the store

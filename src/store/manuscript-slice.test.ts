@@ -760,3 +760,26 @@ describe('manuscriptSlice — applyChapterRestructure', () => {
     expect(next.sentences[0].text).toBe('kept');
   });
 });
+
+const seeded = (sentencesArray: Array<{ id: number; chapterId: number; characterId: string; text: string; emotion?: string }>) =>
+  manuscriptSlice.reducer(undefined, manuscriptActions.reset());
+
+// Helper: a real starting state with manuscriptId set + sentences present.
+function start(sentencesArray: Parameters<typeof seeded>[0]) {
+  return manuscriptSlice.reducer(
+    { ...manuscriptSlice.reducer(undefined, manuscriptActions.reset()), manuscriptId: 'm1', bookId: 'b1', sentences: sentencesArray } as never,
+    { type: '@@noop' } as never,
+  );
+}
+
+describe('setSentenceText', () => {
+  it('replaces the matching sentence text, leaves others untouched', () => {
+    const s = start([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'He ran. "Stop," she said.' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'Quiet.' },
+    ]);
+    const next = manuscriptSlice.reducer(s, manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'He ran. "Stop,"' }));
+    expect(next.sentences.find((x) => x.id === 1)?.text).toBe('He ran. "Stop,"');
+    expect(next.sentences.find((x) => x.id === 2)?.text).toBe('Quiet.');
+  });
+});
