@@ -35,8 +35,18 @@ import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import { DetectEmotionsButton } from '../components/detect-emotions-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
+import { ScriptReviewDiff } from '../components/script-review-diff';
+import { api } from '../lib/api';
+import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
+import { notificationsActions } from '../store/notifications-slice';
+import { rpdWarningFor, planApply } from '../lib/script-review-apply';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
+
+/* fs-58 — Unit-A per-run default model. No persisted model-picker knob in
+   Unit A; a per-run local-model option is deferred to srv-48. Used both for
+   the per-run `model` opt and to compute the whole-book RPD warning. */
+const REVIEW_MODEL = 'gemma-4-31b-it';
 
 interface Props {
   characters: Character[];
@@ -106,9 +116,23 @@ export function ManuscriptView({
   onAddFromSeriesRoster,
 }: Props) {
   const dispatch = useAppDispatch();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
+     per-chapter "Review Script" stays the primary, low-cost default. */
+  const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
+  const reviewMenuRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
   const sentences: Sentence[] = sentencesFromStore ?? initialSentences;
+  /* Keep a ref so async handlers (e.g. handleReviewScript) always read
+     the LIVE sentences even after an await, without depending on a
+     potentially stale closure. */
+  const sentencesRef = useRef<Sentence[]>(sentences);
+  sentencesRef.current = sentences;
   const [selectedSeg, setSelectedSeg] = useState<string | null>(null);
   const [filterChar, setFilterChar] = useState<string | null>(null);
   const [chapterFilter, setChapterFilter] = useState<string>('');
@@ -157,6 +181,27 @@ export function ManuscriptView({
       el.scrollIntoView({ block: 'nearest' });
     }
   }, [currentChapterId]);
+
+  /* fs-58 — dismiss the review-scope disclosure on outside-click (pointerdown)
+     or Escape. Mirrors the NavDrawer / HelpMenu pattern in top-bar.tsx. */
+  useEffect(() => {
+    if (!reviewMenuOpen) return;
+    function onDocPointerDown(e: PointerEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (reviewMenuRef.current?.contains(t)) return;
+      setReviewMenuOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setReviewMenuOpen(false);
+    }
+    document.addEventListener('pointerdown', onDocPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDocPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [reviewMenuOpen]);
 
   /* Segments are scoped to the currently-selected chapter so the manuscript
      view shows only sentences from that chapter — clicking a chapter in
@@ -610,11 +655,74 @@ export function ManuscriptView({
     />
   );
 
+  /* fs-58 — LLM script-review trigger. The model is per-run in Unit A (no
+     persisted knob); we pass the server free-tier default so the RPD warning
+     can reason about quota. Per-chapter (the default) uses one request; a
+     whole-book sweep fires one request per chapter, so the RPD warning below
+     gates it when the book is longer than the model's daily cap. */
+  const reviewModel = REVIEW_MODEL;
+  /* Non-excluded chapters are the ones a whole-book sweep would actually hit
+     (excluded chapters never reach the analyzer). */
+  const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
+  const rpdWarning = rpdWarningFor(reviewableChapterCount, reviewModel);
+
+  async function handleReviewScript(wholeBook: boolean) {
+    if (!bookId || reviewLoading) return;
+    if (!wholeBook && currentChapterId == null) return;
+    const allOps: ReviewOpWithChapter[] = [];
+    setReviewLoading(true);
+    setReviewMenuOpen(false);
+    try {
+      await api.reviewScript(bookId, {
+        /* Omitting chapterId reviews every (non-excluded) chapter server-side. */
+        ...(wholeBook ? {} : { chapterId: currentChapterId ?? undefined }),
+        model: reviewModel,
+        onOps: ({ chapterId: chId, ops }) => {
+          for (const op of ops) allOps.push({ ...op, chapterId: chId });
+        },
+      });
+      /* fs-58 Task 11 — run planApply at seed time so ops that can't be
+         resolved against the LIVE sentences (stale ids, missing anchors,
+         invalid merges) land in `unappliable` rather than appearing as
+         selectable no-ops in the diff modal. The Apply-time planApply in
+         the modal stays — it's the TOCTOU re-validation for any edits
+         that arrived between stream-complete and the user clicking Accept.
+         sentencesRef.current gives the latest Redux value even after the
+         await, without depending on the stale-closure capture. */
+      const live = sentencesRef.current.map((s) => ({
+        id: s.id,
+        chapterId: s.chapterId,
+        text: s.text,
+        characterId: s.characterId,
+      }));
+      /* planApply filters from allOps whose entries are ReviewOpWithChapter —
+         the chapterId is preserved on each returned object at runtime, so
+         casting back to the wider type is safe here. */
+      const { appliable, unappliable } = planApply(allOps, live) as {
+        appliable: ReviewOpWithChapter[];
+        unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+      };
+      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
+    } catch (err) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Script review failed.',
+        }),
+      );
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
   return (
     <div
       className="max-w-[1500px] mx-auto px-3 md:px-6 py-6 md:py-8 lg:grid lg:grid-cols-[280px_1fr_360px] lg:gap-6"
       ref={containerRef}
     >
+      {/* fs-58 — ScriptReviewDiff modal: fixed-overlay, renders null when no active review */}
+      {hasActiveReview && bookId && <ScriptReviewDiff bookId={bookId} />}
+
       {/* Desktop-only sticky sidebar (chapters + detected).
           Sidebar shell — flex column with no outer scroll. Each card owns
           its own internal scroll region (min-h-0 + overflow-y-auto on the
@@ -666,6 +774,59 @@ export function ManuscriptView({
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
+              {/* fs-58 — LLM script-review trigger. Primary = per-chapter
+                  (low-cost default); the ⌄ disclosure opens the whole-book
+                  opt-in, which is RPD-gated when the book is longer than the
+                  selected model's daily cap. */}
+              <div ref={reviewMenuRef} className="relative shrink-0 inline-flex items-stretch">
+                <button
+                  data-testid="review-script-chapter"
+                  onClick={() => void handleReviewScript(false)}
+                  disabled={reviewLoading || !bookId}
+                  className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
+                >
+                  {reviewLoading ? 'Reviewing…' : 'Review Script'}
+                </button>
+                <button
+                  data-testid="review-script-menu-toggle"
+                  onClick={() => setReviewMenuOpen((o) => !o)}
+                  disabled={reviewLoading || !bookId}
+                  aria-label="Script review options"
+                  aria-expanded={reviewMenuOpen}
+                  className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
+                >
+                  <IconArrowDn className="w-4 h-4" />
+                </button>
+                {reviewMenuOpen && (
+                  <div className="absolute top-full left-0 mt-2 z-20 w-72 rounded-2xl border border-ink/10 bg-white shadow-float p-3 space-y-2">
+                    <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50">
+                      Review scope
+                    </p>
+                    <button
+                      data-testid="review-script-wholebook"
+                      onClick={() => void handleReviewScript(true)}
+                      disabled={reviewLoading || !bookId}
+                      className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
+                    >
+                      Review whole book
+                      <span className="block text-xs font-normal text-ink/50">
+                        {reviewableChapterCount} chapter
+                        {reviewableChapterCount === 1 ? '' : 's'}
+                      </span>
+                    </button>
+                    {rpdWarning && (
+                      <p
+                        data-testid="review-script-rpd-warning"
+                        className="text-xs text-magenta leading-relaxed px-1"
+                      >
+                        This book has {rpdWarning.chapterCount} chapters; the
+                        selected model allows only {rpdWarning.rpd} reviews/day —
+                        switch to a local model or review per chapter.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}

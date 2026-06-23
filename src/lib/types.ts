@@ -374,7 +374,7 @@ export interface BookStateResponse {
       in-memory ManuscriptRecord. Lets the Analysing screen show a size-aware
       ETA without loading the full sourceText. */
   manuscript: { wordCount: number; format: UploadResponse['format'] } | null;
-  manuscriptEdits: { sentences?: Sentence[] } | null;
+  manuscriptEdits: { sentences?: Sentence[]; /** fs-58 — merge tombstone keys. */ mergedAwayKeys?: string[] } | null;
   revisions: {
     pending?: Revision[];
     drift?: DriftEvent[];

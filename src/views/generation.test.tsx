@@ -1358,6 +1358,71 @@ describe('GenerationView — precise reassignment staleness via render map (#650
     renderWithRenderMap({ 1: { 1: 'narrator', 2: 'marlow', 3: 'marlow' } });
     expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
   });
+
+  it('shows the caption when the render map matches but a post-render boundary_move was logged (OR-gate fs-58)', () => {
+    /* The precise render-map diff returns false (characterIds unchanged), but a
+       boundary_move event was logged after audioRenderedAt — e.g. a strip_tag or
+       fix_emotion op that doesn't change which character speaks. The OR-gate
+       (Task 3) must catch this and mark the chapter stale. */
+    const RENDERED_PAST = '2020-01-01T00:00:00Z';
+    const doneWithStamp: Chapter = {
+      ...chapter1,
+      audioRenderedAt: RENDERED_PAST,
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    /* Render map exactly matches current sentences → precise diff returns false. */
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a' },
+          { id: 2, title: 'Chapter 2', slug: '02-b' },
+        ],
+        completedSlugs: ['01-a'],
+        characters,
+        renderedSpeakersByChapter: { 1: { 1: 'narrator', 2: 'marlow', 3: 'marlow' } },
+      } as any),
+    );
+    store.dispatch(chaptersSlice.actions.setChapters([doneWithStamp, chapter2]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [doneWithStamp, chapter2],
+        sentences,
+      } as any),
+    );
+    /* A post-render boundary_move (e.g. from strip_tag / fix_emotion) that
+       doesn't change characterId assignments. */
+    store.dispatch(changeLogSlice.actions.bumpBoundaryMove({ chapterId: 1, count: 1 }));
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[doneWithStamp, chapter2]}
+          characters={characters}
+          paused
+          title="OR-gate Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
 });
 
 describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', () => {

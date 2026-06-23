@@ -157,11 +157,17 @@ _Full detail + acceptance:_ [#976](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
 _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
-#### `fs-58` — LLM Script Review: optional second-pass annotation correction ([#998](https://github.com/dudarenok-maker/Castwright/issues/998))
+#### `fs-58` — LLM Script Review (Unit A): per-chapter read-only annotation-repair pass ([#998](https://github.com/dudarenok-maker/Castwright/issues/998))
 
-- _What:_ Operator-triggered ("Review Script") second LLM pass over Phase-1 output, before `manuscript-edits.json`, repairing five annotation-error classes (strip attribution tags from dialogue; split narration out of dialogue; extract dialogue from narrator runs; merge over-split narrator runs; validate/repair `instruct` fields). Accept/reject diff. Engine-agnostic (no GPU) — shippable independently. MUST preserve sentence-ID stability (no orphaned emotion/instruct/audio).
+- _What:_ Operator-triggered ("Review Script"), **per-chapter, read-only** LLM pass that proposes annotation repairs and applies the accepted ones **client-side** (dispatching the existing manual-edit Redux reducers). Unit A = five classes: `strip_tag`, `split`, `extract_dialogue` (two-anchor), `merge` (adjacent same-speaker narrator runs), `fix_emotion`. Accept/reject diff modal. Standalone job, runnable anytime (incl. post-generation), optional `chapterId` (per-chapter default; whole-book opt-in with an RPD warning). **Engine-agnostic — no TTS engine load** (analyzer Ollama/Gemini only). `validate_instruct` → fs-56 (#1041); `reattribute`/`flag_nonstory` → Unit B (#1040).
 - _Benefit (user):_ higher annotation quality, fewer manual fixes; Alexandria parity.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.6 · [#998](https://github.com/dudarenok-maker/Castwright/issues/998).
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-23-fs58-llm-script-review-design.md` · plan `docs/superpowers/plans/2026-06-23-fs58-script-review-unit-a.md` · [#998](https://github.com/dudarenok-maker/Castwright/issues/998).
+
+#### `fs-58 Unit B` — LLM Script Review: `reattribute` + `flag_nonstory` ([#1040](https://github.com/dudarenok-maker/Castwright/issues/1040))
+
+- _What:_ The two deferred Script Review classes on the Unit A harness — `reattribute` (re-assign a dialogue line to the correct existing cast member) and `flag_nonstory` (flag import residue for synthesis exclusion). Each carries an unmet dependency (cast-create wiring + cross-chapter context for reattribute; a new `excludeFromSynthesis` field + a positive fixture for flag_nonstory), so it's tracked separately from Unit A. Both default OFF.
+- _Benefit (user):_ completes the Script Review error-class set on top of Unit A.
+_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-23-fs58-llm-script-review-design.md` §13 · [#1040](https://github.com/dudarenok-maker/Castwright/issues/1040).
 
 ### Agents & integrations
 

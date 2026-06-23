@@ -203,3 +203,38 @@ export const stage1GrammarSchema = z
     chapters: stage1Schema.shape.chapters,
   })
   .strict();
+
+/* ── fs-58 Script Review schema (Task 6) ────────────────────────────────────
+   Flat envelope for LLM script-review ops. No discriminated union — Gemini
+   can't constrain it; Ollama only softly. Per-op validation is imperative
+   client-side (Task 4) and server pre-apply is N/A (apply is client-side).
+
+   Typical ops: strip_tag (remove formatting), split (sentence across speakers),
+   extract_dialogue (narration → dialogue), merge (join sentences), fix_emotion
+   (set delivery emotion). Each op carries an anchor or range for location,
+   optional new-text / pieceCharacterIds / mergeIds / emotion, and a rationale
+   + optional confidence score. */
+
+export const scriptReviewSchema = z
+  .object({
+    ops: z.array(
+      z
+        .object({
+          id: z.number().int().positive(),
+          op: z.enum(['strip_tag', 'split', 'extract_dialogue', 'merge', 'fix_emotion']),
+          newText: z.string().optional(),
+          anchor: z.string().optional(),
+          anchorEnd: z.string().optional(),
+          pieceCharacterIds: z.array(z.string()).optional(),
+          mergeIds: z.array(z.number().int().positive()).optional(),
+          emotion: z.enum(EMOTIONS).optional(),
+          rationale: z.string(),
+          confidence: z.number().min(0).max(1).optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type ScriptReviewOp = z.infer<typeof scriptReviewSchema>['ops'][number];
+export type ScriptReviewOutput = z.infer<typeof scriptReviewSchema>;

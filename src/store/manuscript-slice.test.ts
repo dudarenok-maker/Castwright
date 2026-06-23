@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import type { Sentence } from '../lib/types';
+import { start } from './manuscript-slice.test-helpers';
 
 const sentences = (
   xs: Array<Partial<Sentence> & { id: number; text: string; characterId: string }>,
@@ -18,6 +19,7 @@ const baseState = (initial: Sentence[]) => ({
   sentences: initial,
   importCandidate: null,
   pendingReupload: null,
+  mergedAwayKeys: [] as string[],
 });
 
 describe('manuscriptSlice — splitSentence', () => {
@@ -758,5 +760,77 @@ describe('manuscriptSlice — applyChapterRestructure', () => {
     );
     expect(next.sentences).toHaveLength(1);
     expect(next.sentences[0].text).toBe('kept');
+  });
+});
+
+const reducer = manuscriptSlice.reducer;
+
+describe('setSentenceText', () => {
+  it('replaces the matching sentence text, leaves others untouched', () => {
+    const s = start([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'He ran. "Stop," she said.' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'Quiet.' },
+    ]);
+    const next = reducer(s, manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'He ran. "Stop,"' }));
+    expect(next.sentences.find((x) => x.id === 1)?.text).toBe('He ran. "Stop,"');
+    expect(next.sentences.find((x) => x.id === 2)?.text).toBe('Quiet.');
+  });
+});
+
+describe('mergeSentences', () => {
+  it('merges into the lowest id, concatenates in order, drops the rest, tombstones', () => {
+    const s = start([
+      { id: 5, chapterId: 3, characterId: 'narrator', text: 'The hall was dark.' },
+      { id: 6, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+    ]);
+    const next = reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 6] }));
+    const ch3 = next.sentences.filter((x) => x.chapterId === 3);
+    expect(ch3.map((x) => x.id)).toEqual([5]);
+    expect(ch3[0].text).toBe('The hall was dark. Dust hung in the air.');
+    expect(next.mergedAwayKeys).toContain('3:6');
+  });
+
+  it('does NOT resurrect the merged-away id on a subsequent re-analysis', () => {
+    const merged = reducer(
+      start([
+        { id: 5, chapterId: 3, characterId: 'narrator', text: 'The hall was dark.' },
+        { id: 6, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+      ]),
+      manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 6] }),
+    );
+    // manuscriptId is set (via start()), so hydrateFromAnalysis takes the merge/append branch:
+    const reanalysed = reducer(merged, manuscriptActions.hydrateFromAnalysis({
+      bookId: 'b1',
+      sentences: [
+        { id: 5, chapterId: 3, characterId: 'narrator', text: 'The hall was dark.' },
+        { id: 6, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+      ],
+    } as never));
+    const ch3 = reanalysed.sentences.filter((x) => x.chapterId === 3);
+    expect(ch3.map((x) => x.id)).toEqual([5]); // 6 stays dead
+    expect(ch3[0].text).toBe('The hall was dark. Dust hung in the air.');
+  });
+
+  it('rejects a merge naming a missing id, and a single-id merge', () => {
+    const s = start([{ id: 5, chapterId: 3, characterId: 'narrator', text: 'A.' }]);
+    expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 9] })).sentences).toHaveLength(1);
+    expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5] })).sentences).toHaveLength(1);
+  });
+});
+
+describe('hydrateFromBookState — merge tombstone persistence (task-2b)', () => {
+  it('rehydrates and book-scopes the merge tombstone', () => {
+    const a = reducer(undefined, manuscriptActions.hydrateFromBookState({
+      state: { bookId: 'A', manuscriptId: 'mns_a', title: 'Book A' } as never,
+      sentences: null,
+      mergedAwayKeys: ['3:6'],
+    }));
+    expect(a.mergedAwayKeys).toEqual(['3:6']);
+    // Loading a different book with no mergedAwayKeys clears the prior book's tombstone.
+    const b = reducer(a, manuscriptActions.hydrateFromBookState({
+      state: { bookId: 'B', manuscriptId: 'mns_b', title: 'Book B' } as never,
+      sentences: null,
+    }));
+    expect(b.mergedAwayKeys).toEqual([]); // B's load doesn't inherit A's tombstone
   });
 });

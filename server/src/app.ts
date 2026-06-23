@@ -24,6 +24,7 @@ import { qwenVoiceRouter } from './routes/qwen-voice.js';
 import { castDesignRouter } from './routes/cast-design.js';
 import { singleDesignRouter } from './routes/single-design.js';
 import { annotateEmotionRouter } from './routes/annotate-emotion.js';
+import { scriptReviewRouter } from './routes/script-review.js';
 import { libraryCastOverrideRouter } from './routes/library-cast-override.js';
 import { seriesRosterRouter } from './routes/series-roster.js';
 import { seriesCastRouter } from './routes/series-cast.js';
@@ -152,6 +153,7 @@ app.use('/api/books', qwenVoiceRouter); // mounts /:bookId/cast/:characterId/des
 app.use('/api/books', castDesignRouter); // mounts /:bookId/cast/design{,/status,/pause} ("Design full cast" bulk-design job — server-owned SSE)
 app.use('/api/books', singleDesignRouter); // mounts /:bookId/cast/:characterId/design-voice/stream + /:bookId/cast/design-single/{subscribe,status} (single-design background job)
 app.use('/api/books', annotateEmotionRouter); // mounts /:bookId/annotate-emotion (fs-33 — emotion-only backfill SSE pass)
+app.use('/api/books', scriptReviewRouter); // mounts /:bookId/script-review (fs-58 — LLM script-review SSE pass)
 app.use('/api/books', seriesRosterRouter); // mounts /:bookId/series-roster (prior-book characters in the same series)
 app.use('/api/books', seriesCastRouter); // mounts /:bookId/series-cast (full-fidelity cast of every OTHER series book — rebaseline aggregation)
 app.use('/api', libraryCastOverrideRouter); // mounts /library-cast/override (cross-book; not under /:bookId)

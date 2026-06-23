@@ -334,6 +334,33 @@ describe('persistenceMiddleware — payload shape', () => {
     });
   });
 
+  it('fs-58 batch ordering: mergedAwayKeys survives a subsequent setSentenceText in the same debounce window', async () => {
+    /* Regression guard for the Task-2b correctness gap: when an Apply batch
+       dispatches mergeSentences then setSentenceText, the later action was the
+       last writer of pending['manuscript'], so the flush sent only { sentences }
+       and the tombstone was silently dropped — causing a re-analysis to
+       resurrect the merged-away id on reload.
+       Both actions must land the same tombstone in the final PUT patch. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      manuscript: {
+        sentences: [{ id: 1, chapterId: 1, text: 'Corrected text.' }],
+        mergedAwayKeys: ['1:2'],
+      },
+    });
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    mw({ type: 'manuscript/mergeSentences' });
+    mw({ type: 'manuscript/setSentenceText' });
+    await advance(500);
+
+    expect(putBookState).toHaveBeenCalledOnce();
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'manuscript',
+      patch: expect.objectContaining({ mergedAwayKeys: ['1:2'] }),
+    });
+  });
+
   it('sends castConfirmed=true for ui/confirmCast (slice="state")', async () => {
     const next = vi.fn((x) => x);
     persistenceMiddleware(makeStore(baseState()))(next)({ type: 'ui/confirmCast' });

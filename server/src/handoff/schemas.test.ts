@@ -11,6 +11,9 @@ import {
   analyzerCharacterSchema,
   stage1ChapterGrammarSchema,
   stage1GrammarSchema,
+  scriptReviewSchema,
+  ScriptReviewOp,
+  ScriptReviewOutput,
 } from './schemas.js';
 
 /* The Ollama analyzer (server/src/analyzer/ollama.ts) feeds these per-stage
@@ -193,5 +196,138 @@ describe('analyzer grammar schemas — required tone (Task 6)', () => {
 
   it('stage1ChapterSchema (validation) still accepts characters with no tone', () => {
     expect(stage1ChapterSchema.safeParse({ characters: [charWithoutTone] }).success).toBe(true);
+  });
+});
+
+describe('fs-58 — script review schema (flat envelope)', () => {
+  it('parses a heterogeneous ops array with extract_dialogue including both anchor and anchorEnd', () => {
+    const payload = {
+      ops: [
+        {
+          id: 1,
+          op: 'extract_dialogue',
+          anchor: 'She said,',
+          anchorEnd: 'goodbye"',
+          rationale: 'Extracted dialogue from narration',
+          confidence: 0.95,
+        },
+        {
+          id: 2,
+          op: 'strip_tag',
+          newText: 'corrected text',
+          rationale: 'Removed formatting tag',
+          confidence: 0.88,
+        },
+        {
+          id: 3,
+          op: 'split',
+          pieceCharacterIds: ['char-a', 'char-b'],
+          rationale: 'Split sentence across speakers',
+        },
+        {
+          id: 4,
+          op: 'merge',
+          mergeIds: [5, 6],
+          rationale: 'Merged two related sentences',
+        },
+        {
+          id: 5,
+          op: 'fix_emotion',
+          emotion: 'angry',
+          rationale: 'Changed emotion for delivery',
+          confidence: 0.92,
+        },
+      ],
+    };
+
+    const result = scriptReviewSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ops).toHaveLength(5);
+      expect(result.data.ops[0].op).toBe('extract_dialogue');
+      expect(result.data.ops[0].anchor).toBe('She said,');
+      expect(result.data.ops[0].anchorEnd).toBe('goodbye"');
+      expect(result.data.ops[4].emotion).toBe('angry');
+    }
+  });
+
+  it('rejects an unknown op type', () => {
+    const payload = {
+      ops: [
+        {
+          id: 1,
+          op: 'frobnicate',
+          rationale: 'This op does not exist',
+        },
+      ],
+    };
+
+    const result = scriptReviewSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an op with an unknown emotion value', () => {
+    const payload = {
+      ops: [
+        {
+          id: 1,
+          op: 'fix_emotion',
+          emotion: 'furious',
+          rationale: 'Invalid emotion',
+        },
+      ],
+    };
+
+    const result = scriptReviewSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects strict violations — extra fields on op or root', () => {
+    const payloadExtraOpField = {
+      ops: [
+        {
+          id: 1,
+          op: 'strip_tag',
+          rationale: 'test',
+          unknownField: 'should not be here',
+        },
+      ],
+    };
+
+    const payloadExtraRootField = {
+      ops: [{ id: 1, op: 'strip_tag', rationale: 'test' }],
+      unknownField: 'should not be here',
+    };
+
+    expect(scriptReviewSchema.safeParse(payloadExtraOpField).success).toBe(false);
+    expect(scriptReviewSchema.safeParse(payloadExtraRootField).success).toBe(false);
+  });
+
+  it('accepts an empty ops array — a chapter with no suggestions', () => {
+    const payload = { ops: [] };
+    const result = scriptReviewSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ops).toEqual([]);
+    }
+  });
+
+  it('types ScriptReviewOp and ScriptReviewOutput correctly', () => {
+    const payload: ScriptReviewOutput = {
+      ops: [
+        {
+          id: 1,
+          op: 'extract_dialogue',
+          anchor: 'text',
+          anchorEnd: 'text2',
+          rationale: 'reason',
+        },
+      ],
+    };
+
+    // This is a type-only check; if it compiles, the types are correct.
+    // We can also access individual ops:
+    const op: ScriptReviewOp = payload.ops[0];
+    expect(op.op).toBe('extract_dialogue');
   });
 });

@@ -9,6 +9,7 @@ import {
   mockSetShelfStatus,
   _resetMockListenStats,
   readE2eUpdateOverride,
+  api,
 } from './api';
 
 describe('mockGetSetupReadiness', () => {
@@ -110,6 +111,22 @@ describe('mock listen-stats client', () => {
     await mockSetShelfStatus('h', { hidden: true });
     expect(await mockGetContinueListening()).toEqual([]);
     delete (globalThis as any).__SEED_CONTINUE__;
+  });
+});
+
+describe('api.reviewScript', () => {
+  it('parses the SSE stream and surfaces ops', async () => {
+    const chunks = [
+      'data: {"kind":"ops","chapterId":1,"ops":[{"id":1,"op":"strip_tag","newText":"x","rationale":"tag"}]}\n\n',
+      'data: {"kind":"result","reviewedChapters":1,"totalOps":1}\n\n',
+    ].map((s) => new TextEncoder().encode(s));
+    let i = 0;
+    const body = { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }) }) };
+    global.fetch = (async () => ({ ok: true, status: 200, body })) as never;
+    const seen: unknown[] = [];
+    const res = await api.reviewScript('b1', { onOps: (e) => seen.push(e) });
+    expect(seen).toHaveLength(1);
+    expect(res.totalOps).toBe(1);
   });
 });
 

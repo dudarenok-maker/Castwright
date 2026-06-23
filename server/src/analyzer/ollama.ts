@@ -24,12 +24,14 @@ import {
   stage1ChapterSchema,
   stage2ChapterSchema,
   emotionAnnotationSchema,
+  scriptReviewSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
   type EmotionAnnotationOutput,
+  type ScriptReviewOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { AnalyzerTruncatedError } from './errors.js';
@@ -302,6 +304,16 @@ export class OllamaAnalyzer implements Analyzer {
       emotionAnnotationSchema,
       call,
     );
+  }
+
+  async runScriptReviewChapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<ScriptReviewOutput> {
+    const key = `review-ch${chapterId}` as const;
+    return this.runStage(manuscriptId, key, 'script_review', promptMd, scriptReviewSchema, scriptReviewSchema, call);
   }
 
   private async runStage<T>(

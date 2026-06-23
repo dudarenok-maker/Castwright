@@ -222,7 +222,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       await writeStateJsonAtomic(stateJsonPath(bookDir), state);
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
-    let edits = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
+    let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
     const revs = await readJson<{
       pending?: unknown[];
       drift?: unknown[];
@@ -288,7 +288,8 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
             if (cacheIds.has(s.id)) return true; // still a valid sentence
             return s.id > maxCacheId; // likely a split offspring
           });
-          edits = { sentences: filtered };
+          // fs-58 — preserve mergedAwayKeys across the sentences-filter reassignment.
+          edits = { sentences: filtered, mergedAwayKeys: edits.mergedAwayKeys };
         }
       } else if (cachedSentences.length > 0) {
         edits = { sentences: cachedSentences };

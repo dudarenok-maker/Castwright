@@ -74,6 +74,7 @@ function makeStore(s: Sentence[]) {
         sentences: s,
         importCandidate: null,
         pendingReupload: null,
+        mergedAwayKeys: [],
       },
     },
   });

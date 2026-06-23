@@ -2744,6 +2744,128 @@ async function mockDetectEmotions(
   return { annotatedChapters: 1, totalAnnotations: 1 };
 }
 
+/* fs-58 — LLM script-review SSE stream. Mirrors realDetectEmotions' SSE
+   reader. Emits per-chapter op batches; the caller applies them via
+   script-review-apply.ts. */
+export interface ReviewScriptOpts {
+  chapterId?: number;
+  model?: string;
+  signal?: AbortSignal;
+  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
+  onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
+}
+export interface ReviewScriptResult {
+  reviewedChapters: number;
+  totalOps: number;
+}
+export class ReviewScriptError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'ReviewScriptError';
+  }
+}
+
+async function realReviewScript(
+  bookId: string,
+  { chapterId, model, signal, onPhase, onThrottle, onOps }: ReviewScriptOpts = {},
+): Promise<ReviewScriptResult> {
+  const body: Record<string, unknown> = {};
+  if (chapterId !== undefined) body.chapterId = chapterId;
+  if (model !== undefined) body.model = model;
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (res.status === 404) throw new ReviewScriptError('Book not found.', 'not_found');
+  if (!res.ok || !res.body) throw new Error(`Script-review stream failed (${res.status}).`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let result: ReviewScriptResult | null = null;
+
+  const handle = (p: Record<string, unknown>) => {
+    switch (p.kind) {
+      case 'phase':
+        if (typeof p.progress === 'number') {
+          onPhase?.({
+            progress: p.progress,
+            label: typeof p.label === 'string' ? p.label : undefined,
+            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+          });
+        }
+        break;
+      case 'throttle':
+        if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
+          onThrottle?.({
+            chapterId: p.chapterIndex,
+            waitMs: p.waitMs,
+            reason: String(p.reason ?? ''),
+          });
+        }
+        break;
+      case 'ops':
+        if (typeof p.chapterId === 'number' && Array.isArray(p.ops)) {
+          onOps?.({
+            chapterId: p.chapterId,
+            ops: p.ops as import('./script-review-apply').ReviewOp[],
+          });
+        }
+        break;
+      case 'result':
+        result = {
+          reviewedChapters: typeof p.reviewedChapters === 'number' ? p.reviewedChapters : 0,
+          totalOps: typeof p.totalOps === 'number' ? p.totalOps : 0,
+        };
+        break;
+      case 'error':
+        throw new ReviewScriptError(
+          typeof p.message === 'string' ? p.message : 'Script review failed.',
+          typeof p.code === 'string' ? p.code : 'unknown',
+        );
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const raw = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
+      if (!dataLines.length) continue;
+      handle(JSON.parse(dataLines.join('\n')) as Record<string, unknown>);
+    }
+  }
+
+  if (!result) throw new Error('Script-review stream ended without a result event.');
+  return result;
+}
+
+async function mockReviewScript(
+  _bookId: string,
+  { onOps, onPhase }: ReviewScriptOpts = {},
+): Promise<ReviewScriptResult> {
+  await wait(60);
+  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 1 });
+  onOps?.({
+    chapterId: 1,
+    ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
+  });
+  return { reviewedChapters: 1, totalOps: 1 };
+}
+
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */
 async function realRemoveQwenVariant(
   bookId: string,
@@ -6801,6 +6923,7 @@ const real = {
   fetchDesignedPersona: realFetchDesignedPersona,
   designQwenVoice: realDesignQwenVoice,
   detectEmotions: realDetectEmotions,
+  reviewScript: realReviewScript,
   removeQwenVariant: realRemoveQwenVariant,
   promoteQwenVoice: realPromoteQwenVoice,
   discardQwenPreview: realDiscardQwenPreview,
@@ -7062,6 +7185,7 @@ const mock = {
   fetchDesignedPersona: mockFetchDesignedPersona,
   designQwenVoice: mockDesignQwenVoice,
   detectEmotions: mockDetectEmotions,
+  reviewScript: mockReviewScript,
   removeQwenVariant: mockRemoveQwenVariant,
   promoteQwenVoice: mockPromoteQwenVoice,
   discardQwenPreview: mockDiscardQwenPreview,

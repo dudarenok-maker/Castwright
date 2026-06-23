@@ -1923,6 +1923,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/script-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * LLM script-review pass (fs-58)
+         * @description Runs an LLM pass over the book's already-attributed sentences and
+         *     streams per-chapter editing ops over Server-Sent Events. The ops
+         *     (strip_tag, split, extract_dialogue, merge, fix_emotion) carry anchors
+         *     and rationale; the client applies them through existing Redux
+         *     manual-edit reducers. The route never writes a file. When an optional
+         *     `chapterId` is provided, only that chapter is reviewed. SSE event
+         *     kinds: `phase`, `throttle`, `heartbeat`, `ops`
+         *     (`{ chapterId, ops: [{ id, op, anchor?, newText?, rationale, ... }] }`),
+         *     `chapter-failed`,
+         *     `error` (`code: no_attribution | no_such_chapter | quota_exhausted`),
+         *     and a terminal `result` (`{ done, reviewedChapters, totalOps }`).
+         */
+        post: operations["scriptReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}": {
         parameters: {
             query?: never;
@@ -6923,6 +6953,51 @@ export interface operations {
         };
         responses: {
             /** @description SSE stream of annotation/phase/result events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": Record<string, never>;
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book has not been analysed yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    scriptReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Optional chapter id — when present, limits the pass to that chapter only. */
+                    chapterId?: number;
+                    /** @description Optional analyzer model id override (matches the analysis endpoints). */
+                    model?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description SSE stream of ops/phase/result events. */
             200: {
                 headers: {
                     [name: string]: unknown;
