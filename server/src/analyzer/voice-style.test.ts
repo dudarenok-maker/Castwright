@@ -203,6 +203,22 @@ describe('cleanPersona', () => {
     const { cleanPersona } = await import('./voice-style.js');
     expect(cleanPersona('a warm,\n  steady\nvoice')).toBe('a warm, steady voice');
   });
+
+  describe('cleanPersona <think> guard', () => {
+    it('strips a leading <think>…</think> block a local thinking model may emit', async () => {
+      const { cleanPersona } = await import('./voice-style.js');
+      const raw = '<think>The character is a gruff miner, so low pitch…</think>\nA gruff, low-pitched man\'s voice, slow and weary, for audiobook narration.';
+      expect(cleanPersona(raw)).toBe(
+        "A gruff, low-pitched man's voice, slow and weary, for audiobook narration.",
+      );
+    });
+
+    it('leaves a persona with no think block unchanged', async () => {
+      const { cleanPersona } = await import('./voice-style.js');
+      const raw = 'A bright teenage girl\'s voice, medium-high pitch, for audiobook narration.';
+      expect(cleanPersona(raw)).toBe(raw);
+    });
+  });
 });
 
 describe('persona generation config', () => {

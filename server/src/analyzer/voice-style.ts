@@ -144,6 +144,11 @@ Voice-design persona:`;
    so a multi-line answer still lands as one clean instruct. */
 export function cleanPersona(raw: string): string {
   let s = stripCodeFences(raw).trim();
+  /* Local thinking models may ignore think:false and emit a reasoning block
+     ahead of the persona. The structured analyzer path is protected by
+     constrained decoding; this freeform path is not. Drop a leading
+     <think>…</think> (DOTALL) before the rest of the cleanup. */
+  s = s.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim();
   /* Drop a leading label like "Persona:" / "Voice:" the model sometimes
      prepends despite the instruction. */
   s = s.replace(/^(voice[- ]?design persona|persona|voice style|voice)\s*[:\-—]\s*/i, '');
