@@ -104,13 +104,20 @@ export async function afterChapterFinalized(
   ctx: { bookId: string; bookDir: string; chapters: { id: number; slug: string }[] },
 ) {
   if (!configValue('qa.speaker.enabled')) return;
-  if (scoringInFlight.has(ctx.bookId)) return scoringInFlight.get(ctx.bookId);
+  if (scoringInFlight.has(ctx.bookId)) return;
+  /* Fire-and-forget: kick the score pass off and return immediately — the
+     caller (chapter-completion path) must NOT await it. scoreBook can make
+     unbounded blocking sidecar calls (the audition-centroid path renders the
+     sample K=12× + ECAPA-embeds each, per too-thin/bimodal character), and it
+     feeds no progress to the per-chapter no-progress watchdog. Awaiting it here
+     turned a slow-but-progressing score pass into a 720s assembly stall on the
+     8GB box (#1029). The pass is non-fatal (.catch) and self-cleaning (.finally);
+     a stale verdict file just gets overwritten on the next chapter's pass. */
   const run = scoreBook(ctx.bookDir, ctx.chapters)
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
     .finally(() => scoringInFlight.delete(ctx.bookId));
   scoringInFlight.set(ctx.bookId, run);
-  return run;
 }
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
@@ -1292,6 +1299,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           bumpProgress();
           recordBatchThroughput({ genMs, audioMs });
         },
+        /* srv-36 — the post-synth SPK embed pass is CPU-bound and emits no SSE
+           tick of its own; feed the no-progress watchdog per embed so a long
+           pass (many groups) can't be killed mid-flight (sibling of #1029). */
+        onEmbedProgress: bumpProgress,
         /* Pre-assembly per-sentence QA gate (segment-qa.ts): re-record a
            sentence whose rendered PCM is dead/silent, has a long internal
            silence run, or drifts far from its text-predicted length, BEFORE
@@ -1450,8 +1461,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          now that this chapter's embeddings are on disk. Passes the FULL
          state.chapters list (not `chapter` / `targetChapters`) so the
          centroid is built from all rendered chapters, not just the one that
-         just finished. Single-flight + non-fatal (see afterChapterFinalized). */
-      await afterChapterFinalized({
+         just finished. Single-flight + non-fatal (see afterChapterFinalized).
+         NOT awaited (#1029): the score pass runs in the background so a slow
+         audition-centroid render can't starve the no-progress watchdog and
+         stall assembly. */
+      afterChapterFinalized({
         bookId,
         bookDir,
         chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
