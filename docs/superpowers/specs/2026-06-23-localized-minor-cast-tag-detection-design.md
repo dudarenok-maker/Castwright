@@ -155,7 +155,11 @@ Seed verb lists (curated, extensible):
 Both public functions resolve a grammar up front and replace the
 `if (isNonEnglish(language)) return <no-op>` early-return with:
 `const g = grammarFor(language); if (!g) return <no-op>;` — `es`/`ru` now resolve a
-grammar; fr/de/etc. resolve `null` and keep the existing gated no-op.
+grammar; fr/de/etc. resolve `null` and keep the existing gated no-op. Two
+implementation notes: `tagRegexFor` builds with **no `g` flag** (the regex is reused
+across sentences via `.exec`; a global flag would make `lastIndex` stateful and skip
+matches — F3); and the now-unused `isNonEnglish` import is removed from
+`recover-tagged-lines.ts` (F4).
 
 - **`taggedSpeakerIds`** (keep-protection — segmentation-agnostic): scan every sentence
   with `tagRegexFor(g)`, `resolveNameToId` the capture against the roster, collect the
@@ -286,7 +290,34 @@ The two halves carry different risk, so the plan ships them in order:
   on an already-rostered name, the same false-positive class as the English heuristic
   (R13).
 
+## Scope boundaries (adjacent gaps this does NOT close)
+
+- **Rostered-only (F2):** keep/recover act only on speakers already in the roster
+  (`resolveNameToId` requires a roster match). The roster-coverage guard (seam-3d Task 1)
+  remains gated for `es`/`ru`, so a speaker stage-1 dropped from the roster entirely is
+  not re-added here — consistent with "never invent a speaker." Localising that guard is
+  a separate seam-3d follow-up.
+- **No `es`/`ru` *descriptor* fold for Spanish (F1):** `isDescriptorName` has English and
+  Russian branches but **no Spanish branch**, so Spanish background *descriptors*
+  (`el viejo`, `la mujer`, `el desconocido`) won't fold into the `unknown-*` buckets the
+  way Russian's `GENERIC_ROLE_RU` does. That is a **separate** gap from #1028 (which is
+  the loss of the prose-tag *keep* protection) and should be filed as its own follow-up
+  (`isDescriptorName` ES branch) rather than absorbed here — keep this PR scoped to the
+  tag-detection regression.
+
 ## Adversarial-review changelog (2026-06-23)
+
+Round 3:
+
+- Verified **no existing test breaks** un-gating `es`/`ru`: the seam-3d non-English gate
+  tests pin `'de'` only (`recover-tagged-lines.test.ts:101,112`,
+  `roster-coverage.test.ts:285,303`); the `fold-minor-cast.test.ts` RU tests
+  (`:844,864,962`) drive the full fold with placeholder text `"Sentence N."` (no verbs/
+  names), so the now-un-gated `taggedSpeakerIds` still returns ∅ for them.
+- **F3 / F4 (impl notes):** `tagRegexFor` uses no `g` flag (stateful-`lastIndex` bug
+  guard); drop the orphaned `isNonEnglish` import.
+- **F1 / F2 (scope boundaries):** documented the rostered-only boundary and the missing
+  Spanish `isDescriptorName` branch as explicit out-of-scope follow-ups.
 
 Round 2:
 
