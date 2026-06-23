@@ -52,6 +52,7 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 #### `fs-50` — Language packs: ES/FR/DE end-to-end, Latin Qwen tranche ([#974](https://github.com/dudarenok-maker/Castwright/issues/974))
 
 - _What:_ Stand up **ES/FR/DE** end-to-end through **Qwen design** (Latin-script tranche), folding in `fs-41` (auto-detect on ingest + voice-library language filtering). Keeps the shipped `non-English ⇒ Qwen, fail-loud` invariant unchanged; the bulk is the engine-independent **analyze half** (detection, chapter/quote/attribution/token + the English prompt skills) plus the Qwen design-path i18n. **CJK (ZH/JA) split to `fs-59`; the Kokoro/XTTS engine relaxation split to `fs-60`.**
+- _Status:_ **ES (Spanish) SHIPPED 2026-06-23** — `es.supported:true` (#1031), canary-validated + operator-accepted, attribution-eval harness merged (#1032). **FR/DE remain** — each needs its own on-box canary before its flip. Follow-ups from the ES canary: #1027 (per-language sample books → `fs-61` below), #1028/#1029/#1030 (bugs).
 - _Benefit (user / strategic):_ the **biggest single perception gap** — rivals market 1,158 languages, we show 2. Now spec'd + decomposed into 5 desk-verifiable seams.
 _Spec:_ [`2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md`](superpowers/specs/2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md) · _Detail:_ [#974](https://github.com/dudarenok-maker/Castwright/issues/974).
 
@@ -66,6 +67,12 @@ _Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwrigh
 - _What:_ Let non-English books use Kokoro-native / Coqui-XTTS voices instead of forced Qwen — the gap-fill tail. Owns the Kokoro non-English G2P deps, per-language default voices, the 3-engine VRAM constraint, Coqui per-synth language threading, and a cross-language voice-identity check (srv-36 ECAPA).
 - _Benefit (user / strategic):_ languages + voice variety beyond Qwen's reach; same engine choice for non-English books. Lowest strategic priority.
 _Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwright/issues/1005).
+
+#### `fs-61` — Per-language sample books in the demo pack ([#1027](https://github.com/dudarenok-maker/Castwright/issues/1027))
+
+- _What:_ The `fs-22` demo pack ships one English Coalfall sample with English-designed voices. Because Qwen voice designs are **per-language** (a voice baked for one language is cleared on a book in another), a non-English user can't run the English sample's voices. Ship **a sample book per supported language** — each with its own language-matched designed voices (Spanish translation already at `samples/the-coalfall-commission/manuscript.es.md`) — wired into the bundle/zip pipeline, plus a convention so each new supported language adds its sample.
+- _Benefit (user / strategic):_ a non-English user gets a generate-able demo in their own language out of the box, not a dead English-voiced sample. Surfaced by the `fs-50` Spanish ship.
+_Full detail + acceptance:_ [#1027](https://github.com/dudarenok-maker/Castwright/issues/1027).
 
 #### `fs-52` — Caption/SRT export (.srt/.vtt; line/sentence/word) ([#975](https://github.com/dudarenok-maker/Castwright/issues/975))
 

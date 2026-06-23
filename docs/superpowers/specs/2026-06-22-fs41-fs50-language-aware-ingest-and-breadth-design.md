@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 date: 2026-06-22
 topic: fs-41 + fs-50 — language-aware ingest + Latin-script Qwen breadth (one initiative)
 issues: >
@@ -409,3 +409,12 @@ _(filled per phase on ship: date · commit SHA · seam PRs · registry + sharing
 Qwen verified ES/FR/DE quality · detector accuracy + English-stability · design-path
 i18n (refText/persona/emotion) · attribution eval harness · Spanish canary (audio
 FP/FN + attribution FP/FN) · then one block per Phase-2/3 language.)_
+
+### Phase 1 — Spanish (`es`) — SHIPPED 2026-06-23
+
+- **`es.supported: true`** in `language-registry.ts` (#1031, `b92a22ab`); `fr`/`de` stay `supported:false` until their own canaries. All seams merged: detection + confirm selector, language-agnostic structure + analyze-half primitives, voice-library language filter + facet + early-warning (#1011/#1013/#1014/#1015/#1020/#1021), seam-5 `sidecarLanguageName` fail-loud (#1022) + per-language Qwen calibration `refText` (#1019).
+- **Attribution eval harness** (#1032, `scripts/eval-attribution.mjs`) — pure `scoreAttribution()` + CLI; scored the on-box ES cast **RECALL 13/13 (100%), PRECISION 93%** (sole imprecision = the Dragón/Coalfall entity-split).
+- **Spanish canary (audio + attribution):** driven end-to-end against the real stack on a Spanish translation of the canonical book (`samples/the-coalfall-commission/manuscript.es.md`). Full Chapter render (66/66 lines, ~4m27s MP3) with **Spanish-calibrated voices** (manifest `refText` = "El veloz murciélago…"); ASR content-QA **0 flagged segments** (clean Spanish round-trip); **operator listen → accepted.**
+- **Follow-ups filed (none blocked the ship):** #1027 per-language sample books (voices are per-language designs → the demo pack needs a per-language sample), #1028 non-English minor-cast protection (the seam-3d `taggedSpeakerIds` gate-off folds minor speakers like Berrin/Ivo), #1029 chapter-assembly stall with the `SEG_SPK` drift gate on (8 GB box), #1030 recycle-storm single-owner guard. Unfiled refinement: the Qwen design `instruct` persona is still English.
+
+_Phase 2/3 (FR/DE, then CJK via fs-59) remain — status stays `active` until they ship._
