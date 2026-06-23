@@ -59,6 +59,10 @@ import {
   registerActiveSupervisor,
   type SidecarSupervisor,
 } from './tts/sidecar-supervisor.js';
+import {
+  enforceSingleSidecarOwner,
+  releaseSidecarOwnership,
+} from './tts/sidecar-owner.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -210,6 +214,17 @@ const listenerCallback = () => {
      the conditional default falls back to Kokoro. The /health poll refreshes
      this continuously once the sidecar is up. */
   setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
+  /* #1030 — refuse to boot if another LIVE server already owns the :9000
+     sidecar, so two stacks can't fight over it (the recycle storm). Only when
+     THIS server will actually manage the sidecar (autoStart on); a no-autostart
+     server never supervises and so never conflicts. Drops/clears an owner note
+     in .run/; keyed on ppid so a `tsx watch` reload takes over rather than
+     refusing. Mirrors the EADDRINUSE HTTP-port guard (crash-logging.ts). Runs
+     before the supervisor starts AND before app.listen, so a conflict exits
+     cleanly without spawning a rival sidecar or grabbing the HTTP port. */
+  if (getResolvedAutoStartSidecar()) {
+    enforceSingleSidecarOwner({ runDir });
+  }
   /* srv-15 — supervise the sidecar instead of a one-shot spawn, so a crash /
      OOM-kill / poison self-exit respawns instead of stalling generation
      forever. `buildOpts` re-reads settings on each respawn so a mid-session
@@ -331,6 +346,10 @@ function shutdown(signal: NodeJS.Signals): void {
   shuttingDown = true;
   stopBackupScheduler();
   console.log(`[server] ${signal} received, tearing down sidecar...`);
+  /* #1030 — release our :9000 ownership note so the next boot (or another
+     stack) sees the port as free. No-op if we never claimed it (autoStart off)
+     or a same-lineage reload already took it over. */
+  releaseSidecarOwnership(runDir);
   /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
      child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
