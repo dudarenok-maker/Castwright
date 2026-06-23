@@ -20,6 +20,9 @@ export interface LanguageEntry {
   /** Non-English chapter-heading lexicon (used to build the language-agnostic
       split regex; English stays inline in parsers/text.ts). Absent on `en`. */
   headingLexicon?: { keywords: string[]; numberWords: string[]; standalone: string[] };
+  /** Non-English front/back-matter title terms (used to build the language-agnostic
+      FRONT_MATTER_RX; English stays inline in parsers/front-matter.ts). Absent on en. */
+  frontMatterKeywords?: string[];
 }
 
 const ENTRIES: readonly LanguageEntry[] = [
@@ -30,7 +33,11 @@ const ENTRIES: readonly LanguageEntry[] = [
       numberWords: ['один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять', 'десять',
         'одиннадцать', 'двенадцать', 'двадцать', 'тридцать'],
       standalone: ['пролог', 'эпилог', 'предисловие', 'введение', 'интерлюдия', 'послесловие'],
-    } },
+    },
+    frontMatterKeywords: ['посвящение', 'авторские права', 'благодарности', 'содержание', 'оглавление',
+      'об авторе', 'предисловие', 'послесловие', 'приложение', 'глоссарий', 'библиография', 'указатель',
+      'примечания', 'выходные данные', 'эпиграф'],
+  },
   // es/fr/de: detection identifies them, but they are not claimed until their
   // rollout phase's operator gate flips `supported` (not in this seam).
   { code: 'es', sidecarName: 'Spanish', supported: false, detect: { script: 'latin',    iso6393: 'spa' },
@@ -40,21 +47,33 @@ const ENTRIES: readonly LanguageEntry[] = [
         'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve',
         'veinte', 'treinta', 'cuarenta', 'cincuenta'],
       standalone: ['prólogo', 'epílogo', 'prefacio', 'introducción', 'interludio', 'epígrafe'],
-    } },
+    },
+    frontMatterKeywords: ['dedicatoria', 'derechos de autor', 'agradecimientos', 'índice', 'sobre el autor',
+      'prefacio', 'apéndice', 'glosario', 'bibliografía', 'epígrafe', 'colofón', 'nota del autor',
+      'nota del traductor'],
+  },
   { code: 'fr', sidecarName: 'French',  supported: false, detect: { script: 'latin',    iso6393: 'fra' },
     headingLexicon: {
       keywords: ['chapitre', 'partie', 'jour', 'livre', 'acte', 'scène', 'section'],
       numberWords: ['un', 'une', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix',
         'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'vingt', 'trente', 'quarante', 'cinquante'],
       standalone: ['prologue', 'épilogue', 'préface', 'introduction', 'interlude', 'avant-propos'],
-    } },
+    },
+    frontMatterKeywords: ['dédicace', 'remerciements', 'table des matières', 'sommaire',
+      'à propos de l\'auteur', 'préface', 'avant-propos', 'postface', 'annexe', 'glossaire', 'bibliographie',
+      'note de l\'auteur', 'note du traducteur', 'colophon', 'épigraphe'],
+  },
   { code: 'de', sidecarName: 'German',  supported: false, detect: { script: 'latin',    iso6393: 'deu' },
     headingLexicon: {
       keywords: ['kapitel', 'teil', 'tag', 'buch', 'akt', 'szene', 'abschnitt'],
       numberWords: ['eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun', 'zehn',
         'elf', 'zwölf', 'dreizehn', 'vierzehn', 'fünfzehn', 'zwanzig', 'dreißig', 'vierzig'],
       standalone: ['prolog', 'epilog', 'vorwort', 'einleitung', 'zwischenspiel', 'nachwort'],
-    } },
+    },
+    frontMatterKeywords: ['widmung', 'urheberrecht', 'danksagung', 'inhaltsverzeichnis', 'über den autor',
+      'vorwort', 'nachwort', 'anhang', 'glossar', 'bibliografie', 'register', 'anmerkungen', 'impressum',
+      'epigraph'],
+  },
 ];
 
 const BY_CODE: ReadonlyMap<string, LanguageEntry> = new Map(
@@ -95,4 +114,11 @@ export function nonEnglishHeadingLexicon(): { keywords: string[]; numberWords: s
     e.headingLexicon.standalone.forEach((s) => standalone.add(s));
   }
   return { keywords: [...keywords], numberWords: [...numberWords], standalone: [...standalone] };
+}
+
+/** Deduped union of every entry's non-English front-matter keywords. */
+export function nonEnglishFrontMatterKeywords(): string[] {
+  const out = new Set<string>();
+  for (const e of ENTRIES) e.frontMatterKeywords?.forEach((w) => out.add(w));
+  return [...out];
 }

@@ -3,6 +3,7 @@
    chapter-label logic is identical between them. */
 
 import { tagHtmlEmphasis } from './audio-tags.js';
+import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
 
 /* Decode numeric character references — both hex (`&#x27;`) and decimal
    (`&#39;`). EPUB serializers very commonly emit the HEX apostrophe
@@ -78,9 +79,22 @@ export function extractFirstHeading(html: string): string | null {
   return raw;
 }
 
-/* "Chapter 1" / "Chapter IV" / "Chapter Twelve" with nothing else.
-   Used to detect generic NCX titles that should be augmented with the
-   body's <h1>. Mirrors the bare-numbered-heading test in text.ts but
-   self-contained here to keep the parsers loosely coupled. */
-export const GENERIC_NCX_RE =
-  /^chapter\s+(?:[ivxlcdm\d]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\s*$/i;
+/* "Chapter 1" / "Chapter IV" / "Chapter Twelve" / "Capítulo 3" / "Глава 2" etc.
+   with nothing else. Used to detect generic NCX titles that should be augmented
+   with the body's <h1>. Mirrors the bare-numbered-heading test in text.ts but
+   self-contained here to keep the parsers loosely coupled.
+
+   seam 3b (fs-41/fs-50): non-English chapter keywords and number words are
+   pulled from the language-registry union so any new language only needs a
+   `headingLexicon` entry in the registry. English stays inline. */
+const _NE = nonEnglishHeadingLexicon();
+const _NCX_KEYWORDS = ['chapter', ..._NE.keywords].join('|');
+const _NCX_EN_NUMBERS =
+  'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|' +
+  'thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' +
+  'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred';
+const _NCX_NUMBERS = [_NCX_EN_NUMBERS, ..._NE.numberWords].join('|');
+export const GENERIC_NCX_RE = new RegExp(
+  `^(?:${_NCX_KEYWORDS})\\s+(?:[ivxlcdm\\d]+|(?:${_NCX_NUMBERS})(?:[-\\s](?:${_NCX_NUMBERS}))?)\\s*$`,
+  'iu',
+);

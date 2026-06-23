@@ -2573,6 +2573,8 @@ export interface components {
                 title: string;
                 /** @description Words in this chapter body. Lets the confirm view auto-suggest front/back-matter exclusion. */
                 wordCount?: number;
+                /** @description seam 3b — server-computed flag (title-union OR wordCount ≤ 150). Replaces the client-side regex mirror. */
+                isLikelyFrontMatter?: boolean;
             }[];
         };
         ImportResponse: {

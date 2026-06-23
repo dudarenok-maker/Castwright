@@ -170,8 +170,10 @@ export interface ImportCandidate {
   supportedLanguages?: Array<{ code: string; label: string }>;
   /* Per-chapter wordCount is what powers the confirm view's auto-suggest
      heuristic (front-matter detection by length). Optional because older
-     server builds didn't expose it. */
-  chapters: Array<{ id: number; title: string; wordCount?: number }>;
+     server builds didn't expose it. isLikelyFrontMatter is server-computed
+     since seam 3b (title-union OR wordCount ≤ 150); optional so older server
+     builds stay compatible. */
+  chapters: Array<{ id: number; title: string; wordCount?: number; isLikelyFrontMatter?: boolean }>;
 }
 
 export interface ImportResponse {

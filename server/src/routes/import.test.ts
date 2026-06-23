@@ -397,6 +397,49 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
   });
 });
 
+/* fs-41/fs-50 seam 3b — per-chapter isLikelyFrontMatter flag on the import candidate. */
+describe('POST /api/import — per-chapter isLikelyFrontMatter flag (seam 3b)', () => {
+  it('marks a non-English front-matter chapter via the per-chapter flag', async () => {
+    /* Uses markdown headings so the parser assigns the expected chapter titles.
+       "Derechos de autor" is a Spanish frontMatterKeyword in the language registry,
+       detected by isLikelyFrontMatterTitle (seam 3b). */
+    const text =
+      '# Mi Libro\n\n## Derechos de autor\n\n© 2026.\n\n## Capítulo 1\n\n' +
+      'palabra '.repeat(400);
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const fm = res.body.candidate.chapters.find((c: any) => /Derechos de autor/.test(c.title));
+    const ch1 = res.body.candidate.chapters.find((c: any) => /Capítulo 1/.test(c.title));
+    expect(fm).toBeTruthy();
+    expect(ch1).toBeTruthy();
+    expect(fm.isLikelyFrontMatter).toBe(true);
+    expect(ch1.isLikelyFrontMatter).toBe(false);
+  });
+
+  it('marks a short chapter (wordCount ≤ 150) as isLikelyFrontMatter=true regardless of title', async () => {
+    const text = '# My Book\n\n## A Strange Page\n\nShort body.\n\n## Chapter One\n\n' + 'word '.repeat(400);
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const short = res.body.candidate.chapters.find((c: any) => /A Strange Page/.test(c.title));
+    const long = res.body.candidate.chapters.find((c: any) => /Chapter One/.test(c.title));
+    expect(short).toBeTruthy();
+    expect(long).toBeTruthy();
+    expect(short.isLikelyFrontMatter).toBe(true);
+    expect(long.isLikelyFrontMatter).toBe(false);
+  });
+
+  it('marks an English front-matter chapter (Dedication) as isLikelyFrontMatter=true', async () => {
+    const text =
+      '# My Book\n\n## Dedication\n\n' + 'word '.repeat(400) +
+      '\n\n## Chapter One\n\n' + 'word '.repeat(400);
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const ded = res.body.candidate.chapters.find((c: any) => /Dedication/.test(c.title));
+    const ch1 = res.body.candidate.chapters.find((c: any) => /Chapter One/.test(c.title));
+    expect(ded).toBeTruthy();
+    expect(ch1).toBeTruthy();
+    expect(ded.isLikelyFrontMatter).toBe(true);
+    expect(ch1.isLikelyFrontMatter).toBe(false);
+  });
+});
+
 /* fs-41/fs-50 seam 2 — server-side language detection wired into POST /api/import. */
 describe('POST /api/import — language detection (fs-41/fs-50)', () => {
   it('detects the manuscript language and stamps the supported-list on the candidate', async () => {

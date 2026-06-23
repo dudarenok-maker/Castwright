@@ -7,7 +7,7 @@
    narrator. stripHtml decoded only the DECIMAL `&#39;`, never the hex form. */
 
 import { describe, it, expect } from 'vitest';
-import { stripHtml, extractFirstHeading } from './html-utils.js';
+import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
 
 describe('stripHtml — tag stripping', () => {
   it('still strips tags and reaches a fixed point (replace-until-stable)', () => {
@@ -54,5 +54,35 @@ describe('stripHtml — numeric character references', () => {
 describe('extractFirstHeading — numeric character references', () => {
   it('decodes a hex apostrophe in the heading text', () => {
     expect(extractFirstHeading('<h1>Oduvan&#x27;s Forge</h1>')).toBe("Oduvan's Forge");
+  });
+});
+
+describe('GENERIC_NCX_RE — English (existing behaviour)', () => {
+  it('matches English "Chapter N" patterns', () => {
+    for (const s of ['Chapter 1', 'Chapter IV', 'Chapter Twelve', 'chapter twenty']) {
+      expect(GENERIC_NCX_RE.test(s)).toBe(true);
+    }
+  });
+
+  it('does not match a descriptive chapter title', () => {
+    expect(GENERIC_NCX_RE.test('The Berth at Liverpool')).toBe(false);
+    expect(GENERIC_NCX_RE.test('Chapter')).toBe(false); // no number
+  });
+});
+
+describe('GENERIC_NCX_RE — non-English generic chapter labels (seam 3b)', () => {
+  it('matches non-English generic chapter labels', () => {
+    for (const s of [
+      'Capítulo 3',   // Spanish
+      'Kapitel 5',    // German
+      'Глава 2',      // Russian
+      'Chapitre IV',  // French
+    ]) {
+      expect(GENERIC_NCX_RE.test(s)).toBe(true);
+    }
+  });
+
+  it('does not match a descriptive non-English chapter title', () => {
+    expect(GENERIC_NCX_RE.test('El Comienzo del Fin')).toBe(false);
   });
 });
