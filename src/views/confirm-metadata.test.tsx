@@ -244,13 +244,13 @@ describe('ConfirmMetadataView — fs-41/fs-50 language selector (server-detected
   });
 
   it('shows a detected-but-unsupported banner and defaults to English when the detection is unsupported', () => {
-    renderWithCandidate({ language: 'es', languageSupported: false,
-      supportedLanguages: [{ code: 'en', label: 'English' }, { code: 'ru', label: 'Russian' }] });
+    renderWithCandidate({ language: 'fr', languageSupported: false,
+      supportedLanguages: [{ code: 'en', label: 'English' }, { code: 'ru', label: 'Russian' }, { code: 'es', label: 'Spanish' }] });
     const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
     expect(select.value).toBe('en'); // not yet supported → user must pick a supported language
-    expect(screen.getByText(/spanish.*not.*supported/i)).toBeInTheDocument();
+    expect(screen.getByText(/french.*not.*supported/i)).toBeInTheDocument();
     // the unsupported language is NOT a selectable option
-    expect(within(select).queryByText('Spanish')).not.toBeInTheDocument();
+    expect(within(select).queryByText('French')).not.toBeInTheDocument();
   });
 
   it('clears the auto-detected chip once the user changes the selector', async () => {

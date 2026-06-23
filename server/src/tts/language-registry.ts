@@ -6,7 +6,9 @@
    gated `supported:false` until its validation gate passes.
 
    `en` and `ru` are seeded `supported:true`: ru shipped validated under
-   fs-2, so it is grandfathered past the per-language gate. */
+   fs-2, so it is grandfathered past the per-language gate.
+   `es` flipped `supported:true` 2026-06-23 after canary validation + operator
+   acceptance (fs-41/fs-50 Spanish rollout). `fr` and `de` remain gated. */
 
 export interface LanguageEntry {
   /** BCP-47 primary subtag, lower-cased (e.g. 'en', 'ru', 'es'). */
@@ -38,9 +40,10 @@ const ENTRIES: readonly LanguageEntry[] = [
       'об авторе', 'предисловие', 'послесловие', 'приложение', 'глоссарий', 'библиография', 'указатель',
       'примечания', 'выходные данные', 'эпиграф'],
   },
-  // es/fr/de: detection identifies them, but they are not claimed until their
-  // rollout phase's operator gate flips `supported` (not in this seam).
-  { code: 'es', sidecarName: 'Spanish', supported: false, detect: { script: 'latin',    iso6393: 'spa' },
+  // es: canary-validated + operator-accepted (2026-06-23); fr/de remain gated.
+  // fr/de: detection identifies them, but they are not claimed until their
+  // rollout phase's operator gate flips `supported`.
+  { code: 'es', sidecarName: 'Spanish', supported: true,  detect: { script: 'latin',    iso6393: 'spa' },
     headingLexicon: {
       keywords: ['capítulo', 'parte', 'día', 'libro', 'acto', 'escena', 'sección'],
       numberWords: ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez',
