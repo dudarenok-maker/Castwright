@@ -1,6 +1,6 @@
 ---
 title: 'fs-58 — LLM Script Review, Unit A: annotation mechanics + emotion correction'
-status: draft
+status: active
 date: 2026-06-23
 issue: '#998'
 related:
