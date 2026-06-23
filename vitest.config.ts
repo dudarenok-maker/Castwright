@@ -25,7 +25,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'skills/**/*.test.ts'],
     /* `vitest run --changed <base>` (CI cost round 2 — verify.yml frontend leg)
        narrows the run to tests whose module graph touches the diff. The setup
        file is injected by the runner, NOT imported by any test, so a change to

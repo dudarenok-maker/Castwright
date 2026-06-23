@@ -848,6 +848,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'high',
   },
   {
+    key: 'prompt.scriptReview',
+    env: '',
+    group: 'analyzer-prompts',
+    label: 'Script review prompt',
+    help: 'The skill file sent to the analysis model for per-chapter script review (strip_tag/split/extract_dialogue/merge/fix_emotion ops). Editing forks a local copy; changes take effect without a restart.',
+    type: 'string', isPrompt: true,
+    default: 'skills/audiobook-script-review.md', // ← confirmed exists at skills/audiobook-script-review.md
+    apply: 'live', risk: 'high',
+  },
+  {
     key: 'prompt.voiceStyle',
     env: '',
     group: 'analyzer-prompts',

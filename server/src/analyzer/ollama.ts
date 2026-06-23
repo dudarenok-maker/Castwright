@@ -24,6 +24,7 @@ import {
   stage1ChapterSchema,
   stage2ChapterSchema,
   emotionAnnotationSchema,
+  scriptReviewSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   type Stage1Output,
@@ -305,14 +306,14 @@ export class OllamaAnalyzer implements Analyzer {
     );
   }
 
-  // fs-58 — real body lands in Task 7b
   async runScriptReviewChapter(
-    _manuscriptId: string,
-    _chapterId: number,
-    _promptMd: string,
-    _call: StageCall,
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
   ): Promise<ScriptReviewOutput> {
-    throw new Error('runScriptReviewChapter not implemented (Task 7b)');
+    const key = `review-ch${chapterId}` as const;
+    return this.runStage(manuscriptId, key, 'script_review', promptMd, scriptReviewSchema, scriptReviewSchema, call);
   }
 
   private async runStage<T>(

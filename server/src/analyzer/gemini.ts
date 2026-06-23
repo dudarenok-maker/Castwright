@@ -18,6 +18,7 @@ import {
   stage1ChapterSchema,
   stage2ChapterSchema,
   emotionAnnotationSchema,
+  scriptReviewSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   type Stage1Output,
@@ -122,6 +123,9 @@ const SKILL_FILES = {
   /* fs-33 — emotion-only backfill pass (does NOT re-attribute).
      Routes through the prompt-fork loader (prompt.emotionAnnotation). */
   emotion_annotation: 'audiobook-emotion-annotation.md',
+  /* fs-58 — per-chapter script review (strip_tag/split/extract_dialogue/merge/fix_emotion).
+     Routes through the prompt-fork loader (prompt.scriptReview). */
+  script_review: 'audiobook-script-review.md',
 } as const;
 export type SkillName = keyof typeof SKILL_FILES;
 
@@ -132,6 +136,7 @@ const SKILL_TO_PROMPT_ID: Partial<Record<SkillName, string>> = {
   per_chapter_stage1: 'prompt.castDetection',
   per_chapter_stage2: 'prompt.sentenceAttribution',
   emotion_annotation: 'prompt.emotionAnnotation',
+  script_review: 'prompt.scriptReview',
 };
 
 /* Read the skill file fresh on every request so prompt iteration doesn't
@@ -283,14 +288,14 @@ export class GeminiAnalyzer implements Analyzer {
     );
   }
 
-  // fs-58 — real body lands in Task 7b
   async runScriptReviewChapter(
-    _manuscriptId: string,
-    _chapterId: number,
-    _promptMd: string,
-    _call: StageCall,
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
   ): Promise<ScriptReviewOutput> {
-    throw new Error('runScriptReviewChapter not implemented (Task 7b)');
+    const key = `review-ch${chapterId}` as const;
+    return this.runStage(manuscriptId, key, 'script_review', promptMd, scriptReviewSchema, scriptReviewSchema, call);
   }
 
   private async runStage<T>(
