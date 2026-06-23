@@ -205,6 +205,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                             }
                             className="accent-ink w-4 h-4"
                           />
+                          <span className="sr-only">Toggle this {op.op} suggestion</span>
                         </label>
                         <div className="flex-1 min-w-0 space-y-1">
                           <OpPreview op={op} before={liveText} />

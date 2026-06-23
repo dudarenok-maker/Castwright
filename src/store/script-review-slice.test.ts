@@ -24,10 +24,9 @@ type TestState = ReturnType<TestStore['getState']>;
 // Re-wire selectActiveReview against the test store's state shape.
 function selectReview(state: TestState, bookId: string) {
   // Cast: the test store has only scriptReview, which matches the key the
-  // selector reads. Use 'as any' to satisfy the full RootState type param
-  // without pulling in the real store (which has side-effects).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return selectActiveReview(state as any, bookId);
+  // selector reads. Cast to satisfy the full RootState type param without
+  // pulling in the real store (which has side-effects).
+  return selectActiveReview(state as never, bookId);
 }
 
 // ---------------------------------------------------------------------------
