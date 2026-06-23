@@ -79,6 +79,14 @@ export function isAnyDesignBusy(): boolean {
   return designBusy.size > 0;
 }
 
+/** True when a bulk design is live for some book OTHER than `bookDir`. The
+    persona pre-pass marks ITS book busy before probing, so the self-exclusion
+    matters — `isAnyDesignBusy()` would always be true for the running job. */
+export function isOtherBookDesignBusy(bookDir: string): boolean {
+  for (const d of designBusy) if (d !== bookDir) return true;
+  return false;
+}
+
 /** True when ANY book has an analysis job in flight (main or subset). */
 export function isAnyAnalysisBusy(): boolean {
   return analysisBusy.size > 0;

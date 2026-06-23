@@ -5,7 +5,7 @@
    while letting different books run in parallel. The busy registry ref-counts
    analysis (main + subset can coexist) and tracks single design jobs. */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   withDesignLock,
   markAnalysisBusy,
@@ -14,6 +14,7 @@ import {
   markDesignBusy,
   clearDesignBusy,
   isDesignBusy,
+  isOtherBookDesignBusy,
 } from './design-lock.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
@@ -90,5 +91,20 @@ describe('busy registry', () => {
     expect(isDesignBusy('b')).toBe(true);
     clearDesignBusy('b');
     expect(isDesignBusy('b')).toBe(false);
+  });
+});
+
+describe('isOtherBookDesignBusy', () => {
+  afterEach(() => {
+    clearDesignBusy('/a');
+    clearDesignBusy('/b');
+  });
+
+  it('ignores the querying book, sees other books', () => {
+    expect(isOtherBookDesignBusy('/a')).toBe(false);
+    markDesignBusy('/a');
+    expect(isOtherBookDesignBusy('/a')).toBe(false); // self excluded
+    markDesignBusy('/b');
+    expect(isOtherBookDesignBusy('/a')).toBe(true); // other book busy
   });
 });
