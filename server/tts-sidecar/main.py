@@ -1014,6 +1014,37 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
     return scaled.tobytes()
 
 
+# Per-emotion output gain (fs-55): whisper variants rendered quieter, angry
+# louder. Keyed on the variant voice's `__<emotion>` suffix, so it applies in
+# NORMAL chapter generation (single + batch), not just auditions. Survives the
+# chapter loudnorm as RELATIVE dynamics — loudnorm applies one integrated-
+# loudness offset and preserves between-line levels — so a quieter whisper /
+# louder shout stays that way in the final book. Env-tunable: QWEN_GAIN_<EMOTION>
+# (e.g. QWEN_GAIN_WHISPER=0.5). Gain>1 clips via _float_audio_to_int16_le's clamp.
+_EMOTION_OUTPUT_GAIN: dict[str, float] = {"whisper": 0.45, "angry": 1.5}
+
+
+def _emotion_output_gain(voice: str) -> float:
+    if not isinstance(voice, str) or "__" not in voice:
+        return 1.0
+    emo = voice.rsplit("__", 1)[1].lower()
+    raw = os.environ.get(f"QWEN_GAIN_{emo.upper()}")
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _EMOTION_OUTPUT_GAIN.get(emo, 1.0)
+
+
+def _apply_emotion_gain(audio: Any, voice: Optional[str]) -> Any:
+    """Scale `audio` by the per-emotion output gain for `voice` (no-op at 1.0)."""
+    g = _emotion_output_gain(voice) if isinstance(voice, str) else 1.0
+    if g == 1.0:
+        return audio
+    return np.asarray(audio, dtype=np.float32) * g
+
+
 def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
     """Duration in ms of an audio array at the given sample rate. Drives the
     real-time-factor (rtf) perf logs; rtf = gen_ms / audio_ms, so <1 is
@@ -1445,6 +1476,17 @@ class QwenEngine(Engine):
         instruct_ids = w._tokenize_texts([w._build_instruct_text(instruct)])
 
         gk = w._merge_generate_kwargs()
+        # fs-55 emotion tuning: the anchored mint distils the 1.7B instruct synth
+        # down to a 0.6B clone, which softens emotion. Raise sampling temperature
+        # (main + subtalker acoustic) so the source synth performs the emotion
+        # harder before distillation. Tunable via QWEN_INSTRUCT_TEMP /
+        # QWEN_INSTRUCT_SUBTALKER_TEMP for on-box intensity calibration.
+        import os as _os  # noqa: PLC0415
+        gk["temperature"] = float(_os.environ.get("QWEN_INSTRUCT_TEMP", "1.6"))
+        gk["subtalker_temperature"] = float(
+            _os.environ.get("QWEN_INSTRUCT_SUBTALKER_TEMP", "1.8")
+        )
+        gk["top_p"] = float(_os.environ.get("QWEN_INSTRUCT_TOP_P", "0.90"))
 
         with torch.no_grad():
             codes, _ = m.generate(
@@ -2052,7 +2094,7 @@ class QwenEngine(Engine):
                 voice, len(text), "hit" if cache_hit else "miss", load_ms,
                 gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
             )
-            return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+            return SynthResult(pcm=_float_audio_to_int16_le(_apply_emotion_gain(audio, voice)), sample_rate=int(sr))
 
         # ── 0.6B-Base path (default) ──────────────────────────────────────────
         # Resolve the voice prompt first so an undesigned voice still fails
@@ -2082,7 +2124,7 @@ class QwenEngine(Engine):
             voice, len(text), "hit" if cache_hit else "miss", load_ms,
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
-        return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+        return SynthResult(pcm=_float_audio_to_int16_le(_apply_emotion_gain(audio, voice)), sample_rate=int(sr))
 
     def synthesize_batch(self, model: str, items: list[dict]) -> SynthBatchResult:
         """TRUE batching (plan 112): synth N sentences in ONE batched forward.
@@ -2217,7 +2259,10 @@ class QwenEngine(Engine):
             model, len(items), n_voices, sum(len(t) for t in texts), load_ms,
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
-        pcms = [_float_audio_to_int16_le(w) for w in wavs]
+        pcms = [
+            _float_audio_to_int16_le(_apply_emotion_gain(w, items[i].get("voice")))
+            for i, w in enumerate(wavs)
+        ]
         return SynthBatchResult(
             pcms=pcms, sample_rate=int(sr), gen_ms=gen_ms, audio_ms=audio_ms
         )
