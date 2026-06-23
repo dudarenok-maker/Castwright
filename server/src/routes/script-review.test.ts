@@ -189,6 +189,19 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(runReview).not.toHaveBeenCalled();
   });
 
+  it('emits a no_such_chapter error when a requested chapterId matches no attributed chapter', async () => {
+    writeBook(SENTENCES); // book IS analysed — chapters 1 and 2 carry sentences
+    const res = await request(app)
+      .post(`/api/books/${bookId}/script-review`)
+      .send({ chapterId: 99 }); // no such chapter
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'no_such_chapter')).toBe(true);
+    // Must NOT be conflated with the unanalysed-book code.
+    expect(events.some((e) => e.kind === 'error' && e.code === 'no_attribution')).toBe(false);
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+    expect(runReview).not.toHaveBeenCalled();
+  });
+
   it('404s for an unknown book', async () => {
     const res = await request(app).post(`/api/books/does-not-exist/script-review`).send({});
     expect(res.status).toBe(404);

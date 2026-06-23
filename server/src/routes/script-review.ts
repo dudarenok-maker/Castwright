@@ -184,11 +184,25 @@ scriptReviewRouter.post(
       clearInterval(keepAlive);
     });
 
-    if (chapterIds.length === 0) {
+    if (byChapter.size === 0) {
+      /* The book carries no attributed sentences at all — it was never
+         analysed (or analysis produced nothing). */
       send({
         kind: 'error',
         code: 'no_attribution',
         message: 'Run analysis first — there are no attributed sentences to review.',
+      });
+      clearInterval(keepAlive);
+      res.end();
+      return;
+    }
+    if (chapterIds.length === 0) {
+      /* The book IS analysed, but the requested chapterId matched no chapter
+         with attributed sentences — a distinct case from the unanalysed book. */
+      send({
+        kind: 'error',
+        code: 'no_such_chapter',
+        message: `Chapter ${requestedChapterId} has no attributed sentences to review.`,
       });
       clearInterval(keepAlive);
       res.end();
