@@ -32,6 +32,7 @@ import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
 import { readPrompt } from '../config/prompts.js';
 import { configValue } from '../config/resolver.js';
+import { generatePersonaViaOllama } from './ollama.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
     loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
@@ -159,11 +160,41 @@ export function cleanPersona(raw: string): string {
   return s;
 }
 
-/** Generate a voice-style persona for ONE character via a single
-    `gemini-3.1-flash-lite` call, rate-limited through the shared limiter.
-    Throws when no Gemini API key resolves, or when the model returns an
-    empty response. */
-export async function generateVoiceStylePersona(character: CastCharacter): Promise<string> {
+/** Generate a voice-style persona for ONE character.
+    Dispatches to the local Ollama path (`PERSONA_GEN_ENGINE=local`) or the
+    Gemini path (default). The optional `opts` are forwarded to the local
+    branch only; existing callers that pass no opts remain backward-compatible.
+
+    - local  → generateViaOllama (never touches Gemini; throws LocalUnreachableError
+                when the daemon is down — NO silent Gemini fallback).
+    - gemini → generateViaGemini (existing inline Google-GenAI code, verbatim;
+                retains geminiRateLimiter.acquire to prevent 429 storms). */
+export async function generateVoiceStylePersona(
+  character: CastCharacter,
+  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+): Promise<string> {
+  const engine = resolvePersonaEngine();
+  return engine === 'local' ? generateViaOllama(character, opts) : generateViaGemini(character);
+}
+
+async function generateViaOllama(
+  character: CastCharacter,
+  opts: { onCpu?: boolean; keepAlive?: string | number },
+): Promise<string> {
+  const model = resolvePersonaLocalModel();
+  const prompt = await buildVoiceStylePrompt(character);
+  const persona = cleanPersona(await generatePersonaViaOllama(prompt, model, opts));
+  if (!persona) {
+    throw new Error(`Voice-style generation for "${character.id}" returned an empty persona.`);
+  }
+  return persona;
+}
+
+/* generateViaGemini = the previous generateVoiceStylePersona body, unchanged:
+   getResolvedGeminiApiKey() guard → resolveVoiceStyleModel() → buildVoiceStylePrompt
+   → geminiRateLimiter.acquire(model, estTokens) → GoogleGenAI generateContent
+   → cleanPersona → empty-persona guard. MUST retain geminiRateLimiter.acquire. */
+async function generateViaGemini(character: CastCharacter): Promise<string> {
   const apiKey = getResolvedGeminiApiKey();
   if (!apiKey) {
     throw new Error(

@@ -292,3 +292,51 @@ describe('generateVoiceStylePersona', () => {
     await expect(generateVoiceStylePersona(MAERIN)).rejects.toThrow(/empty persona/);
   });
 });
+
+import { generateVoiceStylePersona } from './voice-style.js';
+
+const CHAR = { id: 'miner', name: 'Old Tom' } as any;
+
+describe('generateVoiceStylePersona dispatch', () => {
+  const ENV = ['PERSONA_GEN_ENGINE', 'GEMINI_API_KEY', 'OLLAMA_MODEL'];
+  afterEach(() => {
+    for (const k of ENV) delete process.env[k];
+    mockApiKey = 'test-key';
+    vi.restoreAllMocks();
+  });
+
+  it('local engine routes to Ollama and never touches Gemini', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    const ollama = await import('./ollama.js');
+    const spy = vi.spyOn(ollama, 'generatePersonaViaOllama').mockResolvedValue('A weary miner\'s voice.');
+    const out = await generateVoiceStylePersona(CHAR, { onCpu: true });
+    expect(out).toBe("A weary miner's voice.");
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it('local engine with daemon down throws LocalUnreachableError (no Gemini fallback)', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    const ollama = await import('./ollama.js');
+    vi.spyOn(ollama, 'generatePersonaViaOllama').mockRejectedValue(
+      new ollama.LocalUnreachableError('Ollama unreachable'),
+    );
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toBeInstanceOf(ollama.LocalUnreachableError);
+  });
+
+  it('gemini engine with no key throws the clear message', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'gemini';
+    mockApiKey = null;
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toThrow(/GEMINI_API_KEY is required/);
+  });
+
+  it('gemini branch still acquires the rate limiter', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'gemini';
+    process.env.GEMINI_API_KEY = 'k';
+    const acquire = vi.spyOn(geminiRateLimiter, 'acquire').mockResolvedValue(undefined as any);
+    // Use vi.mock factory form — prototype spy on GoogleGenAI is fragile across SDK versions.
+    // The top-level vi.mock('@google/genai') already stubs generateContent; just ensure it resolves.
+    generateContent.mockResolvedValue({ text: 'A persona.' });
+    await generateVoiceStylePersona(CHAR);
+    expect(acquire).toHaveBeenCalled();
+  });
+});
