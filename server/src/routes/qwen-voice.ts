@@ -104,10 +104,13 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
    adds only the delivery modifier on top. Phrasings calibrated for the
    anchored-mint approach (Task 6): stronger contrast vs. base voice. */
 const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
-  whisper: 'Delivered in a very soft, breathy whisper — barely audible, hushed and faint.',
-  angry: 'Delivered with loud, forceful anger — shouting, sharp and intense.',
-  excited: 'Delivered with bright, high-energy excitement.',
-  sad: 'Delivered sadly — subdued, downcast, and heavy.',
+  whisper:
+    'Delivered as a barely-there whisper, almost silent, pure soft breath with no vocal tone at all, hushed and intimate, faint enough that you strain to hear it.',
+  angry:
+    'Delivered with explosive, furious rage, shouting at the top of the voice, harsh and seething, sharp and aggressive, utterly enraged.',
+  excited:
+    'Delivered with bright, happy, upbeat excitement, cheerful and thrilled, full of joyful, positive energy.',
+  sad: 'Delivered with quiet, downcast sadness, slow and subdued, low and weary, heavy and dejected.',
 };
 
 /* fs-25 / fe-32 / srv-37 — record a designed emotion variant onto a

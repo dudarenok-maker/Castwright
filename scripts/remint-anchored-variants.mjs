@@ -31,6 +31,11 @@
  *   - The Qwen sidecar must be running and the 0.6B + 1.7B-Base models must
  *     be loaded (or loadable) — /qwen/mint-variant blocks until the mint
  *     completes.  Each base voice must have been designed already.
+ *   - LARGE LIBRARIES: repeated minting accumulates GPU VRAM; on an 8 GB card
+ *     the sidecar can stall or OOM-crash after ~60 mints. This script is
+ *     IDEMPOTENT (skips already-anchored variants), so if mints stall, restart
+ *     the sidecar (clears VRAM) and re-run to resume where it left off.
+ *     (Follow-up: per-mint VRAM cleanup so a whole library re-mints in one pass.)
  *   - The sidecar URL defaults to http://localhost:9000; override with
  *     SIDECAR_URL or LOCAL_TTS_URL.
  *   - The qwen voices directory defaults to <AudiobookWorkspace>/voices/qwen;
@@ -54,10 +59,13 @@ import os from 'node:os';
 
 /** @type {Record<string, string>} */
 const EMOTION_INSTRUCT = {
-  whisper: 'Delivered in a very soft, breathy whisper — barely audible, hushed and faint.',
-  angry: 'Delivered with loud, forceful anger — shouting, sharp and intense.',
-  excited: 'Delivered with bright, high-energy excitement.',
-  sad: 'Delivered sadly — subdued, downcast, and heavy.',
+  whisper:
+    'Delivered as a barely-there whisper, almost silent, pure soft breath with no vocal tone at all, hushed and intimate, faint enough that you strain to hear it.',
+  angry:
+    'Delivered with explosive, furious rage, shouting at the top of the voice, harsh and seething, sharp and aggressive, utterly enraged.',
+  excited:
+    'Delivered with bright, happy, upbeat excitement, cheerful and thrilled, full of joyful, positive energy.',
+  sad: 'Delivered with quiet, downcast sadness, slow and subdued, low and weary, heavy and dejected.',
 };
 
 // ---------------------------------------------------------------------------

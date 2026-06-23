@@ -471,7 +471,7 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     // variantVoiceId carries the __emotion suffix.
     expect(sent.variantVoiceId).toBe('qwen-v_maerin__angry');
     // emotionInstruct is the delivery clause ONLY — no persona re-description.
-    expect(sent.emotionInstruct).toContain('anger');
+    expect(sent.emotionInstruct).toContain('rage');
     expect(sent.emotionInstruct).not.toContain('a poised, confident teenage girl');
     // no legacy `instruct` field on the mint-variant body.
     expect(sent.instruct).toBeUndefined();

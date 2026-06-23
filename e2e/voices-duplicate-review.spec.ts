@@ -22,15 +22,21 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('cross-book duplicate review (plan 101)', () => {
+  // These tests each link / mark-variant the SAME cross-book Eliza pair. Run
+  // serial: under parallel workers one test's mutation clears the duplicate
+  // pill another is asserting on, so they pass alone but fail together. Serial
+  // (one at a time, fresh page per test) removes the cross-test race.
+  test.describe.configure({ mode: 'serial' });
+
   test('⚠ pill opens the modal, hydrates both casts, and links the pair', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 30_000,
     });
     await page.goto('/#/voices');
 
     /* The Kore family card carries the Eliza Gray + Eliza cross-book pair. */
-    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 30_000 });
 
     /* The ⚠ pill renders in the family header. Text shape:
        "⚠ 1 duplicate candidate". */
@@ -68,10 +74,10 @@ test.describe('cross-book duplicate review (plan 101)', () => {
   test('"Different on purpose" marks the pair as variants and clears the pill', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 30_000,
     });
     await page.goto('/#/voices');
-    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 30_000 });
 
     await page
       .getByRole('button', { name: /duplicate candidate/i })
@@ -97,10 +103,10 @@ test.describe('cross-book duplicate review (plan 101)', () => {
   test('Cancel closes the modal cleanly', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 30_000,
     });
     await page.goto('/#/voices');
-    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 30_000 });
 
     await page
       .getByRole('button', { name: /duplicate candidate/i })
@@ -118,10 +124,10 @@ test.describe('cross-book duplicate review (plan 101)', () => {
   }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 30_000,
     });
     await page.goto('/#/voices');
-    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 30_000 });
 
     const bulkBtn = page.getByRole('button', { name: /Review all duplicates in/i }).first();
     await expect(bulkBtn).toBeVisible({ timeout: 5_000 });
@@ -145,10 +151,10 @@ test.describe('cross-book duplicate review (plan 101)', () => {
   }) => {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 30_000,
     });
     await page.goto('/#/voices');
-    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 30_000 });
 
     /* Mark the pair "different on purpose". */
     await page

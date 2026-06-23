@@ -1,9 +1,11 @@
 {
   "voiceId": "qwen-1333d776ef3b4e72acaa1__whisper",
-  "instruct": "A mature male voice with a medium-low pitch and steady, measured pacing, featuring a resonant, dry timbre that conveys a calm, professional authority for expressive character dialogue. Delivered in a soft, hushed whisper.",
+  "voiceUuid": null,
+  "instruct": "Delivered as a barely-there whisper, almost silent, pure soft breath with no vocal tone at all, hushed and intimate, faint enough that you strain to hear it.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-  "voiceUuid": "1333d776ef3b4e72acaa1"
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-1333d776ef3b4e72acaa1",
+  "mintMethod": "anchored-icl-instruct"
 }

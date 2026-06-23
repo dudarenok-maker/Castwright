@@ -170,6 +170,36 @@ def _apply_torch_perf_flags(torch: Any) -> None:
 app = FastAPI(title="audiobook-generator local TTS sidecar")
 
 
+async def _read_json_body(req: Request):
+    """Parse a request's JSON body, tolerating a non-UTF-8 (Windows ANSI /
+    cp1252) wire encoding of 3-byte typographic characters.
+
+    The bug this guards against: a client that delivers an em-dash (U+2014),
+    smart-quote (U+201C/U+201D), apostrophe (U+2019) or ellipsis (U+2026) as a
+    SINGLE cp1252 byte (0x97 / 0x93 / 0x94 / 0x92 / 0x85) instead of the proper
+    multi-byte UTF-8 sequence. `json.loads(bytes)` decodes strict UTF-8 and a
+    lone 0x80-0x9F byte is an invalid UTF-8 start byte, so it raised
+    UnicodeDecodeError — which the routes swallowed into a generic
+    "Body must be JSON." 400. That broke emotion-variant minting, the re-mint
+    migration, and any synth body carrying smart quotes / em-dashes.
+
+    Strategy: try strict UTF-8 first (the correct, common case). On a decode
+    error ONLY (never on a genuine JSON syntax error), retry decoding the raw
+    bytes as cp1252 — the Windows ANSI codepage where those typographic bytes
+    live — then latin1 as a can't-fail last resort. A real malformed-JSON body
+    still raises JSONDecodeError and surfaces as a 400, unchanged."""
+    raw = await req.body()
+    try:
+        return json.loads(raw)
+    except UnicodeDecodeError:
+        for enc in ("cp1252", "latin1"):
+            try:
+                return json.loads(raw.decode(enc))
+            except (UnicodeDecodeError, LookupError):
+                continue
+        raise
+
+
 # CUDA poison detection — phrases that PyTorch / NVIDIA emit when a kernel
 # raises a device-side assert. Once any of these fire, the CUDA context is
 # corrupted process-wide; every subsequent CUDA call re-raises the same
@@ -1014,6 +1044,37 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
     return scaled.tobytes()
 
 
+# Per-emotion output gain (fs-55): whisper variants rendered quieter, angry
+# louder. Keyed on the variant voice's `__<emotion>` suffix, so it applies in
+# NORMAL chapter generation (single + batch), not just auditions. Survives the
+# chapter loudnorm as RELATIVE dynamics — loudnorm applies one integrated-
+# loudness offset and preserves between-line levels — so a quieter whisper /
+# louder shout stays that way in the final book. Env-tunable: QWEN_GAIN_<EMOTION>
+# (e.g. QWEN_GAIN_WHISPER=0.5). Gain>1 clips via _float_audio_to_int16_le's clamp.
+_EMOTION_OUTPUT_GAIN: dict[str, float] = {"whisper": 0.45, "angry": 1.5}
+
+
+def _emotion_output_gain(voice: str) -> float:
+    if not isinstance(voice, str) or "__" not in voice:
+        return 1.0
+    emo = voice.rsplit("__", 1)[1].lower()
+    raw = os.environ.get(f"QWEN_GAIN_{emo.upper()}")
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _EMOTION_OUTPUT_GAIN.get(emo, 1.0)
+
+
+def _apply_emotion_gain(audio: Any, voice: Optional[str]) -> Any:
+    """Scale `audio` by the per-emotion output gain for `voice` (no-op at 1.0)."""
+    g = _emotion_output_gain(voice) if isinstance(voice, str) else 1.0
+    if g == 1.0:
+        return audio
+    return np.asarray(audio, dtype=np.float32) * g
+
+
 def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
     """Duration in ms of an audio array at the given sample rate. Drives the
     real-time-factor (rtf) perf logs; rtf = gen_ms / audio_ms, so <1 is
@@ -1445,6 +1506,17 @@ class QwenEngine(Engine):
         instruct_ids = w._tokenize_texts([w._build_instruct_text(instruct)])
 
         gk = w._merge_generate_kwargs()
+        # fs-55 emotion tuning: the anchored mint distils the 1.7B instruct synth
+        # down to a 0.6B clone, which softens emotion. Raise sampling temperature
+        # (main + subtalker acoustic) so the source synth performs the emotion
+        # harder before distillation. Tunable via QWEN_INSTRUCT_TEMP /
+        # QWEN_INSTRUCT_SUBTALKER_TEMP for on-box intensity calibration.
+        import os as _os  # noqa: PLC0415
+        gk["temperature"] = float(_os.environ.get("QWEN_INSTRUCT_TEMP", "1.6"))
+        gk["subtalker_temperature"] = float(
+            _os.environ.get("QWEN_INSTRUCT_SUBTALKER_TEMP", "1.8")
+        )
+        gk["top_p"] = float(_os.environ.get("QWEN_INSTRUCT_TOP_P", "0.90"))
 
         with torch.no_grad():
             codes, _ = m.generate(
@@ -2052,7 +2124,7 @@ class QwenEngine(Engine):
                 voice, len(text), "hit" if cache_hit else "miss", load_ms,
                 gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
             )
-            return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+            return SynthResult(pcm=_float_audio_to_int16_le(_apply_emotion_gain(audio, voice)), sample_rate=int(sr))
 
         # ── 0.6B-Base path (default) ──────────────────────────────────────────
         # Resolve the voice prompt first so an undesigned voice still fails
@@ -2082,7 +2154,7 @@ class QwenEngine(Engine):
             voice, len(text), "hit" if cache_hit else "miss", load_ms,
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
-        return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+        return SynthResult(pcm=_float_audio_to_int16_le(_apply_emotion_gain(audio, voice)), sample_rate=int(sr))
 
     def synthesize_batch(self, model: str, items: list[dict]) -> SynthBatchResult:
         """TRUE batching (plan 112): synth N sentences in ONE batched forward.
@@ -2217,7 +2289,10 @@ class QwenEngine(Engine):
             model, len(items), n_voices, sum(len(t) for t in texts), load_ms,
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
-        pcms = [_float_audio_to_int16_le(w) for w in wavs]
+        pcms = [
+            _float_audio_to_int16_le(_apply_emotion_gain(w, items[i].get("voice")))
+            for i, w in enumerate(wavs)
+        ]
         return SynthBatchResult(
             pcms=pcms, sample_rate=int(sr), gen_ms=gen_ms, audio_ms=audio_ms
         )
@@ -3601,7 +3676,7 @@ async def load_model(req: Request) -> JSONResponse:
     `_load_lock` so concurrent UI clicks against the same engine serialise,
     but a Coqui load and a Kokoro load can proceed in parallel."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -3721,7 +3796,7 @@ async def unload_model(req: Request) -> JSONResponse:
     in-app Stop pill (sidecar restart re-loads it via the eager preload
     hook)."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -3808,7 +3883,7 @@ async def qwen_design_voice(req: Request) -> Response:
     a hint of anxiety"); the caller composes it from the character's profile.
     Idempotent-ish — re-designing the same voiceId overwrites its embedding."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
     voice_id = body.get("voiceId")
@@ -3868,7 +3943,7 @@ async def qwen_mint_variant(req: Request) -> Response:
 
     Returns 409 when `baseVoiceId` has no cached embedding (design it first)."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
     base_voice_id = body.get("baseVoiceId")
@@ -3924,7 +3999,7 @@ async def qwen_evict_voice(req: Request) -> Response:
     mtime check — it's only evicted on (re)design of that id or a full unload).
     Idempotent: a miss is a no-op `evicted: false`."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
     voice_id = body.get("voiceId")
@@ -3941,7 +4016,7 @@ async def qwen_evict_voice(req: Request) -> Response:
 @app.post("/synthesize")
 async def synthesize(req: Request) -> Response:
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
 
@@ -4192,7 +4267,7 @@ async def synthesize_batch(req: Request) -> Response:
     sliced by `lengths`. Binary (not base64) avoids ~33 % inflation per chapter
     and parses with the Node client's existing arrayBuffer() read."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
 
