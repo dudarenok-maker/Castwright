@@ -548,6 +548,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'high',
   },
   {
+    key: 'sidecar.qwenBase17IdleTtl',
+    env: 'QWEN_BASE17_IDLE_TTL',
+    group: 'gpu-lifecycle',
+    label: 'Qwen 1.7B-Base idle TTL (s)',
+    help: 'Seconds of inactivity before the watchdog frees the resident Qwen 1.7B-Base model (reclaiming ~3.4 GB VRAM). It stays warm across back-to-back emotion-variant mints and 1.7B (Quality-tier) synths so a full-library re-mint runs in one pass without fragmenting the CUDA allocator (issue #1024); lower this to shrink the warm window on a small card. Values below 5 fall back to the default (120) to avoid reload thrash.',
+    type: 'integer', min: 0,
+    default: 120, // ← _DESIGN_IDLE_TTL_DEFAULT reused by _base17_idle_ttl() in tts-sidecar/main.py
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
     key: 'sidecar.asrIdleTtl',
     env: 'ASR_IDLE_TTL',
     group: 'gpu-lifecycle',
