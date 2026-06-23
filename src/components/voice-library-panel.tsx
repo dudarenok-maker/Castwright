@@ -32,6 +32,12 @@ interface VoiceLibraryPanelProps {
      to apply). Drag-and-drop on desktop stays intact regardless. */
   onTapAssign?: (voice: Voice) => void;
   assigningVoiceId?: string | null;
+  /* fs-41/fs-50 seam 4a — BCP-47 language of the current book. When set
+     to a non-English code, voices whose `languageCode` doesn't match are
+     hidden behind a "N hidden · can't read <Language> · show all" toggle
+     so the user can't pick a voice that would be cleared at generation.
+     English books (`bookLanguage === 'en'` or absent) are unaffected. */
+  bookLanguage?: string;
 }
 
 export function VoiceLibraryPanel({
@@ -45,8 +51,10 @@ export function VoiceLibraryPanel({
   displayMode = 'aside',
   onTapAssign,
   assigningVoiceId,
+  bookLanguage,
 }: VoiceLibraryPanelProps) {
   const [query, setQuery] = useState('');
+  const [showAll, setShowAll] = useState(false);
   /* Whether any voice belongs to the open book's series (a sibling book — the
      `source === 'library'` half — that shares its author + series). The server
      tags these `inCurrentSeries`. A standalone (or a one-book series) has none,
@@ -94,6 +102,20 @@ export function VoiceLibraryPanel({
         v.character.toLowerCase().includes(q) ||
         v.bookTitle.toLowerCase().includes(q),
     );
+  /* fs-41/fs-50 seam 4a — language eligibility filter. Only active for
+     non-English books: a voice is eligible when its `languageCode` matches
+     the book's language. Preset/catalog voices (no `languageCode`) are
+     ineligible for a non-English book because they can't read foreign text.
+     English books skip the filter entirely so the picker stays byte-identical. */
+  const filterByLanguage = !!bookLanguage && bookLanguage !== 'en';
+  const isEligible = (v: Voice) => !filterByLanguage || v.languageCode === bookLanguage;
+  const shown = filterByLanguage && !showAll ? filtered.filter(isEligible) : filtered;
+  const hidden = filterByLanguage && !showAll ? filtered.filter((v) => !isEligible(v)) : [];
+  const hiddenCount = hidden.length;
+  const languageLabel =
+    ({ ru: 'Russian', es: 'Spanish', fr: 'French', de: 'German' } as Record<string, string>)[
+      bookLanguage ?? ''
+    ] ?? bookLanguage ?? '';
   const bookCount = new Set(library.map((v) => v.bookId)).size;
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'all', label: 'All' },
@@ -151,12 +173,12 @@ export function VoiceLibraryPanel({
         data-testid="voice-library-scroll"
         className="p-5 overflow-y-auto scrollbar-thin space-y-2"
       >
-        {filtered.length === 0 && q ? (
+        {shown.length === 0 && q ? (
           <p className="text-center text-xs text-ink/40 py-6">
             No voices match “{query.trim()}”
           </p>
         ) : (
-          filtered.map((v) => (
+          shown.map((v) => (
             <VoiceCard
               key={v.id}
               voice={v}
@@ -170,6 +192,16 @@ export function VoiceLibraryPanel({
               isAssigningTarget={assigningVoiceId === v.id}
             />
           ))
+        )}
+        {filterByLanguage && hiddenCount > 0 && !showAll && (
+          <button
+            type="button"
+            onClick={() => setShowAll(true)}
+            className="w-full text-center text-xs text-ink/50 hover:text-ink py-2 min-h-[44px] sm:min-h-0"
+          >
+            {hiddenCount} hidden · can&apos;t read {languageLabel} ·{' '}
+            <span className="underline">show all</span>
+          </button>
         )}
       </div>
     </div>

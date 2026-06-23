@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
 
@@ -465,5 +466,38 @@ describe('VoiceLibraryPanel — Series tab scoping & default tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'This book' }));
     expect(screen.getByText('Captain Halloran')).toBeInTheDocument();
     expect(screen.queryByText('Series Sibling')).toBeNull();
+  });
+});
+
+describe('VoiceLibraryPanel — language filter (fs-41/fs-50 seam 4a)', () => {
+  /* Shared noop props: the minimal set required by VoiceLibraryPanel beyond
+     library + bookLanguage. */
+  const noopProps = {
+    draggingVoiceId: null as string | null,
+    setDraggingVoiceId: vi.fn(),
+  };
+
+  it('hides language-ineligible voices in a non-English book, with a show-all toggle', async () => {
+    const library: Voice[] = [
+      makeVoice('v_ivan', 'Ivan', { languageCode: 'ru' }),        // eligible
+      makeVoice('v_john', 'John', { languageCode: 'en' }),        // ineligible (English-designed)
+      makeVoice('v_preset', 'Preset', { languageCode: undefined }),// ineligible (preset → English)
+    ];
+    render(<VoiceLibraryPanel library={library} bookLanguage="ru" {...noopProps} />);
+    expect(screen.getByText('Ivan')).toBeInTheDocument();
+    expect(screen.queryByText('John')).not.toBeInTheDocument();
+    expect(screen.getByText(/2 hidden/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /show all/i }));
+    expect(screen.getByText('John')).toBeInTheDocument();
+  });
+
+  it('does not filter in an English book', () => {
+    const library: Voice[] = [
+      makeVoice('v_john', 'John', { languageCode: 'en' }),
+      makeVoice('v_preset', 'Preset', { languageCode: undefined }),
+    ];
+    render(<VoiceLibraryPanel library={library} bookLanguage="en" {...noopProps} />);
+    expect(screen.getByText('John')).toBeInTheDocument();
+    expect(screen.queryByText(/hidden/i)).not.toBeInTheDocument();
   });
 });
