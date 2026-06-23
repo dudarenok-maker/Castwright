@@ -43,6 +43,22 @@ def _decode(audio_path: str, cache: dict) -> bytes:
     return cache[audio_path]
 
 
+def _clean_seg_cid(seg: dict, floor: float):
+    """characterId of a countable CLEAN dialogue segment, or None to skip:
+    needs a characterId, a non-empty sentenceIds, a valid duration >= floor, and
+    must not be gate-flagged. Shared by collect_book_vectors (embeds) and
+    count_clean_segments (counts) so both apply the identical clean-render filter."""
+    cid = seg.get("characterId") or seg.get("character")
+    if not cid or not (seg.get("sentenceIds") or []):
+        return None
+    st, en = seg.get("startSec"), seg.get("endSec")
+    if st is None or en is None or (en - st) < floor:
+        return None
+    if is_gate_flagged(seg):
+        return None
+    return cid
+
+
 def collect_book_vectors(book_dir: str, cast: dict, floor: float = FLOOR) -> dict:
     """Embed every gate-OK, >=floor-second segment of one rendered book, keyed by
     the character's resolved voiceUuid (cast.json join). Returns
@@ -67,27 +83,54 @@ def collect_book_vectors(book_dir: str, cast: dict, floor: float = FLOOR) -> dic
         except Exception:
             continue
         for seg in data.get("segments", []):
-            cid = seg.get("characterId") or seg.get("character")
-            if not cid:
-                continue
-            sids = seg.get("sentenceIds") or []
-            sentence_id = "-".join(str(s) for s in sids) if sids else None
-            st, en = seg.get("startSec"), seg.get("endSec")
-            if sentence_id is None or st is None or en is None or (en - st) < floor:
-                continue
-            if is_gate_flagged(seg):
+            cid = _clean_seg_cid(seg, floor)
+            if cid is None:
                 continue
             vu = resolve_voice_uuid(cid, cast)
             if not vu:
                 continue
+            sentence_id = "-".join(str(s) for s in seg["sentenceIds"])
+            st, en = float(seg["startSec"]), float(seg["endSec"])
             try:
-                vec = embed_pcm(slice_pcm(pcm, SR, float(st), float(en)), SR)
+                vec = embed_pcm(slice_pcm(pcm, SR, st, en), SR)
             except Exception:
                 continue
             rec = out.setdefault(vu, {"vecs": [], "meta": []})
             rec["vecs"].append(vec)
             rec["meta"].append({"chapter": chapter, "sentence_id": sentence_id,
                                  "start": float(st), "end": float(en)})
+    return out
+
+
+def count_clean_segments(books_root: str, series: str | None = None,
+                         floor: float = FLOOR) -> dict:
+    """GPU-FREE sizing helper: count clean >=floor-second dialogue segments per
+    voiceUuid per book — NO audio decode, NO embed (just reads segments.json +
+    cast.json). Use before the expensive re-render/embed to check each recurring
+    character has enough clean lines per book for a stable cross-book centroid.
+    Returns {voiceUuid: {"character_id": cid, "by_book": {bookId: count}}}."""
+    out: dict = {}
+    for b in iter_series_books(books_root):
+        if series and b["series"] != series:
+            continue
+        cast_path = Path(b["cast_path"])
+        cast = json.loads(cast_path.read_text("utf-8")) if cast_path.exists() else {}
+        for segf in sorted(Path(b["segments_path"]).parent.glob("*.segments.json")):
+            if ".previous." in segf.name:
+                continue
+            try:
+                data = json.loads(segf.read_text("utf-8"))
+            except Exception:
+                continue
+            for seg in data.get("segments", []):
+                cid = _clean_seg_cid(seg, floor)
+                if cid is None:
+                    continue
+                vu = resolve_voice_uuid(cid, cast)
+                if not vu:
+                    continue
+                rec = out.setdefault(vu, {"character_id": cid, "by_book": {}})
+                rec["by_book"][b["bookId"]] = rec["by_book"].get(b["bookId"], 0) + 1
     return out
 
 
