@@ -145,3 +145,23 @@ describe('tagHtmlEmphasis', () => {
     expect(tagHtmlEmphasis('<p>hi</p>')).toBe('<p>hi</p>');
   });
 });
+
+describe('audio-tags — non-English quotes + Unicode case (seam 3c)', () => {
+  it('tags shouting inside German „…" quotes (umlaut caps)', () => {
+    // „SCHNELL!" — German low/high quotes, all-caps incl. no umlaut here but Unicode-cap path
+    const out = tagShoutingDialog('Er rief „SCHNELL!"');
+    expect(out).toContain('[shouting]');
+    expect(out).not.toContain('SCHNELL'); // denormalised to Schnell
+  });
+  it('tags shouting inside Russian «…» quotes (Cyrillic caps) — previously a silent miss', () => {
+    const out = tagShoutingDialog('Он крикнул «БЫСТРО!»');
+    expect(out).toContain('[shouting]');
+  });
+  it('tags excited dialogue inside Spanish «…!» quotes', () => {
+    const out = tagExcitedDialog('Ella dijo «¡Cuidado!»');
+    expect(out).toContain('[excited]');
+  });
+  it('leaves English smart-quote behaviour unchanged', () => {
+    expect(tagShoutingDialog('She yelled "GET OUT".')).toBe('She yelled "[shouting] Get Out".');
+  });
+});
