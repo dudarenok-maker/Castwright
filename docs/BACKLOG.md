@@ -228,12 +228,6 @@ _Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
 _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
 
-#### `side-20` — Wire Qwen 1.7B-Base into sidecar setup ([#999](https://github.com/dudarenok-maker/Castwright/issues/999))
-
-- _What:_ Add `Qwen/Qwen3-TTS-12Hz-1.7B-Base` to the sidecar bootstrap (`install-qwen3.mjs` + `QwenEngine` ids); not fetched on a normal install today. Enabler for `fs-56` + `fs-55` anchored-variant minting (the 1.7B **Base** clones; VoiceDesign can't — a genuinely new ~3.4 GB model dependency, incl. for Fast/0.6B users at design time).
-- _Benefit (technical):_ unblocks per-line instruct + anchored variants on the default engine.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.8 · blocks `fs-56` · [#999](https://github.com/dudarenok-maker/Castwright/issues/999).
-
 ### Companion app
 
 _`app-10` is the companion-app follow-up left after the Android v1 shipped
