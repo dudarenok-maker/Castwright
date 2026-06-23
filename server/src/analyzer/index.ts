@@ -13,6 +13,7 @@ import type {
   Stage1ChapterOutput,
   Stage2ChapterOutput,
   EmotionAnnotationOutput,
+  ScriptReviewOutput,
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
@@ -91,6 +92,16 @@ export interface Analyzer {
     promptMd: string,
     call: StageCall,
   ): Promise<EmotionAnnotationOutput>;
+  /* fs-58 — LLM script review pass. Reads a chapter's attributed sentences
+     and returns a flat list of editing ops (strip_tag, split, extract_dialogue,
+     merge, fix_emotion) with anchors and rationale. Client-side apply dispatches
+     the ops through existing Redux manual-edit reducers. */
+  runScriptReviewChapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<ScriptReviewOutput>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -242,6 +253,28 @@ export class FallbackAnalyzer implements Analyzer {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
+      }
+      throw err;
+    }
+  }
+
+  async runScriptReviewChapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<ScriptReviewOutput> {
+    try {
+      return await this.primary.runScriptReviewChapter(manuscriptId, chapterId, promptMd, call);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      if (err instanceof LocalUnreachableError) {
+        return await this.fallback.runScriptReviewChapter(
+          manuscriptId,
+          chapterId,
+          promptMd,
+          call,
+        );
       }
       throw err;
     }

@@ -25,7 +25,8 @@ export type HandoffKey =
   | `1-ch${number}`
   | '2'
   | `2-ch${number}`
-  | `emotion-ch${number}`;
+  | `emotion-ch${number}`
+  | `review-ch${number}`;
 
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });

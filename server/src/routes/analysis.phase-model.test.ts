@@ -58,6 +58,9 @@ function buildSpyPhase0Analyzer(): Analyzer {
     async runEmotionChapter() {
       throw new Error('Phase-0 analyzer does not run emotion calls');
     },
+    async runScriptReviewChapter() {
+      throw new Error('Phase-0 analyzer does not run script review calls');
+    },
   };
 }
 
@@ -88,6 +91,9 @@ function buildSpyPhase1Analyzer(): Analyzer {
     },
     async runEmotionChapter() {
       throw new Error('Phase-1 analyzer does not run emotion calls');
+    },
+    async runScriptReviewChapter() {
+      throw new Error('Phase-1 analyzer does not run script review calls');
     },
   };
 }

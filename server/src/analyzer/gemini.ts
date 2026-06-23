@@ -24,6 +24,7 @@ import {
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
   type EmotionAnnotationOutput,
+  type ScriptReviewOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
@@ -280,6 +281,16 @@ export class GeminiAnalyzer implements Analyzer {
       emotionAnnotationSchema,
       call,
     );
+  }
+
+  // fs-58 — real body lands in Task 7b
+  async runScriptReviewChapter(
+    _manuscriptId: string,
+    _chapterId: number,
+    _promptMd: string,
+    _call: StageCall,
+  ): Promise<ScriptReviewOutput> {
+    throw new Error('runScriptReviewChapter not implemented (Task 7b)');
   }
 
   private async runStage<T>(

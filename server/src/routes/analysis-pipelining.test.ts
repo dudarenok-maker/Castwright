@@ -211,6 +211,9 @@ function makePipelineFixture(): {
     async runEmotionChapter() {
       throw new Error('Phase 0 analyzer does not run emotion calls');
     },
+    async runScriptReviewChapter() {
+      throw new Error('Phase 0 analyzer does not run script review calls');
+    },
   };
 
   const phase1Analyzer: Analyzer = {
@@ -255,6 +258,9 @@ function makePipelineFixture(): {
     },
     async runEmotionChapter() {
       throw new Error('Phase 1 analyzer does not run emotion calls');
+    },
+    async runScriptReviewChapter() {
+      throw new Error('Phase 1 analyzer does not run script review calls');
     },
   };
 
