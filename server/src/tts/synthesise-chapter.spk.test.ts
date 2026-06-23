@@ -147,6 +147,32 @@ describe('collectGroupEmbeddings', () => {
     expect(embedFn).toHaveBeenCalledTimes(2);
   });
 
+  it('fires the onEmbed progress callback once per embedded group (watchdog feed — #1029)', async () => {
+    /* The embed pass runs CPU-bound after synthesis with no SSE tick of its
+       own; without feeding the per-chapter no-progress watchdog a long pass
+       could be killed mid-flight. onEmbed fires per ACTUAL embed (the slow op),
+       not per skipped group. */
+    const sampleRate = 24000;
+    const groups: SentenceGroup[] = [
+      makeGroup(0, 'qwen-char', [1]),
+      makeGroup(1, 'kokoro-char', [2]), // skipped — deterministic engine
+      makeGroup(2, 'qwen-char', [3]),
+    ];
+    const results = [
+      { pcm: makePcm(4.0, sampleRate), sampleRate },
+      { pcm: makePcm(4.0, sampleRate), sampleRate },
+      { pcm: makePcm(4.0, sampleRate), sampleRate },
+    ];
+    const embedFn = vi.fn().mockResolvedValue(Float32Array.from(Array(192).fill(0.0)));
+    const resolvedEngineFor = vi.fn().mockImplementation((i: number) => (i === 1 ? 'kokoro' : 'qwen'));
+    const onEmbed = vi.fn();
+
+    const rows = await collectGroupEmbeddings(groups, results, resolvedEngineFor, embedFn, onEmbed);
+
+    expect(rows).toHaveLength(2);
+    expect(onEmbed).toHaveBeenCalledTimes(2);
+  });
+
   it('includes a Qwen-configured group that fell back to Kokoro (configuredEngine=qwen)', async () => {
     /* The critical fallback-render scenario: a Qwen character has no designed
        voice so the engine silently fell back to Kokoro at render time.

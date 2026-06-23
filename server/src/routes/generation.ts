@@ -1299,6 +1299,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           bumpProgress();
           recordBatchThroughput({ genMs, audioMs });
         },
+        /* srv-36 — the post-synth SPK embed pass is CPU-bound and emits no SSE
+           tick of its own; feed the no-progress watchdog per embed so a long
+           pass (many groups) can't be killed mid-flight (sibling of #1029). */
+        onEmbedProgress: bumpProgress,
         /* Pre-assembly per-sentence QA gate (segment-qa.ts): re-record a
            sentence whose rendered PCM is dead/silent, has a long internal
            silence run, or drifts far from its text-predicted length, BEFORE

@@ -366,6 +366,12 @@ export async function collectGroupEmbeddings(
   results: (GroupPcmResult | undefined)[],
   resolvedEngineFor: (index: number) => TtsEngine,
   embedFn: (pcm: Buffer, sampleRate: number) => Promise<Float32Array> = embedSegment,
+  /** Fired after each ACTUAL embed completes (not for skipped groups). The
+      route wires this to the per-chapter no-progress watchdog: the embed pass
+      is CPU-bound, runs after synthesis with no SSE tick of its own, and on a
+      long chapter could otherwise be killed mid-flight by the 720s stall guard
+      (sibling of #1029's assembly stall). */
+  onEmbed?: () => void,
 ): Promise<EmbeddingRow[]> {
   const rows: EmbeddingRow[] = [];
   for (const group of groups) {
@@ -376,6 +382,7 @@ export async function collectGroupEmbeddings(
     if (pcmDurationSec(r.pcm.length, r.sampleRate) < MIN_DURATION_SEC) continue;
     const vec = await embedFn(r.pcm, r.sampleRate);
     rows.push({ characterId: group.characterId, sentenceIds: group.sentenceIds.slice(), vec });
+    onEmbed?.();
   }
   return rows;
 }
@@ -462,6 +469,10 @@ export interface SynthesiseChapterOpts {
       per-chapter rollup. Only fires when the sidecar reported the perf fields;
       single-group (non-batched) work does not fire it. */
   onBatchComplete?: (e: { batchSize: number; genMs: number; audioMs: number }) => void;
+  /** Fired after each render-integrity embed completes during the post-synth
+      SPK pass. The route wires it to the no-progress watchdog so a long
+      CPU-bound embed pass keeps the chapter alive (sibling of #1029). */
+  onEmbedProgress?: () => void;
   /** Optional abort signal — checked between groups and forwarded to the
       provider so an in-flight TTS call can be cancelled mid-call. Used by
       the per-bookId server mutex to stop a stale generation handler when a
@@ -722,6 +733,7 @@ export async function synthesiseChapter(
     onGroupComplete,
     onGroupRetry,
     onBatchComplete,
+    onEmbedProgress,
     signal,
     chapterTitleNarration,
     narratorCharacterId = 'narrator',
@@ -1477,6 +1489,8 @@ export async function synthesiseChapter(
         groups,
         results,
         (index) => resolveGroup(groupByIndex.get(index)!).configuredEngine,
+        embedSegment,
+        onEmbedProgress,
       );
     } catch (err) {
       console.warn(`[synthesiseChapter] render-integrity embed pass failed: ${String(err)}`);
