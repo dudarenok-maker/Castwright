@@ -50,9 +50,10 @@ describe('getLanguageEntry', () => {
 });
 
 describe('isSupportedLanguage', () => {
-  it('is true for seeded en/ru, false otherwise', () => {
+  it('is true for en/ru/es (es canary-validated), false otherwise', () => {
     expect(isSupportedLanguage('en')).toBe(true);
     expect(isSupportedLanguage('ru')).toBe(true);
+    expect(isSupportedLanguage('es')).toBe(true);
     expect(isSupportedLanguage('de')).toBe(false);
     expect(isSupportedLanguage('')).toBe(false);
   });
@@ -64,8 +65,14 @@ describe('detect field + Latin entries', () => {
     expect(getLanguageEntry('ru')?.detect).toEqual({ script: 'cyrillic', iso6393: 'rus' });
   });
 
-  it('es/fr/de exist, are Latin, and are NOT yet supported', () => {
-    for (const [code, iso] of [['es', 'spa'], ['fr', 'fra'], ['de', 'deu']] as const) {
+  it('es exists, is Latin, and IS supported (canary-validated)', () => {
+    const e = getLanguageEntry('es');
+    expect(e?.detect).toEqual({ script: 'latin', iso6393: 'spa' });
+    expect(e?.supported).toBe(true);
+  });
+
+  it('fr/de exist, are Latin, and are NOT yet supported', () => {
+    for (const [code, iso] of [['fr', 'fra'], ['de', 'deu']] as const) {
       const e = getLanguageEntry(code);
       expect(e?.detect).toEqual({ script: 'latin', iso6393: iso });
       expect(e?.supported).toBe(false);
@@ -74,9 +81,9 @@ describe('detect field + Latin entries', () => {
 });
 
 describe('isSupportedLanguage with a present-but-unsupported entry', () => {
-  it('is false for es (present, supported:false) — not just for absent codes', () => {
-    expect(getLanguageEntry('es')).toBeDefined();
-    expect(isSupportedLanguage('es')).toBe(false);
+  it('is false for fr (present, supported:false) — not just for absent codes', () => {
+    expect(getLanguageEntry('fr')).toBeDefined();
+    expect(isSupportedLanguage('fr')).toBe(false);
   });
 });
 
@@ -86,6 +93,7 @@ describe('supportedLanguages', () => {
     expect(list).toEqual([
       { code: 'en', label: 'English' },
       { code: 'ru', label: 'Russian' },
+      { code: 'es', label: 'Spanish' },
     ]);
   });
 });

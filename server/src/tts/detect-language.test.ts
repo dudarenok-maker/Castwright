@@ -11,10 +11,10 @@ describe('detectManuscriptLanguage', () => {
     expect(detectManuscriptLanguage(ru)).toEqual({ language: 'ru', supported: true });
   });
 
-  it('detects Spanish (present in the registry, not yet supported)', () => {
+  it('detects Spanish (present in the registry, supported — canary-validated)', () => {
     const es =
       'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller.';
-    expect(detectManuscriptLanguage(es)).toEqual({ language: 'es', supported: false });
+    expect(detectManuscriptLanguage(es)).toEqual({ language: 'es', supported: true });
   });
 
   it('detects French (not yet supported)', () => {
@@ -46,7 +46,7 @@ describe('detectManuscriptLanguage', () => {
       'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller, una y otra vez, hasta que abrió.';
     // stripFrontMatterBoilerplate drops the bare-URL + copyright lines; the Spanish
     // body dominates the sample, so franc must return Spanish, not English.
-    expect(detectManuscriptLanguage(text)).toEqual({ language: 'es', supported: false });
+    expect(detectManuscriptLanguage(text)).toEqual({ language: 'es', supported: true });
   });
 
   it('flags a CJK manuscript as detected-but-unsupported (no zh/ja registry entry yet)', () => {
