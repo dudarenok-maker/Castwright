@@ -52,7 +52,7 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 #### `fs-50` — Language packs: ES/FR/DE end-to-end, Latin Qwen tranche ([#974](https://github.com/dudarenok-maker/Castwright/issues/974))
 
 - _What:_ Stand up **ES/FR/DE** end-to-end through **Qwen design** (Latin-script tranche), folding in `fs-41` (auto-detect on ingest + voice-library language filtering). Keeps the shipped `non-English ⇒ Qwen, fail-loud` invariant unchanged; the bulk is the engine-independent **analyze half** (detection, chapter/quote/attribution/token + the English prompt skills) plus the Qwen design-path i18n. **CJK (ZH/JA) split to `fs-59`; the Kokoro/XTTS engine relaxation split to `fs-60`.**
-- _Status:_ **ES (Spanish) SHIPPED 2026-06-23** — `es.supported:true` (#1031), canary-validated + operator-accepted, attribution-eval harness merged (#1032). **FR/DE remain** — each needs its own on-box canary before its flip, and **`fs-62` (#1034, persona-i18n) must land first** (the Qwen voice-design `instruct` is still English-only — the top accent-quality lever, a prerequisite for the FR/DE canaries). Follow-ups from the ES canary: #1027 (per-language sample books → `fs-61` below), `fs-62` (#1034, persona-i18n — gates FR/DE), #1028/#1029/#1030 (bugs).
+- _Status:_ **ES (Spanish) SHIPPED 2026-06-23** — `es.supported:true` (#1031), canary-validated + operator-accepted, attribution-eval harness merged (#1032). **FR/DE remain** — each needs its own on-box canary before its flip; they are **NOT** gated by persona-i18n (ES shipped fine with English personas). `fs-62` (#1034, "translate the persona") was **closed won't-fix** — Qwen VoiceDesign's `instruct` is English/Chinese only and spoken-language/accent ride a separate calibration channel (#1019), so the persona stays English by design (see [persona-language research](research/2026-06-23-qwen-voicedesign-persona-language.md)). Follow-ups from the ES canary: #1027 (per-language sample books → `fs-61` below), #1028 (minor-cast bug), #1029/#1030 (closed).
 - _Benefit (user / strategic):_ the **biggest single perception gap** — rivals market 1,158 languages, we show 2. Now spec'd + decomposed into 5 desk-verifiable seams.
 _Spec:_ [`2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md`](superpowers/specs/2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md) · _Detail:_ [#974](https://github.com/dudarenok-maker/Castwright/issues/974).
 
@@ -337,6 +337,12 @@ _Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
+
+#### `srv-48` — Local-model option for voice-design persona generation (Gemini-only today; fails offline) ([#1038](https://github.com/dudarenok-maker/Castwright/issues/1038))
+
+- _What:_ `generateVoiceStylePersona()` is Gemini-only and throws hard without an API key, so a fully-local install can analyze + synthesize but cannot design voices. Add a `local | gemini` provider toggle mirroring the analyzer's `ANALYZER` switch (default Gemini for persona quality; local Ollama as fallback/opt-in), with mutual fallback.
+- _Benefit (user):_ offline / no-Gemini installs can design Qwen voices end-to-end. _(About the persona's **provider** — distinct from fs-62 #1034, which proposed translating the persona's **language** and was closed won't-fix.)_
+_Full detail + acceptance:_ [#1038](https://github.com/dudarenok-maker/Castwright/issues/1038).
 
 ### Ingest & languages
 

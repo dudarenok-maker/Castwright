@@ -34,7 +34,15 @@ import { readPrompt } from '../config/prompts.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
     loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
-    takes effect on the next call without a restart (apply:'live'). */
+    takes effect on the next call without a restart (apply:'live').
+
+    The skill's `- English.` rule (persona written in English) is INTENTIONAL —
+    NOT an i18n gap. Qwen VoiceDesign's `instruct` supports English/Chinese only;
+    the spoken language + accent ride a separate `language` + calibration-text
+    channel (#1019), and Spanish shipped operator-accepted (#1031) with English
+    personas. Do not translate the persona into the book's language — it buys
+    nothing and degrades quality. fs-62 (#1034) was closed won't-fix on this
+    evidence. See docs/research/2026-06-23-qwen-voicedesign-persona-language.md. */
 export async function loadVoiceStyleSkill(): Promise<string> {
   return (await readPrompt('prompt.voiceStyle')).text;
 }
