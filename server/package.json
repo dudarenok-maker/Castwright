@@ -33,6 +33,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/cookie": "^0.6.0",
     "@types/express": "^5.0.0",
     "@types/multer": "^2.1.0",
     "@types/node": "^20.12.7",
