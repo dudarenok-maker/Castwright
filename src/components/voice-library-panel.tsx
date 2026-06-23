@@ -112,10 +112,9 @@ export function VoiceLibraryPanel({
   const shown = filterByLanguage && !showAll ? filtered.filter(isEligible) : filtered;
   const hidden = filterByLanguage && !showAll ? filtered.filter((v) => !isEligible(v)) : [];
   const hiddenCount = hidden.length;
-  const languageLabel =
-    ({ ru: 'Russian', es: 'Spanish', fr: 'French', de: 'German' } as Record<string, string>)[
-      bookLanguage ?? ''
-    ] ?? bookLanguage ?? '';
+  const languageLabel = bookLanguage
+    ? ({ ru: 'Russian', es: 'Spanish', fr: 'French', de: 'German' }[bookLanguage] ?? bookLanguage)
+    : '';
   const bookCount = new Set(library.map((v) => v.bookId)).size;
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'all', label: 'All' },

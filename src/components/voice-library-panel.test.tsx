@@ -489,6 +489,7 @@ describe('VoiceLibraryPanel — language filter (fs-41/fs-50 seam 4a)', () => {
     expect(screen.getByText(/2 hidden/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /show all/i }));
     expect(screen.getByText('John')).toBeInTheDocument();
+    expect(screen.queryByText(/hidden/i)).not.toBeInTheDocument();
   });
 
   it('does not filter in an English book', () => {
