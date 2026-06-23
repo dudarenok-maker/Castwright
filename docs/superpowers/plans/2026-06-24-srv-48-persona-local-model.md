@@ -32,7 +32,7 @@
 - `server/src/tts/persona-gpu-plan.ts` *(new)* — `resolvePersonaGpuPlan` + `unloadResidentSidecar` (GPU/concurrency decision + reverse-evict). **Placed under `tts/` (peer to `design-lock.ts`), NOT `analyzer/`,** to avoid an analyzer→routes layering inversion — it needs `gpu/`, `tts/design-lock`, and the generation-busy signal. **Cycle guard:** it imports `activeGenerationBooks` from `../routes/generation.js`; before coding, verify `generation.ts` does not transitively import `persona-gpu-plan`/`voice-style`/`cast-design` (no cycle today). If a cycle ever appears, lazy-`await import('../routes/generation.js')` inside the function, or hoist `activeGenerationBooks`/`isGenerationActive` into a neutral state module both layers import.
 - `server/src/tts/design-lock.ts` — add `isOtherBookDesignBusy(bookDir)`.
 - `server/src/routes/generation.ts` — reuse existing `activeGenerationBooks()` (no change; imported by the plan).
-- `server/src/routes/voice-style.ts` — single-character persona-gen site: thread the plan.
+- `server/src/routes/voice-style.ts` — BOTH persona-gen endpoints (`/generate` single + `/generate-all` batch): thread `preparePersonaBatch`.
 - `server/src/routes/cast-design.ts` — `local`-only persona pre-pass + heartbeats + pause.
 
 Test files colocate: `voice-style.test.ts`, `persona-gpu-plan.test.ts`, `cast-design.test.ts` (extend if present).
@@ -163,11 +163,19 @@ export function resolvePersonaLocalModel(): string {
 Run: `cd server && npx vitest run src/analyzer/voice-style.test.ts -t "persona generation config"`
 Expected: PASS (3 tests).
 
-- [ ] **Step 6: Typecheck + commit**
+- [ ] **Step 6: Regenerate the `.env.example` managed block**
+
+`.env.example` has a registry-generated managed block; adding knobs requires
+regenerating it, or `npm run config:check` (which runs in `verify`) fails.
+
+Run: `npm run config:sync`
+Then confirm it's current: `npm run config:check` → exits 0; `git diff --stat server/.env.example` shows the two new vars added inside the managed block.
+
+- [ ] **Step 7: Typecheck + commit**
 
 ```bash
 cd server && npm run typecheck
-git add server/src/config/registry.ts server/src/analyzer/voice-style.ts server/src/analyzer/voice-style.test.ts
+git add server/src/config/registry.ts server/src/analyzer/voice-style.ts server/src/analyzer/voice-style.test.ts server/.env.example
 git commit -m "feat(server): srv-48 persona-engine + localModel registry knobs, wire voiceStyleModel"
 ```
 
@@ -820,103 +828,186 @@ git commit -m "feat(server): srv-48 resolvePersonaGpuPlan decision (idle→GPU+e
 
 ---
 
-## Task 8: Wire the single-character persona route
+## Task 8: Shared `preparePersonaBatch` + wire BOTH voice-style routes
+
+`routes/voice-style.ts` has TWO persona-gen endpoints — `/generate` (single) and
+`/generate-all` (sequential batch over the cast). BOTH must apply the GPU plan or
+`/generate-all` OOMs under `local` on a constrained card. The "resolve plan →
+evict once → CPU on refuse" dance is shared by these two AND the bulk pre-pass
+(Task 9), so it lives in one helper: `preparePersonaBatch`.
 
 **Files:**
-- Modify: `server/src/routes/voice-style.ts` (the generate-persona handler)
-- Test: `server/src/routes/voice-style.test.ts` (create/extend)
+- Modify: `server/src/tts/persona-gpu-plan.ts` (add `preparePersonaBatch`)
+- Modify: `server/src/routes/voice-style.ts` (both handlers)
+- Test: `server/src/tts/persona-gpu-plan.test.ts`, `server/src/routes/voice-style.test.ts`
 
 **Interfaces:**
-- Consumes: `resolvePersonaGpuPlan`, `unloadResidentSidecar`, `GpuBusyForPersonaError` (Tasks 6-7); `generateVoiceStylePersona(character, opts)` (Task 4).
-- Behaviour: compute the plan; if `evict`, `await unloadResidentSidecar()` (on `GpuBusyForPersonaError`, downgrade to `onCpu: true`); call `generateVoiceStylePersona(character, { onCpu: plan.onCpu, keepAlive: plan.keepAlive })`.
+- Produces: `preparePersonaBatch(bookDir: string): Promise<{ onCpu: boolean; keepAlive: string | number }>` — resolves the plan, performs the one-shot reverse-evict if `evict` (on `GpuBusyForPersonaError` returns `{ onCpu: true, keepAlive: 0 }`), and returns the per-call args to pass into `generateVoiceStylePersona(character, …)`. For the `gemini` engine returns `{ onCpu: false, keepAlive: 0 }` (off-GPU, no evict).
+- Consumes: `resolvePersonaGpuPlan`, `unloadResidentSidecar`, `GpuBusyForPersonaError` (Tasks 6-7); `resolvePersonaEngine` (Task 1).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test for `preparePersonaBatch`**
+
+Add to `server/src/tts/persona-gpu-plan.test.ts`:
 
 ```typescript
-import { describe, it, expect, afterEach, vi } from 'vitest';
-
-describe('voice-style route persona GPU plan', () => {
+describe('preparePersonaBatch', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('evict plan: unloads the sidecar then generates on GPU', async () => {
-    const plan = await import('../tts/persona-gpu-plan.js');
-    vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
-    const evict = vi.spyOn(plan, 'unloadResidentSidecar').mockResolvedValue();
+  it('evict plan → unloads once, returns GPU args', async () => {
+    const mod = await import('./persona-gpu-plan.js');
     const vs = await import('../analyzer/voice-style.js');
-    const gen = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
-    // …invoke the handler's persona-generation path (extract a tested helper
-    //   `generatePersonaForRoute(character, bookDir)` if the handler is hard to
-    //   call directly; assert on these two spies)…
-    // expect(evict).toHaveBeenCalled();
-    // expect(gen).toHaveBeenCalledWith(expect.anything(), { onCpu: false, keepAlive: '5m' });
+    vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('local');
+    vi.spyOn(mod, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
+    const evict = vi.spyOn(mod, 'unloadResidentSidecar').mockResolvedValue();
+    expect(await mod.preparePersonaBatch('/a')).toEqual({ onCpu: false, keepAlive: '5m' });
+    expect(evict).toHaveBeenCalledOnce();
   });
 
-  it('evict refused (GpuBusyForPersonaError) → CPU generation', async () => {
-    const plan = await import('../tts/persona-gpu-plan.js');
-    vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
-    vi.spyOn(plan, 'unloadResidentSidecar').mockRejectedValue(new plan.GpuBusyForPersonaError('busy'));
+  it('evict refused → CPU args, no throw', async () => {
+    const mod = await import('./persona-gpu-plan.js');
     const vs = await import('../analyzer/voice-style.js');
-    const gen = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
-    // …invoke; assert gen called with { onCpu: true, … }…
+    vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('local');
+    vi.spyOn(mod, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
+    vi.spyOn(mod, 'unloadResidentSidecar').mockRejectedValue(new mod.GpuBusyForPersonaError('busy'));
+    expect(await mod.preparePersonaBatch('/a')).toEqual({ onCpu: true, keepAlive: 0 });
+  });
+
+  it('gemini engine → off-GPU args, no evict', async () => {
+    const mod = await import('./persona-gpu-plan.js');
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('gemini');
+    const evict = vi.spyOn(mod, 'unloadResidentSidecar');
+    expect(await mod.preparePersonaBatch('/a')).toEqual({ onCpu: false, keepAlive: 0 });
+    expect(evict).not.toHaveBeenCalled();
   });
 });
 ```
 
-> Implementation note: extract the route's persona step into a small exported helper, e.g. `export async function generatePersonaWithPlan(character, bookDir)`, so it's unit-testable without spinning the Express app. The two assertions above target that helper.
-
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/routes/voice-style.test.ts`
-Expected: FAIL — helper not present / route doesn't apply the plan.
+Run: `cd server && npx vitest run src/tts/persona-gpu-plan.test.ts -t "preparePersonaBatch"`
+Expected: FAIL — not exported.
 
-- [ ] **Step 3: Implement the helper and use it in the handler**
+- [ ] **Step 3: Implement `preparePersonaBatch`**
 
-In `server/src/routes/voice-style.ts`:
+Append to `server/src/tts/persona-gpu-plan.ts` (imports `resolvePersonaEngine`
+from `../analyzer/voice-style.js` — one-directional, no cycle: voice-style does
+not import this module):
 
 ```typescript
-import {
-  resolvePersonaGpuPlan,
-  unloadResidentSidecar,
-  GpuBusyForPersonaError,
-} from '../tts/persona-gpu-plan.js';
-import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { resolvePersonaEngine } from '../analyzer/voice-style.js';
 
-/** Generate one character's persona, applying the GPU plan for `bookDir`.
-    Only the `local` engine consults the plan; `gemini` is off-GPU. */
-export async function generatePersonaWithPlan(
-  character: CastCharacter,
+/** Resolve the GPU plan for a persona batch on `bookDir` and perform the
+    one-shot reverse-evict if needed, returning the per-call args to thread into
+    generateVoiceStylePersona. Used by both voice-style routes and the bulk
+    pre-pass so the evict dance lives in exactly one place. */
+export async function preparePersonaBatch(
   bookDir: string,
-): Promise<string> {
-  if (resolvePersonaEngine() !== 'local') {
-    return generateVoiceStylePersona(character); // gemini path, unchanged
-  }
-  let plan = resolvePersonaGpuPlan(bookDir);
+): Promise<{ onCpu: boolean; keepAlive: string | number }> {
+  if (resolvePersonaEngine() !== 'local') return { onCpu: false, keepAlive: 0 };
+  const plan = resolvePersonaGpuPlan(bookDir);
   if (plan.evict) {
     try {
       await unloadResidentSidecar();
     } catch (err) {
       if (!(err instanceof GpuBusyForPersonaError)) throw err;
-      plan = { onCpu: true, evict: false, keepAlive: 0 }; // a render slipped in — go CPU
+      return { onCpu: true, keepAlive: 0 }; // a render slipped in — go CPU
     }
   }
-  return generateVoiceStylePersona(character, { onCpu: plan.onCpu, keepAlive: plan.keepAlive });
+  return { onCpu: plan.onCpu, keepAlive: plan.keepAlive };
 }
 ```
 
-Then replace the handler's direct `generateVoiceStylePersona(character)` call with `generatePersonaWithPlan(character, bookDir)` (the handler already resolves `bookDir` via `findBookByBookId`).
+- [ ] **Step 4: Run the helper test (PASS), then write the route test**
 
-- [ ] **Step 4: Run tests to verify they pass**
+Run: `cd server && npx vitest run src/tts/persona-gpu-plan.test.ts -t "preparePersonaBatch"` → PASS.
+
+Add to `server/src/routes/voice-style.test.ts` (prefer `vi.mock(importOriginal)`
+to intercept `preparePersonaBatch`; assert the route threads its result):
+
+```typescript
+import { describe, it, expect, afterEach, vi } from 'vitest';
+
+describe('voice-style routes apply the persona GPU plan', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('/generate threads prep args into generateVoiceStylePersona', async () => {
+    const mod = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(mod, 'preparePersonaBatch').mockResolvedValue({ onCpu: true, keepAlive: 0 });
+    const vs = await import('../analyzer/voice-style.js');
+    const gen = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+    // …invoke the /generate handler (or an extracted helper) for one character…
+    // expect(mod.preparePersonaBatch).toHaveBeenCalled();
+    // expect(gen).toHaveBeenCalledWith(expect.anything(), { onCpu: true, keepAlive: 0 });
+  });
+
+  it('/generate-all prepares ONCE then loops with the same args', async () => {
+    const mod = await import('../tts/persona-gpu-plan.js');
+    const prep = vi.spyOn(mod, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
+    const vs = await import('../analyzer/voice-style.js');
+    const gen = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+    // …invoke /generate-all over a 3-character cast…
+    // expect(prep).toHaveBeenCalledTimes(1);            // ONE prepare, not per-character
+    // expect(gen).toHaveBeenCalledTimes(3);
+    // expect(gen).toHaveBeenCalledWith(expect.anything(), { onCpu: false, keepAlive: '5m' });
+  });
+});
+```
+
+> Implementation note: extract each handler's persona step into a small testable
+> helper if the Express handler is awkward to call directly. The load-bearing
+> assertions are: `/generate` calls `preparePersonaBatch` once and threads the
+> args; `/generate-all` calls it ONCE (not per character) and loops.
+
+- [ ] **Step 5: Run route test to verify it fails**
 
 Run: `cd server && npx vitest run src/routes/voice-style.test.ts`
+Expected: FAIL — routes still call `generateVoiceStylePersona(c)` with no args.
+
+- [ ] **Step 6: Wire both handlers**
+
+In `server/src/routes/voice-style.ts`:
+
+```typescript
+import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
+```
+
+`/generate` handler — replace `await generateVoiceStylePersona(cast.characters[idx])` with:
+
+```typescript
+      const prep = await preparePersonaBatch(bookDir);
+      const voiceStyle = await generateVoiceStylePersona(cast.characters[idx], prep);
+```
+
+`/generate-all` handler — resolve the plan ONCE before the loop, then thread it:
+
+```typescript
+    const prep = await preparePersonaBatch(bookDir); // one evict / one decision for the batch
+    for (let i = 0; i < cast.characters.length; i++) {
+      const c = cast.characters[i];
+      if (!includeNarrator && isNarrator(c)) continue;
+      try {
+        const voiceStyle = await generateVoiceStylePersona(c, prep);
+        cast.characters[i] = { ...c, voiceStyle };
+        voiceStyles[c.id] = voiceStyle;
+      } catch (e) {
+        failures[c.id] = (e as Error).message || 'Voice-style generation failed.';
+        console.error('[voice-style] book=%s character=%s failed', bookId, c.id, e);
+      }
+    }
+```
+
+- [ ] **Step 7: Run tests to verify they pass**
+
+Run: `cd server && npx vitest run src/routes/voice-style.test.ts src/tts/persona-gpu-plan.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck + commit**
+- [ ] **Step 8: Typecheck + commit**
 
 ```bash
 cd server && npm run typecheck
-git add server/src/routes/voice-style.ts server/src/routes/voice-style.test.ts
-git commit -m "feat(server): srv-48 single-design persona honours the GPU plan"
+git add server/src/tts/persona-gpu-plan.ts server/src/tts/persona-gpu-plan.test.ts server/src/routes/voice-style.ts server/src/routes/voice-style.test.ts
+git commit -m "feat(server): srv-48 preparePersonaBatch; both voice-style routes honour the GPU plan"
 ```
 
 ---
@@ -925,11 +1016,11 @@ git commit -m "feat(server): srv-48 single-design persona honours the GPU plan"
 
 **Files:**
 - Modify: `server/src/routes/cast-design.ts` (`runDesignJob` + a new `runPersonaPrePass`)
-- Test: `server/src/routes/cast-design.test.ts` (create/extend)
+- Test: `server/src/routes/cast-design.test.ts` (**exists** — extend it; reuse its `job` fixtures)
 
 **Interfaces:**
-- Consumes: `resolvePersonaGpuPlan`, `unloadResidentSidecar`, `GpuBusyForPersonaError` (Tasks 6-7); `generateVoiceStylePersona(character, opts)` (Task 4); `resolvePersonaEngine` (Task 1).
-- Behaviour: for the `local` engine only, before the design loop, run a pre-pass over the **base** task characters lacking a `voiceStyle`; persist each; emit heartbeats < 30 s; honour `job.controller.signal`. The `gemini` engine keeps the existing lazy-interleaved persona-gen inside the loop (unchanged).
+- Consumes: `preparePersonaBatch` (Task 8); `generateVoiceStylePersona(character, opts)` (Task 4); `resolvePersonaEngine`, `LocalUnreachableError` (Tasks 1/3).
+- Behaviour: for the `local` engine only, before the design loop, run a pre-pass over the **base** task characters lacking a `voiceStyle`; `preparePersonaBatch` once; persist each; emit heartbeats < 30 s; honour `job.controller.signal`; per-character failure records + skips. The `gemini` engine keeps the existing lazy-interleaved persona-gen inside the loop (unchanged).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -939,10 +1030,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 describe('cast-design persona pre-pass', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('local idle: evict + all personas before the first design; variants skipped', async () => {
+  it('local: all personas before the first design; variants skipped', async () => {
     const plan = await import('../tts/persona-gpu-plan.js');
-    vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: false, evict: true, keepAlive: '5m' });
-    const evict = vi.spyOn(plan, 'unloadResidentSidecar').mockResolvedValue();
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
     const vs = await import('../analyzer/voice-style.js');
     vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('local');
     const order: string[] = [];
@@ -955,25 +1045,27 @@ describe('cast-design persona pre-pass', () => {
       order.push(`design:${a.characterId}`);
       return { voiceId: 'qwen-x', url: '/x.mp3' };
     });
-    // …drive runPersonaPrePass (or runDesignJob) with two base tasks + one variant…
-    // expect(evict).toHaveBeenCalled();
-    // expect(order.slice(0,2).every(s => s.startsWith('persona:'))).toBe(true);
-    // expect(order).not.toContain('persona:<variant-char-from-variant-only-task>');
+    // …drive runPersonaPrePass (or runDesignJob) with two base tasks + one variant-only task…
+    // expect(plan.preparePersonaBatch).toHaveBeenCalledTimes(1);
+    // expect(order.slice(0,2).every(s => s.startsWith('persona:'))).toBe(true); // personas first
+    // expect(order).not.toContain('persona:<variant-only-char>');               // variant skipped
   });
 
-  it('generation in flight: no evict, personas on CPU, designs still run', async () => {
+  it('busy box: preparePersonaBatch returns CPU args, threaded into persona calls', async () => {
     const plan = await import('../tts/persona-gpu-plan.js');
-    vi.spyOn(plan, 'resolvePersonaGpuPlan').mockReturnValue({ onCpu: true, evict: false, keepAlive: 0 });
-    const evict = vi.spyOn(plan, 'unloadResidentSidecar');
-    // …drive; expect(evict).not.toHaveBeenCalled(); assert generateVoiceStylePersona called with {onCpu:true}…
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: true, keepAlive: 0 });
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('local');
+    const gen = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+    // …drive; expect(gen).toHaveBeenCalledWith(expect.anything(), { onCpu: true, keepAlive: 0 }); designs still run…
   });
 
   it('gemini engine: no pre-pass batch (lazy interleave preserved)', async () => {
     const vs = await import('../analyzer/voice-style.js');
     vi.spyOn(vs, 'resolvePersonaEngine').mockReturnValue('gemini');
     const plan = await import('../tts/persona-gpu-plan.js');
-    const evict = vi.spyOn(plan, 'unloadResidentSidecar');
-    // …drive; expect(evict).not.toHaveBeenCalled()…
+    const prep = vi.spyOn(plan, 'preparePersonaBatch');
+    // …drive; expect(prep).not.toHaveBeenCalled() (pre-pass returns early for gemini)…
   });
 
   it('heartbeat < 30s during the pass and pause stops before designs', async () => {
@@ -997,11 +1089,7 @@ In `server/src/routes/cast-design.ts`, add the imports and a `runPersonaPrePass`
 ```typescript
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
-import {
-  resolvePersonaGpuPlan,
-  unloadResidentSidecar,
-  GpuBusyForPersonaError,
-} from '../tts/persona-gpu-plan.js';
+import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 
 const PERSONA_HEARTBEAT_MS = 6000; // < the pill's 30s stall heuristic
 
@@ -1015,15 +1103,7 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
   const baseIds = [...new Set(tasks.filter((t) => !t.emotion).map((t) => t.characterId))];
   if (baseIds.length === 0) return;
 
-  let plan = resolvePersonaGpuPlan(job.bookDir);
-  if (plan.evict) {
-    try {
-      await unloadResidentSidecar();
-    } catch (err) {
-      if (!(err instanceof GpuBusyForPersonaError)) throw err;
-      plan = { onCpu: true, evict: false, keepAlive: 0 };
-    }
-  }
+  const prep = await preparePersonaBatch(job.bookDir); // one evict / one decision (shared helper)
 
   // Emit the SAME `heartbeat` event the design loop uses (cast-design.ts:212) —
   // the pill's stall heuristic resets on that known type, NOT on a novel one.
@@ -1043,10 +1123,7 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
 
       let persona: string;
       try {
-        persona = await generateVoiceStylePersona(character, {
-          onCpu: plan.onCpu,
-          keepAlive: plan.keepAlive,
-        });
+        persona = await generateVoiceStylePersona(character, prep);
       } catch (err) {
         // Wholesale failure (engine unreachable) → let it propagate so runDesignJob's
         // catch ends the job with a clear error. A per-character failure → record it
@@ -1108,18 +1185,14 @@ git commit -m "feat(server): srv-48 local-only persona pre-pass for bulk cast de
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-06-24-srv-48-persona-generation-local-model-design.md` (`status:` → `active`)
-- Modify: `server/.env.example` (document `PERSONA_GEN_ENGINE` / `PERSONA_GEN_LOCAL_MODEL`)
 
-- [ ] **Step 1: Document the env vars**
+(`server/.env.example` is regenerated in Task 1 via `config:sync` — the knob
+`help` text is its documentation; no hand-edit here.)
 
-Add to `server/.env.example`, near the analyzer/Gemini section:
+- [ ] **Step 1: Confirm the env-example managed block is current**
 
-```bash
-# Persona generation (voice-design). Default 'gemini' (gemini-3.1-flash-lite).
-# Set 'local' to design voices with no Gemini key (routes through Ollama).
-# PERSONA_GEN_ENGINE=local
-# PERSONA_GEN_LOCAL_MODEL=qwen3.5:9b   # blank inherits the analyzer's local model
-```
+Run: `npm run config:check`
+Expected: exits 0 (Task 1 already regenerated it). If it reports drift, run `npm run config:sync` and commit the result.
 
 - [ ] **Step 2: Flip the spec status**
 
@@ -1138,8 +1211,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/.env.example docs/superpowers/specs/2026-06-24-srv-48-persona-generation-local-model-design.md
-git commit -m "docs(server): srv-48 document persona-engine env vars; spec → active"
+git add docs/superpowers/specs/2026-06-24-srv-48-persona-generation-local-model-design.md
+git commit -m "docs(server): srv-48 spec → active"
 ```
 
 - [ ] **Step 6: Final full battery (no sidecar load in flight)**
@@ -1155,20 +1228,20 @@ Expected: PASS (typecheck + tests + e2e + build). If a pre-existing unrelated fa
 - Provider toggle + default gemini → Task 1. Model defaults from registry (wire voiceStyleModel) → Task 1. Blank-inherit localModel → Task 1.
 - Explicit opt-in / no silent fallback → Task 4 (gemini-no-key throws; local-down throws). 
 - `<think>` strip → Task 2. Local Ollama helper + export classifyConnectError + onCpu/keepAlive/semaphore-conditional → Task 3. Gemini rate-limiter retained → Task 4.
-- Global generation + other-book design-busy signals → Task 5 (reuses `activeGenerationBooks`). Reverse-evict full-budget fail-closed → Task 6. Decision table → Task 7. Single-design wiring → Task 8. Bulk local-only pre-pass + heartbeats + pause + variants-skipped → Task 9.
-- Env docs + status flip + verify → Task 10.
-- The twelve spec tests map to: T1 (knob-wiring, engine/localModel resolvers = #1/#4 partial), T2 (#5 `<think>`), T3 (#2 local happy-path, #6 GPU semaphore+keepalive, #7 CPU no-semaphore, #3 LocalUnreachable), T4 (#1 provider selection, #3 no-provider, #8 rate-limiter), T6 (#10 fail-closed evict), T7 (#9 decision table incl. durable-vs-instantaneous), T9 (#11 ordering+variants+gemini-no-prepass, #12 heartbeat+pause).
+- Other-book design-busy signal → Task 5 (`isOtherBookDesignBusy`); global generation reuses the existing `activeGenerationBooks()`. Reverse-evict full-budget fail-closed → Task 6. Decision table → Task 7. Shared `preparePersonaBatch` + BOTH voice-style routes (`/generate` AND `/generate-all`) → Task 8. Bulk local-only pre-pass + heartbeats + pause + variants-skipped + per-character failure → Task 9.
+- `.env.example` managed block regenerated (`config:sync`) → Task 1; status flip + verify → Task 10.
+- The twelve spec tests map to: T1 (knob-wiring, engine/localModel resolvers = #1/#4 partial), T2 (#5 `<think>`), T3 (#2 local happy-path, #6 GPU semaphore+keepalive, #7 CPU no-semaphore, #3 LocalUnreachable), T4 (#1 provider selection, #3 no-provider, #8 rate-limiter), T6 (#10 fail-closed evict), T7 (#9 decision table incl. durable-vs-instantaneous), T9 (#11 ordering+variants+gemini-no-prepass, #12 heartbeat+pause). NEW coverage beyond the spec's 12: `/generate-all` route (Task 8) and `preparePersonaBatch` (Task 8) — found in final review.
 
-**Placeholder scan:** Tasks 8 & 9 use prose "…drive the handler…" *inside test bodies* with an explicit instruction to extract a named, testable helper (`generatePersonaWithPlan`, `runPersonaPrePass`) — the production code for both is fully specified. This is the one area an executor must flesh the harness to match the existing `cast-design.test.ts` fixtures; flagged, not hidden.
+**Placeholder scan:** Tasks 8 & 9 use prose "…drive the handler…" *inside test bodies* with an explicit instruction to extract named, testable helpers (`preparePersonaBatch`, `runPersonaPrePass`) — the production code for both is fully specified. This is the one area an executor must flesh the harness to match the existing `cast-design.test.ts` fixtures; flagged, not hidden.
 
-**Type consistency:** `PersonaGpuPlan { onCpu; evict; keepAlive }` is produced in Task 7 and consumed in Tasks 8-9. `generateVoiceStylePersona(character, opts?)` opts shape `{ onCpu?; keepAlive? }` matches Tasks 3/4/8/9. `unloadResidentSidecar()` / `GpuBusyForPersonaError` defined Task 6, used Tasks 8-9. `isOtherBookDesignBusy(bookDir)` defined Task 5, used Task 7. `activeGenerationBooks()` is the existing export (verified `generation.ts:410`).
+**Type consistency:** `PersonaGpuPlan { onCpu; evict; keepAlive }` is produced in Task 7 and consumed by `resolvePersonaGpuPlan`. `preparePersonaBatch(bookDir): Promise<{ onCpu; keepAlive }>` defined Task 8, consumed by both voice-style routes (Task 8) and the pre-pass (Task 9). `generateVoiceStylePersona(character, opts?)` opts shape `{ onCpu?; keepAlive? }` matches Tasks 3/4/8/9. `unloadResidentSidecar()` / `GpuBusyForPersonaError` defined Task 6, used Task 8 (inside `preparePersonaBatch`). `isOtherBookDesignBusy(bookDir)` defined Task 5, used Task 7. `activeGenerationBooks()` is the existing export (verified `generation.ts:410`).
 
 ## Notes for the executor
 
 - **Mocking ES named exports (cross-cutting).** Tasks 4/8/9 intercept named
   exports (`generateVoiceStylePersona`, `resolvePersonaEngine`,
-  `resolvePersonaGpuPlan`, `unloadResidentSidecar`) that are *called internally
-  by the module under test*. `vi.spyOn(ns, 'fn')` on a live ESM binding is flaky
+  `resolvePersonaGpuPlan`, `unloadResidentSidecar`, `preparePersonaBatch`) that
+  are *called internally by the module under test*. `vi.spyOn(ns, 'fn')` on a live ESM binding is flaky
   in this repo (see the known `importOriginal` flake). **Prefer
   `vi.mock('../path.js', async (importOriginal) => ({ ...(await importOriginal()), fn: vi.fn() }))`**
   at the top of the file for those modules, and import the mocked symbol to
