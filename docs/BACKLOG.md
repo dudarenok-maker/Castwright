@@ -496,6 +496,12 @@ _Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected). **Niche dev/LAN surfacing — kept at Could 2026-06-08.**
 _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401).
 
+#### `srv-49` — Consolidate Coalfall manuscript locations (fixtures ↔ sample book; consider brand/) ([#1043](https://github.com/dudarenok-maker/Castwright/issues/1043))
+
+- _What:_ Reduce the number of Coalfall homes — point e2e + language-detection tests at the `samples/` manuscripts (or vice-versa) so English/ru text isn't duplicated in `__fixtures__/`, optionally add an English `manuscript.en.md` to `samples/` for `.md` uniformity, and resolve the open question of whether the Castwright-original book belongs under `brand/` (git-ignored) vs staying the shipped bundled demo in `samples/`.
+- _Benefit (technical):_ one source of truth per manuscript; less drift between the demo book and the test fixtures. Pairs with `fs-61` (#1027) and `fs-22`.
+_Full detail + acceptance:_ [#1043](https://github.com/dudarenok-maker/Castwright/issues/1043).
+
 #### `ops-18` — Catch any large-region visual change (not just the top-bar) ([#947](https://github.com/dudarenok-maker/Castwright/issues/947))
 
 - _What:_ Full-page re-blessed baselines + a contiguity gate to catch branding-scale changes outside the top-bar. Follow-up to #925; build only if a real non-top-bar regression is seen.
