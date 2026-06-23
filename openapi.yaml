@@ -2496,6 +2496,51 @@ paths:
         '409':
           description: Book has not been analysed yet
 
+  /api/books/{bookId}/script-review:
+    post:
+      summary: LLM script-review pass (fs-58)
+      operationId: scriptReview
+      description: |
+        Runs an LLM pass over the book's already-attributed sentences and
+        streams per-chapter editing ops over Server-Sent Events. The ops
+        (strip_tag, split, extract_dialogue, merge, fix_emotion) carry anchors
+        and rationale; the client applies them through existing Redux
+        manual-edit reducers. The route never writes a file. When an optional
+        `chapterId` is provided, only that chapter is reviewed. SSE event
+        kinds: `phase`, `throttle`, `heartbeat`, `ops`
+        (`{ chapterId, ops: [{ id, op, anchor?, newText?, rationale, ... }] }`),
+        `chapter-failed`, `error` (`code: no_attribution | quota_exhausted`),
+        and a terminal `result` (`{ done, reviewedChapters, totalOps }`).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                chapterId:
+                  {
+                    type: integer,
+                    description: 'Optional chapter id — when present, limits the pass to that chapter only.',
+                  }
+                model:
+                  {
+                    type: string,
+                    description: 'Optional analyzer model id override (matches the analysis endpoints).',
+                  }
+      responses:
+        '200':
+          description: SSE stream of ops/phase/result events.
+          content:
+            text/event-stream:
+              schema: { type: object }
+        '404':
+          description: Book not found
+        '409':
+          description: Book has not been analysed yet
+
   /api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}:
     delete:
       summary: Remove a designed emotion variant (fs-34)
