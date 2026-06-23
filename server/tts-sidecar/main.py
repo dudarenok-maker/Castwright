@@ -1142,6 +1142,40 @@ class QwenEngine(Engine):
         "The quick brown fox jumps over the lazy dog, "
         "and she wondered what tomorrow would bring."
     )
+    # fs-41/fs-50 (seam 5) — language-aware calibration. The English
+    # CALIBRATION_TEXT above stays the default; a non-English voice needs a
+    # phonetically rich line in ITS OWN language so the design reference clip +
+    # clone prompt fix the timbre on the right phoneme set. An English ref_text
+    # on a Spanish voice (the "quick brown fox" baked into every es voice) was
+    # the gap the Spanish canary surfaced. Values are well-known per-language
+    # pangrams + a reflective tail mirroring the English line's prosody. Keys are
+    # the sidecar language WORD (sidecarLanguageName → e.g. 'Spanish').
+    CALIBRATION_TEXTS = {
+        "Spanish": (
+            "El veloz murciélago hindú comía feliz cardillo y kiwi, "
+            "y se preguntaba qué traería el mañana."
+        ),
+        "French": (
+            "Portez ce vieux whisky au juge blond qui fume, "
+            "et demandez-vous ce que demain réserve."
+        ),
+        "German": (
+            "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, "
+            "und sie fragte sich, was der morgige Tag bringen würde."
+        ),
+        "Russian": (
+            "Съешь же ещё этих мягких французских булок да выпей чаю, "
+            "и она подумала, что принесёт завтрашний день."
+        ),
+    }
+
+    def _calibration_text(self, language: Optional[str]) -> str:
+        """Short, phonetically rich calibration/ref_text line in `language` (the
+        sidecar language WORD, e.g. 'Spanish'). Falls back to the English
+        CALIBRATION_TEXT for English/unknown languages, so English behaviour is
+        byte-identical and an unmapped language degrades to English, never fails."""
+        lang = (language or "").strip()
+        return self.CALIBRATION_TEXTS.get(lang, self.CALIBRATION_TEXT)
 
     def __init__(self) -> None:
         self._base: Any = None  # resident clone/synth model (0.6B-Base)
@@ -1681,8 +1715,9 @@ class QwenEngine(Engine):
         # voice the SHORT CALIBRATION_TEXT here, never the caller's evidence
         # quote (up to 320 chars). The reference is generated on the heavy 1.7B
         # VoiceDesign model, and voicing a long quote there at design-RTF ~10 is
-        # what pushed cold designs past the 120s server budget.
-        ref_text = self.CALIBRATION_TEXT
+        # what pushed cold designs past the 120s server budget. fs-41/fs-50
+        # (seam 5) — in the voice's OWN language, not a hardcoded English line.
+        ref_text = self._calibration_text(lang)
         # The audition preview speaks the caller's own calibration line, so the
         # UI plays back the character's actual words AND the MP3 the design
         # route caches matches the "Play 12s" player's cache key (the server
@@ -1805,7 +1840,8 @@ class QwenEngine(Engine):
         import torch  # type: ignore
 
         lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
-        ref_text = self.CALIBRATION_TEXT
+        # fs-41/fs-50 (seam 5) — language-aware ref_text (see design_voice).
+        ref_text = self._calibration_text(lang)
         audition_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
         base_pt, _base_json = self._voice_paths(base_voice_id)
