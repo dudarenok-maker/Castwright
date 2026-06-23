@@ -3079,6 +3079,8 @@ export interface components {
             generated?: boolean;
             /** @description True when a 12s audition has been synthesised for this voiceId — the lifecycle tier between "Designed" and "Generated". Populated only for bespoke Qwen voices (the server checks the voice-sample cache for a `<scope>-qwen3-tts-0.6b-*.mp3` file when the engine query is 'qwen'); preset voices omit it. Drives the new "Sampled" cast Status pill / Voices badge. Cross-book like `generated`; a `generated` voice outranks it. Absent ⇒ not sampled / not applicable. */
             sampled?: boolean;
+            /** @description BCP-47 code of a designed Qwen voice's baked manifest language (e.g. 'ru' for Russian). Derived from the sidecar manifest `{ language }` word via the registry reverse-lookup. Absent for preset/catalog voices and voices whose manifest is missing or has no language field. */
+            languageCode?: string;
             ttsVoice: components["schemas"]["TtsVoiceAssignment"];
             /**
              * @description User-set TTS voice overrides per engine. Each entry pins a

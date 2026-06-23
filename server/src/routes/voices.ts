@@ -33,6 +33,7 @@ import {
   BOOKS_ROOT,
   castJsonPath,
   ensureWorkspace,
+  qwenVoiceSidecarPath,
   stateJsonPath,
   voicesMetaPath,
 } from '../workspace/paths.js';
@@ -43,6 +44,7 @@ import {
   qwenStorageKey,
   type TtsVoiceAssignment,
 } from '../tts/voice-mapping.js';
+import { codeForSidecarName } from '../tts/language-registry.js';
 import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import {
@@ -128,6 +130,10 @@ interface DerivedVoice {
       Copied from the source Character. Absent on pre-srv-43 designs and
       catalog voices. */
   voiceUuid?: string;
+  /** BCP-47 code of a designed Qwen voice's baked manifest language (e.g. 'ru').
+      Derived from the sidecar manifest `{ language }` word via codeForSidecarName.
+      Absent for presets and voices whose manifest is missing or has no language. */
+  languageCode?: string;
 }
 
 /* Read-time migration. Older cast.json files (pre-Kokoro) stored a
@@ -346,6 +352,23 @@ async function aggregateVoices(
             }
             continue;
           }
+          /* Read the sidecar manifest for a designed Qwen voice to derive its
+             baked language code. One read per new voice family entry (first-
+             occurrence wins, same as identity fields). The storage key is
+             computed independently of the engine query parameter so languageCode
+             is always present on a designed Qwen voice regardless of which engine
+             tab is active. */
+          const qwenDesignedName = c.overrideTtsVoices?.qwen?.name;
+          let languageCode: string | undefined;
+          if (qwenDesignedName) {
+            const manifestKey = qwenStorageKey({ voiceUuid: c.voiceUuid, voiceId: c.voiceId }, id);
+            const manifest = await readJson<{ language?: string }>(
+              qwenVoiceSidecarPath(manifestKey),
+            ).catch(() => null);
+            if (manifest?.language) {
+              languageCode = codeForSidecarName(manifest.language);
+            }
+          }
           const isCurrent = !!currentBookId && state.bookId === currentBookId;
           const ttsVoiceRaw = resolveVoiceAssignment(
             engine,
@@ -397,6 +420,7 @@ async function aggregateVoices(
             overrideTtsVoices: overrideMap,
             overrideTtsVoice: legacyShape,
             voiceUuid: c.voiceUuid,
+            languageCode,
             books: new Set([state.bookId]),
           });
         }

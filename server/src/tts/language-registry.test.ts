@@ -10,6 +10,7 @@ import {
   supportedLanguages,
   nonEnglishHeadingLexicon,
   nonEnglishFrontMatterKeywords,
+  codeForSidecarName,
 } from './language-registry.js';
 
 describe('getLanguageEntry', () => {
@@ -133,5 +134,15 @@ describe('nonEnglishFrontMatterKeywords', () => {
   it('ru/es/fr/de carry frontMatterKeywords; en does not', () => {
     expect(getLanguageEntry('en')?.frontMatterKeywords).toBeUndefined();
     for (const c of ['ru', 'es', 'fr', 'de']) expect(getLanguageEntry(c)?.frontMatterKeywords).toBeDefined();
+  });
+});
+
+describe('codeForSidecarName', () => {
+  it('maps sidecar words back to BCP-47 codes', () => {
+    expect(codeForSidecarName('Russian')).toBe('ru');
+    expect(codeForSidecarName('Spanish')).toBe('es');
+    expect(codeForSidecarName('German')).toBe('de');
+    expect(codeForSidecarName('English')).toBe('en');
+    expect(codeForSidecarName('Klingon')).toBeUndefined();
   });
 });

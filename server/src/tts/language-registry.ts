@@ -122,3 +122,8 @@ export function nonEnglishFrontMatterKeywords(): string[] {
   for (const e of ENTRIES) e.frontMatterKeywords?.forEach((w) => out.add(w));
   return [...out];
 }
+
+/** Reverse of `sidecarName` — the BCP-47 code for a sidecar/manifest language word. */
+export function codeForSidecarName(word: string): string | undefined {
+  return ENTRIES.find((e) => e.sidecarName === word)?.code;
+}
