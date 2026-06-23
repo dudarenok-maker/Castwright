@@ -1,3 +1,6 @@
+import type { Dispatch } from '@reduxjs/toolkit';
+import { manuscriptActions } from '../store/manuscript-slice';
+
 export const REVIEW_EMOTIONS = ['neutral', 'whisper', 'angry', 'excited', 'sad'] as const;
 
 export interface ReviewOp {
@@ -87,4 +90,43 @@ export function planApply(
     appliable.push(op);
   }
   return { appliable, unappliable };
+}
+
+export function dispatchAcceptedOps(
+  dispatch: Dispatch,
+  accepted: ReviewOp[],
+  live: Array<{ id: number; chapterId: number; text: string; characterId: string }>,
+  { onBoundaryMove }: { onBoundaryMove: (chapterId: number) => void },
+): void {
+  const byId = new Map(live.map((s) => [s.id, s]));
+  for (const op of accepted) {
+    const target = byId.get(op.op === 'merge' ? (op.mergeIds?.[0] ?? op.id) : op.id);
+    if (!target) continue;
+    const chapterId = target.chapterId;
+    switch (op.op) {
+      case 'strip_tag':
+        dispatch(manuscriptActions.setSentenceText({ chapterId, sentenceId: op.id, text: op.newText ?? target.text }));
+        break;
+      case 'fix_emotion':
+        dispatch(manuscriptActions.setSentenceEmotion({ chapterId, sentenceId: op.id, emotion: op.emotion ?? 'neutral' }));
+        break;
+      case 'split': {
+        const off = resolveAnchorOffset(target.text, op.anchor ?? '');
+        if (off === null) continue;
+        dispatch(manuscriptActions.splitSentence({ chapterId, sentenceId: op.id, offsets: [off], characterIds: op.pieceCharacterIds ?? [target.characterId, target.characterId] }));
+        break;
+      }
+      case 'extract_dialogue': {
+        const start = resolveAnchorOffset(target.text, op.anchor ?? '');
+        const end = resolveAnchorOffset(target.text, op.anchorEnd ?? '');
+        if (start === null || end === null || end <= start) continue;
+        dispatch(manuscriptActions.splitSentence({ chapterId, sentenceId: op.id, offsets: [start, end], characterIds: op.pieceCharacterIds ?? [target.characterId, target.characterId, target.characterId] }));
+        break;
+      }
+      case 'merge':
+        dispatch(manuscriptActions.mergeSentences({ chapterId, sentenceIds: op.mergeIds ?? [] }));
+        break;
+    }
+    onBoundaryMove(chapterId);
+  }
 }

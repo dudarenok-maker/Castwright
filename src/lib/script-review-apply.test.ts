@@ -1,4 +1,8 @@
-import { resolveAnchorOffset, planApply } from './script-review-apply';
+import { configureStore } from '@reduxjs/toolkit';
+import { vi } from 'vitest';
+import { resolveAnchorOffset, planApply, dispatchAcceptedOps, type ReviewOp } from './script-review-apply';
+import { manuscriptSlice } from '../store/manuscript-slice';
+import { start } from '../store/manuscript-slice.test-helpers';
 
 describe('resolveAnchorOffset', () => {
   it('returns the EXACT original offset across quote/dash normalization', () => {
@@ -86,5 +90,119 @@ describe('planApply', () => {
     }], live);
     expect(r.appliable).toHaveLength(0);
     expect(r.unappliable[0].reason).toMatch(/anchorEnd|extract|anchor/i);
+  });
+});
+
+describe('dispatchAcceptedOps', () => {
+  // Seed sentences:
+  //   ch=3, id=1 — strip_tag target: text has a tag [laughing]
+  //   ch=3, id=2 — fix_emotion target
+  //   ch=3, id=3 — split target: "Hello world. Goodbye world."
+  //   ch=3, id=4 — extract_dialogue target: 'He said. "Come on," she urged. He left.'
+  //   ch=3, id=5 — merge survivor
+  //   ch=3, id=6 — merge secondary (adjacent, same characterId)
+  const sentences = [
+    { id: 1, chapterId: 3, characterId: 'narrator', text: '[laughing] The hall was dark.' },
+    { id: 2, chapterId: 3, characterId: 'narrator', text: 'Dust hung in the air.' },
+    { id: 3, chapterId: 3, characterId: 'narrator', text: 'Hello world. Goodbye world.' },
+    { id: 4, chapterId: 3, characterId: 'narrator', text: 'He said. "Come on," she urged. He left.' },
+    { id: 5, chapterId: 3, characterId: 'narrator', text: 'First piece.' },
+    { id: 6, chapterId: 3, characterId: 'narrator', text: 'Second piece.' },
+  ];
+
+  // The live array dispatchAcceptedOps will use for anchor resolution
+  const liveForDispatch = sentences.map((s) => ({ ...s }));
+
+  const ops: ReviewOp[] = [
+    // strip_tag: replace text of sentence 1
+    { id: 1, op: 'strip_tag', newText: 'The hall was dark.', rationale: 'remove tag' },
+    // fix_emotion: set emotion on sentence 2
+    { id: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'detected sadness' },
+    // split: anchor = "Hello world." — ends at offset 12; pieces narrator+narrator
+    { id: 3, op: 'split', anchor: 'Hello world.', pieceCharacterIds: ['narrator', 'narrator'], rationale: 'over-long sentence' },
+    // extract_dialogue: anchor = '"Come on,"' (start), anchorEnd = 'she urged.' (end)
+    // text = 'He said. "Come on," she urged. He left.'
+    // anchor ends at offset 19 (' she urged. He left.' remains)
+    // anchorEnd ends at offset 30 (' He left.' remains as third piece)
+    { id: 4, op: 'extract_dialogue', anchor: '"Come on,"', anchorEnd: 'she urged.', pieceCharacterIds: ['narrator', 'maerin', 'narrator'], rationale: 'dialogue extraction' },
+    // merge: join sentences 5 and 6
+    { id: 5, op: 'merge', mergeIds: [5, 6], rationale: 'under-split' },
+  ];
+
+  it('applies all 5 op classes and fires onBoundaryMove once per op', () => {
+    const store = configureStore({
+      reducer: { manuscript: manuscriptSlice.reducer },
+      preloadedState: { manuscript: start(sentences) },
+    });
+
+    const spy = vi.fn();
+    dispatchAcceptedOps(store.dispatch, ops, liveForDispatch, { onBoundaryMove: spy });
+
+    const state = store.getState().manuscript;
+
+    // strip_tag: sentence 1 text replaced
+    const s1 = state.sentences.find((x) => x.chapterId === 3 && x.id === 1);
+    expect(s1?.text).toBe('The hall was dark.');
+
+    // fix_emotion: sentence 2 emotion set to 'sad'
+    const s2 = state.sentences.find((x) => x.chapterId === 3 && x.id === 2);
+    expect(s2?.emotion).toBe('sad');
+
+    // split: sentence 3 becomes 2 pieces; first keeps id=3, second gets maxId+1=7
+    const s3first = state.sentences.find((x) => x.chapterId === 3 && x.id === 3);
+    const s3second = state.sentences.find((x) => x.chapterId === 3 && x.id === 7);
+    expect(s3first?.text).toBe('Hello world.');
+    expect(s3second?.text).toBe(' Goodbye world.');
+
+    // extract_dialogue: sentence 4 becomes 3 pieces; ids 4, 8, 9 (max before extract = 7 post-split)
+    // After the split op, maxId = 7. extract produces 3 pieces: id=4, id=8, id=9
+    // anchor '"Come on,"' ends at offset 19; anchorEnd 'she urged.' ends at offset 30
+    // piece 0: 'He said. "Come on,"' (id=4, keeps original id)
+    // piece 1: ' she urged.' (id=8, global max+1)
+    // piece 2: ' He left.' (id=9, global max+2)
+    const s4first = state.sentences.find((x) => x.chapterId === 3 && x.id === 4);
+    const s4second = state.sentences.find((x) => x.chapterId === 3 && x.id === 8);
+    const s4third = state.sentences.find((x) => x.chapterId === 3 && x.id === 9);
+    expect(s4first).toBeDefined();
+    expect(s4second).toBeDefined();
+    expect(s4third).toBeDefined();
+    // All 3 pieces together should reconstruct the original text
+    const reconstructed = (s4first?.text ?? '') + (s4second?.text ?? '') + (s4third?.text ?? '');
+    expect(reconstructed).toBe('He said. "Come on," she urged. He left.');
+
+    // merge: sentences 5+6 → survivor id=5 with joined text; id=6 removed
+    const s5 = state.sentences.find((x) => x.chapterId === 3 && x.id === 5);
+    const s6 = state.sentences.find((x) => x.chapterId === 3 && x.id === 6);
+    expect(s5?.text).toBe('First piece. Second piece.');
+    expect(s6).toBeUndefined();
+
+    // onBoundaryMove fired once per op (5 ops)
+    expect(spy).toHaveBeenCalledTimes(5);
+    expect(spy).toHaveBeenCalledWith(3); // chapterId = 3 for all ops
+  });
+
+  it('skips an op whose anchor does not resolve, WITHOUT firing onBoundaryMove', () => {
+    const store = configureStore({
+      reducer: { manuscript: manuscriptSlice.reducer },
+      preloadedState: { manuscript: start(sentences) },
+    });
+    const spy = vi.fn();
+    const badOp: ReviewOp = { id: 3, op: 'split', anchor: 'no such anchor text', pieceCharacterIds: ['narrator', 'narrator'], rationale: 'bad' };
+    dispatchAcceptedOps(store.dispatch, [badOp], liveForDispatch, { onBoundaryMove: spy });
+    // sentence 3 should be unchanged
+    const s3 = store.getState().manuscript.sentences.find((x) => x.chapterId === 3 && x.id === 3);
+    expect(s3?.text).toBe('Hello world. Goodbye world.');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('skips an op whose id is missing from live, WITHOUT firing onBoundaryMove', () => {
+    const store = configureStore({
+      reducer: { manuscript: manuscriptSlice.reducer },
+      preloadedState: { manuscript: start(sentences) },
+    });
+    const spy = vi.fn();
+    const missingOp: ReviewOp = { id: 999, op: 'strip_tag', newText: 'x', rationale: 'missing' };
+    dispatchAcceptedOps(store.dispatch, [missingOp], liveForDispatch, { onBoundaryMove: spy });
+    expect(spy).not.toHaveBeenCalled();
   });
 });
