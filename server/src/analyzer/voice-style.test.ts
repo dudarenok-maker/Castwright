@@ -12,9 +12,14 @@
    the test never touches the real filesystem and verifies the static
    instruction is sourced from the file. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { geminiRateLimiter } from './rate-limit.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
+import {
+  resolveVoiceStyleModel,
+  resolvePersonaEngine,
+  resolvePersonaLocalModel,
+} from './voice-style.js';
 
 const generateContent = vi.fn();
 
@@ -27,8 +32,23 @@ vi.mock('@google/genai', () => ({
 let mockApiKey: string | null = 'test-key';
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedGeminiApiKey: () => mockApiKey,
+  getResolvedOllamaModel: () => 'llama2',
   readConfigOverrides: () => ({}),
 }));
+
+vi.mock('../config/resolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/resolver.js')>();
+  return {
+    ...actual,
+    configValue: (key: string) => {
+      // Override just the persona config keys; delegate others to the real implementation
+      if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
+      if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
+      // For other keys, use the real configValue function (includes analyzer.gemini.voiceStyleModel)
+      return actual.configValue(key);
+    },
+  };
+});
 
 /* Canonical static instruction text — matches the content of
    skills/audiobook-voice-style.md so the assertions below are stable
@@ -182,6 +202,33 @@ describe('cleanPersona', () => {
   it('collapses multi-line output into a single instruct line', async () => {
     const { cleanPersona } = await import('./voice-style.js');
     expect(cleanPersona('a warm,\n  steady\nvoice')).toBe('a warm, steady voice');
+  });
+});
+
+describe('persona generation config', () => {
+  const ENV_KEYS = ['VOICE_STYLE_MODEL', 'PERSONA_GEN_ENGINE', 'PERSONA_GEN_LOCAL_MODEL'];
+  afterEach(() => {
+    for (const k of ENV_KEYS) delete process.env[k];
+    vi.restoreAllMocks();
+  });
+
+  it('resolveVoiceStyleModel reflects the registry default and an env override', () => {
+    expect(resolveVoiceStyleModel()).toBe('gemini-3.1-flash-lite'); // registry default, not a code literal
+    process.env.VOICE_STYLE_MODEL = 'gemini-3.1-pro';
+    expect(resolveVoiceStyleModel()).toBe('gemini-3.1-pro');
+  });
+
+  it('resolvePersonaEngine defaults to gemini, honours the env toggle', () => {
+    expect(resolvePersonaEngine()).toBe('gemini');
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    expect(resolvePersonaEngine()).toBe('local');
+  });
+
+  it('resolvePersonaLocalModel: blank inherits the analyzer model; explicit wins', async () => {
+    const { getResolvedOllamaModel } = await import('../workspace/user-settings.js');
+    expect(resolvePersonaLocalModel()).toBe(getResolvedOllamaModel()); // blank ⇒ inherit
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
+    expect(resolvePersonaLocalModel()).toBe('qwen3.5:9b');
   });
 });
 

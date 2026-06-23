@@ -27,10 +27,11 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
-import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { getResolvedGeminiApiKey, getResolvedOllamaModel } from '../workspace/user-settings.js';
 import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
 import { readPrompt } from '../config/prompts.js';
+import { configValue } from '../config/resolver.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
     loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
@@ -47,11 +48,24 @@ export async function loadVoiceStyleSkill(): Promise<string> {
   return (await readPrompt('prompt.voiceStyle')).text;
 }
 
-/** Pinned voice-style model. `gemini-3.1-flash-lite` per the locked
-    decision; env-overridable for ops triage without a rebuild. */
+/** Voice-style (persona) Gemini model. Sourced from the registry knob
+    `analyzer.gemini.voiceStyleModel` (env VOICE_STYLE_MODEL → user override →
+    default `gemini-3.1-flash-lite`). Previously this returned a hardcoded
+    literal and ignored the knob — srv-48 wires it up. */
 export function resolveVoiceStyleModel(): string {
-  const raw = process.env.VOICE_STYLE_MODEL?.trim();
-  return raw && raw.length > 0 ? raw : 'gemini-3.1-flash-lite';
+  return configValue<string>('analyzer.gemini.voiceStyleModel');
+}
+
+/** Persona generation provider — `local` (Ollama) or `gemini`. Default gemini. */
+export function resolvePersonaEngine(): 'local' | 'gemini' {
+  return configValue<string>('analyzer.personaGeneration.engine') === 'local' ? 'local' : 'gemini';
+}
+
+/** Ollama model for the local persona path. Blank ⇒ inherit the analyzer's
+    resolved local model (single source of truth, zero extra download). */
+export function resolvePersonaLocalModel(): string {
+  const explicit = configValue<string>('analyzer.personaGeneration.localModel').trim();
+  return explicit.length > 0 ? explicit : getResolvedOllamaModel();
 }
 
 /* Tone metrics are 0–100. Translate the two that matter most for a voice
