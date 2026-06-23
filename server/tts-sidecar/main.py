@@ -170,6 +170,36 @@ def _apply_torch_perf_flags(torch: Any) -> None:
 app = FastAPI(title="audiobook-generator local TTS sidecar")
 
 
+async def _read_json_body(req: Request):
+    """Parse a request's JSON body, tolerating a non-UTF-8 (Windows ANSI /
+    cp1252) wire encoding of 3-byte typographic characters.
+
+    The bug this guards against: a client that delivers an em-dash (U+2014),
+    smart-quote (U+201C/U+201D), apostrophe (U+2019) or ellipsis (U+2026) as a
+    SINGLE cp1252 byte (0x97 / 0x93 / 0x94 / 0x92 / 0x85) instead of the proper
+    multi-byte UTF-8 sequence. `json.loads(bytes)` decodes strict UTF-8 and a
+    lone 0x80-0x9F byte is an invalid UTF-8 start byte, so it raised
+    UnicodeDecodeError — which the routes swallowed into a generic
+    "Body must be JSON." 400. That broke emotion-variant minting, the re-mint
+    migration, and any synth body carrying smart quotes / em-dashes.
+
+    Strategy: try strict UTF-8 first (the correct, common case). On a decode
+    error ONLY (never on a genuine JSON syntax error), retry decoding the raw
+    bytes as cp1252 — the Windows ANSI codepage where those typographic bytes
+    live — then latin1 as a can't-fail last resort. A real malformed-JSON body
+    still raises JSONDecodeError and surfaces as a 400, unchanged."""
+    raw = await req.body()
+    try:
+        return json.loads(raw)
+    except UnicodeDecodeError:
+        for enc in ("cp1252", "latin1"):
+            try:
+                return json.loads(raw.decode(enc))
+            except (UnicodeDecodeError, LookupError):
+                continue
+        raise
+
+
 # CUDA poison detection — phrases that PyTorch / NVIDIA emit when a kernel
 # raises a device-side assert. Once any of these fire, the CUDA context is
 # corrupted process-wide; every subsequent CUDA call re-raises the same
@@ -3646,7 +3676,7 @@ async def load_model(req: Request) -> JSONResponse:
     `_load_lock` so concurrent UI clicks against the same engine serialise,
     but a Coqui load and a Kokoro load can proceed in parallel."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -3766,7 +3796,7 @@ async def unload_model(req: Request) -> JSONResponse:
     in-app Stop pill (sidecar restart re-loads it via the eager preload
     hook)."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -3853,7 +3883,7 @@ async def qwen_design_voice(req: Request) -> Response:
     a hint of anxiety"); the caller composes it from the character's profile.
     Idempotent-ish — re-designing the same voiceId overwrites its embedding."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
     voice_id = body.get("voiceId")
@@ -3913,7 +3943,7 @@ async def qwen_mint_variant(req: Request) -> Response:
 
     Returns 409 when `baseVoiceId` has no cached embedding (design it first)."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
     base_voice_id = body.get("baseVoiceId")
@@ -3969,7 +3999,7 @@ async def qwen_evict_voice(req: Request) -> Response:
     mtime check — it's only evicted on (re)design of that id or a full unload).
     Idempotent: a miss is a no-op `evicted: false`."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
     voice_id = body.get("voiceId")
@@ -3986,7 +4016,7 @@ async def qwen_evict_voice(req: Request) -> Response:
 @app.post("/synthesize")
 async def synthesize(req: Request) -> Response:
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
 
@@ -4237,7 +4267,7 @@ async def synthesize_batch(req: Request) -> Response:
     sliced by `lengths`. Binary (not base64) avoids ~33 % inflation per chapter
     and parses with the Node client's existing arrayBuffer() read."""
     try:
-        body = await req.json()
+        body = await _read_json_body(req)
     except Exception:
         raise HTTPException(status_code=400, detail="Body must be JSON.")
 
