@@ -38,14 +38,13 @@ import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
 import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
-import { rpdWarningFor } from '../lib/script-review-apply';
+import { rpdWarningFor, planApply } from '../lib/script-review-apply';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
-/* fs-58 — default per-run script-review model. Unit A has no persisted
-   review-model knob, so the trigger passes the server free-tier default
-   (mirrors server/.env GEMINI_MODEL). Used both for the per-run `model`
-   opt and to compute the whole-book RPD warning. */
+/* fs-58 — Unit-A per-run default model. No persisted model-picker knob in
+   Unit A; a per-run local-model option is deferred to srv-48. Used both for
+   the per-run `model` opt and to compute the whole-book RPD warning. */
 const REVIEW_MODEL = 'gemma-4-31b-it';
 
 interface Props {
@@ -122,11 +121,17 @@ export function ManuscriptView({
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
+  const reviewMenuRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
   const sentences: Sentence[] = sentencesFromStore ?? initialSentences;
+  /* Keep a ref so async handlers (e.g. handleReviewScript) always read
+     the LIVE sentences even after an await, without depending on a
+     potentially stale closure. */
+  const sentencesRef = useRef<Sentence[]>(sentences);
+  sentencesRef.current = sentences;
   const [selectedSeg, setSelectedSeg] = useState<string | null>(null);
   const [filterChar, setFilterChar] = useState<string | null>(null);
   const [chapterFilter, setChapterFilter] = useState<string>('');
@@ -175,6 +180,27 @@ export function ManuscriptView({
       el.scrollIntoView({ block: 'nearest' });
     }
   }, [currentChapterId]);
+
+  /* fs-58 — dismiss the review-scope disclosure on outside-click (pointerdown)
+     or Escape. Mirrors the NavDrawer / HelpMenu pattern in top-bar.tsx. */
+  useEffect(() => {
+    if (!reviewMenuOpen) return;
+    function onDocPointerDown(e: PointerEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (reviewMenuRef.current?.contains(t)) return;
+      setReviewMenuOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setReviewMenuOpen(false);
+    }
+    document.addEventListener('pointerdown', onDocPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDocPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [reviewMenuOpen]);
 
   /* Segments are scoped to the currently-selected chapter so the manuscript
      view shows only sentences from that chapter — clicking a chapter in
@@ -654,7 +680,28 @@ export function ManuscriptView({
           for (const op of ops) allOps.push({ ...op, chapterId: chId });
         },
       });
-      dispatch(scriptReviewActions.setReview({ bookId, ops: allOps, unappliable: [] }));
+      /* fs-58 Task 11 — run planApply at seed time so ops that can't be
+         resolved against the LIVE sentences (stale ids, missing anchors,
+         invalid merges) land in `unappliable` rather than appearing as
+         selectable no-ops in the diff modal. The Apply-time planApply in
+         the modal stays — it's the TOCTOU re-validation for any edits
+         that arrived between stream-complete and the user clicking Accept.
+         sentencesRef.current gives the latest Redux value even after the
+         await, without depending on the stale-closure capture. */
+      const live = sentencesRef.current.map((s) => ({
+        id: s.id,
+        chapterId: s.chapterId,
+        text: s.text,
+        characterId: s.characterId,
+      }));
+      /* planApply filters from allOps whose entries are ReviewOpWithChapter —
+         the chapterId is preserved on each returned object at runtime, so
+         casting back to the wider type is safe here. */
+      const { appliable, unappliable } = planApply(allOps, live) as {
+        appliable: ReviewOpWithChapter[];
+        unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+      };
+      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
     } catch {
       // error surfaced via notifications elsewhere
     } finally {
@@ -725,7 +772,7 @@ export function ManuscriptView({
                   (low-cost default); the ⌄ disclosure opens the whole-book
                   opt-in, which is RPD-gated when the book is longer than the
                   selected model's daily cap. */}
-              <div className="relative shrink-0 inline-flex items-stretch">
+              <div ref={reviewMenuRef} className="relative shrink-0 inline-flex items-stretch">
                 <button
                   data-testid="review-script-chapter"
                   onClick={() => void handleReviewScript(false)}

@@ -10,17 +10,26 @@
    Also covers the chapter-filter affordance added so a 500+ chapter book
    does not push the cast list off the bottom of the sidebar. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { tourSlice } from '../store/tour-slice';
+import { scriptReviewSlice } from '../store/script-review-slice';
+import { uiSlice } from '../store/ui-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
+
+/* fs-58 — api mock for reviewScript trigger tests. */
+const { reviewScript } = vi.hoisted(() => ({ reviewScript: vi.fn() }));
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>();
+  return { ...actual, api: { ...(actual as { api: object }).api, reviewScript } };
+});
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
@@ -920,5 +929,170 @@ describe('ManuscriptView — guided-tour demonstrations (fe-38)', () => {
     expect(screen.getAllByLabelText('Close inspector').length).toBeGreaterThan(0);
     /* The speaker dim is cleared on this step. */
     expect(screen.queryByTitle('Clear filter')).toBeNull();
+  });
+});
+
+/* fs-58 Task 11 — whole-book disclosure menu dismissal (Fix 2).
+   The ⌄ toggle opens a small popover; an outside pointerdown or Escape
+   must close it so it doesn't linger after the user clicks away. */
+describe('ManuscriptView — review-menu dismissal', () => {
+  const reviewChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  function renderReviewView() {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-menu',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[reviewChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+  }
+
+  it('dismisses the whole-book menu on Escape', async () => {
+    const user = userEvent.setup();
+    renderReviewView();
+
+    const toggle = screen.getByTestId('review-script-menu-toggle');
+    await user.click(toggle);
+    /* Menu must now be open. */
+    expect(screen.getByTestId('review-script-wholebook')).toBeInTheDocument();
+
+    /* Press Escape — menu must close. */
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('review-script-wholebook')).toBeNull();
+  });
+
+  it('dismisses the whole-book menu on outside pointerdown', async () => {
+    const user = userEvent.setup();
+    renderReviewView();
+
+    const toggle = screen.getByTestId('review-script-menu-toggle');
+    await user.click(toggle);
+    expect(screen.getByTestId('review-script-wholebook')).toBeInTheDocument();
+
+    /* Pointer-down on the document body (outside the menu wrapper). */
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByTestId('review-script-wholebook')).toBeNull();
+  });
+});
+
+/* fs-58 Task 11 — planApply quarantine at seed time (Fix 1).
+   When the SSE stream returns an op whose target id is NOT in the live
+   sentences, it must land in `unappliable` — NOT in the selectable `ops`
+   list — so the diff modal never presents a no-op to the user. */
+describe('ManuscriptView — script-review planApply quarantine at seed', () => {
+  beforeEach(() => reviewScript.mockReset());
+
+  const quarantineChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+  const liveSentence: Sentence = { id: 1, chapterId: 1, characterId: 'narrator', text: 'Live line.' };
+
+  function makeQuarantineStore() {
+    return configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [liveSentence] as never,
+        },
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-1',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+  }
+
+  it('seeds ops with only resolvable ops; stale-id op goes to unappliable', async () => {
+    const user = userEvent.setup();
+    const store = makeQuarantineStore();
+
+    /* Mock: stream returns one resolvable strip_tag (id=1) and one stale
+       fix_emotion (id=999, which does not exist in live sentences). */
+    reviewScript.mockImplementation(async (_bookId: string, opts?: { onOps?: (arg: { chapterId: number; ops: object[] }) => void }) => {
+      opts?.onOps?.({
+        chapterId: 1,
+        ops: [
+          { id: 1, op: 'strip_tag', newText: 'Live line fixed.', rationale: 'tag' },
+          { id: 999, op: 'fix_emotion', emotion: 'excited', rationale: 'stale' },
+        ],
+      });
+    });
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[quarantineChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[liveSentence]}
+        />
+      </Provider>,
+    );
+
+    /* Trigger per-chapter review. */
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    /* Wait for the async handler to dispatch. */
+    await waitFor(() => {
+      const state = store.getState() as { scriptReview: { byBook: Record<string, { ops: { id: number }[]; unappliable: { op: { id: number } }[] }> } };
+      const review = state.scriptReview.byBook['bk-1'];
+      expect(review).toBeDefined();
+      /* The resolvable op (id=1) must be in ops. */
+      expect(review.ops.some((o) => o.id === 1)).toBe(true);
+      /* The stale op (id=999) must NOT be in ops. */
+      expect(review.ops.some((o) => o.id === 999)).toBe(false);
+      /* The stale op must be in unappliable. */
+      expect(review.unappliable.some((u) => u.op.id === 999)).toBe(true);
+    });
   });
 });
