@@ -20,9 +20,7 @@
    keep a 0-line speaker that the prose clearly tags (backstop for speakers whose
    quote isn't narrator-adjacent and so can't be flipped). Pure — no I/O. */
 
-import { DIALOGUE_VERBS } from './dialogue-verbs.js';
-import { isNonEnglish } from '../tts/language.js';
-import { grammarFor, tagRegexFor } from './tag-grammar.js';
+import { grammarFor, tagRegexFor, verbBeatRegexFor, isQuoteBearing } from './tag-grammar.js';
 
 interface Sentence {
   id: number;
@@ -89,13 +87,10 @@ function resolveNameToId(rawName: string, nameToId: Map<string, string | null>, 
   return nameToId.get(key) ?? null;
 }
 
-function makeTagRegex(): RegExp {
-  return new RegExp(`\\b([A-Z][A-Za-z’'-]+)\\s+(?:${DIALOGUE_VERBS.join('|')})\\b`);
-}
-
 /** Ids of rostered characters the prose tags with a `<Name> <speech-verb>` beat
     somewhere in `sentences`. Used by the fold to keep a 0-line tagged speaker.
-    §4.3 — English-only heuristic: non-English books return an empty set. */
+    §4.3 — mapped languages (en/es/ru) are detected; unmapped languages return an
+    empty set. */
 export function taggedSpeakerIds(
   sentences: Sentence[],
   roster: RosterChar[],
@@ -116,35 +111,69 @@ export function taggedSpeakerIds(
   return ids;
 }
 
-/** Flip narrator quotes that sit immediately before a `<Name> <speech-verb>`
+/** Flip narrator quotes that sit immediately before (or around) a `<Name> <speech-verb>`
     tag onto the resolved speaker. Returns a new sentence array (input not
     mutated), the number flipped, and a per-id breakdown.
-    §4.3 — English-only heuristic: non-English books are returned unchanged. */
+    English uses the preceding-only strategy; es/ru use a guarded adjacency rule. */
 export function recoverTaggedNarratorLines<T extends Sentence>(
   sentences: T[],
   roster: RosterChar[],
   language: string = 'en',
 ): { sentences: T[]; flipped: number; byId: Map<string, number> } {
-  if (isNonEnglish(language)) return { sentences, flipped: 0, byId: new Map() };
-  const nameToId = buildNameToId(roster);
-  const tagRe = makeTagRegex();
+  const g = grammarFor(language);
+  if (!g) return { sentences, flipped: 0, byId: new Map() }; // unmapped → no-op
+  const stop = stopwordsFor(g.stopwords);
+  const nameToId = buildNameToId(roster, stop);
+  const tagRe = tagRegexFor(g);
   const out = sentences.map((s) => ({ ...s }));
   const byId = new Map<string, number>();
   let flipped = 0;
-  for (let i = 1; i < out.length; i++) {
-    const s = out[i];
-    const m = tagRe.exec(s.text);
-    if (!m) continue;
-    const id = resolveNameToId(m[1], nameToId);
-    if (!id) continue;
-    const prev = out[i - 1];
-    // The quote is the preceding sentence in the SAME chapter, currently on
-    // narrator (the broken state). Never overwrite a non-narrator attribution.
-    if (prev.chapterId !== s.chapterId || prev.characterId !== NARRATOR_ID) continue;
-    if (prev.characterId === id) continue;
-    prev.characterId = id;
+
+  const flipQ = (q: T, id: string) => {
+    if (q.characterId !== NARRATOR_ID || q.characterId === id) return;
+    q.characterId = id;
     byId.set(id, (byId.get(id) ?? 0) + 1);
     flipped += 1;
+  };
+
+  if (g.flipStrategy === 'preceding') {
+    // English — UNCHANGED behaviour: the tag is its own beat; flip the prior sentence.
+    for (let i = 1; i < out.length; i++) {
+      const m = tagRe.exec(out[i].text);
+      if (!m) continue;
+      const id = resolveNameToId(m[1], nameToId, stop);
+      if (!id) continue;
+      const prev = out[i - 1];
+      if (prev.chapterId !== out[i].chapterId) continue;
+      flipQ(prev, id);
+    }
+    return { sentences: out, flipped, byId };
+  }
+
+  // 'adjacent' (es/ru) — preceding-first; following only under the interrupted
+  // signature (S+1 not itself immediately followed by its own tag). Never flip S.
+  const verbBeat = verbBeatRegexFor(g);
+  const qualifies = (q: T | undefined, chapterId: number): boolean =>
+    !!q &&
+    q.chapterId === chapterId &&
+    q.characterId === NARRATOR_ID &&
+    isQuoteBearing(q.text) &&
+    !verbBeat.test(q.text); // a neighbour that is itself a tag is never stolen
+
+  for (let i = 0; i < out.length; i++) {
+    const m = tagRe.exec(out[i].text);
+    if (!m) continue;
+    const id = resolveNameToId(m[1], nameToId, stop);
+    if (!id) continue;
+    const chapterId = out[i].chapterId;
+    const prev = out[i - 1];
+    const next = out[i + 1];
+    if (qualifies(prev, chapterId)) flipQ(prev, id);
+    if (qualifies(next, chapterId)) {
+      const after = out[i + 2];
+      const afterIsTag = !!after && after.chapterId === chapterId && verbBeat.test(after.text);
+      if (!afterIsTag) flipQ(next, id);
+    }
   }
   return { sentences: out, flipped, byId };
 }

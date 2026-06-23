@@ -138,3 +138,56 @@ describe('taggedSpeakerIds — localized (es/ru, #1028)', () => {
     expect(taggedSpeakerIds([s(1, 1, 'narrator', 'dijo Berrin.')], esRoster, 'de').size).toBe(0);
   });
 });
+
+describe('recoverTaggedNarratorLines — localized adjacency (es/ru)', () => {
+  const ruRoster = [{ id: 'oduvan', name: 'Одуван' }, { id: 'wren', name: 'Рен' }];
+
+  it('flips a stranded preceding quote onto the speaker (ru «…», — сказала Рен)', () => {
+    const sentences = [
+      s(1, 1, 'narrator', '«Я никогда не вздыхаю»,'),
+      s(2, 1, 'narrator', '— сказала Рен.'),
+    ];
+    const out = recoverTaggedNarratorLines(sentences, ruRoster, 'ru');
+    expect(out.sentences[0].characterId).toBe('wren');
+    expect(out.flipped).toBe(1);
+  });
+
+  it('flips BOTH sides of an interrupted quote (preceding + following)', () => {
+    const sentences = [
+      s(1, 1, 'narrator', '«Если я залью огонь,'),
+      s(2, 1, 'narrator', '— сказал Одуван, —'),
+      s(3, 1, 'narrator', 'то потеряю сварку».'),
+    ];
+    const out = recoverTaggedNarratorLines(sentences, ruRoster, 'ru');
+    expect(out.sentences[0].characterId).toBe('oduvan');
+    expect(out.sentences[2].characterId).toBe('oduvan');
+    expect(out.flipped).toBe(2);
+  });
+
+  it('does NOT steal the next speaker\'s quote in a rapid exchange (R23)', () => {
+    const sentences = [
+      s(1, 1, 'narrator', '«Первый».'),
+      s(2, 1, 'narrator', '— сказал Одуван.'),
+      s(3, 1, 'narrator', '«Второй».'),     // belongs to Рен — its own tag is next
+      s(4, 1, 'narrator', '— сказала Рен.'),
+    ];
+    const out = recoverTaggedNarratorLines(sentences, ruRoster, 'ru');
+    expect(out.sentences[0].characterId).toBe('oduvan'); // preceding of S2 → Одуван
+    expect(out.sentences[2].characterId).toBe('wren');   // NOT stolen by Одуван; flipped by S4
+  });
+
+  it('does NOT flip an inline quote+tag+narration sentence (no re-voiced narration)', () => {
+    const sentences = [
+      s(1, 1, 'narrator', '«Está bien», dijo Berrin, plano como un estante.'),
+    ];
+    const esRoster = [{ id: 'berrin', name: 'Berrin' }];
+    const out = recoverTaggedNarratorLines(sentences, esRoster, 'es');
+    expect(out.sentences[0].characterId).toBe('narrator'); // S itself never flips
+    expect(out.flipped).toBe(0);
+  });
+
+  it('stays a no-op for an unmapped language (de)', () => {
+    const sentences = [s(1, 1, 'narrator', '«…»,'), s(2, 1, 'narrator', '— сказала Рен.')];
+    expect(recoverTaggedNarratorLines(sentences, ruRoster, 'de').flipped).toBe(0);
+  });
+});
