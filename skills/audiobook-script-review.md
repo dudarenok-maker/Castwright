@@ -23,7 +23,8 @@ The input contains:
 
 Return ONLY a JSON object `{ "ops": [...] }`. Each op has:
 
-- `id` — a unique positive integer (sequential, starting from 1)
+- `id` — the `sentenceId` of the target sentence, copied exactly from the input
+  (NOT a new sequential counter starting from 1)
 - `op` — one of the five classes below
 - `rationale` — one-line explanation (required for every op)
 - `confidence` — optional float 0–1

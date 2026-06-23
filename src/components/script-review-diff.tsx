@@ -77,7 +77,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
 
   if (!bucket) return null;
 
-  const { ops, selected } = bucket;
+  const { ops, selected, unappliable } = bucket;
 
   /* Group ops by their class. Preserve insertion order so the class list is
      deterministic. */
@@ -156,6 +156,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
 
           {/* Body */}
           <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
+            {unappliable.length > 0 && (
+              <div
+                data-testid="unappliable-notice"
+                className="rounded-2xl border border-ink/10 bg-canvas/50 px-4 py-3 text-xs text-ink/60"
+              >
+                <span className="font-semibold text-ink/70">
+                  {unappliable.length} suggestion{unappliable.length === 1 ? '' : 's'} couldn&apos;t be applied
+                </span>
+                {' '}(stale text or invalid)
+              </div>
+            )}
             {classes.map((cls) => {
               const classOps = byClass.get(cls) ?? [];
               const allClassSelected = classOps.every(

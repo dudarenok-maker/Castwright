@@ -20,6 +20,8 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { tourSlice } from '../store/tour-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
 import { uiSlice } from '../store/ui-slice';
+import { notificationsSlice } from '../store/notifications-slice';
+import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
@@ -1094,5 +1096,89 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
       /* The stale op must be in unappliable. */
       expect(review.unappliable.some((u) => u.op.id === 999)).toBe(true);
     });
+  });
+});
+
+/* fs-58 — handleReviewScript error surface (Fix 2).
+   When api.reviewScript rejects, an error toast must be dispatched so
+   the user sees feedback rather than the button going silently dead.
+
+   The mock uses a controlled-resolution promise so the rejection fires
+   AFTER the component's async handler is already awaiting it — this
+   ensures the try/catch in handleReviewScript is the one that sees the
+   rejection (rather than vitest's global unhandled-rejection tracker
+   seeing a synchronously-thrown error from a mockRejectedValue call). */
+describe('ManuscriptView — handleReviewScript error toast', () => {
+  it('dispatches an error toast when api.reviewScript rejects', async () => {
+    const user = userEvent.setup();
+
+    /* Controlled promise: resolve/reject are captured so we can fire the
+       rejection after the component has started awaiting. */
+    let triggerReject!: (e: Error) => void;
+    reviewScript.mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          triggerReject = reject;
+        }),
+    );
+
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-err',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+
+    const errChapter: Chapter = {
+      id: 1,
+      title: 'Chapter One',
+      duration: '10:00',
+      state: 'done',
+      progress: 1,
+      characters: {},
+    };
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[errChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    /* Click the review button — the component starts awaiting the promise. */
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    /* Now reject the controlled promise so handleReviewScript's catch fires. */
+    triggerReject(new Error('Quota exceeded'));
+
+    await waitFor(() => {
+      const toasts: Toast[] = store.getState().notifications.toasts;
+      expect(toasts.some((t) => t.kind === 'error' && t.message.includes('Quota exceeded'))).toBe(
+        true,
+      );
+    });
+
+    /* Reset the mock so the next test run doesn't get a dangling promise. */
+    reviewScript.mockReset();
   });
 });

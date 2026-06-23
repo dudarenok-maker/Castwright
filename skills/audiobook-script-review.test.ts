@@ -13,6 +13,17 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_PATH = resolve(__dirname, 'audiobook-script-review.md');
 
+describe('skills/audiobook-script-review.md — op.id contract', () => {
+  it('states that op id is the sentenceId of the target sentence, copied exactly from the input', () => {
+    const text = readFileSync(SKILL_PATH, 'utf8');
+    /* The id field must NOT describe a sequential counter. It must be
+       unambiguous that the value comes from the input sentenceId.
+       The backtick-wrapped form matches the markdown source in the file. */
+    expect(text).toContain('`sentenceId` of the target sentence');
+    expect(text).toContain('copied exactly from the input');
+  });
+});
+
 describe('skills/audiobook-script-review.md — M5 vocalization-protection clause', () => {
   it('contains the verbatim M5 vocalization-protection clause', () => {
     const text = readFileSync(SKILL_PATH, 'utf8');

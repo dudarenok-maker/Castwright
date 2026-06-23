@@ -38,6 +38,7 @@ import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
 import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor, planApply } from '../lib/script-review-apply';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
@@ -702,8 +703,13 @@ export function ManuscriptView({
         unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
       };
       dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
-    } catch {
-      // error surfaced via notifications elsewhere
+    } catch (err) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Script review failed.',
+        }),
+      );
     } finally {
       setReviewLoading(false);
     }

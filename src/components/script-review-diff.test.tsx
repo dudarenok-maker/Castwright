@@ -153,4 +153,58 @@ describe('fs-58 — ScriptReviewDiff', () => {
     fireEvent.click(screen.getByTestId('close-button'));
     expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
   });
+
+  it('renders the unappliable notice when bucket.unappliable is non-empty', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: { ...manuscriptSlice.getInitialState() },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [{ id: 1, op: 'fix_emotion', emotion: 'angry', rationale: 'r', chapterId: 1 }],
+        unappliable: [
+          {
+            op: { id: 99, op: 'strip_tag', anchor: 'x', newText: 'x', rationale: 'r', chapterId: 1 },
+            reason: 'anchor not found',
+          },
+        ],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    const notice = screen.getByTestId('unappliable-notice');
+    expect(notice).toBeTruthy();
+    expect(notice.textContent).toContain("1 suggestion couldn't be applied");
+  });
+
+  it('does not render the unappliable notice when bucket.unappliable is empty', () => {
+    const store = makeStore(); // makeStore seeds unappliable: []
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    expect(screen.queryByTestId('unappliable-notice')).toBeNull();
+  });
 });
