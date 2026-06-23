@@ -12,6 +12,7 @@ import {
   runStage1WithRosterGuard,
   chapterDriftExceeded,
   toKebabId,
+  DEFAULT_ROSTER_COVERAGE_THRESHOLDS,
   type MissingSpeaker,
 } from './roster-coverage.js';
 
@@ -273,5 +274,34 @@ describe('validateAttributionCoverage (#529 half-state)', () => {
       { characterId: 'narrator' },
     ]);
     expect(v.ok).toBe(true); // one tag, no nearby quote → below the flag threshold
+  });
+});
+
+describe('roster guard — non-English gate (seam 3d)', () => {
+  it('skips the roster guard for a German book (no false positives from capitalised nouns)', () => {
+    // German prose: every noun is capitalised; "Diener"/"Frau"/"Soldat" before a
+    // verb would false-flag as missing speakers if the English guard ran.
+    const body = '„Ja", sagte der Diener. „Nein", antwortete die Frau. „Schnell", rief der Soldat.';
+    const res = validateRosterCoverage(body, new Set<string>(), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'de');
+    expect(res.missingSpeakers).toEqual([]); // gated off → no missing-speaker flags
+    expect(res.ok).toBe(true);
+    expect(res.issues).toEqual([]);
+  });
+
+  it('still runs the guard for English (default language) — Lessom regression intact', () => {
+    // No language arg → defaults to 'en' → guard runs → Lessom flagged.
+    const res = validateRosterCoverage(LESSOM_BODY, new Set<string>(), DEFAULT_ROSTER_COVERAGE_THRESHOLDS);
+    expect(res.missingSpeakers.map((m) => m.name.toLowerCase())).toContain('lessom');
+    expect(res.ok).toBe(false);
+  });
+
+  it('skips the attribution guard for a German book', () => {
+    // German prose tagged with German verbs — attribution guard must not fire.
+    const body = '„Ja", sagte der Diener. „Nein", antwortete die Frau. „Schnell", rief der Soldat.';
+    const roster = [{ id: 'diener', name: 'Diener' }];
+    const sentences = [{ characterId: 'narrator' }];
+    const res = validateAttributionCoverage(body, roster, sentences, DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'de');
+    expect(res.ok).toBe(true);
+    expect(res.halfStateSpeakers).toEqual([]);
   });
 });

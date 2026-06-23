@@ -21,6 +21,7 @@
    quote isn't narrator-adjacent and so can't be flipped). Pure — no I/O. */
 
 import { DIALOGUE_VERBS } from './dialogue-verbs.js';
+import { isNonEnglish } from '../tts/language.js';
 
 interface Sentence {
   id: number;
@@ -86,8 +87,14 @@ function makeTagRegex(): RegExp {
 }
 
 /** Ids of rostered characters the prose tags with a `<Name> <speech-verb>` beat
-    somewhere in `sentences`. Used by the fold to keep a 0-line tagged speaker. */
-export function taggedSpeakerIds(sentences: Sentence[], roster: RosterChar[]): Set<string> {
+    somewhere in `sentences`. Used by the fold to keep a 0-line tagged speaker.
+    §4.3 — English-only heuristic: non-English books return an empty set. */
+export function taggedSpeakerIds(
+  sentences: Sentence[],
+  roster: RosterChar[],
+  language: string = 'en',
+): Set<string> {
+  if (isNonEnglish(language)) return new Set<string>();
   const nameToId = buildNameToId(roster);
   const tagRe = makeTagRegex();
   const ids = new Set<string>();
@@ -102,11 +109,14 @@ export function taggedSpeakerIds(sentences: Sentence[], roster: RosterChar[]): S
 
 /** Flip narrator quotes that sit immediately before a `<Name> <speech-verb>`
     tag onto the resolved speaker. Returns a new sentence array (input not
-    mutated), the number flipped, and a per-id breakdown. */
+    mutated), the number flipped, and a per-id breakdown.
+    §4.3 — English-only heuristic: non-English books are returned unchanged. */
 export function recoverTaggedNarratorLines<T extends Sentence>(
   sentences: T[],
   roster: RosterChar[],
+  language: string = 'en',
 ): { sentences: T[]; flipped: number; byId: Map<string, number> } {
+  if (isNonEnglish(language)) return { sentences, flipped: 0, byId: new Map() };
   const nameToId = buildNameToId(roster);
   const tagRe = makeTagRegex();
   const out = sentences.map((s) => ({ ...s }));
