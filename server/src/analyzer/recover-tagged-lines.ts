@@ -54,7 +54,7 @@ function stopwordsFor(extra?: readonly string[]): Set<string> {
 }
 
 function stripPossessive(name: string): string {
-  return name.replace(/[‘’]s$/i, '');
+  return name.replace(/['’]s$/i, '');
 }
 
 /* Build a token → characterId map for matching a bare prose name to a roster

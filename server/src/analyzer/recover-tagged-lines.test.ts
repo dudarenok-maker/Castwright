@@ -88,6 +88,12 @@ describe('taggedSpeakerIds', () => {
     expect(ids.has('wren-sparrow')).toBe(false);
     expect([...ids]).toEqual(['behnam']);
   });
+
+  it('strips a straight-apostrophe possessive before resolving (regression)', () => {
+    // "Behnam's said." → capture "Behnam's" → stripPossessive → "behnam".
+    const ids = taggedSpeakerIds([s(1, 1, 'narrator', "Behnam's said.")], roster);
+    expect(ids.has('behnam')).toBe(true);
+  });
 });
 
 describe('recover-tagged-lines — non-English gate (seam 3d)', () => {
