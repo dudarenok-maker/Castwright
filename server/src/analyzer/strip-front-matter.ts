@@ -17,6 +17,9 @@ const GLOBAL_BOILERPLATE: RegExp[] = [
   /одобрен к распространению/i, // e-library distribution notice
   /^\s*\((С|C)\)\s/i, // "(С) <author>" copyright line
   /^\s*https?:\/\/\S+\s*$/i, // bare URL line
+  /[Tt]odos los derechos reservados/, // es "all rights reserved"
+  /[Tt]ous droits réservés/, // fr "all rights reserved"
+  /[Aa]lle Rechte vorbehalten/, // de "all rights reserved"
 ];
 
 function isGlobalBoilerplate(line: string): boolean {
