@@ -89,3 +89,26 @@ describe('taggedSpeakerIds', () => {
     expect([...ids]).toEqual(['behnam']);
   });
 });
+
+describe('recover-tagged-lines — non-English gate (seam 3d)', () => {
+  it('does not flip narrator lines for a German book (avoids false re-attribution)', () => {
+    // A German book with a narrator quote + a prose tag that the English
+    // [A-Z]+verb heuristic would mis-attribute — must be a no-op for 'de'.
+    const sentences = [
+      s(313, 16, 'narrator', '"Das wäre leichter zu glauben, wenn du dein Diadem nicht trügest,"'),
+      s(314, 16, 'narrator', 'Behnam noted.'),
+    ];
+    const out = recoverTaggedNarratorLines(sentences, roster, 'de');
+    expect(out.flipped).toBe(0);
+    expect(out.sentences[0].characterId).toBe('narrator'); // quote unchanged
+    expect([...out.byId.entries()]).toHaveLength(0);
+  });
+
+  it('returns no tagged speakers for a non-English book', () => {
+    const sentences = [
+      s(1, 1, 'narrator', 'Behnam noted.'),
+      s(2, 1, 'narrator', 'Wren said.'),
+    ];
+    expect(taggedSpeakerIds(sentences, roster, 'de').size).toBe(0);
+  });
+});

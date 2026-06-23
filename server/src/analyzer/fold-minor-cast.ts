@@ -312,7 +312,7 @@ export function foldMinorCast(
      instead of dropping (#537), so a roster-recovered character that couldn't
      get its quote flipped still persists in the cast. nameOnly mode skips the
      zero-line drop entirely, so the scan isn't needed there. */
-  const proseTagged = nameOnly ? new Set<string>() : taggedSpeakerIds(sentences, characters);
+  const proseTagged = nameOnly ? new Set<string>() : taggedSpeakerIds(sentences, characters, language);
 
   /* Decide who folds, who drops, and where. Narrator is exempt from both.
      A character with zero attributed sentences in this run is dropped

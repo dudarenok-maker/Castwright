@@ -3925,7 +3925,7 @@ export async function runMainAnalyzerJob(
     /* Recover dialogue lines stage-2 left on the narrator (a prose-tagged
        speaker who is in the roster but got 0 attributed lines) BEFORE the fold
        counts lines, so the fold doesn't drop them as 0-line. */
-    const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters);
+    const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters, bookLanguage);
     if (recovered.flipped > 0) {
       const summary = [...recovered.byId.entries()].map(([id, n]) => `${id}=${n}`).join(', ');
       log(
@@ -4930,7 +4930,7 @@ async function runSubsetAnalyzerJob(
     /* Recover narrator-stranded tagged-speaker lines before the fold (see the
        main route's same block) so a re-analysed chapter's tagged speakers get
        their lines + aren't dropped as 0-line. */
-    const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters);
+    const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters, bookLanguage);
     if (recovered.flipped > 0) {
       const summary = [...recovered.byId.entries()].map(([id, n]) => `${id}=${n}`).join(', ');
       log(
