@@ -205,4 +205,30 @@ describe('dispatchAcceptedOps', () => {
     dispatchAcceptedOps(store.dispatch, [missingOp], liveForDispatch, { onBoundaryMove: spy });
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it('skips extract_dialogue when anchorEnd resolves before anchor (end <= start), WITHOUT firing onBoundaryMove', () => {
+    const store = configureStore({
+      reducer: { manuscript: manuscriptSlice.reducer },
+      preloadedState: { manuscript: start(sentences) },
+    });
+    const spy = vi.fn();
+    // sentence 4 text: 'He said. "Come on," she urged. He left.'
+    // anchor = 'she urged.' ends at offset 29 (later in the sentence)
+    // anchorEnd = '"Come on,"' ends at offset 19 (earlier in the sentence)
+    // end (19) <= start (29), so the op should be skipped
+    const badExtractionOp: ReviewOp = {
+      id: 4,
+      op: 'extract_dialogue',
+      anchor: 'she urged.',
+      anchorEnd: '"Come on,"',
+      pieceCharacterIds: ['narrator', 'maerin', 'narrator'],
+      rationale: 'invalid range',
+    };
+    dispatchAcceptedOps(store.dispatch, [badExtractionOp], liveForDispatch, { onBoundaryMove: spy });
+    // sentence 4 should be unchanged
+    const s4 = store.getState().manuscript.sentences.find((x) => x.chapterId === 3 && x.id === 4);
+    expect(s4?.text).toBe('He said. "Come on," she urged. He left.');
+    // onBoundaryMove should not have been called
+    expect(spy).not.toHaveBeenCalled();
+  });
 });
