@@ -532,6 +532,7 @@ async function runStage1Guarded(opts: {
   call: () => Promise<Stage1ChapterOutput>;
   log: (phaseId: number, message: string) => void;
   chapterId: number;
+  language?: string;
 }): Promise<Stage1ChapterOutput> {
   const retriesRaw = Number(process.env.STAGE1_ROSTER_RETRIES);
   const maxRetries = Number.isFinite(retriesRaw) ? Math.max(0, Math.trunc(retriesRaw)) : 1;
@@ -544,6 +545,7 @@ async function runStage1Guarded(opts: {
     call: opts.call,
     makeCharacter: makeRecoveredCharacter,
     maxRetries,
+    language: opts.language,
     onRetry: (attempt, verdict) =>
       opts.log(
         0,
@@ -2785,6 +2787,7 @@ export async function runMainAnalyzerJob(
             runningRoster: Array.from(rebuildRoster().values()),
             chapterId: ch.id,
             log,
+            language: bookLanguage,
             call: () =>
               runStage1ChapterChunked({
                 body: ch.body,
@@ -4610,6 +4613,7 @@ async function runSubsetAnalyzerJob(
           runningRoster: Array.from(rebuildRoster().values()),
           chapterId: ch.id,
           log,
+          language: bookLanguage,
           call: () =>
             runStage1ChapterChunked({
               body: ch.body,

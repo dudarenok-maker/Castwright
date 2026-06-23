@@ -31,6 +31,7 @@
 
 import { DIALOGUE_VERBS } from './dialogue-verbs.js';
 import { safeId } from '../util/safe-id.js';
+import { isNonEnglish } from '../tts/language.js';
 
 export interface RosterCoverageThresholds {
   /** A candidate with fewer than this many tags must be quote-adjacent to count. */
@@ -171,7 +172,12 @@ export function validateRosterCoverage(
   bodyText: string,
   rosterNames: Iterable<string>,
   thresholds?: RosterCoverageThresholds,
+  language: string = 'en',
 ): RosterCoverageVerdict {
+  // fs-41/fs-50 §4.3 — the [A-Z]+verb roster heuristic is English-only (German
+  // capitalises every noun → false positives; ES/FR invert verb/name → false
+  // negatives). Gate it off for non-English; localisation is a follow-up.
+  if (isNonEnglish(language)) return { ok: true, missingSpeakers: [], issues: [] };
   const t = resolveThresholds(thresholds);
   const roster = rosterTokenSet(rosterNames);
   const ignore = ignoredNames();
@@ -305,7 +311,10 @@ export function validateAttributionCoverage(
   roster: Iterable<{ id: string; name: string; aliases?: string[] }>,
   chapterSentences: Iterable<{ characterId: string }>,
   thresholds?: RosterCoverageThresholds,
+  language: string = 'en',
 ): AttributionCoverageVerdict {
+  // fs-41/fs-50 §4.3 — same English-only gate as validateRosterCoverage.
+  if (isNonEnglish(language)) return { ok: true, halfStateSpeakers: [], issues: [] };
   const t = resolveThresholds(thresholds);
   const tokenToId = rosterTokenToId(roster);
   const ignore = ignoredNames();
@@ -400,16 +409,18 @@ export async function runStage1WithRosterGuard<
   makeCharacter: (missing: MissingSpeaker) => C;
   maxRetries: number;
   thresholds?: RosterCoverageThresholds;
+  language?: string;
   onRetry?: (attempt: number, verdict: RosterCoverageVerdict) => void;
   onAutoAdd?: (added: MissingSpeaker[]) => void;
 }): Promise<{ result: T; verdict: RosterCoverageVerdict; attempts: number; autoAdded: MissingSpeaker[] }> {
+  const lang = opts.language ?? 'en';
   let result = await opts.call();
-  let verdict = validateRosterCoverage(opts.body, opts.rosterNamesFor(result), opts.thresholds);
+  let verdict = validateRosterCoverage(opts.body, opts.rosterNamesFor(result), opts.thresholds, lang);
   let attempts = 1;
   while (!verdict.ok && attempts <= opts.maxRetries) {
     opts.onRetry?.(attempts + 1, verdict);
     const retry = await opts.call();
-    const retryVerdict = validateRosterCoverage(opts.body, opts.rosterNamesFor(retry), opts.thresholds);
+    const retryVerdict = validateRosterCoverage(opts.body, opts.rosterNamesFor(retry), opts.thresholds, lang);
     attempts += 1;
     // Keep the take with fewer missing speakers.
     if (retryVerdict.missingSpeakers.length < verdict.missingSpeakers.length) {
