@@ -891,6 +891,26 @@ describe('Wave D — localized minor-cast fold buckets', () => {
   });
 });
 
+describe('foldMinorCast — keeps a prose-tagged Spanish minor speaker (#1028)', () => {
+  it('does not drop a 0-line speaker whose quote the prose tags (es)', () => {
+    const chars = [
+      makeChar('narrator'),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
+      makeChar('berrin', { name: 'Berrin', gender: 'male' }), // 0 attributed lines
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'], [1, 'wren'], [1, 'wren'], [2, 'wren'],
+    ]);
+    // A narrator-attributed sentence whose TEXT tags Berrin (stage-2 stranded the quote).
+    sentences.push({ id: sentences.length + 1, chapterId: 1, characterId: 'narrator', text: '«Está bien», dijo Berrin.' });
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3, language: 'es' });
+
+    expect(result.characters.find((c) => c.id === 'berrin')).toBeDefined(); // kept
+    expect(result.dropped).not.toContain('Berrin');
+  });
+});
+
 describe('Wave E — Russian descriptor phrases (safe tier)', () => {
   /* Background speakers on a Russian book are often named with a multi-word
      DESCRIPTIVE PHRASE ("женщина с двумя овчарками на поводке"), not a bare

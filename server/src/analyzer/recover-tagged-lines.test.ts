@@ -112,3 +112,23 @@ describe('recover-tagged-lines — non-English gate (seam 3d)', () => {
     expect(taggedSpeakerIds(sentences, roster, 'de').size).toBe(0);
   });
 });
+
+describe('taggedSpeakerIds — localized (es/ru, #1028)', () => {
+  const esRoster = [{ id: 'berrin', name: 'Berrin Weir' }, { id: 'brann', name: 'Brann Weir' }];
+  const ruRoster = [{ id: 'oduvan', name: 'Одуван' }, { id: 'wren', name: 'Рен' }];
+
+  it('resolves a Spanish verb-before-name tag', () => {
+    const ids = taggedSpeakerIds([s(1, 1, 'narrator', '«Está bien», dijo Berrin.')], esRoster, 'es');
+    expect([...ids]).toEqual(['berrin']);
+  });
+  it('resolves a Russian verb-before-name tag (gendered + role noun)', () => {
+    const ids = taggedSpeakerIds(
+      [s(1, 1, 'narrator', '«Оставь, — сказал мастер Одуван, не поднимая глаз».')],
+      ruRoster, 'ru',
+    );
+    expect([...ids]).toEqual(['oduvan']);
+  });
+  it('still returns ∅ for an unmapped non-English language (de stays gated)', () => {
+    expect(taggedSpeakerIds([s(1, 1, 'narrator', 'dijo Berrin.')], esRoster, 'de').size).toBe(0);
+  });
+});

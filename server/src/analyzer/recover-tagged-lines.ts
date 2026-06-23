@@ -22,6 +22,7 @@
 
 import { DIALOGUE_VERBS } from './dialogue-verbs.js';
 import { isNonEnglish } from '../tts/language.js';
+import { grammarFor, tagRegexFor } from './tag-grammar.js';
 
 interface Sentence {
   id: number;
@@ -46,8 +47,14 @@ const STOPWORDS = new Set([
   'here', 'what', 'well', 'no', 'yes', 'his', 'their', 'its',
 ]);
 
+/** Module STOPWORDS unioned with a grammar’s language stopwords. Returns the
+    shared set unchanged when there are no extras (English path stays identical). */
+function stopwordsFor(extra?: readonly string[]): Set<string> {
+  return extra && extra.length ? new Set([...STOPWORDS, ...extra]) : STOPWORDS;
+}
+
 function stripPossessive(name: string): string {
-  return name.replace(/['’]s$/i, '');
+  return name.replace(/[‘’]s$/i, '');
 }
 
 /* Build a token → characterId map for matching a bare prose name to a roster
@@ -55,10 +62,10 @@ function stripPossessive(name: string): string {
    whitespace/dot/hyphen sub-token (len ≥ 2): "Behnam Aria" → "behnam aria",
    "behnam", "aria". A token that maps to MORE THAN ONE id is marked ambiguous
    (value null) so we never guess between two characters who share a name. */
-function buildNameToId(roster: RosterChar[]): Map<string, string | null> {
+function buildNameToId(roster: RosterChar[], stop: Set<string> = STOPWORDS): Map<string, string | null> {
   const map = new Map<string, string | null>();
   const add = (tok: string, id: string) => {
-    if (!tok || STOPWORDS.has(tok)) return;
+    if (!tok || stop.has(tok)) return;
     if (!map.has(tok)) map.set(tok, id);
     else if (map.get(tok) !== id) map.set(tok, null); // ambiguous
   };
@@ -76,9 +83,9 @@ function buildNameToId(roster: RosterChar[]): Map<string, string | null> {
 
 /** Resolve a captured prose name to a single roster id, or null if unknown /
     ambiguous / a stopword. */
-function resolveNameToId(rawName: string, nameToId: Map<string, string | null>): string | null {
+function resolveNameToId(rawName: string, nameToId: Map<string, string | null>, stop: Set<string> = STOPWORDS): string | null {
   const key = stripPossessive(rawName).toLowerCase();
-  if (STOPWORDS.has(key)) return null;
+  if (stop.has(key)) return null;
   return nameToId.get(key) ?? null;
 }
 
@@ -94,14 +101,16 @@ export function taggedSpeakerIds(
   roster: RosterChar[],
   language: string = 'en',
 ): Set<string> {
-  if (isNonEnglish(language)) return new Set<string>();
-  const nameToId = buildNameToId(roster);
-  const tagRe = makeTagRegex();
+  const g = grammarFor(language);
+  if (!g) return new Set<string>(); // unmapped language → stay gated
+  const stop = stopwordsFor(g.stopwords);
+  const nameToId = buildNameToId(roster, stop);
+  const tagRe = tagRegexFor(g);
   const ids = new Set<string>();
   for (const s of sentences) {
     const m = tagRe.exec(s.text);
     if (!m) continue;
-    const id = resolveNameToId(m[1], nameToId);
+    const id = resolveNameToId(m[1], nameToId, stop);
     if (id) ids.add(id);
   }
   return ids;
