@@ -35,6 +35,9 @@ import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import { DetectEmotionsButton } from '../components/detect-emotions-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
+import { ScriptReviewDiff } from '../components/script-review-diff';
+import { api } from '../lib/api';
+import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -106,6 +109,11 @@ export function ManuscriptView({
   onAddFromSeriesRoster,
 }: Props) {
   const dispatch = useAppDispatch();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
   const sentences: Sentence[] = sentencesFromStore ?? initialSentences;
@@ -610,11 +618,37 @@ export function ManuscriptView({
     />
   );
 
+  /* fs-58 — per-chapter LLM script-review trigger.
+     RPD note: each chapter call uses one Gemini RPD slot. The per-chapter
+     button is the default (not a whole-book sweep) to stay within free-tier
+     limits. Operators can override the model via the `model` opt. */
+  async function handleReviewScript() {
+    if (!bookId || reviewLoading || currentChapterId == null) return;
+    const allOps: ReviewOpWithChapter[] = [];
+    setReviewLoading(true);
+    try {
+      await api.reviewScript(bookId, {
+        chapterId: currentChapterId,
+        onOps: ({ chapterId: chId, ops }) => {
+          for (const op of ops) allOps.push({ ...op, chapterId: chId });
+        },
+      });
+      dispatch(scriptReviewActions.setReview({ bookId, ops: allOps, unappliable: [] }));
+    } catch {
+      // error surfaced via notifications elsewhere
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
   return (
     <div
       className="max-w-[1500px] mx-auto px-3 md:px-6 py-6 md:py-8 lg:grid lg:grid-cols-[280px_1fr_360px] lg:gap-6"
       ref={containerRef}
     >
+      {/* fs-58 — ScriptReviewDiff modal: fixed-overlay, renders null when no active review */}
+      {hasActiveReview && bookId && <ScriptReviewDiff bookId={bookId} />}
+
       {/* Desktop-only sticky sidebar (chapters + detected).
           Sidebar shell — flex column with no outer scroll. Each card owns
           its own internal scroll region (min-h-0 + overflow-y-auto on the
@@ -666,6 +700,14 @@ export function ManuscriptView({
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
+              {/* fs-58 — per-chapter LLM script review trigger */}
+              <button
+                onClick={() => void handleReviewScript()}
+                disabled={reviewLoading || !bookId}
+                className="shrink-0 inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
+              >
+                {reviewLoading ? 'Reviewing…' : 'Review Script'}
+              </button>
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}

@@ -2855,9 +2855,10 @@ async function realReviewScript(
 
 async function mockReviewScript(
   _bookId: string,
-  { onOps }: ReviewScriptOpts = {},
+  { onOps, onPhase }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
+  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 1 });
   onOps?.({
     chapterId: 1,
     ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
