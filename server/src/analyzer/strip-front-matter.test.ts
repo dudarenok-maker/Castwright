@@ -56,4 +56,15 @@ describe('stripFrontMatterBoilerplate', () => {
     // Without author/title we cannot identify the byline; only global boilerplate would be removed (none here).
     expect(stripFrontMatterBoilerplate(body)).toBe(body);
   });
+
+  it('strips es/fr/de copyright-notice boilerplate lines', () => {
+    const body =
+      'Todos los derechos reservados.\nTous droits réservés.\nAlle Rechte vorbehalten.\n\n' +
+      'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria.';
+    const out = stripFrontMatterBoilerplate(body);
+    expect(out).not.toMatch(/derechos reservados/i);
+    expect(out).not.toMatch(/droits réservés/i);
+    expect(out).not.toMatch(/Rechte vorbehalten/i);
+    expect(out).toMatch(/El horno se había enfriado/); // narrative kept
+  });
 });
