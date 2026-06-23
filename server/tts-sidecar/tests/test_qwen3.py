@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import types
 from pathlib import Path
 from typing import Any
@@ -461,6 +462,73 @@ def test_idle_watchdog_noop_when_no_design_resident(fake_qwen_runtime) -> None:
     engine = fake_qwen_runtime["engine"]
     assert engine._design is None
     assert engine.maybe_free_idle_design(0.0) is False  # nothing to free
+
+
+# ── transient 1.7B-Base lifecycle: keep warm across mints, free on idle ───
+# Regression for issue #1024: mint_variant used to unload_base17() every mint,
+# so a full-library re-mint reloaded the ~3.4 GB 1.7B-Base ~60× and fragmented
+# the Windows CUDA allocator's reserved pool → OOM mid-run (empty_cache, which
+# already ran per mint, frees blocks but can't compact a fragmented pool). The
+# 1.7B-Base now stays warm across back-to-back mints and is freed by an idle
+# watchdog (mirrors the VoiceDesign lifecycle above).
+
+def test_mint_variant_keeps_base17_warm_across_mints(fake_qwen_runtime, monkeypatch) -> None:
+    """Two consecutive mints reuse the SAME resident 1.7B-Base — it is not
+    nulled between mints (the issue #1024 fragmentation fix)."""
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("v1", "A warm narrator.", "English", None, None)
+    monkeypatch.setattr(
+        eng, "_icl_instruct_synth",
+        lambda items, text, instr, lang: (np.zeros(6000, "float32"), 24000),
+    )
+    import types as _types
+    monkeypatch.setattr(
+        eng, "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    warm = type(eng._base)("1.7b")
+    eng._base17 = warm
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: None)  # already warm
+    eng.mint_variant("v1", "v1__angry", "Angrily.", "English", None, None)
+    eng.mint_variant("v1", "v1__sad", "Sadly.", "English", None, None)
+    assert eng._base17 is warm         # same object across both mints — no reload churn
+    assert eng._base17_in_flight == 0  # in-flight guard balanced after both mints
+
+
+def test_idle_watchdog_frees_idle_base17(fake_qwen_runtime) -> None:
+    """maybe_free_idle_base17 keeps the model warm within the idle window and
+    frees it (reclaiming ~3.4 GB) once it idles past the TTL — mirrors the
+    VoiceDesign idle watchdog."""
+    eng = fake_qwen_runtime["engine"]
+    eng._base17 = object()   # watchdog only inspects identity/flags, never calls the model
+    eng._base17_in_flight = 0
+    eng._base17_last_used = time.monotonic()
+    assert eng.maybe_free_idle_base17(600.0) is False   # still within the idle window → warm
+    assert eng._base17 is not None
+    eng._base17_last_used -= 1000.0                      # simulate the TTL elapsing
+    assert eng.maybe_free_idle_base17(120.0) is True
+    assert eng._base17 is None                           # transient 1.7B-Base freed
+
+
+def test_idle_watchdog_does_not_free_base17_while_in_flight(fake_qwen_runtime) -> None:
+    """maybe_free_idle_base17 must refuse to free the 1.7B-Base while a mint or
+    1.7B synth is in flight (`_base17_in_flight` > 0), even past the TTL — the
+    same race the VoiceDesign guard prevents."""
+    eng = fake_qwen_runtime["engine"]
+    eng._base17 = object()           # watchdog only inspects identity/flags, never calls the model
+    eng._base17_last_used = 0.0      # ancient → past any ttl
+    eng._base17_in_flight = 1
+    assert eng.maybe_free_idle_base17(0.0) is False
+    assert eng._base17 is not None   # NOT freed mid-forward
+    eng._base17_in_flight = 0
+    assert eng.maybe_free_idle_base17(0.0) is True
+    assert eng._base17 is None       # freed once idle AND not in flight
+
+
+def test_idle_watchdog_noop_when_no_base17_resident(fake_qwen_runtime) -> None:
+    eng = fake_qwen_runtime["engine"]
+    assert eng._base17 is None
+    assert eng.maybe_free_idle_base17(0.0) is False  # nothing to free
 
 
 def test_synthesize_frees_resident_design_model(fake_qwen_runtime) -> None:
@@ -972,10 +1040,11 @@ def test_qwen_tts_pinned_for_raw_bypass() -> None:
 
 def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypatch) -> None:
     """mint_variant() chains: load-1.7B → decode ref_code → ICL re-derive →
-    instruct-synth → unload-1.7B → 0.6B distil → write .pt + .json.
+    instruct-synth → 0.6B distil → write .pt + .json, and KEEPS the 1.7B-Base
+    warm afterwards (issue #1024: per-mint unload/reload reloaded the ~3.4 GB
+    1.7B-Base ~60× across a full-library re-mint and fragmented the Windows CUDA
+    allocator → OOM mid-run; it now stays warm and is freed by the idle watchdog).
 
-    The call-sequence assertion (`instruct_synth` BEFORE `unload17`) is the
-    core invariant: the 1.7B work must complete before the model is freed.
     The JSON manifest must carry `anchoredTo`, `mintMethod`, and `voiceUuid`
     so the Node side can distinguish anchored variants from independent designs.
     """
@@ -985,7 +1054,6 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     eng.design_voice("v1", "A warm narrator.", "English", None, None)
     calls: list[str] = []
     monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: calls.append("load17"))
-    monkeypatch.setattr(eng, "unload_base17", lambda: calls.append("unload17"))
     monkeypatch.setattr(
         eng,
         "_icl_instruct_synth",
@@ -1007,7 +1075,9 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     # base17 wrapper needed for decode + ICL re-derive (has speech_tokenizer via Task 2's fake)
     eng._base17 = type(eng._base)("1.7b")
     eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, "uuid-1")
-    assert calls.index("instruct_synth") < calls.index("unload17")  # 1.7B work before unload
+    assert "instruct_synth" in calls   # the 1.7B work ran …
+    assert eng._base17 is not None     # … and the model stays WARM (no per-mint unload, #1024)
+    assert eng._base17_in_flight == 0  # the in-flight guard balanced (entry +1 / finally −1)
     import json as _json
     meta = _json.load(open(os.path.join(vdir, "v1__angry.json"), encoding="utf-8"))
     assert meta["anchoredTo"] == "v1" and meta["mintMethod"] == "anchored-icl-instruct"
@@ -1036,7 +1106,14 @@ def test_minted_variant_holds_base_identity() -> None:
     var, _, _ = eng._load_voice_prompt("rv1__angry")
     bw, bsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=base)
     vw, vsr = eng._base.generate_voice_clone(text=["Stop right there."], language=[lang], voice_clone_prompt=var)
-    assert eng.speaker_distance(bw[0], bsr, vw[0], vsr) < 0.30  # threshold calibrated in Step 6
+    try:
+        assert eng.speaker_distance(bw[0], bsr, vw[0], vsr) < 0.30  # threshold calibrated in Step 6
+    finally:
+        # mint_variant now keeps the 1.7B-Base WARM (issue #1024) — no per-mint
+        # unload, and no idle watchdog runs under pytest. Free it explicitly so
+        # this real-weights test leaves the GPU clean for the next one (restores
+        # the pre-#1024 cross-test VRAM hygiene the old per-mint unload gave).
+        eng.unload_base17()
 
 
 # ── Task 5 (fs-55): POST /qwen/mint-variant HTTP surface ─────────────────

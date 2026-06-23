@@ -6,7 +6,7 @@ regression test can import + call `configure_warning_filters()` without paying
 the cost of importing all of `main`. `main` calls it once at startup, before
 `app = FastAPI()`.
 
-Three noise sources are silenced — none of them is actionable:
+Four noise sources are silenced — none of them is actionable:
 
 1. **HF Hub symlink warning** — on Windows without Developer Mode, the Hugging
    Face Hub cache can't create symlinks and prints a multi-line warning on every
@@ -26,6 +26,13 @@ Three noise sources are silenced — none of them is actionable:
    that isn't actually required. Filtered at the narrowest scope (message regex)
    so other transformers warnings still surface. Deployers who install the FA2
    wheel silence it the upstream way regardless.
+
+4. **torch `expandable_segments not supported on this platform`** — issue #1024
+   sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to curb CUDA allocator
+   fragmentation; a Windows torch build without support parses it, can't honour
+   it, and emits this benign UserWarning at the first CUDA op (it keeps the
+   default allocator). The flag is forward-looking — the real Windows fix is the
+   warm-1.7B-Base idle watchdog. Filtered at the narrowest scope.
 """
 from __future__ import annotations
 
@@ -53,5 +60,15 @@ def configure_warning_filters() -> None:
 
     # (3) transformers "flash-attn is not installed" banner — narrowest scope.
     warnings.filterwarnings("ignore", message=r".*flash[- ]?attn(ention)? is not installed.*")
+
+    # (4) torch "expandable_segments not supported on this platform" — issue #1024
+    # sets PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to curb CUDA allocator
+    # fragmentation from repeated heavy-model load/free. On a Windows torch build
+    # without support, torch parses it, can't honour it, and emits this benign
+    # UserWarning at the first CUDA op (it just keeps the default allocator). The
+    # flag is forward-looking (helps on Linux / a future torch with Windows
+    # support); silence the nag at the narrowest scope. The real Windows fix is the
+    # warm-1.7B-Base idle watchdog, not this flag.
+    warnings.filterwarnings("ignore", message=r".*expandable_segments not supported.*")
 
     WARNING_FILTERS_CONFIGURED = True

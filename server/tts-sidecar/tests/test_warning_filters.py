@@ -48,6 +48,10 @@ def test_registers_sox_and_flash_attn_filters() -> None:
     joined = " | ".join(patterns)
     assert "SoX could not be found" in joined
     assert "flash" in joined and "is not installed" in joined
+    # issue #1024: the PYTORCH_CUDA_ALLOC_CONF=expandable_segments flag we set in
+    # main.py is a no-op on a Windows torch build without support — torch emits a
+    # benign "expandable_segments not supported on this platform" UserWarning.
+    assert "expandable_segments not supported" in joined
 
 
 def test_actually_suppresses_the_messages() -> None:
@@ -59,6 +63,7 @@ def test_actually_suppresses_the_messages() -> None:
         warning_filters.configure_warning_filters()
         warnings.warn("SoX could not be found!", UserWarning)
         warnings.warn("flash-attn is not installed. Using SDPA.", UserWarning)
+        warnings.warn("expandable_segments not supported on this platform", UserWarning)
     assert caught == [], f"expected suppression, got: {[str(w.message) for w in caught]}"
 
 

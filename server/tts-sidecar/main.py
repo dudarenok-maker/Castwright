@@ -46,6 +46,16 @@ from warning_filters import configure_warning_filters
 # warning_filters.py for the per-warning rationale.
 configure_warning_filters()
 
+# issue #1024 — defeat CUDA caching-allocator fragmentation from repeated heavy
+# model load/free (e.g. a full-library variant re-mint that loads/frees the
+# 1.7B-Base many times). `expandable_segments` lets the allocator grow/shrink a
+# segment instead of fragmenting the reserved pool, so `empty_cache()` can
+# actually return memory. Must be set BEFORE torch initialises CUDA (torch reads
+# it at the first CUDA call, long after this import). `setdefault` so an operator
+# override wins. On a platform/torch build without expandable_segments support
+# torch ignores it with a warning — harmless. Validate the effect on the 8 GB box.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 # Exposed as module constants so the logging-format regression test can
 # assert on the intended format directly, instead of fishing the formatter
 # off `logging.getLogger().handlers[0]` — pytest's caplog plugin installs
@@ -1286,6 +1296,15 @@ class QwenEngine(Engine):
         # _base_load_lock above; separate lock so a 0.6B-Base load and a
         # 1.7B-Base load can proceed in parallel if both are needed at once.
         self._base17_load_lock = threading.Lock()
+        # Idle-lifecycle bookkeeping for the resident 1.7B-Base (issue #1024).
+        # mint_variant() + the 1.7B synth/batch paths keep it WARM across
+        # back-to-back calls (the old per-mint unload/reload fragmented the CUDA
+        # allocator and OOM'd a full-library re-mint); the idle watchdog frees it
+        # once QWEN_BASE17_IDLE_TTL elapses since the last use. Mirrors the
+        # VoiceDesign `_design_last_used` / `_design_in_flight` pair: the
+        # in-flight guard stops the watchdog freeing it mid-forward.
+        self._base17_last_used: float = 0.0
+        self._base17_in_flight: int = 0
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -1462,6 +1481,49 @@ class QwenEngine(Engine):
         with self._synth_lock:
             self._base17 = None
         _reclaim_host_and_vram()
+
+    @contextmanager
+    def _base17_activity(self):
+        """Bracket a 1.7B-Base forward (mint OR 1.7B synth/batch): refresh the
+        idle timestamp and hold the in-flight guard so the idle watchdog can't
+        free the model mid-forward (issue #1024). Mirrors design_voice's manual
+        `_design_in_flight` bracketing, factored because three sites drive the
+        1.7B-Base (mint_variant + synthesize + synthesize_batch). The int
+        inc/dec is GIL-atomic — same rationale as `_design_in_flight`."""
+        self._base17_last_used = time.monotonic()
+        self._base17_in_flight += 1
+        try:
+            yield
+        finally:
+            self._base17_last_used = time.monotonic()
+            self._base17_in_flight -= 1
+
+    def maybe_free_idle_base17(self, ttl_seconds: float) -> bool:
+        """Free the resident 1.7B-Base model once it's idled past `ttl_seconds`
+        since the last mint / 1.7B synth. Returns True if it freed. Mirrors
+        `maybe_free_idle_design`: rapid back-to-back mints stay warm (no per-mint
+        reload — the issue #1024 fragmentation fix), but a quiet pause reclaims
+        ~3.4 GB. Cheap no-op when nothing is resident.
+
+        Race-guarded exactly like `maybe_free_idle_design`: the idle test is
+        re-validated UNDER `_synth_lock` and skipped while a forward is in flight
+        (`_base17_in_flight`), so the watchdog can never null `_base17` out from
+        under an active mint or 1.7B generate. Nulls inline (calling
+        `unload_base17()` would re-acquire the non-reentrant `_synth_lock` →
+        deadlock); the gc/empty_cache reclaim runs after the lock is released."""
+        if self._base17 is None or self._base17_in_flight > 0:
+            return False
+        if time.monotonic() - self._base17_last_used <= ttl_seconds:
+            return False
+        with self._synth_lock:
+            if self._base17 is None or self._base17_in_flight > 0:
+                return False
+            if time.monotonic() - self._base17_last_used <= ttl_seconds:
+                return False
+            self._base17 = None
+        _reclaim_host_and_vram()
+        log.info("Qwen 1.7B-Base unloaded (idle watchdog).")
+        return True
 
     def _icl_instruct_synth(
         self,
@@ -1927,7 +1989,17 @@ class QwenEngine(Engine):
 
         # --- 1.7B phase: decode ref_code from base identity → ICL re-derive ---
         # Evict Kokoro before the 1.7B load (mirrors design_voice lines ~1704-1708).
-        with _VD_KOKORO.design():
+        # Keep the 1.7B-Base WARM across back-to-back mints (issue #1024): the old
+        # per-mint `unload_base17()` here reloaded the ~3.4 GB model on EVERY mint,
+        # which fragmented the Windows CUDA allocator's reserved pool and OOM'd a
+        # full-library re-mint after ~20-60 mints (empty_cache, which the unload
+        # already ran, frees blocks but can't compact a fragmented pool).
+        # `_base17_activity()` refreshes the idle timestamp + guards the in-flight
+        # window; the idle watchdog frees the model once a mint batch goes quiet
+        # (QWEN_BASE17_IDLE_TTL). The 0.6B distil phase below no longer races a
+        # resident 1.7B for VRAM only because the watchdog reclaims it on idle —
+        # during a mint the two are co-resident (validated on the 8 GB box).
+        with self._base17_activity(), _VD_KOKORO.design():
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
@@ -1944,7 +2016,6 @@ class QwenEngine(Engine):
                 )
                 icl = icl if isinstance(icl, list) else [icl]
                 emo_wav, emo_sr = self._icl_instruct_synth(icl, ref_text, emotion_instruct, lang)
-        self.unload_base17()  # one-heavy-model invariant
 
         # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
         with self._synth_lock:
@@ -2102,19 +2173,22 @@ class QwenEngine(Engine):
         if model == "1.7b":
             # ── 1.7B-Base path (fs-55 Quality tier) ──────────────────────────
             # Ensure the 1.7B-Base model is resident before deriving the prompt.
-            self._ensure_base17_loaded()
-            load_start = time.perf_counter()
-            prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
-            load_ms = (time.perf_counter() - load_start) * 1000.0
-
-            gen_start = time.perf_counter()
-            with self._synth_lock:
-                # Re-ensure under the lock (same rationale as the 0.6B path).
+            # `_base17_activity()` keeps it warm across the book's batches and
+            # stops the idle watchdog freeing it mid-generate (issue #1024).
+            with self._base17_activity():
                 self._ensure_base17_loaded()
-                wavs, sr = self._base17.generate_voice_clone(
-                    text=[text], language=[lang], voice_clone_prompt=prompt
-                )
-            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+                load_start = time.perf_counter()
+                prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
+                load_ms = (time.perf_counter() - load_start) * 1000.0
+
+                gen_start = time.perf_counter()
+                with self._synth_lock:
+                    # Re-ensure under the lock (same rationale as the 0.6B path).
+                    self._ensure_base17_loaded()
+                    wavs, sr = self._base17.generate_voice_clone(
+                        text=[text], language=[lang], voice_clone_prompt=prompt
+                    )
+                gen_ms = (time.perf_counter() - gen_start) * 1000.0
 
             audio = wavs[0]
             audio_ms = _audio_duration_ms(audio, int(sr))
@@ -2196,33 +2270,36 @@ class QwenEngine(Engine):
             # Ensure the 1.7B-Base model is resident before deriving any prompt.
             # Prompt derivation must happen BEFORE the _synth_lock so we don't
             # hold the synth lock during potentially slow prompt loading.
-            self._ensure_base17_loaded()
-            for i, item in enumerate(items):
-                voice = item.get("voice")
-                text = item.get("text")
-                if not isinstance(voice, str) or not voice:
-                    raise RuntimeError(f"batch item {i}: `voice` is required.")
-                if not isinstance(text, str) or not text.strip():
-                    raise RuntimeError(f"batch item {i}: `text` is required.")
-                try:
-                    prompt, lang, _cache_hit = self._load_voice_prompt_17b(voice)
-                except RuntimeError as e:
-                    raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
-                texts.append(text)
-                langs.append(lang)
-                # Flatten per-voice prompt-item list (same rationale as the 0.6B
-                # path below; see comment there for the list-of-lists danger).
-                prompts.extend(prompt if isinstance(prompt, list) else [prompt])
-            load_ms = (time.perf_counter() - load_start) * 1000.0
-
-            gen_start = time.perf_counter()
-            with self._synth_lock:
-                # Re-ensure under the lock (same rationale as synthesize()).
+            # `_base17_activity()` keeps it warm across the book's batches and
+            # stops the idle watchdog freeing it mid-generate (issue #1024).
+            with self._base17_activity():
                 self._ensure_base17_loaded()
-                wavs, sr = self._base17.generate_voice_clone(
-                    text=texts, language=langs, voice_clone_prompt=prompts
-                )
-            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+                for i, item in enumerate(items):
+                    voice = item.get("voice")
+                    text = item.get("text")
+                    if not isinstance(voice, str) or not voice:
+                        raise RuntimeError(f"batch item {i}: `voice` is required.")
+                    if not isinstance(text, str) or not text.strip():
+                        raise RuntimeError(f"batch item {i}: `text` is required.")
+                    try:
+                        prompt, lang, _cache_hit = self._load_voice_prompt_17b(voice)
+                    except RuntimeError as e:
+                        raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+                    texts.append(text)
+                    langs.append(lang)
+                    # Flatten per-voice prompt-item list (same rationale as the 0.6B
+                    # path below; see comment there for the list-of-lists danger).
+                    prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+                load_ms = (time.perf_counter() - load_start) * 1000.0
+
+                gen_start = time.perf_counter()
+                with self._synth_lock:
+                    # Re-ensure under the lock (same rationale as synthesize()).
+                    self._ensure_base17_loaded()
+                    wavs, sr = self._base17.generate_voice_clone(
+                        text=texts, language=langs, voice_clone_prompt=prompts
+                    )
+                gen_ms = (time.perf_counter() - gen_start) * 1000.0
         else:
             # ── 0.6B-Base batch path (default) ───────────────────────────────
             for i, item in enumerate(items):
@@ -2564,14 +2641,27 @@ def _design_idle_ttl() -> float:
     return ttl if ttl >= 5.0 else _DESIGN_IDLE_TTL_DEFAULT
 
 
+def _base17_idle_ttl() -> float:
+    """Resolve QWEN_BASE17_IDLE_TTL (seconds) with a safe default + 5 s floor —
+    mirrors `_design_idle_ttl`. Keeps a full-library re-mint's back-to-back mints
+    warm while a quiet pause reclaims the ~3.4 GB 1.7B-Base (issue #1024)."""
+    try:
+        ttl = float(os.environ.get("QWEN_BASE17_IDLE_TTL", _DESIGN_IDLE_TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return _DESIGN_IDLE_TTL_DEFAULT
+    return ttl if ttl >= 5.0 else _DESIGN_IDLE_TTL_DEFAULT
+
+
 async def _qwen_design_idle_watchdog() -> None:
-    """Periodically free each Qwen engine's transient VoiceDesign model once it
-    has idled past the TTL — reclaiming ~4–5 GB after a cast-review session goes
-    quiet, while leaving rapid back-to-back designs warm (the user's stated
-    preference). The free runs in a worker thread (unload_design waits on the
-    engine's threading `_synth_lock`) so the event loop and /health stay live."""
+    """Periodically free each Qwen engine's transient heavy models once they have
+    idled past their TTL — the VoiceDesign 1.7B (~4–5 GB, after a cast-review
+    session goes quiet) and the 1.7B-Base (~3.4 GB, after a mint batch / 1.7B
+    render goes quiet — issue #1024). Rapid back-to-back designs/mints stay warm
+    (no per-call reload). Each free runs in a worker thread (the unload waits on
+    the engine's threading `_synth_lock`) so the event loop and /health stay live."""
     ttl = _design_idle_ttl()
-    interval = min(30.0, max(5.0, ttl / 4))
+    base17_ttl = _base17_idle_ttl()
+    interval = min(30.0, max(5.0, min(ttl, base17_ttl) / 4))
     while True:
         try:
             await asyncio.sleep(interval)
@@ -2580,18 +2670,25 @@ async def _qwen_design_idle_watchdog() -> None:
                     freed = await asyncio.to_thread(engine.maybe_free_idle_design, ttl)
                     if freed:
                         log.info("Qwen VoiceDesign freed after >%.0fs idle (watchdog).", ttl)
+                    freed17 = await asyncio.to_thread(engine.maybe_free_idle_base17, base17_ttl)
+                    if freed17:
+                        log.info("Qwen 1.7B-Base freed after >%.0fs idle (watchdog).", base17_ttl)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # a watchdog must never die on a transient error
-            log.warning("Qwen design idle watchdog tick failed (%s).", e)
+            log.warning("Qwen idle watchdog tick failed (%s).", e)
 
 
 @app.on_event("startup")
 async def _start_design_idle_watchdog() -> None:
-    """Launch the Qwen VoiceDesign idle watchdog (see _qwen_design_idle_watchdog)."""
+    """Launch the Qwen idle watchdog (frees VoiceDesign + 1.7B-Base on idle;
+    see _qwen_design_idle_watchdog)."""
     global _design_idle_task
     _design_idle_task = asyncio.create_task(_qwen_design_idle_watchdog())
-    log.info("Qwen VoiceDesign idle watchdog started (ttl=%.0fs).", _design_idle_ttl())
+    log.info(
+        "Qwen idle watchdog started (design ttl=%.0fs, 1.7B-Base ttl=%.0fs).",
+        _design_idle_ttl(), _base17_idle_ttl(),
+    )
 
 
 @app.on_event("shutdown")
