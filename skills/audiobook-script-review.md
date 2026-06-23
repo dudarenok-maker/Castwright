@@ -28,23 +28,23 @@ Return ONLY a JSON object `{ "ops": [...] }`. Each op has:
 - `rationale` — one-line explanation (required for every op)
 - `confidence` — optional float 0–1
 
-### M1 — `strip_tag`
+### `strip_tag`
 
 Remove a speech-attribution tag that was incorrectly left in the text (e.g. `"he
 said"`, `"she whispered softly"`). Supply `anchor` (verbatim substring to locate
 the sentence) and `newText` (the sentence with the tag stripped).
 
-**M5 — Vocalization protection:** NEVER strip intentional non-verbal vocalizations
+**Vocalization protection:** NEVER strip intentional non-verbal vocalizations
 such as "Ah!", "Haah…", "Mmm" — these are spoken content, not attribution tags.
 Only strip true speech-attribution tags ("he said", "she whispered").
 
-### M2 — `split`
+### `split`
 
 Split a sentence that spans two speakers. Supply:
 - `anchor` — copied verbatim from the sentence (enough to locate it uniquely)
 - `pieceCharacterIds` — array of character ids, one per piece after the split
 
-### M3 — `extract_dialogue`
+### `extract_dialogue`
 
 A narration sentence contains embedded dialogue that should become its own
 sentence attributed to the speaker. Supply:
@@ -52,12 +52,12 @@ sentence attributed to the speaker. Supply:
 - `anchorEnd` — end of the dialogue span (verbatim)
 - `pieceCharacterIds` — exactly 3 elements: [narrator_id, speaker_id, narrator_id]
 
-### M4 — `merge`
+### `merge`
 
 Merge two or more adjacent same-speaker narrator sentences into one. Supply:
 - `mergeIds` — array of sentence ids to merge (must be adjacent, same speaker)
 
-### M5 — `fix_emotion`
+### `fix_emotion`
 
 Override the delivery emotion only when the current emotion is clearly wrong for
 the sentence. Supply:
