@@ -433,7 +433,14 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
   }
 
   /* ── Start path: register the job + run the loop detached. */
-  const language = sidecarLanguageName(bookStateLanguage(located.state));
+  let language: string;
+  try {
+    language = sidecarLanguageName(bookStateLanguage(located.state));
+  } catch (e) {
+    send({ type: 'error', code: 'unsupported_language', message: (e as Error).message });
+    clearInterval(keepAlive);
+    return res.end();
+  }
   const isStandalone = located.state?.isStandalone === true;
   const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
   const seriesFilter = seriesInfo ?? undefined;

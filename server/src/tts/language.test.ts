@@ -1,18 +1,15 @@
 /* language — the BCP-47 ↔ sidecar language-name bridge (fs-2). Pins the
-   normalisation, the en/ru mapping, the unknown-code fallback-with-warn, and
-   the isNonEnglish predicate that gates the never-cross-language enforcement. */
+   normalisation, the en/ru mapping, the fail-loud throw for unsupported codes
+   (seam 5a), and the isNonEnglish predicate that gates the never-cross-language
+   enforcement. */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_LANGUAGE,
   normaliseBookLanguage,
   sidecarLanguageName,
   isNonEnglish,
 } from './language.js';
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe('normaliseBookLanguage', () => {
   it('defaults missing/empty/whitespace to en', () => {
@@ -39,15 +36,25 @@ describe('sidecarLanguageName', () => {
     expect(sidecarLanguageName('ru-RU')).toBe('Russian');
   });
 
-  it('treats missing/empty as English', () => {
+  it('treats missing/empty as English (normalises to "en" which resolves)', () => {
     expect(sidecarLanguageName('')).toBe('English');
   });
 
-  it('falls back to English with a warning for an unknown code', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(sidecarLanguageName('xy')).toBe('English');
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0]?.[0]).toContain('xy');
+  /* seam 5a — fail loud: an unsupported language code must THROW, not silently
+     return 'English' and ship cross-language garbage through the voice pipeline. */
+  it('throws for an unknown BCP-47 code', () => {
+    expect(() => sidecarLanguageName('xy')).toThrow(/unsupported language/);
+    expect(() => sidecarLanguageName('xy')).toThrow(/xy/);
+  });
+
+  it('throws for a language not in the registry (e.g. Japanese)', () => {
+    expect(() => sidecarLanguageName('ja')).toThrow(/unsupported language/);
+    expect(() => sidecarLanguageName('ja-JP')).toThrow(/unsupported language/);
+  });
+
+  it('throw message includes the bcp47 tag and the primary subtag', () => {
+    expect(() => sidecarLanguageName('zz-ZZ')).toThrow(/zz-ZZ/);
+    expect(() => sidecarLanguageName('zz-ZZ')).toThrow(/"zz"/);
   });
 
   it('sources the language word from the registry entry', async () => {

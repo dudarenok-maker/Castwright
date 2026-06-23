@@ -23,19 +23,20 @@ export function normaliseBookLanguage(raw: string | undefined | null): string {
   return primary || DEFAULT_LANGUAGE;
 }
 
-/** The sidecar's language word for a BCP-47 book language. Unknown codes fall
-    back to `'English'` with a warning — a stray code must never throw and break
-    generation, but it also must never silently mis-route, so we log it.
-    (Seam 5 replaces this fallback with a throw gated on the registry's
-    `supported` set; seam 1 preserves the shipped behaviour.) */
+/** The sidecar's language word for a BCP-47 book language.
+    Throws for any language code not present in the registry — an unsupported
+    language must never silently default to English and ship cross-language garbage.
+    The confirm-screen support gate blocks unsupported languages before they reach
+    the voice pipeline, so a throw here is a fail-loud safety net for the cases
+    where that gate was bypassed or the registry is out of sync. */
 export function sidecarLanguageName(bcp47: string): string {
   const primary = normaliseBookLanguage(bcp47);
   const entry = getLanguageEntry(primary);
   if (!entry) {
-    console.warn(
-      `[language] no sidecar language name for "${bcp47}" (primary "${primary}") — falling back to English`,
+    throw new Error(
+      `[language] unsupported language reached the voice pipeline: bcp47="${bcp47}" primary="${primary}". ` +
+        `Add it to the language registry or block it at the confirm-screen support gate.`,
     );
-    return 'English';
   }
   return entry.sidecarName;
 }
