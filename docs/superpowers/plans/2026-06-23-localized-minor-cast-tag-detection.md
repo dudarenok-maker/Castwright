@@ -80,8 +80,10 @@ describe('tagRegexFor — Spanish (verb-name)', () => {
   it('skips a lowercase role noun between verb and name', () => {
     expect(re().exec('—dijo el viejo Berrin.')?.[1]).toBe('Berrin');
   });
-  it('does NOT match a polysemous verb mid-narration (no bare-whitespace anchor)', () => {
-    expect(re().exec('Coalfall llamó a la puerta.')).toBeNull();
+  it('does NOT match a real dialogue verb mid-narration (no bare-whitespace anchor)', () => {
+    // `dijo` IS in ES_VERBS; here it is reported speech with no quote beat before it,
+    // so the anchored pattern must not fire (this is the spec-C regression).
+    expect(re().exec('Coalfall dijo que sí.')).toBeNull();
   });
   it('does NOT capture a pronoun', () => {
     expect(re().exec('—dijo él.')).toBeNull();
@@ -244,7 +246,7 @@ git commit -m "feat(server): per-language dialogue-tag grammar table (es/ru, #10
 This is the bug fix. It is segmentation-agnostic and safe to merge on green tests.
 
 **Files:**
-- Modify: `server/src/analyzer/recover-tagged-lines.ts` (`buildNameToId`, `resolveNameToId`, `taggedSpeakerIds`; add `stopwordsFor`; remove the `isNonEnglish` import once Task 4 also lands — for now it is still used by `recoverTaggedNarratorLines`, so leave it)
+- Modify: `server/src/analyzer/recover-tagged-lines.ts` (`buildNameToId`, `resolveNameToId`, `taggedSpeakerIds`; add `stopwordsFor`). **Leave `recoverTaggedNarratorLines`, `makeTagRegex`, and the `isNonEnglish` import untouched in this task** — they are rewritten in Task 4. This keeps Task 2 free of unused imports (the repo sets `noUnusedLocals: true`, so an import added before its first use fails `tsc`).
 - Test: `server/src/analyzer/recover-tagged-lines.test.ts` (extend), `server/src/analyzer/fold-minor-cast.test.ts` (extend)
 
 **Interfaces:**
@@ -306,13 +308,13 @@ Expected: FAIL — `taggedSpeakerIds(..., 'es')` returns ∅ today (gated), so t
 
 - [ ] **Step 3: Implement the localization** — in `server/src/analyzer/recover-tagged-lines.ts`:
 
-(a) Replace the import line `import { isNonEnglish } from '../tts/language.js';` with:
+(a) ADD a new import line (keep the existing `import { isNonEnglish } from '../tts/language.js';` — `recoverTaggedNarratorLines` still uses it until Task 4):
 
 ```typescript
-import { grammarFor, tagRegexFor, verbBeatRegexFor, isQuoteBearing } from './tag-grammar.js';
+import { grammarFor, tagRegexFor } from './tag-grammar.js';
 ```
 
-(`verbBeatRegexFor`/`isQuoteBearing` are used by Task 4; importing them now is harmless. `isNonEnglish` is no longer used after Task 4 replaces the flip gate — but `recoverTaggedNarratorLines` still references it until then, so KEEP a second import line `import { isNonEnglish } from '../tts/language.js';` for now and delete it in Task 4.)
+Import ONLY `grammarFor` + `tagRegexFor` here — both are used by `taggedSpeakerIds` below. (`verbBeatRegexFor`/`isQuoteBearing` are added in Task 4 when the flip needs them; adding them now trips `noUnusedLocals`.)
 
 (b) Add a per-call stopword union helper (no mutation of the module set) near `STOPWORDS`:
 
@@ -350,7 +352,7 @@ export function taggedSpeakerIds(
 }
 ```
 
-(`makeTagRegex` is now unused — delete it. `recoverTaggedNarratorLines` is updated in Task 4; for now point its existing `makeTagRegex()` call at `tagRegexFor(grammarFor('en')!)` so the file compiles AND English behaviour is unchanged.)
+(Do NOT touch `makeTagRegex` or `recoverTaggedNarratorLines` in this task — `makeTagRegex` is still called by the untouched `recoverTaggedNarratorLines`, so it stays. Both are removed/rewritten in Task 4. This keeps Task 2's diff to `taggedSpeakerIds` + the two helpers, and the file compiles with no unused symbols.)
 
 - [ ] **Step 4: Run to verify pass — localized cases + the full English suites**
 
@@ -369,7 +371,11 @@ git add server/src/analyzer/recover-tagged-lines.ts server/src/analyzer/recover-
 git commit -m "fix(server): localize the minor-cast keep-protection for es/ru (#1028)"
 ```
 
-> **#1028 is now closed by Tasks 1–2.** This is a valid merge point: open the PR with `Closes #1028`, run `npm run verify` (Task 6 below), and ship. Tasks 3–5 add the flip as a follow-up.
+> **#1028 is now closed by Tasks 1–2 — this is PR1.** Run the full battery
+> (`npm run verify` — typecheck + all tests + e2e + build) on the branch, open the PR
+> with `Closes #1028` in the body, and ship. Tasks 3–5 are **PR2** (the gated flip), cut
+> as a follow-up branch off the merged PR1 (or stacked on it). Splitting here keeps the
+> safe keep-protection fix from waiting on the on-box flip gates.
 
 ---
 
@@ -402,7 +408,7 @@ git commit -m "docs(server): record es/ru stage-2 segmentation for the #1028 fli
 - Test: `server/src/analyzer/recover-tagged-lines.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: `grammarFor`, `tagRegexFor`, `verbBeatRegexFor`, `isQuoteBearing` from `./tag-grammar.js` (imported in Task 2).
+- Consumes: `grammarFor`, `tagRegexFor` (already imported in Task 2) plus `verbBeatRegexFor`, `isQuoteBearing` (added in this task) from `./tag-grammar.js`.
 - Produces: `recoverTaggedNarratorLines(sentences, roster, language = 'en'): { sentences, flipped, byId }` — unchanged signature; now flips es/ru.
 
 - [ ] **Step 1: Write the failing tests** — append to `server/src/analyzer/recover-tagged-lines.test.ts`:
@@ -534,7 +540,13 @@ export function recoverTaggedNarratorLines<T extends Sentence>(
 }
 ```
 
-(b) Now remove the orphaned `import { isNonEnglish } from '../tts/language.js';` line (no longer referenced) and revert Task 2's temporary `tagRegexFor(grammarFor('en')!)` shim — `recoverTaggedNarratorLines` no longer uses a standalone English regex.
+(b) Add the two flip-only imports to the existing tag-grammar import line:
+
+```typescript
+import { grammarFor, tagRegexFor, verbBeatRegexFor, isQuoteBearing } from './tag-grammar.js';
+```
+
+(c) Delete the now-unused `makeTagRegex` function (the rewritten body uses `tagRegexFor`), and remove the now-orphaned `import { isNonEnglish } from '../tts/language.js';` line. After this task no symbol in the file is unused (`noUnusedLocals` clean).
 
 - [ ] **Step 4: Run to verify pass — flip + the full suite**
 
