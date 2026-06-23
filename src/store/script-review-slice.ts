@@ -60,7 +60,7 @@ export const scriptReviewSlice = createSlice({
     toggleOp: (s, a: PayloadAction<{ bookId: string; key: string }>) => {
       const { bookId, key } = a.payload;
       const bucket = s.byBook[bookId];
-      if (!bucket) return;
+      if (!bucket || !(key in bucket.selected)) return;
       bucket.selected[key] = !bucket.selected[key];
     },
 

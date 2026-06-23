@@ -154,4 +154,111 @@ describe('scriptReviewSlice', () => {
     store.dispatch(scriptReviewActions.clearReview({ bookId: 'book-a' }));
     expect(selectReview(store.getState(), 'book-a')).toBeUndefined();
   });
+
+  it('unappliable is stored and accessible', () => {
+    const store = makeStore();
+    const unappliableOp: ReviewOpWithChapter = {
+      id: 99,
+      op: 'strip_tag',
+      newText: 'test',
+      rationale: 'test',
+      chapterId: 10,
+    };
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-a',
+        ops: [op1],
+        unappliable: [{ op: unappliableOp, reason: 'anchor not found' }],
+      }),
+    );
+    const bucket = selectReview(store.getState(), 'book-a');
+    expect(bucket!.unappliable).toHaveLength(1);
+    expect(bucket!.unappliable[0].op.id).toBe(99);
+    expect(bucket!.unappliable[0].reason).toBe('anchor not found');
+  });
+
+  it('toggleClass isolates to the target book (cross-book test)', () => {
+    const store = makeStore();
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-a',
+        ops: [op1, op2],
+        unappliable: [],
+      }),
+    );
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-b',
+        ops: [op3],
+        unappliable: [],
+      }),
+    );
+    const bookBBefore = selectReview(store.getState(), 'book-b')!;
+    const bookBSelectedBefore = { ...bookBBefore.selected };
+
+    // Toggle strip_tag on book-a
+    store.dispatch(scriptReviewActions.toggleClass({ bookId: 'book-a', op: 'strip_tag' }));
+
+    // book-b's selected map should be identical
+    const bookBAfter = selectReview(store.getState(), 'book-b')!;
+    expect(bookBAfter.selected).toEqual(bookBSelectedBefore);
+  });
+
+  it('toggleOp isolates to the target book (cross-book test)', () => {
+    const store = makeStore();
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-a',
+        ops: [op1],
+        unappliable: [],
+      }),
+    );
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-b',
+        ops: [op2],
+        unappliable: [],
+      }),
+    );
+    const bookBBefore = selectReview(store.getState(), 'book-b')!;
+    const bookBSelectedBefore = { ...bookBBefore.selected };
+
+    // Toggle op on book-a
+    store.dispatch(
+      scriptReviewActions.toggleOp({
+        bookId: 'book-a',
+        key: opKey(10, 1, 'strip_tag'),
+      }),
+    );
+
+    // book-b's selected map should be identical
+    const bookBAfter = selectReview(store.getState(), 'book-b')!;
+    expect(bookBAfter.selected).toEqual(bookBSelectedBefore);
+  });
+
+  it('toggleOp ignores an unknown key (defensive guard)', () => {
+    const store = makeStore();
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-a',
+        ops: [op1, op2],
+        unappliable: [],
+      }),
+    );
+    const beforeToggle = selectReview(store.getState(), 'book-a')!;
+    const selectedBefore = { ...beforeToggle.selected };
+
+    // Try to toggle a key that was never in the ops
+    store.dispatch(
+      scriptReviewActions.toggleOp({
+        bookId: 'book-a',
+        key: 'nonexistent:99:strip_tag',
+      }),
+    );
+
+    // The nonexistent key should NOT be created; all existing keys untouched
+    const afterToggle = selectReview(store.getState(), 'book-a')!;
+    expect('nonexistent:99:strip_tag' in afterToggle.selected).toBe(false);
+    expect(afterToggle.selected).toEqual(selectedBefore);
+  });
 });

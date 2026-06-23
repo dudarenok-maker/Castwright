@@ -38,8 +38,15 @@ import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
 import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
+import { rpdWarningFor } from '../lib/script-review-apply';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
+
+/* fs-58 — default per-run script-review model. Unit A has no persisted
+   review-model knob, so the trigger passes the server free-tier default
+   (mirrors server/.env GEMINI_MODEL). Used both for the per-run `model`
+   opt and to compute the whole-book RPD warning. */
+const REVIEW_MODEL = 'gemma-4-31b-it';
 
 interface Props {
   characters: Character[];
@@ -112,6 +119,9 @@ export function ManuscriptView({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
+     per-chapter "Review Script" stays the primary, low-cost default. */
+  const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   /* Sentences are the single source of truth in Redux. All edits go via
@@ -618,17 +628,28 @@ export function ManuscriptView({
     />
   );
 
-  /* fs-58 — per-chapter LLM script-review trigger.
-     RPD note: each chapter call uses one Gemini RPD slot. The per-chapter
-     button is the default (not a whole-book sweep) to stay within free-tier
-     limits. Operators can override the model via the `model` opt. */
-  async function handleReviewScript() {
-    if (!bookId || reviewLoading || currentChapterId == null) return;
+  /* fs-58 — LLM script-review trigger. The model is per-run in Unit A (no
+     persisted knob); we pass the server free-tier default so the RPD warning
+     can reason about quota. Per-chapter (the default) uses one request; a
+     whole-book sweep fires one request per chapter, so the RPD warning below
+     gates it when the book is longer than the model's daily cap. */
+  const reviewModel = REVIEW_MODEL;
+  /* Non-excluded chapters are the ones a whole-book sweep would actually hit
+     (excluded chapters never reach the analyzer). */
+  const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
+  const rpdWarning = rpdWarningFor(reviewableChapterCount, reviewModel);
+
+  async function handleReviewScript(wholeBook: boolean) {
+    if (!bookId || reviewLoading) return;
+    if (!wholeBook && currentChapterId == null) return;
     const allOps: ReviewOpWithChapter[] = [];
     setReviewLoading(true);
+    setReviewMenuOpen(false);
     try {
       await api.reviewScript(bookId, {
-        chapterId: currentChapterId,
+        /* Omitting chapterId reviews every (non-excluded) chapter server-side. */
+        ...(wholeBook ? {} : { chapterId: currentChapterId ?? undefined }),
+        model: reviewModel,
         onOps: ({ chapterId: chId, ops }) => {
           for (const op of ops) allOps.push({ ...op, chapterId: chId });
         },
@@ -700,14 +721,59 @@ export function ManuscriptView({
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
-              {/* fs-58 — per-chapter LLM script review trigger */}
-              <button
-                onClick={() => void handleReviewScript()}
-                disabled={reviewLoading || !bookId}
-                className="shrink-0 inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
-              >
-                {reviewLoading ? 'Reviewing…' : 'Review Script'}
-              </button>
+              {/* fs-58 — LLM script-review trigger. Primary = per-chapter
+                  (low-cost default); the ⌄ disclosure opens the whole-book
+                  opt-in, which is RPD-gated when the book is longer than the
+                  selected model's daily cap. */}
+              <div className="relative shrink-0 inline-flex items-stretch">
+                <button
+                  data-testid="review-script-chapter"
+                  onClick={() => void handleReviewScript(false)}
+                  disabled={reviewLoading || !bookId}
+                  className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
+                >
+                  {reviewLoading ? 'Reviewing…' : 'Review Script'}
+                </button>
+                <button
+                  data-testid="review-script-menu-toggle"
+                  onClick={() => setReviewMenuOpen((o) => !o)}
+                  disabled={reviewLoading || !bookId}
+                  aria-label="Script review options"
+                  aria-expanded={reviewMenuOpen}
+                  className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
+                >
+                  <IconArrowDn className="w-4 h-4" />
+                </button>
+                {reviewMenuOpen && (
+                  <div className="absolute top-full left-0 mt-2 z-20 w-72 rounded-2xl border border-ink/10 bg-white shadow-float p-3 space-y-2">
+                    <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50">
+                      Review scope
+                    </p>
+                    <button
+                      data-testid="review-script-wholebook"
+                      onClick={() => void handleReviewScript(true)}
+                      disabled={reviewLoading || !bookId}
+                      className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
+                    >
+                      Review whole book
+                      <span className="block text-xs font-normal text-ink/50">
+                        {reviewableChapterCount} chapter
+                        {reviewableChapterCount === 1 ? '' : 's'}
+                      </span>
+                    </button>
+                    {rpdWarning && (
+                      <p
+                        data-testid="review-script-rpd-warning"
+                        className="text-xs text-magenta leading-relaxed px-1"
+                      >
+                        This book has {rpdWarning.chapterCount} chapters; the
+                        selected model allows only {rpdWarning.rpd} reviews/day —
+                        switch to a local model or review per chapter.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}

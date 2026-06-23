@@ -1,6 +1,12 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { vi } from 'vitest';
-import { resolveAnchorOffset, planApply, dispatchAcceptedOps, type ReviewOp } from './script-review-apply';
+import {
+  resolveAnchorOffset,
+  planApply,
+  dispatchAcceptedOps,
+  rpdWarningFor,
+  type ReviewOp,
+} from './script-review-apply';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { start } from '../store/manuscript-slice.test-helpers';
 
@@ -230,5 +236,33 @@ describe('dispatchAcceptedOps', () => {
     expect(s4?.text).toBe('He said. "Come on," she urged. He left.');
     // onBoundaryMove should not have been called
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('rpdWarningFor', () => {
+  it('warns when chapter count exceeds the model RPD cap', () => {
+    const w = rpdWarningFor(30, 'gemini-2.5-flash'); // cap 20
+    expect(w).not.toBeNull();
+    expect(w!.chapterCount).toBe(30);
+    expect(w!.rpd).toBe(20);
+    expect(w!.model).toBe('gemini-2.5-flash');
+  });
+
+  it('stays quiet when chapter count is at or under the cap', () => {
+    expect(rpdWarningFor(20, 'gemini-2.5-flash')).toBeNull(); // exactly at cap
+    expect(rpdWarningFor(5, 'gemini-2.5-flash')).toBeNull();
+    expect(rpdWarningFor(400, 'gemini-3.1-flash-lite')).toBeNull(); // cap 500
+  });
+
+  it('never warns for a local / unknown model (no daily cap)', () => {
+    expect(rpdWarningFor(10_000, 'qwen3.5:9b')).toBeNull(); // local Ollama model
+    expect(rpdWarningFor(10_000, undefined)).toBeNull(); // server default local
+  });
+
+  it('uses the per-model cap, not a shared one', () => {
+    // gemma has a 1500/day cap → 30 chapters is fine
+    expect(rpdWarningFor(30, 'gemma-4-31b-it')).toBeNull();
+    // but flash preview only allows 20/day
+    expect(rpdWarningFor(30, 'gemini-3-flash-preview')).not.toBeNull();
   });
 });

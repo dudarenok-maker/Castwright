@@ -3,6 +3,43 @@ import { manuscriptActions } from '../store/manuscript-slice';
 
 export const REVIEW_EMOTIONS = ['neutral', 'whisper', 'angry', 'excited', 'sad'] as const;
 
+/* fs-58 — per-model requests-per-day caps for the whole-book script-review
+   sweep. A whole-book run fires ONE script-review request per chapter, so a
+   book with more chapters than the selected model's RPD cap will exhaust the
+   free-tier quota mid-run. We mirror the server caps here (they live in
+   server/src/analyzer/rate-limit.ts BUILTIN_LIMITS — keep in lockstep when
+   they change) because rate-limit.ts is a server module not importable
+   client-side. A model absent from this map (notably any LOCAL Ollama model)
+   has no daily cap → no warning. */
+export const REVIEW_MODEL_RPD: Record<string, number> = {
+  'gemini-3.1-flash-lite': 500,
+  'gemini-3.5-flash': 20,
+  'gemini-3-flash-preview': 20,
+  'gemini-2.5-flash': 20,
+  'gemma-4-31b-it': 1500,
+  'gemma-4-26b-a4b-it': 1500,
+};
+
+export interface RpdWarning {
+  chapterCount: number;
+  /** The matched model's daily request cap. */
+  rpd: number;
+  model: string;
+}
+
+/* Pure helper: should a whole-book sweep of `chapterCount` chapters with
+   `model` warn the user that they'll blow the daily quota? Returns the
+   warning payload when chapterCount exceeds the model's RPD cap, else null.
+   A model with no entry in REVIEW_MODEL_RPD (e.g. a local Ollama model, or
+   undefined when the server default is local) is uncapped → null. */
+export function rpdWarningFor(chapterCount: number, model: string | undefined): RpdWarning | null {
+  if (!model) return null;
+  const rpd = REVIEW_MODEL_RPD[model];
+  if (rpd === undefined) return null;
+  if (chapterCount <= rpd) return null;
+  return { chapterCount, rpd, model };
+}
+
 export interface ReviewOp {
   id: number;
   op: 'strip_tag' | 'split' | 'extract_dialogue' | 'merge' | 'fix_emotion';
