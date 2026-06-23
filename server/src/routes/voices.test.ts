@@ -573,6 +573,47 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
   });
 });
 
+describe('GET /api/voices — languageCode on designed Qwen voices', () => {
+  /* A designed Qwen voice whose sidecar manifest carries `language: "Russian"`
+     must surface `languageCode: "ru"` on the derived voice. A preset voice
+     (no qwen override, no manifest) must omit `languageCode` entirely.
+     Uses the v_oduvan character from the Qwen series above (already in the
+     workspace) — no new books required. */
+
+  let qwenVoicesPath: string;
+
+  beforeAll(async () => {
+    const [{ qwenVoiceSidecarPath: sidecarPath }, { dirname }] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('node:path'),
+    ]);
+    /* Oduvan's storage key (no uuid) → qwen-v_oduvan. */
+    qwenVoicesPath = sidecarPath('qwen-v_oduvan');
+    mkdirSync(dirname(qwenVoicesPath), { recursive: true });
+    /* Write a manifest with Russian as the baked language. */
+    writeFileSync(qwenVoicesPath, JSON.stringify({ voiceId: 'qwen-v_oduvan', instruct: 'persona', language: 'Russian' }));
+  });
+
+  afterAll(() => {
+    rmSync(qwenVoicesPath, { force: true });
+  });
+
+  it('surfaces languageCode ru on a Russian-designed Qwen voice', async () => {
+    const res = await request(app).get('/api/voices?engine=qwen');
+    expect(res.status).toBe(200);
+    const oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_oduvan');
+    expect(oduvan).toBeDefined();
+    expect(oduvan.languageCode).toBe('ru');
+  });
+
+  it('omits languageCode on a preset (non-Qwen-designed) voice', async () => {
+    const res = await request(app).get('/api/voices');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann).toBeDefined();
+    expect(v_brann.languageCode).toBeUndefined();
+  });
+});
+
 describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
   /* A self-contained author with: a two-book series (Trilogy), a same-author
      spinoff in a DIFFERENT series, and a standalone. Distinct voiceIds per
