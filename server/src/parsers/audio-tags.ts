@@ -14,9 +14,13 @@ export const AUDIO_TAGS = [
 ] as const;
 export type AudioTag = (typeof AUDIO_TAGS)[number];
 
-/* Smart and straight quote characters that wrap dialogue. */
-const QUOTE_OPENS = '"“'; // " “
-const QUOTE_CLOSES = '"”'; // " ”
+/* Dialogue-wrapping quotes across English + Latin-script + Cyrillic books.
+   A monolingual manuscript contains only its own pair, so the union is safe.
+   Opens: “ (straight) “ (smart) « (ES/FR/RU guillemet) „ (DE low-9).
+   Closes: “ (straight) “ (smart) » (guillemet) “ (DE high-6 = also EN open;
+   safe for monolingual — the scanner closes on the first closer after an open). */
+const QUOTE_OPENS = '"“«„';
+const QUOTE_CLOSES = '"”»“';
 
 /* Already-tagged-at-the-start check. Lets every detector be idempotent and
    keeps later detectors from stacking a second tag onto something an
@@ -31,10 +35,10 @@ const LEADING_TAG_RE = /^\s*\[[a-z]+\]/i;
    Without the `!` guard, two-letter all-caps words like "OK" or initialisms
    like "AC" would false-trigger. */
 function isShoutingRun(s: string): boolean {
-  const letters = s.replace(/[^A-Za-z]/g, '');
+  const letters = s.replace(/[^\p{L}]/gu, '');
   if (letters.length < 2) return false;
   if (letters !== letters.toUpperCase()) return false;
-  if (!/[A-Z]{2,}/.test(s)) return false;
+  if (!/\p{Lu}{2,}/u.test(s)) return false;
   if (letters.length >= 4) return true;
   return s.includes('!');
 }
@@ -43,7 +47,7 @@ function isShoutingRun(s: string): boolean {
    Preserves punctuation and whitespace; only lowercases run-internal letters
    after the first letter of each word. */
 function denormaliseShouting(s: string): string {
-  return s.replace(/([A-Z])([A-Z']+)/g, (_m, head, tail) => head + tail.toLowerCase());
+  return s.replace(/(\p{Lu})([\p{Lu}']+)/gu, (_m, head, tail) => head + tail.toLowerCase());
 }
 
 /* Walk a string and call `transform(inner)` for each quote span. The
@@ -102,7 +106,7 @@ export function tagExcitedDialog(text: string): string {
    tagged. Excitement takes precedence — a line with both `!` and `…`
    stays excited, not hesitant. */
 const HESITATION_LEADING_RE = /^\s*(?:…|\.{2,})/;
-const HESITATION_TRAILING_RE = /(?:…|\.{2,})\s*["”]?\s*$/;
+const HESITATION_TRAILING_RE = /(?:…|\.{2,})\s*["”»“]?\s*$/;
 
 export function tagHesitantDialog(text: string): string {
   return rewriteQuoteSpans(text, (inner) => {
