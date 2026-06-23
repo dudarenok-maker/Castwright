@@ -28,13 +28,19 @@ function classLabel(op: string): string {
   return CLASS_LABELS[op] ?? op;
 }
 
-/* Format the before → after preview for a single op row. */
-function OpPreview({ op }: { op: ReviewOpWithChapter }) {
+/* Format the before → after preview for a single op row. `before` is the
+   live sentence text (the original) when available, so strip_tag shows the
+   tagged source struck-through next to the cleaned result. */
+function OpPreview({ op, before }: { op: ReviewOpWithChapter; before?: string }) {
   if (op.op === 'strip_tag' && op.newText !== undefined) {
     return (
       <span className="text-xs text-ink/70 min-w-0 truncate">
-        <span className="line-through text-ink/45">{op.newText}</span>
-        {' → '}
+        {before !== undefined && before !== op.newText && (
+          <>
+            <span className="line-through text-ink/45">{before}</span>
+            {' → '}
+          </>
+        )}
         <span className="text-ink font-medium">{op.newText}</span>
       </span>
     );
@@ -181,6 +187,9 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                   {classOps.map((op) => {
                     const key = opKey(op.chapterId, op.id, op.op);
                     const isSelected = !!selected[key];
+                    const liveText = sentences.find(
+                      (s) => s.chapterId === op.chapterId && s.id === op.id,
+                    )?.text;
                     return (
                       <div
                         key={key}
@@ -198,7 +207,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                           />
                         </label>
                         <div className="flex-1 min-w-0 space-y-1">
-                          <OpPreview op={op} />
+                          <OpPreview op={op} before={liveText} />
                           <p className="text-xs text-ink/55 leading-relaxed">{op.rationale}</p>
                           {op.confidence !== undefined && (
                             <p className="text-[10px] text-ink/40 tabular-nums">
