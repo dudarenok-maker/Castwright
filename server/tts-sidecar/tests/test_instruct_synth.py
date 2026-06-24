@@ -171,9 +171,15 @@ def test_stub_empty_instruct_passes_non_none_instruct_ids(stub_engine) -> None:
     assert isinstance(wav, np.ndarray) and len(wav) > 0
 
 
-def test_stub_neutral_placeholder_passes_content_in_instruct_ids(stub_engine) -> None:
-    """A neutral placeholder string produces a non-empty content token sequence,
-    distinguishable from the empty-template form."""
+def test_stub_neutral_instruct_constant_flows_to_non_none_instruct_ids(stub_engine) -> None:
+    """NEUTRAL_INSTRUCT (the exported constant Task 6/8 will import) flows through
+    _build_instruct_text/_tokenize_texts and arrives at model.generate() as a
+    non-None instruct_ids value — confirming the export-usage contract.
+
+    Because NEUTRAL_INSTRUCT == "" this exercises the same empty-template path as
+    the preceding test; the distinct assertion here is that the *constant itself*
+    (not a bare literal) is accepted by the call chain without error and produces
+    a valid, non-None instruct_ids entry."""
     item = types.SimpleNamespace(ref_code=None, ref_text="calibration text")
     placeholder = main.NEUTRAL_INSTRUCT  # the pinned constant under test
     wav, sr = stub_engine._icl_instruct_synth([item], "A neutral line.", placeholder, "English")
@@ -181,6 +187,7 @@ def test_stub_neutral_placeholder_passes_content_in_instruct_ids(stub_engine) ->
     gen_kw = stub_engine._base17.model.last_generate
     assert "instruct_ids" in gen_kw
     instruct_ids = gen_kw["instruct_ids"]
+    assert instruct_ids is not None, "NEUTRAL_INSTRUCT must produce a non-None instruct_ids"
     assert len(instruct_ids) == 1
     _id, content = instruct_ids[0]
     # Content should be the empty-template (because NEUTRAL_INSTRUCT == "").
@@ -250,22 +257,25 @@ def test_real_empty_instruct_produces_valid_pcm() -> None:
     orig_voices_dir = engine._voices_dir
     engine._voices_dir = str(voices_dir)
     try:
+        # Both the prompt load AND the generate call live inside ONE
+        # _base17_activity() context — mirrors synthesize()/synthesize_batch()
+        # so the idle watchdog cannot null _base17 between load and use.
         with engine._base17_activity():
             engine._ensure_base17_loaded()
             prompt_items, lang, _hit = engine._load_voice_prompt_17b(_TEST_VOICE)
+
+            if not isinstance(prompt_items, list):
+                prompt_items = [prompt_items]
+
+            # Drive with instruct="" (the empty-template form under test).
+            wav, sr = engine._icl_instruct_synth(
+                prompt_items,
+                "The harbor fell silent as the fog rolled in.",
+                "",
+                lang,
+            )
     finally:
         engine._voices_dir = orig_voices_dir
-
-    if not isinstance(prompt_items, list):
-        prompt_items = [prompt_items]
-
-    # Drive with instruct="" (the empty-template form under test).
-    wav, sr = engine._icl_instruct_synth(
-        prompt_items,
-        "The harbor fell silent as the fog rolled in.",
-        "",
-        lang,
-    )
 
     assert sr > 0, "sample rate must be positive"
     assert isinstance(wav, np.ndarray), "PCM must be a numpy array"
@@ -291,24 +301,27 @@ def test_real_neutral_placeholder_produces_valid_pcm() -> None:
     orig_voices_dir = engine._voices_dir
     engine._voices_dir = str(voices_dir)
     try:
+        # Both the prompt load AND the generate call live inside ONE
+        # _base17_activity() context — mirrors synthesize()/synthesize_batch()
+        # so the idle watchdog cannot null _base17 between load and use.
         with engine._base17_activity():
             engine._ensure_base17_loaded()
             prompt_items, lang, _hit = engine._load_voice_prompt_17b(_TEST_VOICE)
+
+            if not isinstance(prompt_items, list):
+                prompt_items = [prompt_items]
+
+            # Neutral placeholder — a concrete delivery direction for the no-instruct case.
+            _NEUTRAL_PLACEHOLDER = "Delivered in a calm, natural narration voice."
+
+            wav, sr = engine._icl_instruct_synth(
+                prompt_items,
+                "She crossed the bridge without looking back.",
+                _NEUTRAL_PLACEHOLDER,
+                lang,
+            )
     finally:
         engine._voices_dir = orig_voices_dir
-
-    if not isinstance(prompt_items, list):
-        prompt_items = [prompt_items]
-
-    # Neutral placeholder — a concrete delivery direction for the no-instruct case.
-    _NEUTRAL_PLACEHOLDER = "Delivered in a calm, natural narration voice."
-
-    wav, sr = engine._icl_instruct_synth(
-        prompt_items,
-        "She crossed the bridge without looking back.",
-        _NEUTRAL_PLACEHOLDER,
-        lang,
-    )
 
     assert sr > 0
     assert isinstance(wav, np.ndarray) and len(wav) > 0
