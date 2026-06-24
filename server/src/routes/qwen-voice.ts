@@ -294,6 +294,10 @@ export interface DesignQwenVoiceParams {
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
+  /** When present, forwarded to the sidecar so it can POST phase progress back
+      to this server (AR2 design-progress feature). */
+  progressToken?: string;
+  progressUrl?: string;
 }
 
 export async function designQwenVoiceForCharacter(
@@ -350,6 +354,10 @@ export async function designQwenVoiceForCharacter(
           /* fs-55: emotion variant path sends { baseVoiceId, variantVoiceId,
              emotionInstruct, ... } to /qwen/mint-variant. The base path sends
              { voiceId, instruct, ... } to /qwen/design-voice unchanged. */
+          const progressFields =
+            p.progressToken && p.progressUrl
+              ? { progressToken: p.progressToken, progressUrl: p.progressUrl }
+              : {};
           const fetchBody = p.emotion
             ? JSON.stringify({
                 baseVoiceId,
@@ -358,6 +366,7 @@ export async function designQwenVoiceForCharacter(
                 voiceUuid: p.character.voiceUuid ?? null,
                 language: p.language,
                 calibrationText,
+                ...progressFields,
               })
             : JSON.stringify({
                 voiceId,
@@ -365,6 +374,7 @@ export async function designQwenVoiceForCharacter(
                 instruct: p.persona,
                 language: p.language,
                 calibrationText,
+                ...progressFields,
               });
           upstream = await fetch(target, {
             method: 'POST',
@@ -451,6 +461,8 @@ qwenVoiceRouter.post(
       modelKey?: unknown;
       preview?: unknown;
       emotion?: unknown;
+      progressToken?: unknown;
+      progressUrl?: unknown;
     };
 
     /* fs-25 — optional emotion variant. When present it must be one of the
@@ -554,6 +566,8 @@ qwenVoiceRouter.post(
         language: designLanguage,
         emotion,
         preview: body.preview === true,
+        progressToken: typeof body.progressToken === 'string' ? body.progressToken : undefined,
+        progressUrl: typeof body.progressUrl === 'string' ? body.progressUrl : undefined,
       });
       /* fs-25 — record a (non-preview) emotion variant onto the character's
          qwen slot so generation can resolve it (Wave 2) and the cast UI can show

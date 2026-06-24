@@ -43,13 +43,13 @@ interface Subscriber {
   keepAlive: ReturnType<typeof setInterval>;
 }
 
-interface SingleJob {
+export interface SingleJob {
   bookId: string;
   bookDir: string;
   characterId: string;
   characterName: string;
   mode: 'first' | 'redesign';
-  phase: 'designing' | 'rendering';
+  phase: 'freeing-vram' | 'loading-model' | 'designing' | 'anchoring' | 'performing' | 'distilling' | 'rendering';
   preview: boolean;
   subscribers: Set<Subscriber>;
   controller: AbortController;
@@ -58,7 +58,21 @@ interface SingleJob {
 const inFlightByBook = new Map<string, SingleJob>();
 const HEARTBEAT_MS = 6000;
 
-function broadcast(job: SingleJob, ev: unknown): void {
+/* Progress-token registry: the sidecar POSTs phase progress to the loopback
+   relay carrying this token; the relay maps it back to the in-flight job. A
+   token is valid only while its job runs (deleted in endJob). */
+const tokenToJob = new Map<string, SingleJob>();
+export function registerProgressToken(token: string, job: SingleJob): void {
+  tokenToJob.set(token, job);
+}
+export function resolveProgressToken(token: string): SingleJob | undefined {
+  return tokenToJob.get(token);
+}
+export function dropProgressToken(token: string): void {
+  tokenToJob.delete(token);
+}
+
+export function broadcast(job: SingleJob, ev: unknown): void {
   for (const sub of job.subscribers) {
     try {
       sub.send(ev);
@@ -81,6 +95,7 @@ function endJob(job: SingleJob, finalEv?: unknown): void {
   job.subscribers.clear();
   if (inFlightByBook.get(job.bookId) === job) inFlightByBook.delete(job.bookId);
   clearDesignBusy(job.bookDir);
+  for (const [tok, j] of tokenToJob) if (j === job) tokenToJob.delete(tok);
 }
 
 async function runSingleDesign(
@@ -103,18 +118,6 @@ async function runSingleDesign(
     HEARTBEAT_MS,
   );
   try {
-    /* Phase 1 — designing. The audition-render phase is emitted by the core
-       boundary below; the core does design THEN encode, so we flip to
-       'rendering' right before the encode is observable. Since the core is a
-       single call, we approximate the two honest phases around it: 'designing'
-       up front, 'rendering' is emitted from a thin wrapper once the sidecar PCM
-       returns. The core doesn't expose that seam yet, so for v1 we emit
-       'rendering' immediately before persist (the encode already happened
-       inside the core) — still honest: by then the sidecar call is done and
-       we're finalizing the audition. */
-    job.phase = 'designing';
-    broadcast(job, { type: 'phase', phase: 'designing', characterId: job.characterId });
-
     /* srv-43 — mint/persist voiceUuid before the core names the .pt, matching
        the bulk-job and REST-endpoint paths so every design entry point produces
        the same uuid-keyed cache key. */
@@ -126,6 +129,16 @@ async function runSingleDesign(
     );
     const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
 
+    /* Mint a progress token so the sidecar can POST real phase updates back via
+       the loopback relay (Task 4). The token is registered before the design
+       call and dropped in endJob. The sidecar drives every phase event — we no
+       longer fake 'designing' or 'rendering' here. */
+    const { randomUUID } = await import('node:crypto');
+    const { serverLoopbackBaseUrl } = await import('../tts/loopback-url.js');
+    const progressToken = randomUUID();
+    registerProgressToken(progressToken, job);
+    const progressUrl = `${serverLoopbackBaseUrl()}/api/internal/design-progress`;
+
     const { voiceId, url } = await designQwenVoiceForCharacter({
       bookDir: job.bookDir,
       character: characterForDesign,
@@ -135,10 +148,9 @@ async function runSingleDesign(
       modelKey,
       language,
       preview: job.preview,
+      progressToken,
+      progressUrl,
     });
-
-    job.phase = 'rendering';
-    broadcast(job, { type: 'phase', phase: 'rendering', characterId: job.characterId });
 
     if (job.preview) {
       /* Re-design: hold the preview, do NOT persist. The drawer's A/B compare
@@ -254,7 +266,7 @@ singleDesignRouter.post(
       characterId,
       characterName: character.name ?? characterId,
       mode: preview ? 'redesign' : 'first',
-      phase: 'designing',
+      phase: 'freeing-vram',
       preview,
       subscribers: new Set(),
       controller: new AbortController(),

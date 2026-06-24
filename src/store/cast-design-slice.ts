@@ -22,6 +22,7 @@
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Emotion } from '../lib/types';
+import { type DesignPhase, phaseRank } from '../lib/design-phase';
 
 /** A single character's design failure, surfaced in the terminal summary. */
 export interface CastDesignFailure {
@@ -62,7 +63,7 @@ export interface CastDesignSnapshot {
   /** Single-design only. */
   characterId?: string;
   mode?: 'first' | 'redesign';
-  phase?: 'designing' | 'rendering';
+  phase?: DesignPhase;
   /** `running` is the happy path; `done` is the brief terminal-summary state
       before clear; `halted` is a catastrophic abort (rare — per-character
       failures never halt). `stalled` is a derived UI state computed inline in
@@ -250,7 +251,7 @@ export const castDesignSlice = createSlice({
         currentName: action.payload.name,
         characterId: action.payload.characterId,
         mode: action.payload.mode,
-        phase: 'designing',
+        phase: 'freeing-vram',
         state: 'running',
         lastTickAt: action.payload.lastTickAt,
         failures: [],
@@ -264,7 +265,7 @@ export const castDesignSlice = createSlice({
       action: PayloadAction<{
         bookId: string;
         characterId: string;
-        phase: 'designing' | 'rendering';
+        phase: DesignPhase;
         lastTickAt: number;
       }>,
     ) {
@@ -272,6 +273,8 @@ export const castDesignSlice = createSlice({
       if (!snap || snap.kind !== 'single') return;
       if (snap.bookId !== action.payload.bookId || snap.characterId !== action.payload.characterId)
         return;
+      const cur = snap.phase as DesignPhase | undefined;
+      if (cur && phaseRank(action.payload.phase) <= phaseRank(cur)) return; // monotonic (AR5)
       snap.phase = action.payload.phase;
       snap.lastTickAt = action.payload.lastTickAt;
     },
