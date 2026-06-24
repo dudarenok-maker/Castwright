@@ -1240,6 +1240,26 @@ class QwenEngine(Engine):
         ),
     }
 
+    # C2 gate (fs-57, Task 5): canonical no-op instruct value for sentences
+    # that carry no delivery direction on the live-instruct synth path (Task 6).
+    #
+    # Measurement: _icl_instruct_synth was driven with instruct="" and with a
+    # neutral-placeholder string ("Delivered in a calm, natural narration voice.")
+    # on the real 1.7B-Base (dev box, 2026-06-24).  Both produced valid, non-empty
+    # PCM.  The empty string is adopted as the canonical no-op because:
+    #   1. It minimises token overhead — _build_instruct_text("") produces only
+    #      the chat-template wrapper tokens (<|im_start|>user\n<|im_end|>\n) with
+    #      NO content tokens, which is the closest structural analogue to
+    #      instruct_ids=None (the true skip path in generate()).
+    #   2. A fixed-wording placeholder drifts if the model is retrained; the
+    #      empty template is model-agnostic.
+    #   3. The smoke test (tests/golden/instruct_smoke.py) already confirmed that
+    #      instruct_ids=[None] (truly no instruct) produces natural narration on
+    #      the 1.7B-Base; the empty-template produces the same token structure.
+    #
+    # Task 6 and Task 8 import this constant — never a bare "".
+    NEUTRAL_INSTRUCT: str = ""
+
     def _calibration_text(self, language: Optional[str]) -> str:
         """Short, phonetically rich calibration/ref_text line in `language` (the
         sidecar language WORD, e.g. 'Spanish'). Falls back to the English
@@ -2620,6 +2640,12 @@ ENGINES: dict[str, Engine] = {
     "kokoro": KokoroEngine(),
     "qwen": QwenEngine(),
 }
+
+# fs-57 C2 gate — canonical no-op instruct value for the live-instruct synth path
+# (Task 6).  Re-exported at module level so callers import `main.NEUTRAL_INSTRUCT`
+# rather than going through the class.  The authoritative definition + rationale
+# comment lives on QwenEngine.NEUTRAL_INSTRUCT above.
+NEUTRAL_INSTRUCT: str = QwenEngine.NEUTRAL_INSTRUCT
 
 
 # Default seconds of voice-design inactivity before the watchdog frees the
