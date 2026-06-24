@@ -136,6 +136,8 @@ describe('fs-33 — DetectEmotionsButton', () => {
     await waitFor(() => expect(emoteAborted).toBe(true));
     // The component returns to idle after the AbortError is caught
     await waitFor(() => screen.getByTestId('detect-emotions-button'));
+    // Pass 2 must NOT run once pass 1 aborts — locks the sequential short-circuit.
+    expect(detectInstruct).not.toHaveBeenCalled();
   });
 
   it('is disabled when there are no attributed sentences', () => {
