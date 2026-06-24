@@ -26,7 +26,8 @@
    transcribe call. Env-override pattern mirrors `segment-qa.ts`. */
 
 import { transcribeSegment, type TranscribeResult } from './transcribe-client.js';
-import { configValue } from '../config/resolver.js';
+import { configValue, resolveKnob } from '../config/resolver.js';
+import { allKnobs } from '../config/registry.js';
 
 export type AsrVerdict = 'ok' | 'drift' | 'inconclusive';
 
@@ -76,9 +77,31 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxNoSpeechProb: 0.6,
 };
 
-export function resolveAsrThresholds(override?: Partial<AsrThresholds>): AsrThresholds {
+/** BCP-47 primary subtag, lower-cased ('es-ES' → 'es', '' for nullish). */
+function baseSubtag(language?: string | null): string {
+  return (language ?? '').toLowerCase().split('-')[0];
+}
+
+/** Per-language ASR `maxWer` override (#1084 scaffold). Returns the configured
+    value ONLY when an operator has explicitly set this language's knob (env or
+    app override); otherwise undefined, so the global `maxWer` (including its own
+    override) applies. The per-language knobs default to the global value, so
+    behaviour is unchanged until the owed on-box calibration tunes them. */
+function perLanguageMaxWer(language?: string | null): number | undefined {
+  const lang = baseSubtag(language);
+  if (!lang) return undefined;
+  const knob = allKnobs().find((k) => k.key === `qa.asr.maxWer.${lang}`);
+  if (!knob) return undefined;
+  const state = resolveKnob(knob);
+  return state.source === 'default' ? undefined : (state.effective as number);
+}
+
+export function resolveAsrThresholds(
+  override?: Partial<AsrThresholds>,
+  language?: string | null,
+): AsrThresholds {
   const base: AsrThresholds = {
-    maxWer: configValue<number>('qa.asr.maxWer'),
+    maxWer: perLanguageMaxWer(language) ?? configValue<number>('qa.asr.maxWer'),
     maxDeletionRun: configValue<number>('qa.asr.maxDeletionRun'),
     minChars: configValue<number>('qa.asr.minChars'),
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
@@ -192,14 +215,22 @@ function spellInteger(n: number): string | null {
   return null;
 }
 
-/** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii,
-    contraction expansion, integer 0..99 → words, strip residual punctuation. */
-export function normalizeForWer(text: string): string[] {
+/** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii, and
+    — for English (or unspecified language) only — contraction expansion and
+    integer 0..99 → words. The English number-speller ("3" → "three") matches
+    Whisper's English word output; on a non-English book Whisper hears "tres" /
+    "три", so spelling the digit in English injects a false substitution, hence
+    it is gated on `language` (#1084). Full per-language number spelling is owed
+    on-box calibration. */
+export function normalizeForWer(text: string, language?: string | null): string[] {
+  const english = baseSubtag(language) === 'en' || !language;
   let s = (text ?? '').normalize('NFKC').toLowerCase();
   s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
-  // Expand contractions before stripping apostrophes.
-  for (const [from, to] of Object.entries(CONTRACTIONS)) {
-    s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+  // Expand contractions before stripping apostrophes (English-only forms).
+  if (english) {
+    for (const [from, to] of Object.entries(CONTRACTIONS)) {
+      s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+    }
   }
   // Drop possessive 's and any remaining apostrophes inside words.
   s = s.replace(/'s\b/g, '').replace(/'/g, '');
@@ -210,6 +241,7 @@ export function normalizeForWer(text: string): string[] {
   // (2026-06-15; mirrors the stage2-coverage.ts fix). English is unchanged.
   s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
   const tokens = s.split(/\s+/).filter(Boolean);
+  if (!english) return tokens; // skip English integer-spelling for other languages
   const out: string[] = [];
   for (const tok of tokens) {
     if (/^\d+$/.test(tok)) {
@@ -326,6 +358,10 @@ export interface ClassifyOptions {
   /** Per-book proper-noun allowlist (cast names). Tokens here don't count as
       drift when substituted/deleted — Whisper mangles invented names. */
   nameAllowlist?: Iterable<string>;
+  /** BCP-47 base subtag of the book. Gates English-only normalization (integer
+      spelling / contractions) and selects the per-language `maxWer` (#1084).
+      Unset → English behaviour, byte-identical to before. */
+  language?: string | null;
 }
 
 /** Pure verdict from a transcript + signals. No I/O — inject the transcript. */
@@ -335,7 +371,7 @@ export function classifyTranscript(
   signals: AsrSignals,
   opts: ClassifyOptions = {},
 ): AsrClassification {
-  const t = resolveAsrThresholds(opts.thresholds);
+  const t = resolveAsrThresholds(opts.thresholds, opts.language);
   const reasons: string[] = [];
   const base = (verdict: AsrVerdict, extra: Partial<AsrClassification> = {}): AsrClassification => ({
     verdict,
@@ -393,8 +429,8 @@ export function classifyTranscript(
   }
 
   const [expectedTokens, actualTokens] = bridgeCompounds(
-    normalizeForWer(expectedText),
-    normalizeForWer(transcript),
+    normalizeForWer(expectedText, opts.language),
+    normalizeForWer(transcript, opts.language),
   );
   if (expectedTokens.length === 0) {
     reasons.push('Not scored — expected text normalised to empty.');
@@ -404,7 +440,7 @@ export function classifyTranscript(
   const allow = new Set<string>();
   if (opts.nameAllowlist) {
     for (const name of opts.nameAllowlist) {
-      for (const tok of normalizeForWer(name)) allow.add(tok);
+      for (const tok of normalizeForWer(name, opts.language)) allow.add(tok);
     }
   }
 
@@ -487,6 +523,6 @@ export async function verifySegmentTranscript(
     expectedText,
     r.text,
     { avgLogprob: r.avgLogprob, noSpeechProb: r.noSpeechProb, compressionRatio: r.compressionRatio },
-    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist },
+    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist, language: opts.language },
   );
 }
