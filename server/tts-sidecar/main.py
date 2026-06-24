@@ -1867,7 +1867,10 @@ class QwenEngine(Engine):
             return []
 
     def design_voice(
-        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str], voice_uuid: Optional[str] = None
+        self, voice_id: str, instruct: str, language: Optional[str],
+        calibration_text: Optional[str], voice_uuid: Optional[str] = None,
+        mint_method: Optional[str] = None,
+        fallback_for: Optional[dict] = None,
     ) -> SynthResult:
         """Design + cache a reusable bespoke voice from a persona `instruct`.
         Returns an audition preview (the calibration line spoken in the new
@@ -1953,6 +1956,8 @@ class QwenEngine(Engine):
                         "refText": ref_text,
                         "baseModel": self.BASE_MODEL,
                         "designModel": self.VOICEDESIGN_MODEL,
+                        **({"mintMethod": mint_method} if mint_method else {}),
+                        **({"fallbackFor": fallback_for} if fallback_for else {}),
                     },
                     fh,
                     ensure_ascii=False,
@@ -4046,6 +4051,8 @@ async def qwen_design_voice(req: Request) -> Response:
     language = body.get("language")
     calibration_text = body.get("calibrationText")
     voice_uuid = body.get("voiceUuid") if isinstance(body.get("voiceUuid"), str) else None
+    mint_method = body.get("mintMethod") if isinstance(body.get("mintMethod"), str) else None
+    fallback_for = body.get("fallbackFor") if isinstance(body.get("fallbackFor"), dict) else None
     if not isinstance(voice_id, str) or not voice_id.strip():
         raise HTTPException(status_code=400, detail="`voiceId` is required.")
     if not isinstance(instruct, str) or not instruct.strip():
@@ -4074,6 +4081,8 @@ async def qwen_design_voice(req: Request) -> Response:
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
             voice_uuid,
+            mint_method,
+            fallback_for,
         )
     except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)

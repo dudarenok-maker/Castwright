@@ -1471,3 +1471,28 @@ def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):
     })
     assert r.status_code == 500
     assert "code" not in r.json()  # NOT a fallback signal
+
+
+# ── Task 3 (srv-52): design-voice provenance fields ──────────────────────
+
+def test_design_voice_writes_fallback_provenance(fake_qwen_runtime, tmp_path):
+    import json, os
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice(
+        "qwen-x__angry", "a warm narrator", "english", "Hello.", None,
+        mint_method="design-voice-fallback",
+        fallback_for={"baseVoiceId": "qwen-x", "emotion": "angry"},
+    )
+    _pt, jpath = eng._voice_paths("qwen-x__angry")
+    meta = json.loads(open(jpath, encoding="utf-8").read())
+    assert meta["mintMethod"] == "design-voice-fallback"
+    assert meta["fallbackFor"] == {"baseVoiceId": "qwen-x", "emotion": "angry"}
+
+
+def test_design_voice_manifest_unchanged_without_provenance(fake_qwen_runtime):
+    import json
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("qwen-y", "a warm narrator", "english", "Hello.", None)
+    _pt, jpath = eng._voice_paths("qwen-y")
+    meta = json.loads(open(jpath, encoding="utf-8").read())
+    assert "mintMethod" not in meta and "fallbackFor" not in meta
