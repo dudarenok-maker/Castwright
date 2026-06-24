@@ -32,7 +32,7 @@ import shutil
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -1835,7 +1835,8 @@ class QwenEngine(Engine):
             return []
 
     def design_voice(
-        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str], voice_uuid: Optional[str] = None
+        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str], voice_uuid: Optional[str] = None,
+        report_progress: Optional[Callable[[str], None]] = None,
     ) -> SynthResult:
         """Design + cache a reusable bespoke voice from a persona `instruct`.
         Returns an audition preview (the calibration line spoken in the new
@@ -1872,17 +1873,27 @@ class QwenEngine(Engine):
             # the whole operation so the structured timing line below can split a
             # slow design into its phases — see that log.info for the field map.
             t0 = time.perf_counter()
+            def _phase(name: str) -> None:
+                if report_progress is not None:
+                    try:
+                        report_progress(name)
+                    except Exception:  # best-effort: never fail a design on progress
+                        pass
             # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
             # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
             # (waits for any in-flight Kokoro synth to drain, blocks new ones),
             # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
             # reloads on the next synth (~1s); when no generation ran it isn't
             # resident, so this is a no-op.
+            _kokoro_pre = ENGINES.get("kokoro")
+            if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
+                _phase("freeing-vram")
             with _VD_KOKORO.design():
                 _kokoro_eng = ENGINES.get("kokoro")
                 if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
                     log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
                     _kokoro_eng.unload()
+                _phase("loading-model")
                 self._ensure_design_loaded()
                 self._ensure_base_loaded()
                 # Phase boundary: everything above is Kokoro-evict + (cold) model
@@ -1904,6 +1915,7 @@ class QwenEngine(Engine):
                     self._ensure_design_loaded()
                     self._ensure_base_loaded()
                     # 1. design a reference clip from the persona instruction.
+                    _phase("designing")
                     _t = time.perf_counter()
                     ref_wavs, ref_sr = self._design.generate_voice_design(
                         text=ref_text, language=lang, instruct=instruct
@@ -1912,6 +1924,7 @@ class QwenEngine(Engine):
                     ref_audio = ref_wavs[0]
 
                     # 2. distil into a reusable clone prompt on the Base model.
+                    _phase("distilling")
                     _t = time.perf_counter()
                     prompt = self._base.create_voice_clone_prompt(
                         ref_audio=(ref_audio, ref_sr), ref_text=ref_text
@@ -1951,6 +1964,7 @@ class QwenEngine(Engine):
 
             # 4. audition preview — speak the caller's calibration line in the new
             #    voice (the full evidence quote, NOT the short reference text).
+            _phase("rendering")
             _t = time.perf_counter()
             with self._synth_lock:
                 self._ensure_base_loaded()  # re-ensure under the lock — see above
@@ -1986,6 +2000,7 @@ class QwenEngine(Engine):
         language: Optional[str],
         calibration_text: Optional[str],
         voice_uuid: Optional[str] = None,
+        report_progress: Optional[Callable[[str], None]] = None,
     ) -> "SynthResult":
         """Mint an emotion variant anchored to `base_voice_id`'s identity.
 
@@ -2027,11 +2042,21 @@ class QwenEngine(Engine):
         # (QWEN_BASE17_IDLE_TTL). The 0.6B distil phase below no longer races a
         # resident 1.7B for VRAM only because the watchdog reclaims it on idle —
         # during a mint the two are co-resident (validated on the 8 GB box).
+        def _phase(name: str) -> None:
+            if report_progress is not None:
+                try:
+                    report_progress(name)
+                except Exception:  # best-effort: never fail a design on progress
+                    pass
         t0 = time.perf_counter()
+        _kok_pre = ENGINES.get("kokoro")
+        if isinstance(_kok_pre, KokoroEngine) and _kok_pre._kokoro is not None:
+            _phase("freeing-vram")
         with self._base17_activity(), _VD_KOKORO.design():
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
+            _phase("loading-model")
             self._ensure_base17_loaded()
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
@@ -2040,6 +2065,7 @@ class QwenEngine(Engine):
                 rc = base_item.ref_code
                 rc = rc.to(self._device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()
+                _phase("anchoring")
                 ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
                     [{"audio_codes": rc}]
                 )
@@ -2049,10 +2075,12 @@ class QwenEngine(Engine):
                 icl = icl if isinstance(icl, list) else [icl]
                 icl_ms = (time.perf_counter() - _t) * 1000.0
                 _t = time.perf_counter()
+                _phase("performing")
                 emo_wav, emo_sr = self._icl_instruct_synth(icl, ref_text, emotion_instruct, lang)
                 instruct_ms = (time.perf_counter() - _t) * 1000.0
 
         # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
+        _phase("distilling")
         _t = time.perf_counter()
         with self._synth_lock:
             self._ensure_base_loaded()
@@ -2090,6 +2118,7 @@ class QwenEngine(Engine):
             self._prompt_cache.pop(variant_voice_id, None)
 
         # audition preview — speak the calibration line in the new variant voice
+        _phase("rendering")
         _t = time.perf_counter()
         with self._synth_lock:
             self._ensure_base_loaded()
