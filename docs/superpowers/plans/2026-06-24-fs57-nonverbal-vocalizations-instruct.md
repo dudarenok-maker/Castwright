@@ -56,6 +56,24 @@
 
 ---
 
+## Execution order & dependencies (PR3-M1)
+
+Sub-agent-driven execution runs tasks one at a time in this order; cross-wave deps noted:
+
+1. **Task 1** (schema) → **Task 2** (OpenAPI/types). No deps.
+2. **Task 3** (emotion-instruct map). No deps.
+3. **Task 4** (liveInstruct flag). No deps.
+4. **Task 5** (C2 / `NEUTRAL_INSTRUCT`) → **Task 6** (sidecar batch path) → **Task 7** (length cap/guard). Sidecar chain.
+5. **Task 8** (server threading) — needs 3, 4, 6 → **Task 8a** (batch budget) → **Task 9** (golden + flag-off regression).
+6. **Task 10** (skill) → **Task 11** (`runStage3` + `stage3ChapterSchema`, needs 1) → **Task 12** (language preamble).
+7. **Task 13** (instruct reducer, needs 1) ; **Task 14** (Stage-3 endpoint + client, needs 11) → **Task 15** (button wiring, needs 13, 14) ; **Task 16** (toggle, needs 4).
+8. **Task 17** (ASR carve-out, needs 1, 8) ; **Task 18** (Script-Review, needs 1, 13).
+9. **Task 19** (docs/regression/backlog) — last.
+
+Wave 2 (4–5) and Wave 3 (6–7) are independent of each other and could interleave; Wave 4 (8) needs both. Each task is committed before the next starts.
+
+---
+
 # Wave 1 — Data model + schema
 
 ### Task 1: Add `instruct?` + `vocalization?` to the Zod Sentence schema
@@ -582,7 +600,7 @@ it('drops an annotation whose sentenceId no longer exists', () => { /* … */ })
 
 - [ ] **Step 1:** Failing route test — the endpoint streams annotations for attributed chapters and 4xx's with a typed error when there's no attribution (mirror the emotion-pass test).
 - [ ] **Step 2:** Run — FAIL.
-- [ ] **Step 3:** Implement the route (loop chapters, call `runStage3Chapter`, emit SSE) + the `detectInstruct` client.
+- [ ] **Step 3:** Implement the route (loop chapters, call `runStage3Chapter`, emit SSE) + the `detectInstruct` client. **Mock surface (PR3-Mi1):** add a `detectInstruct` to the mock `api` returning canned Stage-3 annotations (e.g. one vocalization on a known sentence) so mock-mode + e2e exercise the path.
 - [ ] **Step 4:** Run — PASS.
 - [ ] **Step 5:** Commit `feat(server): Stage-3 instruct-annotation SSE endpoint + client (fs-57)`.
 
@@ -601,7 +619,7 @@ it('drops an annotation whose sentenceId no longer exists', () => { /* … */ })
 - [ ] **Step 1:** Failing test — clicking confirm dispatches both `applyDetectedEmotions` and `applyDetectedInstruct` as their streams arrive; confirm copy mentions text changes.
 - [ ] **Step 2:** Run — FAIL.
 - [ ] **Step 3:** Implement — after (or alongside) `api.detectEmotions`, call `api.detectInstruct` with the same abort controller; update the confirm dialog copy ("…also adds natural reactions like a gasp or sigh to the text").
-- [ ] **Step 4:** Run — PASS.
+- [ ] **Step 4:** Run — PASS. **Add the spec's named e2e (PR3-Mi2):** a Playwright spec (mock mode) asserting one button click runs both passes and the analysis form reflects the Stage-3 result.
 - [ ] **Step 5:** Commit `feat(frontend): run Stage 3 from the Detect-emotions trigger (fs-57)`.
 
 ---
