@@ -311,7 +311,7 @@ export interface DesignQwenVoiceParams {
 
 export async function designQwenVoiceForCharacter(
   p: DesignQwenVoiceParams,
-): Promise<{ voiceId: string; url: string }> {
+): Promise<{ voiceId: string; url: string; fellBackToDesignVoice?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }> {
   const baseVoiceId = qwenStorageKey(p.character, p.characterId);
   const designedId = p.emotion ? `${baseVoiceId}__${p.emotion}` : baseVoiceId;
   const voiceId = p.preview ? previewVoiceIdFor(designedId) : designedId;
@@ -404,14 +404,50 @@ export async function designQwenVoiceForCharacter(
       };
 
       try {
-        /* fs-55: emotion variants go to /qwen/mint-variant (anchored to the base
-           identity, so the base persona is not re-described — only the delivery
-           clause is added). Base voice design still goes to /qwen/design-voice. */
-        const target = p.emotion ? `${sidecarUrl}/qwen/mint-variant` : `${sidecarUrl}/qwen/design-voice`;
-        const fetchBody = p.emotion
-          ? JSON.stringify({ baseVoiceId, variantVoiceId: voiceId, emotionInstruct: EMOTION_INSTRUCT[p.emotion], voiceUuid: p.character.voiceUuid ?? null, language: p.language, calibrationText })
-          : JSON.stringify({ voiceId, voiceUuid: p.character.voiceUuid ?? null, instruct: p.persona, language: p.language, calibrationText });
-        return await postDesignAndCache(target, fetchBody, voiceId);
+        if (!p.emotion) {
+          return await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, JSON.stringify({
+            voiceId, voiceUuid: p.character.voiceUuid ?? null, instruct: p.persona, language: p.language, calibrationText,
+          }), voiceId);
+        }
+
+        // Variant: try the anchored mint, fall back on a deterministic 1.7B-Base failure.
+        const mintBody = JSON.stringify({
+          baseVoiceId, variantVoiceId: voiceId, emotionInstruct: EMOTION_INSTRUCT[p.emotion],
+          voiceUuid: p.character.voiceUuid ?? null, language: p.language, calibrationText,
+        });
+        try {
+          return await postDesignAndCache(`${sidecarUrl}/qwen/mint-variant`, mintBody, voiceId);
+        } catch (e) {
+          const err = e as SidecarDesignError;
+          const isFallback = err?.name === 'SidecarDesignError' && err.status === 503 && err.code === 'base17-unavailable'
+            && (err.reason === 'not-installed' || err.reason === 'corrupt');
+          if (!isFallback) throw e;  // OOM/500, cancel, unreachable, 409 → propagate
+
+          // Resolve a persona: p.persona → base voice's sidecar .json instruct → decline.
+          let persona = (p.persona ?? '').trim();
+          if (!persona) {
+            const baseVoiceName = p.character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(p.character, p.characterId);
+            const sidecarJson = await readJson<{ instruct?: string }>(qwenVoiceSidecarPath(baseVoiceName)).catch(() => null);
+            persona = (typeof sidecarJson?.instruct === 'string' ? sidecarJson.instruct : '').trim();
+          }
+          if (!persona) {
+            throw new Error('1.7B-Base unavailable and no persona on disk to fall back with — design the base voice\'s persona first.');
+          }
+
+          const reason = err.reason as 'not-installed' | 'corrupt';
+          console.warn(
+            `[qwen-voice] 1.7B-Base unavailable (reason=${reason}) — minted ${p.emotion} variant for ${p.characterId} via design-voice fallback (lower fidelity).`,
+          );
+          const fallbackBody = JSON.stringify({
+            voiceId, voiceUuid: p.character.voiceUuid ?? null,
+            instruct: `${persona} ${EMOTION_INSTRUCT[p.emotion]}`,
+            language: p.language, calibrationText,
+            mintMethod: 'design-voice-fallback',
+            fallbackFor: { baseVoiceId, emotion: p.emotion },
+          });
+          const out = await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, fallbackBody, voiceId);
+          return { ...out, fellBackToDesignVoice: true, fallbackReason: reason };
+        }
       } finally {
         releaseGpu();
       }
