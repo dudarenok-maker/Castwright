@@ -97,6 +97,17 @@ export function classifyVoiceGroup(name, uuids, ptExists) {
   return { action: 'flag', oldKey: name, newKey, reason: `no .pt at "${name}" or "${newKey}" — (re)design this voice` };
 }
 
+/** The on-disk storage key a row's voice is ACTUALLY loaded from at synth time
+    (`pickVoiceForEngine` → `qwenStorageKey`): `qwen-<voiceUuid>` when a uuid was
+    minted, else `qwen-<voiceId ?? id>`. The persisted `overrideTtsVoices.qwen.name`
+    SHOULD equal this; when it drifts (a stale name left after a re-design/reuse),
+    the voice still resolves correctly (resolution ignores the name) but the
+    record is misleading and the `designed-persona` route reads the wrong `.json`.
+    Normalising `name` → this key makes the cast honest. */
+export function storageKeyForRow(character) {
+  return character.voiceUuid ? `qwen-${character.voiceUuid}` : `qwen-${character.voiceId ?? character.id}`;
+}
+
 /** Rewrite a character's qwen base name + variant slot names from oldKey to
     newKey (pure; returns a new character). */
 export function rekeyCharacterNames(character, oldKey, newKey) {
@@ -167,21 +178,45 @@ async function main() {
 
   const casts = await listCastJsons(booksRoot);
 
-  // ── Pass 1: parse every cast; build voice GROUPS keyed by persisted qwen.name.
-  // A voice is shared across books, so its rows span casts; each group collects
-  // its distinct uuids and the (book, char) coordinates of its rows.
+  // ── Pass 1: parse every cast.
   const parsed = []; // index-aligned with `casts`; null for an unparseable cast
-  const groups = new Map(); // name -> { uuids:Set, rows:[{ bookIdx, charIdx }] }
   for (let b = 0; b < casts.length; b++) {
-    let cast;
     try {
-      cast = JSON.parse(await readFile(casts[b].path, 'utf8'));
+      parsed.push({ path: casts[b].path, label: casts[b].label, cast: JSON.parse(await readFile(casts[b].path, 'utf8')) });
     } catch {
       parsed.push(null);
-      continue;
     }
-    parsed.push({ path: casts[b].path, label: casts[b].label, cast });
-    const chars = cast.characters ?? [];
+  }
+
+  // ── Pass 2 (NORMALISE names): set every row's persisted name to the storage
+  // key its voice already loads from, when that key's `.pt` is on disk. This is
+  // a pure cast.json fix (no file renames) that heals stale names left by
+  // re-designs / reuse — and, by making names honest, dissolves false "rows
+  // disagree on uuid" groups before the consolidation pass below.
+  const dirtyBooks = new Set();
+  let normalised = 0;
+  for (let b = 0; b < parsed.length; b++) {
+    const entry = parsed[b];
+    if (!entry) continue;
+    const chars = entry.cast.characters ?? [];
+    for (let i = 0; i < chars.length; i++) {
+      const nm = chars[i]?.overrideTtsVoices?.qwen?.name;
+      if (!nm) continue;
+      const key = storageKeyForRow(chars[i]);
+      if (nm === key || !ptExists(key)) continue; // already honest, or .pt not at the key (leave for consolidation)
+      chars[i] = rekeyCharacterNames(chars[i], nm, key);
+      dirtyBooks.add(b);
+      normalised++;
+      console.log(`  name    ${entry.label}: ${chars[i].id}  ${nm} → ${key}`);
+    }
+  }
+
+  // ── Pass 3 (CONSOLIDATE misplaced files): build voice GROUPS keyed by the
+  // now-normalised name. A voice is shared across books, so its rows span casts.
+  const groups = new Map(); // name -> { uuids:Set, rows:[{ bookIdx, charIdx }] }
+  for (let b = 0; b < parsed.length; b++) {
+    if (!parsed[b]) continue;
+    const chars = parsed[b].cast.characters ?? [];
     for (let i = 0; i < chars.length; i++) {
       const nm = chars[i]?.overrideTtsVoices?.qwen?.name;
       if (!nm) continue;
@@ -201,9 +236,8 @@ async function main() {
     else if (c.action === 'flag') flags.push({ name, ...c });
   }
 
-  // ── Pass 2: apply. Re-key each voice's files once, then rewrite the name +
-  // stamp the shared uuid on every row of the group.
-  const dirtyBooks = new Set();
+  // Apply consolidations: re-key each voice's files once, then rewrite the name
+  // + stamp the shared uuid on every row of the group.
   let rowCount = 0;
   for (const { oldKey, newKey, uuid, rows } of consolidations) {
     for (const { from, to } of planRenames(voiceFiles, oldKey, newKey)) {
@@ -228,13 +262,14 @@ async function main() {
       await writeFile(parsed[b].path, JSON.stringify(parsed[b].cast, null, 2) + '\n');
 
   console.log(
-    `\n${APPLY ? 'Consolidated' : 'Would consolidate'}: ${consolidations.length} voice(s) re-keyed on disk; ${rowCount} cast row(s) rewritten.`,
+    `\n${APPLY ? 'Done' : 'Would change'}: ${normalised} name(s) normalised; ` +
+      `${consolidations.length} voice(s) re-keyed on disk (${rowCount} rows).`,
   );
   if (flags.length) {
     console.log(`\nNeeds manual attention (not auto-fixed):`);
     for (const f of flags) console.log(`  ${f.name}${f.newKey ? ` → ${f.newKey}` : ''}\n      ↳ ${f.reason}`);
   }
-  if (!APPLY && (consolidations.length || flags.length))
+  if (!APPLY && (normalised || consolidations.length || flags.length))
     console.log(`\nReview the plan above, back up ${voicesDir}, stop the server, then re-run with --apply.`);
 }
 
