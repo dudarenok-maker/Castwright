@@ -23,6 +23,7 @@ import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
 import {
   verifySegmentTranscript,
+  leadingVocalizationTokens,
   type AsrClassification,
   type AsrThresholds,
 } from './segment-asr-qa.js';
@@ -1494,14 +1495,17 @@ export async function synthesiseChapter(
       c.verdict === 'ok' ? 0 : c.verdict === 'inconclusive' ? 1 : 2;
     const asrBetter = (a: AsrClassification, b: AsrClassification): boolean =>
       rank(a) !== rank(b) ? rank(a) < rank(b) : a.wer < b.wer;
-    const verify = (pcm: Buffer, rate: number, text: string): Promise<AsrClassification> =>
-      verifySegmentTranscript(pcm, rate, text, {
+    const verify = (pcm: Buffer, rate: number, group: SentenceGroup): Promise<AsrClassification> =>
+      verifySegmentTranscript(pcm, rate, group.text, {
         language: asr.language,
         nameAllowlist: asr.nameAllowlist,
         thresholds: asr.thresholds,
         transcribeFn: asr.transcribeFn,
         sidecarUrl: asr.sidecarUrl,
         signal,
+        /* fs-57 / srv-31: when Stage 3 prepended a vocalization, tolerate its
+           leading token(s) so the gasp doesn't count as content drift. */
+        ...(group.vocalization ? { vocalizationAllowlist: leadingVocalizationTokens(group.text) } : {}),
       });
     /* Sample the groups to verify (have a result + pass the stride). The stride
        walks groups-with-results in order, so `total` mirrors that ordering. */
@@ -1523,7 +1527,7 @@ export async function synthesiseChapter(
       verifiedCount += 1;
       const r = results[group.index]!;
       best.set(group.index, r);
-      segmentAsrByIndex.set(group.index, await verify(r.pcm, r.sampleRate, group.text));
+      segmentAsrByIndex.set(group.index, await verify(r.pcm, r.sampleRate, group));
     }
     /* Round-based re-records: each round re-synths ALL still-drift groups in one
        batched dispatch, re-verifies, and keeps the better take per group. Each
@@ -1547,7 +1551,7 @@ export async function synthesiseChapter(
       for (const group of pending) {
         const f = fresh.get(group.index);
         if (!f) continue;
-        const freshClass = await verify(f.pcm, f.sampleRate, group.text);
+        const freshClass = await verify(f.pcm, f.sampleRate, group);
         if (asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
           best.set(group.index, f);
           segmentAsrByIndex.set(group.index, freshClass);

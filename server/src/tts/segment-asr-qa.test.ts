@@ -15,6 +15,7 @@ import {
   classifyTranscript,
   normalizeForWer,
   verifySegmentTranscript,
+  leadingVocalizationTokens,
   type AsrSignals,
 } from './segment-asr-qa.js';
 
@@ -157,5 +158,64 @@ describe('verifySegmentTranscript', () => {
       },
     });
     expect(seenLang).toBe('ru');
+  });
+});
+
+/* fs-57 / srv-31: vocalization-token tolerance (Task 17) */
+
+describe('leadingVocalizationTokens', () => {
+  it('extracts the single token before a "!" terminal', () => {
+    expect(leadingVocalizationTokens('Ah! I did not see you walk in.')).toEqual(['ah']);
+  });
+
+  it('extracts the single token before a U+2026 ellipsis terminal', () => {
+    // U+2026 is the real ellipsis character (…), not three dots.
+    expect(leadingVocalizationTokens('Haah… so tired.')).toEqual(['haah']);
+  });
+
+  it('handles a "." terminal (non-vocalization call, safe)', () => {
+    expect(leadingVocalizationTokens('No vocalization here.')).toEqual(['no', 'vocalization', 'here']);
+  });
+
+  it('returns [] when text has no terminal mark', () => {
+    expect(leadingVocalizationTokens('no terminal mark')).toEqual([]);
+  });
+});
+
+describe('classifyTranscript vocalizationAllowlist (fs-57)', () => {
+  const CLEAN_SIGNALS: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.01, compressionRatio: 1.2 };
+
+  it('tolerates a prepended vocalization token that the transcript dropped', () => {
+    // Expected has "Ah!" prepended; transcript silently drops it but says the words.
+    const c = classifyTranscript(
+      'Ah! I did not see you walk in there, Marcus, my friend.',
+      'I did not see you walk in there, Marcus, my friend.',
+      CLEAN_SIGNALS,
+      { vocalizationAllowlist: ['ah'] },
+    );
+    expect(c.verdict).toBe('ok');
+  });
+
+  it('without the allowlist the same drop is tolerated only by WER threshold', () => {
+    // "ah" is only 1 token out of ~11; WER ~0.09 so still ok by default threshold.
+    // But the point of this test is that the flag is NOT required for ok here;
+    // the real test is that WITHOUT allowlist AND with significant word drops → drift.
+    const c = classifyTranscript(
+      'Ah! I did not see you walk in there, Marcus, my friend at all today.',
+      'walk in there, Marcus.',
+      CLEAN_SIGNALS,
+    );
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('real word drops still drift even WITH the vocalization allowlist', () => {
+    // The allowlist only tolerates "ah"; the heavy deletion of lexical words still drifts.
+    const c = classifyTranscript(
+      'Ah! I did not see you walk in there, Marcus, my friend at all today.',
+      'walk in there, Marcus.',
+      CLEAN_SIGNALS,
+      { vocalizationAllowlist: ['ah'] },
+    );
+    expect(c.verdict).toBe('drift');
   });
 });
