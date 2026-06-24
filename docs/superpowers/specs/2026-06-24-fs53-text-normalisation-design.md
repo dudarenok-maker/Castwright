@@ -199,9 +199,12 @@ Then the ordered passes (operating on the canonicalised numbers):
    per-language currency word; amount via `cardinal()`; minor units split. →
    "one thousand two hundred dollars and fifty cents". Handles
    symbol-before-number (en/£/$) **and** number-before-symbol (`5 €`, the es/fr/
-   de convention). Minor-unit agreement uses the unit's known gender/plural
-   (see Russian/Spanish floors). **Symbols only** — ISO codes (`USD`/`EUR`) are
-   out of scope (see non-goals; the all-caps fold pre-mangles them anyway).
+   de convention). The **minor-unit name** (cents / céntimos / копейки / Cent /
+   centimes) and the **connector** between major and minor units (en "and",
+   es "con", de "und", fr "et", ru **none**) are per-language currency-table
+   data, and minor-unit agreement uses the unit's known gender/plural (see
+   Russian/Spanish floors). **Symbols only** — ISO codes (`USD`/`EUR`) are out
+   of scope (see non-goals; the all-caps fold pre-mangles them anyway).
 2. **Dates** — textual-month forms confidently (`January 3, 2026` → "January
    third, twenty twenty-six"; per-language month tables + ordinal day + year
    reading). **Conservative on bare numeric dates** (`3/1/2026`) — M/D vs D/M is
@@ -211,10 +214,12 @@ Then the ordered passes (operating on the canonicalised numbers):
    `+`/`-`/`=` in number-ish context. No guessing at arbitrary punctuation.
 4. **Ordinals** — `3rd`, `21st`, es `1.º`/`1.ª`, fr `1er`/`2e` → per-language
    ordinal word.
-5. **Decades** — `1990s` / `1990's` → per-language decade reading ("nineteen
-   nineties"). Runs **before** the year pass so the trailing `s` isn't orphaned
-   into "…ninety s". The bare `'90s` apostrophe-elided form is left alone
-   (ambiguous century) — documented limit.
+5. **Decades** — `1990s` / `1990's` → the per-language `decade()` engine
+   (NOT year + naive plural — decades are idiomatically distinct, see
+   per-language notes; Spanish/Russian **drop the century**). Runs **before**
+   the year pass so the trailing `s` isn't orphaned into "…ninety s". The bare
+   `'90s` apostrophe-elided form is left alone (ambiguous century) — documented
+   limit.
 6. **Years (the heuristic)** — bare 4-digit integer in ~**1100–2099**, no
    separator → year-style reading ("nineteen ninety-nine", "twenty
    twenty-six"). Outside the range, or grouped/decimal → falls through to
@@ -227,7 +232,9 @@ Then the ordered passes (operating on the canonicalised numbers):
    are untouched) → "minus".
 8. **Abbreviations** — a **curated, closed, per-language map** where one reading
    dominates: `Mr.`→Mister, `Mrs.`, `Ms.`, `Dr.`→Doctor, `Prof.`, `vs.`, `etc.`,
-   `e.g.`/`i.e.`, `a.m.`/`p.m.`. `No.`→Number **only when followed by a digit**
+   `e.g.`/`i.e.`. (`a.m.`/`p.m.` are **deliberately excluded** — TTS engines
+   already voice them acceptably and expanding to "ay em" would regress.)
+   `No.`→Number **only when followed by a digit**
    (`No. 5`) — never the sentence-initial negation *"No."*. `St.`→Saint
    **only when title-cased before a capitalised word**, else left alone (the
    documented 50/50 escape). Anything not in the map is untouched.
@@ -285,14 +292,17 @@ that the two normalisers compose without double-counting.
 
 ## Multi-language strategy & quality-floor morphology
 
-Each `lang/<code>.ts` exports `cardinal(n)`, `ordinal(n)`, `year(n)`, the
-`{decimalSep, thousandsSep}` pair, plus data tables (currency words + minor-unit
-gender, month names incl. genitive forms where needed, symbol words,
-abbreviation map). The shared `classifiers.ts` does language-agnostic
+Each `lang/<code>.ts` exports `cardinal(n)`, `ordinal(n)`, `year(n)`,
+`decade(n)` (the start year of a decade → its idiomatic spoken form), the
+`{decimalSep, thousandsSep}` pair, plus data tables (currency words +
+minor-unit name/gender + connector, month names incl. genitive forms where
+needed, symbol words, abbreviation map). The shared `classifiers.ts` does
+language-agnostic
 *detection*; rendering dispatches to the language file. v1 range:
 **0 – 999,999,999**; out-of-range untouched.
 
 - **English** — clean, full correctness. The reference implementation.
+  Decade: `1990s` → *nineteen nineties* (year stem + plural).
 - **Spanish** — real irregulars (*dieciséis…veintinueve*, *quinientos /
   setecientos / novecientos*, *cien* vs *ciento*), and the **`y`-placement
   rule**: `y` joins tens–units (*treinta y uno*) but **not** after hundreds
@@ -300,7 +310,8 @@ abbreviation map). The shared `classifiers.ts` does language-agnostic
   **Gender floor:** default masculine (*un*, *doscientos*); currency uses the
   unit's known gender (*dólar*→masc, *libra*→fem). Documented limit: a bare
   count modifying a feminine noun renders masculine. Separators: `.`=thousands,
-  `,`=decimal.
+  `,`=decimal. Decade: `1990s` → *los noventa* (**century dropped** — the tens
+  word alone, masculine plural article).
 - **Russian — the raised floor** (the hardest, deliberately pushed past a bare
   masculine-cardinal default):
   1. **Years as ordinals** — `1999` → *тысяча девятьсот девяносто девя́тый*
@@ -327,13 +338,16 @@ abbreviation map). The shared `classifiers.ts` does language-agnostic
      nouns and irregulars like *папа* — each documented with a fixture.
   6. Cardinals otherwise nominative; the numeral does not decline in other
      oblique contexts (documented limit). Separators: space=thousands,
-     `,`=decimal.
+     `,`=decimal. Decade: `1990s` → *девяностые* (**century dropped** —
+     substantivised nominative-plural ordinal of the tens word).
 - **French** — *soixante-dix / quatre-vingts / quatre-vingt-dix*; *vingt*/*cent*
   pluralisation common-case rule (edge documented). Separators: space=thousands,
-  `,`=decimal.
+  `,`=decimal. Decade: `1990s` → *les années quatre-vingt-dix* (tens word, no
+  century-drop — French keeps the full tens form).
 - **German** — unit-before-ten compounding (*einundzwanzig*), long-form
   concatenation; *eins*→*ein* before a scale word. Separators: `.`=thousands,
-  `,`=decimal.
+  `,`=decimal. Decade: `1990s` → *die Neunzigerjahre* (tens stem +
+  *-erjahre* compound, century dropped).
 
 `fr`/`de` ship **fully populated and unit-tested** but stay dormant behind the
 `isSupportedLanguage` self-gate — `expandForSpeech` returns the input unchanged
@@ -356,8 +370,9 @@ Satisfies the acceptance "regression test over a normalisation fixture set."
 - **Unit tests per engine** — `cardinal`/`ordinal`/`year`/`decade` edge numbers
   per language: 0, 21, 100, 101, 999, 1000, 1_000_000, the range cap, RU
   years-as-ordinals + all three preposition cases, ES 16–29 contractions +
-  `y`-placement, FR 70/80/90, DE unit-before-ten, and separator-group parsing
-  (`1.5` vs `1.500` per locale).
+  `y`-placement, FR 70/80/90, DE unit-before-ten, separator-group parsing
+  (`1.5` vs `1.500` per locale), and `decade()` century-drop (es *los noventa*,
+  ru *девяностые*, de *Neunzigerjahre* — assert the century is absent).
 - **ASR-QA alignment tests** — (a) a regression test asserting the QA
   `expectedText` equals the synth-input text for the same group; (b) a WER
   fixture line over a normalised-number sentence (en + es) proving
@@ -365,6 +380,9 @@ Satisfies the acceptance "regression test over a normalisation fixture set."
 - **Regression guard** — `normaliseForTts(text)` with **no** `langCode` is
   byte-identical to today's output across a sample corpus, locking the
   zero-regression promise for the existing transforms.
+- **No-op-on-plain-prose guard** — `normaliseForTts(text, langCode)` over a
+  number-free sentence (each language) equals the no-`langCode` output, proving
+  the new passes never munge ordinary words.
 - **Activation-gate test** — `expandForSpeech` with a `supported:false` langCode
   (fr/de today) returns input unchanged; flipping the flag activates it.
 - Pure text-level; no golden-audio tier needed.
