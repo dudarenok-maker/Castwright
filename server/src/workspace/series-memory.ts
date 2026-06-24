@@ -30,9 +30,19 @@ const MIN_BOOKS = 3;
 
 interface Appearance { book: SeriesBookInput; ch: SeriesCharacterInput; }
 
-/** Walk newest→oldest, chaining matchedFrom into per-character appearance
-    chains. A chain's head is a character with no incoming match in a LATER
-    book; we reconstruct by following matchedFrom backward from each book. */
+/** Group each character's cross-book appearances into one carried record by
+    CONNECTED COMPONENTS over the `matchedFrom` graph (union-find), then keep
+    the components that share a single bespoke/preset voice across ≥2 books.
+
+    Why components and not a directional walk: `matchedFrom` USUALLY points
+    backward (a later book → its earlier self), but the client confirm-matcher
+    links against ANY prior confirmed book — so a voice DESIGNED in a later book
+    and reused into an EARLIER one yields a FORWARD edge. That makes the shared
+    source a node with multiple incoming edges (e.g. book1→book2 AND book3→book2),
+    which a singly-linked tail-walk can't reconstruct: it dropped appearances or
+    split one character into two carried rows (over/under-count). Treating the
+    edges as undirected and bucketing by component is direction-agnostic and
+    fork-safe; it also subsumes the old cycle / shared-ancestor guards. */
 export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail | null {
   if (books.length < MIN_BOOKS) return null;
   const ordered = [...books].sort((a, b) => a.index - b.index);
@@ -41,40 +51,49 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
   const byKey = new Map<string, Appearance>();
   for (const book of ordered) for (const ch of book.characters) byKey.set(`${book.bookId}::${ch.characterId}`, { book, ch });
 
-  // `matchedFrom` points BACKWARD (a newer character → its older self). The set
-  // of pointed-at keys are chain interiors/heads; the appearances NOT pointed at
-  // are chain TAILS (the latest appearance). We start from each tail and walk
-  // BACKWARD by following matchedFrom — this is the fix for the wrong-direction
-  // walk: a forward walk from a tail goes nowhere.
-  const pointedAt = new Set<string>();
-  for (const book of ordered) for (const ch of book.characters) {
-    if (ch.matchedFrom?.bookId && ch.matchedFrom?.characterId)
-      pointedAt.add(`${ch.matchedFrom.bookId}::${ch.matchedFrom.characterId}`);
+  // Union-find over appearance keys. `find` uses path-halving; missing parents
+  // (a matchedFrom target not in this series) are simply never unioned.
+  const parent = new Map<string, string>();
+  for (const key of byKey.keys()) parent.set(key, key);
+  const find = (k: string): string => {
+    while (parent.get(k) !== k) {
+      const grand = parent.get(parent.get(k)!)!;
+      parent.set(k, grand);
+      k = grand;
+    }
+    return k;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  for (const [key, { ch }] of byKey) {
+    if (ch.matchedFrom?.bookId && ch.matchedFrom?.characterId) {
+      const target = `${ch.matchedFrom.bookId}::${ch.matchedFrom.characterId}`;
+      if (byKey.has(target)) union(key, target); // ignore links to other series / dropped chars
+    }
+  }
+
+  // Bucket appearances by component root — each component is one logical character.
+  const components = new Map<string, Appearance[]>();
+  for (const [key, app] of byKey) {
+    const root = find(key);
+    let bucket = components.get(root);
+    if (!bucket) components.set(root, (bucket = []));
+    bucket.push(app);
   }
 
   const carried: CarriedCharacter[] = [];
-  const seen = new Set<string>(); // guards against cycles and shared ancestors
-  for (const [key, tail] of byKey) {
-    if (pointedAt.has(key)) continue; // keep only chain tails (latest appearance)
-    const chain: Appearance[] = [tail];
-    seen.add(key);
-    let cur = tail;
-    while (cur.ch.matchedFrom?.bookId && cur.ch.matchedFrom?.characterId) {
-      const prevKey = `${cur.ch.matchedFrom.bookId}::${cur.ch.matchedFrom.characterId}`;
-      if (seen.has(prevKey)) break; // cycle or shared ancestor already consumed
-      const prev = byKey.get(prevKey);
-      if (!prev) break;
-      seen.add(prevKey);
-      chain.push(prev); cur = prev;
-    }
-    if (chain.length < 2) continue; // appears in <2 books → not carried
+  for (const chain of components.values()) {
     const voiceIds = new Set(chain.map((a) => a.ch.voiceId ?? ''));
     if (voiceIds.size !== 1 || voiceIds.has('')) continue; // voice changed/missing → not carried
-    // Order explicitly by book index — DON'T rely on chain push-order (it's
-    // tail→head). Earliest = first book, latest = canonical name/voice.
+    // Order explicitly by book index — earliest = first book, latest = canonical
+    // name/voice. Dedup indices: a component can hold >1 appearance in the same
+    // book (two characters reused from one shared source merge into one component).
     const byIndex = [...chain].sort((a, b) => a.book.index - b.book.index);
+    const indices = [...new Set(byIndex.map((a) => a.book.index))];
+    if (indices.length < 2) continue; // present in <2 distinct books → not carried
     const earliest = byIndex[0], latest = byIndex[byIndex.length - 1].ch;
-    const indices = byIndex.map((a) => a.book.index);
     // carriedFullSpan: present in EVERY confirmed book 1..M (no gap). `ordered`
     // is the confirmed set by contract.
     const fullSpan = indices.length === ordered.length &&
