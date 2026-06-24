@@ -194,6 +194,55 @@ export function normalizeForWer(text: string): string[] {
   return out;
 }
 
+/* Known Whisper hallucinations — boilerplate the model emits from its training
+   data on short / ambiguous audio (pirate-EPUB watermarks, subtitle credits,
+   video sign-offs). It emits these CONFIDENTLY, so they pass the avg_logprob /
+   no_speech_prob guards and would otherwise land as content drift. They are
+   never real book content, so a match → `inconclusive` (never a re-record). */
+const HALLUCINATION_PATTERNS: readonly RegExp[] = [
+  /oceansofpdf/i,
+  /\bsub(title|titles|s)?\s+by\b/i,
+  /\bcaptions?\s+by\b/i,
+  /\btranscri(bed|ption)\s+by\b/i,
+  /\bamara\.org\b/i,
+  /\bthanks?\s+(you\s+)?for\s+watching\b/i,
+  /\b(please\s+)?(like\s+and\s+)?subscribe\b/i,
+];
+
+/** True when the transcript is dominated by known Whisper boilerplate. */
+export function looksLikeHallucination(transcript: string): boolean {
+  const s = (transcript ?? '').trim();
+  return s.length > 0 && HALLUCINATION_PATTERNS.some((re) => re.test(s));
+}
+
+/* Reconcile solid↔split compound forms between the expected and actual token
+   streams. Whisper routinely splits a closed compound the manuscript writes
+   solid ("curvebuster" → "curve buster") or joins an open one the manuscript
+   writes apart ("good bye" → "goodbye"); on a short sentence that single
+   re-tokenisation is 1 sub + 1 ins on a tiny denominator → WER over the cap → a
+   false 'drift' on audio that says exactly the right words. We collapse an
+   adjacent PAIR only when its concatenation appears as a single token in the
+   OTHER stream — a genuinely wrong word won't concatenate to the expected
+   token, so this can never mask real drift. Pairs only (2↔1); 3+ token
+   compounds are rare and out of scope. */
+export function bridgeCompounds(expected: string[], actual: string[]): [string[], string[]] {
+  const collapse = (tokens: string[], other: ReadonlySet<string>): string[] => {
+    const out: string[] = [];
+    for (let i = 0; i < tokens.length; i += 1) {
+      if (i + 1 < tokens.length && other.has(tokens[i] + tokens[i + 1])) {
+        out.push(tokens[i] + tokens[i + 1]);
+        i += 1; // consumed the pair
+      } else {
+        out.push(tokens[i]);
+      }
+    }
+    return out;
+  };
+  const expSet = new Set(expected);
+  const actSet = new Set(actual);
+  return [collapse(expected, actSet), collapse(actual, expSet)];
+}
+
 /* --- Word-level alignment (Levenshtein with backtrace) --- */
 
 type Op = { type: 'match' | 'sub' | 'del' | 'ins'; expected?: string };
@@ -276,6 +325,15 @@ export function classifyTranscript(
     return base('inconclusive');
   }
 
+  // Known Whisper boilerplate hallucination → untrustworthy transcript, never a
+  // re-record (it's emitted confidently, so the signal guards below miss it).
+  if (looksLikeHallucination(transcript)) {
+    reasons.push(
+      'Transcript is known Whisper boilerplate/hallucination (not book content); not scoring.',
+    );
+    return base('inconclusive');
+  }
+
   // Loop/repeat hallucination is positive drift evidence even at low WER.
   if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
     reasons.push(
@@ -304,8 +362,10 @@ export function classifyTranscript(
     }
   }
 
-  const expectedTokens = normalizeForWer(expectedText);
-  const actualTokens = normalizeForWer(transcript);
+  const [expectedTokens, actualTokens] = bridgeCompounds(
+    normalizeForWer(expectedText),
+    normalizeForWer(transcript),
+  );
   if (expectedTokens.length === 0) {
     reasons.push('Not scored — expected text normalised to empty.');
     return base('inconclusive');
