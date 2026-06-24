@@ -139,6 +139,28 @@ describe('taggedSpeakerIds — localized (es/ru, #1028)', () => {
   });
 });
 
+describe('recoverTaggedNarratorLines — fr/de (activated by #1051 rows)', () => {
+  it('flips a German narrator quote onto the inversion-tagged speaker', () => {
+    const roster = [{ id: 'anna', name: 'Anna' }];
+    const sentences = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: '„Ich komme mit.“' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'sagte Anna entschlossen.' },
+    ];
+    const { sentences: out, flipped } = recoverTaggedNarratorLines(sentences, roster, 'de');
+    expect(flipped).toBe(1);
+    expect(out[0].characterId).toBe('anna');
+  });
+  it('keeps a 0-line French tagged speaker via taggedSpeakerIds', () => {
+    const roster = [{ id: 'marie', name: 'Marie' }];
+    const ids = taggedSpeakerIds(
+      [{ id: 1, chapterId: 1, characterId: 'narrator', text: '— Bonjour, dit Marie.' }],
+      roster,
+      'fr',
+    );
+    expect(ids.has('marie')).toBe(true);
+  });
+});
+
 describe('recoverTaggedNarratorLines — localized adjacency (es/ru)', () => {
   const ruRoster = [{ id: 'oduvan', name: 'Одуван' }, { id: 'wren', name: 'Рен' }];
 

@@ -892,6 +892,17 @@ describe('Wave D — localized minor-cast fold buckets', () => {
 });
 
 describe('foldMinorCast — keeps a prose-tagged Spanish minor speaker (#1028)', () => {
+  it('keeps a prose-tagged Spanish 0-line speaker (es keep-protection)', () => {
+    const characters = [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', gender: 'neutral', description: '', aliases: [] },
+      { id: 'berrin', name: 'Berrin', role: 'minor', color: 'narrator', gender: 'male', description: '', aliases: [] },
+    ];
+    const sentences = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: '—Está bien —dijo Berrin.' },
+    ];
+    const result = foldMinorCast(characters as any, sentences as any, { language: 'es' });
+    expect(result.characters.map((c) => c.id)).toContain('berrin');
+  });
   it('does not drop a 0-line speaker whose quote the prose tags (es)', () => {
     const chars = [
       makeChar('narrator'),
