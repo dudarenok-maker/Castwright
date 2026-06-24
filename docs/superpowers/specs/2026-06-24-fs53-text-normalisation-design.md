@@ -55,10 +55,17 @@ fs-53 extends this seam; it does not invent a new one.
 - General Russian numeral–noun **case agreement** for arbitrary nouns
   (declining the *noun* for 2–4 / 5+). Only known currency units get it.
 - Full oblique-case declension of Russian numerals after arbitrary
-  prepositions. (The one common frame `в … году` IS special-cased — see
-  Russian floor.)
+  prepositions. Only the **closed set of year-governing prepositions** is
+  cased (см. Russian floor); all other oblique numerals stay nominative.
 - Numeric-date disambiguation (`3/1/2026` — M/D vs D/M). Textual-month dates
   only.
+- **Currency ISO codes** (`USD`, `EUR`, `GBP`). v1 handles currency **symbols**
+  only ($, €, £, ₽). Codes are additionally pre-mangled by the existing
+  `denormaliseAllCaps` fold (`USD`→`Usd`) which runs before expansion, so
+  handling them would mean reordering that transform — out of scope.
+- **Clock times** (`3:30`), **ratios** (`2:1`), and **numeric ranges**
+  (`10–20`, already comma-softened upstream). They read acceptably-but-imperfectly
+  via the plain-number pass; not specially handled (documented limitation #8/#9).
 - Numbers above ~10⁹ (one billion). Out-of-range falls through untouched.
 - A heavy WFST / NeMo-style grammar or any new Python-sidecar surface. This is
   hand-rolled, auditable TypeScript in the existing `text-normalize.ts` style.
@@ -75,7 +82,7 @@ fs-53 extends this seam; it does not invent a new one.
 | Data home | `normalize/lang/*.ts` (alongside, not in the registry) | Data is behavioural (functions, not word lists); co-locate with the engine; registry stays the source of truth for language *identity/support* only |
 | Caption desync risk | None | Verified: no word-level/karaoke audio-synced highlighting exists in the frontend |
 | ASR-QA alignment | QA expected-text = the fs-53-normalised text | Audio is made from normalised text; the QA gate MUST compare against the same, or every expanded number is a false-positive `drift` |
-| Activation gate | `expandForSpeech` self-gates on `isSupportedLanguage(langCode)` | fr/de rules ship dormant and auto-activate when their `supported` flag flips; defense-in-depth past the confirm-screen gate |
+| Activation gate | `expandForSpeech` self-gates on `isSupportedLanguage(langCode)` **and** a `lang/<code>.ts` module existing | fr/de rules ship dormant and auto-activate when their `supported` flag flips; the module clause stops a future `supported` language without rules from crashing at dispatch |
 | Frontend work | None | Always-on / no toggle / invisible ⇒ server-only; the issue's "frontend" half of the Full-stack label is intentionally dropped |
 
 ## Architecture
@@ -96,11 +103,13 @@ normaliseForTts(text: string, langCode?: string): string
   risk**, fully backward-compatible.
 
 `expandForSpeech` is a **no-op** when `langCode` is absent, not in the registry,
-or maps to a `supported:false` language (the `isSupportedLanguage` self-gate).
-This is what keeps fr/de dormant until their fs-50 gate flips — and it is a
-real gate, not an assumption: `sidecarLanguageName` only fails-loud for
-languages *missing* from the registry, but fr/de are *present* (just
-`supported:false`), so they would otherwise slip through.
+maps to a `supported:false` language, **or** has no `lang/<code>.ts` module
+(the `isSupportedLanguage` self-gate + a module-presence check). This is what
+keeps fr/de dormant until their fs-50 gate flips — and it is a real gate, not an
+assumption: `sidecarLanguageName` only fails-loud for languages *missing* from
+the registry, but fr/de are *present* (just `supported:false`), so they would
+otherwise slip through. The module clause is belt-and-suspenders for a future
+registry language flipped `supported` before its rules land.
 
 ### Call-site threading (every audio + QA site, or none)
 
@@ -168,12 +177,21 @@ the classifier rewrites the matched numeric span into a canonical
 - `en`: `,`=thousands, `.`=decimal → `1,200.50` ⇒ 1200.50
 - `de`: `.`=thousands, `,`=decimal → `1.200,50` ⇒ 1200.50
 - `es`: `.`=thousands, `,`=decimal → `1.200,50` ⇒ 1200.50
-- `fr`/`ru`: space (incl. NBSP/thin-space) = thousands, `,`=decimal →
-  `1 200,50` ⇒ 1200.50
+- `fr`/`ru`: space = thousands, `,`=decimal → `1 200,50` ⇒ 1200.50.
+  The space matcher MUST include `U+0020`, `U+00A0` (NBSP), `U+202F` (narrow
+  NBSP), `U+2009` (thin) — verified these survive `stripUnsafeForTts` (they are
+  not in its zero-width set), so they reach this pass and must be matched.
 
 This is **critical for multilingual correctness**: without it, German `3,14`
 (π) reads as "three thousand fourteen". The separator rule is data, not code —
 one `{decimalSep, thousandsSep}` per language.
+
+**Thousands separators only count in valid 3-digit groups.** A period/comma is
+treated as a thousands separator **only** when it groups exactly-3-digit runs
+(`\d{1,3}(<sep>\d{3})+`). A lone non-grouping separator is the decimal (per
+locale) or left literal — so German `1.5` / `3.5x` (a casual decimal or a
+version) is **not** mangled to `15` / `35`. Without this guard the separator fix
+itself introduces a new mis-read class.
 
 Then the ordered passes (operating on the canonicalised numbers):
 
@@ -182,7 +200,8 @@ Then the ordered passes (operating on the canonicalised numbers):
    "one thousand two hundred dollars and fifty cents". Handles
    symbol-before-number (en/£/$) **and** number-before-symbol (`5 €`, the es/fr/
    de convention). Minor-unit agreement uses the unit's known gender/plural
-   (see Russian/Spanish floors).
+   (see Russian/Spanish floors). **Symbols only** — ISO codes (`USD`/`EUR`) are
+   out of scope (see non-goals; the all-caps fold pre-mangles them anyway).
 2. **Dates** — textual-month forms confidently (`January 3, 2026` → "January
    third, twenty twenty-six"; per-language month tables + ordinal day + year
    reading). **Conservative on bare numeric dates** (`3/1/2026`) — M/D vs D/M is
@@ -192,19 +211,24 @@ Then the ordered passes (operating on the canonicalised numbers):
    `+`/`-`/`=` in number-ish context. No guessing at arbitrary punctuation.
 4. **Ordinals** — `3rd`, `21st`, es `1.º`/`1.ª`, fr `1er`/`2e` → per-language
    ordinal word.
-5. **Years (the heuristic)** — bare 4-digit integer in ~**1100–2099**, no
+5. **Decades** — `1990s` / `1990's` → per-language decade reading ("nineteen
+   nineties"). Runs **before** the year pass so the trailing `s` isn't orphaned
+   into "…ninety s". The bare `'90s` apostrophe-elided form is left alone
+   (ambiguous century) — documented limit.
+6. **Years (the heuristic)** — bare 4-digit integer in ~**1100–2099**, no
    separator → year-style reading ("nineteen ninety-nine", "twenty
    twenty-six"). Outside the range, or grouped/decimal → falls through to
    cardinal. The one documented gamble; right for the overwhelming majority of
    prose. Known false positives (`Room 1999`, `Apartment 2024`, `Highway 1500`)
-   are accepted and pinned as fixture known-failures (#7).
-6. **Plain numbers** — grouped and bare integers → `cardinal()`; decimals →
-   "three point one four" (digit-by-digit after the point); a leading minus →
-   "minus".
-7. **Abbreviations** — a **curated, closed, per-language map** where one reading
+   are accepted and pinned as fixture known-failures (limitation #1).
+7. **Plain numbers** — grouped and bare integers → `cardinal()`; decimals →
+   "three point one four" (digit-by-digit after the point); a leading hyphen
+   that is **preceded by a non-alphanumeric** (so `well-being` / `twenty-one`
+   are untouched) → "minus".
+8. **Abbreviations** — a **curated, closed, per-language map** where one reading
    dominates: `Mr.`→Mister, `Mrs.`, `Ms.`, `Dr.`→Doctor, `Prof.`, `vs.`, `etc.`,
    `e.g.`/`i.e.`, `a.m.`/`p.m.`. `No.`→Number **only when followed by a digit**
-   (`No. 5`) — never the sentence-initial negation *"No."* (#6). `St.`→Saint
+   (`No. 5`) — never the sentence-initial negation *"No."*. `St.`→Saint
    **only when title-cased before a capitalised word**, else left alone (the
    documented 50/50 escape). Anything not in the map is untouched.
 
@@ -243,9 +267,11 @@ streams on both sides.
 
 **Bonus this unlocks:** because fs-53 is language-aware, the Spanish expected
 `$1,200` becomes *"mil doscientos dólares"*, which matches what Spanish Whisper
-hears — so the non-English number-WER path that `normalizeForWer` currently
-disables (#1084) effectively starts working through fs-53. fs-53 turns the QA
-gate from a liability into an asset.
+hears. Precisely: fs-53 **pre-spells** the numbers, so `normalizeForWer`'s own
+integer-speller — which is English-only and disabled for non-English (#1084) —
+is no longer *needed* on the non-English path. This requires **no change to
+`normalizeForWer`**; fs-53 simply sidesteps the gap by handing it matching word
+streams on both sides. The QA gate goes from a liability to an asset.
 
 **Latent pre-existing skew, also fixed:** even today, raw `group.text` vs
 `normaliseForTts` audio differ for dashes/all-caps/audio-tags; routing the
@@ -279,10 +305,17 @@ abbreviation map). The shared `classifiers.ts` does language-agnostic
   masculine-cardinal default):
   1. **Years as ordinals** — `1999` → *тысяча девятьсот девяносто девя́тый*
      (final component inflects to ordinal, nominative). Deterministic.
-  2. **`в … году` frame** — the dominant year context in prose — special-cased
-     to the prepositional: *в тысяча девятьсот девяносто девя́том году*.
-     Detected by the governing preposition + `году`; outside this frame, years
-     stay nominative (documented limit).
+  2. **Year-preposition frames (closed set, cased)** — Russian years inflect by
+     their governing preposition, so handling only `в` would make `в` right and
+     its siblings *worse-than-uniform* (partial correctness hides the gap). The
+     **closed set** is cased on the final ordinal component:
+     - `в`/`во` + `году` → **prepositional**: *в … девя́том году*
+     - `с` / `до` / `от` / `после` + `года` → **genitive**: *с … девя́того года*
+     - `к` + `году` → **dative**: *к … девя́тому году*
+
+     Detected by the governing preposition + the `год`-stem case marker. Any
+     year **outside** this closed set stays nominative (documented limit) — but
+     the common frames are now internally consistent, not half-right.
   3. **Dates** — day as **neuter ordinal** + month in **genitive**
      (`3 января` → *третье января*); both from hardcoded tables (12 genitive
      months, neuter ordinals 1–31). Deterministic.
@@ -314,13 +347,17 @@ Satisfies the acceptance "regression test over a normalisation fixture set."
 - **Per-language fixture files** `normalize/__fixtures__/{en,es,ru,fr,de}.txt` —
   `input ⇒ expected` pairs, table-driven. Every heuristic contributes a success
   line **and** its documented known-failure line: year gamble + `Room 1999`
-  type FPs (#7), `St.` left-alone + `No.`-vs-negation (#6), RU mis-gender edges,
-  RU `в…году` frame, conservative numeric dates, ES `y`-placement (#8),
-  **separator inversion** per language (de `3,14`, `1.200,50`).
-- **Unit tests per engine** — `cardinal`/`ordinal`/`year` edge numbers per
-  language: 0, 21, 100, 101, 999, 1000, 1_000_000, the range cap, RU
-  years-as-ordinals + `в…году`, ES 16–29 contractions + `y`-placement, FR
-  70/80/90, DE unit-before-ten.
+  type FPs, `St.` left-alone + `No.`-vs-negation, RU mis-gender edges, the RU
+  **year-preposition closed set** (`в…году` prepositional, `с…года` genitive,
+  `к…году` dative) **and** a sibling left nominative, conservative numeric
+  dates, ES `y`-placement, **decades** (`1990s`→nineteen nineties; `'90s`
+  left-alone), and **separator** cases per language: inversion (de `3,14`,
+  `1.200,50`), and the 3-digit-group guard (de `1.5` must NOT become `15`).
+- **Unit tests per engine** — `cardinal`/`ordinal`/`year`/`decade` edge numbers
+  per language: 0, 21, 100, 101, 999, 1000, 1_000_000, the range cap, RU
+  years-as-ordinals + all three preposition cases, ES 16–29 contractions +
+  `y`-placement, FR 70/80/90, DE unit-before-ten, and separator-group parsing
+  (`1.5` vs `1.500` per locale).
 - **ASR-QA alignment tests** — (a) a regression test asserting the QA
   `expectedText` equals the synth-input text for the same group; (b) a WER
   fixture line over a normalised-number sentence (en + es) proving
@@ -343,15 +380,23 @@ Satisfies the acceptance "regression test over a normalisation fixture set."
 1. Year heuristic mis-reads non-year 4-digit frames in 1100–2099 (`Room 1999`).
 2. `St.` left untouched outside the title-case-before-capital frame (model
    guesses Saint/Street).
-3. Russian numeral declension only resolved for the `в…году` year frame and for
-   currency units; arbitrary oblique numerals stay nominative.
+3. Russian numeral declension only resolved for the **closed year-preposition
+   set** (`в`/`во`, `с`/`до`/`от`/`после`, `к`) and for currency units; any
+   other oblique numeral stays nominative.
 4. Russian 1/2 gender heuristic mis-genders soft-sign and irregular nouns.
 5. Spanish/French gender floor renders bare counts masculine before feminine
    nouns.
 6. Numeric-only dates (`3/1/2026`) are not expanded as dates (M/D vs D/M).
-7. ICL reference-clip text (`voice-mapping.ts`) stays language-neutral; a
+7. Apostrophe-elided decades (`'90s`) left alone (ambiguous century); only the
+   full `1990s` form is expanded.
+8. Clock times (`3:30`), ratios (`2:1`), and numeric ranges (`10–20`,
+   comma-softened upstream) read via the plain-number pass — acceptable but not
+   idiomatic ("ten, twenty" not "ten to twenty"). Not specially handled.
+9. ICL reference-clip text (`voice-mapping.ts`) stays language-neutral; a
    reference sentence containing numbers has a minor text/audio convention
    mismatch (low impact — it's a clone reference, not shipped narration).
+10. Currency ISO codes (`USD`/`EUR`) not handled (symbols only); the all-caps
+    fold pre-alters them regardless.
 
 ## Before-shipping
 
