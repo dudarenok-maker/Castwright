@@ -1132,7 +1132,7 @@ def _fake_mint_variant(fake_qwen_runtime, monkeypatch):
     engine = fake_qwen_runtime["engine"]
     import types as _types
 
-    def _stub_mint(base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, voice_uuid=None):
+    def _stub_mint(base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, voice_uuid=None, report_progress=None):
         from main import SynthResult
         return SynthResult(pcm=b"\x00" * 48000, sample_rate=24000)
 

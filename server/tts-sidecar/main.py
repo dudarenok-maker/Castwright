@@ -32,7 +32,7 @@ import shutil
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -387,6 +387,31 @@ def _reclaim_host_and_vram() -> None:
             torch.cuda.empty_cache()
     except Exception:
         pass
+
+
+def _post_progress(url: str, token: str, phase: str) -> None:
+    """Best-effort fire-and-forget progress POST to the server's loopback relay.
+    Runs in a daemon thread; swallows every error (progress must never fail or
+    stall a design). Uses an unverified SSL context for the https loopback —
+    the server's LAN cert is self-signed and this is the same host (AR2)."""
+    import json as _json
+    import ssl as _ssl
+    import threading as _threading
+    import urllib.request as _ureq
+
+    def _fire() -> None:
+        try:
+            data = _json.dumps({"token": token, "phase": phase}).encode("utf-8")
+            req = _ureq.Request(
+                url, data=data, method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            ctx = _ssl._create_unverified_context() if url.lower().startswith("https") else None
+            _ureq.urlopen(req, timeout=1.5, context=ctx).close()
+        except Exception:
+            pass
+
+    _threading.Thread(target=_fire, daemon=True).start()
 
 
 class SynthResult:
@@ -1869,6 +1894,7 @@ class QwenEngine(Engine):
     def design_voice(
         self, voice_id: str, instruct: str, language: Optional[str],
         calibration_text: Optional[str], voice_uuid: Optional[str] = None,
+        report_progress: Optional[Callable[[str], None]] = None,
         mint_method: Optional[str] = None,
         fallback_for: Optional[dict] = None,
     ) -> SynthResult:
@@ -1903,19 +1929,38 @@ class QwenEngine(Engine):
         self._design_last_used = time.monotonic()
         self._design_in_flight += 1
         try:
+            # Phase timer (mirrors the synth path's load_ms/gen_ms). `t0` brackets
+            # the whole operation so the structured timing line below can split a
+            # slow design into its phases — see that log.info for the field map.
+            t0 = time.perf_counter()
+            def _phase(name: str) -> None:
+                if report_progress is not None:
+                    try:
+                        report_progress(name)
+                    except Exception:  # best-effort: never fail a design on progress
+                        pass
             # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
             # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
             # (waits for any in-flight Kokoro synth to drain, blocks new ones),
             # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
             # reloads on the next synth (~1s); when no generation ran it isn't
             # resident, so this is a no-op.
+            _kokoro_pre = ENGINES.get("kokoro")
+            if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
+                _phase("freeing-vram")
             with _VD_KOKORO.design():
                 _kokoro_eng = ENGINES.get("kokoro")
                 if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
                     log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
                     _kokoro_eng.unload()
+                _phase("loading-model")
                 self._ensure_design_loaded()
                 self._ensure_base_loaded()
+                # Phase boundary: everything above is Kokoro-evict + (cold) model
+                # load; everything below is GPU forwards. `load_ms` isolates the
+                # cold-start cost (the transient 1.7B VoiceDesign load the operator
+                # suspects) from the design forward itself.
+                load_ms = (time.perf_counter() - t0) * 1000.0
                 # Serialise the GPU forwards against any concurrent synth/design — see
                 # `_synth_lock` in __init__ (the Base model isn't thread-safe).
                 with self._synth_lock:
@@ -1930,15 +1975,21 @@ class QwenEngine(Engine):
                     self._ensure_design_loaded()
                     self._ensure_base_loaded()
                     # 1. design a reference clip from the persona instruction.
+                    _phase("designing")
+                    _t = time.perf_counter()
                     ref_wavs, ref_sr = self._design.generate_voice_design(
                         text=ref_text, language=lang, instruct=instruct
                     )
+                    design_fwd_ms = (time.perf_counter() - _t) * 1000.0
                     ref_audio = ref_wavs[0]
 
                     # 2. distil into a reusable clone prompt on the Base model.
+                    _phase("distilling")
+                    _t = time.perf_counter()
                     prompt = self._base.create_voice_clone_prompt(
                         ref_audio=(ref_audio, ref_sr), ref_text=ref_text
                     )
+                    distil_ms = (time.perf_counter() - _t) * 1000.0
 
             # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
@@ -1975,11 +2026,27 @@ class QwenEngine(Engine):
 
             # 4. audition preview — speak the caller's calibration line in the new
             #    voice (the full evidence quote, NOT the short reference text).
+            _phase("rendering")
+            _t = time.perf_counter()
             with self._synth_lock:
                 self._ensure_base_loaded()  # re-ensure under the lock — see above
                 wavs, sr = self._base.generate_voice_clone(
                     text=[audition_text], language=[lang], voice_clone_prompt=prompt
                 )
+            audition_ms = (time.perf_counter() - _t) * 1000.0
+            # Structured timing line, mirroring the synth path. Field map:
+            #   load_ms        Kokoro-evict + (cold) 1.7B VoiceDesign / 0.6B load
+            #   design_fwd_ms  the 1.7B VoiceDesign reference-clip forward
+            #   distil_ms      0.6B clone-prompt distil from the reference clip
+            #   audition_ms    0.6B audition-preview synth of the calibration line
+            # A single grep over this line tells us where a slow design spends its
+            # time, with no guesswork.
+            total_ms = (time.perf_counter() - t0) * 1000.0
+            log.info(
+                "qwen voice design: voice=%s lang=%s load_ms=%.0f design_fwd_ms=%.0f "
+                "distil_ms=%.0f audition_ms=%.0f total_ms=%.0f",
+                voice_id, lang, load_ms, design_fwd_ms, distil_ms, audition_ms, total_ms,
+            )
             # Idle clock starts now (design finished) — back-to-back designs keep
             # the model warm; a pause past the TTL lets the watchdog reclaim it.
             self._design_last_used = time.monotonic()
@@ -1995,6 +2062,7 @@ class QwenEngine(Engine):
         language: Optional[str],
         calibration_text: Optional[str],
         voice_uuid: Optional[str] = None,
+        report_progress: Optional[Callable[[str], None]] = None,
     ) -> "SynthResult":
         """Mint an emotion variant anchored to `base_voice_id`'s identity.
 
@@ -2036,15 +2104,30 @@ class QwenEngine(Engine):
         # (QWEN_BASE17_IDLE_TTL). The 0.6B distil phase below no longer races a
         # resident 1.7B for VRAM only because the watchdog reclaims it on idle —
         # during a mint the two are co-resident (validated on the 8 GB box).
+        def _phase(name: str) -> None:
+            if report_progress is not None:
+                try:
+                    report_progress(name)
+                except Exception:  # best-effort: never fail a design on progress
+                    pass
+        t0 = time.perf_counter()
+        _kok_pre = ENGINES.get("kokoro")
+        if isinstance(_kok_pre, KokoroEngine) and _kok_pre._kokoro is not None:
+            _phase("freeing-vram")
         with self._base17_activity(), _VD_KOKORO.design():
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
+            _phase("loading-model")
             self._ensure_base17_for_mint()
+            # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
+            load_ms = (time.perf_counter() - t0) * 1000.0
             with self._synth_lock:
                 self._ensure_base17_for_mint()
                 rc = base_item.ref_code
                 rc = rc.to(self._device) if hasattr(rc, "to") else rc
+                _t = time.perf_counter()
+                _phase("anchoring")
                 ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
                     [{"audio_codes": rc}]
                 )
@@ -2052,14 +2135,21 @@ class QwenEngine(Engine):
                     ref_audio=(ref_wavs[0], ref_sr), ref_text=ref_text
                 )
                 icl = icl if isinstance(icl, list) else [icl]
+                icl_ms = (time.perf_counter() - _t) * 1000.0
+                _t = time.perf_counter()
+                _phase("performing")
                 emo_wav, emo_sr = self._icl_instruct_synth(icl, ref_text, emotion_instruct, lang)
+                instruct_ms = (time.perf_counter() - _t) * 1000.0
 
         # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
+        _phase("distilling")
+        _t = time.perf_counter()
         with self._synth_lock:
             self._ensure_base_loaded()
             prompt = self._base.create_voice_clone_prompt(
                 ref_audio=(emo_wav, emo_sr), ref_text=ref_text
             )
+        distil_ms = (time.perf_counter() - _t) * 1000.0
         os.makedirs(self._voices_dir, exist_ok=True)
         pt_path, json_path = self._voice_paths(variant_voice_id)
         torch.save(prompt, pt_path)
@@ -2090,11 +2180,27 @@ class QwenEngine(Engine):
             self._prompt_cache.pop(variant_voice_id, None)
 
         # audition preview — speak the calibration line in the new variant voice
+        _phase("rendering")
+        _t = time.perf_counter()
         with self._synth_lock:
             self._ensure_base_loaded()
             wavs, sr = self._base.generate_voice_clone(
                 text=[audition_text], language=[lang], voice_clone_prompt=prompt
             )
+        audition_ms = (time.perf_counter() - _t) * 1000.0
+        # Structured timing line, mirroring design_voice. Field map:
+        #   load_ms      Kokoro-evict + (cold) 1.7B-Base load
+        #   icl_ms       ref_code decode + ICL clone-prompt re-derive (1.7B)
+        #   instruct_ms  the 1.7B instruct-synth of the emotion clip (the big one)
+        #   distil_ms    0.6B clone-prompt distil from the emotion clip
+        #   audition_ms  0.6B audition-preview synth
+        total_ms = (time.perf_counter() - t0) * 1000.0
+        log.info(
+            "qwen mint variant: voice=%s base=%s lang=%s load_ms=%.0f icl_ms=%.0f "
+            "instruct_ms=%.0f distil_ms=%.0f audition_ms=%.0f total_ms=%.0f",
+            variant_voice_id, base_voice_id, lang, load_ms, icl_ms, instruct_ms,
+            distil_ms, audition_ms, total_ms,
+        )
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
@@ -4073,6 +4179,14 @@ async def qwen_design_voice(req: Request) -> Response:
     if not isinstance(qwen, QwenEngine):
         return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
 
+    progress_token = body.get("progressToken") if isinstance(body.get("progressToken"), str) else None
+    progress_url = body.get("progressUrl") if isinstance(body.get("progressUrl"), str) else None
+    _report = (
+        (lambda ph: _post_progress(progress_url, progress_token, ph))
+        if progress_token and progress_url
+        else None
+    )
+
     try:
         result = await asyncio.to_thread(
             qwen.design_voice,
@@ -4081,6 +4195,7 @@ async def qwen_design_voice(req: Request) -> Response:
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
             voice_uuid,
+            _report,
             mint_method,
             fallback_for,
         )
@@ -4127,6 +4242,14 @@ async def qwen_mint_variant(req: Request) -> Response:
     if not isinstance(qwen, QwenEngine):
         return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
 
+    progress_token = body.get("progressToken") if isinstance(body.get("progressToken"), str) else None
+    progress_url = body.get("progressUrl") if isinstance(body.get("progressUrl"), str) else None
+    _report = (
+        (lambda ph: _post_progress(progress_url, progress_token, ph))
+        if progress_token and progress_url
+        else None
+    )
+
     try:
         result = await asyncio.to_thread(
             qwen.mint_variant,
@@ -4136,6 +4259,7 @@ async def qwen_mint_variant(req: Request) -> Response:
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
             voice_uuid,
+            _report,
         )
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)

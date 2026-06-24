@@ -307,6 +307,10 @@ export interface DesignQwenVoiceParams {
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
+  /** When present, forwarded to the sidecar so it can POST phase progress back
+      to this server (AR2 design-progress feature). */
+  progressToken?: string;
+  progressUrl?: string;
 }
 
 export async function designQwenVoiceForCharacter(
@@ -404,9 +408,17 @@ export async function designQwenVoiceForCharacter(
       };
 
       try {
+        /* AR2 design-progress: forward the token so the sidecar can POST phase
+           progress back to this server. Spread into every body (base, mint,
+           fallback) so progress works on all paths. */
+        const progressFields =
+          p.progressToken && p.progressUrl
+            ? { progressToken: p.progressToken, progressUrl: p.progressUrl }
+            : {};
         if (!p.emotion) {
           return await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, JSON.stringify({
             voiceId, voiceUuid: p.character.voiceUuid ?? null, instruct: p.persona, language: p.language, calibrationText,
+            ...progressFields,
           }), voiceId);
         }
 
@@ -414,6 +426,7 @@ export async function designQwenVoiceForCharacter(
         const mintBody = JSON.stringify({
           baseVoiceId, variantVoiceId: voiceId, emotionInstruct: EMOTION_INSTRUCT[p.emotion],
           voiceUuid: p.character.voiceUuid ?? null, language: p.language, calibrationText,
+          ...progressFields,
         });
         try {
           return await postDesignAndCache(`${sidecarUrl}/qwen/mint-variant`, mintBody, voiceId);
@@ -444,6 +457,7 @@ export async function designQwenVoiceForCharacter(
             language: p.language, calibrationText,
             mintMethod: 'design-voice-fallback',
             fallbackFor: { baseVoiceId, emotion: p.emotion },
+            ...progressFields,
           });
           const out = await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, fallbackBody, voiceId);
           return { ...out, fellBackToDesignVoice: true, fallbackReason: reason };
@@ -465,6 +479,8 @@ qwenVoiceRouter.post(
       modelKey?: unknown;
       preview?: unknown;
       emotion?: unknown;
+      progressToken?: unknown;
+      progressUrl?: unknown;
     };
 
     /* fs-25 — optional emotion variant. When present it must be one of the
@@ -568,6 +584,8 @@ qwenVoiceRouter.post(
         language: designLanguage,
         emotion,
         preview: body.preview === true,
+        progressToken: typeof body.progressToken === 'string' ? body.progressToken : undefined,
+        progressUrl: typeof body.progressUrl === 'string' ? body.progressUrl : undefined,
       });
       /* fs-25 — record a (non-preview) emotion variant onto the character's
          qwen slot so generation can resolve it (Wave 2) and the cast UI can show

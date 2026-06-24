@@ -229,6 +229,32 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     expect(seg?.asr?.verdict).toBe('ok');
   });
 
+  it('fs-53: a faithful render of an expanded number is ok, not drift (ASR-QA alignment)', async () => {
+    /* The sentence carries "$1,200"; fs-53 synthesises it as "one thousand two
+       hundred dollars", and Whisper transcribes that spoken form. Without the
+       ASR-QA alignment (expected text normalised with the book langCode) the
+       gate would WER the transcript against the raw "$1,200" and false-flag a
+       perfect render as drift. With it, expected == spoken → verdict ok. */
+    const provider = makeProvider();
+    const SENTENCE = 'He paid $1,200 for the rare old book.';
+    const SPOKEN = 'He paid one thousand two hundred dollars for the rare old book.';
+    const { fn } = makeTranscriber([SPOKEN]);
+    const res = await synthesiseChapter({
+      sentences: [sentence(1, SENTENCE)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      bookLanguage: 'en',
+      asr: { maxRerecords: 2, transcribeFn: fn },
+    });
+    // No re-record — the take is faithful once the expected text is aligned.
+    expect(provider.calls).toHaveLength(1);
+    const seg = res.segments.find((s) => s.kind !== 'title');
+    expect(seg?.asr?.verdict).toBe('ok');
+    expect(seg?.asrSuspect).toBeUndefined();
+  });
+
   it('is a no-op when asr is absent (byte-identical to today)', async () => {
     const provider = makeProvider();
     const res = await synthesiseChapter({

@@ -119,13 +119,13 @@ describe('castDesignSlice — active snapshot reducers', () => {
 });
 
 describe('single-design snapshot', () => {
-  it('beginSingle opens a kind:single snapshot with phase designing', () => {
+  it('beginSingle opens a kind:single snapshot with phase freeing-vram', () => {
     const s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
       bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'first', lastTickAt: 10,
     }));
     expect(s.active).toMatchObject({
       kind: 'single', bookId: 'b1', characterId: 'c1', currentName: 'Aria',
-      total: 1, done: 0, mode: 'first', phase: 'designing', state: 'running',
+      total: 1, done: 0, mode: 'first', phase: 'freeing-vram', state: 'running',
     });
   });
 
@@ -177,6 +177,30 @@ describe('single-design snapshot', () => {
       previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm', lastTickAt: 20,
     }));
     expect(s.active?.preview?.voiceUuid).toBeUndefined();
+  });
+
+  it('beginSingle seeds the lowest phase so early phases still show', () => {
+    const s = castDesignSlice.reducer(
+      undefined,
+      castDesignActions.beginSingle({ bookId: 'b', characterId: 'c', name: 'N', mode: 'first', lastTickAt: 0 }),
+    );
+    expect(s.active?.phase).toBe('freeing-vram');
+  });
+
+  it('setPhase advances forward through the real phase order but never rewinds', () => {
+    let s = castDesignSlice.reducer(
+      undefined,
+      castDesignActions.beginSingle({ bookId: 'b', characterId: 'c', name: 'N', mode: 'first', lastTickAt: 0 }),
+    );
+    s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'loading-model', lastTickAt: 1 }));
+    expect(s.active?.phase).toBe('loading-model'); // advances from the freeing-vram seed
+    s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'designing', lastTickAt: 2 }));
+    expect(s.active?.phase).toBe('designing');
+    // a late, duplicated/out-of-order lower-rank POST must be ignored (AR5)
+    s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'loading-model', lastTickAt: 3 }));
+    expect(s.active?.phase).toBe('designing');
+    s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'rendering', lastTickAt: 4 }));
+    expect(s.active?.phase).toBe('rendering');
   });
 });
 

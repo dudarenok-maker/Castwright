@@ -12,6 +12,7 @@ import type { Stage, View } from '../lib/types';
 import { useAppDispatch } from '../store';
 import { startLinearTour, startScreenTour } from '../store/tour-slice';
 import { screenForStage } from '../lib/tour-steps';
+import { type DesignPhase } from '../lib/design-phase';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
 export interface GenerationPillData {
@@ -70,7 +71,7 @@ export interface DesignPillData {
   /** Character currently being designed (running subtitle). */
   currentName?: string | null;
   /** Phase of the current single-character design job (absent for bulk). */
-  phase?: 'designing' | 'rendering';
+  phase?: DesignPhase;
   onClick: () => void;
 }
 

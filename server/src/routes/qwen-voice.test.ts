@@ -1177,3 +1177,42 @@ describe('srv-43 mint + collision regression', () => {
     rmSync(join(workspaceRoot, 'books', AUTHOR, 'Standalones'), { recursive: true, force: true });
   });
 });
+
+describe('progress token threading (design-progress AR2)', () => {
+  /* Verifies that progressToken + progressUrl are forwarded into BOTH sidecar
+     request bodies (design-voice and mint-variant) when provided, and are absent
+     when not provided. */
+
+  it('threads progressToken + progressUrl into the design-voice body when both are present', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ ...designBody, progressToken: 'tok', progressUrl: 'http://127.0.0.1:8080/api/internal/design-progress' });
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.progressToken).toBe('tok');
+    expect(sent.progressUrl).toBe('http://127.0.0.1:8080/api/internal/design-progress');
+  });
+
+  it('does NOT include progressToken / progressUrl in the design-voice body when omitted', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent).not.toHaveProperty('progressToken');
+    expect(sent).not.toHaveProperty('progressUrl');
+  });
+
+  it('threads progressToken + progressUrl into the mint-variant body when both are present', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ ...designBody, emotion: 'angry', progressToken: 'tok2', progressUrl: 'http://127.0.0.1:8080/api/internal/design-progress' });
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.progressToken).toBe('tok2');
+    expect(sent.progressUrl).toBe('http://127.0.0.1:8080/api/internal/design-progress');
+  });
+});
