@@ -23,3 +23,10 @@ describe('expandForSpeech dormancy gate', () => {
   it('de (supported:false) no-ops end-to-end', () =>
     expect(expandForSpeech('Ich habe 5 €.', 'de')).toBe('Ich habe 5 €.'));
 });
+
+describe('expandForSpeech activation gate', () => {
+  it('unknown language no-ops', () =>
+    expect(expandForSpeech('I have $5.', 'xx')).toBe('I have $5.'));
+  it('supported language with engine expands', () =>
+    expect(expandForSpeech('I have $5.', 'en')).toBe('I have five dollars.'));
+});
