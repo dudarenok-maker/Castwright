@@ -9,9 +9,13 @@ describe('grammarFor', () => {
     expect(grammarFor('ru-RU')?.flipStrategy).toBe('adjacent');
   });
   it('returns null for unmapped languages (still gated) and empty input', () => {
-    expect(grammarFor('de')).toBeNull();
-    expect(grammarFor('fr')).toBeNull();
+    expect(grammarFor('pt')).toBeNull();
     expect(grammarFor('')).toBe(grammarFor('en')); // '' normalises to en
+  });
+  it('maps fr and de (added in #1051)', () => {
+    expect(grammarFor('fr')?.orders[0]).toBe('verb-name');
+    expect(grammarFor('de')?.orders[0]).toBe('verb-name');
+    expect(grammarFor('de-DE')?.flipStrategy).toBe('adjacent');
   });
 });
 
@@ -117,6 +121,34 @@ describe('stopword suppression for name-verb (finding J)', () => {
     //  grammar stopword set contains the opener so roster-coverage can filter it.)
     expect(grammarFor('es')!.stopwords).toContain('entonces');
     expect(grammarFor('ru')!.stopwords).toContain('тогда');
+  });
+});
+
+describe('fr/de grammar rows (#1051)', () => {
+  it('detects French inversion and name-verb', () => {
+    expect(capturesName('fr', '— Bonjour, dit Marie.')).toBe('Marie');
+    expect(capturesName('fr', 'Marie dit bonjour.')).toBe('Marie');
+  });
+  it('detects German inversion and name-verb', () => {
+    expect(capturesName('de', '„Hallo", sagte Anna.')).toBe('Anna');
+    expect(capturesName('de', 'Anna sagte leise etwas.')).toBe('Anna');
+  });
+  it('skips a German capitalized title and captures the surname', () => {
+    expect(capturesName('de', '„Guten Tag", sagte Frau Schmidt.')).toBe('Schmidt');
+    expect(capturesName('de', 'sagte Herr Berger')).toBe('Berger');
+  });
+  it('captures a lone German title-noun (no surname) for the fold to bucket', () => {
+    expect(capturesName('de', 'sagte Frau')).toBe('Frau');
+  });
+  it('unmapped languages stay gated', () => {
+    expect(grammarFor('pt')).toBeNull();
+  });
+});
+
+describe('QUOTE_GLYPHS recognises German low-opening quote (R2-3)', () => {
+  it('treats „… as quote-bearing', () => {
+    expect(isQuoteBearing('„Hallo, wie geht es dir?')).toBe(true); // opening only
+    expect(isQuoteBearing('«Hola»')).toBe(true);
   });
 });
 

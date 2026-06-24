@@ -23,6 +23,8 @@ export interface TagGrammar {
   flipStrategy: 'preceding' | 'adjacent';
   /** Pronouns/articles that look like a name in verb-name order but aren't. */
   stopwords?: readonly string[];
+  /** Capitalized honorifics to skip before the name in verb-name order (de). */
+  titles?: readonly string[];
 }
 
 // Curated, inclusion-biased (a missing verb silently drops a real speaker; an
@@ -49,6 +51,31 @@ const RU_STOPWORDS = [
   // name-verb openers (finding J)
   'тогда', 'потом', 'затем', 'однако', 'хотя', 'наконец', 'вдруг', 'теперь', 'здесь',
 ] as const;
+const FR_VERBS = [
+  'dit', 'demanda', 'répondit', 'répliqua', 'ajouta', 'cria', 'murmura',
+  'chuchota', 's’exclama', 'reprit', 'répéta', 'insista', 'continua', 'soupira',
+  'lança', 'ordonna',
+] as const;
+const DE_VERBS = [
+  'sagte', 'fragte', 'antwortete', 'erwiderte', 'rief', 'flüsterte', 'murmelte',
+  'entgegnete', 'fuhr', 'meinte', 'erklärte', 'wiederholte', 'fügte', 'seufzte',
+  'brüllte', 'stammelte',
+] as const;
+const FR_STOPWORDS = [
+  'il', 'elle', 'ils', 'elles', 'je', 'tu', 'nous', 'vous', 'ce', 'cela', 'qui', 'que',
+  'alors', 'puis', 'ensuite', 'mais', 'donc', 'quand', 'enfin', 'ici', 'là',
+] as const;
+const DE_STOPWORDS = [
+  'er', 'sie', 'es', 'ich', 'du', 'wir', 'ihr', 'das', 'dies', 'wer', 'was',
+  'dann', 'da', 'als', 'doch', 'aber', 'also', 'hier', 'dort', 'schließlich', 'plötzlich',
+] as const;
+/* German honorifics: capitalized, so the lowercase role-token skip in the verb-name
+   regex won't skip them — list them explicitly to capture the following surname. */
+const DE_TITLES = [
+  'Herr', 'Frau', 'Fräulein', 'Dr', 'Doktor', 'Professor', 'Prof', 'Graf',
+  'Gräfin', 'Baron', 'Baronin', 'König', 'Königin', 'Prinz', 'Prinzessin',
+  'Meister', 'Hauptmann',
+] as const;
 
 // English name token — IDENTICAL to the historical makeTagRegex character class.
 const EN_NAME = "[A-Z][A-Za-z’'-]+";
@@ -59,6 +86,8 @@ const TAG_GRAMMARS: Record<string, TagGrammar> = {
   en: { verbs: DIALOGUE_VERBS, orders: ['name-verb'], nameCapture: EN_NAME, flipStrategy: 'preceding' },
   es: { verbs: ES_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: ES_STOPWORDS },
   ru: { verbs: RU_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: RU_STOPWORDS },
+  fr: { verbs: FR_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: FR_STOPWORDS },
+  de: { verbs: DE_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: DE_STOPWORDS, titles: DE_TITLES },
 };
 
 /** Grammar row for a book language, or null when unmapped (caller stays gated). */
@@ -83,9 +112,13 @@ function buildOrderRegex(g: TagGrammar, order: 'name-verb' | 'verb-name'): RegEx
     // BOTH ends (e.g. trailing \b after Cyrillic "сказал") — use lookarounds (R2-8).
     return new RegExp(`(?<!\\p{L})(${g.nameCapture})\\s+(?:${verbs})(?!\\p{L})`, 'u');
   }
-  // verb-name: beat + verb + up to two lowercase role tokens + the name.
+  // verb-name: beat + verb + up to two lowercase role tokens + optional
+  // capitalized title (de) + the name.
+  const titleSkip = g.titles?.length
+    ? `(?:(?:${g.titles.join('|')})\\.?\\s+)?`
+    : '';
   return new RegExp(
-    `${VERB_BEAT}(?:${verbs})\\s+(?:\\p{Ll}[\\p{L}''-]*\\s+){0,2}(${g.nameCapture})`,
+    `${VERB_BEAT}(?:${verbs})\\s+(?:\\p{Ll}[\\p{L}''-]*\\s+){0,2}${titleSkip}(${g.nameCapture})`,
     'u',
   );
 }
@@ -126,7 +159,7 @@ export function verbBeatRegexFor(g: TagGrammar): RegExp {
   return new RegExp(alts.join('|'), 'u');
 }
 
-const QUOTE_GLYPHS = /[«»"""]|^\s*[—–]/u;
+const QUOTE_GLYPHS = /[«»„"""]|^\s*[—–]/u;
 /** True if the sentence looks like (part of) a quote: a guillemet/curly/straight
     quote glyph, or a leading em/en-dash (ES/RU dialogue opener). */
 export function isQuoteBearing(text: string): boolean {
