@@ -145,12 +145,6 @@ blocked companion follow-up.
 
 - _Folded:_ the detect + auto-load halves shipped via `fs-2`/`fe-16`; the remaining voice-library language filtering is now part of the `fs-50` Latin-Qwen initiative spec (§6, `docs/superpowers/specs/2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md`). Tracked there; row kept for ID continuity. _Detail:_ [#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666).
 
-#### `fs-53` — Automatic text normalisation (numbers/dates/currency/abbreviations) ([#976](https://github.com/dudarenok-maker/Castwright/issues/976))
-
-- _What:_ Speak numbers, dates, currency, abbreviations and symbols correctly before synth (NeMo-style). Distinct from `fs-24` (per-character proper-noun lexicon).
-- _Benefit (user):_ a basic **quality floor** rivals already clear; complements `fs-50` (per-language rules).
-_Full detail + acceptance:_ [#976](https://github.com/dudarenok-maker/Castwright/issues/976).
-
 #### `fs-14` — Russian UI localization (interface strings, react-i18next) ([#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396))
 
 - _What:_ Localize the application interface to Russian. Stand up an i18n framework (**react-i18next** — user-confirmed choice) + a per-user `UserSettings.uiLanguage` preference with a language switcher in Account management, then translate the high-traffic surfaces first (top nav, account, upload/confirm, listen, cast) and grow coverage incrementally. Ground truth at capture: **no i18n library today**, ~1,500 hardcoded user-facing strings across ~82 components (densest: `account.tsx` ~92, `profile-drawer.tsx` ~79, `voices.tsx` ~68, `analysing.tsx` ~59, `cast.tsx` ~58, `export-audiobook.tsx` ~52). Centralisable copy already lives in `src/data/{walkthroughs,analysis-phases,regen-reasons,match-factors,listener-apps}.ts`. Locale-sensitive formatting is minimal (`src/lib/time.ts` durations only; no currency/date pickers).
