@@ -17,6 +17,7 @@ import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from 
 import { canonicalModelKeyForEngine } from './model-keys.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
+import { normaliseBookLanguage } from './language.js';
 import { pcmDurationSec } from './pcm.js';
 import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
@@ -764,6 +765,17 @@ export async function synthesiseChapter(
     maxRecycleRecoveries = 2,
   } = opts;
 
+  /* fs-53: resolve the book language to a concrete BCP-47 primary subtag ONCE,
+     then thread it into every audio-producing normaliseForTts call (title +
+     group synth) AND every site compared against that audio (the batch-length
+     key + the ASR-QA expected text) so spoken-form expansion stays aligned.
+     `normaliseBookLanguage` defaults undefined/empty to 'en', so an English
+     book (which often carries no explicit bookLanguage) still gets normalised —
+     do NOT gate this on `bookLanguage` being truthy. `expandForSpeech`
+     self-gates on supported+registered languages, so a dormant/unknown code is
+     a pass-through. */
+  const langCode = normaliseBookLanguage(bookLanguage);
+
   /* Per-character engine resolver (plan 108). Returns the engine + its
      provider + modelKey for a given character. When the caller supplied
      `resolveForEngine`, each character routes to its own engine's provider;
@@ -914,7 +926,7 @@ export async function synthesiseChapter(
       withTtsRetry(
         () =>
           titleRoute.provider.synthesize({
-            text: normaliseForTts(titleText),
+            text: normaliseForTts(titleText, langCode),
             voiceName: narratorVoice,
             modelKey: titleRoute.modelKey,
             signal,
@@ -1087,7 +1099,7 @@ export async function synthesiseChapter(
         withTtsRetry(
           () =>
             route.provider.synthesize({
-              text: normaliseForTts(group.text),
+              text: normaliseForTts(group.text, langCode),
               voiceName,
               modelKey: route.modelKey,
               signal: sig,
@@ -1136,7 +1148,7 @@ export async function synthesiseChapter(
     }
     const items = batchGroups.map((g) => {
       const { voiceName } = resolveGroup(g);
-      return { text: normaliseForTts(g.text), voiceName };
+      return { text: normaliseForTts(g.text, langCode), voiceName };
     });
     const out = await withHeartbeat(lead, () =>
       withCallTimeout('batch', (sig) =>
@@ -1278,7 +1290,7 @@ export async function synthesiseChapter(
     /* Model-side length precomputed once across all batchable groups — shared by
        the length-bucketing sort (plan 128) and the token-budget packer (plan 136). */
     const allBatchable: SentenceGroup[] = Array.from(batchableByModel.values()).flat();
-    const lenOf = new Map(allBatchable.map((g) => [g, normaliseForTts(g.text).length]));
+    const lenOf = new Map(allBatchable.map((g) => [g, normaliseForTts(g.text, langCode).length]));
     const pushBatch = (slice: SentenceGroup[]): void => {
       workItems.push(
         slice.length === 1 ? { kind: 'single', group: slice[0] } : { kind: 'batch', groups: slice },
@@ -1457,8 +1469,13 @@ export async function synthesiseChapter(
       c.verdict === 'ok' ? 0 : c.verdict === 'inconclusive' ? 1 : 2;
     const asrBetter = (a: AsrClassification, b: AsrClassification): boolean =>
       rank(a) !== rank(b) ? rank(a) < rank(b) : a.wer < b.wer;
+    /* fs-53: the QA expected text MUST be the same fs-53-normalised string the
+       synth path spoke — otherwise an expanded number ("$1,200" → "one thousand
+       two hundred dollars") would word-error-rate against the raw "$1,200" and
+       false-flag a perfectly faithful render as `drift`. Normalise here with the
+       resolved `langCode` so the comparison stays aligned with the audio. */
     const verify = (pcm: Buffer, rate: number, text: string): Promise<AsrClassification> =>
-      verifySegmentTranscript(pcm, rate, text, {
+      verifySegmentTranscript(pcm, rate, normaliseForTts(text, langCode), {
         language: asr.language,
         nameAllowlist: asr.nameAllowlist,
         thresholds: asr.thresholds,

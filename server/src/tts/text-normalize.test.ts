@@ -199,4 +199,19 @@ describe('normaliseForTts (composed)', () => {
     expect(normaliseForTts(once)).toBe(once);
     expect(once).toBe('I am about this.');
   });
+
+  /* ── fs-53 — optional langCode runs expandForSpeech LAST ──────────── */
+
+  it('no langCode => byte-identical to today (no expansion)', () => {
+    expect(normaliseForTts('I have $5.')).toBe('I have $5.');
+  });
+
+  it('with langCode => expands numbers/currency to spoken form', () => {
+    expect(normaliseForTts('I have $5.', 'en')).toBe('I have five dollars.');
+  });
+
+  it('no-op on plain prose with langCode (nothing to expand)', () => {
+    const plain = 'The quiet road wound north.';
+    expect(normaliseForTts(plain, 'en')).toBe(normaliseForTts(plain));
+  });
 });

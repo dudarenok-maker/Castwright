@@ -1,0 +1,14 @@
+# fs-53 German normalisation fixtures (input ⇒ expected)
+# Dormant (supported:false) — driven via applyPasses, not the gated expandForSpeech.
+#
+# Separator guard: German "." is the THOUSANDS sep, but a lone non-3-group "."
+# is a decimal/literal — "1.5" must NOT become 1500 / "15".
+Version 1.5 ist da. ⇒ Version eins Komma fünf ist da.
+# Full currency with locale separators: "." groups thousands, "," is the decimal.
+Es kostet 1.200,50 €. ⇒ Es kostet eintausendzweihundert Euro und fünfzig Cent.
+# Plain decimal read digit-by-digit after the comma.
+Pi ist 3,14. ⇒ Pi ist drei Komma eins vier.
+# Decade drops the century: tens-stem + "erjahre". The shared decade detector is
+# English-tokened ("1990s"); German "1990er" isn't auto-detected, so the fixture
+# uses the "1990s" token to exercise the decade() render (century-drop assertion).
+Das waren 1990s. ⇒ Das waren die Neunzigerjahre.
