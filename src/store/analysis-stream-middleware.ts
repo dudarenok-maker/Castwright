@@ -90,7 +90,15 @@ export const analysisStreamMiddleware: Middleware = (store) => {
 
     const callbacks = {
       signal: controller.signal,
-      onPhase: ({ phaseId, progress }: { phaseId: number; progress: number }) => {
+      onPhase: ({
+        phaseId,
+        progress,
+        model,
+      }: {
+        phaseId: number;
+        progress: number;
+        model?: string;
+      }) => {
         dispatch(
           analysisActions.applyAnalysisSnapshotTick({
             manuscriptId,
@@ -98,6 +106,7 @@ export const analysisStreamMiddleware: Middleware = (store) => {
             phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
             phaseProgress: progress,
             lastTickAt: Date.now(),
+            model,
           }),
         );
       },

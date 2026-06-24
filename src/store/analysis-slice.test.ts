@@ -61,6 +61,21 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(s2.activeStream?.state).toBe('running');
   });
 
+  it('applyAnalysisSnapshotTick captures the server model id and preserves it across ticks that omit it', () => {
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', model: 'qwen3.5:9b' }),
+    );
+    expect(s2.activeStream?.model).toBe('qwen3.5:9b');
+    /* A later eta-only tick (no model field) must NOT wipe the captured model. */
+    const s3 = analysisSlice.reducer(
+      s2,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', remainingMs: 5000 }),
+    );
+    expect(s3.activeStream?.model).toBe('qwen3.5:9b');
+  });
+
   it('applyAnalysisSnapshotTick only updates fields supplied — undefined leaves prior values intact', () => {
     const s1 = analysisSlice.reducer(
       undefined,

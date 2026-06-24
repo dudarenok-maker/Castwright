@@ -47,6 +47,10 @@ export interface AnalysisPillData {
   /** Number of chapters being retried — only meaningful when
       `kind === 'subset'`. Drives the "Retrying N chapters" copy. */
   subsetChapterCount?: number;
+  /** Server-resolved analyzer model id (from the SSE `model` field). Rendered
+      as a small chip in the Status popover's Analysis section so the user can
+      see which model the run is on. Undefined pre-stream. */
+  model?: string;
   onClick: () => void;
 }
 

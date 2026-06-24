@@ -86,6 +86,19 @@ describe('StatusPopover', () => {
     expect(screen.getByText('No pending revisions.')).toBeInTheDocument();
   });
 
+  it('shows the analyzer model chip when analysis.model is set', () => {
+    render(<StatusPopover {...makeProps({ analysis: { ...analysis, model: 'gizmo-local:1b' } })} />);
+    const chip = screen.getByTestId('status-popover-analysis-model');
+    expect(chip).toBeInTheDocument();
+    /* Unknown id falls back to the raw model id (known ids map to a label). */
+    expect(chip.textContent).toContain('gizmo-local:1b');
+  });
+
+  it('omits the model chip when analysis has no model', () => {
+    render(<StatusPopover {...makeProps()} />);
+    expect(screen.queryByTestId('status-popover-analysis-model')).toBeNull();
+  });
+
   it('routes the analysis pill click through onGoToAnalysing', () => {
     const onGoToAnalysing = vi.fn();
     render(<StatusPopover {...makeProps({ onGoToAnalysing })} />);

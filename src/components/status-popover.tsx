@@ -30,6 +30,7 @@ import {
   type GenerationPillData,
   type DesignPillData,
 } from './top-bar';
+import { MODEL_OPTIONS } from '../lib/models';
 
 const PANEL_WIDTH = 340;
 const ESTIMATED_HEIGHT = 320;
@@ -159,7 +160,20 @@ export function StatusPopover({
       </Section>
       <Section title="Analysis" testid="status-popover-analysis">
         {analysis ? (
-          <AnalysisPill data={{ ...analysis, onClick: onGoToAnalysing }} />
+          <div className="flex flex-col items-start gap-1.5">
+            <AnalysisPill data={{ ...analysis, onClick: onGoToAnalysing }} />
+            {analysis.model && (
+              <span
+                data-testid="status-popover-analysis-model"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-ink/5 text-ink/70"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-ink/30" />
+                <span className="tabular-nums">
+                  {MODEL_OPTIONS.find((m) => m.id === analysis.model)?.label ?? analysis.model}
+                </span>
+              </span>
+            )}
+          </div>
         ) : (
           <p className="text-sm text-ink/60">No analysis running.</p>
         )}
