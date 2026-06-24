@@ -48,7 +48,7 @@ describe('resolvePersonaGpuPlan', () => {
 
   it('roomy card → GPU, no evict', async () => {
     const mod = await setup({ constrained: false, inFlight: 0, gen: [] });
-    expect(mod.resolvePersonaGpuPlan('/a')).toMatchObject({ onCpu: false, evict: false });
+    expect(mod.resolvePersonaGpuPlan('/a')).toMatchObject({ onCpu: false, evict: false, keepAlive: 0 });
   });
 
   it('constrained + idle → evict + GPU + resident keepAlive', async () => {
@@ -68,3 +68,4 @@ describe('resolvePersonaGpuPlan', () => {
     expect(mod.resolvePersonaGpuPlan('/a')).toMatchObject({ onCpu: true, evict: false });
   });
 });
+

@@ -5,6 +5,7 @@ import { shouldEvictBeforeSidecarLoad } from '../gpu/residency.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
 import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
 import { resolveAnalyzerKeepAlive } from '../analyzer/ollama.js';
+import { resolvePersonaEngine } from '../analyzer/voice-style.js';
 
 /** Thrown when the sidecar can't be safely unloaded for a persona run because a
     render is active. The caller falls back to CPU persona generation. */
@@ -68,4 +69,28 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
   return busy
     ? { onCpu: true, evict: false, keepAlive: 0 }
     : { onCpu: false, evict: true, keepAlive: resolveAnalyzerKeepAlive() };
+}
+
+/** Resolve the GPU plan for a persona batch on `bookDir` and perform the
+    one-shot reverse-evict if needed, returning the per-call args to thread
+    into generateVoiceStylePersona. Used by both voice-style routes and the
+    bulk pre-pass so the evict dance lives in exactly one place.
+
+    - gemini engine → `{ onCpu: false, keepAlive: 0 }` (off-GPU, no evict).
+    - local engine → resolve the plan; if evict, unload once; on
+      GpuBusyForPersonaError (a render slipped in) fall back to CPU. */
+export async function preparePersonaBatch(
+  bookDir: string,
+): Promise<{ onCpu: boolean; keepAlive: string | number }> {
+  if (resolvePersonaEngine() !== 'local') return { onCpu: false, keepAlive: 0 };
+  const plan = resolvePersonaGpuPlan(bookDir);
+  if (plan.evict) {
+    try {
+      await unloadResidentSidecar();
+    } catch (err) {
+      if (!(err instanceof GpuBusyForPersonaError)) throw err;
+      return { onCpu: true, keepAlive: 0 }; // a render slipped in — go CPU
+    }
+  }
+  return { onCpu: plan.onCpu, keepAlive: plan.keepAlive };
 }
