@@ -214,3 +214,45 @@ def test_design_voice_holds_arbiter_and_evicts_resident_kokoro(monkeypatch):
     assert unloaded["called"] is True, "resident Kokoro must be evicted before the design"
     assert captured["design_active"] is True, "design forward must run under arb.design()"
     assert captured["kokoro_resident"] is False, "Kokoro must be unloaded during the design forward"
+
+
+def test_design_voice_emits_phase_timing_line(monkeypatch, caplog):
+    """design_voice must log one structured timing line carrying each phase
+    (load / design_fwd / distil / audition / total), so a slow design is
+    diagnosable from the log without guesswork — and so the progress UX has a
+    real per-phase signal to drive instead of a fake bar."""
+    import logging
+    import tempfile
+
+    import main
+
+    qeng = main.QwenEngine()
+
+    class _FakeDesign:
+        def generate_voice_design(self, text, language, instruct):
+            import numpy as np
+            return [np.zeros(10, dtype="float32")], 24000
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return {"prompt": True}
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            import numpy as np
+            return [np.zeros(10, dtype="float32")], 24000
+
+    qeng._design = _FakeDesign()
+    qeng._base = _FakeBase()
+    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda: None)
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda: None)
+    qeng._voices_dir = tempfile.mkdtemp()
+    monkeypatch.setattr("torch.save", lambda *a, **k: None)
+
+    with caplog.at_level(logging.INFO, logger="sidecar"):
+        qeng.design_voice("qwen-narrator-preview", "A warm voice.", "english", "Hi.")
+
+    timing = [r.getMessage() for r in caplog.records if "qwen voice design:" in r.getMessage()]
+    assert len(timing) == 1, f"expected exactly one timing line, got {timing}"
+    line = timing[0]
+    for field in ("load_ms=", "design_fwd_ms=", "distil_ms=", "audition_ms=", "total_ms="):
+        assert field in line, f"timing line missing {field!r}: {line}"
