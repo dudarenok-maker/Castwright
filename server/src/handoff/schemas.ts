@@ -124,6 +124,12 @@ export const sentenceSchema = z
     /* fs-25 — optional per-quote delivery emotion (4a Phase-1 inline). Absent
        = neutral. Strictly additive: pre-fs-25 analyses validate unchanged. */
     emotion: z.enum(EMOTIONS).optional(),
+    /* fs-57 — optional free-text delivery direction (English), live on the
+       Qwen 1.7B liveInstruct path. Absent ⇒ today's behaviour. Additive. */
+    instruct: z.string().optional(),
+    /* fs-57 — Stage 3 authored a non-verbal vocalization into `text`. Drives
+       the srv-31 ASR carve-out. Additive. */
+    vocalization: z.boolean().optional(),
   })
   .strict();
 
