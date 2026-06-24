@@ -41,7 +41,9 @@ import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
-import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
+import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
+import { LocalUnreachableError } from '../analyzer/ollama.js';
+import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
 import { ensureSidecarEngineReady } from '../tts/ensure-sidecar-loaded.js';
@@ -154,6 +156,84 @@ function endJob(job: DesignJob, finalEv?: unknown): void {
   clearDesignBusy(job.bookDir);
 }
 
+/** Heartbeat cadence during the persona pre-pass — same value as the design
+    loop's HEARTBEAT_MS so the pill's 30s stall heuristic never trips during
+    either phase. */
+const PERSONA_HEARTBEAT_MS = 6000;
+
+/** LOCAL-engine only: generate `voiceStyle` personas for all base-task
+    characters that lack one, BEFORE the design loop touches the sidecar.
+    On a constrained GPU this lets `preparePersonaBatch` evict the idle
+    resident model once (instead of once-per-character interleaved with
+    VoiceDesign), preventing thrash and OOM.
+
+    The `gemini` engine keeps its existing lazy-interleaved persona-gen
+    inside `runDesignJob` unchanged — this function returns immediately for
+    any non-local engine.
+
+    Failure modes:
+    - `LocalUnreachableError` → PROPAGATES (wholesale job abort).
+    - Any other per-character error → recorded to `job.failures` +
+      `character_failed` broadcast + continue (design loop will skip
+      characters whose persona we could not set). */
+async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<void> {
+  if (resolvePersonaEngine() !== 'local') return;
+
+  // Deduplicate to base tasks only — variants always reuse the base persona.
+  const baseIds = [...new Set(tasks.filter((t) => !t.emotion).map((t) => t.characterId))];
+  if (baseIds.length === 0) return;
+
+  // One GPU decision (evict / CPU-fallback) for the entire batch.
+  const prep = await preparePersonaBatch(job.bookDir);
+
+  // Emit the same `heartbeat` event type the design loop uses so the pill's
+  // stall heuristic resets on a known event.
+  const beat = setInterval(() => {
+    broadcast(job, { type: 'heartbeat', characterId: job.currentCharacterId });
+  }, PERSONA_HEARTBEAT_MS);
+
+  try {
+    for (const characterId of baseIds) {
+      if (job.controller.signal.aborted) return;
+
+      const cast = await readJson<CastFile>(castJsonPath(job.bookDir));
+      const character = cast?.characters?.find((c) => c.id === characterId);
+      if (!character) continue; // deleted mid-run — silently skip
+
+      // Idempotent: already has a persona or is already designed.
+      if ((character.voiceStyle ?? '').trim()) continue;
+      if (character.overrideTtsVoices?.qwen?.name) continue;
+
+      let persona: string;
+      try {
+        persona = await generateVoiceStylePersona(character, prep);
+      } catch (err) {
+        if (err instanceof LocalUnreachableError) throw err; // wholesale — propagate
+        // Per-character failure: record + skip; the design loop will skip this char.
+        const message = (err as Error).message || 'Persona generation failed.';
+        job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+        broadcast(job, {
+          type: 'character_failed',
+          characterId,
+          name: character.name ?? characterId,
+          errorReason: message,
+        });
+        continue;
+      }
+
+      // Minimal-patch write so a concurrent edit to another character survives.
+      const fresh = await readJson<CastFile>(castJsonPath(job.bookDir));
+      const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+      if (fresh && idx !== -1) {
+        fresh.characters[idx] = { ...fresh.characters[idx], voiceStyle: persona };
+        await writeJsonAtomic(castJsonPath(job.bookDir), fresh);
+      }
+    }
+  } finally {
+    clearInterval(beat);
+  }
+}
+
 /** The serial design loop — runs detached in the background; broadcasts to
     whatever subscribers are currently attached (zero during a reload gap). */
 async function runDesignJob(
@@ -163,6 +243,12 @@ async function runDesignJob(
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
 ): Promise<void> {
+  await runPersonaPrePass(job, tasks);
+  if (job.controller.signal.aborted) {
+    endJob(job, { type: 'idle', done: job.done, total: job.total, skipped: job.skipped, failures: job.failures });
+    return;
+  }
+
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
     const { characterId, emotion } = task;

@@ -33,10 +33,31 @@ let app: Express;
 let bookId: string;
 
 const fetchMock = vi.fn();
-const { personaMock } = vi.hoisted(() => ({ personaMock: vi.fn() }));
+const { personaMock, resolvePersonaEngineMock } = vi.hoisted(() => ({
+  personaMock: vi.fn(),
+  /* Default to 'gemini' so the pre-pass is a no-op for all the existing tests
+     that have nothing to do with the local persona path. */
+  resolvePersonaEngineMock: vi.fn().mockReturnValue('gemini'),
+}));
 
 vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona: personaMock,
+  resolvePersonaEngine: resolvePersonaEngineMock,
+}));
+
+/* Passthrough mock — persona-gpu-plan.preparePersonaBatch so the pre-pass
+   doesn't try to reach a real sidecar or GPU during existing tests.  The
+   resolvePersonaEngineMock defaults to 'gemini' so preparePersonaBatch is never
+   reached in the existing tests anyway, but the mock is here as a safety net
+   and is overridden per-test in the pre-pass describe block. */
+vi.mock('../tts/persona-gpu-plan.js', () => ({
+  preparePersonaBatch: vi.fn().mockResolvedValue({ onCpu: false, keepAlive: 0 }),
+  resolvePersonaGpuPlan: vi.fn().mockReturnValue({ onCpu: false, evict: false, keepAlive: 0 }),
+  unloadResidentSidecar: vi.fn().mockResolvedValue(undefined),
+  GpuBusyForPersonaError: class GpuBusyForPersonaError extends Error {
+    code = 'GPU_BUSY_FOR_PERSONA';
+    constructor(m: string) { super(m); this.name = 'GpuBusyForPersonaError'; }
+  },
 }));
 
 /* Passthrough mock — keeps withGpuLoad a no-op in tests so the unit boundary
@@ -518,5 +539,297 @@ describe('scope + variantTasks (fs-25)', () => {
     expect(baseIdx).toBeLessThan(variantIdx);
 
     spy.mockRestore();
+  });
+});
+
+// ── Task 9: persona pre-pass ────────────────────────────────────────────────
+describe('cast-design persona pre-pass', () => {
+  /* Each test imports the modules under test dynamically so vi.spyOn can
+     intercept the cross-module calls.  We reuse the shared `job`-construction
+     infrastructure by driving the full HTTP POST but with all heavy dependencies
+     mocked at the module level. */
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // Clear all mock call counts so spies in later tests don't inherit accumulated
+    // history from the shared module-level vi.fn() mocks (vi.restoreAllMocks resets
+    // implementations but not call counts; vi.clearAllMocks resets counts).
+    vi.clearAllMocks();
+    // Reset the hoisted mock return values to defaults so tests are fully isolated.
+    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaMock.mockReset();
+    personaMock.mockResolvedValue('a bright, quick-witted teenage boy');
+  });
+
+  it('local: all personas generated before the first designQwenVoiceForCharacter; variants skipped', async () => {
+    // Use the hoisted mock directly — avoids spy ordering issues between tests.
+    resolvePersonaEngineMock.mockReturnValue('local');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const callOrder: string[] = [];
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async (c: any) => {
+      callOrder.push(`persona:${c.id}`);
+      return 'A persona.';
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockImplementation(async (a: any) => {
+      callOrder.push(`design:${a.characterId}`);
+      return { voiceId: `qwen-${a.characterId}`, url: `/v/${a.characterId}.mp3` };
+    });
+
+    /* Two base tasks + one variant-only character.
+       We send: aria (base, has voiceStyle → idempotent skip in pre-pass),
+       hart (base, no voiceStyle → persona needed), and a variant task for aria
+       (emotion: 'angry').  Scope 'both' produces tasks: [base:aria, base:hart,
+       variant:aria@angry].  Pre-pass baseIds = ['aria','hart'].  aria already
+       has voiceStyle → skipped in the pre-pass (idempotent).  hart has none →
+       persona generated.  The design loop runs after. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'both',
+        characterIds: ['aria', 'hart'],
+        variantTasks: [{ characterId: 'aria', emotions: ['angry'] }],
+      });
+
+    expect(res.status).toBe(200);
+
+    // preparePersonaBatch must have been called exactly once (one GPU decision for the whole batch)
+    expect(plan.preparePersonaBatch).toHaveBeenCalledTimes(1);
+
+    // hart (no voiceStyle) must have got a persona call; aria (has voiceStyle) must not
+    expect(callOrder.filter((s) => s.startsWith('persona:'))).toContain('persona:hart');
+    expect(callOrder.filter((s) => s.startsWith('persona:'))).not.toContain('persona:aria');
+
+    // ALL persona calls must appear BEFORE the FIRST design call
+    const firstDesignIdx = callOrder.findIndex((s) => s.startsWith('design:'));
+    const lastPersonaIdx = [...callOrder].reverse().findIndex((s) => s.startsWith('persona:'));
+    const lastPersonaPos = lastPersonaIdx === -1 ? -1 : callOrder.length - 1 - lastPersonaIdx;
+    if (firstDesignIdx !== -1 && lastPersonaPos !== -1) {
+      expect(lastPersonaPos).toBeLessThan(firstDesignIdx);
+    }
+
+    // variant-only task (aria@angry) must NOT trigger a pre-pass persona call
+    // (pre-pass is base-tasks-only; variants are filtered out)
+    expect(callOrder.filter((s) => s === 'persona:aria')).toHaveLength(0);
+  });
+
+  it('busy box: preparePersonaBatch returns CPU args, threaded into persona calls', async () => {
+    resolvePersonaEngineMock.mockReturnValue('local');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: true, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const genSpy = vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-hart',
+      url: '/v/hart.mp3',
+    });
+
+    /* hart has no voiceStyle, so it gets a persona call; the CPU args must be forwarded. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    expect(res.status).toBe(200);
+
+    // generateVoiceStylePersona must have been called with the CPU plan args from preparePersonaBatch
+    expect(genSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'hart' }),
+      { onCpu: true, keepAlive: 0 },
+    );
+
+    // design must still run (pre-pass does not abort the design)
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'hart')).toBe(true);
+  });
+
+  it('gemini engine: pre-pass returns early — preparePersonaBatch NOT called', async () => {
+    // resolvePersonaEngineMock is already reset to 'gemini' by afterEach; make it explicit.
+    resolvePersonaEngineMock.mockReturnValue('gemini');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    // Wrap the module-level mock in a fresh spy so we can count calls in THIS test only.
+    const prepSpy = vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_aria',
+      url: '/v/aria.mp3',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['aria'] });
+
+    expect(res.status).toBe(200);
+    // resolvePersonaEngine returns 'gemini' → pre-pass returns immediately.
+    // preparePersonaBatch must NOT have been called at all by the pre-pass.
+    expect(prepSpy).not.toHaveBeenCalled();
+    // resolvePersonaEngineMock must have been called (confirms the guard ran)
+    expect(resolvePersonaEngineMock).toHaveBeenCalled();
+  });
+
+  it('heartbeat is emitted during pre-pass before the first character_designed event', async () => {
+    /* Verify the setInterval inside runPersonaPrePass fires a { type: 'heartbeat' }
+       event before any design work begins.
+
+       Strategy: hold generateVoiceStylePersona pending behind a deferred promise so
+       the pre-pass is "stuck" while we advance fake timers past PERSONA_HEARTBEAT_MS
+       (6 000 ms), then release the promise and let the run complete.  We capture
+       all SSE events from the response body and assert the heartbeat appears before
+       the first character_designed event.
+
+       supertest buffers the full SSE body after res.end(), so we need the run to
+       complete before asserting order.  The sequence is:
+         1. POST starts, pre-pass begins, persona promise pends.
+         2. We advance fake timers by 6 000 ms → heartbeat fires.
+         3. Release the persona promise → pre-pass finishes → design loop runs →
+            character_designed fires → idle → response ends.
+       Because supertest awaits the full response, we interleave step 2 inside
+       the persona mock (the mock is called during the await of the POST, so we
+       advance timers from within the mock implementation). */
+    resolvePersonaEngineMock.mockReturnValue('local');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
+
+    vi.useFakeTimers();
+
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async () => {
+      // Advance timers past PERSONA_HEARTBEAT_MS while the pre-pass is mid-flight.
+      await vi.advanceTimersByTimeAsync(7000);
+      return 'A persona.';
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-hart',
+      url: '/v/hart.mp3',
+    });
+
+    // Run with hart (no voiceStyle → triggers pre-pass persona call).
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    vi.useRealTimers();
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    // There must be at least one heartbeat event.
+    const heartbeatIdx = events.findIndex((e) => e.type === 'heartbeat');
+    expect(heartbeatIdx).toBeGreaterThanOrEqual(0);
+
+    // The heartbeat must come BEFORE the first character_designed event.
+    const designedIdx = events.findIndex((e) => e.type === 'character_designed');
+    expect(designedIdx).toBeGreaterThanOrEqual(0);
+    expect(heartbeatIdx).toBeLessThan(designedIdx);
+  });
+
+  it('abort mid-pre-pass (signal.aborted) stops the loop before designQwenVoiceForCharacter runs', async () => {
+    /* Verify the `if (job.controller.signal.aborted) return;` guard at the top of
+       the per-character loop in runPersonaPrePass.
+
+       The AbortController lives on the internal DesignJob which is unreachable from
+       test code directly.  We trigger the abort by hitting the pause endpoint from
+       inside the generateVoiceStylePersona mock — the mock is called while the HTTP
+       request is still in flight (supertest hasn't received res.end() yet), and the
+       pause endpoint calls job.controller.abort() synchronously.  After the mock
+       returns, the pre-pass loop checks signal.aborted and exits — so
+       designQwenVoiceForCharacter must never be called. */
+    resolvePersonaEngineMock.mockReturnValue('local');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
+
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async () => {
+      // Abort the running job via the pause endpoint while we are inside the pre-pass.
+      await request(app).post(`/api/books/${bookId}/cast/design/pause`).send({});
+      return 'A persona.';
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-hart',
+      url: '/v/hart.mp3',
+    });
+
+    // Use two persona-less characters so there is a second iteration that would
+    // run IF the abort guard were missing.
+    const extraChar2 = { id: 'orin', name: 'Orin', role: 'supporting', color: 'green', voiceUuid: 'orin' };
+    writeBookOnDisk([...characters, extraChar2]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'orin'] });
+
+    expect(res.status).toBe(200);
+
+    // The design loop must never have been entered.
+    expect(designSpy).not.toHaveBeenCalled();
+
+    const events = parseSse(res.text);
+    // The job should end (idle or error) — not hang.
+    expect(events.some((e) => e.type === 'idle' || e.type === 'error')).toBe(true);
+
+    // Restore cast.json for subsequent tests.
+    writeBookOnDisk(characters);
+  });
+
+  it('LocalUnreachableError in pre-pass propagates and stops designs; heartbeat interval is cleared', async () => {
+    /* This test covers two contracts from the brief:
+       1. A LocalUnreachableError in generateVoiceStylePersona propagates wholesale
+          (the job ends with an error event, no character_designed fires).
+       2. By implication the finally{clearInterval(beat)} guard runs (no leaked
+          timer — we can't directly assert that, but the test exercises the path). */
+    resolvePersonaEngineMock.mockReturnValue('local');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { LocalUnreachableError } = await import('../analyzer/ollama.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new LocalUnreachableError('Ollama is down'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-hart',
+      url: '/v/hart.mp3',
+    });
+
+    // Use two persona-less characters to ensure a real pre-pass runs.
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    // LocalUnreachableError must propagate → the job ends with an error event.
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+
+    // No design must have run (the pre-pass threw before the design loop could start).
+    expect(designSpy).not.toHaveBeenCalled();
+
+    // Restore the cast.json for subsequent tests.
+    writeBookOnDisk(characters);
   });
 });
