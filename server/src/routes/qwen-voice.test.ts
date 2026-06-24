@@ -482,6 +482,28 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     expect(maerin.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_maerin__angry' });
   });
 
+  it('#1057: designing a VARIANT for a no-uuid character does NOT mint a uuid (would orphan the base .pt)', async () => {
+    /* Strip maerin's pre-seeded uuid so it resolves via the legacy voiceId key
+       (qwen-v_maerin), where its base .pt actually lives. Designing a VARIANT
+       must anchor on that key WITHOUT minting a fresh uuid — minting would flip
+       the base's storage key to qwen-<uuid> while the base .pt stays put,
+       orphaning it (the bulk "Emotion variants" no-op bug). */
+    const noUuid = characters.map((c) => (c.id === 'maerin' ? { ...c, voiceUuid: undefined } : c));
+    writeBookOnDisk(noUuid);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+
+    expect(res.status).toBe(200);
+    // Anchors on the legacy key, not a freshly-minted qwen-<uuid>.
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.baseVoiceId).toBe('qwen-v_maerin');
+    // Crucially: no uuid was stamped onto the character.
+    const maerin = readCast().characters.find((c) => c.id === 'maerin') as Record<string, unknown>;
+    expect(maerin.voiceUuid).toBeUndefined();
+  });
+
   it('rejects an out-of-enum / neutral emotion with 400', async () => {
     const bad = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)

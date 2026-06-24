@@ -336,8 +336,18 @@ async function runDesignJob(
          "unreachable"-class error while the supervisor respawns the sidecar.
          Wait for it to come back (ensureSidecarEngineReady polls /load through
          the respawn) and retry THIS character, up to MAX_RECYCLE_RIDEOUTS. */
-      /* srv-43 — mint/persist voiceUuid before the core names the .pt. */
-      const voiceUuid = await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
+      /* srv-43 — mint/persist a voiceUuid before the core names the .pt, but
+         ONLY for a BASE design. A base design writes the `.pt` at the resulting
+         `qwen-<uuid>` key, so minting is safe. A VARIANT must NOT mint: it
+         doesn't write the base `.pt`, so stamping a fresh uuid would flip the
+         base's storage key to `qwen-<uuid>` while its embedding still sits at the
+         old key — orphaning it (silent Kokoro fallback on re-render; the variant
+         mint then can't load its base). #1057: this is exactly how a bulk
+         "Emotion variants" run orphaned every base. A variant anchors on the
+         base's CURRENT key, so it reuses the character's existing voiceUuid. */
+      const voiceUuid = emotion
+        ? character.voiceUuid
+        : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
       const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
 
       let rideouts = 0;

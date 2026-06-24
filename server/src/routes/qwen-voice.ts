@@ -533,8 +533,15 @@ qwenVoiceRouter.post(
        promotes it on approve. Default false keeps the original in-place design. */
     const isStandalone = located.state?.isStandalone === true;
     const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
-    /* srv-43 — mint/persist voiceUuid before the core names the .pt. */
-    const voiceUuid = await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined);
+    /* srv-43 — mint/persist a voiceUuid before the core names the .pt, but ONLY
+       for a BASE design (which writes the `.pt` at the resulting `qwen-<uuid>`
+       key). A VARIANT must NOT mint: it doesn't write the base `.pt`, so a fresh
+       uuid would flip the base's storage key while its embedding stays at the
+       old key — orphaning it (#1057). A variant reuses the character's existing
+       voiceUuid and anchors on the base's current key. */
+    const voiceUuid = emotion
+      ? character.voiceUuid
+      : await ensureCharacterVoiceUuid(bookDir, characterId, seriesInfo ?? undefined);
     const characterForDesign: CastCharacter = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
     try {
       const { voiceId, url } = await designQwenVoiceForCharacter({
