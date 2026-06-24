@@ -1007,6 +1007,20 @@ describe('ManuscriptView — review-menu dismissal', () => {
     fireEvent.pointerDown(document.body);
     expect(screen.queryByTestId('review-script-wholebook')).toBeNull();
   });
+
+  it('renders the whole-book menu above sibling sections (z-50 + opaque picker-surface)', async () => {
+    const user = userEvent.setup();
+    renderReviewView();
+
+    await user.click(screen.getByTestId('review-script-menu-toggle'));
+    /* The dropdown flyout is the parent of the whole-book button. It must sit
+       at z-50 (above the z-40 content below it — the old z-20 left it hidden
+       behind sibling sections) and carry the opaque picker-surface elevation. */
+    const menu = screen.getByTestId('review-script-wholebook').parentElement!;
+    expect(menu.className).toContain('z-50');
+    expect(menu.className).toContain('picker-surface');
+    expect(menu.className).not.toContain('z-20');
+  });
 });
 
 /* fs-58 Task 11 — planApply quarantine at seed time (Fix 1).
