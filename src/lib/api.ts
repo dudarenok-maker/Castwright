@@ -4575,7 +4575,7 @@ export interface CastDesignCallbacks {
       srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
   onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
-  onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string }) => void;
+  onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
   onCharacterSkipped?: (e: { characterId: string }) => void;
   /** A character's design failed; the run continues past it. */
@@ -4633,6 +4633,8 @@ interface CastDesignStreamEvent {
   voiceUuid?: string;
   mode?: 'first' | 'redesign';
   url?: string;
+  viaFallback?: boolean;
+  fallbackReason?: 'not-installed' | 'corrupt';
 }
 
 /** Status of a possibly-live design job (the layout cold-boot probe reads this
@@ -4736,6 +4738,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId,
             emotion: e.emotion as Emotion,
             voiceId: e.voiceId,
+            ...(e.viaFallback ? { viaFallback: true, fallbackReason: e.fallbackReason } : {}),
           });
         break;
       case 'character_skipped':
