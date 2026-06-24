@@ -1138,6 +1138,15 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
     expect(el.currentTime).toBe(8);
   });
 
+  it('lists the flagged issues in a hover title on the ⚠ jump button', async () => {
+    getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
+    renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
+    const btn = await screen.findByLabelText(/Next issue/);
+    // The ⚠ icon must reveal what the issues actually are on hover, not just
+    // read "Next issue".
+    expect(btn).toHaveAttribute('title', expect.stringContaining('Long sentence'));
+  });
+
   it('auto-seeks to the first issue in the generate context, overriding resume', async () => {
     getChapterAudioFn.mockResolvedValue(audioWithIssues as never);
     getListenProgressMock.mockResolvedValue({ chapterId: 1, currentSec: 25 } as never);

@@ -84,6 +84,23 @@ The canonical pipeline fixture for deeper regression: `server/src/__fixtures__/t
 - Surfacing suspect segments in the Listen view — the waveform scrubber there is unchanged.
 - Whisper ASR enablement (`SEG_ASR_ENABLED`) — plan 186; this plan only ensures ASR reasons pass through correctly when ASR is on.
 
+## Follow-up fixes (2026-06-24, `fix/frontend-generation-issue-tooltips`)
+
+Three gaps surfaced when this shipped against a real book:
+
+1. **Amber markers had no hover affordance.** The issue `reasons` were rendered
+   `sr-only` only, so sighted users hovering the amber bars saw nothing. Each
+   amber bar now carries a `title` (`Issue at <time>: <reasons>`) via a
+   bar-index→region map in `Waveform`; the "N issues to review" caption and the
+   MiniPlayer ⚠ jump buttons gained summarising `title`s too.
+2. **The MiniPlayer scrubber waveform under-filled.** `Waveform` rendered
+   fixed-width (`w-[3px]`) bars, so the 48 bars spanned only ~238 px and left a
+   flat tail in the wide scrubber. Bars are now `flex-1` so they fill any
+   container (no visual-baseline change — the waveforms sit below the
+   `fullPage:false` snapshot fold).
+3. Paired unit tests in `waveform.test.tsx`, `generation.test.tsx`,
+   `mini-player.test.tsx`.
+
 ## Ship notes
 
 (To be filled when status flips to `stable`.)

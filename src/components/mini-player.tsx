@@ -99,6 +99,12 @@ export function MiniPlayer({
      even if it runs before the first render with non-empty issues. */
   const issuesRef = useRef(issues);
   issuesRef.current = issues;
+  /* Human-readable summary for the ⚠ jump-button hover title, so the warning
+     icon reveals what the issues actually are — not just "Next issue". */
+  const issueSummary = useMemo(
+    () => issues.map((r) => `${formatTime(r.seekSec)}: ${r.reasons.join(', ')}`).join(' · '),
+    [issues],
+  );
   const [currentSec, setCurrentSec] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -785,7 +791,7 @@ export function MiniPlayer({
                   type="button"
                   onClick={() => jumpToIssue(-1)}
                   aria-label="Previous issue"
-                  title="Previous issue"
+                  title={`Previous issue · ${issueSummary}`}
                   className="hidden md:grid place-items-center p-2 rounded-full hover:bg-canvas/10 text-amber-300"
                 >
                   <span aria-hidden>‹⚠</span>
@@ -794,7 +800,7 @@ export function MiniPlayer({
                   type="button"
                   onClick={() => jumpToIssue(1)}
                   aria-label="Next issue"
-                  title="Next issue"
+                  title={`Next issue · ${issueSummary}`}
                   data-testid="mini-player-next-issue"
                   className="grid place-items-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:p-2 rounded-full hover:bg-canvas/10 text-amber-300"
                 >

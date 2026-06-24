@@ -20,6 +20,16 @@ describe('Waveform', () => {
     expect(barHeights(container)).toHaveLength(48);
   });
 
+  it('stretches its bars to fill the container width (flex-1, not a fixed pixel width)', () => {
+    const { container } = render(<Waveform progress={0} active />);
+    const bars = Array.from(container.querySelectorAll('span')) as HTMLElement[];
+    expect(bars).toHaveLength(48);
+    // Fixed-width bars under-fill a wide container (the mini-player scrubber),
+    // leaving a flat tail; flex-1 makes them span the full track.
+    expect(bars.every((b) => b.className.includes('flex-1'))).toBe(true);
+    expect(bars.some((b) => b.className.includes('w-[3px]'))).toBe(false);
+  });
+
   it('produces identical bar heights across unmount/remount', () => {
     const first = render(<Waveform progress={0.3} active />);
     const heightsA = barHeights(first.container);
@@ -86,6 +96,23 @@ describe('Waveform issue overlay', () => {
     expect(container.querySelectorAll('.bg-amber-400').length).toBeGreaterThan(0);
     // bar row is hidden from AT
     expect(container.querySelector('[aria-hidden="true"]')).toBeInTheDocument();
+  });
+
+  it('exposes the issue reasons in a hover title on every amber bar', () => {
+    const { container } = render(
+      <Waveform
+        progress={0}
+        active
+        peaks={Array(240).fill(0.5)}
+        issues={[{ startFrac: 0.25, endFrac: 0.5, seekSec: 90, reasons: ['Suspiciously long'] }]}
+      />,
+    );
+    const amber = Array.from(container.querySelectorAll('.bg-amber-400')) as HTMLElement[];
+    expect(amber.length).toBeGreaterThan(0);
+    // Every amber bar surfaces the reason + timestamp on hover (the sr-only list
+    // alone left sighted users with nothing to read).
+    expect(amber.every((b) => b.title.includes('Suspiciously long'))).toBe(true);
+    expect(amber[0].title).toMatch(/1:30/);
   });
 
   it('renders unchanged (no amber, no list) with no issues', () => {
