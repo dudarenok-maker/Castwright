@@ -1213,18 +1213,30 @@ export async function synthesiseChapter(
     bodyStartIndex = 1;
   }
 
-  /* Partition the remaining body groups into work items: every Qwen group whose
-     provider advertises `synthesizeBatch` is collected (regardless of narrative
-     adjacency — a non-Qwen group interleaving doesn't break a batch) and sliced
-     into `batchSize`-capped batches; everything else stays a singleton. Items
-     are ordered by their first group's index so dispatch is deterministic;
-     scatter-back is by `group.index`, so the final concat order is unaffected
-     either way. `batchSize === 1` makes every batch a singleton — the per-call
-     kill-switch. When `qwenBatchBucket` is on (plan 128) the collected
-     `batchable` list is sorted by normalised-text length before slicing, so
-     similar-length sentences share a batch (less padding waste); this only
-     changes which groups co-occur in a batch, not the concat order. */
+  /* Synthesise an arbitrary list of groups through the batched dispatch and
+     return each group's PCM by index. Every Qwen group whose provider advertises
+     `synthesizeBatch` is collected (regardless of narrative adjacency — a non-Qwen
+     group interleaving doesn't break a batch) and packed into `batchSize`-capped,
+     modelKey-bucketed, length-sorted, token-budgeted batches sent as ONE call;
+     everything else (non-Qwen, or `batchSize === 1` — the per-call kill-switch)
+     stays a single call. Scatter-back is by `group.index`, so the downstream
+     index-order concat is identical regardless of batch composition. Abort +
+     recycle-recovery wrap every call; `onDone(group, result)` fires per group as
+     its PCM lands — the initial body pass uses it to write `results` + stream
+     chapter progress; the QA re-record passes omit it and read the returned map.
+
+     Used by BOTH the initial body dispatch AND the QA re-record loops, so a
+     re-record round costs ONE batched call covering all of its suspect/drift
+     sentences instead of one single call per sentence — the unbatched per-group
+     re-record was the ~2x RTF regression on Qwen chapters.
+
+     Determinism rests on the same rules tested in synthesise-chapter.test.ts:
+       1. PCM ORDER — results keyed by `group.index`; batch packing never reorders.
+       2. SAMPLE-RATE ANCHOR — fixed before this runs (the anchor group above).
+       3. STALL WATCHDOG — synthGroup/synthBatch tick the heartbeat per (lead)
+          group, so a long batched call keeps feeding the no-progress watchdog. */
   const batchSize = Math.max(1, Math.floor(qwenBatchSize));
+  const tokenBudget = Math.floor(qwenBatchTokenBudget);
   type WorkItem =
     | { kind: 'single'; group: SentenceGroup }
     | { kind: 'batch'; groups: SentenceGroup[] };
@@ -1232,140 +1244,139 @@ export async function synthesiseChapter(
     const { route } = resolveGroup(group);
     return route.engine === 'qwen' && typeof route.provider.synthesizeBatch === 'function';
   };
-  const workItems: WorkItem[] = [];
-  /* Partition batchable groups by modelKey so 1.7B and 0.6B groups NEVER share
-     a batch — the sidecar runs a single-model forward and mixing model tiers
-     would cause a prompt-tensor dim mismatch. Each modelKey bucket is sorted and
-     chunked independently, then the resulting work items are merged with the
-     singles and sorted by first-group index before dispatch (line below). */
-  const batchableByModel = new Map<string, SentenceGroup[]>();
-  for (let i = bodyStartIndex; i < groups.length; i++) {
-    const group = groups[i];
-    if (batchSize > 1 && isBatchable(group)) {
-      const { route } = resolveGroup(group);
-      const bucket = batchableByModel.get(route.modelKey) ?? [];
-      bucket.push(group);
-      batchableByModel.set(route.modelKey, bucket);
-    } else {
-      workItems.push({ kind: 'single', group });
-    }
-  }
-  /* Model-side length precomputed once across ALL batchable groups (all buckets).
-     Shared by BOTH the length-bucketing sort (plan 128) and the token-budget
-     packer (plan 136), so normalisation runs at most once per group. */
-  const allBatchable: SentenceGroup[] = Array.from(batchableByModel.values()).flat();
-  const lenOf = new Map(allBatchable.map((g) => [g, normaliseForTts(g.text).length]));
-  const pushBatch = (slice: SentenceGroup[]): void => {
-    workItems.push(
-      slice.length === 1 ? { kind: 'single', group: slice[0] } : { kind: 'batch', groups: slice },
-    );
-  };
-  const tokenBudget = Math.floor(qwenBatchTokenBudget);
-  /* Process each per-modelKey bucket independently so a slice never crosses a
-     model-tier boundary. The sort + chunking logic is identical to the pre-fix
-     single-bucket path, just applied per bucket. */
-  for (const batchable of batchableByModel.values()) {
-    /* Length-bucketing (plan 128): order batchable groups by model-side length,
-       tie-break by `group.index` for determinism. Output-preserving: scatter-back
-       below is by `group.index`. */
-    if (qwenBatchBucket && batchable.length > 1) {
-      batchable.sort((a, b) => lenOf.get(a)! - lenOf.get(b)! || a.index - b.index);
-    }
-    if (tokenBudget <= 0) {
-      /* Fixed-width slicing (plans 113/128) — the back-compat path and the
-         kill-switch (`QWEN_BATCH_TOKEN_BUDGET` unset/0). Byte-for-byte the
-         pre-136 loop. */
-      for (let i = 0; i < batchable.length; i += batchSize) {
-        pushBatch(batchable.slice(i, i + batchSize));
+  async function synthGroupsBatched(
+    groupList: SentenceGroup[],
+    onDone?: (group: SentenceGroup, result: GroupResult) => void,
+  ): Promise<Map<number, GroupResult>> {
+    const out = new Map<number, GroupResult>();
+    const workItems: WorkItem[] = [];
+    /* Partition batchable groups by modelKey so 1.7B and 0.6B groups NEVER share
+       a batch — the sidecar runs a single-model forward and mixing model tiers
+       would cause a prompt-tensor dim mismatch. */
+    const batchableByModel = new Map<string, SentenceGroup[]>();
+    for (const group of groupList) {
+      if (batchSize > 1 && isBatchable(group)) {
+        const { route } = resolveGroup(group);
+        const bucket = batchableByModel.get(route.modelKey) ?? [];
+        bucket.push(group);
+        batchableByModel.set(route.modelKey, bucket);
+      } else {
+        workItems.push({ kind: 'single', group });
       }
-    } else {
-      /* Token-budget packing (plan 136): greedily fill each batch while
-         `count × maxLenInBatch <= tokenBudget` AND `count <= batchSize` (the
-         hard width cap). `batchable` is ascending-length-sorted when bucketing is
-         on, so the candidate is normally the batch's new max; we track a running
-         max so the `count × maxLen` VRAM/compute proxy stays a true upper bound
-         even when bucketing is off. A single item that alone exceeds the budget
-         forms its own batch (the `current.length > 0` guard never closes an empty
-         batch). Output-preserving: scatter-back is still by `group.index`. */
-      let current: SentenceGroup[] = [];
-      let currentMax = 0;
-      for (const g of batchable) {
-        const candLen = lenOf.get(g)!;
-        let candMax = Math.max(currentMax, candLen);
-        const nextCount = current.length + 1;
-        if (current.length > 0 && (nextCount * candMax > tokenBudget || nextCount > batchSize)) {
-          pushBatch(current);
-          current = [];
-          currentMax = 0;
-          candMax = candLen;
+    }
+    /* Model-side length precomputed once across all batchable groups — shared by
+       the length-bucketing sort (plan 128) and the token-budget packer (plan 136). */
+    const allBatchable: SentenceGroup[] = Array.from(batchableByModel.values()).flat();
+    const lenOf = new Map(allBatchable.map((g) => [g, normaliseForTts(g.text).length]));
+    const pushBatch = (slice: SentenceGroup[]): void => {
+      workItems.push(
+        slice.length === 1 ? { kind: 'single', group: slice[0] } : { kind: 'batch', groups: slice },
+      );
+    };
+    /* Process each per-modelKey bucket independently so a slice never crosses a
+       model-tier boundary. */
+    for (const batchable of batchableByModel.values()) {
+      /* Length-bucketing (plan 128): order by model-side length, tie-break by
+         `group.index`. Output-preserving: scatter-back is by `group.index`. */
+      if (qwenBatchBucket && batchable.length > 1) {
+        batchable.sort((a, b) => lenOf.get(a)! - lenOf.get(b)! || a.index - b.index);
+      }
+      if (tokenBudget <= 0) {
+        /* Fixed-width slicing (plans 113/128) — back-compat path + kill-switch. */
+        for (let i = 0; i < batchable.length; i += batchSize) {
+          pushBatch(batchable.slice(i, i + batchSize));
         }
-        current.push(g);
-        currentMax = candMax;
+      } else {
+        /* Token-budget packing (plan 136): greedily fill while
+           `count × maxLenInBatch <= tokenBudget` AND `count <= batchSize`; a
+           single item that alone exceeds the budget forms its own batch. */
+        let current: SentenceGroup[] = [];
+        let currentMax = 0;
+        for (const g of batchable) {
+          const candLen = lenOf.get(g)!;
+          let candMax = Math.max(currentMax, candLen);
+          const nextCount = current.length + 1;
+          if (current.length > 0 && (nextCount * candMax > tokenBudget || nextCount > batchSize)) {
+            pushBatch(current);
+            current = [];
+            currentMax = 0;
+            candMax = candLen;
+          }
+          current.push(g);
+          currentMax = candMax;
+        }
+        if (current.length > 0) pushBatch(current);
       }
-      if (current.length > 0) pushBatch(current);
     }
-  }
-  const firstIndexOf = (item: WorkItem): number =>
-    item.kind === 'single' ? item.group.index : item.groups[0].index;
-  workItems.sort((a, b) => firstIndexOf(a) - firstIndexOf(b));
+    const firstIndexOf = (item: WorkItem): number =>
+      item.kind === 'single' ? item.group.index : item.groups[0].index;
+    workItems.sort((a, b) => firstIndexOf(a) - firstIndexOf(b));
 
-  /* Index-pulling worker pool over the work items. `poolWidth` workers share
-     `nextItem`; each runs its item, stores result(s) by `group.index`, and
-     fires a per-group complete. At `poolWidth === 1` this is a serial walk. */
-  let nextItem = 0;
-  const effectiveWidth = Math.min(poolWidth, Math.max(1, workItems.length));
-  const workers: Promise<void>[] = [];
-  for (let w = 0; w < effectiveWidth; w++) {
-    workers.push(
-      (async () => {
-        for (;;) {
-          /* Cheap abort check before claiming the next item — covers the common
-             case where the outer handler decides to stop (per-bookId mutex,
-             request close, etc.) and the next call would otherwise burn another
-             minute or two of sidecar time. The provider also receives the
-             signal so a mid-call abort is honoured. */
-          if (signal?.aborted) {
-            throw new DOMException('synthesiseChapter aborted', 'AbortError');
+    /* Index-pulling worker pool over the work items. `poolWidth` workers share
+       `nextItem`; each runs its item and stores result(s) by `group.index`. At
+       `poolWidth === 1` this is a serial walk. */
+    let nextItem = 0;
+    const effectiveWidth = Math.min(poolWidth, Math.max(1, workItems.length));
+    const workers: Promise<void>[] = [];
+    for (let w = 0; w < effectiveWidth; w++) {
+      workers.push(
+        (async () => {
+          for (;;) {
+            /* Cheap abort check before claiming the next item. The provider also
+               receives the signal so a mid-call abort is honoured. */
+            if (signal?.aborted) {
+              throw new DOMException('synthesiseChapter aborted', 'AbortError');
+            }
+            const i = nextItem++;
+            if (i >= workItems.length) return;
+            const item = workItems[i];
+            if (item.kind === 'single') {
+              const r = await withRecycleRecovery(resolveGroup(item.group).route.engine, () =>
+                synthGroup(item.group),
+              );
+              out.set(item.group.index, r);
+              onDone?.(item.group, r);
+            } else {
+              const res = await withRecycleRecovery(resolveGroup(item.groups[0]).route.engine, () =>
+                synthBatch(item.groups),
+              );
+              /* Scatter each batched chunk back to ITS OWN group index — this is
+                 what keeps the index-order concat below identical to the per-call
+                 path. */
+              item.groups.forEach((g, k) => {
+                const r = { pcm: res.pcms[k], sampleRate: res.sampleRate };
+                out.set(g.index, r);
+                onDone?.(g, r);
+              });
+            }
           }
-          const i = nextItem++;
-          if (i >= workItems.length) return;
-          const item = workItems[i];
-          if (item.kind === 'single') {
-            results[item.group.index] = await withRecycleRecovery(
-              resolveGroup(item.group).route.engine,
-              () => synthGroup(item.group),
-            );
-            fireComplete(item.group);
-          } else {
-            const out = await withRecycleRecovery(
-              resolveGroup(item.groups[0]).route.engine,
-              () => synthBatch(item.groups),
-            );
-            /* Scatter each batched chunk back to ITS OWN group index — this is
-               what keeps the index-order concat below identical to the per-call
-               path. */
-            item.groups.forEach((g, k) => {
-              results[g.index] = { pcm: out.pcms[k], sampleRate: out.sampleRate };
-              fireComplete(g);
-            });
-          }
-        }
-      })(),
-    );
+        })(),
+      );
+    }
+    await Promise.all(workers);
+    return out;
   }
-  await Promise.all(workers);
+
+  /* Initial body dispatch — synth groups[bodyStartIndex..] (the anchor already
+     ran), writing each result into `results` and streaming chapter progress as
+     it lands. */
+  await synthGroupsBatched(groups.slice(bodyStartIndex), (group, result) => {
+    results[group.index] = result;
+    fireComplete(group);
+  });
 
   /* Pre-assembly per-sentence QA gate. Every body group's PCM is now in
      `results[group.index]`, still UN-concatenated, so a bad sentence can be
      re-recorded in place before assembly (the user heard dropped / silent /
      runaway single sentences slip through the chapter-level gate, which only
-     sees whole-chapter loudness + total duration). For each suspect group we
-     re-synth via the same single-call `synthGroup`, keep the best take, and —
-     if it still fails after `maxSegmentRerecords` attempts — keep the least-bad
-     take and stamp it `suspect` (never block completion). `0` skips the gate
-     entirely (byte-identical to pre-gate). Re-records run serially here, after
-     the pool: a suspect sentence is the rare exception, and serial keeps the
-     retake deterministic. */
+     sees whole-chapter loudness + total duration). Suspect groups are re-synthed
+     in BATCHED rounds (synthGroupsBatched): each round re-records ALL still-
+     suspect sentences in one call, keeps the best take, and — if a group still
+     fails after `maxSegmentRerecords` rounds — keeps the least-bad take and
+     stamps it `suspect` (never block completion). `0` skips the gate entirely
+     (byte-identical to pre-gate). Batching the re-records (vs the old one-call-
+     per-suspect loop) is the ~2x RTF fix; each suspect group still gets at most
+     `maxSegmentRerecords` re-synths (one per round), so the budget is unchanged. */
   const segmentQaByIndex = new Map<number, SegmentQaVerdict>();
   if (maxSegmentRerecords > 0) {
     /* `ok` beats `suspect`; among two suspects, fewer reasons is less-bad. */
@@ -1373,37 +1384,47 @@ export async function synthesiseChapter(
       if (a.status !== b.status) return a.status === 'ok';
       return a.reasons.length < b.reasons.length;
     };
+    /* Best take per group + its current verdict (held in segmentQaByIndex),
+       seeded from the initial synth. */
+    const best = new Map<number, GroupResult>();
     for (const group of groups) {
       const r = results[group.index];
       if (!r) continue;
-      let best = r;
-      let bestVerdict = evaluateSegmentPcm(r.pcm, r.sampleRate, group.text, segmentQaThresholds);
-      for (let attempt = 1; attempt <= maxSegmentRerecords && bestVerdict.status === 'suspect'; attempt++) {
-        if (signal?.aborted) {
-          throw new DOMException('synthesiseChapter aborted', 'AbortError');
-        }
+      best.set(group.index, r);
+      segmentQaByIndex.set(
+        group.index,
+        evaluateSegmentPcm(r.pcm, r.sampleRate, group.text, segmentQaThresholds),
+      );
+    }
+    for (let attempt = 1; attempt <= maxSegmentRerecords; attempt++) {
+      if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      const pending = groups.filter(
+        (g) => results[g.index] && segmentQaByIndex.get(g.index)!.status === 'suspect',
+      );
+      if (pending.length === 0) break;
+      for (const group of pending) {
         onSegmentRerecord?.({
           group,
           attempt,
           maxRerecords: maxSegmentRerecords,
-          reasons: bestVerdict.reasons,
+          reasons: segmentQaByIndex.get(group.index)!.reasons,
         });
-        const fresh = await withRecycleRecovery(resolveGroup(group).route.engine, () =>
-          synthGroup(group),
-        );
-        const freshVerdict = evaluateSegmentPcm(
-          fresh.pcm,
-          fresh.sampleRate,
-          group.text,
-          segmentQaThresholds,
-        );
-        if (isBetter(freshVerdict, bestVerdict)) {
-          best = fresh;
-          bestVerdict = freshVerdict;
+      }
+      const fresh = await synthGroupsBatched(pending);
+      for (const group of pending) {
+        const f = fresh.get(group.index);
+        if (!f) continue;
+        const freshVerdict = evaluateSegmentPcm(f.pcm, f.sampleRate, group.text, segmentQaThresholds);
+        if (isBetter(freshVerdict, segmentQaByIndex.get(group.index)!)) {
+          best.set(group.index, f);
+          segmentQaByIndex.set(group.index, freshVerdict);
         }
       }
-      results[group.index] = best;
-      segmentQaByIndex.set(group.index, bestVerdict);
+    }
+    /* Commit the best take per group (verdicts already live in segmentQaByIndex). */
+    for (const group of groups) {
+      if (!results[group.index]) continue;
+      results[group.index] = best.get(group.index)!;
     }
   }
 
@@ -1434,43 +1455,60 @@ export async function synthesiseChapter(
         sidecarUrl: asr.sidecarUrl,
         signal,
       });
-    /* Count the groups we will actually transcribe (have a result + pass the
-       stride) so onProgress can report verified/total. The stride below walks
-       groups-with-results in order, so total mirrors that ordering. */
-    const groupsWithResult = groups.filter((g) => results[g.index]);
-    const totalToVerify = groupsWithResult.filter((_, i) => i % sampleEvery === 0).length;
-    let verifiedCount = 0;
+    /* Sample the groups to verify (have a result + pass the stride). The stride
+       walks groups-with-results in order, so `total` mirrors that ordering. */
     let sampleCounter = 0;
+    const sampled: SentenceGroup[] = [];
     for (const group of groups) {
-      const r = results[group.index];
-      if (!r) continue;
+      if (!results[group.index]) continue;
       /* Stride sampling — default every sentence (sampleEvery=1). */
       if (sampleEvery > 1 && sampleCounter++ % sampleEvery !== 0) continue;
+      sampled.push(group);
+    }
+    const totalToVerify = sampled.length;
+    /* Transcribe + classify every sampled group once (the best-of-N seed). */
+    const best = new Map<number, GroupResult>();
+    let verifiedCount = 0;
+    for (const group of sampled) {
       if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
       asr.onProgress?.({ verified: verifiedCount, total: totalToVerify });
       verifiedCount += 1;
-      let best = r;
-      let bestClass = await verify(r.pcm, r.sampleRate, group.text);
-      for (let attempt = 1; attempt <= maxAsrRerecords && bestClass.verdict === 'drift'; attempt++) {
-        if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      const r = results[group.index]!;
+      best.set(group.index, r);
+      segmentAsrByIndex.set(group.index, await verify(r.pcm, r.sampleRate, group.text));
+    }
+    /* Round-based re-records: each round re-synths ALL still-drift groups in one
+       batched dispatch, re-verifies, and keeps the better take per group. Each
+       drift group gets at most `maxAsrRerecords` re-synths (one per round) — same
+       budget as the old per-group loop, batched so a round costs one call, not N. */
+    for (let attempt = 1; attempt <= maxAsrRerecords; attempt++) {
+      if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      const pending = sampled.filter((g) => segmentAsrByIndex.get(g.index)!.verdict === 'drift');
+      if (pending.length === 0) break;
+      for (const group of pending) {
+        const c = segmentAsrByIndex.get(group.index)!;
         asr.onRerecord?.({
           group,
           attempt,
           maxRerecords: maxAsrRerecords,
-          wer: bestClass.wer,
-          reasons: bestClass.reasons,
+          wer: c.wer,
+          reasons: c.reasons,
         });
-        const fresh = await withRecycleRecovery(resolveGroup(group).route.engine, () =>
-          synthGroup(group),
-        );
-        const freshClass = await verify(fresh.pcm, fresh.sampleRate, group.text);
-        if (asrBetter(freshClass, bestClass)) {
-          best = fresh;
-          bestClass = freshClass;
+      }
+      const fresh = await synthGroupsBatched(pending);
+      for (const group of pending) {
+        const f = fresh.get(group.index);
+        if (!f) continue;
+        const freshClass = await verify(f.pcm, f.sampleRate, group.text);
+        if (asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
+          best.set(group.index, f);
+          segmentAsrByIndex.set(group.index, freshClass);
         }
       }
-      results[group.index] = best;
-      segmentAsrByIndex.set(group.index, bestClass);
+    }
+    /* Commit the best take per sampled group. */
+    for (const group of sampled) {
+      results[group.index] = best.get(group.index)!;
     }
   }
 

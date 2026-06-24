@@ -10,7 +10,13 @@
 import { describe, it, expect } from 'vitest';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
-import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
+import type {
+  SynthesizeInput,
+  SynthesizeOutput,
+  SynthesizeBatchInput,
+  SynthesizeBatchOutput,
+  TtsProvider,
+} from './index.js';
 import type { TranscribeResult } from './transcribe-client.js';
 
 const TEXT = 'The quick brown fox jumped over the lazy dog in the moonlit yard.';
@@ -185,5 +191,81 @@ describe('synthesiseChapter ASR content-QA pass', () => {
       engine: 'gemini',
     });
     expect(res.segments.find((s) => s.kind !== 'title')?.asr).toBeUndefined();
+  });
+});
+
+/* ASR drift re-records must flow through the SAME batched path as the initial
+   synth (one `synthesizeBatch` call for the whole round) instead of one
+   single `synthesize` call per drift sentence — the unbatched per-group
+   re-record was the ~2x RTF regression on Qwen chapters. */
+describe('synthesiseChapter ASR re-records are batched (Qwen)', () => {
+  function makeQwenBatchProvider(): TtsProvider & {
+    singleCalls: SynthesizeInput[];
+    batchCalls: { items: SynthesizeBatchInput['items'] }[];
+  } {
+    const singleCalls: SynthesizeInput[] = [];
+    const batchCalls: { items: SynthesizeBatchInput['items'] }[] = [];
+    return {
+      singleCalls,
+      batchCalls,
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        singleCalls.push(input);
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({ items }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        batchCalls.push({ items });
+        return { pcms: items.map(() => Buffer.alloc(2)), sampleRate: 24000 };
+      },
+    };
+  }
+
+  const qwenCast: CastCharacter[] = [
+    { id: 'narrator', name: 'Narrator', ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-narrator' } } },
+  ];
+
+  it('re-records all drift sentences in one batch, not one single call each', async () => {
+    const provider = makeQwenBatchProvider();
+    // Every sentence transcribes wrong → every sentence drifts → every sentence
+    // is re-recorded once (maxRerecords: 1).
+    const { fn } = makeTranscriber(['totally wrong unrelated words across this whole line now']);
+    await synthesiseChapter({
+      sentences: [sentence(1), sentence(2), sentence(3)],
+      cast: qwenCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      asr: { maxRerecords: 1, transcribeFn: fn },
+    });
+
+    // Initial dispatch: groups[0] is the up-front anchor (1 single call);
+    // groups[1..2] synth in one batch. The 3 drift re-records must then go
+    // through ONE more batched call — NOT three single `synthesize` calls.
+    expect(provider.singleCalls).toHaveLength(1); // anchor only; zero single re-records
+    expect(provider.batchCalls).toHaveLength(2); // initial body batch + one re-record batch
+  });
+
+  it('stops re-recording groups that recover — no wasted second round', async () => {
+    const provider = makeQwenBatchProvider();
+    // All three drift on the first verify, then transcribe clean on the retake.
+    const { fn } = makeTranscriber(['wrong words one', 'wrong words two', 'wrong words three', TEXT]);
+    const res = await synthesiseChapter({
+      sentences: [sentence(1), sentence(2), sentence(3)],
+      cast: qwenCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      asr: { maxRerecords: 2, transcribeFn: fn },
+    });
+
+    // Round 1 re-records all three (one batch) and they recover, so round 2
+    // finds nothing pending and never dispatches: exactly ONE re-record batch
+    // despite a budget of 2.
+    expect(provider.batchCalls).toHaveLength(2); // initial body batch + one re-record round
+    for (const seg of res.segments.filter((s) => s.kind !== 'title')) {
+      expect(seg.asr?.verdict).toBe('ok');
+      expect(seg.asrSuspect).toBeUndefined();
+    }
   });
 });

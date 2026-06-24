@@ -1472,6 +1472,29 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     ]);
   });
 
+  it('re-records suspect sentences in one batch, not one single call each (signal-QA)', async () => {
+    // makeBatchProvider returns tiny text-length PCM → every sentence renders far
+    // below its expected duration → all flagged suspect by the signal-QA gate.
+    const provider = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: MIXED_SENTENCES,
+      cast: QWEN_CAST,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: 0,
+      maxSegmentRerecords: 1,
+    });
+    // Anchor (groups[0]) is the single up-front call. All five sentences are
+    // suspect, so the re-record round re-synths them in ONE batched call — NOT
+    // five single `synthesize` calls (the unbatched per-suspect re-record was
+    // the ~2x RTF regression).
+    expect(provider.singleCalls).toHaveLength(1);
+    // initial body batch (groups 1-4) + one re-record batch (all 5 suspect).
+    expect(provider.batchCalls).toHaveLength(2);
+  });
+
   it('scatters each batched chunk back to its own sentence index (narrative order preserved)', async () => {
     const provider = makeBatchProvider();
     const result = await synthesiseChapter({
