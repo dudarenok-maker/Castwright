@@ -87,9 +87,11 @@ const ORD_STEM: Record<string, string> = {
 };
 
 // Nominative masculine ending: -ой for the stressed-ending ordinals, else -ый.
+// Only the units второй/шестой/седьмой/восьмой and сороковой take stressed -ой.
+// Hundreds ordinals are -ый (двухсо́тый … девятисо́тый — stress on the -со- syllable,
+// ending unstressed), so they are NOT in this set.
 const ORD_NOM_OY = new Set([
   'втор', 'шест', 'седьм', 'восьм', 'сороков',
-  'двухсот', 'трёхсот', 'четырёхсот', 'пятисот', 'шестисот', 'семисот', 'восьмисот', 'девятисот',
 ]);
 
 function ordinalEnding(stem: string, c: YearCase): string {

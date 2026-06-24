@@ -22,6 +22,15 @@ describe('ru year (final component becomes an ordinal in the requested case)', (
   it('prepositional', () => expect(ru.year(1999, 'prepositional')).toBe('тысяча девятьсот девяносто девятом'));
   it('genitive', () => expect(ru.year(1999, 'genitive')).toBe('тысяча девятьсот девяносто девятого'));
   it('dative', () => expect(ru.year(1999, 'dative')).toBe('тысяча девятьсот девяносто девятому'));
+  // Round-century year: the final component is a hundreds word, which takes -ый
+  // (NOT the stressed -ой). Locks the ORD_NOM_OY hundreds-exclusion fix.
+  it('round-century nominative', () => expect(ru.year(1800, 'nominative')).toBe('тысяча восьмисотый'));
+  it('round-century prepositional', () => expect(ru.year(1800, 'prepositional')).toBe('тысяча восьмисотом'));
+});
+
+describe('ru ordinal hundreds take -ый not -ой', () => {
+  it('200th', () => expect(ru.ordinal(200)).toBe('двухсотый'));
+  it('900th', () => expect(ru.ordinal(900)).toBe('девятисотый'));
 });
 
 describe('ru yearCaseFor', () => {
