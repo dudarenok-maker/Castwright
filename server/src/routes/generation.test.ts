@@ -1398,8 +1398,9 @@ describe('fs-57 — generation route threads liveInstruct from state into synthe
     expect(res.status).toBe(200);
     expect(capturedOpts.length).toBeGreaterThan(0);
     for (const opts of capturedOpts) {
-      /* undefined MUST resolve to false — never truthy for a legacy book. */
-      expect(opts.liveInstruct ?? false).toBe(false);
+      /* The generation route's `?? false` guard MUST have fired — the value
+         reaching synthesiseChapter is strictly `false`, never `undefined`. */
+      expect(opts.liveInstruct).toBe(false);
     }
     /* Reset state for subsequent tests. */
     await patchStateLiveInstruct(false);
