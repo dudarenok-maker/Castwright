@@ -389,6 +389,31 @@ def _reclaim_host_and_vram() -> None:
         pass
 
 
+def _post_progress(url: str, token: str, phase: str) -> None:
+    """Best-effort fire-and-forget progress POST to the server's loopback relay.
+    Runs in a daemon thread; swallows every error (progress must never fail or
+    stall a design). Uses an unverified SSL context for the https loopback —
+    the server's LAN cert is self-signed and this is the same host (AR2)."""
+    import json as _json
+    import ssl as _ssl
+    import threading as _threading
+    import urllib.request as _ureq
+
+    def _fire() -> None:
+        try:
+            data = _json.dumps({"token": token, "phase": phase}).encode("utf-8")
+            req = _ureq.Request(
+                url, data=data, method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            ctx = _ssl._create_unverified_context() if url.lower().startswith("https") else None
+            _ureq.urlopen(req, timeout=1.5, context=ctx).close()
+        except Exception:
+            pass
+
+    _threading.Thread(target=_fire, daemon=True).start()
+
+
 class SynthResult:
     """Engine output: PCM bytes + sample rate + the speaker actually used.
     `substituted_from` is non-None when the requested voice wasn't in the
@@ -4092,6 +4117,14 @@ async def qwen_design_voice(req: Request) -> Response:
     if not isinstance(qwen, QwenEngine):
         return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
 
+    progress_token = body.get("progressToken") if isinstance(body.get("progressToken"), str) else None
+    progress_url = body.get("progressUrl") if isinstance(body.get("progressUrl"), str) else None
+    _report = (
+        (lambda ph: _post_progress(progress_url, progress_token, ph))
+        if progress_token and progress_url
+        else None
+    )
+
     try:
         result = await asyncio.to_thread(
             qwen.design_voice,
@@ -4100,6 +4133,7 @@ async def qwen_design_voice(req: Request) -> Response:
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
             voice_uuid,
+            _report,
         )
     except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
@@ -4144,6 +4178,14 @@ async def qwen_mint_variant(req: Request) -> Response:
     if not isinstance(qwen, QwenEngine):
         return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
 
+    progress_token = body.get("progressToken") if isinstance(body.get("progressToken"), str) else None
+    progress_url = body.get("progressUrl") if isinstance(body.get("progressUrl"), str) else None
+    _report = (
+        (lambda ph: _post_progress(progress_url, progress_token, ph))
+        if progress_token and progress_url
+        else None
+    )
+
     try:
         result = await asyncio.to_thread(
             qwen.mint_variant,
@@ -4153,6 +4195,7 @@ async def qwen_mint_variant(req: Request) -> Response:
             language if isinstance(language, str) else None,
             calibration_text if isinstance(calibration_text, str) else None,
             voice_uuid,
+            _report,
         )
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)

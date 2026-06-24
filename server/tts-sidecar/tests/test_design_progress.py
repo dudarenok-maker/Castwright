@@ -97,3 +97,35 @@ def test_mint_variant_reports_phases_in_order(monkeypatch):
     )
 
     assert seen == ["loading-model", "anchoring", "performing", "distilling", "rendering"]
+
+
+def test_design_route_posts_progress_when_token_present(monkeypatch):
+    import main
+    import numpy as np
+    from fastapi.testclient import TestClient  # matches test_batch_synthesis.py; used WITHOUT `with` so lifespan/preload never fires
+
+    class _FakeQwen(main.QwenEngine):
+        def __init__(self):
+            pass  # skip the real heavy __init__; the route only calls design_voice
+
+        def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None, report_progress=None):
+            if report_progress:
+                report_progress("loading-model")
+                report_progress("designing")
+            return main.SynthResult(pcm=np.zeros(4, dtype="<i2").tobytes(), sample_rate=24000)
+
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwen())
+
+    posted = []
+    monkeypatch.setattr(main, "_post_progress", lambda url, token, phase: posted.append((url, token, phase)))
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/design-voice", json={
+        "voiceId": "qwen-x", "instruct": "warm",
+        "progressToken": "tok123", "progressUrl": "http://127.0.0.1:8080/api/internal/design-progress",
+    })
+    assert res.status_code == 200
+    assert posted == [
+        ("http://127.0.0.1:8080/api/internal/design-progress", "tok123", "loading-model"),
+        ("http://127.0.0.1:8080/api/internal/design-progress", "tok123", "designing"),
+    ]
