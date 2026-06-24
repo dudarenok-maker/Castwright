@@ -40,7 +40,7 @@ export async function unloadResidentSidecar(): Promise<void> {
       throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
     }
     // Best-effort health verify — /health is the sidecar's own endpoint (not the Node proxy).
-    const health = await fetch(`${url}/health`).then((r) => r.json()).catch(() => ({}));
+    const health = await fetch(`${url}/health`).then((r) => r.json()).catch((e) => { console.warn('[persona-gpu-plan] sidecar /health probe failed after /unload (best-effort):', (e as Error).message); return {}; });
     void health; // idempotent; /unload 200 is sufficient; health is diagnostic only.
   } finally {
     release();

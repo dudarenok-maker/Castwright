@@ -297,13 +297,27 @@ async function runDesignJob(
 
     const heartbeat = setInterval(() => broadcast(job, { type: 'heartbeat', characterId }), HEARTBEAT_MS);
     try {
-      /* Persona fallback (Gemini) when the character has none, persisted
-         minimal-patch so a concurrent edit to another character survives.
+      /* Persona fallback: when the character has no persona, generate one.
          Computed ONCE before the ride-out loop — a recycle retry re-renders the
          voice, not the persona. (Variants always have a base so a persona must
-         already exist — but we apply the same fallback for safety.) */
+         already exist — but we apply the same fallback for safety.)
+
+         ENGINE SPLIT: the LOCAL engine must NOT fall back here.  The pre-pass
+         (`runPersonaPrePass`) owns local persona-gen; it runs before VoiceDesign
+         loads and uses a safe GPU plan (evict or CPU).  If it failed for this
+         character it already recorded a `character_failed` and the character ends
+         up in `job.failures`.  Retrying here — with VoiceDesign already resident
+         on the GPU — would call Ollama inside `withGpuLoad`, the exact plan-108
+         OOM this pre-pass was built to prevent.  Skip silently (no second
+         `character_failed` broadcast — the pre-pass already emitted one). */
       let persona = (character.voiceStyle ?? '').trim();
       if (!persona) {
+        if (resolvePersonaEngine() === 'local') {
+          /* Skip — the pre-pass owns local persona-gen and already recorded any
+             failure; retrying here with an un-evicted GPU Ollama call as
+             VoiceDesign loads is the plan-108 OOM. */
+          continue;
+        }
         persona = await generateVoiceStylePersona(character);
         const fresh = await readJson<CastFile>(castJsonPath(job.bookDir));
         const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;

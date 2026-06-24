@@ -788,6 +788,64 @@ describe('cast-design persona pre-pass', () => {
     writeBookOnDisk(characters);
   });
 
+  it('I1/I2 skip guard: LOCAL pre-pass failure does NOT retry in design loop (no un-evicted OOM call)', async () => {
+    /* Locks the OOM seam (plan-108): when the pre-pass's generateVoiceStylePersona
+       throws a non-LocalUnreachableError for character A (e.g. empty persona), the
+       design loop must NOT call generateVoiceStylePersona or designQwenVoiceForCharacter
+       for A a second time.  Character B (whose pre-pass succeeds) must still be designed.
+
+       Assertions:
+         - generateVoiceStylePersona called ONCE total (pre-pass only for A; B has a
+           voiceStyle so the pre-pass skips it idempotently — total = 1 call for A).
+         - designQwenVoiceForCharacter NOT called for A (skip guard prevents the retry).
+         - designQwenVoiceForCharacter IS called for B (the healthy path is unaffected). */
+    resolvePersonaEngineMock.mockReturnValue('local');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: '5m' });
+
+    // hart (no voiceStyle) will be character A — pre-pass throws a transient error.
+    // aria (has voiceStyle) will be character B — pre-pass skips (idempotent), design runs.
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async (c: any) => {
+      if (c.id === 'hart') throw new Error('empty persona'); // non-LocalUnreachableError
+      return 'A persona.'; // should never be called for aria (has voiceStyle)
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_aria',
+      url: '/v/aria.mp3',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'aria'] });
+
+    expect(res.status).toBe(200);
+
+    // generateVoiceStylePersona must have been called exactly ONCE (for hart in pre-pass only).
+    // The design loop must NOT retry hart — that would be the OOM call.
+    const personaCalls = (vs.generateVoiceStylePersona as ReturnType<typeof vi.fn>).mock.calls;
+    expect(personaCalls).toHaveLength(1);
+    expect((personaCalls[0][0] as any).id).toBe('hart');
+
+    // designQwenVoiceForCharacter must NOT have been called for hart (skipped by guard).
+    const designCalls = designSpy.mock.calls;
+    const hartDesign = designCalls.filter((c) => (c[0] as any).characterId === 'hart');
+    expect(hartDesign).toHaveLength(0);
+
+    // designQwenVoiceForCharacter MUST have been called for aria (healthy path unaffected).
+    const ariaDesign = designCalls.filter((c) => (c[0] as any).characterId === 'aria');
+    expect(ariaDesign.length).toBeGreaterThanOrEqual(1);
+
+    const events = parseSse(res.text);
+    // hart must appear in failures (recorded by the pre-pass), aria must be designed.
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures?.some((f: any) => f.characterId === 'hart')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
+  });
+
   it('LocalUnreachableError in pre-pass propagates and stops designs; heartbeat interval is cleared', async () => {
     /* This test covers two contracts from the brief:
        1. A LocalUnreachableError in generateVoiceStylePersona propagates wholesale
