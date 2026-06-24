@@ -329,3 +329,59 @@ def test_real_neutral_placeholder_produces_valid_pcm() -> None:
     assert len(wav) >= min_samples, (
         f"PCM too short: {len(wav)} samples < {min_samples} (0.1s at {sr} Hz)."
     )
+
+
+@requires_qwen_gpu
+@requires_17b_pt
+def test_real_batch_live_instruct_heterogeneous_no_cross_bleed() -> None:
+    """fs-57 Task 6 (real model): synthesize_batch(model='1.7b',
+    live_instruct=True) runs N items with DIFFERENT per-item instructs (one
+    neutral, no `instruct`) through ONE batched forward and returns N distinct,
+    non-empty PCM buffers.
+
+    This is the on-box proof that the heterogeneous per-item instruct_ids list
+    is accepted by the real `model.generate()` in a single forward (the brief's
+    hard part) AND that a neutral item (NEUTRAL_INSTRUCT) shares that forward
+    without the wrapper. Cross-bleed evidence is structural here (each item gets
+    its own non-empty buffer of independent length); audio-quality / emotion
+    intensity is a human-listening check outside this gate."""
+    voices_dir = _voices_dir_with_17b_pt()
+    engine = main.ENGINES["qwen"]
+    assert isinstance(engine, main.QwenEngine)
+
+    orig_voices_dir = engine._voices_dir
+    engine._voices_dir = str(voices_dir)
+    try:
+        items = [
+            {
+                "voice": _TEST_VOICE,
+                "text": "The harbor fell silent as the fog rolled in.",
+                "instruct": "Whispering, tense and afraid.",
+            },
+            {
+                "voice": _TEST_VOICE,
+                "text": "He laughed and threw open the door.",
+                "instruct": "Booming with delighted laughter.",
+            },
+            # Neutral item — no `instruct` → NEUTRAL_INSTRUCT, same bypass forward.
+            {"voice": _TEST_VOICE, "text": "She crossed the bridge without looking back."},
+        ]
+        res = engine.synthesize_batch("1.7b", items, live_instruct=True)
+    finally:
+        engine._voices_dir = orig_voices_dir
+
+    assert res.sample_rate > 0
+    assert len(res.pcms) == 3, "one PCM buffer per input item, in order"
+    for i, pcm in enumerate(res.pcms):
+        assert isinstance(pcm, (bytes, bytearray)), f"item {i} PCM must be bytes"
+        # int16 LE → at least 0.1 s of audio (2 bytes/sample).
+        min_bytes = int(res.sample_rate * 0.1) * 2
+        assert len(pcm) >= min_bytes, (
+            f"item {i} PCM too short: {len(pcm)} bytes < {min_bytes} "
+            f"(0.1s at {res.sample_rate} Hz) — possible degenerate batch output."
+        )
+    # No cross-bleed proxy: the three differently-worded lines must not all
+    # collapse to byte-identical buffers (independent sequences → distinct PCM).
+    assert not (res.pcms[0] == res.pcms[1] == res.pcms[2]), (
+        "all three batched items produced identical PCM — a demux/cross-bleed bug."
+    )
