@@ -3445,6 +3445,28 @@ def _qwen_weights_present() -> bool:
     return False
 
 
+def _qwen_base17_weights_present() -> bool:
+    """True if the 1.7B-Base snapshot holds at least one real weight blob.
+    Mirrors `_qwen_weights_present` but targets `QwenEngine.BASE17_MODEL` (the
+    anchored emotion-variant engine, fs-55). Read the constant at call time so
+    a QWEN_BASE_17B_MODEL env override is honoured."""
+    repo_dir = os.path.join(
+        _qwen_hub_cache_dir(),
+        "models--" + QwenEngine.BASE17_MODEL.replace("/", "--"),
+    )
+    snapshots = os.path.join(repo_dir, "snapshots")
+    if not os.path.isdir(snapshots):
+        return False
+    try:
+        for _root, _dirs, files in os.walk(snapshots):
+            for fname in files:
+                if fname.endswith(_QWEN_WEIGHT_SUFFIXES):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _qwen_install_state(qwen_loaded: bool) -> str:
     """One of: 'not-installed' (pip package absent) | 'weights-missing'
     (package present, Base weights not downloaded) | 'ready' (package + weights
@@ -3667,6 +3689,7 @@ def health() -> dict[str, Any]:
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
+        "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
         "kokoro_package_installed": _kokoro_package_installed(),

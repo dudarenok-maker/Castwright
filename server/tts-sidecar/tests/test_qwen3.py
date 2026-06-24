@@ -1382,3 +1382,19 @@ def test_synth_17b_on_gpu_produces_audio_and_writes_cache() -> None:
     # The 1.7B native cache file must have been written.
     pt_17b, _ = eng._voice_paths("cw_gpu_17b__1.7b")
     assert os.path.isfile(pt_17b), f"<voice>__1.7b.pt not found at {pt_17b}"
+
+
+def test_base17_weights_present_true_when_blob_exists(tmp_path, monkeypatch):
+    import main
+    repo = tmp_path / ("models--" + main.QwenEngine.BASE17_MODEL.replace("/", "--"))
+    snap = repo / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    (snap / "model.safetensors").write_bytes(b"x")
+    monkeypatch.setattr(main, "_qwen_hub_cache_dir", lambda: str(tmp_path))
+    assert main._qwen_base17_weights_present() is True
+
+
+def test_base17_weights_present_false_when_absent(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "_qwen_hub_cache_dir", lambda: str(tmp_path))
+    assert main._qwen_base17_weights_present() is False
