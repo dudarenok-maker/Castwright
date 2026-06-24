@@ -136,6 +136,37 @@ describe('voice-sample router', () => {
     });
   });
 
+  describe('error mapping', () => {
+    it('maps a sidecar "voice not designed" 409 to a clean 409 voice_not_designed (#1063)', async () => {
+      // The sidecar now returns 409 `voice_not_designed` for a missing .pt;
+      // sidecar.ts surfaces it as "Local voice engine returned 409: {json}".
+      // The route must re-map that to a distinct 4xx + actionable copy, NOT the
+      // generic 502 tts_failed.
+      synthesize.mockRejectedValueOnce(
+        new Error(
+          'Local voice engine returned 409: {"detail":"Qwen voice \'qwen-x\' has not been designed yet. Design it first via POST /qwen/design-voice.","code":"voice_not_designed"}',
+        ),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_x/sample')
+        .send({ modelKey: 'qwen3-tts-0.6b', voice: { id: 'v_x', character: 'X' }, text: 'Hi.' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('voice_not_designed');
+      expect(res.body.message).toMatch(/design it first/i);
+      // The friendly copy must not echo the raw sidecar JSON / path.
+      expect(res.body.message).not.toMatch(/\.pt|POST \/qwen/);
+    });
+
+    it('still maps an unrecognised synth failure to 502 tts_failed', async () => {
+      synthesize.mockRejectedValueOnce(new Error('some unexpected boom'));
+      const res = await request(app)
+        .post('/api/voices/v_y/sample')
+        .send({ modelKey: 'coqui-xtts-v2', voice: { id: 'v_y', character: 'Y' }, text: 'Hi.' });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('tts_failed');
+    });
+  });
+
   describe('evidence-driven sample text (no text in body)', () => {
     /* The route's buildSampleText is internal, but we can verify its
        behaviour through synthesize's call arguments — the route hands

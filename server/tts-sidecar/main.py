@@ -2080,10 +2080,13 @@ class QwenEngine(Engine):
 
         pt_path, json_path = self._voice_paths(voice)
         if not os.path.isfile(pt_path):
-            raise RuntimeError(
+            # Typed so the /synthesize route can map it to a clear 409 instead
+            # of the opaque 500 (#1063). The absolute path is omitted from the
+            # message (it may reach the client body) — the voice id is enough to
+            # act on; the disk location stays in the server-side log.
+            raise VoiceNotDesignedError(
                 f"Qwen voice '{voice}' has not been designed yet (no cached "
-                f"embedding at {pt_path}). Design it first via "
-                "POST /qwen/design-voice."
+                "embedding). Design it first via POST /qwen/design-voice."
             )
         lang = self.DEFAULT_LANGUAGE
         if os.path.isfile(json_path):
@@ -4191,6 +4194,21 @@ async def synthesize(req: Request) -> Response:
         # control back to the event loop, so /health stays sub-50ms during
         # synthesis. This is the single biggest UX fix in the sidecar.
         result = await asyncio.to_thread(engine.synthesize, model, voice, text)
+    except VoiceNotDesignedError as exc:
+        # #1063 — the requested voice/variant has no cached embedding on disk.
+        # That's a bad-input condition (design the voice/variant first), not an
+        # engine fault, so surface a clear, actionable 409 instead of the opaque
+        # 500 below. Mirrors the /qwen/mint-variant handler. The CUDA-poison
+        # fence is intentionally skipped — a missing .pt never poisons the
+        # context — so the process keeps serving other voices.
+        log.warning(
+            "/synthesize: voice not designed — engine=%s voice=%s: %s",
+            engine_id, voice, exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "voice_not_designed"},
+            status_code=409,
+        )
     except Exception as e:
         # Internal-only — feeds CUDA-poison detection + the server-side log,
         # never a response body (the body stays generic below).
