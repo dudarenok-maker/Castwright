@@ -1063,6 +1063,17 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
 # (e.g. QWEN_GAIN_WHISPER=0.5). Gain>1 clips via _float_audio_to_int16_le's clamp.
 _EMOTION_OUTPUT_GAIN: dict[str, float] = {"whisper": 0.45, "angry": 1.5}
 
+# Per-emotion output gain for the liveInstruct path (fs-57).  Keyed on the
+# explicit `emotion` field in the batch item (not the voice name suffix, which
+# is absent on the liveInstruct path).  Env-tunable via QWEN_LIVE_GAIN_<EMOTION>
+# (e.g. QWEN_LIVE_GAIN_WHISPER=0.4), mirroring the QWEN_GAIN_* pattern above.
+_LIVE_INSTRUCT_GAIN: dict[str, float] = {
+    "whisper": 0.35,
+    "angry": 1.7,
+    "sad": 0.6,
+    "excited": 1.15,
+}
+
 
 def _emotion_output_gain(voice: str) -> float:
     if not isinstance(voice, str) or "__" not in voice:
@@ -1075,6 +1086,39 @@ def _emotion_output_gain(voice: str) -> float:
         except ValueError:
             pass
     return _EMOTION_OUTPUT_GAIN.get(emo, 1.0)
+
+
+def _live_instruct_gain(emotion: Optional[str]) -> float:
+    """Per-emotion output gain for the liveInstruct path.
+
+    Uses `_LIVE_INSTRUCT_GAIN` (separate from `_EMOTION_OUTPUT_GAIN` so the
+    anchored-variant / 0.6B path is UNCHANGED).  Env-override:
+    ``QWEN_LIVE_GAIN_<EMOTION>`` (e.g. ``QWEN_LIVE_GAIN_WHISPER=0.4``).
+    Returns 1.0 for absent / unknown emotions.
+    """
+    emo = (emotion or "").lower()
+    if not emo:
+        return 1.0
+    raw = os.environ.get(f"QWEN_LIVE_GAIN_{emo.upper()}")
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _LIVE_INSTRUCT_GAIN.get(emo, 1.0)
+
+
+def _gain_for_item(item: dict, live_instruct: bool) -> float:
+    """Return the output gain multiplier for a batch item.
+
+    On the liveInstruct path, uses the item's explicit ``emotion`` field via
+    `_live_instruct_gain`.  On the standard (anchored-variant) path, derives
+    the gain from the voice name's ``__<emotion>`` suffix via
+    `_emotion_output_gain`.  This keeps the two paths strictly independent.
+    """
+    if live_instruct:
+        return _live_instruct_gain(item.get("emotion"))
+    return _emotion_output_gain(item.get("voice") or "")
 
 
 def _apply_emotion_gain(audio: Any, voice: Optional[str]) -> Any:
@@ -2556,7 +2600,11 @@ class QwenEngine(Engine):
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
         pcms = [
-            _float_audio_to_int16_le(_apply_emotion_gain(w, items[i].get("voice")))
+            _float_audio_to_int16_le(
+                np.asarray(w, dtype=np.float32) * g
+                if (g := _gain_for_item(items[i], live_instruct)) != 1.0
+                else w
+            )
             for i, w in enumerate(wavs)
         ]
         return SynthBatchResult(

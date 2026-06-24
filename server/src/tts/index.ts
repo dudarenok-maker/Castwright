@@ -58,6 +58,10 @@ export interface SynthesizeBatchItem {
   /** fs-57 — delivery direction for the 1.7B liveInstruct path. Absent
       when the gate is off or no instruct/emotion phrase applies. */
   instruct?: string;
+  /** fs-57 — delivery emotion for the liveInstruct gain path. The sidecar
+      uses this (not the voice name suffix) to look up the output gain on the
+      liveInstruct path. Absent → unity gain (1.0). */
+  emotion?: string;
 }
 
 export interface SynthesizeBatchInput {

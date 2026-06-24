@@ -124,6 +124,44 @@ describe('fs-57 — synthesizeBatch request body carries liveInstruct + per-item
     expect(items[1]).not.toHaveProperty('instruct');
   });
 
+  it('sends per-item emotion only when present on the item', async () => {
+    /* fs-57 gain fix: emotion is forwarded so the sidecar can apply
+       _live_instruct_gain on the liveInstruct path.  Items without an emotion
+       must not carry the key (no-op → unity gain on the sidecar side). */
+    const bodies: unknown[] = [];
+    stubBatchFetch(bodies);
+    await makeQwenProvider().synthesizeBatch!({
+      items: [
+        { text: 'hello', voiceName: 'qwen-v1', emotion: 'whisper' },
+        { text: 'world', voiceName: 'qwen-v2' }, // no emotion
+      ],
+      modelKey: 'qwen3-tts-1.7b',
+      liveInstruct: true,
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    const items = body.items as Array<Record<string, unknown>>;
+    expect(items[0].emotion).toBe('whisper');
+    expect(items[1]).not.toHaveProperty('emotion');
+  });
+
+  it('emotion is absent from body when not set (variant path)', async () => {
+    /* On the standard (anchored-variant) path, emotion is not set so no emotion
+       key should appear in the request body. */
+    const bodies: unknown[] = [];
+    stubBatchFetch(bodies);
+    await makeQwenProvider().synthesizeBatch!({
+      items: [
+        { text: 'hello', voiceName: 'qwen-v1__whisper' },
+        { text: 'world', voiceName: 'qwen-v2' },
+      ],
+      modelKey: 'qwen3-tts-0.6b',
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    const items = body.items as Array<Record<string, unknown>>;
+    expect(items[0]).not.toHaveProperty('emotion');
+    expect(items[1]).not.toHaveProperty('emotion');
+  });
+
   it('single /synthesize body is unchanged — no liveInstruct field', async () => {
     /* PR2-M3: live instruct is batch-only; the single /synthesize body MUST NOT
        carry liveInstruct so a future sidecar version can rely on it not being set. */

@@ -1162,6 +1162,9 @@ export async function synthesiseChapter(
            resolveInstructForGroup returns {} when liveInstruct=false or is17b=false,
            so the spread is a no-op on the standard path. */
         ...resolveInstructForGroup(g, { is17b, liveInstruct }),
+        /* fs-57 — forward the group's emotion so the sidecar can look up the
+           liveInstruct gain.  Absent/neutral groups send no key → unity gain. */
+        ...(g.emotion != null ? { emotion: g.emotion } : {}),
       };
     });
     const out = await withHeartbeat(lead, () =>

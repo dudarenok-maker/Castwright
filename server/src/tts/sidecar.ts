@@ -184,6 +184,7 @@ export class SidecarTtsProvider implements TtsProvider {
         voice: it.voiceName,
         text: it.text,
         ...(it.instruct != null ? { instruct: it.instruct } : {}),
+        ...(it.emotion != null ? { emotion: it.emotion } : {}),
       })),
     });
 

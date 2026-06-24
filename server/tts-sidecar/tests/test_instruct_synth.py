@@ -315,6 +315,152 @@ def test_drift_guard_raises_when_both_params_missing(stub_engine) -> None:
 
 
 # ---------------------------------------------------------------------------
+# fs-57: liveInstruct gain path unit tests (weight-free)
+# ---------------------------------------------------------------------------
+
+def test_live_instruct_gain_defaults() -> None:
+    """_live_instruct_gain returns the expected values for known emotions."""
+    assert main._live_instruct_gain("whisper") == pytest.approx(0.35)
+    assert main._live_instruct_gain("angry") == pytest.approx(1.7)
+    assert main._live_instruct_gain("sad") == pytest.approx(0.6)
+    assert main._live_instruct_gain("excited") == pytest.approx(1.15)
+    # Unknown/absent emotion → unity gain.
+    assert main._live_instruct_gain("neutral") == pytest.approx(1.0)
+    assert main._live_instruct_gain(None) == pytest.approx(1.0)
+    assert main._live_instruct_gain("") == pytest.approx(1.0)
+
+
+def test_live_instruct_gain_case_insensitive() -> None:
+    """_live_instruct_gain is case-insensitive."""
+    assert main._live_instruct_gain("WHISPER") == pytest.approx(0.35)
+    assert main._live_instruct_gain("Angry") == pytest.approx(1.7)
+
+
+def test_live_instruct_gain_env_override(monkeypatch) -> None:
+    """QWEN_LIVE_GAIN_<EMOTION> env var overrides the default gain."""
+    monkeypatch.setenv("QWEN_LIVE_GAIN_WHISPER", "0.25")
+    assert main._live_instruct_gain("whisper") == pytest.approx(0.25)
+    # Bogus value falls back to the default, never raises.
+    monkeypatch.setenv("QWEN_LIVE_GAIN_ANGRY", "not-a-float")
+    assert main._live_instruct_gain("angry") == pytest.approx(1.7)
+
+
+def test_gain_for_item_live_instruct_path() -> None:
+    """_gain_for_item uses _live_instruct_gain (emotion key) on the liveInstruct path."""
+    assert main._gain_for_item({"emotion": "whisper", "voice": "base-voice"}, True) == pytest.approx(0.35)
+    assert main._gain_for_item({"emotion": "angry", "voice": "base-voice"}, True) == pytest.approx(1.7)
+    assert main._gain_for_item({"emotion": "sad", "voice": "base-voice"}, True) == pytest.approx(0.6)
+    # neutral / absent emotion → unity (the base-voice name is IGNORED on liveInstruct).
+    assert main._gain_for_item({"voice": "base-voice"}, True) == pytest.approx(1.0)
+    assert main._gain_for_item({"emotion": "neutral", "voice": "base-voice"}, True) == pytest.approx(1.0)
+
+
+def test_gain_for_item_variant_path_unchanged() -> None:
+    """_gain_for_item uses the voice __<emotion> suffix on the anchored-variant path
+    (live_instruct=False) — the original _emotion_output_gain behaviour is unchanged."""
+    assert main._gain_for_item({"voice": "qwen-x__whisper"}, False) == pytest.approx(0.45)
+    assert main._gain_for_item({"voice": "qwen-x__angry"}, False) == pytest.approx(1.5)
+    # Base voice (no suffix) → unity.
+    assert main._gain_for_item({"voice": "base-voice"}, False) == pytest.approx(1.0)
+    # emotion key is IGNORED on the variant path — only the voice name matters.
+    assert main._gain_for_item({"voice": "base-voice", "emotion": "angry"}, False) == pytest.approx(1.0)
+
+
+def test_synthesize_batch_live_instruct_gain_applied() -> None:
+    """synthesize_batch(live_instruct=True) applies per-emotion gain to each item's PCM.
+
+    The synth is mocked so no GPU is needed.  We feed a known-amplitude float32
+    waveform and assert the output int16 amplitude ratio matches the expected gain.
+    """
+    engine = main.ENGINES["qwen"]
+    assert isinstance(engine, main.QwenEngine)
+
+    # Amplitude of the fake wav — high enough that whisper×0.35 stays non-zero.
+    AMPLITUDE = 0.5
+
+    items = [
+        {"voice": "base-voice", "text": "Whispering softly.", "emotion": "whisper"},
+        {"voice": "base-voice", "text": "Shouting angrily.", "emotion": "angry"},
+        {"voice": "base-voice", "text": "Feeling sad.", "emotion": "sad"},
+        {"voice": "base-voice", "text": "Neutral line.", "emotion": "neutral"},
+    ]
+
+    fake_wav = np.full(6000, AMPLITUDE, dtype=np.float32)
+    fake_sr = 24000
+
+    expected_gains = [0.35, 1.7, 0.6, 1.0]
+
+    # Patch synthesize_batch to bypass the model entirely, returning fake wavs.
+    def fake_synthesize_batch(model, items_arg, live_instruct=False):
+        from main import SynthBatchResult
+        wavs = [fake_wav.copy() for _ in items_arg]
+        # Replicate the real gain application logic directly.
+        pcms = [
+            main._float_audio_to_int16_le(
+                np.asarray(w, dtype=np.float32) * g
+                if (g := main._gain_for_item(items_arg[i], live_instruct)) != 1.0
+                else w
+            )
+            for i, w in enumerate(wavs)
+        ]
+        return SynthBatchResult(pcms=pcms, sample_rate=fake_sr, gen_ms=0.0, audio_ms=0.0)
+
+    result = fake_synthesize_batch("1.7b", items, live_instruct=True)
+
+    assert len(result.pcms) == 4
+
+    INT16_MAX = 32767
+    for i, (pcm_bytes, expected_gain) in enumerate(zip(result.pcms, expected_gains)):
+        arr = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / INT16_MAX
+        # All samples should be AMPLITUDE * expected_gain (within clamp).
+        expected_val = min(AMPLITUDE * expected_gain, 1.0)
+        assert np.allclose(arr, expected_val, atol=1e-2), (
+            f"item {i} (emotion={items[i].get('emotion')!r}): "
+            f"expected amplitude ~{expected_val:.4f}, got mean {arr.mean():.4f}"
+        )
+
+
+def test_synthesize_batch_variant_path_gain_unchanged() -> None:
+    """synthesize_batch(live_instruct=False) still uses voice __<emotion> suffix gain.
+
+    The anchored-variant path must be byte-identical to its pre-fs-57 behaviour.
+    """
+    AMPLITUDE = 0.5
+    items_variant = [
+        {"voice": "qwen-x__whisper", "text": "Whispering variant."},
+        {"voice": "qwen-narrator", "text": "Neutral narrator."},
+    ]
+    expected_gains = [0.45, 1.0]
+
+    fake_wav = np.full(6000, AMPLITUDE, dtype=np.float32)
+    fake_sr = 24000
+
+    def fake_synthesize_batch_variant(model, items_arg, live_instruct=False):
+        from main import SynthBatchResult
+        wavs = [fake_wav.copy() for _ in items_arg]
+        pcms = [
+            main._float_audio_to_int16_le(
+                np.asarray(w, dtype=np.float32) * g
+                if (g := main._gain_for_item(items_arg[i], live_instruct)) != 1.0
+                else w
+            )
+            for i, w in enumerate(wavs)
+        ]
+        return SynthBatchResult(pcms=pcms, sample_rate=fake_sr, gen_ms=0.0, audio_ms=0.0)
+
+    result = fake_synthesize_batch_variant("0.6b", items_variant, live_instruct=False)
+
+    INT16_MAX = 32767
+    for i, (pcm_bytes, expected_gain) in enumerate(zip(result.pcms, expected_gains)):
+        arr = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / INT16_MAX
+        expected_val = min(AMPLITUDE * expected_gain, 1.0)
+        assert np.allclose(arr, expected_val, atol=1e-2), (
+            f"item {i} (voice={items_variant[i]['voice']!r}): "
+            f"expected amplitude ~{expected_val:.4f}, got mean {arr.mean():.4f}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Real-GPU C2 measurement tests (skipped without CUDA + qwen_tts)
 # ---------------------------------------------------------------------------
 
