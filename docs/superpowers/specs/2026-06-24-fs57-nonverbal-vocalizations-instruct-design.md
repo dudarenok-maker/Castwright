@@ -95,7 +95,7 @@ along since the instruct is English regardless).
   `server/src/tts/synthesise-chapter.ts`, alongside the existing `emotion` carry at ~line 265).
 - **Precedence ladder** (3-way, additive — absent `instruct` ⇒ today's behaviour exactly):
 
-  > **manual edit › analyzer `instruct` › emotion-derived English phrase (1.7B only) › neutral.**
+  > **manual edit › analyzer `instruct` › emotion-derived English phrase (1.7B + `liveInstruct`) › neutral.**
 
   Manual edits win (consistent with `emotion`'s "manual wins"). On the 1.7B tier a sentence with
   `emotion` but no `instruct` derives an English phrase from the enum; on the 0.6B tier `emotion`
@@ -107,7 +107,9 @@ along since the instruct is English regardless).
   (book-meta, default **off**) gates it. So existing 1.7B-cast books keep today's behaviour until
   the operator opts in and re-renders — this is what makes the "no silent restyle" promise (§4.3
   C1) actually hold. With the flag off, 1.7B stays on `generate_voice_clone` + anchored variants
-  exactly as today.
+  exactly as today. **v1 simplification (R3-Mi1):** the flag is **per-book**, while tier selection
+  is per-character — so it enables live instruct for *all* of a book's 1.7B characters at once; a
+  per-character live-instruct toggle is a deferred follow-up.
 - Manuscript edits are **not** cross-tab broadcast (`broadcast-middleware.ts`) — no sync worry;
   `instruct` follows `emotion`'s persistence (cast/manuscript state + manuscript-edits).
 - **Vocalization marker (M3).** Add an optional `vocalization?: boolean` to the Sentence schema
@@ -126,7 +128,11 @@ along since the instruct is English regardless).
 - **Strict, non-re-attributing envelope** (the fs-33 invariant — never regress attribution to
   gain instruct): `{ annotations: [{ sentenceId, text?, instruct?, vocalization? }] }`. `text` is
   emitted only when the LLM authors a vocalization; `instruct` is the English delivery direction;
-  `vocalization: true` marks it for QA (§4.1). No `characterId`, no re-splitting.
+  `vocalization: true` marks it for QA (§4.1). No `characterId`, no re-splitting. **Stage-3 `text`
+  edits persist independently of `liveInstruct` (R3-Mi2):** the inserted vocalization stays in the
+  manuscript even if the flag is off (or the tier is 0.6B) — only the *expressive delivery* is
+  gated, so a flag-off render reads the `"Ah!"` flatly (the §4.4 M5 degradation, also reachable on
+  1.7B-flag-off).
 - **Edit-in-place only for v1 (M2).** Stage 3 may only **prepend/edit a vocalization within an
   existing sentence's `text`** — it never inserts a *new* sentence. Consequence to accept and
   document: a gasp and the words after it (`"Ah! I didn't see you."`) share **one** `instruct`, so
@@ -182,9 +188,14 @@ along since the instruct is English regardless).
   this batches cleanly (mixed voices + per-item instruct, RTF 0.67, instruct ≈ free) — but that
   number is from **uncommitted, non-reproducible** scripts (parent R2-C1, m1 below); treat it as a
   hypothesis the §5 perf guard must re-establish, not an established baseline.
-- **One main voice, no variants on 1.7B.** The 1.7B tier stops selecting `__emotion` variant
-  `.pt`s; emotion becomes an English instruct phrase (the §4.1 fallback). `pickEmotionVariantVoice`
-  stays a strict no-op for everything except the **0.6B** Fast tier.
+- **One main voice, no variants on 1.7B — *when `liveInstruct` is on* (R3-M1).** With the flag on,
+  the 1.7B tier stops selecting `__emotion` variant `.pt`s and emotion becomes an English instruct
+  phrase (the §4.1 fallback). With the flag **off**, 1.7B keeps `generate_voice_clone` + anchored
+  variants exactly as today. `pickEmotionVariantVoice` therefore stays live for 0.6B **and** for
+  1.7B-flag-off; it is a no-op only on the 1.7B-flag-on path. **Dual-path cost (accepted):** the
+  flag means both 1.7B synth paths are carried until books migrate — a deliberate migration-safety
+  tradeoff. Deleting the variant path once 1.7B books have opted in is a tracked future cleanup
+  (§6), not v1.
 - **Sidecar request body** gains optional per-item `instruct`: `{ engine, model, items: [{ voice,
   text, instruct? }] }` (and the single `/synthesize` shape). Server side
   (`server/src/tts/sidecar.ts`) threads it from the resolved `SentenceGroup`. **Instruct length cap
@@ -229,12 +240,13 @@ along since the instruct is English regardless).
   that can't scale to open-ended multilingual). In `classifyTranscript`
   (`server/src/tts/segment-asr-qa.ts`), a sentence whose `vocalization` flag (§4.1) is true relaxes
   the verdict to `inconclusive` rather than `drift` (mirroring the existing `nameAllowlist`
-  carve-out shape at ~lines 328-339). **Dominance gate (R2-M1):** because edit-in-place (§4.2) can
-  prepend a gasp onto a long lexical sentence, the relaxation fires **only when the vocalization is
-  dominant** — i.e. the lexical remainder after stripping the vocalization is below the `minChars`
-  floor (or a small token count). A long line that merely *starts* with `"Ah!"` keeps full WER
-  scoring on its words; a bare `"Haah…"` is relaxed. The `vocalization` flag + the stripped-lexical
-  length are both threaded into the QA call. The gate is OFF by default and the 12-char floor
+  carve-out shape at ~lines 328-339). **Dominance gate (R2-M1, predicate fixed per R3-M2):** because
+  edit-in-place (§4.2) can prepend a gasp onto a long lexical sentence, the relaxation fires **only
+  when the vocalization is dominant**. Since `vocalization` is a bare boolean (no stored span), the
+  predicate is **total sentence-`text` length below the `minChars` floor** — reusing the existing
+  short-sentence floor rather than inventing a span field: a bare `"Haah…"`/`"Haha!"` is short and
+  relaxed; `"Ah! I didn't see you…"` exceeds the floor and keeps full WER scoring on its words. The
+  `vocalization` flag is threaded into the QA call; length is already available there. The gate is OFF by default and the 12-char floor
   already short-circuits bare interjections — so this is a narrow, targeted add, not a new
   subsystem.
 - **0.6B Fast-tier degradation (M5).** On the 0.6B tier `instruct` is ignored (no live-instruct
@@ -280,6 +292,9 @@ along since the instruct is English regardless).
   carries delivery on one main voice; calibration of whisper-softer / angry-louder phrasing is
   tuning debt, not a v1 blocker.
 - A `validate_instruct` Script-Review operation class (defer to an fs-58 follow-up).
+- **Deleting the 1.7B anchored-variant path** once books have migrated to `liveInstruct` (R3-M1) —
+  a tracked future cleanup, not v1; the dual path is carried for safe migration.
+- A **per-character** `liveInstruct` toggle (v1 is per-book, R3-Mi1).
 - fr/de vocalization *text* is unvalidated on a canary (rides along because the instruct is
   English regardless); es/ru vocalization text validated on their existing Coalfall canaries.
 - **Disclosure (R2-Mi2):** vocalizations are performance content the **manuscript never
@@ -367,3 +382,20 @@ bugs the first pass missed. Architecture unchanged.
   conservative/auditable safeguards.
 - **R2-Mi3 — no draft gate → FIXED in §1.** Stays `draft` until the C2 sidecar gate + perf
   baseline land.
+
+## 11. Adversarial review — resolutions (round 3, 2026-06-24)
+
+Round 3 was a convergence pass: one contradiction the round-2 flag *created*, one predicate gap,
+and wording/scope minors. No new architectural problems — the spec is stable.
+
+- **R3-M1 — the `liveInstruct` flag re-created a dual 1.7B path; §4.3 contradicted itself →
+  FIXED in §4.3 + §6 (operator chose KEEP the flag).** "No variants on 1.7B" scoped to
+  `liveInstruct=on`; the dual-path maintenance cost is accepted, with variant-path deletion tracked
+  as a future cleanup.
+- **R3-M2 — dominance gate needed a span the boolean flag lacks → FIXED in §4.4.** Predicate
+  redefined as total-`text`-length below the `minChars` floor; no new span field.
+- **R3-Mi1 — per-book vs per-character flag → FIXED in §4.1 + §6.** v1 is per-book; per-character
+  toggle deferred.
+- **R3-Mi2 — Stage-3 text edits persist regardless of the flag → FIXED in §4.2.** Only delivery is
+  gated; the inserted text stays (reads flat when flag off).
+- **R3-Mi3 — ladder wording → FIXED in §4.1.** "(1.7B + `liveInstruct`)".
