@@ -3325,6 +3325,15 @@ components:
             same-language narration (a non-`en` book routes every character,
             incl. the narrator, to a designed Qwen voice and never falls back
             to English Kokoro) and the library language badge + filter pill.
+        liveInstruct:
+          type: boolean
+          description: |
+            fs-57 — per-book live-instruct flag. When `true`, `synthesiseChapter`
+            uses the Qwen 1.7B live-instruct synth path instead of the standard
+            path. Default `false` (absent on books written before fs-57 — readers
+            treat absence as `false`). Toggled by the UI (Task 16) and gated by
+            the synth route (Task 8). Persisted to `BookStateJson.liveInstruct`
+            in `<bookDir>/.audiobook/state.json`.
 
     # --- Import + confirm-metadata ---------------------------------
     ImportCandidate:

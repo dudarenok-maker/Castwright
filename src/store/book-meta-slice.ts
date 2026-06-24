@@ -48,11 +48,17 @@ export interface BookMetaState {
   draft: Partial<EditableBookMeta> | null;
   /** Last-saved snapshot for each book the user has opened this session. */
   saved: Record<string, EditableBookMeta>;
+  /** fs-57 — per-book live-instruct flag for the currently-open book.
+      Default false. Persisted through the server book-state slice;
+      toggled by the UI (Task 16). Gates the Qwen 1.7B live-instruct
+      synth path (Task 8). */
+  liveInstruct: boolean;
 }
 
 const initialState: BookMetaState = {
   draft: null,
   saved: {},
+  liveInstruct: false,
 };
 
 interface HydratePayload {
@@ -103,6 +109,15 @@ export const bookMetaSlice = createSlice({
       s.draft = null;
     },
 
+    /* fs-57 — toggle the live-instruct flag for the currently-open book.
+       Dispatched by the UI toggle (Task 16); gates the Qwen 1.7B
+       live-instruct synth path (Task 8). The persistence-middleware
+       watches this action and PUTs `{ slice: 'state', patch: { liveInstruct } }`
+       to the server. */
+    setLiveInstruct: (s, a: PayloadAction<boolean>) => {
+      s.liveInstruct = a.payload;
+    },
+
     /* Fold the draft into `saved[bookId]` atomically. This is the action the
        persistence-middleware watches to fire a PUT — keep it dispatching even
        when the draft is empty so the middleware's logic stays simple. */
@@ -124,6 +139,7 @@ export const bookMetaSlice = createSlice({
 });
 
 export const bookMetaActions = bookMetaSlice.actions;
+export const bookMetaReducer = bookMetaSlice.reducer;
 
 /* ── Selectors ──────────────────────────────────────────────────────────── */
 

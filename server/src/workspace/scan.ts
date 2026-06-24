@@ -227,6 +227,13 @@ export interface BookStateJson {
      (plan 27 rename-vs-add policy). Set at confirm time by
      `server/src/routes/import.ts`. */
   language?: string;
+  /* fs-57 — per-book live-instruct flag. When true, synthesiseChapter will
+     use the Qwen 1.7B live-instruct synth path instead of the standard
+     1.7B path. Default `false` (absent on books written before fs-57).
+     Toggled by the UI (Task 16) and gated by the synth route (Task 8).
+     Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
+     (plan 27 rename-vs-add policy). */
+  liveInstruct?: boolean;
 }
 
 /** Resolved chapter audio format for a book — `audioFormat` from

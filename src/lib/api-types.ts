@@ -2557,6 +2557,15 @@ export interface components {
              *     to English Kokoro) and the library language badge + filter pill.
              */
             language?: string;
+            /**
+             * @description fs-57 — per-book live-instruct flag. When `true`, `synthesiseChapter`
+             *     uses the Qwen 1.7B live-instruct synth path instead of the standard
+             *     path. Default `false` (absent on books written before fs-57 — readers
+             *     treat absence as `false`). Toggled by the UI (Task 16) and gated by
+             *     the synth route (Task 8). Persisted to `BookStateJson.liveInstruct`
+             *     in `<bookDir>/.audiobook/state.json`.
+             */
+            liveInstruct?: boolean;
         };
         ImportCandidate: {
             /** @enum {string} */
