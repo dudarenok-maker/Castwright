@@ -27,6 +27,10 @@ export function applyPasses(text: string, norm: LangNormalizer): string {
   s = expandOrdinals(s, norm);
   s = expandDecades(s, norm);
   s = expandYears(s, norm);
+  // Engine-owned pre-pass (Russian 1/2 gender heuristic): consume "1 книга" /
+  // "2 двери" before the generic number pass spells them masculine. No-op for
+  // engines that don't implement it.
+  if (norm.preNumberPass) s = norm.preNumberPass(s);
   s = expandNumbers(s, norm);
   return s;
 }
@@ -135,7 +139,11 @@ function expandDates(s: string, norm: LangNormalizer): string {
   // month-words ("5 May", "3 March"). year 0 sentinel => norm.date renders
   // day+month only.
   if (norm.months.genitiveDates) {
-    const dmNoYear = new RegExp(`\\b(\\d{1,2})\\s+(${names})\\b`, 'g');
+    // Trailing boundary is a Unicode-aware negative lookahead, NOT `\b`: JS `\b`
+    // uses [A-Za-z0-9_], so it never fires at a Cyrillic-letter→space boundary
+    // ("января " would not match `\b`). `(?![\p{L}\d])` + the `u` flag closes the
+    // name on any non-letter/non-digit (space, punctuation, end of string).
+    const dmNoYear = new RegExp(`\\b(\\d{1,2})\\s+(${names})(?![\\p{L}\\d])`, 'gu');
     s = s.replace(dmNoYear, (_m, day, mon) => norm.date(Number(day), idx.get(mon)!, 0));
   }
   return s;

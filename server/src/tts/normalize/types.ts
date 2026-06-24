@@ -50,4 +50,10 @@ export interface LangNormalizer {
   /** Russian implements (returns case from the governing preposition); others
       omit → caller defaults to 'nominative'. */
   yearCaseFor?(precedingWord: string | undefined): YearCase;
+  /** Optional engine-owned pass run BEFORE the plain-number pass, given the
+      text with enough context to do work the language-agnostic passes can't.
+      Russian uses it for the 1/2 gender heuristic (один/одна/одно, два/две —
+      inferred from the FOLLOWING bare noun's ending), which needs the noun the
+      shared `cardinal(n)` never sees. Others omit it → no-op. */
+  preNumberPass?(text: string): string;
 }

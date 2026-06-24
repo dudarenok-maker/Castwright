@@ -17,7 +17,7 @@ function load(lang: string): Array<[string, string]> {
     });
 }
 
-for (const lang of ['en', 'es']) { // extended per language in later tasks
+for (const lang of ['en', 'es', 'ru']) { // extended per language in later tasks
   describe(`fixtures: ${lang}`, () => {
     it.each(load(lang))('%s', (input, expected) => {
       expect(expandForSpeech(input, lang)).toBe(expected);
