@@ -247,13 +247,15 @@ along since the instruct is English regardless).
   that can't scale to open-ended multilingual). In `classifyTranscript`
   (`server/src/tts/segment-asr-qa.ts`), a sentence whose `vocalization` flag (§4.1) is true relaxes
   the verdict to `inconclusive` rather than `drift` (mirroring the existing `nameAllowlist`
-  carve-out shape at ~lines 328-339). **Dominance gate (R2-M1, predicate fixed per R3-M2):** because
-  edit-in-place (§4.2) can prepend a gasp onto a long lexical sentence, the relaxation fires **only
-  when the vocalization is dominant**. Since `vocalization` is a bare boolean (no stored span), the
-  predicate is **total sentence-`text` length below the `minChars` floor** — reusing the existing
-  short-sentence floor rather than inventing a span field: a bare `"Haah…"`/`"Haha!"` is short and
-  relaxed; `"Ah! I didn't see you…"` exceeds the floor and keeps full WER scoring on its words. The
-  `vocalization` flag is threaded into the QA call; length is already available there. The gate is OFF by default and the 12-char floor
+  carve-out shape at ~lines 328-339). **Token-tolerance, not a length gate (refined at plan time):**
+  the existing `minChars` floor already returns `inconclusive` for bare short vocalizations
+  (`"Haah…"`/`"Haha!"`), so the only open case is edit-in-place prepending a gasp onto a *long*
+  lexical line. There, when `vocalization===true`, the server derives the leading vocalization
+  token(s) from `text` (the leading run up to the first terminal mark `! … . ?`) and passes them as
+  a `vocalizationAllowlist` — tolerated exactly like `nameAllowlist`, so the gasp token doesn't
+  count as drift while **the lexical words are still fully scored**. This is strictly better than a
+  whole-sentence length gate (which would blanket-relax the words too) and needs no stored span
+  field. See plan Task 17. The gate is OFF by default and the 12-char floor
   already short-circuits bare interjections — so this is a narrow, targeted add, not a new
   subsystem.
 - **0.6B Fast-tier degradation (M5).** On the 0.6B tier `instruct` is ignored (no live-instruct
