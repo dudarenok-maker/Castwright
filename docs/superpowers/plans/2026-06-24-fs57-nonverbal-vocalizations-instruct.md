@@ -20,7 +20,8 @@
 - **No hex literals in components** — use the CSS-custom-property design tokens.
 - **Pin `qwen-tts` 0.1.1** — the raw-`generate` bypass is version-fragile.
 - **Commit convention:** `<type>(<scope>): <subject>` (e.g. `feat(server): …`, `feat(sidecar): …`, `feat(frontend): …`, `test(server): …`). Commit-msg hook enforces it.
-- **Branch:** cut `feat/fs57-vocalizations-instruct` off `origin/main` before Task 1 (this plan currently lives on the docs branch).
+- **Branch:** cut `feat/fs57-vocalizations-instruct` **off the docs branch `docs/docs-fs57-vocalizations-spec`** (not bare `origin/main`) so the spec + this plan travel with the implementation (P-Mi2); rebase onto `origin/main` before opening the PR.
+- **GPU box:** the Qwen weights are installed on the dev box, so the Wave 2 sidecar tasks (5, 6, 9) validate locally — they do **not** SKIP and do **not** owe a deferred on-box run.
 - **Run before declaring a task done:** the leg matching the change — `cd server && npm test` (server), `npm test` (frontend), `npm run test:sidecar` (sidecar), `npm run typecheck`.
 
 ---
@@ -85,8 +86,11 @@ describe('sentenceSchema fs-57 fields', () => {
     expect(sentenceSchema.parse(s)).toMatchObject(s);
   });
 
-  it('rejects a non-string instruct (strict)', () => {
+  it('rejects a non-string instruct (string validator)', () => {
     expect(() => sentenceSchema.parse({ ...base, instruct: 5 })).toThrow();
+  });
+  it('still rejects unknown keys (.strict preserved)', () => {
+    expect(() => sentenceSchema.parse({ ...base, bogus: 1 })).toThrow();
   });
 });
 ```
@@ -152,22 +156,26 @@ git commit -m "feat(server): add optional instruct + vocalization to sentence sc
 Run: `npm run openapi:types`
 Expected: `src/lib/api-types.ts` diff adds `instruct?: string;` and `vocalization?: boolean;` to `Sentence`.
 
-- [ ] **Step 3: Add a type assertion test**
+- [ ] **Step 3: Add a value round-trip test** (a runtime test, not a type-only assertion — `expectTypeOf` is a no-op at runtime unless vitest `test.typecheck` is enabled, P-Mi1). The real type guarantee comes from `npm run typecheck`; this locks that a Sentence value carrying the fields is accepted by code that consumes `Sentence`.
 
 ```ts
 // src/lib/api-types.test.ts
-import { describe, it, expectTypeOf } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { components } from './api-types';
-type Sentence = components['schemas']['Sentence'];
 
 describe('Sentence fs-57 fields', () => {
-  it('has optional instruct + vocalization', () => {
-    expectTypeOf<Sentence>().toMatchTypeOf<{ instruct?: string; vocalization?: boolean }>();
+  it('accepts a value with instruct + vocalization', () => {
+    const s: components['schemas']['Sentence'] = {
+      id: 1, chapterId: 1, characterId: 'narrator', text: 'Ah! Hi.',
+      instruct: 'a short gasp', vocalization: true,
+    };
+    expect(s.instruct).toBe('a short gasp');
+    expect(s.vocalization).toBe(true);
   });
 });
 ```
 
-- [ ] **Step 4: Run** `npx vitest run src/lib/api-types.test.ts` — expect PASS. Run `npm run typecheck` — expect clean.
+- [ ] **Step 4: Run** `npx vitest run src/lib/api-types.test.ts` — expect PASS. Run `npm run typecheck` — expect clean (this is the real type gate).
 
 - [ ] **Step 5: Commit**
 
@@ -296,7 +304,7 @@ git commit -m "feat(server): per-book liveInstruct flag, default off (fs-57)"
 **Interfaces:**
 - Produces: a pinned answer to "does the batched raw `generate` accept an empty per-item instruct, or is a neutral placeholder needed?" — consumed by Task 6's batching design.
 
-- [ ] **Step 1: Write a pytest that drives `_icl_instruct_synth` (or the raw `generate`) with `instruct=""` and with a neutral placeholder, asserting it returns valid PCM and recording which form is the no-op.** Mark `@pytest.mark.golden`-style gated on Kokoro/Qwen weights so it SKIPs on an unbootstrapped venv (mirror `test_qwen3.py`'s gating).
+- [ ] **Step 1: Write a pytest that drives `_icl_instruct_synth` (or the raw `generate`) with `instruct=""` and with a neutral placeholder, asserting it returns valid PCM and recording which form is the no-op.** Keep the weight-gating helper (mirror `test_qwen3.py`) for CI/no-weight boxes, but **the weights are installed on the dev box, so this task runs green here** and closes the C2 gate (it does not defer).
 
 ```python
 # server/tts-sidecar/tests/test_instruct_synth.py
@@ -317,11 +325,11 @@ def test_empty_instruct_is_a_noop_or_needs_placeholder():
     # switch to a pinned neutral placeholder and assert THAT is the no-op.
 ```
 
-- [ ] **Step 2: Run** `npm run test:sidecar` on a box with weights — observe whether empty instruct is accepted.
+- [ ] **Step 2: Run** `npm run test:sidecar` (weights present) — observe whether empty instruct is accepted.
 
-- [ ] **Step 3: Pin the decision** in the test (empty string vs a fixed neutral placeholder e.g. `"in a neutral, natural narration voice"`) as the canonical no-op form; document it in a comment + the regression plan.
+- [ ] **Step 3: Pin the decision** in the test (empty string vs a fixed neutral placeholder e.g. `"in a neutral, natural narration voice"`) as the canonical no-op form, exported as a sidecar constant (e.g. `NEUTRAL_INSTRUCT`) so Task 6 + Task 8 import the same value; document it in a comment + the regression plan.
 
-- [ ] **Step 4: Run** the test green (or SKIP on a no-weight box).
+- [ ] **Step 4: Run** the test green on the dev box.
 
 - [ ] **Step 5: Commit**
 
@@ -339,18 +347,20 @@ git commit -m "test(sidecar): C2 gate — pin the empty/neutral instruct no-op f
 - Test: `server/tts-sidecar/tests/test_instruct_synth.py` (append); `server/tts-sidecar/tests/test_batch_synthesis.py`
 
 **Interfaces:**
-- Consumes: the Task 5 neutral form.
-- Produces: `synthesize_batch` accepts `items: [{voice, text, instruct?}]`; on the **1.7B Base** path it builds per-item `instruct_ids` and runs one batched `generate` with heterogeneous voices + instructs. The 0.6B path ignores `instruct` (unchanged).
+- Consumes: the Task 5 `NEUTRAL_INSTRUCT` form.
+- Produces: `synthesize_batch` accepts a **batch-level `liveInstruct: bool`** plus `items: [{voice, text, instruct?}]`. **The path is chosen at batch level, not per item (P-C1):** when `liveInstruct` is true (1.7B only), **every** item runs the raw-`generate` bypass — items with an `instruct` use it, items without use `NEUTRAL_INSTRUCT` — so a single forward never mixes wrapper + bypass. When `liveInstruct` is false the batch uses `generate_voice_clone` exactly as today and `instruct` is ignored.
 
-- [ ] **Step 1: Write the failing test** — a batched 1.7B call with two items carrying *different* instructs returns two PCM buffers, each non-empty, with no cross-bleed (assert lengths differ / both present). Weight-gated SKIP.
+> **Why batch-level (P-C1):** one batched `generate` forward cannot mix the `generate_voice_clone` wrapper and the raw bypass. Keying off "any item has an instruct" would (a) leave a neutral item on the wrong path and (b) make an all-neutral `liveInstruct` batch silently use the wrapper. The batch-level flag is the only signal that keeps the whole 1.7B-`liveInstruct` tier on one path.
 
-- [ ] **Step 2: Run** — expect FAIL (batch ignores `instruct`).
+- [ ] **Step 1: Write the failing test** — (a) a `liveInstruct=true` batch with two items carrying *different* instructs returns two non-empty PCM buffers, no cross-bleed; (b) a `liveInstruct=true` batch with one instructed + one **neutral** item still routes BOTH through the bypass (assert the neutral item used `NEUTRAL_INSTRUCT`, e.g. via a spy/log on the generate call), never the wrapper; (c) a `liveInstruct=false` batch ignores `instruct` and calls `generate_voice_clone`.
 
-- [ ] **Step 3: Implement** — in the 1.7B branch of `synthesize_batch`, when any item has a non-empty `instruct`, build `instruct_ids` per item (reuse `w._build_instruct_text` + `w._tokenize_texts`), pass the per-item list to the raw `model.generate(..., instruct_ids=…, voice_clone_prompt=…)` (the `_icl_instruct_synth` mechanism, lifted to batch). Items without instruct use the Task-5 neutral form. Keep the call under `_synth_lock` + `_base17_activity()` exactly as the current 1.7B batch does.
+- [ ] **Step 2: Run** — expect FAIL (batch has no `liveInstruct` param).
+
+- [ ] **Step 3: Implement** — add `liveInstruct` to the `synthesize_batch` request model. In the 1.7B branch: **if `liveInstruct`**, build a per-item `instruct_ids` list (each item's `instruct` or `NEUTRAL_INSTRUCT`, via `w._build_instruct_text` + `w._tokenize_texts`) and call the raw `model.generate(..., instruct_ids=…, voice_clone_prompt=…)` (the `_icl_instruct_synth` mechanism lifted to batch); **else** the existing `generate_voice_clone` path. Keep the call under `_synth_lock` + `_base17_activity()` exactly as the current 1.7B batch does. The 0.6B branch ignores `liveInstruct`.
 
 - [ ] **Step 4: Run** — expect PASS. Run `test_batch_synthesis.py` — existing batch contracts stay green.
 
-- [ ] **Step 5: Commit** `feat(sidecar): per-item instruct in batched 1.7B synth (fs-57)`.
+- [ ] **Step 5: Commit** `feat(sidecar): batch-level liveInstruct path + per-item instruct on 1.7B (fs-57)`.
 
 ---
 
@@ -371,28 +381,78 @@ git commit -m "test(sidecar): C2 gate — pin the empty/neutral instruct no-op f
 ### Task 8: Server — thread `instruct`/`vocalization` through synthesis + route the 1.7B liveInstruct path
 
 **Files:**
+- Create: `server/src/tts/resolve-instruct.ts` — pure `resolveInstructForGroup` (P-Mo1)
+- Test: `server/src/tts/resolve-instruct.test.ts`
 - Modify: `server/src/tts/synthesise-chapter.ts` (`SentenceGroup` ~265; resolution ~949-970; the per-group synth/batch call)
 - Modify: `server/src/tts/voice-mapping.ts:30-44`
-- Modify: `server/src/tts/sidecar.ts` (~91-102 single, ~174-178 batch — add per-item `instruct`)
-- Test: `server/src/tts/synthesise-chapter.test.ts`; `server/src/tts/voice-mapping.test.ts`; `server/src/tts/sidecar.test.ts`
+- Modify: `server/src/tts/sidecar.ts` (~91-102 single, ~174-178 batch — add `instruct` per item + batch-level `liveInstruct`)
+- Modify: `server/src/routes/generation.ts` (~485, ~604-613) — read `book-meta.liveInstruct` and pass into the synth context (P-M1)
+- Test: `server/src/tts/voice-mapping.test.ts`; `server/src/tts/sidecar.test.ts`; `server/src/routes/generation.test.ts`
 
 **Interfaces:**
-- Consumes: `emotionToInstruct` (Task 3), `liveInstruct` (Task 4), Task 6's sidecar contract.
-- Produces: when `liveInstruct` is on AND the character is on the 1.7B tier, each group resolves `instruct = group.instruct ?? emotionToInstruct(group.emotion)` and the sidecar request carries it; `pickEmotionVariantVoice` returns the base voice (no `__emotion`) on that path.
+- Consumes: `emotionToInstruct` (Task 3), `liveInstruct` (Task 4 / generation route), Task 6's batch-level sidecar contract.
+- Produces: `resolveInstructForGroup(group, { tier, liveInstruct }): { instruct?: string }` — pure; returns `group.instruct ?? emotionToInstruct(group.emotion)` only when `tier==='qwen-1.7b' && liveInstruct`, else `{}`. The synth context carries `liveInstruct`; the sidecar request carries the batch-level `liveInstruct` + per-item `instruct`; `pickEmotionVariantVoice` returns the base voice (no `__emotion`) on the liveInstruct path.
 
-- [ ] **Step 1:** Failing unit test on the resolution helper — given `liveInstruct=true`, tier=1.7B, a group with `emotion:'angry'` and no `instruct`, the resolved per-item payload carries `instruct: 'in an angry, raised voice'` and the voice is the **base** (no `__angry`). Given `liveInstruct=false`, the voice is `base__angry` and no `instruct` is sent (today's behaviour).
-- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 0 (P-Mo1): Carve out the pure helper + test.** Write `resolve-instruct.test.ts` first:
+
+```ts
+// server/src/tts/resolve-instruct.test.ts
+import { describe, it, expect } from 'vitest';
+import { resolveInstructForGroup } from './resolve-instruct';
+
+const grp = (o: Partial<{ emotion: string; instruct: string }>) =>
+  ({ emotion: undefined, instruct: undefined, ...o }) as any;
+
+describe('resolveInstructForGroup', () => {
+  it('1.7B + liveInstruct: explicit instruct wins', () => {
+    expect(resolveInstructForGroup(grp({ instruct: 'a tired sigh', emotion: 'angry' }),
+      { tier: 'qwen-1.7b', liveInstruct: true })).toEqual({ instruct: 'a tired sigh' });
+  });
+  it('1.7B + liveInstruct: falls back to emotion phrase', () => {
+    expect(resolveInstructForGroup(grp({ emotion: 'angry' }),
+      { tier: 'qwen-1.7b', liveInstruct: true })).toEqual({ instruct: 'in an angry, raised voice' });
+  });
+  it('liveInstruct off: no instruct (today)', () => {
+    expect(resolveInstructForGroup(grp({ emotion: 'angry' }),
+      { tier: 'qwen-1.7b', liveInstruct: false })).toEqual({});
+  });
+  it('0.6B: never instruct', () => {
+    expect(resolveInstructForGroup(grp({ instruct: 'x' }),
+      { tier: 'qwen-0.6b', liveInstruct: true })).toEqual({});
+  });
+});
+```
+
+- [ ] **Step 1:** Run `cd server && npx vitest run src/tts/resolve-instruct.test.ts` — FAIL (module missing). Implement `resolve-instruct.ts` (imports `emotionToInstruct`). Run — PASS.
+- [ ] **Step 2:** Failing tests for the wiring — `voice-mapping.test.ts` (the new `liveInstruct` param), `sidecar.test.ts` (batch-level `liveInstruct` + per-item `instruct` in the body), `generation.test.ts` (the route reads `book-meta.liveInstruct` and passes it to `synthesiseChapter`).
 - [ ] **Step 3:** Implement:
-  - Carry `instruct?` + `vocalization?` on `SentenceGroup` (from the sentence).
-  - Add a `liveInstruct` boolean into the synth context (plumbed from the generation route's book-meta).
-  - `pickEmotionVariantVoice(engine, variants, emotion, baseVoice, liveInstruct)` — when `engine==='qwen' && liveInstruct` return `baseVoice` (strict no-op); else today's logic. Update all call sites.
-  - In the sidecar request builder, include `instruct` per item only when on the 1.7B-liveInstruct path; resolve via `group.instruct ?? emotionToInstruct(group.emotion)`.
-- [ ] **Step 4:** Run the three test files — PASS. `npm run typecheck`.
-- [ ] **Step 5:** Commit `feat(server): thread instruct + route 1.7B liveInstruct synth path (fs-57)`.
+  - Carry `instruct?` + `vocalization?` on `SentenceGroup` (from the sentence at the grouping site).
+  - `pickEmotionVariantVoice(engine, variants, emotion, baseVoice, liveInstruct)` — when `engine==='qwen' && liveInstruct` return `baseVoice` (strict no-op); else today's logic. **Call sites to update (P-Mo3):** `synthesise-chapter.ts:~964` (the only production caller) + `voice-mapping.test.ts`; grep `pickEmotionVariantVoice` to confirm none missed.
+  - In `generation.ts`, read `liveInstruct` from the loaded book-meta and thread it into the `synthesiseChapter` options/context (default `false` when absent).
+  - In `sidecar.ts`, set batch-level `liveInstruct` on the request and per-item `instruct` from `resolveInstructForGroup`.
+- [ ] **Step 4:** Run all four test files — PASS. `npm run typecheck`.
+- [ ] **Step 5:** Commit `feat(server): pure instruct resolver + liveInstruct wiring + 1.7B routing (fs-57)`.
 
 ---
 
-### Task 9: Server — golden-audio instruct fixture + perf baseline
+### Task 8a: Batch-budget decision — instruct tokens vs the length-bucket batcher (P-M4 / spec R2-M4)
+
+**Files:**
+- Modify: `server/src/tts/synthesise-chapter.ts` (~536, the length-bucket batcher + `qwenBatchTokenBudget`)
+- Test: `server/src/tts/synthesise-chapter.test.ts`
+
+**Interfaces:**
+- Produces: a settled, tested rule for whether a per-line `instruct`'s tokens count against `qwenBatchTokenBudget` when packing 1.7B-liveInstruct batches — so a long-instruct batch doesn't blow the per-forward budget.
+
+- [ ] **Step 1:** Failing test — pack a batch of 1.7B-liveInstruct groups where the combined instruct length would exceed the budget if counted; assert the batcher splits (or doesn't) per the chosen rule, and that a normal no-instruct batch packs identically to today (no regression for `liveInstruct=false`).
+- [ ] **Step 2:** Run — FAIL.
+- [ ] **Step 3:** Implement the decision: **count the instruct token estimate toward `qwenBatchTokenBudget`** on the liveInstruct path (the bypass prepends `instruct_ids` to each item, so they consume the forward's budget); leave the flag-off path's bucketing byte-identical.
+- [ ] **Step 4:** Run — PASS. `npm run typecheck`.
+- [ ] **Step 5:** Commit `feat(server): count instruct tokens against the Qwen batch budget (fs-57)`.
+
+---
+
+### Task 9: Server — golden-audio instruct fixture + flag-off byte-identical regression + perf baseline
 
 **Files:**
 - Modify: `server/tts-sidecar/tests/golden/` (add an instruct fixture; reconcile the fs-55 variant golden test to 0.6B-only)
@@ -400,13 +460,13 @@ git commit -m "test(sidecar): C2 gate — pin the empty/neutral instruct no-op f
 - Test: golden-audio suite
 
 **Interfaces:**
-- Produces: (a) identity-stability assertion (ECAPA cosine within tolerance across instructs); (b) audible-delivery-change assertion; (c) a **committed** batched-RTF baseline (incl. a heterogeneous-instruct-length batch) — replacing the parent spike's non-reproducible RTF 0.67.
+- Produces: (a) identity-stability assertion (ECAPA cosine within tolerance across instructs); (b) audible-delivery-change assertion; (c) **the C1 safety regression (P-M3): a 1.7B render with `liveInstruct=false` is byte-identical to the pre-fs-57 path** (assert the sidecar request shape carries no `instruct` + `liveInstruct:false`, and the golden output matches the committed flag-off baseline); (d) a **committed** batched-RTF baseline (incl. a heterogeneous-instruct-length batch) — replacing the parent spike's non-reproducible RTF 0.67.
 
-- [ ] **Step 1:** Add the instruct golden fixture + the perf-baseline recorder (`--bless` path). Scope the existing fs-55 anchored-variant golden assertion to the 0.6B engine.
-- [ ] **Step 2:** Run `npm run test:golden-audio:sidecar` on a weight box — record the baseline.
-- [ ] **Step 3:** Commit the baseline JSON + fixture.
-- [ ] **Step 4:** Re-run — green against the committed baseline.
-- [ ] **Step 5:** Commit `test(sidecar): golden-audio instruct fixture + committed RTF baseline (fs-57)`.
+- [ ] **Step 1:** Add the instruct golden fixture + the **flag-off byte-identical regression** (P-M3) + the perf-baseline recorder (`--bless` path). Scope the existing fs-55 anchored-variant golden assertion to the 0.6B engine.
+- [ ] **Step 2:** Run `npm run test:golden-audio:sidecar` (weights present on the dev box) — record the baseline.
+- [ ] **Step 3:** Commit the baseline JSON + fixtures.
+- [ ] **Step 4:** Re-run — green against the committed baselines (both flag-on instruct + flag-off byte-identical).
+- [ ] **Step 5:** Commit `test(sidecar): golden-audio instruct fixture + flag-off regression + RTF baseline (fs-57)`.
 
 ---
 
@@ -502,7 +562,7 @@ it('drops an annotation whose sentenceId no longer exists', () => { /* … */ })
 (Fill each with a concrete dispatch + assertion against the slice state, mirroring the existing `applyDetectedEmotions` tests.)
 
 - [ ] **Step 2:** Run — FAIL.
-- [ ] **Step 3:** Implement the reducer (Immer draft): locate the sentence by id (drop if absent); if `vocalization` already true, skip text edit; else apply `text` and mark dirty; set `instruct`/`vocalization` only when currently empty/false.
+- [ ] **Step 3:** Implement the reducer (Immer draft): locate the sentence by id (drop if absent); if `vocalization` already true, skip text edit; else apply `text` and mark dirty; set `instruct`/`vocalization` only when currently empty/false. **Known edge (P-Mi4, accepted for v1):** a vocalization the operator typed *by hand* leaves `vocalization=false`, so a later Stage-3 run could prepend a second gasp; document it in the regression plan (operator-authored vocalizations aren't auto-detected as such).
 - [ ] **Step 4:** Run — PASS.
 - [ ] **Step 5:** Commit `feat(frontend): applyDetectedInstruct reducer w/ idempotency + staleness (fs-57)`.
 
@@ -570,6 +630,8 @@ it('drops an annotation whose sentenceId no longer exists', () => { /* … */ })
 **Interfaces:**
 - Produces: `ClassifyOptions.vocalizationAllowlist?: Iterable<string>` — tokens tolerated exactly like `nameAllowlist`, so a prepended `"Ah!"` on a long lexical line doesn't count as drift while the words ARE still scored. (Refines spec §4.4: the bare-vocalization case is already handled by the existing `minChars` floor at line 274 — this covers only the edit-in-place long-sentence case.)
 
+**Production token-extraction rule (P-M2).** The `vocalization` flag is a bare boolean with no stored span, so the server derives the allowlist tokens from `text` at synth time with a concrete rule: **when `vocalization===true`, take the leading run of `text` up to and including the first terminal mark (`!`, `…`, `.`, `?`) and tolerate its normalized tokens.** This matches how Stage 3 authors vocalizations (a short interjection + terminal mark prepended: `"Ah! …"`, `"Haah… …"`). Add a pure `leadingVocalizationTokens(text): string[]` helper (in `resolve-instruct.ts` or a sibling) so it is unit-tested independently of synthesis, rather than the hand-fed `['ah']` in the classify test below.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
@@ -597,8 +659,8 @@ it('without the allowlist a real word drop still drifts', () => {
 ```
 
 - [ ] **Step 2:** Run `cd server && npx vitest run src/tts/segment-asr-qa.test.ts` — expect FAIL.
-- [ ] **Step 3:** Implement — add `vocalizationAllowlist` to `ClassifyOptions`; fold its normalized tokens into the same `allow` set used by `nameAllowlist` (line 314-319). One-line union; the tolerance loop already honours `allow`.
-- [ ] **Step 4:** In `synthesise-chapter.ts`, when a group's sentence is `vocalization:true`, pass the leading non-lexical token(s) as `vocalizationAllowlist`. Run — PASS.
+- [ ] **Step 3:** Add a `leadingVocalizationTokens` unit test + implementation (the P-M2 rule above): `leadingVocalizationTokens('Ah! I did not see you.')` → `['ah']`; `leadingVocalizationTokens('Haah… so tired.')` → `['haah']`; `leadingVocalizationTokens('No vocalization here.')` → still returns the first clause but is only *called* when `vocalization===true`.
+- [ ] **Step 4:** Implement — add `vocalizationAllowlist` to `ClassifyOptions`; fold its normalized tokens into the same `allow` set used by `nameAllowlist` (line 314-319). One-line union; the tolerance loop already honours `allow`. In `synthesise-chapter.ts`, when a group's sentence is `vocalization:true`, pass `leadingVocalizationTokens(text)` as `vocalizationAllowlist`. Run all three tests — PASS.
 - [ ] **Step 5:** Commit `feat(server): ASR vocalization-token tolerance for content-QA (fs-57)`.
 
 ---
@@ -610,12 +672,15 @@ it('without the allowlist a real word drop still drifts', () => {
 - Test: same
 
 **Interfaces:**
-- Produces: a regression proving a sentence whose `text` is a vocalization AND carries an `instruct` survives a Script-Review pass unchanged (text not stripped, `instruct`/`vocalization` not dropped).
+- Produces: (1) a **lock test** for the already-shipped fs-58 vocalization-strip guard; (2) a genuine **red-green** for the new requirement that `instruct`/`vocalization` survive a `setSentenceText` (`strip_tag`) apply.
 
-- [ ] **Step 1:** Failing test — feed a `strip_tag`-eligible-looking vocalization sentence (`text: 'Ah! he said'` where only "he said" is a tag) through the apply path; assert `"Ah!"` and `instruct` survive while the tag is removed.
-- [ ] **Step 2:** Run — FAIL or PASS-by-accident; if it passes, tighten to a case that would regress without the guard.
-- [ ] **Step 3:** If the apply path drops `instruct` on a `setSentenceText`, fix the reducer to preserve `instruct`/`vocalization` across a text edit.
-- [ ] **Step 4:** Run — PASS.
+> **Two distinct things (P-Mo2):** the fs-58 prompt guard ("never strip a vocalization") already shipped + is tested, so part (1) is a *characterization lock* (no new code, must pass immediately — if it fails, fs-58 regressed). Part (2) — preserving `instruct`/`vocalization` when Script Review rewrites a sentence's `text` — is **new, untested** behaviour and is the real red-green.
+
+- [ ] **Step 1a (lock):** Assert the shipped guard text is present (mirror `audiobook-script-review.test.ts:27-52`) — passes immediately; fails only if fs-58 regresses.
+- [ ] **Step 1b (red):** Failing test — apply a `strip_tag` op (`text: 'Ah! he said'` → `'Ah!'`) to a sentence carrying `instruct: 'a gasp'` + `vocalization: true`; assert the tag is removed **and** `instruct`/`vocalization` survive on the rewritten sentence.
+- [ ] **Step 2:** Run 1b — expect FAIL if `setSentenceText` drops the sibling fields.
+- [ ] **Step 3:** Fix the `setSentenceText` reducer (or the Script-Review apply) to preserve `instruct`/`vocalization` across a text rewrite.
+- [ ] **Step 4:** Run both — PASS.
 - [ ] **Step 5:** Commit `test(server): Script-Review preserves vocalization text + instruct (fs-57)`.
 
 ---
@@ -634,10 +699,26 @@ it('without the allowlist a real word drop still drifts', () => {
 
 ## Self-Review
 
-**Spec coverage:** §4.1 data model → Tasks 1,2,4 + ladder/marker in 8,13; §4.2 Stage 3 → Tasks 10–15; §4.3 synthesis → Tasks 5–9; §4.4 guardrails → Tasks 17,18; §5 testing → folded per task + 9,18,19; §2.1/§4.3 liveInstruct gate → Tasks 4,8,16. No uncovered section.
+**Spec coverage:** §4.1 data model → Tasks 1,2,4 + ladder/marker in 8,13; §4.2 Stage 3 → Tasks 10–15; §4.3 synthesis → Tasks 5,6,7,8,8a,9; §4.4 guardrails → Tasks 17,18; §5 testing → folded per task + 9,18,19; §2.1/§4.3 liveInstruct gate → Tasks 4,8,16. No uncovered section.
 
 **Open refinement to confirm with the operator (surfaced during planning):** the spec §4.4 "dominance via total length" predicate is **superseded** by Task 17's token-tolerance approach, because the existing `minChars` floor already makes bare short vocalizations `inconclusive`. Functionally better; the spec should be reconciled to match (a one-line §4.4 edit).
 
 **Placeholder scan:** the `<a designed test voice id>` in Task 5 and `NN` in Task 19 are intentional fill-at-execution values (a real designed voice on the box; the next free plan number) — every other step carries concrete code/commands.
 
-**Type consistency:** `instruct?: string` / `vocalization?: boolean` consistent across schema (1), OpenAPI (2), envelope (11), reducer (13); `emotionToInstruct` (3) consumed in (8); `liveInstruct` (4) consumed in (8,16); `vocalizationAllowlist` (17) matches the `nameAllowlist` shape.
+**Type consistency:** `instruct?: string` / `vocalization?: boolean` consistent across schema (1), OpenAPI (2), envelope (11), reducer (13); `emotionToInstruct` (3) consumed by `resolveInstructForGroup` (8); `liveInstruct` flows book-meta (4) → `generation.ts` → synth context → batch-level sidecar field (6,8); `NEUTRAL_INSTRUCT` defined in (5), consumed in (6,8); `vocalizationAllowlist` + `leadingVocalizationTokens` (17) match the `nameAllowlist` shape.
+
+## Plan adversarial review — resolutions (round 1, 2026-06-24)
+
+- **P-C1 — batch can't mix wrapper+bypass → FIXED in Tasks 6 + 8.** Path is now a **batch-level `liveInstruct`** signal, not per-item instruct presence (also noted in spec §4.3).
+- **P-M1 — `liveInstruct` never wired → FIXED in Task 8.** Explicit `generation.ts` → `synthesiseChapter` plumbing step.
+- **P-M2 — production allowlist token extraction undefined → FIXED in Task 17.** Concrete `leadingVocalizationTokens(text)` rule + its own unit test.
+- **P-M3 — C1 safety unverified → FIXED in Task 9.** Flag-off byte-identical golden regression added.
+- **P-M4 — batch-budget decision dropped → FIXED as new Task 8a.** Instruct tokens count against `qwenBatchTokenBudget` on the liveInstruct path.
+- **P-Mo1 — untestable resolution unit → FIXED in Task 8 Step 0.** Pure `resolveInstructForGroup` extracted + tested.
+- **P-Mo2 — Task 18 conflated lock + new work → FIXED.** Split into a lock test (shipped guard) + a red-green (instruct preservation across `setSentenceText`).
+- **P-Mo3 — "update all call sites" vague → FIXED in Task 8.** Call sites enumerated (`synthesise-chapter.ts:~964` + grep check).
+- **P-Mi1 — `expectTypeOf` no-op → FIXED in Task 2.** Swapped to a value round-trip test + `npm run typecheck` as the type gate.
+- **P-Mi2 — impl branch wouldn't carry the plan → FIXED in Global Constraints.** Cut off the docs branch.
+- **P-Mi3 — "(strict)" mislabel → FIXED in Task 1.** Relabelled + added a real `.strict()` unknown-key test.
+- **P-Mi4 — manual-gasp double-prepend → FIXED in Task 13.** Documented as an accepted v1 edge.
+- **Weights present → SKIP hedges struck in Tasks 5, 6, 9.** The C2 gate closes on-box.

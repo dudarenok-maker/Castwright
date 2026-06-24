@@ -199,11 +199,15 @@ along since the instruct is English regardless).
   flag means both 1.7B synth paths are carried until books migrate — a deliberate migration-safety
   tradeoff. Deleting the variant path once 1.7B books have opted in is a tracked future cleanup
   (§6), not v1.
-- **Sidecar request body** gains optional per-item `instruct`: `{ engine, model, items: [{ voice,
-  text, instruct? }] }` (and the single `/synthesize` shape). Server side
-  (`server/src/tts/sidecar.ts`) threads it from the resolved `SentenceGroup`. **Instruct length cap
-  (m4):** the per-line path clamps/rejects pathological instruct length, mirroring the
-  `design_voice` char cap, to protect the tokenizer/batcher.
+- **Sidecar request body** gains a **batch-level `liveInstruct` flag** plus optional per-item
+  `instruct`: `{ engine, model, liveInstruct, items: [{ voice, text, instruct? }] }` (and the single
+  `/synthesize` shape). **Path selection is batch-level, not per-item (P-C1):** one batched
+  `generate` forward cannot mix the `generate_voice_clone` wrapper and the raw bypass, so the flag —
+  not the presence of an `instruct` string — decides the path. When on, every 1.7B item runs the
+  bypass (neutral items use the pinned neutral-instruct form); when off, the whole batch uses the
+  wrapper. Server side (`server/src/tts/sidecar.ts`) threads both from the resolved `SentenceGroup`
+  + book flag. **Instruct length cap (m4):** the per-line path clamps/rejects pathological instruct
+  length, mirroring the `design_voice` char cap, to protect the tokenizer/batcher.
 - **C1 — the 1.7B audio changes; this is accepted, not byte-identical.** Routing 1.7B through the
   raw-`generate` bypass (a different code path from `generate_voice_clone`) **and** dropping
   variant selection means 1.7B output differs from today even for neutral lines, and books
