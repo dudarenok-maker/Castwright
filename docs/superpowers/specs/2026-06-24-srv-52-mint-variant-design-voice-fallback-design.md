@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 issue: 1091
 backlog-id: srv-52
 area: srv
@@ -478,4 +478,4 @@ Per-harness paired coverage (CLAUDE.md testing discipline):
 
 ## Ship notes
 
-_(filled at ship)_
+Shipped 2026-06-25 via PR #1096 (merge commit `95cba1c3`), Closes #1091. Built spec → plan → subagent-driven TDD (10 tasks + an H3 narrow-catch regression test), with 2 adversarial spec-review rounds, 2 adversarial plan-review rounds, per-task reviews, and an opus whole-branch review. Merged atop `origin/main` after it advanced with fs-53; resolved the overlap with #1089's design-progress threading by composing `progressFields` into the new fallback control flow. `test:sidecar` is venv-gated (SKIPs in CI / fresh worktrees) — the sidecar pytest was validated against the dev venv. No `docs/features/` plan was created (the superpowers spec + plan are the record).
