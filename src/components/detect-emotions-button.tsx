@@ -97,7 +97,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         title={
           disabled
             ? 'Analyse the book first to detect emotions'
-            : 'Detect per-quote delivery emotions across the whole book'
+            : 'Detect per-quote delivery emotions across all included chapters'
         }
         className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm font-semibold text-ink hover:bg-ink/5 disabled:opacity-40"
       >
@@ -118,12 +118,12 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         <span
           role="dialog"
           aria-label="Detect emotions"
-          className="absolute z-50 left-0 top-full mt-2 w-72 rounded-xl border border-ink/10 bg-canvas shadow-lg p-3 text-left"
+          className="absolute z-50 left-0 top-full mt-2 w-72 rounded-xl border border-ink/10 bg-white picker-surface shadow-lg p-3 text-left"
         >
           <p className="text-xs text-ink/70 leading-snug">
-            Run an LLM pass over the whole book to detect per-quote delivery emotions. This uses
-            your analyzer quota and can take a few minutes on a long book. Hand-set emotions are
-            never overwritten.
+            Run an LLM pass over all included chapters to detect per-quote delivery emotions. This
+            uses your analyzer quota and can take a few minutes on a long book. Hand-set emotions
+            are never overwritten.
           </p>
           <div className="mt-3 flex items-center justify-end gap-2">
             <button

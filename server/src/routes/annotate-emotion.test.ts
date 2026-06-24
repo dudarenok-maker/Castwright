@@ -53,7 +53,7 @@ function bookDir(): string {
   return join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
 }
 
-function writeBook(sentences: unknown[] | null): void {
+function writeBook(sentences: unknown[] | null, chapters: unknown[] = []): void {
   const dir = bookDir();
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   writeFileSync(
@@ -68,7 +68,7 @@ function writeBook(sentences: unknown[] | null): void {
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
-      chapters: [],
+      chapters,
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -179,6 +179,33 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
   it('404s for an unknown book', async () => {
     const res = await request(app).post(`/api/books/does-not-exist/annotate-emotion`).send({});
     expect(res.status).toBe(404);
+  });
+
+  it('skips chapters the user excluded from narration', async () => {
+    writeBook(SENTENCES, [
+      { id: 1, title: 'One', slug: 'one' },
+      { id: 2, title: 'Two', slug: 'two', excluded: true },
+    ]);
+    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> =>
+      Promise.resolve({
+        annotations:
+          chapterId === 1
+            ? [{ sentenceId: 2, emotion: 'angry' }]
+            : [{ sentenceId: 3, emotion: 'sad' }],
+      }),
+    );
+
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    expect(res.status).toBe(200);
+
+    // The analyzer is only called for the included chapter, never the excluded one.
+    const calledChapters = runEmotion.mock.calls.map((c) => c[1]);
+    expect(calledChapters).toContain(1);
+    expect(calledChapters).not.toContain(2);
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 1)).toBe(true);
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 2)).toBe(false);
   });
 
   it('on mid-pass daily-quota exhaustion, keeps already-streamed chapters and stops with quota_exhausted', async () => {

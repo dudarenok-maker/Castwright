@@ -54,7 +54,7 @@ function bookDir(): string {
   return join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
 }
 
-function writeBook(sentences: unknown[] | null): void {
+function writeBook(sentences: unknown[] | null, chapters: unknown[] = []): void {
   const dir = bookDir();
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   writeFileSync(
@@ -69,7 +69,7 @@ function writeBook(sentences: unknown[] | null): void {
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
-      chapters: [],
+      chapters,
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -159,6 +159,30 @@ describe('POST /api/books/:bookId/script-review', () => {
 
     const result = events.find((e) => e.kind === 'result');
     expect(result).toMatchObject({ done: true, reviewedChapters: 2 });
+  });
+
+  it('skips excluded chapters on a whole-book review but honours an explicit per-chapter request', async () => {
+    writeBook(SENTENCES, [
+      { id: 1, title: 'One', slug: 'one' },
+      { id: 2, title: 'Two', slug: 'two', excluded: true },
+    ]);
+    runReview.mockResolvedValue(CANNED_OPS);
+
+    // Whole-book review: the excluded chapter 2 must be skipped.
+    const whole = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    expect(whole.status).toBe(200);
+    const wholeChapters = runReview.mock.calls.map((c) => c[1]);
+    expect(wholeChapters).toContain(1);
+    expect(wholeChapters).not.toContain(2);
+
+    // An explicit per-chapter request for the excluded chapter is still honoured.
+    runReview.mockClear();
+    const single = await request(app)
+      .post(`/api/books/${bookId}/script-review`)
+      .send({ chapterId: 2 });
+    expect(single.status).toBe(200);
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(runReview.mock.calls[0][1]).toBe(2);
   });
 
   it('limits the pass to one chapter when chapterId is provided', async () => {
