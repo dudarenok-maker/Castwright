@@ -3664,6 +3664,10 @@ export interface components {
             startMs?: number;
             endMs?: number;
             emotion?: components["schemas"]["Emotion"];
+            /** @description fs-57 — optional free-text English delivery direction, live on the Qwen 1.7B liveInstruct path. Absent renders as today. */
+            instruct?: string;
+            /** @description fs-57 — true when Stage 3 authored a non-verbal vocalization into text; drives the ASR content-QA carve-out. */
+            vocalization?: boolean;
         };
         /**
          * @description fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly

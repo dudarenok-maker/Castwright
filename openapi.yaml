@@ -4861,6 +4861,16 @@ components:
         endMs: { type: integer }
         emotion:
           $ref: '#/components/schemas/Emotion'
+        instruct:
+          type: string
+          description: >-
+            fs-57 — optional free-text English delivery direction, live on the
+            Qwen 1.7B liveInstruct path. Absent renders as today.
+        vocalization:
+          type: boolean
+          description: >-
+            fs-57 — true when Stage 3 authored a non-verbal vocalization into
+            text; drives the ASR content-QA carve-out.
 
     Emotion:
       type: string
