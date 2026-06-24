@@ -254,7 +254,8 @@ export function ProfileDrawer({
       : null,
   );
   const sliceDesigning = singleDesign?.state === 'running';
-  const slicePhase: 'designing' | 'rendering' = singleDesign?.phase ?? 'designing';
+  const slicePhase: 'designing' | 'rendering' =
+    singleDesign?.phase === 'rendering' ? 'rendering' : 'designing';
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);
