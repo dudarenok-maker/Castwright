@@ -1340,6 +1340,7 @@ describe('CastView — Design full cast button', () => {
     state: 'running' | 'done' | 'halted';
     lastTickAt: number;
     failures: Array<{ characterId: string; name: string; error: string }>;
+    fallbacks: Array<{ characterId: string; emotion: string }>;
   };
 
   function setup(
@@ -1518,6 +1519,7 @@ describe('CastView — Design full cast button', () => {
         state: 'running',
         lastTickAt: 1,
         failures: [],
+        fallbacks: [],
       },
     });
     expect(screen.getByTestId('design-full-cast')).toHaveTextContent('Cancel design · 1/3');
