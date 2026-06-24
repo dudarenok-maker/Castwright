@@ -219,3 +219,54 @@ describe('classifyTranscript vocalizationAllowlist (fs-57)', () => {
     expect(c.verdict).toBe('drift');
   });
 });
+
+/* Integration test: vocalizationAllowlist forwarded through verifySegmentTranscript (fs-57)
+   These tests exercise the PRODUCTION entry point (verifySegmentTranscript), not classifyTranscript.
+   The critical test (first one) FAILS before Fix 1 (when vocalizationAllowlist was dropped on
+   forward) and PASSES after — because it relies on the allowlist to suppress a deletion run of 5
+   that exceeds maxDeletionRun (4), flipping the verdict from drift → ok. */
+
+describe('verifySegmentTranscript vocalizationAllowlist integration (fs-57)', () => {
+  const CLEAN_SIGNALS: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.01, compressionRatio: 1.2 };
+
+  // Expected: "haah ooh ah mm hmm i did not see you walk in there"
+  // ASR drops the 5 vocalization tokens ("haah", "ooh", "ah", "mm", "hmm") — a deletion run of 5
+  // which exceeds maxDeletionRun (4). Without the allowlist forwarded, longestDeletionRun = 5 →
+  // drift. WITH the allowlist forwarded, those 5 deletions are tolerated → run resets → ok.
+  // This test FAILS before Fix 1 (no forwarding) and PASSES after.
+  it('vocalizationAllowlist forwarded: suppresses a 5-token deletion run that would otherwise drift', async () => {
+    const c = await verifySegmentTranscript(
+      Buffer.from([0, 0]),
+      24000,
+      'Haah! Ooh! Ah! Mm! Hmm! I did not see you walk in there.',
+      {
+        transcribeFn: async () => ({
+          text: 'I did not see you walk in there.',
+          language: 'en',
+          ...CLEAN_SIGNALS,
+        }),
+        vocalizationAllowlist: ['haah', 'ooh', 'ah', 'mm', 'hmm'],
+      },
+    );
+    expect(c.verdict).toBe('ok');
+  });
+
+  it('WITHOUT vocalizationAllowlist the same 5-token drop drifts (regression guard)', async () => {
+    // Same input but no allowlist — the 5-token deletion run (haah ooh ah mm hmm) exceeds
+    // maxDeletionRun (4), so verdict is drift. This confirms the allowlist is the flip.
+    const c = await verifySegmentTranscript(
+      Buffer.from([0, 0]),
+      24000,
+      'Haah! Ooh! Ah! Mm! Hmm! I did not see you walk in there.',
+      {
+        transcribeFn: async () => ({
+          text: 'I did not see you walk in there.',
+          language: 'en',
+          ...CLEAN_SIGNALS,
+        }),
+        // no vocalizationAllowlist
+      },
+    );
+    expect(c.verdict).toBe('drift');
+  });
+});

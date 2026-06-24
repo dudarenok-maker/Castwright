@@ -251,7 +251,7 @@ function alignTokens(expected: string[], actual: string[]): Op[] {
     Examples:
       'Ah! I did not see you.'         → ['ah']
       'Haah… so tired.'           → ['haah']
-      'No vocalization here.'          → ['no']   (safe: only called when flag set)
+      'No vocalization here.'          → ['no', 'vocalization', 'here']   (safe: only called when flag set)
 */
 export function leadingVocalizationTokens(text: string): string[] {
   // Match from the start up to and including the first !, … (…), ., or ?
@@ -422,6 +422,6 @@ export async function verifySegmentTranscript(
     expectedText,
     r.text,
     { avgLogprob: r.avgLogprob, noSpeechProb: r.noSpeechProb, compressionRatio: r.compressionRatio },
-    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist },
+    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist, vocalizationAllowlist: opts.vocalizationAllowlist },
   );
 }
