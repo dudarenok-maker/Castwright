@@ -1087,3 +1087,114 @@ def test_route_live_instruct_defaults_false(qwen_batch_runtime, monkeypatch) -> 
     )
     assert resp.status_code == 200
     assert seen["live_instruct"] is False
+
+
+# ── fs-57 Task 7 (m4): instruct length cap on /synthesize-batch ─────────────
+#
+# A per-item `instruct` that exceeds _max_text_length() must be rejected with
+# HTTP 400 and a message matching `instruct` too long (N chars > cap).
+# The cap applies ONLY when liveInstruct=True; a long `instruct` with
+# liveInstruct=False (or absent) must pass validation silently.
+
+
+def test_route_rejects_over_cap_instruct_when_live_instruct_on(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """liveInstruct=True + an instruct that exceeds the cap → HTTP 400 with
+    a message mentioning `instruct` too long and the item index."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 10)  # tiny cap for test
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [
+                {"voice": "a", "text": "Hello.",
+                 "instruct": "X" * 11},  # 11 > cap 10
+            ],
+        },
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "instruct" in detail
+    assert "too long" in detail
+    assert "11" in detail  # length reported
+    assert "10" in detail  # cap reported
+
+
+def test_route_rejects_over_cap_instruct_names_correct_item_index(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """The 400 message must name the item index of the first over-cap instruct
+    (item 1 here — the first item is fine)."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 5)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [
+                {"voice": "a", "text": "Hi.", "instruct": "ok"},     # fine
+                {"voice": "a", "text": "Hi.", "instruct": "Y" * 6},  # over cap
+            ],
+        },
+    )
+    assert resp.status_code == 400
+    assert "item 1" in resp.json()["detail"]
+
+
+def test_route_allows_instruct_at_exact_cap(qwen_batch_runtime, monkeypatch) -> None:
+    """An instruct exactly at the cap boundary (len == cap) must pass validation."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 5)
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    seen: dict[str, Any] = {}
+
+    def _spy(model, items, live_instruct=False):
+        seen["called"] = True
+        return main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [{"voice": "a", "text": "Hi.", "instruct": "A" * 5}],  # == cap
+        },
+    )
+    assert resp.status_code == 200
+    assert seen.get("called")
+
+
+def test_route_ignores_over_cap_instruct_when_live_instruct_off(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """liveInstruct=False (or absent): per-item `instruct` is ignored entirely,
+    so even a pathologically long one must NOT trigger the 400."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 5)
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    def _spy(model, items, live_instruct=False):
+        return main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "0.6b",
+            "liveInstruct": False,
+            "items": [{"voice": "a", "text": "Hi.", "instruct": "Z" * 9999}],
+        },
+    )
+    assert resp.status_code == 200

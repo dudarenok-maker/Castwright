@@ -1665,10 +1665,40 @@ class QwenEngine(Engine):
 
         Requires `_base17` loaded; the CALLER holds `_synth_lock` +
         `_base17_activity()` (the production idiom — same as the single path)."""
+        import inspect  # noqa: PLC0415
         import torch  # noqa: PLC0415
 
         w = self._base17
         m = w.model
+
+        # fs-57 Task 7 (M2): drift guard — verify the raw `generate()` on the
+        # inner qwen_tts model still accepts BOTH `instruct_ids` AND
+        # `voice_clone_prompt` before we call it.  Pure signature introspection:
+        # weight-free, runs on every box.  If a future qwen_tts upgrade drops or
+        # renames either param the error here is clear ("generate() missing param
+        # 'instruct_ids'") rather than a silent mis-synthesis that looked like it
+        # worked but ignored the instruct or used the wrong voice.
+        #
+        # A function with a VAR_KEYWORD (**kwargs) parameter accepts any keyword
+        # argument, so we only flag drift when the explicit named params are absent
+        # AND no catch-all **kwargs is present.
+        _gen_sig = inspect.signature(m.generate)
+        _has_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in _gen_sig.parameters.values()
+        )
+        if not _has_var_kw:
+            _missing = [
+                p for p in ("instruct_ids", "voice_clone_prompt")
+                if p not in _gen_sig.parameters
+            ]
+            if _missing:
+                raise RuntimeError(
+                    f"qwen_tts model.generate() signature drift detected — "
+                    f"missing required parameter(s): {_missing}. "
+                    f"Upgrade may have renamed or dropped them; "
+                    f"update _icl_instruct_synth_batch."
+                )
 
         # Flatten each item's (length-1) prompt-item list into ONE prompt item
         # per text, then merge to a single parallel-list voice_clone_prompt dict
@@ -4580,6 +4610,17 @@ async def synthesize_batch(req: Request) -> Response:
             raise HTTPException(
                 status_code=400,
                 detail=f"item {i}: `text` too long ({len(item['text'])} chars > {_cap} cap).",
+            )
+        # fs-57 Task 7 (m4): cap per-item `instruct` on the live-instruct path.
+        # A pathologically long instruct (copy-paste accident, fuzzer input) can
+        # overflow the tokenizer context just as an oversized `text` can.  Mirror
+        # the text cap exactly: same _cap constant, same HTTP 400 shape.  Only
+        # enforced when live_instruct is on (the instruct key is ignored otherwise).
+        instruct_val = item.get("instruct")
+        if live_instruct and isinstance(instruct_val, str) and _cap > 0 and len(instruct_val) > _cap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"item {i}: `instruct` too long ({len(instruct_val)} chars > {_cap} cap).",
             )
 
     engine = ENGINES["qwen"]

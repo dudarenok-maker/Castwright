@@ -203,6 +203,118 @@ def test_neutral_instruct_constant_is_exported() -> None:
 
 
 # ---------------------------------------------------------------------------
+# fs-57 Task 7: raw-generate drift guard (weight-free signature introspection)
+# ---------------------------------------------------------------------------
+
+def test_drift_guard_passes_when_generate_has_var_keyword(stub_engine) -> None:
+    """The drift guard passes silently when the inner model's generate() has a
+    catch-all **kwargs (VAR_KEYWORD) — accepting any keyword argument including
+    instruct_ids and voice_clone_prompt.  This is the _FakeInnerModule shape."""
+    # _FakeInnerModule.generate(**kwargs) has VAR_KEYWORD → guard passes.
+    item = types.SimpleNamespace(ref_code=None, ref_text="text")
+    # Must not raise.
+    stub_engine._icl_instruct_synth_batch(
+        [[item]], ["Hello."], ["Whispering."], ["English"]
+    )
+
+
+def test_drift_guard_passes_when_generate_has_explicit_params(stub_engine) -> None:
+    """The drift guard passes silently when generate() declares BOTH params by
+    name (the real qwen_tts model pattern, e.g. qwen_tts 0.1.1).
+
+    We only assert that no DRIFT RuntimeError is raised; the call may raise for
+    unrelated fake-output reasons after the guard (the decode step isn't wired)
+    — that's fine, drift detection is the only contract under test here."""
+
+    class _ConformantExplicit:
+        speech_tokenizer = _FakeTokenizerStub()
+
+        def generate(self, *, input_ids=None, ref_ids=None, instruct_ids=None,
+                     voice_clone_prompt=None, languages=None, non_streaming_mode=False):
+            # Minimal output shape so the ICL-trim branch doesn't explode.
+            return ([None], None)
+
+    stub_engine._base17.model = _ConformantExplicit()
+    item = types.SimpleNamespace(ref_code=None, ref_text="text")
+    try:
+        stub_engine._icl_instruct_synth_batch(
+            [[item]], ["Hello."], ["Whispering."], ["English"]
+        )
+    except Exception as exc:
+        # Fail only for drift-guard errors; other errors (e.g. TypeError from
+        # the **gk temperature kwarg hitting explicit params, or fake-decode
+        # issues) are outside the scope of this test.
+        if "signature drift" in str(exc):
+            raise
+
+
+def test_drift_guard_raises_when_instruct_ids_missing(stub_engine) -> None:
+    """Drift guard raises RuntimeError naming the missing parameter when
+    `instruct_ids` is dropped from generate()'s signature — simulating a
+    future qwen_tts upgrade that renames/removes it.
+
+    The drifted fake uses explicit keyword params WITHOUT a catch-all **kwargs
+    so inspect.signature sees exactly the declared parameters (no VAR_KEYWORD
+    escape hatch)."""
+
+    class _MissingInstructIds:
+        """generate() without instruct_ids and no **kwargs — the drifted form."""
+        speech_tokenizer = _FakeTokenizerStub()
+
+        def generate(self, *, input_ids=None, ref_ids=None, voice_clone_prompt=None,
+                     languages=None, non_streaming_mode=False):
+            return ([types.SimpleNamespace()], None)
+
+    stub_engine._base17.model = _MissingInstructIds()
+    with pytest.raises(RuntimeError, match="instruct_ids"):
+        item = types.SimpleNamespace(ref_code=None, ref_text="text")
+        stub_engine._icl_instruct_synth_batch(
+            [[item]], ["Hello."], ["Whispering."], ["English"]
+        )
+
+
+def test_drift_guard_raises_when_voice_clone_prompt_missing(stub_engine) -> None:
+    """Drift guard raises RuntimeError naming the missing parameter when
+    `voice_clone_prompt` is dropped from generate()'s signature."""
+
+    class _MissingVcp:
+        """generate() without voice_clone_prompt and no **kwargs — drifted form."""
+        speech_tokenizer = _FakeTokenizerStub()
+
+        def generate(self, *, input_ids=None, ref_ids=None, instruct_ids=None,
+                     languages=None, non_streaming_mode=False):
+            return ([types.SimpleNamespace()], None)
+
+    stub_engine._base17.model = _MissingVcp()
+    with pytest.raises(RuntimeError, match="voice_clone_prompt"):
+        item = types.SimpleNamespace(ref_code=None, ref_text="text")
+        stub_engine._icl_instruct_synth_batch(
+            [[item]], ["Hello."], ["Whispering."], ["English"]
+        )
+
+
+def test_drift_guard_raises_when_both_params_missing(stub_engine) -> None:
+    """Drift guard raises RuntimeError listing BOTH missing parameters when
+    generate() has neither `instruct_ids` nor `voice_clone_prompt`."""
+
+    class _BothMissing:
+        speech_tokenizer = _FakeTokenizerStub()
+
+        def generate(self, *, input_ids=None, languages=None):
+            return ([types.SimpleNamespace()], None)
+
+    stub_engine._base17.model = _BothMissing()
+    with pytest.raises(RuntimeError) as exc_info:
+        item = types.SimpleNamespace(ref_code=None, ref_text="text")
+        stub_engine._icl_instruct_synth_batch(
+            [[item]], ["Hello."], ["Whispering."], ["English"]
+        )
+    msg = str(exc_info.value)
+    assert "instruct_ids" in msg
+    assert "voice_clone_prompt" in msg
+
+
+# ---------------------------------------------------------------------------
 # Real-GPU C2 measurement tests (skipped without CUDA + qwen_tts)
 # ---------------------------------------------------------------------------
 
