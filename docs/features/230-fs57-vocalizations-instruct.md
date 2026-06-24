@@ -11,11 +11,11 @@ owner: null
 > `server/src/tts/synthesise-chapter.ts`, `server/src/tts/sidecar.ts`,
 > `server/src/analyzer/gemini.ts`, `server/src/analyzer/ollama.ts`,
 > `server/tts-sidecar/main.py`, `server/tts-sidecar/engines/qwen_engine.py`,
-> `src/store/chapters-slice.ts` (new `applyDetectedInstruct` reducer),
+> `src/store/manuscript-slice.ts` (new `applyDetectedInstruct` reducer),
 > `src/components/detect-emotions-button.tsx`,
 > `server/src/tts/segment-asr-qa.ts`
 > URL surface: `#/books/<id>/manuscript` (Detect-emotions button triggers Stage 3); `#/books/<id>/generate` (liveInstruct toggle)
-> OpenAPI ops: `POST /api/manuscripts/{id}/instruct-annotation` (Stage 3 SSE), `GET /api/manuscripts/{id}/analysis`
+> OpenAPI ops: `POST /api/books/{bookId}/instruct-annotation` (Stage 3 SSE), `GET /api/manuscripts/{id}/analysis`
 
 ## Benefit / Rationale
 
@@ -31,8 +31,8 @@ owner: null
 - `NEUTRAL_INSTRUCT = ""` sidecar constant pinned as the canonical no-op form for neutral 1.7B items (C2 gate — verified on-box before trusting neutral-parity language).
 - Batch-level `liveInstruct` flag in the sidecar request body (`POST /synthesize-batch`); per-item optional `instruct` field.
 - `resolveInstructForGroup` — pure helper (`synthesise-chapter.ts`) that applies the precedence ladder (manual edit › analyzer `instruct` › emotion-derived English phrase › neutral).
-- `applyDetectedInstruct` reducer in `chapters-slice` — fill-only instruct, marks sentence dirty on `text` edit.
-- `POST /api/manuscripts/{id}/instruct-annotation` — own SSE endpoint + error type, distinct from the emotion contract.
+- `applyDetectedInstruct` reducer in `manuscript-slice` — fill-only instruct, marks sentence dirty on `text` edit.
+- `POST /api/books/{bookId}/instruct-annotation` — own SSE endpoint + error type, distinct from the emotion contract.
 - `skills/audiobook-instruct-annotation.md` + `prompt.instructAnnotation` registry knob (user-forkable).
 - `vocalizationAllowlist` + `leadingVocalizationTokens(text)` in `segment-asr-qa.ts` — targeted carve-out for vocalization-prepended lines on the ASR gate.
 
@@ -103,10 +103,10 @@ owner: null
 - Vitest server — `languagePreamble` for `es`/`ru`/`fr`/`de` carries the Stage-3 clause (vocalization text in book language, `instruct` in English).
 
 **`applyDetectedInstruct` reducer (Task 13)**
-- Vitest frontend (`src/store/chapters-slice.test.ts`) — fill-only: a hand-set `instruct` wins; the reducer applies `text` edits via `setSentenceText` and marks the sentence dirty for re-gen; `vocalization:true` sentences are skipped on a second Stage-3 apply.
+- Vitest frontend (`src/store/manuscript-slice.test.ts`) — fill-only: a hand-set `instruct` wins; the reducer applies `text` edits via `setSentenceText` and marks the sentence dirty for re-gen; `vocalization:true` sentences are skipped on a second Stage-3 apply.
 
 **Stage 3 endpoint + SSE (Task 11)**
-- Vitest server — `POST /api/manuscripts/{id}/instruct-annotation` fires the Stage-3 pass, streams SSE events matching the schema, returns the correct error type on failure.
+- Vitest server — `POST /api/books/{bookId}/instruct-annotation` fires the Stage-3 pass, streams SSE events matching the schema, returns the correct error type on failure.
 
 **DetectEmotionsButton wiring (Task 16)**
 - Vitest frontend (`src/components/detect-emotions-button.test.tsx`) — button fires both emotion pass and Stage-3 pass; progress copy covers the text-mutating / audio-invalidating work.
@@ -119,7 +119,7 @@ owner: null
 
 **Script-Review locks (Task 18)**
 - Vitest server — a sentence with a vocalization `text` + `instruct` survives a Script Review pass unchanged (text not stripped, `instruct` not dropped).
-- Vitest server (`src/store/chapters-slice.test.ts`) — `setSentenceText` + `mergeSentences` preserve `instruct` when the target sentence has one (P-Mo2 regression lock).
+- Vitest frontend (`src/lib/script-review-apply.test.ts`) — a `strip_tag` apply through `dispatchAcceptedOps`/`setSentenceText` preserves `instruct` + `vocalization` on the rewritten sentence (P-Mo2 regression lock).
 
 **e2e (Task 16)**
 - Playwright (`e2e/instruct-annotation.spec.ts`) — the Detect-emotions button triggers Stage 3 alongside the emotion pass; the analysis form reflects the Stage-3 result (a vocalization sentence is visible with its instruct in the manuscript view). Mock mode.
