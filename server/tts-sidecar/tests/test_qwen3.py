@@ -1473,6 +1473,48 @@ def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):
     assert "code" not in r.json()  # NOT a fallback signal
 
 
+def test_mint_variant_route_500_on_postload_failure_not_corrupt(fake_qwen_runtime, monkeypatch):
+    """H3 narrow-catch: base17 LOAD succeeds but a post-load step raises a
+    non-OOM exception (e.g. speech_tokenizer.decode failure) → generic 500
+    with NO `code` field in the body. This pins that the Base17UnavailableError
+    catch (→ 503 base17-unavailable) does NOT over-broaden to swallow failures
+    that happen AFTER the load phase — the corrupt classification only covers
+    the _ensure_base17_loaded() call itself, not the downstream mint work."""
+    import main
+    import types as _types
+    eng = fake_qwen_runtime["engine"]
+    # Design the base voice so the 409 path isn't hit.
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    # Make _ensure_base17_for_mint succeed: weights present + load is a no-op.
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: None)
+    # Provision a fake _base17 with a speech_tokenizer whose decode() raises.
+    fake_b17 = _FakeQwenModel("1.7b")
+    fake_b17.model.speech_tokenizer = _types.SimpleNamespace(
+        decode=lambda codes: (_ for _ in ()).throw(RuntimeError("decode boom"))
+    )
+    eng._base17 = fake_b17
+    # Stub _load_voice_prompt to hand back a ref_code-bearing item (avoids
+    # AttributeError on base_item.ref_code, which the dict-returning fake lacks).
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    client = TestClient(main.app)
+    r = client.post("/qwen/mint-variant", json={
+        "baseVoiceId": "v1",
+        "variantVoiceId": "v1__angry",
+        "emotionInstruct": "Delivered angrily.",
+    })
+    assert r.status_code == 500
+    body = r.json()
+    assert "code" not in body, (
+        "post-load failure must NOT produce a base17-unavailable code "
+        f"(got body={body!r})"
+    )
+
+
 # ── Task 3 (srv-52): design-voice provenance fields ──────────────────────
 
 def test_design_voice_writes_fallback_provenance(fake_qwen_runtime, tmp_path):
