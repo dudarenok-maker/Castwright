@@ -1,4 +1,4 @@
-import type { Emotion } from '../handoff/schemas';
+import type { Emotion } from '../handoff/schemas.js';
 
 /* fs-57 §4.1 — synth-side fallback: when a 1.7B liveInstruct sentence has an
    emotion but no explicit instruct, derive an English delivery phrase. Kept

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emotionToInstruct } from './emotion-instruct';
+import { emotionToInstruct } from './emotion-instruct.js';
 
 describe('emotionToInstruct', () => {
   it('maps each expressive emotion to an English phrase', () => {
