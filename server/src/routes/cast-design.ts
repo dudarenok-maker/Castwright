@@ -353,7 +353,7 @@ async function runDesignJob(
       let rideouts = 0;
       for (;;) {
         try {
-          const { voiceId } = await designQwenVoiceForCharacter({
+          const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
             bookDir: job.bookDir,
             character: characterForDesign,
             characterId,
@@ -377,7 +377,8 @@ async function runDesignJob(
                series (linked cast), the same scope the base voice uses. */
             await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
             job.done += 1;
-            broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId });
+            broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId,
+              ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}) });
           }
           break;
         } catch (e) {

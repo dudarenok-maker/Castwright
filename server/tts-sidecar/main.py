@@ -1170,6 +1170,19 @@ class VoiceNotDesignedError(RuntimeError):
     """Base voice has no cached .pt — design it before minting a variant."""
 
 
+class Base17UnavailableError(Exception):
+    """The 1.7B-Base model can't be used for an anchored mint for a
+    deterministic reason the separate VoiceDesign model won't share. The
+    mint route maps it to a 503 the server treats as a design-voice fallback
+    signal. `reason` is 'not-installed' (weights absent) or 'corrupt' (weights
+    present but the load raised a non-OOM error). A CUDA OOM is NOT this — it
+    re-raises as a generic error (no fallback)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Qwen 1.7B-Base unavailable ({reason}).")
+        self.reason = reason
+
+
 class QwenEngine(Engine):
     """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
 
@@ -1496,6 +1509,25 @@ class QwenEngine(Engine):
                 )
                 self._base17 = self._load_qwen_model(self.BASE17_MODEL)
                 log.info("Qwen 1.7B-Base loaded.")
+
+    def _ensure_base17_for_mint(self) -> None:
+        """Mint-only: ensure the 1.7B-Base is available, raising a typed
+        Base17UnavailableError the mint route maps to the 503 fallback signal.
+        A CUDA OOM is re-raised unchanged (generic 500, no fallback). Other
+        callers keep using _ensure_base17_loaded() and are unaffected."""
+        import torch  # type: ignore
+
+        if not _qwen_base17_weights_present():
+            raise Base17UnavailableError("not-installed")
+        try:
+            self._ensure_base17_loaded()
+        except Exception as e:  # noqa: BLE001 — classify then re-raise
+            msg = str(e).lower()
+            if "out of memory" in msg or isinstance(
+                e, getattr(torch.cuda, "OutOfMemoryError", ())
+            ):
+                raise  # OOM → generic 500, NEVER a fallback
+            raise Base17UnavailableError("corrupt") from e
 
     def unload_base17(self) -> None:
         """Drop the 1.7B-Base model and free VRAM. Idempotent.
@@ -1860,8 +1892,11 @@ class QwenEngine(Engine):
             return []
 
     def design_voice(
-        self, voice_id: str, instruct: str, language: Optional[str], calibration_text: Optional[str], voice_uuid: Optional[str] = None,
+        self, voice_id: str, instruct: str, language: Optional[str],
+        calibration_text: Optional[str], voice_uuid: Optional[str] = None,
         report_progress: Optional[Callable[[str], None]] = None,
+        mint_method: Optional[str] = None,
+        fallback_for: Optional[dict] = None,
     ) -> SynthResult:
         """Design + cache a reusable bespoke voice from a persona `instruct`.
         Returns an audition preview (the calibration line spoken in the new
@@ -1972,6 +2007,8 @@ class QwenEngine(Engine):
                         "refText": ref_text,
                         "baseModel": self.BASE_MODEL,
                         "designModel": self.VOICEDESIGN_MODEL,
+                        **({"mintMethod": mint_method} if mint_method else {}),
+                        **({"fallbackFor": fallback_for} if fallback_for else {}),
                     },
                     fh,
                     ensure_ascii=False,
@@ -2082,11 +2119,11 @@ class QwenEngine(Engine):
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
             _phase("loading-model")
-            self._ensure_base17_loaded()
+            self._ensure_base17_for_mint()
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
             with self._synth_lock:
-                self._ensure_base17_loaded()
+                self._ensure_base17_for_mint()
                 rc = base_item.ref_code
                 rc = rc.to(self._device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()
@@ -3551,6 +3588,28 @@ def _qwen_weights_present() -> bool:
     return False
 
 
+def _qwen_base17_weights_present() -> bool:
+    """True if the 1.7B-Base snapshot holds at least one real weight blob.
+    Mirrors `_qwen_weights_present` but targets `QwenEngine.BASE17_MODEL` (the
+    anchored emotion-variant engine, fs-55). Read the constant at call time so
+    a QWEN_BASE_17B_MODEL env override is honoured."""
+    repo_dir = os.path.join(
+        _qwen_hub_cache_dir(),
+        "models--" + QwenEngine.BASE17_MODEL.replace("/", "--"),
+    )
+    snapshots = os.path.join(repo_dir, "snapshots")
+    if not os.path.isdir(snapshots):
+        return False
+    try:
+        for _root, _dirs, files in os.walk(snapshots):
+            for fname in files:
+                if fname.endswith(_QWEN_WEIGHT_SUFFIXES):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _qwen_install_state(qwen_loaded: bool) -> str:
     """One of: 'not-installed' (pip package absent) | 'weights-missing'
     (package present, Base weights not downloaded) | 'ready' (package + weights
@@ -3773,6 +3832,7 @@ def health() -> dict[str, Any]:
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
+        "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
         "kokoro_package_installed": _kokoro_package_installed(),
@@ -4097,6 +4157,8 @@ async def qwen_design_voice(req: Request) -> Response:
     language = body.get("language")
     calibration_text = body.get("calibrationText")
     voice_uuid = body.get("voiceUuid") if isinstance(body.get("voiceUuid"), str) else None
+    mint_method = body.get("mintMethod") if isinstance(body.get("mintMethod"), str) else None
+    fallback_for = body.get("fallbackFor") if isinstance(body.get("fallbackFor"), dict) else None
     if not isinstance(voice_id, str) or not voice_id.strip():
         raise HTTPException(status_code=400, detail="`voiceId` is required.")
     if not isinstance(instruct, str) or not instruct.strip():
@@ -4134,6 +4196,8 @@ async def qwen_design_voice(req: Request) -> Response:
             calibration_text if isinstance(calibration_text, str) else None,
             voice_uuid,
             _report,
+            mint_method,
+            fallback_for,
         )
     except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
@@ -4200,6 +4264,12 @@ async def qwen_mint_variant(req: Request) -> Response:
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
         return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Base17UnavailableError as exc:
+        log.warning("/qwen/mint-variant: 1.7B-Base %s", exc.reason)
+        return JSONResponse(
+            {"code": "base17-unavailable", "reason": exc.reason, "detail": str(exc)},
+            status_code=503,
+        )
     except Exception:
         log.exception("/qwen/mint-variant failed (baseVoiceId=%s)", base_voice_id)
         return JSONResponse({"detail": "Internal error."}, status_code=500)

@@ -37,7 +37,7 @@ const CLEAR_TYPE = castDesignActions.clear.type;
 const SUMMARY_LINGER_MS = 5000;
 
 interface CastDesignRootState {
-  castDesign: { active: { bookId: string; state: string; kind?: string } | null };
+  castDesign: { active: { bookId: string; state: string; kind?: string; fallbacks?: { characterId: string; emotion: string }[] } | null };
 }
 
 export function createCastDesignMiddleware(): Middleware {
@@ -82,8 +82,11 @@ export function createCastDesignMiddleware(): Middleware {
         dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
-      onVariantDesigned: ({ characterId, emotion, voiceId }) => {
+      onVariantDesigned: ({ characterId, emotion, voiceId, viaFallback }) => {
         dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        if (viaFallback) {
+          dispatch(castDesignActions.variantFellBack({ bookId, characterId, emotion, lastTickAt: Date.now() }));
+        }
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
       onCharacterSkipped: () =>
@@ -99,10 +102,12 @@ export function createCastDesignMiddleware(): Middleware {
           }),
         ),
       onIdle: ({ done, total, skipped, failures }) => {
+        const fellBack = (store.getState() as CastDesignRootState).castDesign.active?.fallbacks?.length ?? 0;
         dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
         if (total > 0) {
           const failed = failures.length;
           const parts = [`Designed ${done}`];
+          if (fellBack > 0) parts.push(`${fellBack} via fallback (lower fidelity)`);
           if (failed > 0) parts.push(`${failed} failed`);
           if (skipped > 0) parts.push(`${skipped} skipped`);
           dispatch(

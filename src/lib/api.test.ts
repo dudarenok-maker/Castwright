@@ -9,6 +9,7 @@ import {
   mockSetShelfStatus,
   _resetMockListenStats,
   readE2eUpdateOverride,
+  readCastDesignStream,
   api,
 } from './api';
 
@@ -127,6 +128,49 @@ describe('api.reviewScript', () => {
     const res = await api.reviewScript('b1', { onOps: (e) => seen.push(e) });
     expect(seen).toHaveLength(1);
     expect(res.totalOps).toBe(1);
+  });
+});
+
+describe('readCastDesignStream — variant_designed fallback fields (srv-52)', () => {
+  function fakeResponse(sseText: string): Response {
+    const encoded = new TextEncoder().encode(sseText);
+    let consumed = false;
+    const body = {
+      getReader: () => ({
+        read: async () => {
+          if (!consumed) {
+            consumed = true;
+            return { done: false, value: encoded };
+          }
+          return { done: true, value: undefined };
+        },
+      }),
+    };
+    return { ok: true, status: 200, body } as unknown as Response;
+  }
+
+  it('passes viaFallback through onVariantDesigned', async () => {
+    const got: unknown[] = [];
+    await readCastDesignStream(
+      fakeResponse(
+        'event: variant_designed\ndata: {"type":"variant_designed","characterId":"c","emotion":"angry","voiceId":"v","viaFallback":true,"fallbackReason":"corrupt"}\n\n',
+      ),
+      { onVariantDesigned: (e) => got.push(e) },
+    );
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ viaFallback: true, fallbackReason: 'corrupt' });
+  });
+
+  it('omits viaFallback when not present in event', async () => {
+    const got: unknown[] = [];
+    await readCastDesignStream(
+      fakeResponse(
+        'event: variant_designed\ndata: {"type":"variant_designed","characterId":"c","emotion":"neutral","voiceId":"v"}\n\n',
+      ),
+      { onVariantDesigned: (e) => got.push(e) },
+    );
+    expect(got).toHaveLength(1);
+    expect((got[0] as Record<string, unknown>).viaFallback).toBeUndefined();
   });
 });
 

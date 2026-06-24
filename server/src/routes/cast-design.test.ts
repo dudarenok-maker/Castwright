@@ -495,6 +495,57 @@ describe('scope + variantTasks (fs-25)', () => {
     spy.mockRestore();
   });
 
+  it('marks variant_designed viaFallback when the mint fell back', async () => {
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/u',
+      fellBackToDesignVoice: true,
+      fallbackReason: 'not-installed',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const ev = events.find((e) => e.type === 'variant_designed');
+    expect(ev).toBeDefined();
+    expect(ev).toMatchObject({ viaFallback: true, fallbackReason: 'not-installed' });
+
+    spy.mockRestore();
+  });
+
+  it('variant_designed without fallback does NOT include viaFallback/fallbackReason fields', async () => {
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/u',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const ev = events.find((e) => e.type === 'variant_designed');
+    expect(ev).toBeDefined();
+    expect(ev).not.toHaveProperty('viaFallback');
+    expect(ev).not.toHaveProperty('fallbackReason');
+
+    spy.mockRestore();
+  });
+
   it('scope:both designs base then its variants in order for one character', async () => {
     /* maerin has no base yet — scope:both should design the base first, then the variant. */
     const designedIds: string[] = [];

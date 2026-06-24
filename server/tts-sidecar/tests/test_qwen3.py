@@ -1382,3 +1382,159 @@ def test_synth_17b_on_gpu_produces_audio_and_writes_cache() -> None:
     # The 1.7B native cache file must have been written.
     pt_17b, _ = eng._voice_paths("cw_gpu_17b__1.7b")
     assert os.path.isfile(pt_17b), f"<voice>__1.7b.pt not found at {pt_17b}"
+
+
+def test_base17_weights_present_true_when_blob_exists(tmp_path, monkeypatch):
+    import main
+    repo = tmp_path / ("models--" + main.QwenEngine.BASE17_MODEL.replace("/", "--"))
+    snap = repo / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    (snap / "model.safetensors").write_bytes(b"x")
+    monkeypatch.setattr(main, "_qwen_hub_cache_dir", lambda: str(tmp_path))
+    assert main._qwen_base17_weights_present() is True
+
+
+def test_base17_weights_present_false_when_absent(tmp_path, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "_qwen_hub_cache_dir", lambda: str(tmp_path))
+    assert main._qwen_base17_weights_present() is False
+
+
+# ── Task 2 (srv-52): _ensure_base17_for_mint + /qwen/mint-variant 503/500 ──
+
+
+def test_ensure_base17_for_mint_not_installed(fake_qwen_runtime, monkeypatch):
+    import main
+    eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: False)
+    with pytest.raises(main.Base17UnavailableError) as ei:
+        eng._ensure_base17_for_mint()
+    assert ei.value.reason == "not-installed"
+
+
+def test_ensure_base17_for_mint_corrupt_on_nonoom(fake_qwen_runtime, monkeypatch):
+    import main
+    eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    def boom(): raise RuntimeError("bad safetensors header")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", boom)
+    with pytest.raises(main.Base17UnavailableError) as ei:
+        eng._ensure_base17_for_mint()
+    assert ei.value.reason == "corrupt"
+
+
+def test_ensure_base17_for_mint_reraises_oom(fake_qwen_runtime, monkeypatch):
+    import main
+    eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    def oom(): raise RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
+    with pytest.raises(RuntimeError) as ei:   # NOT Base17UnavailableError
+        eng._ensure_base17_for_mint()
+    assert "out of memory" in str(ei.value).lower()
+    assert not isinstance(ei.value, main.Base17UnavailableError)
+
+
+def test_mint_variant_route_503_not_installed(fake_qwen_runtime, monkeypatch):
+    """base voice exists; base17 weights absent → 503 with code=base17-unavailable."""
+    import main
+    eng = fake_qwen_runtime["engine"]
+    # Design the base voice so the 409 path isn't hit.
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: False)
+    client = TestClient(main.app)
+    r = client.post("/qwen/mint-variant", json={
+        "baseVoiceId": "v1",
+        "variantVoiceId": "v1__angry",
+        "emotionInstruct": "Delivered angrily.",
+    })
+    assert r.status_code == 503
+    body = r.json()
+    assert body["code"] == "base17-unavailable"
+    assert body["reason"] == "not-installed"
+
+
+def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):
+    """OOM during base17 load → generic 500, not a 503 fallback signal."""
+    import main
+    eng = fake_qwen_runtime["engine"]
+    # Design the base voice so the 409 path isn't hit.
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    def oom(): raise RuntimeError("CUDA out of memory")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
+    client = TestClient(main.app)
+    r = client.post("/qwen/mint-variant", json={
+        "baseVoiceId": "v1",
+        "variantVoiceId": "v1__angry",
+        "emotionInstruct": "Delivered angrily.",
+    })
+    assert r.status_code == 500
+    assert "code" not in r.json()  # NOT a fallback signal
+
+
+def test_mint_variant_route_500_on_postload_failure_not_corrupt(fake_qwen_runtime, monkeypatch):
+    """H3 narrow-catch: base17 LOAD succeeds but a post-load step raises a
+    non-OOM exception (e.g. speech_tokenizer.decode failure) → generic 500
+    with NO `code` field in the body. This pins that the Base17UnavailableError
+    catch (→ 503 base17-unavailable) does NOT over-broaden to swallow failures
+    that happen AFTER the load phase — the corrupt classification only covers
+    the _ensure_base17_loaded() call itself, not the downstream mint work."""
+    import main
+    import types as _types
+    eng = fake_qwen_runtime["engine"]
+    # Design the base voice so the 409 path isn't hit.
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    # Make _ensure_base17_for_mint succeed: weights present + load is a no-op.
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: None)
+    # Provision a fake _base17 with a speech_tokenizer whose decode() raises.
+    fake_b17 = _FakeQwenModel("1.7b")
+    fake_b17.model.speech_tokenizer = _types.SimpleNamespace(
+        decode=lambda codes: (_ for _ in ()).throw(RuntimeError("decode boom"))
+    )
+    eng._base17 = fake_b17
+    # Stub _load_voice_prompt to hand back a ref_code-bearing item (avoids
+    # AttributeError on base_item.ref_code, which the dict-returning fake lacks).
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    client = TestClient(main.app)
+    r = client.post("/qwen/mint-variant", json={
+        "baseVoiceId": "v1",
+        "variantVoiceId": "v1__angry",
+        "emotionInstruct": "Delivered angrily.",
+    })
+    assert r.status_code == 500
+    body = r.json()
+    assert "code" not in body, (
+        "post-load failure must NOT produce a base17-unavailable code "
+        f"(got body={body!r})"
+    )
+
+
+# ── Task 3 (srv-52): design-voice provenance fields ──────────────────────
+
+def test_design_voice_writes_fallback_provenance(fake_qwen_runtime, tmp_path):
+    import json, os
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice(
+        "qwen-x__angry", "a warm narrator", "english", "Hello.", None,
+        mint_method="design-voice-fallback",
+        fallback_for={"baseVoiceId": "qwen-x", "emotion": "angry"},
+    )
+    _pt, jpath = eng._voice_paths("qwen-x__angry")
+    meta = json.loads(open(jpath, encoding="utf-8").read())
+    assert meta["mintMethod"] == "design-voice-fallback"
+    assert meta["fallbackFor"] == {"baseVoiceId": "qwen-x", "emotion": "angry"}
+
+
+def test_design_voice_manifest_unchanged_without_provenance(fake_qwen_runtime):
+    import json
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("qwen-y", "a warm narrator", "english", "Hello.", None)
+    _pt, jpath = eng._voice_paths("qwen-y")
+    meta = json.loads(open(jpath, encoding="utf-8").read())
+    assert "mintMethod" not in meta and "fallbackFor" not in meta
