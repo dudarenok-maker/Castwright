@@ -1212,6 +1212,7 @@ export function Layout() {
       kind,
       subsetChapterIds,
       phaseElapsedMs,
+      model,
     } = analysisStream;
     /* Single source of truth for work-weighted analysis progress —
        shared with the analysing view's "Overall" bar via
@@ -1249,6 +1250,7 @@ export function Layout() {
          undefined. */
       kind,
       subsetChapterCount: kind === 'subset' ? (subsetChapterIds?.length ?? 0) : undefined,
+      model,
       onClick: () => {
         if (streamBookId) {
           navigate(`/books/${streamBookId}/analysing`);

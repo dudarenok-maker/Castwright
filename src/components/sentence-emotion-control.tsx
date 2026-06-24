@@ -169,7 +169,7 @@ export function SentenceEmotionControl({
       {open && (
         <span
           role="menu"
-          className="absolute z-30 left-0 top-full mt-1 min-w-[120px] rounded-lg border border-ink/10 bg-canvas shadow-lg py-1 flex flex-col"
+          className="absolute z-50 left-0 top-full mt-1 min-w-[120px] rounded-lg border border-ink/10 bg-white picker-surface shadow-lg py-1 flex flex-col"
         >
           {EMOTION_OPTIONS.map((opt) => (
             <button

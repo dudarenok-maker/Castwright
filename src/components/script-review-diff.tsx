@@ -167,6 +167,19 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 {' '}(stale text or invalid)
               </div>
             )}
+            {classes.length === 0 && (
+              <div
+                data-testid="script-review-empty"
+                className="rounded-2xl border border-ink/10 bg-canvas/50 px-6 py-10 text-center"
+              >
+                <p className="text-sm font-medium text-ink/70">No suggestions found</p>
+                <p className="mt-1 text-xs text-ink/50">
+                  {unappliable.length > 0
+                    ? "All suggestions were stale or invalid and couldn't be applied."
+                    : "The reviewer didn't find anything to change in this scope."}
+                </p>
+              </div>
+            )}
             {classes.map((cls) => {
               const classOps = byClass.get(cls) ?? [];
               const allClassSelected = classOps.every(

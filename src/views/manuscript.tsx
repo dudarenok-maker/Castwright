@@ -798,7 +798,7 @@ export function ManuscriptView({
                   <IconArrowDn className="w-4 h-4" />
                 </button>
                 {reviewMenuOpen && (
-                  <div className="absolute top-full left-0 mt-2 z-20 w-72 rounded-2xl border border-ink/10 bg-white shadow-float p-3 space-y-2">
+                  <div className="absolute top-full left-0 mt-2 z-50 w-72 rounded-2xl border border-ink/10 bg-white picker-surface shadow-float p-3 space-y-2">
                     <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/50">
                       Review scope
                     </p>

@@ -31,6 +31,12 @@ export interface AnalysisStreamSnapshot {
       `ui.selectedModel`) so a user model-switch mid-stream cannot
       misclassify the running analysis. */
   engine?: 'local' | 'gemini';
+  /** Server-resolved analyzer model id, carried from the `model` field on SSE
+      phase events (the same source the analysing view's PhaseModelChip reads).
+      Captured so the global Status popover can show WHICH model the run is on —
+      especially the local model id, which the user otherwise can't see.
+      Undefined pre-stream (before the first phase tick). */
+  model?: string;
   /** Active phase id (0 = detecting characters, 1 = parsing+attribution,
       2 = matching library). */
   phaseId: number;
@@ -118,11 +124,13 @@ export const analysisSlice = createSlice({
         phaseElapsedMs?: number;
         remainingMs?: number;
         lastTickAt?: number;
+        model?: string;
       }>,
     ) {
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      if (typeof action.payload.model === 'string') snap.model = action.payload.model;
       const phaseChanged =
         typeof action.payload.phaseId === 'number' && action.payload.phaseId !== snap.phaseId;
       if (typeof action.payload.phaseId === 'number') snap.phaseId = action.payload.phaseId;

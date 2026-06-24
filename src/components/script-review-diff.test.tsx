@@ -82,6 +82,29 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('shows an explicit empty state (not a blank body) when there are zero suggestions', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    /* A review that produced no ops still opens the modal (the bucket exists).
+       Before the fix this rendered a blank body; now it must show a clear
+       "No suggestions found" empty state. */
+    store.dispatch(scriptReviewActions.setReview({ bookId: 'book-A', ops: [], unappliable: [] }));
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    expect(screen.getByText('Script review suggestions')).toBeTruthy();
+    expect(screen.getByTestId('script-review-empty')).toBeInTheDocument();
+    expect(screen.getByText('No suggestions found')).toBeInTheDocument();
+  });
+
   it('applies selected ops and skips deselected ops on Apply', () => {
     const store = makeStore();
     render(

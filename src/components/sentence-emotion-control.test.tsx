@@ -56,6 +56,22 @@ describe('fs-25 — SentenceEmotionControl', () => {
     expect(store.getState().manuscript.sentences[0].emotion).toBe('angry');
   });
 
+  it('renders the variant menu as an opaque elevated surface (picker-surface, not bg-canvas)', () => {
+    const store = makeStore([{ id: 2, chapterId: 1, characterId: 'wren', text: 'Stop.' }]);
+    render(
+      <Provider store={store}>
+        <SentenceEmotionControl chapterId={1} sentenceId={2} />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('emotion-chip'));
+    /* The menu must use the opaque picker-surface elevation so manuscript text
+       behind it never shows through (the dark-mode bg-canvas blended into the
+       page canvas → unreadable). */
+    const menu = screen.getByRole('menu');
+    expect(menu.className).toContain('picker-surface');
+    expect(menu.className).not.toContain('bg-canvas');
+  });
+
   it('shows the current emotion and clears it via Neutral', () => {
     const store = makeStore([
       { id: 2, chapterId: 1, characterId: 'wren', text: 'Stop.', emotion: 'angry' },

@@ -114,7 +114,16 @@ annotateEmotionRouter.post(
     }
 
     const byChapter = await loadPostFoldSentencesByChapter(manuscriptId, located.bookDir);
-    const chapterIds = [...byChapter.keys()].sort((a, b) => a - b);
+    /* Skip chapters the user excluded from narration (front/back-matter they
+       opted out of). Mirrors the generation route's `!c.excluded` filter
+       (analysis.ts) so emotion detection never burns analyzer calls on
+       chapters that will never be rendered. */
+    const excludedChapterIds = new Set<number>(
+      located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
+    );
+    const chapterIds = [...byChapter.keys()]
+      .filter((id) => !excludedChapterIds.has(id))
+      .sort((a, b) => a - b);
 
     /* SSE setup (mirrors analysis.ts). */
     res.setHeader('Content-Type', 'text/event-stream');

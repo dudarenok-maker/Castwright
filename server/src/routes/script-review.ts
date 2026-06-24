@@ -145,6 +145,14 @@ scriptReviewRouter.post(
     let chapterIds = [...byChapter.keys()].sort((a, b) => a - b);
     if (requestedChapterId !== undefined) {
       chapterIds = chapterIds.filter((id) => id === requestedChapterId);
+    } else {
+      /* Whole-book review skips chapters the user excluded from narration
+         (front/back-matter). Mirrors the detect-emotions + generation filters.
+         An explicit per-chapter request above is honoured even when excluded. */
+      const excludedChapterIds = new Set<number>(
+        located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
+      );
+      chapterIds = chapterIds.filter((id) => !excludedChapterIds.has(id));
     }
 
     /* Load the post-fold cast roster so the prompt carries character names+roles.
