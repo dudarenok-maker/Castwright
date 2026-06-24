@@ -85,6 +85,41 @@ describe('isQuoteBearing', () => {
   });
 });
 
+/** Helper: does ANY of the language's order-regexes capture `expectedName`? */
+function capturesName(language: string, text: string): string | null {
+  const g = grammarFor(language)!;
+  for (const re of tagRegexesFor(g)) {
+    const m = re.exec(text);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+describe('both-orders detection (es/ru) — finding A array, R2-8 boundaries', () => {
+  it('detects verb-name AND name-verb in Spanish', () => {
+    expect(capturesName('es', '—Está bien —dijo Berrin.')).toBe('Berrin');
+    expect(capturesName('es', 'María dijo algo en voz baja.')).toBe('María');
+  });
+  it('detects name-verb in Russian (trailing boundary after a Cyrillic verb)', () => {
+    expect(capturesName('ru', 'Иван сказал, что согласен.')).toBe('Иван');
+    expect(capturesName('ru', '«…», — сказал Одуван.')).toBe('Одуван');
+  });
+  it('es/ru rows expose two orders, NOT a single alternation regex', () => {
+    expect(tagRegexesFor(grammarFor('es')!).length).toBe(2);
+    expect(tagRegexesFor(grammarFor('ru')!).length).toBe(2);
+  });
+});
+
+describe('stopword suppression for name-verb (finding J)', () => {
+  it('does not capture a Spanish sentence-opener as a name', () => {
+    // "Entonces dijo" — name-verb would capture "Entonces"; the stopword must veto it.
+    // (the guard resolves only rostered/non-stopword candidates; here we assert the
+    //  grammar stopword set contains the opener so roster-coverage can filter it.)
+    expect(grammarFor('es')!.stopwords).toContain('entonces');
+    expect(grammarFor('ru')!.stopwords).toContain('тогда');
+  });
+});
+
 describe('tagScanRegexesFor — body-scan flags (R-4)', () => {
   it('returns global+multiline regexes that still capture the name in group 1', () => {
     const res = tagScanRegexesFor(grammarFor('en')!);

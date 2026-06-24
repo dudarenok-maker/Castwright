@@ -40,9 +40,14 @@ const RU_VERBS = [
 ] as const;
 const ES_STOPWORDS = [
   'él', 'ella', 'ellos', 'ellas', 'este', 'esta', 'eso', 'que', 'quien', 'aquí', 'allí',
+  // name-verb openers (finding J)
+  'entonces', 'luego', 'después', 'así', 'pero', 'aunque', 'mientras', 'cuando',
+  'también', 'además', 'sin', 'por', 'finalmente', 'de', 'pronto',
 ] as const;
 const RU_STOPWORDS = [
   'он', 'она', 'оно', 'они', 'это', 'тот', 'та', 'кто', 'что', 'там', 'тут', 'так', 'вот',
+  // name-verb openers (finding J)
+  'тогда', 'потом', 'затем', 'однако', 'хотя', 'наконец', 'вдруг', 'теперь', 'здесь',
 ] as const;
 
 // English name token — IDENTICAL to the historical makeTagRegex character class.
@@ -52,8 +57,8 @@ const UNI_NAME = "\\p{Lu}[\\p{L}’'-]+";
 
 const TAG_GRAMMARS: Record<string, TagGrammar> = {
   en: { verbs: DIALOGUE_VERBS, orders: ['name-verb'], nameCapture: EN_NAME, flipStrategy: 'preceding' },
-  es: { verbs: ES_VERBS, orders: ['verb-name'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: ES_STOPWORDS },
-  ru: { verbs: RU_VERBS, orders: ['verb-name'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: RU_STOPWORDS },
+  es: { verbs: ES_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: ES_STOPWORDS },
+  ru: { verbs: RU_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: RU_STOPWORDS },
 };
 
 /** Grammar row for a book language, or null when unmapped (caller stays gated). */
