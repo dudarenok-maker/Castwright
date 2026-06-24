@@ -244,3 +244,26 @@ export const scriptReviewSchema = z
 
 export type ScriptReviewOp = z.infer<typeof scriptReviewSchema>['ops'][number];
 export type ScriptReviewOutput = z.infer<typeof scriptReviewSchema>;
+
+/* ── fs-57 Stage 3 instruct-annotation schema ────────────────────────────────
+   The instruct-annotation pass reads a chapter's already-attributed sentences
+   and returns ONLY {sentenceId, text?, instruct?, vocalization?} for sentences
+   that need a delivery direction or vocalization flag. Strict: no `characterId`
+   — the pass must NOT re-attribute. `.min(1)` is deliberately omitted: a
+   chapter with nothing to annotate returns `{ annotations: [] }`. */
+export const stage3ChapterSchema = z
+  .object({
+    annotations: z.array(
+      z
+        .object({
+          sentenceId: z.number().int().positive(),
+          text: z.string().optional(),
+          instruct: z.string().optional(),
+          vocalization: z.boolean().optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type Stage3ChapterOutput = z.infer<typeof stage3ChapterSchema>;

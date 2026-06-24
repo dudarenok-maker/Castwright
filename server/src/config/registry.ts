@@ -881,6 +881,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'high',
   },
   {
+    key: 'prompt.instructAnnotation',
+    env: '',
+    group: 'analyzer-prompts',
+    label: 'Instruct-annotation prompt',
+    help: 'The skill file sent to the analysis model for per-chapter instruct-annotation (delivery directions + vocalization flags). Editing forks a local copy; changes take effect without a restart.',
+    type: 'string', isPrompt: true,
+    default: 'skills/audiobook-instruct-annotation.md', // ← confirmed exists at skills/audiobook-instruct-annotation.md
+    apply: 'live', risk: 'high',
+  },
+  {
     key: 'prompt.voiceStyle',
     env: '',
     group: 'analyzer-prompts',

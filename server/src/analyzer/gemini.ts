@@ -19,6 +19,7 @@ import {
   stage2ChapterSchema,
   emotionAnnotationSchema,
   scriptReviewSchema,
+  stage3ChapterSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   type Stage1Output,
@@ -26,6 +27,7 @@ import {
   type Stage2ChapterOutput,
   type EmotionAnnotationOutput,
   type ScriptReviewOutput,
+  type Stage3ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
@@ -126,6 +128,9 @@ const SKILL_FILES = {
   /* fs-58 — per-chapter script review (strip_tag/split/extract_dialogue/merge/fix_emotion).
      Routes through the prompt-fork loader (prompt.scriptReview). */
   script_review: 'audiobook-script-review.md',
+  /* fs-57 — per-chapter instruct-annotation pass (delivery directions + vocalizations).
+     Routes through the prompt-fork loader (prompt.instructAnnotation). */
+  instruct_annotation: 'audiobook-instruct-annotation.md',
 } as const;
 export type SkillName = keyof typeof SKILL_FILES;
 
@@ -137,6 +142,7 @@ const SKILL_TO_PROMPT_ID: Partial<Record<SkillName, string>> = {
   per_chapter_stage2: 'prompt.sentenceAttribution',
   emotion_annotation: 'prompt.emotionAnnotation',
   script_review: 'prompt.scriptReview',
+  instruct_annotation: 'prompt.instructAnnotation',
 };
 
 /* Read the skill file fresh on every request so prompt iteration doesn't
@@ -296,6 +302,24 @@ export class GeminiAnalyzer implements Analyzer {
   ): Promise<ScriptReviewOutput> {
     const key = `review-ch${chapterId}` as const;
     return this.runStage(manuscriptId, key, 'script_review', promptMd, scriptReviewSchema, scriptReviewSchema, call);
+  }
+
+  async runStage3Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage3ChapterOutput> {
+    const key = `instruct-ch${chapterId}` as const;
+    return this.runStage(
+      manuscriptId,
+      key,
+      'instruct_annotation',
+      promptMd,
+      stage3ChapterSchema,
+      stage3ChapterSchema,
+      call,
+    );
   }
 
   private async runStage<T>(
