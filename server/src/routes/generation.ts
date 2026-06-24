@@ -1205,6 +1205,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           totalLines,
         });
       };
+      /* fs-57 — read liveInstruct from the book's state. Legacy books omit the
+         field; `?? false` ensures undefined never leaks as truthy. */
+      const liveInstruct = state.liveInstruct ?? false;
       const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
@@ -1220,6 +1223,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         forbidKokoroFallback: nonEnglishBook,
         bookLanguage,
         signal: chapterSignal,
+        liveInstruct,
         chapterTitleNarration,
         narratorCharacterId: 'narrator',
         /* Title-beat ticks so the SSE stream doesn't go silent while the

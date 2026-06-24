@@ -13,6 +13,7 @@ import {
   type CharacterHint,
   type VoiceLike,
 } from './voice-mapping.js';
+import { resolveInstructForGroup } from './resolve-instruct.js';
 import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from './index.js';
 import { canonicalModelKeyForEngine } from './model-keys.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
@@ -266,6 +267,13 @@ export interface SentenceGroup {
       70d). Drives Qwen emotion-variant voice selection in `resolveGroup`;
       absent/`neutral` → the base voice. Ignored entirely for non-Qwen engines. */
   emotion?: Emotion;
+  /** fs-57 — optional explicit delivery direction authored by Stage 3. When
+      set on the 1.7B liveInstruct path it takes precedence over the emotion
+      phrase; ignored on all other paths. */
+  instruct?: string;
+  /** fs-57 — true when Stage 3 authored a non-verbal vocalization into `text`.
+      Drives the srv-31 ASR carve-out. Absent = normal sentence. */
+  vocalization?: boolean;
 }
 
 export interface ChapterSegment {
@@ -603,6 +611,14 @@ export interface SynthesiseChapterOpts {
       throws `RecycleStormError` so the chapter fails fast (no infinite grind).
       Only consulted when `onRecoverRecycle` is provided. Default 2. */
   maxRecycleRecoveries?: number;
+  /** fs-57 — per-book liveInstruct flag. When true (and the group's resolved
+      model key is `qwen3-tts-1.7b`), the synth path:
+        - bypasses emotion-variant voice selection (base voice only), and
+        - attaches a per-item `instruct` phrase to every batch item via
+          `resolveInstructForGroup`.
+      Read from `state.liveInstruct ?? false` in generation.ts so absent
+      (legacy books) is NEVER truthy. Default false. */
+  liveInstruct?: boolean;
 }
 
 /** Options for the per-sentence ASR content-QA pass (srv-31). */
@@ -675,6 +691,9 @@ export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[
       sentenceIds: [s.id],
       text: s.text,
       emotion: s.emotion,
+      /* fs-57 — carry through only when present (additive, back-compat). */
+      ...(s.instruct != null ? { instruct: s.instruct } : {}),
+      ...(s.vocalization != null ? { vocalization: s.vocalization } : {}),
     }));
 }
 
@@ -751,6 +770,7 @@ export async function synthesiseChapter(
     asr,
     onRecoverRecycle,
     maxRecycleRecoveries = 2,
+    liveInstruct = false,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -961,12 +981,17 @@ export async function synthesiseChapter(
        with a designed variant for that emotion synthesises with the variant
        voiceId; everything else (neutral, no variant, or any non-Qwen engine)
        resolves the base voice unchanged. Applied BEFORE the Kokoro fallback so a
-       designed variant counts as a present Qwen voice. */
+       designed variant counts as a present Qwen voice.
+
+       fs-57 — on the liveInstruct path the delivery direction travels as an
+       instruct phrase; pickEmotionVariantVoice returns the base voice (strict
+       no-op, no __emotion suffix) so the sidecar sees the unadorned voice key. */
     const voiceForGroup = pickEmotionVariantVoice(
       baseRoute.engine,
       character.overrideTtsVoices?.qwen?.variants,
       group.emotion,
       baseVoice,
+      liveInstruct,
     );
     /* Capture the CONFIGURED engine before any fallback rewrite so the SPK
        embed filter can include fallback-rendered groups (e.g. Qwen→Kokoro)
@@ -1123,14 +1148,25 @@ export async function synthesiseChapter(
     if (!batchFn) {
       throw new Error('synthBatch called for a provider without synthesizeBatch.');
     }
+    /* fs-57 — derive is17b from the lead group's resolved model key. All groups
+       in a batch share the same Qwen provider + modelKey (the partition ensures
+       this), so one derivation covers the whole batch. */
+    const is17b = route.modelKey === 'qwen3-tts-1.7b';
     const items = batchGroups.map((g) => {
       const { voiceName } = resolveGroup(g);
-      return { text: normaliseForTts(g.text), voiceName };
+      return {
+        text: normaliseForTts(g.text),
+        voiceName,
+        /* fs-57 — attach the resolved instruct phrase when the gate is open.
+           resolveInstructForGroup returns {} when liveInstruct=false or is17b=false,
+           so the spread is a no-op on the standard path. */
+        ...resolveInstructForGroup(g, { is17b, liveInstruct }),
+      };
     });
     const out = await withHeartbeat(lead, () =>
       withCallTimeout('batch', (sig) =>
         withTtsRetry(
-          () => batchFn.call(route.provider, { items, modelKey: route.modelKey, signal: sig }),
+          () => batchFn.call(route.provider, { items, modelKey: route.modelKey, liveInstruct, signal: sig }),
           {
             signal: sig,
             onRetry: (info) =>

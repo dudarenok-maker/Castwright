@@ -47,15 +47,27 @@ export interface SynthesizeOutput {
 
 /** One sentence in a batched synth request (plan 112). Mirrors the per-call
     `{ text, voiceName }` pair; a batch may mix voices because the underlying
-    Qwen `generate_voice_clone` takes a per-element prompt. */
+    Qwen `generate_voice_clone` takes a per-element prompt.
+
+    fs-57 — on the 1.7B liveInstruct path each item optionally carries a
+    delivery direction (`instruct`). Absent items carry no key; the sidecar
+    substitutes NEUTRAL_INSTRUCT for those slots (PR2-Mi1). */
 export interface SynthesizeBatchItem {
   text: string;
   voiceName: string;
+  /** fs-57 — delivery direction for the 1.7B liveInstruct path. Absent
+      when the gate is off or no instruct/emotion phrase applies. */
+  instruct?: string;
 }
 
 export interface SynthesizeBatchInput {
   items: SynthesizeBatchItem[];
   modelKey: TtsModelKey;
+  /** fs-57 — when true the sidecar activates the liveInstruct path for the
+      whole batch (1.7B-only). Per-item `instruct` carries the phrase; absent
+      items get the sidecar's NEUTRAL_INSTRUCT fill (PR2-Mi1). Default false
+      (absent = off, back-compat). */
+  liveInstruct?: boolean;
   signal?: AbortSignal;
 }
 

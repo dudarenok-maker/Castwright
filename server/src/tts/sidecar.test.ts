@@ -50,6 +50,99 @@ afterEach(() => {
   mockFetch.mockReset();
 });
 
+/* Helper: build a minimal valid batch response frame for N items.
+   Format: `{"sampleRate":N,"lengths":[…]}\n<pcm0><pcm1>…` */
+function makeBatchFrame(sampleRate: number, pcms: Buffer[]): Buffer {
+  const header = JSON.stringify({ sampleRate, lengths: pcms.map((p) => p.length) });
+  return Buffer.concat([Buffer.from(header + '\n'), ...pcms]);
+}
+
+describe('fs-57 — synthesizeBatch request body carries liveInstruct + per-item instruct', () => {
+  /* Capture every POST's parsed body, return a minimal valid batch frame. */
+  function stubBatchFetch(capturedBodies: unknown[]) {
+    stubFetch(async (_url: unknown, init: unknown) => {
+      capturedBodies.push(JSON.parse((init as { body: string }).body));
+      const pcm1 = Buffer.alloc(4, 0);
+      const pcm2 = Buffer.alloc(4, 0);
+      return new Response(makeBatchFrame(24000, [pcm1, pcm2]), {
+        status: 200,
+        headers: { 'content-type': 'application/octet-stream' },
+      });
+    });
+  }
+
+  function makeQwenProvider() {
+    return new SidecarTtsProvider({ url: 'http://localhost:9000/', engine: 'qwen' });
+  }
+
+  it('sends liveInstruct=false and no per-item instruct by default', async () => {
+    const bodies: unknown[] = [];
+    stubBatchFetch(bodies);
+    await makeQwenProvider().synthesizeBatch!({
+      items: [
+        { text: 'hello', voiceName: 'qwen-v1' },
+        { text: 'world', voiceName: 'qwen-v2' },
+      ],
+      modelKey: 'qwen3-tts-0.6b',
+    });
+    expect(bodies).toHaveLength(1);
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.liveInstruct).toBe(false);
+    expect((body.items as Array<Record<string, unknown>>)[0]).not.toHaveProperty('instruct');
+    expect((body.items as Array<Record<string, unknown>>)[1]).not.toHaveProperty('instruct');
+  });
+
+  it('sends liveInstruct=true when the flag is set', async () => {
+    const bodies: unknown[] = [];
+    stubBatchFetch(bodies);
+    await makeQwenProvider().synthesizeBatch!({
+      items: [
+        { text: 'hello', voiceName: 'qwen-v1' },
+        { text: 'world', voiceName: 'qwen-v2' },
+      ],
+      modelKey: 'qwen3-tts-1.7b',
+      liveInstruct: true,
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.liveInstruct).toBe(true);
+  });
+
+  it('sends per-item instruct only when present on the item', async () => {
+    const bodies: unknown[] = [];
+    stubBatchFetch(bodies);
+    await makeQwenProvider().synthesizeBatch!({
+      items: [
+        { text: 'hello', voiceName: 'qwen-v1', instruct: 'in an angry, raised voice' },
+        { text: 'world', voiceName: 'qwen-v2' }, // no instruct
+      ],
+      modelKey: 'qwen3-tts-1.7b',
+      liveInstruct: true,
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    const items = body.items as Array<Record<string, unknown>>;
+    expect(items[0].instruct).toBe('in an angry, raised voice');
+    expect(items[1]).not.toHaveProperty('instruct');
+  });
+
+  it('single /synthesize body is unchanged — no liveInstruct field', async () => {
+    /* PR2-M3: live instruct is batch-only; the single /synthesize body MUST NOT
+       carry liveInstruct so a future sidecar version can rely on it not being set. */
+    const bodies: unknown[] = [];
+    stubFetch(async (_url: unknown, init: unknown) => {
+      bodies.push(JSON.parse((init as { body: string }).body));
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000', 'x-sample-rate': '24000' },
+      });
+    });
+    await makeQwenProvider().synthesize({ text: 'hi', voiceName: 'v', modelKey: 'qwen3-tts-1.7b' });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('liveInstruct');
+    expect(body).not.toHaveProperty('instruct');
+  });
+});
+
 describe('SidecarTtsProvider error classification', () => {
   it('annotates network failure as transient with cause=network', async () => {
     stubFetch(async () => {

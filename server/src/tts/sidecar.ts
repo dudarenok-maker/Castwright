@@ -169,12 +169,22 @@ export class SidecarTtsProvider implements TtsProvider {
   async synthesizeBatch({
     items,
     modelKey,
+    liveInstruct,
     signal,
   }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
     const body = JSON.stringify({
       engine: this.engine,
       model: sidecarModelId(modelKey),
-      items: items.map((it) => ({ voice: it.voiceName, text: it.text })),
+      /* fs-57 — batch-level liveInstruct flag; per-item instruct phrase when
+         the gate is open. The sidecar substitutes NEUTRAL_INSTRUCT for items
+         without an instruct on the liveInstruct path (PR2-Mi1). The single
+         /synthesize body is unchanged (live instruct is batch-only, PR2-M3). */
+      liveInstruct: liveInstruct ?? false,
+      items: items.map((it) => ({
+        voice: it.voiceName,
+        text: it.text,
+        ...(it.instruct != null ? { instruct: it.instruct } : {}),
+      })),
     });
 
     /* Per-engine serialisation — outer gate, same rationale as synthesize(). */
