@@ -238,7 +238,7 @@ describe('single-design job — progress token (task-5)', () => {
     // (a) designQwenVoiceForCharacter was called with a non-empty progressToken
     //     and a progressUrl ending in /api/internal/design-progress.
     expect(capturedDesignArgs).not.toBeNull();
-    const { progressToken, progressUrl } = capturedDesignArgs as { progressToken: unknown; progressUrl: unknown };
+    const { progressToken, progressUrl } = capturedDesignArgs as unknown as { progressToken: unknown; progressUrl: unknown };
     expect(typeof progressToken).toBe('string');
     expect((progressToken as string).length).toBeGreaterThan(0);
     expect(typeof progressUrl).toBe('string');
