@@ -132,6 +132,63 @@ describe('deriveSeriesMemory', () => {
     expect(result === null || typeof result === 'object').toBe(true);
   });
 
+  it('counts a character whose voice was designed in a LATER book and reused into the FIRST book (forward matchedFrom)', () => {
+    // User scenario: Marrow's voice is first DESIGNED in book 2, then reused
+    // BACKWARD into book 1 (the client confirm-matcher links against any prior
+    // confirmed book, not only earlier ones) AND forward into book 3. So
+    // b1-marrow points FORWARD to b2-marrow, and b3-marrow points back to it —
+    // b2-marrow has two incoming edges. The old directional tail-walk dropped
+    // book 3 (or split Marrow in two); component connectivity keeps it as one
+    // carried character spanning all three books.
+    const books = baseBooks();
+    const b1m = books[0].characters.find((c) => c.characterId === 'b1-marrow')!;
+    const b2m = books[1].characters.find((c) => c.characterId === 'b2-marrow')!;
+    const b3m = books[2].characters.find((c) => c.characterId === 'b3-marrow')!;
+    b1m.matchedFrom = { bookId: 'b2', characterId: 'b2-marrow' }; // forward: book1 reuses later book2
+    b2m.matchedFrom = null; // origin of the design
+    b3m.matchedFrom = { bookId: 'b2', characterId: 'b2-marrow' }; // backward: book3 links to book2
+    const d = deriveSeriesMemory(books)!;
+    const marrowRows = d.carried.characters.filter((c) => c.voiceId === 'v_q_marrow');
+    expect(marrowRows).toHaveLength(1); // one logical character, not split in two
+    expect(marrowRows[0].bookIndices).toEqual([1, 2, 3]); // book 3 not dropped
+    expect(marrowRows[0].carriedFullSpan).toBe(true);
+    expect(d.carried.count).toBe(5); // unchanged headline — Marrow still ONE
+  });
+
+  it('does not split a forward-reused character into two carried rows across many books', () => {
+    // Voice designed in book 2, reused backward into book 1, then carried
+    // forward 2→3→4→5. b2 is the shared source with two incoming edges
+    // (b1 forward, b3 backward), which the old tail-walk split into [1,2] and
+    // [3,4,5] → double count. One component must yield ONE carried row.
+    const link = (bookId: string, characterId: string) => ({ bookId, characterId });
+    const books: SeriesBookInput[] = [1, 2, 3, 4, 5].map((index) => ({
+      bookId: `b${index}`,
+      index,
+      title: `Book ${index}`,
+      characters: [
+        ch({ characterId: `b${index}-keefe`, name: 'Keefe', voiceId: 'v_q_keefe' }),
+        ch({ characterId: `b${index}-edda`, name: 'Edda', voiceId: 'v_q_edda' }),
+        ch({ characterId: `b${index}-vale`, name: 'Vale', voiceId: 'v_q_vale' }),
+      ],
+    }));
+    const keefe = (i: number) => books[i].characters.find((c) => c.name === 'Keefe')!;
+    keefe(0).matchedFrom = link('b2', 'b2-keefe'); // book 1 ← later book 2 (forward)
+    keefe(1).matchedFrom = null; // origin
+    keefe(2).matchedFrom = link('b2', 'b2-keefe'); // book 3 → book 2
+    keefe(3).matchedFrom = link('b3', 'b3-keefe'); // book 4 → book 3
+    keefe(4).matchedFrom = link('b4', 'b4-keefe'); // book 5 → book 4
+    // Give Edda/Vale plain backward chains so the threshold (≥3 carried) is met.
+    for (let i = 1; i < 5; i++) {
+      books[i].characters.find((c) => c.name === 'Edda')!.matchedFrom = link(`b${i}`, `b${i}-edda`);
+      books[i].characters.find((c) => c.name === 'Vale')!.matchedFrom = link(`b${i}`, `b${i}-vale`);
+    }
+    const d = deriveSeriesMemory(books)!;
+    const keefeRows = d.carried.characters.filter((c) => c.voiceId === 'v_q_keefe');
+    expect(keefeRows).toHaveLength(1);
+    expect(keefeRows[0].bookIndices).toEqual([1, 2, 3, 4, 5]);
+    expect(d.carried.count).toBe(3); // Keefe + Edda + Vale, each once
+  });
+
   it('does not double-count a shared ancestor when two tails matchedFrom the same prior character', () => {
     // Two book-3 characters both claim b1-marrow as their ancestor.
     const books = baseBooks();
