@@ -894,13 +894,21 @@ def test_synthesize_route_routes_qwen(fake_qwen_runtime) -> None:
     assert len(resp.content) > 0
 
 
-def test_synthesize_route_500s_on_undesigned_qwen_voice(fake_qwen_runtime) -> None:
+def test_synthesize_route_409s_on_undesigned_qwen_voice(fake_qwen_runtime) -> None:
+    # #1063 — a voice/variant with no cached .pt is a bad-input condition, not an
+    # engine fault: surface a clear, actionable 409 (was an opaque 500). Mirrors
+    # the /qwen/mint-variant handler so the UI can say "design this voice first".
     client = TestClient(main.app)
     resp = client.post(
         "/synthesize",
         json={"engine": "qwen", "model": "qwen3-tts-0.6b", "voice": "ghost", "text": "Hi."},
     )
-    assert resp.status_code == 500
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["code"] == "voice_not_designed"
+    assert "designed" in body["detail"].lower()
+    # The actionable message must NOT leak the absolute on-disk path.
+    assert ".pt" not in body["detail"] and ":\\" not in body["detail"]
 
 
 # ── load / unload ─────────────────────────────────────────────────────────

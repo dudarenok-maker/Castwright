@@ -159,6 +159,20 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     return res.json({ url: publicUrl, durationSec, cached: false, modelKey });
   } catch (err) {
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
+    /* #1063 — the sidecar returns 409 `voice_not_designed` when the requested
+       voice/variant has no cached embedding (a bad-input condition, not an
+       engine fault). Surface it as a clean 4xx with a distinct code + actionable
+       message instead of re-wrapping it as the generic 502 `tts_failed` below,
+       so the UI can say "design this voice first". The raw `msg` is the
+       "Local voice engine returned 409: {json}" wrapper (sidecar.ts) — we
+       replace it with friendly copy rather than echo the JSON body. */
+    if (/voice_not_designed|not been designed yet/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_not_designed',
+        message:
+          'This voice or emotion variant has not been designed yet — design it first, then play the sample.',
+      });
+    }
     /* ffmpeg-not-on-PATH is a deploy issue, not a runtime TTS issue —
        surface it as its own code so the UI can hint at the install fix
        (scripts/start-app.ps1 preflight should normally prevent this). */
