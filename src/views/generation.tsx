@@ -2147,7 +2147,10 @@ export function ChapterSegmentStrip({
       )}
 
       {issues.length > 0 && (
-        <p className="mt-1 text-[10px] font-semibold text-amber-700 flex items-center gap-1">
+        <p
+          className="mt-1 text-[10px] font-semibold text-amber-700 flex items-center gap-1"
+          title={issues.map((r) => `${formatTime(r.seekSec)}: ${r.reasons.join(', ')}`).join(' · ')}
+        >
           <span aria-hidden>⚠</span>
           {issues.length} issue{issues.length > 1 ? 's' : ''} to review
         </p>

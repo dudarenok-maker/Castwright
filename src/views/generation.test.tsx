@@ -2433,6 +2433,14 @@ describe('ChapterSegmentStrip — issue waveform', () => {
     expect(await screen.findByText(/1 issue to review/)).toBeInTheDocument();
   });
 
+  it('summarises the flagged issues in a hover title on the count label', async () => {
+    vi.mocked(api.getChapterAudio).mockResolvedValue(baseAudio as never);
+    render(<ChapterSegmentStrip chapter={{ id: 1, audioQa: { status: 'suspect', reasons: [] } } as never}
+      bookId="b" characters={[]} />);
+    const label = await screen.findByText(/1 issue to review/);
+    expect(label).toHaveAttribute('title', expect.stringContaining('Long sentence'));
+  });
+
   it('shows the chapter-level baseline note when suspect but no per-segment issue', async () => {
     vi.mocked(api.getChapterAudio).mockResolvedValue({
       ...baseAudio,

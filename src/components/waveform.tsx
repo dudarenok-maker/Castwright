@@ -28,14 +28,21 @@ const BARS: number[] = (() => {
   return out;
 })();
 
-function issueBarSet(issues: IssueRegion[] | undefined, count: number): Set<number> {
-  const set = new Set<number>();
+/* Map each in-issue bar index to the region that covers it, so an amber bar can
+   carry that region's reasons in a hover `title` (the sr-only list alone left
+   sighted users with no way to read what the markers mean). First region wins on
+   the rare overlap — the same index-coverage as the previous Set. */
+function issueBarMap(
+  issues: IssueRegion[] | undefined,
+  count: number,
+): Map<number, IssueRegion> {
+  const map = new Map<number, IssueRegion>();
   for (const r of issues ?? []) {
     const lo = Math.max(0, Math.floor(r.startFrac * count));
     const hi = Math.min(count - 1, Math.ceil(r.endFrac * count) - 1);
-    for (let i = lo; i <= hi; i += 1) set.add(i);
+    for (let i = lo; i <= hi; i += 1) if (!map.has(i)) map.set(i, r);
   }
-  return set;
+  return map;
 }
 
 /* Reduce the server's variable-length RMS envelope (240 bins in practice) to
@@ -62,14 +69,15 @@ export function peaksToBars(peaks: number[] | undefined, count = BAR_COUNT): num
 
 export function Waveform({ progress, active, peaks, issues }: WaveformProps) {
   const bars = peaksToBars(peaks) ?? BARS;
-  const amber = issueBarSet(issues, bars.length);
+  const amber = issueBarMap(issues, bars.length);
   const hasIssues = (issues?.length ?? 0) > 0;
 
   const barRow = (
-    <div className="flex items-end gap-[2px] h-7" aria-hidden={hasIssues || undefined}>
+    <div className="flex items-end gap-[2px] h-7 w-full" aria-hidden={hasIssues || undefined}>
       {bars.map((h, i) => {
+        const region = amber.get(i);
         const filled = i / bars.length <= progress;
-        const cls = amber.has(i)
+        const cls = region
           ? 'bg-amber-400'
           : active && filled
             ? 'bg-magenta'
@@ -79,8 +87,16 @@ export function Waveform({ progress, active, peaks, issues }: WaveformProps) {
         return (
           <span
             key={i}
-            className={`w-[3px] rounded-sm transition-colors ${cls}`}
+            // flex-1 (not a fixed pixel width) so the 48 bars span the full
+            // container — a fixed width under-fills the wide mini-player scrubber,
+            // leaving a flat tail (the "waveform not rendering" report).
+            className={`flex-1 min-w-[2px] rounded-sm transition-colors ${cls}`}
             style={{ height: `${h * 100}%` }}
+            title={
+              region
+                ? `Issue at ${formatTime(region.seekSec)}: ${region.reasons.join('; ')}`
+                : undefined
+            }
           />
         );
       })}
