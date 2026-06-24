@@ -160,6 +160,28 @@ describe('SeriesMemoryReveal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('caps panel height and scrolls internally so a large carried cast stays on-screen', async () => {
+    // Regression: the panel used to be `min-h-screen sm:min-h-0 overflow-auto`
+    // with NO max-height, so a long carried list grew past the viewport and
+    // pushed the footer (Share / Export) off-screen. jsdom can't measure
+    // layout, so assert the bounded-height + vertical-scroll classes structurally.
+    render(
+      <SeriesMemoryReveal
+        author="Kell"
+        series="Ninth House"
+        bookCount={3}
+        onClose={() => {}}
+        onShare={() => {}}
+        fetcher={async () => detail}
+      />,
+    );
+    await waitFor(() => screen.getByText('Marrow'));
+    const panel = screen.getByRole('dialog').firstElementChild as HTMLElement;
+    expect(panel.className).toContain('overflow-y-auto');
+    expect(panel.className).toContain('sm:max-h-[90vh]');
+    expect(panel.className).not.toContain('min-h-screen'); // old unbounded height
+  });
+
   it('shows error message when fetcher rejects', async () => {
     render(
       <SeriesMemoryReveal

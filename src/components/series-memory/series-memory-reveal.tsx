@@ -115,10 +115,17 @@ export function SeriesMemoryReveal({
       onClick={onClose}
     >
       <div
-        className="bg-[#1b1714] text-cream w-full sm:max-w-xl sm:rounded-2xl p-7 min-h-screen sm:min-h-0 overflow-auto"
+        // h-full on phone (full-screen sheet), height-capped + internally
+        // scrollable on desktop — matches the house modal pattern (queue /
+        // rebaseline). The old `min-h-screen sm:min-h-0 overflow-auto` had NO
+        // max-height, so a large carried cast grew the panel past the viewport
+        // and pushed the footer (Share / Export) off-screen — unusable.
+        className="bg-[#1b1714] text-cream w-full sm:max-w-xl sm:rounded-2xl p-7 h-full sm:h-auto sm:max-h-[90vh] overflow-y-auto scrollbar-thin"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-end">
+        {/* Sticky so Close stays reachable while scrolling a long cast list;
+            negative margins extend its background to the padded panel edges. */}
+        <div className="flex justify-end sticky top-0 z-10 -mx-7 -mt-7 px-7 pt-7 pb-2 bg-[#1b1714]">
           <button
             onClick={onClose}
             className="p-2 rounded-full hover:bg-white/10 text-cream/60"
