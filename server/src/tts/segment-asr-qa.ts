@@ -120,6 +120,36 @@ export function buildCastNameAllowlist(
   return [...names];
 }
 
+/* Voice-design calibration / ref_text signatures. The sidecar speaks a short
+   phonetically-rich pangram when cloning a voice (its ICL reference clip);
+   source of truth is `server/tts-sidecar/main.py` CALIBRATION_TEXT (English) +
+   CALIBRATION_TEXTS (per-language siblings). A runaway / bad clone can echo that
+   reference clip into chapter audio (#1074), where it reads as fluent speech the
+   word-error gate flags but ships anyway. These distinctive lowercased
+   substrings detect the bleed in an ASR transcript. Latin signatures are kept
+   ASCII-only (avoiding accent variance in Whisper's output); the Russian one
+   stays Cyrillic, the form Whisper emits for Russian audio. */
+const CALIBRATION_SIGNATURES: readonly string[] = [
+  'quick brown fox', // English
+  'wondered what tomorrow would bring', // English (2nd clause)
+  'cardillo y kiwi', // Spanish
+  'portez ce vieux whisky', // French
+  'sylter deich', // German
+  'французских булок', // Russian
+];
+
+/** True when an ASR transcript is the voice-design calibration clip bleeding
+    into audio (#1083) — it contains a calibration signature that the manuscript
+    sentence does NOT (so a book legitimately quoting the pangram is not a bleed). */
+export function looksLikeCalibrationBleed(transcript: string, expectedText: string): boolean {
+  const norm = (s: string): string =>
+    (s ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ');
+  const t = norm(transcript);
+  if (!t) return false;
+  const e = norm(expectedText);
+  return CALIBRATION_SIGNATURES.some((sig) => t.includes(sig) && !e.includes(sig));
+}
+
 /* --- Normalization --- */
 
 const SMART_QUOTES = /[‘’‚‛′‵]/g; // ' ' ‚ ‛ ′ ‵

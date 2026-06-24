@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyTranscript,
+  looksLikeCalibrationBleed,
   normalizeForWer,
   verifySegmentTranscript,
   type AsrSignals,
@@ -130,6 +131,43 @@ describe('classifyTranscript', () => {
     const c = classifyTranscript(expected, heard, CLEAN);
     expect(c.verdict).toBe('drift');
     expect(c.wer).toBeGreaterThan(0.4);
+  });
+});
+
+describe('looksLikeCalibrationBleed', () => {
+  // A bad/runaway Qwen voice clone can echo its ICL ref_text (the voice-design
+  // calibration pangram) into chapter audio (#1074). The detector catches that
+  // bleed in an ASR transcript so the QA path can quarantine it — but only when
+  // the manuscript ITSELF doesn't contain the pangram (a legit quote stays).
+  const NARRATION = 'Sophie hurried down the long museum hallway toward the exit.';
+  const EN_PANGRAM =
+    'The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.';
+
+  it('English calibration pangram in transcript over normal narration → bleed', () => {
+    expect(looksLikeCalibrationBleed(EN_PANGRAM, NARRATION)).toBe(true);
+  });
+
+  it('does NOT fire when the manuscript itself contains the pangram (legit quote)', () => {
+    expect(looksLikeCalibrationBleed(EN_PANGRAM, `He typed it out: ${EN_PANGRAM}`)).toBe(false);
+  });
+
+  it('ordinary transcript that matches the line → not a bleed', () => {
+    expect(looksLikeCalibrationBleed(NARRATION, NARRATION)).toBe(false);
+  });
+
+  it('detects the per-language calibration siblings (es/fr/de/ru)', () => {
+    expect(
+      looksLikeCalibrationBleed('El veloz murciélago hindú comía feliz cardillo y kiwi.', NARRATION),
+    ).toBe(true);
+    expect(
+      looksLikeCalibrationBleed('Portez ce vieux whisky au juge blond qui fume.', NARRATION),
+    ).toBe(true);
+    expect(
+      looksLikeCalibrationBleed('Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich.', NARRATION),
+    ).toBe(true);
+    expect(
+      looksLikeCalibrationBleed('Съешь же ещё этих мягких французских булок да выпей чаю.', NARRATION),
+    ).toBe(true);
   });
 });
 

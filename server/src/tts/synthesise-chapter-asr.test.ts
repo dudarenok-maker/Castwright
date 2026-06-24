@@ -181,6 +181,54 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     expect(calls.map((c) => c.verified)).toEqual([0, 1]);
   });
 
+  it('quarantines a calibration-bleed segment instead of shipping the pangram (#1083)', async () => {
+    const provider = makeProvider();
+    // A runaway clone bled its ICL ref_text (the calibration pangram) into the
+    // audio. The narration line is ordinary, but every take transcribes as the
+    // pangram → drift that never recovers → must be quarantined, not shipped.
+    const NARRATION = 'Sophie hurried down the long museum hallway toward the exit.';
+    const PANGRAM =
+      'The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.';
+    const { fn } = makeTranscriber([PANGRAM]);
+    const res = await synthesiseChapter({
+      sentences: [sentence(1, NARRATION)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      asr: { maxRerecords: 1, transcribeFn: fn },
+    });
+    // Re-recorded up to budget (initial + 1) before quarantining.
+    expect(provider.calls).toHaveLength(2);
+    const seg = res.segments.find((s) => s.kind !== 'title');
+    expect(seg?.quarantined).toBe(true);
+    expect(seg?.suspect).toBe(true);
+    // The bleeding take is NOT shipped — replaced with silence (a distinct,
+    // non-trivial length vs the 2-byte stub the provider returns).
+    expect(seg!.endSec - seg!.startSec).toBeGreaterThan(0.2);
+    // Forensics retained for the QA report.
+    expect(seg?.asr?.transcript).toContain('quick brown fox');
+  });
+
+  it('does not quarantine when the manuscript legitimately quotes the pangram', async () => {
+    const provider = makeProvider();
+    // Both the line AND the transcript are the pangram → faithful render, ship it.
+    const PANGRAM =
+      'The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.';
+    const { fn } = makeTranscriber([PANGRAM]);
+    const res = await synthesiseChapter({
+      sentences: [sentence(1, PANGRAM)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      asr: { maxRerecords: 1, transcribeFn: fn },
+    });
+    const seg = res.segments.find((s) => s.kind !== 'title');
+    expect(seg?.quarantined).toBeUndefined();
+    expect(seg?.asr?.verdict).toBe('ok');
+  });
+
   it('is a no-op when asr is absent (byte-identical to today)', async () => {
     const provider = makeProvider();
     const res = await synthesiseChapter({

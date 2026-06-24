@@ -21,6 +21,7 @@ import { pcmDurationSec } from './pcm.js';
 import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
 import {
+  looksLikeCalibrationBleed,
   verifySegmentTranscript,
   type AsrClassification,
   type AsrThresholds,
@@ -312,6 +313,11 @@ export interface ChapterSegment {
       "fluent but wrong words" surface. Undefined when ASR passed, was
       inconclusive, or did not run. */
   asrSuspect?: boolean;
+  /** True when this segment's audio bled the voice-design calibration clip
+      (#1083) and was QUARANTINED — its take was dropped (replaced with brief
+      silence) rather than shipped, after the ASR re-record budget failed to
+      recover it. A hard `suspect` flag rides alongside. Undefined otherwise. */
+  quarantined?: boolean;
 }
 
 /** Silence padding bookending the spoken chapter-title narration. Each chapter
@@ -322,6 +328,11 @@ export interface ChapterSegment {
     in `docs/features/archive/28-chapter-audio-format.md`; adjust both at once. */
 const CHAPTER_LEAD_SILENCE_SEC = 1.5;
 const CHAPTER_POST_TITLE_SILENCE_SEC = 1.5;
+
+/** Brief silence that replaces a quarantined calibration-bleed take (#1083) —
+    enough to preserve a perceptible sentence slot in the timeline without
+    subjecting the listener to the (typically runaway-long) bled clip. */
+const QUARANTINE_SILENCE_SEC = 0.3;
 
 /** Build a zero-filled mono 16-bit LE PCM buffer of the requested duration.
     Matches the per-chapter PCM contract — same byte layout as what the TTS
@@ -1550,12 +1561,27 @@ export async function synthesiseChapter(
     if (r.sampleRate !== sampleRate) {
       pcmForGroup = resamplePcm16(r.pcm, r.sampleRate, sampleRate);
     }
+    const qa = segmentQaByIndex.get(group.index);
+    const asrClass = segmentAsrByIndex.get(group.index);
+    /* Calibration-bleed quarantine (#1083): a runaway clone that echoed its
+       voice-design ref_text (the pangram) into audio must never ship, even as
+       the least-bad take. The ASR re-record budget already tried to recover it
+       above; if the final transcript still bleeds, drop the take — replace it
+       with brief silence — and hard-flag it. Belt-and-suspenders over the
+       flag-only ASR gate. */
+    const quarantined =
+      asrClass != null && looksLikeCalibrationBleed(asrClass.transcript, group.text);
+    if (quarantined) {
+      pcmForGroup = buildSilencePcm16(sampleRate, QUARANTINE_SILENCE_SEC);
+      console.warn(
+        `[synthesiseChapter] quarantined calibration-bleed segment (group ${group.index}): ` +
+          JSON.stringify(asrClass.transcript.slice(0, 80)),
+      );
+    }
     const startSec = pcmDurationSec(runningBytes, sampleRate);
     chunks.push(pcmForGroup);
     runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
-    const qa = segmentQaByIndex.get(group.index);
-    const asrClass = segmentAsrByIndex.get(group.index);
     segments.push({
       groupIndex: group.index,
       characterId: group.characterId,
@@ -1565,9 +1591,10 @@ export async function synthesiseChapter(
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
       qa,
-      suspect: qa?.status === 'suspect' ? true : undefined,
+      suspect: quarantined || qa?.status === 'suspect' ? true : undefined,
       asr: asrClass,
       asrSuspect: asrClass?.verdict === 'drift' ? true : undefined,
+      quarantined: quarantined ? true : undefined,
     });
   }
   void completedCount;
