@@ -34,6 +34,7 @@ describe('castDesignSlice — active snapshot reducers', () => {
       state: 'running',
       lastTickAt: 1000,
       failures: [],
+      fallbacks: [],
     });
   });
 
@@ -176,5 +177,21 @@ describe('single-design snapshot', () => {
       previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm', lastTickAt: 20,
     }));
     expect(s.active?.preview?.voiceUuid).toBeUndefined();
+  });
+});
+
+describe('variantFellBack reducer', () => {
+  const reducer = castDesignSlice.reducer;
+
+  it('records a fallback variant in the active snapshot', () => {
+    let s = reducer(undefined, castDesignActions.begin({ bookId: 'b', total: 1, currentName: 'Mara', lastTickAt: 1 }));
+    s = reducer(s, castDesignActions.variantFellBack({ bookId: 'b', characterId: 'c', emotion: 'angry', lastTickAt: 2 }));
+    expect(s.active?.fallbacks).toEqual([{ characterId: 'c', emotion: 'angry' }]);
+  });
+
+  it('ignores a fallback for a different book', () => {
+    let s = reducer(undefined, castDesignActions.begin({ bookId: 'b', total: 1, currentName: null, lastTickAt: 1 }));
+    s = reducer(s, castDesignActions.variantFellBack({ bookId: 'OTHER', characterId: 'c', emotion: 'angry', lastTickAt: 2 }));
+    expect(s.active?.fallbacks).toEqual([]);
   });
 });

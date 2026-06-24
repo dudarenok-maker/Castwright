@@ -30,6 +30,13 @@ export interface CastDesignFailure {
   error: string;
 }
 
+/** An emotion variant minted via the design-voice fallback (1.7B-Base
+    unavailable) — lower fidelity. Count surfaced in the completion summary. */
+export interface CastDesignFallback {
+  characterId: string;
+  emotion: string;
+}
+
 /** Preview payload for a re-design (mode: 'redesign') — staged, not yet
     persisted, awaiting A/B compare in the Profile Drawer. */
 export interface CastDesignPreview {
@@ -75,6 +82,9 @@ export interface CastDesignSnapshot {
   lastTickAt: number;
   /** Per-character failures; the loop continues past each one. */
   failures: CastDesignFailure[];
+  /** Emotion variants minted via the design-voice fallback (1.7B-Base
+      unavailable) — lower fidelity. Count surfaced in the completion summary. */
+  fallbacks: CastDesignFallback[];
   /** Present iff state === 'ready-to-compare'. */
   preview?: CastDesignPreview;
 }
@@ -131,6 +141,7 @@ export const castDesignSlice = createSlice({
         state: 'running',
         lastTickAt: action.payload.lastTickAt,
         failures: [],
+        fallbacks: [],
       };
     },
 
@@ -194,6 +205,19 @@ export const castDesignSlice = createSlice({
       snap.lastTickAt = action.payload.lastTickAt;
     },
 
+    /* A variant was minted via the design-voice fallback (1.7B-Base
+       unavailable). Recorded for the completion summary; does NOT bump `done`
+       (charDone already counts the success). */
+    variantFellBack(
+      state,
+      action: PayloadAction<{ bookId: string; characterId: string; emotion: string; lastTickAt: number }>,
+    ) {
+      const snap = state.active;
+      if (!snap || snap.bookId !== action.payload.bookId) return;
+      snap.fallbacks.push({ characterId: action.payload.characterId, emotion: action.payload.emotion });
+      snap.lastTickAt = action.payload.lastTickAt;
+    },
+
     /* Terminal success — flip to the brief "done" summary state. The middleware
        clears the snapshot shortly after (or the next begin displaces it). */
     settle(state, action: PayloadAction<{ bookId: string; lastTickAt: number }>) {
@@ -254,6 +278,7 @@ export const castDesignSlice = createSlice({
         state: 'running',
         lastTickAt: action.payload.lastTickAt,
         failures: [],
+        fallbacks: [],
       };
     },
 

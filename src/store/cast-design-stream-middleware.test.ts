@@ -440,4 +440,27 @@ describe('castDesignMiddleware', () => {
       store.getState().cast.characters.find((c) => c.id === 'a')?.overrideTtsVoices?.qwen?.variants?.angry,
     ).toEqual({ name: 'qwen-a__angry' });
   });
+
+  it('onVariantDesigned with viaFallback dispatches variantFellBack', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c', name: 'Carol' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b',
+        characterIds: [],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'variants',
+        variantTasks: [{ characterId: 'c', emotions: ['angry'] }],
+      }),
+    );
+
+    const { cb } = startCalls[0];
+    cb.onVariantDesigned?.({ characterId: 'c', emotion: 'angry', voiceId: 'qwen-c__angry', viaFallback: true });
+
+    expect(recorded.map((a) => a.type)).toContain('castDesign/variantFellBack');
+    expect(store.getState().castDesign.active?.fallbacks).toEqual([{ characterId: 'c', emotion: 'angry' }]);
+  });
 });

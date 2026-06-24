@@ -82,8 +82,11 @@ export function createCastDesignMiddleware(): Middleware {
         dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
-      onVariantDesigned: ({ characterId, emotion, voiceId }) => {
+      onVariantDesigned: ({ characterId, emotion, voiceId, viaFallback }) => {
         dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        if (viaFallback) {
+          dispatch(castDesignActions.variantFellBack({ bookId, characterId, emotion, lastTickAt: Date.now() }));
+        }
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
       onCharacterSkipped: () =>
