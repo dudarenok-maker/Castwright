@@ -164,8 +164,12 @@ function rosterTokenSet(rosterNames: Iterable<string>): Set<string> {
   return set;
 }
 
-const QUOTE_CHARS = /[“””]/;              // en — UNCHANGED (byte-identity)
-const QUOTE_CHARS_WIDE = /[“””„«»—–]/;    // es/ru/fr/de — guillemets + German „ + dashes
+// Quote glyphs for the adjacency window, written as \u escapes so an editor
+// can't silently flatten the curly/guillemet chars (P-1 regression guard).
+// QUOTE_CHARS (en, narrow): straight " + curly open/close \u201C \u201D.
+const QUOTE_CHARS = /[\u0022\u201C\u201D]/;
+// QUOTE_CHARS_WIDE (es/ru/fr/de): + \u201E (German low), \u00AB \u00BB (guillemets), \u2014 \u2013 (dashes).
+const QUOTE_CHARS_WIDE = /[\u0022\u201C\u201D\u201E\u00AB\u00BB\u2014\u2013]/;
 
 /** A grammar's language sentence-opener stopwords as a Set (es/ru/fr/de). Empty
     for en (no g.stopwords) so the English path stays byte-identical — the loop

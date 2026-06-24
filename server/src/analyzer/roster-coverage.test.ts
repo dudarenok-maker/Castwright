@@ -122,6 +122,12 @@ describe('validateRosterCoverage', () => {
     const v = validateRosterCoverage(LESSOM_BODY, ['Aldous']);
     expect(v.missingSpeakers.map((s) => s.name)).not.toContain('Lessom');
   });
+
+  it('flags a single-hit English speaker that is straight-double-quote adjacent', () => {
+    const body = '"Fine," Lessom agreed.';
+    const res = validateRosterCoverage(body, new Set<string>(['Mara']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'en');
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Lessom');
+  });
 });
 
 // Minimal character shape — the guard only requires { id, name } on C. (The
