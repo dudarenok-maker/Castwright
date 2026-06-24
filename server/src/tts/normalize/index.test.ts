@@ -14,4 +14,6 @@ describe('expandForSpeech dormancy gate', () => {
   // though the fr engine itself works (exercised directly via applyPasses).
   it('fr (supported:false) no-ops end-to-end', () =>
     expect(expandForSpeech('J’ai 5 €.', 'fr')).toBe('J’ai 5 €.'));
+  it('de (supported:false) no-ops end-to-end', () =>
+    expect(expandForSpeech('Ich habe 5 €.', 'de')).toBe('Ich habe 5 €.'));
 });
