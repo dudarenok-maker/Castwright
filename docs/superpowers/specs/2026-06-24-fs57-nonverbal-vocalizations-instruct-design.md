@@ -295,6 +295,8 @@ along since the instruct is English regardless).
 
 - No instruct on Kokoro / Coqui, nor live instruct on the **0.6B** synth (0.6B keeps anchored
   variants).
+- **Single `/synthesize` (voice previews / auditions / samples) stays neutral** — the live-instruct
+  path lands batch-only; a preview is an identity check, not a per-line delivery (PR2-M3).
 - **Per-emotion intensity tuning of the live instruct** is deferred (operator's call) — the 1.7B
   carries delivery on one main voice; calibration of whisper-softer / angry-louder phrasing is
   tuning debt, not a v1 blocker.

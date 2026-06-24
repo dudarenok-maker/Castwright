@@ -352,6 +352,8 @@ git commit -m "test(sidecar): C2 gate — pin the empty/neutral instruct no-op f
 
 > **Why batch-level (P-C1):** one batched `generate` forward cannot mix the `generate_voice_clone` wrapper and the raw bypass. Keying off "any item has an instruct" would (a) leave a neutral item on the wrong path and (b) make an all-neutral `liveInstruct` batch silently use the wrapper. The batch-level flag is the only signal that keeps the whole 1.7B-`liveInstruct` tier on one path.
 
+> **Single `/synthesize` scope (PR2-M3): batch-only for v1.** Chapter generation always batches, so the live-instruct path lands only on `synthesize_batch`. The single `/synthesize` endpoint (voice samples / auditions / previews) stays **instruct-free / neutral** — a preview is a voice identity check, not a per-line delivery. State this in the spec §4.3 + the regression plan; revisit only if previews need expressive delivery.
+
 - [ ] **Step 1: Write the failing test** — (a) a `liveInstruct=true` batch with two items carrying *different* instructs returns two non-empty PCM buffers, no cross-bleed; (b) a `liveInstruct=true` batch with one instructed + one **neutral** item still routes BOTH through the bypass (assert the neutral item used `NEUTRAL_INSTRUCT`, e.g. via a spy/log on the generate call), never the wrapper; (c) a `liveInstruct=false` batch ignores `instruct` and calls `generate_voice_clone`.
 
 - [ ] **Step 2: Run** — expect FAIL (batch has no `liveInstruct` param).
@@ -385,13 +387,13 @@ git commit -m "test(sidecar): C2 gate — pin the empty/neutral instruct no-op f
 - Test: `server/src/tts/resolve-instruct.test.ts`
 - Modify: `server/src/tts/synthesise-chapter.ts` (`SentenceGroup` ~265; resolution ~949-970; the per-group synth/batch call)
 - Modify: `server/src/tts/voice-mapping.ts:30-44`
-- Modify: `server/src/tts/sidecar.ts` (~91-102 single, ~174-178 batch — add `instruct` per item + batch-level `liveInstruct`)
+- Modify: `server/src/tts/sidecar.ts` (~174-178 **batch only** — add `instruct` per item + batch-level `liveInstruct`; the single `/synthesize` body is unchanged, PR2-M3)
 - Modify: `server/src/routes/generation.ts` (~485, ~604-613) — read `book-meta.liveInstruct` and pass into the synth context (P-M1)
 - Test: `server/src/tts/voice-mapping.test.ts`; `server/src/tts/sidecar.test.ts`; `server/src/routes/generation.test.ts`
 
 **Interfaces:**
 - Consumes: `emotionToInstruct` (Task 3), `liveInstruct` (Task 4 / generation route), Task 6's batch-level sidecar contract.
-- Produces: `resolveInstructForGroup(group, { tier, liveInstruct }): { instruct?: string }` — pure; returns `group.instruct ?? emotionToInstruct(group.emotion)` only when `tier==='qwen-1.7b' && liveInstruct`, else `{}`. The synth context carries `liveInstruct`; the sidecar request carries the batch-level `liveInstruct` + per-item `instruct`; `pickEmotionVariantVoice` returns the base voice (no `__emotion`) on the liveInstruct path.
+- Produces: `resolveInstructForGroup(group, { is17b, liveInstruct }): { instruct?: string }` — pure; `is17b` is derived by the caller from the real model key (`canonicalModelKeyForEngine('qwen', modelKey) === 'qwen3-tts-1.7b'`, NOT an invented tier enum — PR2-M2). Returns `group.instruct ?? emotionToInstruct(group.emotion)` only when `is17b && liveInstruct`, else `{}`. The synth context carries `liveInstruct`; the sidecar request carries the batch-level `liveInstruct` + per-item `instruct` (the sidecar — not the server — substitutes `NEUTRAL_INSTRUCT` for empty items, PR2-Mi1); `pickEmotionVariantVoice` returns the base voice (no `__emotion`) on the liveInstruct path.
 
 - [ ] **Step 0 (P-Mo1): Carve out the pure helper + test.** Write `resolve-instruct.test.ts` first:
 
@@ -406,19 +408,19 @@ const grp = (o: Partial<{ emotion: string; instruct: string }>) =>
 describe('resolveInstructForGroup', () => {
   it('1.7B + liveInstruct: explicit instruct wins', () => {
     expect(resolveInstructForGroup(grp({ instruct: 'a tired sigh', emotion: 'angry' }),
-      { tier: 'qwen-1.7b', liveInstruct: true })).toEqual({ instruct: 'a tired sigh' });
+      { is17b: true, liveInstruct: true })).toEqual({ instruct: 'a tired sigh' });
   });
   it('1.7B + liveInstruct: falls back to emotion phrase', () => {
     expect(resolveInstructForGroup(grp({ emotion: 'angry' }),
-      { tier: 'qwen-1.7b', liveInstruct: true })).toEqual({ instruct: 'in an angry, raised voice' });
+      { is17b: true, liveInstruct: true })).toEqual({ instruct: 'in an angry, raised voice' });
   });
   it('liveInstruct off: no instruct (today)', () => {
     expect(resolveInstructForGroup(grp({ emotion: 'angry' }),
-      { tier: 'qwen-1.7b', liveInstruct: false })).toEqual({});
+      { is17b: true, liveInstruct: false })).toEqual({});
   });
   it('0.6B: never instruct', () => {
     expect(resolveInstructForGroup(grp({ instruct: 'x' }),
-      { tier: 'qwen-0.6b', liveInstruct: true })).toEqual({});
+      { is17b: false, liveInstruct: true })).toEqual({});
   });
 });
 ```
@@ -428,8 +430,8 @@ describe('resolveInstructForGroup', () => {
 - [ ] **Step 3:** Implement:
   - Carry `instruct?` + `vocalization?` on `SentenceGroup` (from the sentence at the grouping site).
   - `pickEmotionVariantVoice(engine, variants, emotion, baseVoice, liveInstruct)` — when `engine==='qwen' && liveInstruct` return `baseVoice` (strict no-op); else today's logic. **Call sites to update (P-Mo3):** `synthesise-chapter.ts:~964` (the only production caller) + `voice-mapping.test.ts`; grep `pickEmotionVariantVoice` to confirm none missed.
-  - In `generation.ts`, read `liveInstruct` from the loaded book-meta and thread it into the `synthesiseChapter` options/context (default `false` when absent).
-  - In `sidecar.ts`, set batch-level `liveInstruct` on the request and per-item `instruct` from `resolveInstructForGroup`.
+  - In `generation.ts`, read `liveInstruct` from the loaded book-meta (PR2-Mi3: confirm the route loads book-meta — if not, add the load) and thread it into the `synthesiseChapter` options/context (default `false` when absent). Derive `is17b` from the resolved model key per group.
+  - In `sidecar.ts`, set batch-level `liveInstruct` on the request and per-item `instruct` from `resolveInstructForGroup`. Empty items carry no `instruct` — the **sidecar** fills `NEUTRAL_INSTRUCT` (PR2-Mi1).
 - [ ] **Step 4:** Run all four test files — PASS. `npm run typecheck`.
 - [ ] **Step 5:** Commit `feat(server): pure instruct resolver + liveInstruct wiring + 1.7B routing (fs-57)`.
 
@@ -446,7 +448,7 @@ describe('resolveInstructForGroup', () => {
 
 - [ ] **Step 1:** Failing test — pack a batch of 1.7B-liveInstruct groups where the combined instruct length would exceed the budget if counted; assert the batcher splits (or doesn't) per the chosen rule, and that a normal no-instruct batch packs identically to today (no regression for `liveInstruct=false`).
 - [ ] **Step 2:** Run — FAIL.
-- [ ] **Step 3:** Implement the decision: **count the instruct token estimate toward `qwenBatchTokenBudget`** on the liveInstruct path (the bypass prepends `instruct_ids` to each item, so they consume the forward's budget); leave the flag-off path's bucketing byte-identical.
+- [ ] **Step 3:** Implement the decision: **count each item's resolved-instruct token estimate toward `qwenBatchTokenBudget`** on the liveInstruct path — including the `NEUTRAL_INSTRUCT` fill on neutral items, since on a liveInstruct batch *every* item carries `instruct_ids` (PR2-Mi2). Leave the flag-off path's bucketing byte-identical.
 - [ ] **Step 4:** Run — PASS. `npm run typecheck`.
 - [ ] **Step 5:** Commit `feat(server): count instruct tokens against the Qwen batch budget (fs-57)`.
 
@@ -460,9 +462,9 @@ describe('resolveInstructForGroup', () => {
 - Test: golden-audio suite
 
 **Interfaces:**
-- Produces: (a) identity-stability assertion (ECAPA cosine within tolerance across instructs); (b) audible-delivery-change assertion; (c) **the C1 safety regression (P-M3): a 1.7B render with `liveInstruct=false` is byte-identical to the pre-fs-57 path** (assert the sidecar request shape carries no `instruct` + `liveInstruct:false`, and the golden output matches the committed flag-off baseline); (d) a **committed** batched-RTF baseline (incl. a heterogeneous-instruct-length batch) — replacing the parent spike's non-reproducible RTF 0.67.
+- Produces: (a) identity-stability assertion (ECAPA cosine within tolerance across instructs); (b) audible-delivery-change assertion; (c) **the C1 safety regression (P-M3 / PR2-M1) — primary is a deterministic code-path assertion**: with `liveInstruct=false`, the 1.7B render takes the `generate_voice_clone` branch with **no `instruct_ids`** and `pickEmotionVariantVoice` still returns `base__angry` (a request-shape / branch-spy assertion, not cross-run audio bytes); golden-audio equality is a *secondary* check, and its baseline must be blessed on **pre-Task-8 code** to mean "equals today," not blessed post-change; (d) a **committed** batched-RTF baseline (incl. a heterogeneous-instruct-length batch) — replacing the parent spike's non-reproducible RTF 0.67.
 
-- [ ] **Step 1:** Add the instruct golden fixture + the **flag-off byte-identical regression** (P-M3) + the perf-baseline recorder (`--bless` path). Scope the existing fs-55 anchored-variant golden assertion to the 0.6B engine.
+- [ ] **Step 1:** Add the instruct golden fixture + the **flag-off code-path regression** (PR2-M1, primary) + an optional pre-change golden baseline + the perf-baseline recorder (`--bless` path). Scope the existing fs-55 anchored-variant golden assertion to the 0.6B engine.
 - [ ] **Step 2:** Run `npm run test:golden-audio:sidecar` (weights present on the dev box) — record the baseline.
 - [ ] **Step 3:** Commit the baseline JSON + fixtures.
 - [ ] **Step 4:** Re-run — green against the committed baselines (both flag-on instruct + flag-off byte-identical).
@@ -705,7 +707,7 @@ it('without the allowlist a real word drop still drifts', () => {
 
 **Placeholder scan:** the `<a designed test voice id>` in Task 5 and `NN` in Task 19 are intentional fill-at-execution values (a real designed voice on the box; the next free plan number) — every other step carries concrete code/commands.
 
-**Type consistency:** `instruct?: string` / `vocalization?: boolean` consistent across schema (1), OpenAPI (2), envelope (11), reducer (13); `emotionToInstruct` (3) consumed by `resolveInstructForGroup` (8); `liveInstruct` flows book-meta (4) → `generation.ts` → synth context → batch-level sidecar field (6,8); `NEUTRAL_INSTRUCT` defined in (5), consumed in (6,8); `vocalizationAllowlist` + `leadingVocalizationTokens` (17) match the `nameAllowlist` shape.
+**Type consistency:** `instruct?: string` / `vocalization?: boolean` consistent across schema (1), OpenAPI (2), envelope (11), reducer (13); `emotionToInstruct` (3) consumed by `resolveInstructForGroup` (8); `liveInstruct` flows book-meta (4) → `generation.ts` → synth context → batch-level sidecar field (6,8); `NEUTRAL_INSTRUCT` is **sidecar-only** — defined + consumed in the Python sidecar (5,6); the TS server never imports it (sends empty instruct, the sidecar fills it). `is17b` derived from the real `modelKey` (not an invented tier enum). `vocalizationAllowlist` + `leadingVocalizationTokens` (17) match the `nameAllowlist` shape.
 
 ## Plan adversarial review — resolutions (round 1, 2026-06-24)
 
@@ -722,3 +724,12 @@ it('without the allowlist a real word drop still drifts', () => {
 - **P-Mi3 — "(strict)" mislabel → FIXED in Task 1.** Relabelled + added a real `.strict()` unknown-key test.
 - **P-Mi4 — manual-gasp double-prepend → FIXED in Task 13.** Documented as an accepted v1 edge.
 - **Weights present → SKIP hedges struck in Tasks 5, 6, 9.** The C2 gate closes on-box.
+
+## Plan adversarial review — resolutions (round 2, 2026-06-24)
+
+- **PR2-M1 — flag-off "byte-identical" verified the wrong thing → FIXED in Task 9.** Primary guarantee is now a deterministic **code-path assertion** (wrapper branch, no `instruct_ids`); golden audio is secondary and, if used for equality, blessed on pre-Task-8 code.
+- **PR2-M2 — invented `tier` enum → FIXED in Task 8.** Helper takes `is17b` derived from the real `modelKey`.
+- **PR2-M3 — single `/synthesize` scope ambiguous → FIXED (Task 6 + spec §4.3).** Batch-only for v1; previews stay neutral.
+- **PR2-Mi1 — `NEUTRAL_INSTRUCT` cross-language cross-ref → FIXED.** Sidecar-owned; the server sends empty instruct.
+- **PR2-Mi2 — budget accounting → FIXED in Task 8a.** Counts every item's resolved instruct incl. the neutral fill.
+- **PR2-Mi3 — book-meta load in `generation.ts` → FIXED in Task 8.** Confirm/add the load step.
