@@ -26,7 +26,14 @@ export function parseLocaleNumber(raw: string, sep: Sep): number {
 export function speakNumber(raw: string, norm: LangNormalizer): string {
   const v = parseLocaleNumber(raw, norm.separators);
   if (Number.isInteger(v)) return norm.cardinal(v);
-  const fracPart = raw.split(norm.separators.decimal)[1] ?? '';
+  // The fraction digits follow the separator parseLocaleNumber treated as the
+  // decimal point: normally the locale decimal char, but a LONE non-grouping
+  // punctuation thousands char (es/de "1.5") is also read as a decimal — split
+  // on whichever actually appears so we never lose the fraction.
+  const fracPart =
+    raw.split(norm.separators.decimal)[1] ??
+    (norm.separators.thousands !== 'space' ? raw.split(norm.separators.thousands)[1] : undefined) ??
+    '';
   const digits = fracPart.split('').map((d) => norm.cardinal(Number(d))).join(' ');
   return `${norm.cardinal(Math.trunc(v))} ${norm.decimalWord} ${digits}`;
 }

@@ -39,7 +39,16 @@ function numberToken(norm: LangNormalizer): string {
   // "1,200" and leak ".50" into the plain-number pass).
   const thou = norm.separators.thousands === 'space' ? SPACE_CLASS : '\\' + norm.separators.thousands;
   const dec = '\\' + norm.separators.decimal;
-  return `\\d{1,3}(?:${thou}\\d{3})+(?:${dec}\\d+)?|\\d+(?:${dec}\\d+)?`;
+  // A lone, non-grouping punctuation thousands char (es/de "1.5") is a decimal,
+  // not a 1500 grouping (parseLocaleNumber already reads it that way). Capture
+  // it so the plain-number pass sees one token instead of splitting "1"·"."·"5".
+  // It MUST precede the bare `\d+` alternative — otherwise the engine matches
+  // just "1" and leaves ".5" behind.
+  const loneThou =
+    norm.separators.thousands !== 'space'
+      ? `\\d+${thou}\\d{1,2}(?!\\d)|`
+      : '';
+  return `\\d{1,3}(?:${thou}\\d{3})+(?:${dec}\\d+)?|${loneThou}\\d+(?:${dec}\\d+)?`;
 }
 
 function expandCurrency(s: string, norm: LangNormalizer): string {

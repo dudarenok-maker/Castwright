@@ -1,0 +1,7 @@
+# fs-53 Spanish fixtures (€ → euros; % → "por ciento"; es decimal word = coma)
+Costó 1.200,50 €. ⇒ Costó mil doscientos euros con cincuenta céntimos.
+Subió un 50% en 1999. ⇒ Subió un cincuenta por ciento en mil novecientos noventa y nueve.
+# separator guard: 1.5 is NOT 1500
+Versión 1.5 lista. ⇒ Versión uno coma cinco lista.
+# decade drops the century
+Los 1990s fueron ruidosos. ⇒ Los los noventa fueron ruidosos.
