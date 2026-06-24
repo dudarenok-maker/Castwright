@@ -2952,3 +2952,107 @@ describe('fs-56 — per-character 1.7B Quality-tier model key routing', () => {
     expect(calls[0].modelKey).toBe('kokoro-v1');
   });
 });
+
+/* ── fs-57 Task 9A — C1 safety lock: liveInstruct=false 1.7B byte-identical ──
+   REGRESSION LOCK: with liveInstruct OFF a 1.7B render is byte-identical to
+   pre-fs-57. Specifically:
+     (1) the sidecar batch carries liveInstruct=false and NO per-item instruct,
+     (2) pickEmotionVariantVoice still selects the __angry variant voice —
+         the liveInstruct no-op ONLY fires when liveInstruct=true.
+   This is a CODE-PATH / request-shape assertion (GPU-free). */
+describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', () => {
+  /* A character on the 1.7B tier with a designed __angry variant. */
+  const CAST_17B: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      ttsModelKey: 'qwen3-tts-1.7b',
+      overrideTtsVoices: {
+        qwen: {
+          name: 'qwen-narrator',
+          variants: { angry: { name: 'qwen-narrator__angry' } },
+        },
+      },
+    },
+  ];
+
+  function makeLiveInstructBatchProvider(): TtsProvider & {
+    batchCalls: SynthesizeBatchInput[];
+    singleCalls: SynthesizeInput[];
+  } {
+    const batchCalls: SynthesizeBatchInput[] = [];
+    const singleCalls: SynthesizeInput[] = [];
+    return {
+      batchCalls,
+      singleCalls,
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        singleCalls.push(input);
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch(input: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        batchCalls.push(input);
+        return {
+          pcms: input.items.map((it) => Buffer.alloc(it.text.length * 2)),
+          sampleRate: 24000,
+        };
+      },
+    };
+  }
+
+  it('sends liveInstruct=false + no per-item instruct, and selects the __angry variant voice (not base)', async () => {
+    /* Sentence 1 = anchor (single, groups[0] always synthed solo for the sample-rate
+       anchor). Sentences 2+3 = two angry-tagged body sentences → a size-2 batch.
+       A size-1 slice routes to synthGroup (single), not synthBatch, so we need at
+       least 2 batchable body groups to exercise the batch path.
+
+       With liveInstruct=false the C1 contract requires:
+         (1) batch carries liveInstruct=false/absent and NO per-item instruct,
+         (2) pickEmotionVariantVoice STILL selects qwen-narrator__angry (not base) —
+             the no-op fires ONLY when liveInstruct=true. */
+    const provider = makeLiveInstructBatchProvider();
+
+    await synthesiseChapter({
+      sentences: [
+        // groups[0] → anchor single (no emotion).
+        { id: 1, chapterId: 1, characterId: 'narrator', text: 'The opening line.' },
+        // groups[1]+[2] → batched together; both angry-tagged with a designed variant.
+        { id: 2, chapterId: 1, characterId: 'narrator', text: 'Stop right there.', emotion: 'angry' },
+        { id: 3, chapterId: 1, characterId: 'narrator', text: 'I said stop.', emotion: 'angry' },
+      ],
+      cast: CAST_17B,
+      provider,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      liveInstruct: false, // THE FLAG UNDER TEST — off path
+    });
+
+    // Anchor was a single call (first group in Qwen batching, synthesized solo).
+    expect(provider.singleCalls).toHaveLength(1);
+    // The two angry body sentences batched into one call.
+    expect(provider.batchCalls).toHaveLength(1);
+
+    const batchCall = provider.batchCalls[0];
+    expect(batchCall.items).toHaveLength(2);
+
+    // (1) Batch-level flag: liveInstruct is absent/false (pre-fs-57 contract).
+    expect(batchCall.liveInstruct ?? false).toBe(false);
+
+    // (2) No per-item instruct field — the liveInstruct path is off, so no
+    //     instruct phrase should appear on any item (not even the angry ones).
+    for (const item of batchCall.items) {
+      expect(item).not.toHaveProperty('instruct');
+    }
+
+    // (3) Variant selection is INTACT: both angry items use qwen-narrator__angry,
+    //     NOT the base qwen-narrator. This proves pickEmotionVariantVoice's no-op
+    //     guard only fires when liveInstruct=true, not when it's false.
+    for (const item of batchCall.items) {
+      expect(item.voiceName).toBe('qwen-narrator__angry');
+    }
+
+    // (4) The 1.7B modelKey reaches the batch call — the tier override is wired.
+    expect(batchCall.modelKey).toBe('qwen3-tts-1.7b');
+  });
+});
