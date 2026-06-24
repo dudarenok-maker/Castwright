@@ -349,7 +349,7 @@ export class OllamaAnalyzer implements Analyzer {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
-    const systemInstruction = buildSystemInstruction(skill, call.language);
+    const systemInstruction = buildSystemInstruction(skill, call.language, skillName);
     /* Convert the GRAMMAR schema into a JSON Schema for Ollama 0.5+ structured-
        output (constrained decoding). grammarSchema may differ from
        validationSchema — e.g. stage1ChapterGrammarSchema makes tone REQUIRED so

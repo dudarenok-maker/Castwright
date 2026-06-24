@@ -164,9 +164,21 @@ export async function loadSkill(skill: SkillName): Promise<string> {
 /* The skill text is moved to `systemInstruction` rather than re-sent as
    part of `contents` on every call (see callsite). This shaves ~10 KB off
    each per-chapter stage-2 request and makes the user-turn token count
-   actually proportional to the task. */
-export function buildSystemInstruction(skill: string, language?: string): string {
-  return `You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Your only output is a JSON object that conforms to the schema.${languagePreamble(language)}
+   actually proportional to the task.
+
+   skillName — when 'instruct_annotation' and the manuscript is non-English,
+   appends a short Stage-3 reinforcement clause (mirrors the castFields guards
+   in languagePreamble: local models need system-level reinforcement even when
+   the skill already states the rule). English output is byte-identical. */
+export function buildSystemInstruction(skill: string, language?: string, skillName?: string): string {
+  /* Stage-3 reinforcement: fires ONLY for instruct_annotation + non-English.
+     The skill already covers this rule, but local models reliably miss it
+     without a system-level echo. One sentence, no wholesale duplication. */
+  const stage3Clause =
+    skillName === 'instruct_annotation' && language && isNonEnglish(language)
+      ? '\n\nFor THIS pass: write each vocalization\'s `text` in the manuscript\'s language (using its native orthography and script); write every `instruct` field in English.'
+      : '';
+  return `You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Your only output is a JSON object that conforms to the schema.${languagePreamble(language)}${stage3Clause}
 
 ---
 
@@ -334,7 +346,7 @@ export class GeminiAnalyzer implements Analyzer {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
-    const systemInstruction = buildSystemInstruction(skill, call.language);
+    const systemInstruction = buildSystemInstruction(skill, call.language, skillName);
 
     const start = Date.now();
     const tick = call.onWaiting

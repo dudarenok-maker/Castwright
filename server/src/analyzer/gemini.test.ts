@@ -318,6 +318,57 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
     expect(sys).not.toMatch(/opening Claude windows|writing files/i);
   });
 
+  describe('fs-57 — Stage-3 reinforcement clause (instruct_annotation + non-English)', () => {
+    it('adds the vocalization-language clause for instruct_annotation + non-English language', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const sys = buildSystemInstruction('SKILL', 'ru', 'instruct_annotation');
+      expect(sys).toMatch(/vocalization/i);
+      expect(sys).toMatch(/manuscript.*language|native orthography/i);
+      expect(sys).toMatch(/instruct.*English/i);
+    });
+
+    it('adds the clause for instruct_annotation + Spanish', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const sys = buildSystemInstruction('SKILL', 'es', 'instruct_annotation');
+      expect(sys).toMatch(/vocalization/i);
+      expect(sys).toMatch(/instruct.*English/i);
+    });
+
+    it('English (en) is byte-identical to today — no Stage-3 clause', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const withSkill = buildSystemInstruction('SKILL', 'en', 'instruct_annotation');
+      const withoutSkill = buildSystemInstruction('SKILL', 'en');
+      expect(withSkill).toBe(withoutSkill);
+      expect(withSkill).not.toMatch(/vocalization.*manuscript.*language|instruct.*English/i);
+    });
+
+    it('absent language is byte-identical to today — no Stage-3 clause', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const withSkill = buildSystemInstruction('SKILL', undefined, 'instruct_annotation');
+      const withoutSkill = buildSystemInstruction('SKILL');
+      expect(withSkill).toBe(withoutSkill);
+    });
+
+    it('a different skill (e.g. whole_book_stage1) with ru gets no Stage-3 clause', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const sys = buildSystemInstruction('SKILL', 'ru', 'whole_book_stage1');
+      // The language preamble still fires (cast/attribution guidance)
+      expect(sys).toMatch(/manuscript text is in Russian/i);
+      // But no Stage-3 clause
+      expect(sys).not.toMatch(/For THIS pass.*vocalization/i);
+    });
+
+    it('no skillName arg at all + ru produces no Stage-3 clause (backward-compat)', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const withSkillName = buildSystemInstruction('SKILL', 'ru', 'instruct_annotation');
+      const withoutSkillName = buildSystemInstruction('SKILL', 'ru');
+      // Without a skillName the clause must NOT appear
+      expect(withoutSkillName).not.toMatch(/For THIS pass.*vocalization/i);
+      // With the skillName it DOES appear — the two outputs differ
+      expect(withSkillName).not.toBe(withoutSkillName);
+    });
+  });
+
   it('estimateInputTokens: Latin uses chars/4, Cyrillic ~chars/2.5, mixed between', async () => {
     const { estimateInputTokens } = await import('./gemini.js');
     const latin = 'a'.repeat(1000);
