@@ -100,7 +100,12 @@ in Spanish, "Haah…" in English) and set `"vocalization": true`.
 **Edit the existing sentence's `text` — never insert a new sentence.** Prepend
 or edit the sentence's text so the vocalization sound appears as part of that
 sentence's spoken output. The `text` field in your annotation replaces the
-stored sentence text for TTS purposes.
+stored sentence text for TTS purposes. When the vocalization makes a narrative
+description of that same sound redundant (e.g. the sound replaces "she sighed"),
+you MAY drop only that now-redundant sound-description — but do NOT remove,
+reorder, or rewrite any OTHER words of the sentence. Prepending without removing
+anything is always safe; trimming is allowed ONLY for the sound-description the
+vocalization replaces.
 
 Vocalization text style guide (open-ended — not a fixed list):
 - Sounds should be pronounceable and natural in the manuscript's language.
