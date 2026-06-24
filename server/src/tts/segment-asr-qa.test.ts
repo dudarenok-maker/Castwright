@@ -10,10 +10,11 @@
      - short sentences are not scored.
    classifyTranscript is pure, so these inject the transcript directly. */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import {
   classifyTranscript,
   normalizeForWer,
+  resolveAsrThresholds,
   verifySegmentTranscript,
   type AsrSignals,
 } from './segment-asr-qa.js';
@@ -32,6 +33,18 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('“Hello,” she said—softly.')).toEqual([
       'hello', 'she', 'said', 'softly',
     ]);
+  });
+
+  it('English-spells integers for English / default language', () => {
+    expect(normalizeForWer('I have 3 keys.')).toEqual(['i', 'have', 'three', 'keys']);
+    expect(normalizeForWer('I have 3 keys.', 'en')).toEqual(['i', 'have', 'three', 'keys']);
+  });
+
+  it('does NOT English-spell integers for a non-English language (keeps the digit)', () => {
+    // "3" → "three" only makes sense against English audio; on a Spanish/Russian
+    // book Whisper hears "tres"/"три", so injecting "three" is a false error (#1084).
+    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', '3', 'llaves']);
+    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', '3', 'ключа']);
   });
 
   it('keeps non-Latin (Cyrillic) words instead of erasing them', () => {
@@ -130,6 +143,39 @@ describe('classifyTranscript', () => {
     const c = classifyTranscript(expected, heard, CLEAN);
     expect(c.verdict).toBe('drift');
     expect(c.wer).toBeGreaterThan(0.4);
+  });
+
+  it('threads language so a non-English digit is not English-spelled into extra errors', () => {
+    // "21" → "twenty one" inflates the expected tokens and mis-aligns against the
+    // Spanish "veintiún" Whisper actually heard; with language=es the digit stays
+    // one token → a single clean substitution (#1084).
+    const esExpected = 'Compró 21 manzanas rojas en el mercado.';
+    const esHeard = 'Compró veintiún manzanas rojas en el mercado.';
+    const withEs = classifyTranscript(esExpected, esHeard, CLEAN, { language: 'es' });
+    const withoutLang = classifyTranscript(esExpected, esHeard, CLEAN);
+    expect(withEs.sub).toBe(1);
+    expect(withEs.del).toBe(0);
+    expect(withEs.verdict).toBe('ok');
+    expect(withoutLang.wer).toBeGreaterThan(withEs.wer);
+  });
+});
+
+describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_MAX_WER_ES;
+  });
+
+  it('defaults every language to the global maxWer', () => {
+    expect(resolveAsrThresholds(undefined, 'es').maxWer).toBe(0.4);
+    expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBe(0.4);
+    expect(resolveAsrThresholds(undefined).maxWer).toBe(0.4);
+  });
+
+  it('honours a per-language override, leaving other languages on the global', () => {
+    process.env.SEG_ASR_MAX_WER_ES = '0.55';
+    expect(resolveAsrThresholds(undefined, 'es').maxWer).toBeCloseTo(0.55);
+    expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBe(0.4);
+    expect(resolveAsrThresholds(undefined, 'en').maxWer).toBe(0.4);
   });
 });
 
