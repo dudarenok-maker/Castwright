@@ -781,6 +781,7 @@ export function Layout() {
               publicationDate: res.state.publicationDate ?? null,
               description: res.state.description ?? null,
               notes: res.state.notes ?? null,
+              liveInstruct: res.state.liveInstruct ?? false,
             },
           }),
         );

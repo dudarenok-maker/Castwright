@@ -97,6 +97,8 @@ const chapter1: Chapter = {
   characters: { narrator: 'queued' },
 };
 
+const BOOK_ID = 'book-1';
+
 function makeStore(liveInstruct = false) {
   const store = configureStore({
     reducer: {
@@ -114,7 +116,7 @@ function makeStore(liveInstruct = false) {
   store.dispatch(accountSlice.actions.setDefaultTtsModelKey('coqui-xtts-v2'));
   store.dispatch(chaptersSlice.actions.setChapters([chapter1]));
   if (liveInstruct) {
-    store.dispatch(bookMetaActions.setLiveInstruct(true));
+    store.dispatch(bookMetaActions.setLiveInstruct({ bookId: BOOK_ID, value: true }));
   }
   return store;
 }
@@ -156,22 +158,22 @@ describe('GenerationView — liveInstruct toggle (fs-57)', () => {
     expect(checkbox.checked).toBe(true);
   });
 
-  it('dispatches setLiveInstruct(true) when the user checks the toggle', () => {
+  it('dispatches setLiveInstruct({bookId, value:true}) when the user checks the toggle', () => {
     const store = makeStore(false);
     renderView(store);
     const toggle = screen.getByTestId('live-instruct-toggle');
     const checkbox = toggle.querySelector('input[type="checkbox"]') as HTMLInputElement;
     fireEvent.click(checkbox);
-    expect(store.getState().bookMeta.liveInstruct).toBe(true);
+    expect(store.getState().bookMeta.liveInstruct[BOOK_ID]).toBe(true);
   });
 
-  it('dispatches setLiveInstruct(false) when the user unchecks the toggle', () => {
+  it('dispatches setLiveInstruct({bookId, value:false}) when the user unchecks the toggle', () => {
     const store = makeStore(true);
     renderView(store);
     const toggle = screen.getByTestId('live-instruct-toggle');
     const checkbox = toggle.querySelector('input[type="checkbox"]') as HTMLInputElement;
     fireEvent.click(checkbox);
-    expect(store.getState().bookMeta.liveInstruct).toBe(false);
+    expect(store.getState().bookMeta.liveInstruct[BOOK_ID]).toBe(false);
   });
 
   it('shows the label text for the toggle', () => {
@@ -198,7 +200,7 @@ describe('GenerationView — liveInstruct toggle (fs-57)', () => {
 describe('persistence-middleware — bookMeta/setLiveInstruct (fs-57)', () => {
   it('action type matches the middleware rule key', () => {
     // The rule key is 'bookMeta/setLiveInstruct' — verify the action's type.
-    const action = bookMetaActions.setLiveInstruct(true);
+    const action = bookMetaActions.setLiveInstruct({ bookId: 'book-1', value: true });
     expect(action.type).toBe('bookMeta/setLiveInstruct');
   });
 });

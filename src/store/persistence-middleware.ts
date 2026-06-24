@@ -261,7 +261,7 @@ const PERSIST_RULES: Record<
      the `state` slice alongside castConfirmed and the book-meta fields. */
   'bookMeta/setLiveInstruct': {
     slice: 'state',
-    build: (s) => ({ liveInstruct: s.bookMeta.liveInstruct }),
+    build: (s, bookId) => ({ liveInstruct: bookId ? (s.bookMeta.liveInstruct[bookId] ?? false) : false }),
   },
 };
 

@@ -50,7 +50,7 @@ import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { uiActions } from '../store/ui-slice';
-import { bookMetaActions } from '../store/book-meta-slice';
+import { bookMetaActions, selectLiveInstruct } from '../store/book-meta-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
 import { api, AnalysisError } from '../lib/api';
@@ -174,9 +174,9 @@ export function GenerationView({
   const activityCount = useAppSelector(selectGenerationActivityCount);
   /* fs-57 — per-book live-instruct flag. Defaults false (absent on older books).
      Dispatching setLiveInstruct also fires a persistence-middleware PUT via the
-     'bookMeta/setLiveInstruct' rule. The `?? false` guard makes this safe when
-     the bookMeta slice is absent in tests that predate it. */
-  const liveInstruct = useAppSelector((s) => s.bookMeta?.liveInstruct ?? false);
+     'bookMeta/setLiveInstruct' rule. selectLiveInstruct is keyed by bookId so
+     switching books always reflects the correct per-book value. */
+  const liveInstruct = useAppSelector(selectLiveInstruct(bookId));
   /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
      is set by the queue modal's "Jump to chapter" affordance (modal pushes
      #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
@@ -863,7 +863,7 @@ export function GenerationView({
               type="checkbox"
               checked={liveInstruct}
               onChange={(e) =>
-                dispatch(bookMetaActions.setLiveInstruct(e.target.checked))
+                dispatch(bookMetaActions.setLiveInstruct({ bookId, value: e.target.checked }))
               }
               className="accent-magenta w-4 h-4 shrink-0"
             />

@@ -12,7 +12,7 @@ import {
 } from './book-meta-slice';
 import type { RootState } from './index';
 
-const initial = (): BookMetaState => ({ draft: null, saved: {}, liveInstruct: false });
+const initial = (): BookMetaState => ({ draft: null, saved: {}, liveInstruct: {} });
 
 const fullMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   title: 'The Northern Star',
@@ -30,7 +30,7 @@ const reducer = bookMetaSlice.reducer;
 
 describe('bookMetaSlice — hydrateFromBookState', () => {
   it('seeds saved[bookId] from BookStateJson and wipes any draft', () => {
-    const start: BookMetaState = { draft: { title: 'stale draft' }, saved: {}, liveInstruct: false };
+    const start: BookMetaState = { draft: { title: 'stale draft' }, saved: {}, liveInstruct: {} };
     const next = reducer(
       start,
       bookMetaActions.hydrateFromBookState({
@@ -101,7 +101,7 @@ describe('bookMetaSlice — setDraftField + cancelDraft', () => {
   });
 
   it('cancelDraft clears the draft buffer', () => {
-    const dirty: BookMetaState = { draft: { title: 'X' }, saved: { ns: fullMeta() }, liveInstruct: false };
+    const dirty: BookMetaState = { draft: { title: 'X' }, saved: { ns: fullMeta() }, liveInstruct: {} };
     const next = reducer(dirty, bookMetaActions.cancelDraft());
     expect(next.draft).toBeNull();
     expect(next.saved.ns).toEqual(fullMeta());
@@ -113,7 +113,7 @@ describe('bookMetaSlice — commitDraft', () => {
     const start: BookMetaState = {
       draft: { title: 'Renamed', genre: 'Sci-fi' },
       saved: { ns: fullMeta() },
-      liveInstruct: false,
+      liveInstruct: {},
     };
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
     expect(next.draft).toBeNull();
@@ -121,7 +121,7 @@ describe('bookMetaSlice — commitDraft', () => {
   });
 
   it('is a no-op when no saved baseline exists (refuses to corrupt state)', () => {
-    const start: BookMetaState = { draft: { title: 'X' }, saved: {}, liveInstruct: false };
+    const start: BookMetaState = { draft: { title: 'X' }, saved: {}, liveInstruct: {} };
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'unknown' }));
     expect(next.saved.unknown).toBeUndefined();
     /* Draft is still cleared — the user's intent (commit & close) is honoured
@@ -130,7 +130,7 @@ describe('bookMetaSlice — commitDraft', () => {
   });
 
   it('clears the draft even when it is empty (so the middleware fires once)', () => {
-    const start: BookMetaState = { draft: null, saved: { ns: fullMeta() }, liveInstruct: false };
+    const start: BookMetaState = { draft: null, saved: { ns: fullMeta() }, liveInstruct: {} };
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
     expect(next.saved.ns).toEqual(fullMeta());
     expect(next.draft).toBeNull();
@@ -143,7 +143,7 @@ describe('bookMetaSlice — commitDraft', () => {
     const start: BookMetaState = {
       draft: { notes: 'First line.\nSecond line.\n\nThird paragraph.' },
       saved: { ns: fullMeta() },
-      liveInstruct: false,
+      liveInstruct: {},
     };
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
     expect(next.draft).toBeNull();
@@ -160,7 +160,7 @@ describe('selectors', () => {
   });
 
   it('selectEffectiveMeta returns saved snapshot when draft is empty', () => {
-    const s = baseState({ draft: null, saved: { ns: fullMeta() }, liveInstruct: false });
+    const s = baseState({ draft: null, saved: { ns: fullMeta() }, liveInstruct: {} });
     expect(selectEffectiveMeta('ns')(s)).toEqual(fullMeta());
   });
 
@@ -168,7 +168,7 @@ describe('selectors', () => {
     const s = baseState({
       draft: { title: 'Live Edit', genre: null },
       saved: { ns: fullMeta() },
-      liveInstruct: false,
+      liveInstruct: {},
     });
     expect(selectEffectiveMeta('ns')(s)).toEqual(fullMeta({ title: 'Live Edit', genre: null }));
   });
@@ -178,24 +178,101 @@ describe('selectors', () => {
   });
 
   it('selectIsDirty is true once the draft has any keys', () => {
-    const s = baseState({ draft: { title: 'X' }, saved: { ns: fullMeta() }, liveInstruct: false });
+    const s = baseState({ draft: { title: 'X' }, saved: { ns: fullMeta() }, liveInstruct: {} });
     expect(selectIsDirty(s)).toBe(true);
   });
 
   it('selectIsDirty is false for an empty-object draft', () => {
     /* Defensive — setDraftField always seeds at least one key, but a stray
        reducer that left {} behind shouldn't mark the form dirty. */
-    const s = baseState({ draft: {}, saved: { ns: fullMeta() }, liveInstruct: false });
+    const s = baseState({ draft: {}, saved: { ns: fullMeta() }, liveInstruct: {} });
     expect(selectIsDirty(s)).toBe(false);
   });
 });
 
 // fs-57 — per-book liveInstruct flag
-import { bookMetaReducer } from './book-meta-slice';
-it('liveInstruct defaults off and toggles', () => {
-  const s0 = bookMetaReducer(undefined, { type: '@@init' });
-  expect(s0.liveInstruct ?? false).toBe(false);
-  const s1 = bookMetaReducer(s0, bookMetaActions.setLiveInstruct(true));
-  expect(s1.liveInstruct).toBe(true);
+import { bookMetaReducer, selectLiveInstruct } from './book-meta-slice';
+import type { RootState as RS } from './index';
+
+describe('bookMetaSlice — liveInstruct (fs-57 book-scoped)', () => {
+  it('defaults to empty map (no books hydrated)', () => {
+    const s0 = bookMetaReducer(undefined, { type: '@@init' });
+    expect(s0.liveInstruct).toEqual({});
+  });
+
+  it('setLiveInstruct scopes the flag to the given bookId', () => {
+    const s0 = bookMetaReducer(undefined, { type: '@@init' });
+    const s1 = bookMetaReducer(s0, bookMetaActions.setLiveInstruct({ bookId: 'book-A', value: true }));
+    expect(s1.liveInstruct['book-A']).toBe(true);
+  });
+
+  it('setLiveInstruct for Book A does not affect Book B', () => {
+    let s = bookMetaReducer(undefined, { type: '@@init' });
+    s = bookMetaReducer(s, bookMetaActions.setLiveInstruct({ bookId: 'book-A', value: true }));
+    expect(s.liveInstruct['book-B']).toBeUndefined();
+  });
+
+  it('hydrateFromBookState with liveInstruct:true sets the flag for that book', () => {
+    const s = bookMetaReducer(
+      undefined,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'book-A',
+        state: { title: 'T', author: 'A', series: '', liveInstruct: true },
+      }),
+    );
+    expect(s.liveInstruct['book-A']).toBe(true);
+  });
+
+  it('hydrateFromBookState without liveInstruct defaults to false for that book', () => {
+    const s = bookMetaReducer(
+      undefined,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'book-A',
+        state: { title: 'T', author: 'A', series: '' },
+      }),
+    );
+    expect(s.liveInstruct['book-A']).toBe(false);
+  });
+
+  it('opening Book B (liveInstruct absent) does not inherit Book A liveInstruct:true', () => {
+    let s = bookMetaReducer(
+      undefined,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'book-A',
+        state: { title: 'TA', author: 'AA', series: '', liveInstruct: true },
+      }),
+    );
+    s = bookMetaReducer(
+      s,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'book-B',
+        state: { title: 'TB', author: 'AB', series: '' },
+      }),
+    );
+    expect(s.liveInstruct['book-A']).toBe(true);
+    expect(s.liveInstruct['book-B']).toBe(false);
+  });
+
+  it('selectLiveInstruct returns false for an unknown bookId', () => {
+    const rootState = ({ bookMeta: bookMetaReducer(undefined, { type: '@@init' }) }) as unknown as RS;
+    expect(selectLiveInstruct('unknown-book')(rootState)).toBe(false);
+  });
+
+  it('selectLiveInstruct returns true after hydrateFromBookState with liveInstruct:true', () => {
+    const s = bookMetaReducer(
+      undefined,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'book-A',
+        state: { title: 'T', author: 'A', series: '', liveInstruct: true },
+      }),
+    );
+    const rootState = ({ bookMeta: s }) as unknown as RS;
+    expect(selectLiveInstruct('book-A')(rootState)).toBe(true);
+  });
+
+  it('selectLiveInstruct returns false for null bookId', () => {
+    const rootState = ({ bookMeta: bookMetaReducer(undefined, { type: '@@init' }) }) as unknown as RS;
+    expect(selectLiveInstruct(null)(rootState)).toBe(false);
+  });
 });
 
