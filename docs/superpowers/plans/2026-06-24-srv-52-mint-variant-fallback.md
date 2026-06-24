@@ -35,10 +35,9 @@
 
 **Frontend (`src/`)**
 - `lib/api.ts` — widen `onVariantDesigned` payload + SSE parse.
-- `store/cast-design-slice.ts` — `fallbacks[]` + `variantFellBack` reducer.
-- `store/cast-design-stream-middleware.ts` — dispatch on `viaFallback`.
-- The Design summary component that renders `failures` — render the fallback line.
-- `*.test.ts(x)` colocated.
+- `store/cast-design-slice.ts` — `fallbacks: CastDesignFallback[]` ({characterId, emotion}) + `variantFellBack` reducer (guards on `state.active`).
+- `store/cast-design-stream-middleware.ts` — dispatch `variantFellBack` on `viaFallback` (`onVariantDesigned`); add a `· N via fallback` part to the `onIdle` completion toast (the real summary surface — there is no failures-list component).
+- `*.test.ts` colocated.
 
 ---
 
@@ -144,7 +143,7 @@ Add to `server/tts-sidecar/tests/test_qwen3.py` (the `fake_qwen_runtime` fixture
 ```python
 def test_ensure_base17_for_mint_not_installed(fake_qwen_runtime, monkeypatch):
     import main
-    eng = fake_qwen_runtime
+    eng = fake_qwen_runtime["engine"]
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: False)
     with pytest.raises(main.Base17UnavailableError) as ei:
         eng._ensure_base17_for_mint()
@@ -153,7 +152,7 @@ def test_ensure_base17_for_mint_not_installed(fake_qwen_runtime, monkeypatch):
 
 def test_ensure_base17_for_mint_corrupt_on_nonoom(fake_qwen_runtime, monkeypatch):
     import main
-    eng = fake_qwen_runtime
+    eng = fake_qwen_runtime["engine"]
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     def boom(): raise RuntimeError("bad safetensors header")
     monkeypatch.setattr(eng, "_ensure_base17_loaded", boom)
@@ -164,7 +163,7 @@ def test_ensure_base17_for_mint_corrupt_on_nonoom(fake_qwen_runtime, monkeypatch
 
 def test_ensure_base17_for_mint_reraises_oom(fake_qwen_runtime, monkeypatch):
     import main
-    eng = fake_qwen_runtime
+    eng = fake_qwen_runtime["engine"]
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     def oom(): raise RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
     monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
@@ -283,7 +282,15 @@ def test_mint_variant_route_500_on_oom(qwen_test_client, designed_base_voice, mo
     assert "code" not in r.json()  # NOT a fallback signal
 ```
 
-> Note: if `qwen_test_client` / `designed_base_voice` fixtures don't exist, build them from the existing mint-variant route test's setup in this file (it already designs a base via the engine before calling the route). Keep the fixtures local if simpler.
+> **Net-new test infra (H2):** `qwen_test_client` and `designed_base_voice` do
+> NOT exist in `test_qwen3.py` — build them locally from the existing
+> mint-variant route test's setup (~`:1129-1209`): `TestClient(main.app)` +
+> `engine.design_voice("v1", …)` to create a base first. **Critical:** the
+> existing route tests stub the whole engine method via `_fake_mint_variant(...)`
+> — these 503/500 tests must NOT do that, or they bypass `_ensure_base17_for_mint`
+> entirely and test nothing. Instead `monkeypatch` `_qwen_base17_weights_present`
+> and/or `engine._ensure_base17_loaded` so the REAL `mint_variant` →
+> `_ensure_base17_for_mint` path runs and raises. Keep the fixtures local.
 
 - [ ] **Step 9: Run the full qwen test file**
 
@@ -314,7 +321,7 @@ git commit -m "feat(sidecar): classify 1.7B-Base mint failures (not-installed/co
 ```python
 def test_design_voice_writes_fallback_provenance(fake_qwen_runtime, tmp_path):
     import json, os
-    eng = fake_qwen_runtime
+    eng = fake_qwen_runtime["engine"]
     eng.design_voice(
         "qwen-x__angry", "a warm narrator", "english", "Hello.", None,
         mint_method="design-voice-fallback",
@@ -328,7 +335,7 @@ def test_design_voice_writes_fallback_provenance(fake_qwen_runtime, tmp_path):
 
 def test_design_voice_manifest_unchanged_without_provenance(fake_qwen_runtime):
     import json
-    eng = fake_qwen_runtime
+    eng = fake_qwen_runtime["engine"]
     eng.design_voice("qwen-y", "a warm narrator", "english", "Hello.", None)
     _pt, jpath = eng._voice_paths("qwen-y")
     meta = json.loads(open(jpath, encoding="utf-8").read())
@@ -550,9 +557,16 @@ const postDesignAndCache = async (
     const fileName = voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName: outVoiceId });
     const filePath = voiceSampleFilePath(fileName);
     const url = voiceSamplePublicUrl(fileName);
-    await mkdir(voiceSampleAudioDir(), { recursive: true });
-    const mp3 = await encodePcmToAudio(pcm, sampleRate);
-    await writeFile(filePath, mp3);
+    try {
+      await mkdir(voiceSampleAudioDir(), { recursive: true });
+      const mp3 = await encodePcmToAudio(pcm, sampleRate);
+      await writeFile(filePath, mp3);
+    } catch (encErr) {
+      throw new Error(`Designed the voice but failed to cache its preview: ${(encErr as Error).message}`);
+    }
+    // fs-45 v1: record the design peak (Base + VoiceDesign resident here).
+    const { maybeSampleSidecarEngine } = await import('../gpu/sidecar-vram-sample.js');
+    await maybeSampleSidecarEngine('qwen:design');
     return { voiceId: outVoiceId, url };
   } finally {
     clearInterval(livenessTimer);
@@ -560,6 +574,13 @@ const postDesignAndCache = async (
   }
 };
 ```
+
+> **H3 (do not drop behavior):** the extracted helper MUST keep (a) the
+> cache-error `try/catch` that rethrows `"Designed the voice but failed to cache
+> its preview: …"` and (b) the `maybeSampleSidecarEngine('qwen:design')`
+> telemetry call — both exist in the current inline block (`qwen-voice.ts:418-433`)
+> and an existing test asserts on `maybeSampleSidecarEngineMock`. The single
+> `releaseGpu()` stays in the OUTER `finally`, never in this helper.
 
 Then the existing body becomes (for now, behaviour-preserving):
 
@@ -613,7 +634,10 @@ it('falls back to design-voice on 503 not-installed (no retry)', async () => {
   expect(calls.filter((u) => u.includes('/qwen/mint-variant'))).toHaveLength(1);
   const dvCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/qwen/design-voice'))!;
   const sentBody = JSON.parse(String((dvCall[1] as RequestInit).body));
-  expect(sentBody.instruct).toBe('a warm narrator Delivered angrily, with raised intensity and edge.');
+  // EMOTION_INSTRUCT is module-private; assert structurally instead of pasting
+  // the (long, real) angry clause. The composed instruct is `${persona} ${clause}`.
+  expect(sentBody.instruct.startsWith('a warm narrator ')).toBe(true);
+  expect(sentBody.instruct.length).toBeGreaterThan('a warm narrator '.length);
   expect(sentBody.voiceId).toMatch(/__angry$/);
   expect(sentBody.mintMethod).toBe('design-voice-fallback');
 });
@@ -809,7 +833,19 @@ it('passes viaFallback through onVariantDesigned', async () => {
 Run: `npx vitest run src/lib/api.test.ts -t viaFallback`
 Expected: FAIL
 
-- [ ] **Step 3: Widen the type + parse**
+- [ ] **Step 3a: Extend the event interface (C3)**
+
+The SSE parse is typed `e: CastDesignStreamEvent` (`src/lib/api.ts:4664`), a flat
+interface at `:4615-4636` — it has NO `viaFallback`/`fallbackReason`, so reading
+them is a TS error unless you add them. In `interface CastDesignStreamEvent`,
+after `url?: string;` (~4635), add:
+
+```ts
+  viaFallback?: boolean;
+  fallbackReason?: 'not-installed' | 'corrupt';
+```
+
+- [ ] **Step 3b: Widen the callback type**
 
 Callback type (~4578):
 
@@ -817,12 +853,17 @@ Callback type (~4578):
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
 ```
 
-Real parse (~4735) — pass the optional fields from the parsed event:
+- [ ] **Step 3c: Pass the fields through the parse**
+
+The parsed event variable is **`e`** (not `ev`). In the `case 'variant_designed':`
+block (`:4729-4740`), inside the existing `cb.onVariantDesigned?.({ … })`:
 
 ```ts
           cb.onVariantDesigned?.({
-            characterId: ev.characterId, emotion: ev.emotion, voiceId: ev.voiceId,
-            ...(ev.viaFallback ? { viaFallback: true, fallbackReason: ev.fallbackReason } : {}),
+            characterId: e.characterId,
+            emotion: e.emotion as Emotion,
+            voiceId: e.voiceId,
+            ...(e.viaFallback ? { viaFallback: true, fallbackReason: e.fallbackReason } : {}),
           });
 ```
 
@@ -845,65 +886,82 @@ git commit -m "feat(frontend): carry viaFallback through the variant_designed st
 
 ## Task 9: Frontend — `fallbacks[]` snapshot state + reducer + middleware dispatch
 
+> **Round-1 correction (C1/H4):** the slice state is `{ active: CastDesignSnapshot | null }`
+> (`cast-design-slice.ts:82-88`) — there is **no `byBook` map** and **no `open`
+> action**. Reducers guard with `if (!snap || snap.bookId !== payload.bookId) return;`
+> (see `charFailed` `:177-195`); the openers are `begin` (`:113`) and `beginSingle`
+> (`:234`). `failures: []` is initialized at exactly two sites (`:133` in `begin`,
+> `:256` in `beginSingle`). The fallback record carries **no `name`** (the bulk
+> `variant_designed` event has none and there is no `selectCharacterName` selector
+> — H4); `{characterId, emotion}` is enough for the count-based summary (Task 10).
+
 **Files:**
-- Modify: `src/store/cast-design-slice.ts` (`CastDesignFallback` type, `CastDesignSnapshot.fallbacks`, init ~129/249, `variantFellBack` reducer near `charFailed` ~189)
-- Modify: `src/store/cast-design-stream-middleware.ts` (`onVariantDesigned` ~85-88)
+- Modify: `src/store/cast-design-slice.ts` (`CastDesignFallback` type ~31; `CastDesignSnapshot.fallbacks` ~77; init at `:133` and `:256`; `variantFellBack` reducer after `charFailed` ~195)
+- Modify: `src/store/cast-design-stream-middleware.ts` (`onVariantDesigned` `:85-88`)
 - Test: `src/store/cast-design-slice.test.ts`, `src/store/cast-design-stream-middleware.test.ts`
 
 **Interfaces:**
 - Consumes: `onVariantDesigned` payload (Task 8).
-- Produces: `castDesignActions.variantFellBack({ characterId, name, emotion })`; `CastDesignSnapshot.fallbacks: CastDesignFallback[]`.
+- Produces: `castDesignActions.variantFellBack({ bookId, characterId, emotion, lastTickAt })`; `CastDesignSnapshot.fallbacks: CastDesignFallback[]` where `CastDesignFallback = { characterId: string; emotion: string }`.
 
 - [ ] **Step 1: Write the failing slice test**
 
-In `src/store/cast-design-slice.test.ts`:
+In `src/store/cast-design-slice.test.ts` (use `begin`, and `state.active` — match the existing tests in the file):
 
 ```ts
-it('records a fallback variant in the snapshot', () => {
-  let s = reducer(undefined, castDesignActions.open({ bookId: 'b', kind: 'bulk', total: 1 }));
-  s = reducer(s, castDesignActions.variantFellBack({ bookId: 'b', characterId: 'c', name: 'Mara', emotion: 'angry' }));
-  expect(s.byBook['b'].fallbacks).toEqual([{ characterId: 'c', name: 'Mara', emotion: 'angry' }]);
+it('records a fallback variant in the active snapshot', () => {
+  let s = reducer(undefined, castDesignActions.begin({ bookId: 'b', total: 1, currentName: 'Mara', lastTickAt: 1 }));
+  s = reducer(s, castDesignActions.variantFellBack({ bookId: 'b', characterId: 'c', emotion: 'angry', lastTickAt: 2 }));
+  expect(s.active?.fallbacks).toEqual([{ characterId: 'c', emotion: 'angry' }]);
+});
+
+it('ignores a fallback for a different book', () => {
+  let s = reducer(undefined, castDesignActions.begin({ bookId: 'b', total: 1, currentName: null, lastTickAt: 1 }));
+  s = reducer(s, castDesignActions.variantFellBack({ bookId: 'OTHER', characterId: 'c', emotion: 'angry', lastTickAt: 2 }));
+  expect(s.active?.fallbacks).toEqual([]);
 });
 ```
-
-> Match the actual snapshot access shape used in this file's existing tests (e.g. `snapshotFor(s,'b')` or `s.byBook['b']`).
 
 - [ ] **Step 2: Run to verify fail**
 
 Run: `npx vitest run src/store/cast-design-slice.test.ts -t fallback`
-Expected: FAIL (`variantFellBack` is not an action)
+Expected: FAIL (`variantFellBack` is not a function)
 
-- [ ] **Step 3: Add the type + state + reducer**
+- [ ] **Step 3: Add the type + state field + init + reducer**
 
-Add the type near `CastDesignFailure` (~27):
+Add the type near `CastDesignFailure` (~31):
 
 ```ts
 export interface CastDesignFallback {
   characterId: string;
-  name: string;
   emotion: string;
 }
 ```
 
-Add to `CastDesignSnapshot` (after `failures` ~77):
+Add to `CastDesignSnapshot` after `failures: CastDesignFailure[];` (~77):
 
 ```ts
   /** Emotion variants minted via the design-voice fallback (1.7B-Base
-      unavailable) — lower fidelity; surfaced in the summary like `failures`. */
+      unavailable) — lower fidelity. Count surfaced in the completion summary. */
   fallbacks: CastDesignFallback[];
 ```
 
-Initialize `fallbacks: []` everywhere `failures: []` is initialized (~133 in `open`, ~256 in any reset).
+Add `fallbacks: [],` immediately after `failures: [],` at BOTH init sites — `begin` (`:133`) and `beginSingle` (`:256`).
 
-Add the reducer next to `charFailed` (~189):
+Add the reducer immediately after `charFailed` (~195), mirroring its cross-book guard:
 
 ```ts
     /* A variant was minted via the design-voice fallback (1.7B-Base
-       unavailable). Recorded for the summary; does NOT affect `done`. */
-    variantFellBack(state, action: PayloadAction<{ bookId: string; characterId: string; name: string; emotion: string }>) {
-      const snap = state.byBook[action.payload.bookId];
-      if (!snap) return;
-      snap.fallbacks.push({ characterId: action.payload.characterId, name: action.payload.name, emotion: action.payload.emotion });
+       unavailable). Recorded for the completion summary; does NOT bump `done`
+       (charDone already counts the success). */
+    variantFellBack(
+      state,
+      action: PayloadAction<{ bookId: string; characterId: string; emotion: string; lastTickAt: number }>,
+    ) {
+      const snap = state.active;
+      if (!snap || snap.bookId !== action.payload.bookId) return;
+      snap.fallbacks.push({ characterId: action.payload.characterId, emotion: action.payload.emotion });
+      snap.lastTickAt = action.payload.lastTickAt;
     },
 ```
 
@@ -914,24 +972,23 @@ Expected: PASS
 
 - [ ] **Step 5: Write the failing middleware test**
 
-In `src/store/cast-design-stream-middleware.test.ts`, add a case where the injected `cb.onVariantDesigned` is called with `viaFallback: true` and assert a `variantFellBack` dispatch occurs. Mirror the existing `onVariantDesigned` test setup.
+In `src/store/cast-design-stream-middleware.test.ts`, mirror the existing `onVariantDesigned` test: invoke the built callback with `{ characterId:'c', emotion:'angry', voiceId:'v', viaFallback:true }` and assert a `castDesign/variantFellBack` action was dispatched (capture dispatched actions as the existing tests do).
 
 - [ ] **Step 6: Dispatch from the middleware**
 
-In `cast-design-stream-middleware.ts` (~85):
+In `cast-design-stream-middleware.ts`, replace the `onVariantDesigned` handler (`:85-88`):
 
 ```ts
       onVariantDesigned: ({ characterId, emotion, voiceId, viaFallback }) => {
         dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
         if (viaFallback) {
-          const name = selectCharacterName(getState(), characterId) ?? characterId;
-          dispatch(castDesignActions.variantFellBack({ bookId, characterId, name, emotion }));
+          dispatch(castDesignActions.variantFellBack({ bookId, characterId, emotion, lastTickAt: Date.now() }));
         }
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
 ```
 
-> Use whatever name-lookup the middleware already has access to (it dispatches `charFailed` with a name elsewhere — reuse that pattern; if no selector exists, pass `characterId` as the name and let the render fall back).
+(No name lookup — the record is `{characterId, emotion}`; `bookId` is already in closure scope from `buildCallbacks(bookId, …)`.)
 
 - [ ] **Step 7: Run both store tests to verify pass**
 
@@ -948,62 +1005,83 @@ git commit -m "feat(frontend): record design-voice fallback variants in the desi
 
 ---
 
-## Task 10: Frontend — render the fallback note in the Design summary
+## Task 10: Frontend — surface the fallback count in the completion summary toast
+
+> **Round-1 correction (C2):** there is **no failures-list component** —
+> `grep "\.failures"` over `src/components`/`src/views` returns nothing. The
+> design summary is the completion **toast** built in
+> `cast-design-stream-middleware.ts`'s `onIdle` (`:101-115`):
+> `"Designed 6 · 1 failed · 2 skipped."`. The fallback note belongs there, as a
+> `· N via fallback` part. The count comes from the slice state the middleware
+> accumulated during the run (`store.getState().castDesign.active?.fallbacks`),
+> read at idle — `settle` is dispatched first but the snapshot is still present
+> (it's cleared later, after `SUMMARY_LINGER_MS`).
 
 **Files:**
-- Modify: the component that renders `CastDesignSnapshot.failures` (find via `grep -rn "\.failures" src/components src/views`)
-- Test: that component's colocated `*.test.tsx`
+- Modify: `src/store/cast-design-stream-middleware.ts` (`onIdle` toast builder, `:101-115`)
+- Test: `src/store/cast-design-stream-middleware.test.ts`
 
 **Interfaces:**
 - Consumes: `CastDesignSnapshot.fallbacks` (Task 9).
 
-- [ ] **Step 1: Locate the failures-render site**
+- [ ] **Step 1: Write the failing test**
 
-Run: `grep -rn "\.failures" src/components src/views | grep -i design`
-Note the file + the JSX block that lists failures.
+In `src/store/cast-design-stream-middleware.test.ts`, drive a run that records ≥1 fallback (dispatch `variantFellBack` via the `onVariantDesigned` path, or seed the store), then invoke `onIdle({ done: 1, total: 1, skipped: 0, failures: [] })` and assert the pushed toast message contains the fallback part:
 
-- [ ] **Step 2: Write the failing component test**
-
-In that component's test, render it with a snapshot that has `fallbacks: [{characterId:'c', name:'Mara', emotion:'angry'}]` and assert the note text appears:
-
-```tsx
-it('shows a lower-fidelity fallback note', () => {
-  renderWithSnapshot({ fallbacks: [{ characterId: 'c', name: 'Mara', emotion: 'angry' }], failures: [] /* + other required snapshot fields */ });
-  expect(screen.getByText(/via fallback \(lower fidelity\)/i)).toBeInTheDocument();
+```ts
+it('includes a fallback count in the completion toast', () => {
+  // arrange: store has an active bulk snapshot with one fallback recorded
+  // (begin → variantFellBack), then call the onIdle callback.
+  const toasts = captureToasts(); // existing helper / spy on notificationsActions.pushToast
+  cb.onIdle({ done: 1, total: 1, skipped: 0, failures: [] });
+  expect(toasts.at(-1)?.message).toMatch(/1 via fallback/);
 });
 ```
 
-- [ ] **Step 3: Run to verify fail**
+- [ ] **Step 2: Run to verify fail**
 
-Run: `npx vitest run <that-test-file>`
-Expected: FAIL (text not found)
+Run: `npx vitest run src/store/cast-design-stream-middleware.test.ts -t fallback`
+Expected: FAIL (toast has no "via fallback" part)
 
-- [ ] **Step 4: Render the note**
+- [ ] **Step 3: Add the toast part**
 
-Next to the failures list JSX, add (matching the surrounding markup/classes):
+In `onIdle` (`:101-115`), after the `skipped` part is pushed and before the toast dispatch, read the accumulated count and add a part:
 
-```tsx
-{snap.fallbacks.length > 0 && (
-  <p className="text-sm text-ink/70">
-    {snap.fallbacks.length} emotion variant{snap.fallbacks.length > 1 ? 's' : ''} minted via fallback (lower fidelity):{' '}
-    {snap.fallbacks.map((f) => `${f.name} (${f.emotion})`).join(', ')}
-  </p>
-)}
+```ts
+      onIdle: ({ done, total, skipped, failures }) => {
+        const fellBack = (store.getState() as CastDesignRootState).castDesign.active?.fallbacks.length ?? 0;
+        dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
+        if (total > 0) {
+          const failed = failures.length;
+          const parts = [`Designed ${done}`];
+          if (fellBack > 0) parts.push(`${fellBack} via fallback (lower fidelity)`);
+          if (failed > 0) parts.push(`${failed} failed`);
+          if (skipped > 0) parts.push(`${skipped} skipped`);
+          dispatch(
+            notificationsActions.pushToast({
+              kind: failed > 0 ? 'error' : 'info',
+              message: `${parts.join(' · ')}.`,
+              dedupeKey: `cast-design-done:${bookId}`,
+            }),
+          );
+        }
+        /* …existing clear-after-linger block unchanged… */
+      },
 ```
 
-> Use existing design tokens/classes from the sibling failures markup — no hex literals.
+> Read `fellBack` BEFORE `settle` (settle doesn't touch `fallbacks`, but reading first is robust against future changes). `CastDesignRootState` is already imported/defined in this file (`:39-41`); extend its inline type if needed so `.active.fallbacks` typechecks — or cast as the file already does for `currentNameFor`.
 
-- [ ] **Step 5: Run to verify pass**
+- [ ] **Step 4: Run to verify pass**
 
-Run: `npx vitest run <that-test-file>`
+Run: `npx vitest run src/store/cast-design-stream-middleware.test.ts`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd C:/Claude/Projects/Audiobook-Generator-wt-srv52
-git add <component>.tsx <component>.test.tsx
-git commit -m "feat(frontend): show design-voice fallback note in the Design summary"
+git add src/store/cast-design-stream-middleware.ts src/store/cast-design-stream-middleware.test.ts
+git commit -m "feat(frontend): show design-voice fallback count in the completion summary"
 ```
 
 ---
