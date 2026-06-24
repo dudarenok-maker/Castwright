@@ -1,5 +1,5 @@
 {
-  "note": "Canonical cast for The Coalfall Commission (English and Spanish translations are 1:1). Used by scripts/eval-attribution.mjs.",
+  "note": "Canonical cast for The Coalfall Commission (the en/es/fr/de/ru translations are 1:1 line-for-line). Aliases carry every translation's name for an entity (e.g. the dragon: Dragón/le dragon/Drache; Wren's nickname: Sparrow/Gorrión/Moineau/Spatz) so the same ground truth scores a run in any of these languages. Matching is exact normalised full-name, so each alias is a full name the analyzer might emit, not a token. Used by scripts/eval-attribution.mjs.",
   "allowedAnonymous": ["unknown male", "unknown female", "unknown"],
   "speakers": [
     {
@@ -12,10 +12,10 @@
     {
       "id": "coalfall",
       "name": "Coalfall",
-      "aliases": ["Dragón", "Dragon", "El Dragón", "the dragon", "The Dragon"],
+      "aliases": ["Dragón", "Dragon", "El Dragón", "the dragon", "The Dragon", "le dragon", "Le dragon", "Drache", "Der Drache", "Drachen"],
       "expectedLines": 22,
       "lineRange": [11, 44],
-      "entitySplitAliases": ["Dragón", "Dragon", "El Dragón", "the dragon", "The Dragon"]
+      "entitySplitAliases": ["Dragón", "Dragon", "El Dragón", "the dragon", "The Dragon", "le dragon", "Le dragon", "Drache", "Der Drache", "Drachen"]
     },
     {
       "id": "oduvan",
@@ -27,7 +27,7 @@
     {
       "id": "wren",
       "name": "Wren",
-      "aliases": [],
+      "aliases": ["Sparrow", "Gorrión", "Moineau", "Spatz"],
       "expectedLines": 11,
       "lineRange": [5, 22]
     },
@@ -55,7 +55,7 @@
     {
       "id": "widow-casper",
       "name": "Widow Casper",
-      "aliases": ["Viuda Casper", "Casper"],
+      "aliases": ["Viuda Casper", "Casper", "Veuve Casper", "Witwe Casper", "Veuve", "Witwe"],
       "expectedLines": 7,
       "lineRange": [3, 14]
     },
@@ -76,7 +76,7 @@
     {
       "id": "father-lessom",
       "name": "Father Lessom",
-      "aliases": ["Padre Lessom", "Lessom"],
+      "aliases": ["Padre Lessom", "Lessom", "Père Lessom", "Vater Lessom", "Pater Lessom"],
       "expectedLines": 4,
       "lineRange": [2, 8]
     },
