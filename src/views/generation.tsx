@@ -50,6 +50,7 @@ import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { uiActions } from '../store/ui-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
 import { api, AnalysisError } from '../lib/api';
@@ -171,6 +172,11 @@ export function GenerationView({
      reconcile-driven path never writes a queue entry) so the pill doesn't read
      0 / vanish while a book is visibly generating. */
   const activityCount = useAppSelector(selectGenerationActivityCount);
+  /* fs-57 — per-book live-instruct flag. Defaults false (absent on older books).
+     Dispatching setLiveInstruct also fires a persistence-middleware PUT via the
+     'bookMeta/setLiveInstruct' rule. The `?? false` guard makes this safe when
+     the bookMeta slice is absent in tests that predate it. */
+  const liveInstruct = useAppSelector((s) => s.bookMeta?.liveInstruct ?? false);
   /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
      is set by the queue modal's "Jump to chapter" affordance (modal pushes
      #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
@@ -846,6 +852,32 @@ export function GenerationView({
               />
             )}
           </p>
+          {/* fs-57 — per-book live-instruct toggle. Only meaningful for
+              1.7B-tier characters; shown for all books so the operator can
+              flip it before starting generation. */}
+          <label
+            className="mt-2 flex items-center gap-2 cursor-pointer select-none min-h-[44px] sm:min-h-0"
+            data-testid="live-instruct-toggle"
+          >
+            <input
+              type="checkbox"
+              checked={liveInstruct}
+              onChange={(e) =>
+                dispatch(bookMetaActions.setLiveInstruct(e.target.checked))
+              }
+              className="accent-magenta w-4 h-4 shrink-0"
+            />
+            <span className="text-xs text-ink/60 leading-snug">
+              <span className="font-medium text-ink/75">
+                Live expressive delivery (1.7B)
+              </span>{' '}
+              — re-render to hear it
+              <span className="block text-ink/45 mt-0.5">
+                Uses real-time instruct prompts to shape emotion + vocalizations on
+                Qwen 1.7B characters. Has no effect on Kokoro or 0.6B voices.
+              </span>
+            </span>
+          </label>
           {/* TTS Load/Stop notices (eviction + load error) now render once
               globally under the top bar via <TtsNoticeBanner> in layout.tsx —
               see that component for why. The inline copy was removed here to
