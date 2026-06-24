@@ -5,7 +5,14 @@ import {
   planRenames,
   classifyVoiceGroup,
   rekeyCharacterNames,
+  storageKeyForRow,
 } from '../repair-qwen-voice-uuid-keys.mjs';
+
+test('storageKeyForRow: uuid wins, else voiceId, else id', () => {
+  assert.equal(storageKeyForRow({ id: 'x', voiceId: 'vx', voiceUuid: 'U' }), 'qwen-U');
+  assert.equal(storageKeyForRow({ id: 'x', voiceId: 'vx' }), 'qwen-vx');
+  assert.equal(storageKeyForRow({ id: 'x' }), 'qwen-x');
+});
 
 test('belongsToKey matches base + variants but not prefix-siblings', () => {
   assert.equal(belongsToKey('qwen-dad.pt', 'qwen-dad'), true);
