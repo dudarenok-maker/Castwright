@@ -8,6 +8,7 @@
 - **A third language takes the stage: Spanish.** After English and Russian, Castwright now performs Spanish-language books with the same full-cast craft — it reads the manuscript in Spanish, gives every character a voice that speaks it, and keeps the cast's tone and descriptions written in the book's own language.
 - **Castwright knows what language your book is in.** Drop in a manuscript and it recognises the language the moment you import — and tells you plainly, before you commit, whether it's one it can perform yet, so you're never halfway in before you find out.
 - **The right voice for the language.** Browse your voice library by language, and when you cast a character the voices that don't speak the book's tongue step quietly aside — one tap brings them all back — so every voice you pick is one that can actually perform the part.
+- **Design your cast without a cloud key.** Crafting a character's voice used to need a hosted service to write its description from; now Castwright can do that on a model running entirely on your own machine, so a fully offline setup — or one with no cloud key — can still design a full cast from scratch. The cloud path stays the default for the richest results; this is the offline road for those who want it.
 - **An em dash no longer trips a line.** A line carrying an em dash — or other punctuation beyond plain text — could occasionally fail to render; it now performs cleanly.
 
 # Castwright 1.9.0
