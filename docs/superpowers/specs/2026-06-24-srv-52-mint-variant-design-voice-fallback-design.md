@@ -173,35 +173,56 @@ single-design/REST route) inherits it identically.
 2. **`/health` gains `qwen_base17_weights_present`** — computed each poll
    (cheap, side-effect-free) alongside the existing `qwen_base17_loaded`.
 
-3. **`mint_variant` raises distinct, typed errors so the route can classify**,
-   replacing the generic 500 for the not-installed / corrupt cases. The checks
-   live **inside `mint_variant`** (not as a route pre-check) in this strict
-   order, so the existing base-first contract is preserved:
+3. **A dedicated classified-load method** is the seam for distinguishing
+   not-installed / corrupt / OOM. **Do NOT try to bracket the raw load with a
+   single inline try/except** — `mint_variant` calls `_ensure_base17_loaded()`
+   at `main.py:2006` (under `with self._base17_activity(), _VD_KOKORO.design():`)
+   AND re-checks at `2008` (first line under the nested `with self._synth_lock:`,
+   immediately followed by the decode/ICL/instruct-synth at `2009-2018`). Those
+   two call sites are at **different nesting levels**, and `2008` is contiguous
+   with non-load work — so one wrap "around both, nothing else" is structurally
+   impossible without either leaking the lock or over-broadening the catch (the
+   round-2 finding C-A).
 
-   1. **Base `.pt` missing** → existing `VoiceNotDesignedError` (`main.py:1982`)
-      → route maps to **409**. *Unchanged, and FIRST* — a character with no
-      designed base is always a 409 regardless of Base17 state, so a
-      missing-base + missing-Base17 character does **not** wrongly fall back
-      (H4). The fallback never papers over "base not designed."
-   2. **Base17 not installed** — immediately after the base check, if
-      `_qwen_base17_weights_present()` is false, raise
-      `Base17UnavailableError("not-installed")` *before* attempting any load →
-      route maps to `503 { code:"base17-unavailable", reason:"not-installed" }`.
-   3. **Base17 load fails** — wrap **only** the Base17 load
-      (`_ensure_base17_loaded()`, called at `main.py:2006` and re-checked at
-      `2008` — both inside the wrap, nothing else) in a try/except:
-      - OOM (per the substring gate above) → **re-raise unchanged** → generic
-        500. NOT a fallback trigger.
-      - any other exception → raise `Base17UnavailableError("corrupt", cause)`
-        → route maps to `503 { …, reason:"corrupt", detail:"<exc message>" }`.
+   Instead add **one new method** and call it at **both** sites in place of the
+   raw `_ensure_base17_loaded()`:
 
-   **The wrap is the narrow seam (H3): it brackets the load call only.** Decode
-   (`speech_tokenizer.decode`, `main.py:2011`), `_icl_instruct_synth`, the 0.6B
-   distil, and the audition are **outside** it, so a bug there (qwen_tts API
-   drift, malformed `ref_code`, distil failure) still surfaces as a generic 500
-   — never mis-tagged "corrupt" and never wrongly falling back. `Base17UnavailableError`
-   is raised only from these two points, so the 1.7B synth/batch callers of
-   `_ensure_base17_loaded()` are unaffected (they don't catch it → existing 500).
+   ```python
+   def _ensure_base17_for_mint(self) -> None:
+       """Mint-only: ensure the 1.7B-Base is available, raising a typed
+       Base17UnavailableError the mint route maps to a 503 fallback signal.
+       Other callers keep using _ensure_base17_loaded() and are unaffected."""
+       if not _qwen_base17_weights_present():
+           raise Base17UnavailableError("not-installed")
+       try:
+           self._ensure_base17_loaded()
+       except Exception as e:                      # noqa: BLE001 — classify+reraise
+           msg = str(e).lower()
+           if "out of memory" in msg or isinstance(
+               e, getattr(torch.cuda, "OutOfMemoryError", ())
+           ):
+               raise                               # OOM → generic 500, NO fallback
+           raise Base17UnavailableError("corrupt") from e
+   ```
+
+   Ordering is preserved automatically: the base-`.pt` check
+   (`VoiceNotDesignedError → 409`) is at `main.py:1982`, *before* either call
+   site, so a missing-base character is always a 409 regardless of Base17 state
+   (H4) — the fallback never papers over "base not designed." The not-installed
+   check lives in the method (cheap, idempotent on the second call). The
+   **narrow-catch guarantee (H3) holds because the try wraps only
+   `_ensure_base17_loaded()`** — the decode / `_icl_instruct_synth` / 0.6B distil
+   / audition at `2009-2018+` are *outside* this method, so a bug there still
+   surfaces as a generic 500, never mis-tagged "corrupt". The 1.7B synth/batch
+   paths call the original `_ensure_base17_loaded()` and are unchanged.
+
+   Route mapping (`qwen_mint_variant`, `main.py:4066-4081`): add an
+   `except Base17UnavailableError as e` arm **before** the generic `except`,
+   returning `JSONResponse({"code": "base17-unavailable", "reason": e.reason,
+   "detail": str(e)}, status_code=503)`. `VoiceNotDesignedError` keeps its 409;
+   every other exception keeps the existing generic 500 (so a re-raised OOM stays
+   a 500). `Base17UnavailableError` is a small new exception class carrying
+   `.reason ∈ {"not-installed","corrupt"}`.
 
 4. **`/qwen/design-voice` accepts optional provenance fields** so a
    fallback-minted variant is honestly stamped. Body may carry:
@@ -228,7 +249,12 @@ single-design/REST route) inherits it identically.
    into the helper). So a cancel during the fallback aborts the fallback's own
    controller, and each call gets a fresh liveness timer + ceiling. This is the
    one part of the refactor that is **not** verbatim reuse — the spec calls it
-   out so it isn't missed.
+   out so it isn't missed. **Cleanup-ownership rule:** `clearInterval(timer)` +
+   `removeEventListener(p.signal,…)` live in `postDesignAndCache`'s own `finally`
+   (per call); the **single** `releaseGpu()` stays in the *outer*
+   `designQwenVoiceForCharacter` `finally` (once, after both calls) — so the
+   semaphore is never double-released and a timer/listener can't leak across the
+   two calls.
 
 2. **Typed `SidecarDesignError` carrying status + code.** Today the non-OK
    branch (`qwen-voice.ts:394-406`) throws a plain `Error` with only a message.
@@ -293,15 +319,33 @@ single-design/REST route) inherits it identically.
 6. **Server log** on fallback:
    `[qwen-voice] 1.7B-Base unavailable (reason=<not-installed|corrupt>) — minted <emotion> variant for <characterId> via design-voice fallback (lower fidelity).`
 
-### Bulk Design progress stream (`server/src/routes/cast-design.ts`)
+### Bulk Design progress stream + the frontend note (H-A)
 
-- The bulk variant loop already broadcasts
+The round-2 review confirmed there is **no existing per-variant row** to hang a
+note on: `cast-design-slice`'s `CastDesignSnapshot` holds only aggregate state
+(`done`/`skipped`/`failures`/`currentName`); the only per-character surface is
+the `failures` list. `cast-slice`'s `variants[emotion]` is `{ name }` with no
+fallback field. So the note needs a concrete, named surface — modelled on the
+existing `failures` list (the established pattern), not invented UI:
+
+- **Server** (`cast-design.ts`): the bulk variant loop broadcasts
   `{ type: 'variant_designed', characterId, emotion, voiceId }` on success
-  (line ~380). Extend it with `viaFallback: boolean` (and `fallbackReason`)
-  read from the `designQwenVoiceForCharacter` return value.
-- Client: the Design panel renders "minted via fallback (lower fidelity)" for
-  any character whose `variant_designed` carried `viaFallback: true`. (Frontend
-  surface is small — a per-row note in the existing live panel, no new modal.)
+  (line ~380). Add `viaFallback: boolean` + `fallbackReason` from the
+  `designQwenVoiceForCharacter` return value.
+- **api.ts** (`src/lib/api.ts:4729-4740` + the mock at ~4964): widen the
+  `onVariantDesigned` callback payload with the two optional fields. Backward-safe.
+- **`cast-design-slice`**: add a `fallbacks: { characterId; name; emotion }[]`
+  array to `CastDesignSnapshot` — a **mirror of `failures`**. Reducer pushes an
+  entry when a `variant_designed` carries `viaFallback`.
+- **`cast-design-stream-middleware.ts`** (`:85-88`): on `variant_designed` with
+  `viaFallback`, dispatch the new `castDesignActions.variantFellBack({characterId,
+  name, emotion})` alongside the existing `setCharacterEmotionVariant`/`charDone`.
+- **Render site**: the Design panel/summary that already renders the `failures`
+  list renders a sibling line — e.g. "N emotion variant(s) minted via fallback
+  (lower fidelity)" with the per-character/emotion detail. Same component, same
+  pattern as failures; **no new modal, no new per-row variant UI invented.**
+- **Durable provenance** is independent of this (the `.json` `mintMethod` marker),
+  so even if the live note is missed the fallback is greppable on disk.
 
 ### Health forwarding (`server/src/routes/sidecar-health.ts`)
 
