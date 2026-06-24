@@ -17,9 +17,9 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
-import { manuscriptEditsJsonPath, castJsonPath } from '../workspace/paths.js';
+import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { loadAnalysisCache } from '../store/analysis-cache.js';
+import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
@@ -37,46 +37,6 @@ interface CastCharacterSlim {
 }
 interface CastFile {
   characters?: CastCharacterSlim[];
-}
-
-/* Load the book's POST-FOLD attributed sentences grouped by chapter — the
-   same source synth + the manuscript view use. Mirrors loadPostFoldSentencesByChapter
-   from annotate-emotion.ts exactly (same reconciliation logic). */
-async function loadPostFoldSentencesByChapter(
-  manuscriptId: string,
-  bookDir: string,
-): Promise<Map<number, SentenceOutput[]>> {
-  const cache = await loadAnalysisCache(manuscriptId);
-  const cachedSentences = Object.values(cache.chapters ?? {}).flat();
-  const edits = await readJson<{ sentences?: SentenceOutput[] }>(manuscriptEditsJsonPath(bookDir));
-
-  let sentences: SentenceOutput[];
-  if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
-    if (cachedSentences.length > 0) {
-      const cacheIds = new Set<number>();
-      let maxCacheId = 0;
-      for (const s of cachedSentences) {
-        cacheIds.add(s.id);
-        if (s.id > maxCacheId) maxCacheId = s.id;
-      }
-      sentences = edits.sentences.filter(
-        (s) => typeof s?.id !== 'number' || cacheIds.has(s.id) || s.id > maxCacheId,
-      );
-    } else {
-      sentences = edits.sentences;
-    }
-  } else {
-    sentences = cachedSentences;
-  }
-
-  const byChapter = new Map<number, SentenceOutput[]>();
-  for (const s of sentences) {
-    if (typeof s?.chapterId !== 'number') continue;
-    const bucket = byChapter.get(s.chapterId);
-    if (bucket) bucket.push(s);
-    else byChapter.set(s.chapterId, [s]);
-  }
-  return byChapter;
 }
 
 /* Build the per-chapter script-review prompt. We send the full chapter
