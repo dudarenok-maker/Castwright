@@ -122,6 +122,12 @@ describe('validateRosterCoverage', () => {
     const v = validateRosterCoverage(LESSOM_BODY, ['Aldous']);
     expect(v.missingSpeakers.map((s) => s.name)).not.toContain('Lessom');
   });
+
+  it('flags a single-hit English speaker that is straight-double-quote adjacent', () => {
+    const body = '"Fine," Lessom agreed.';
+    const res = validateRosterCoverage(body, new Set<string>(['Mara']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'en');
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Lessom');
+  });
 });
 
 // Minimal character shape — the guard only requires { id, name } on C. (The
@@ -277,31 +283,56 @@ describe('validateAttributionCoverage (#529 half-state)', () => {
   });
 });
 
-describe('roster guard — non-English gate (seam 3d)', () => {
-  it('skips the roster guard for a German book (no false positives from capitalised nouns)', () => {
-    // German prose: every noun is capitalised; "Diener"/"Frau"/"Soldat" before a
-    // verb would false-flag as missing speakers if the English guard ran.
-    const body = '„Ja", sagte der Diener. „Nein", antwortete die Frau. „Schnell", rief der Soldat.';
-    const res = validateRosterCoverage(body, new Set<string>(), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'de');
-    expect(res.missingSpeakers).toEqual([]); // gated off → no missing-speaker flags
-    expect(res.ok).toBe(true);
-    expect(res.issues).toEqual([]);
-  });
-
-  it('still runs the guard for English (default language) — Lessom regression intact', () => {
-    // No language arg → defaults to 'en' → guard runs → Lessom flagged.
-    const res = validateRosterCoverage(LESSOM_BODY, new Set<string>(), DEFAULT_ROSTER_COVERAGE_THRESHOLDS);
-    expect(res.missingSpeakers.map((m) => m.name.toLowerCase())).toContain('lessom');
+describe('roster guard — localized detection (es/ru/fr/de) #1051', () => {
+  it('flags a Spanish prose-tagged speaker missing from the roster (Berrin)', () => {
+    const body = '—Está bien —dijo Berrin, mirando la campana.';
+    const res = validateRosterCoverage(body, new Set<string>(['Mara']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'es');
     expect(res.ok).toBe(false);
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Berrin');
   });
-
-  it('skips the attribution guard for a German book', () => {
-    // German prose tagged with German verbs — attribution guard must not fire.
-    const body = '„Ja", sagte der Diener. „Nein", antwortete die Frau. „Schnell", rief der Soldat.';
-    const roster = [{ id: 'diener', name: 'Diener' }];
-    const sentences = [{ characterId: 'narrator' }];
-    const res = validateAttributionCoverage(body, roster, sentences, DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'de');
+  it('flags a Russian prose-tagged speaker missing from the roster (Одуван)', () => {
+    const body = '«Одну минуту», — сказал Одуван и улыбнулся.';
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.ok).toBe(false);
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Одуван');
+  });
+  it('recovers the German SURNAME, not the title (Frau Schmidt → Schmidt)', () => {
+    const body = '„Guten Tag", sagte Frau Schmidt zu ihrem Nachbarn.';
+    const res = validateRosterCoverage(body, new Set<string>(['Mara']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'de');
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Schmidt');
+    expect(res.missingSpeakers.map((s) => s.name)).not.toContain('Frau');
+  });
+  it('does NOT flag a Spanish sentence-opener (stopword, finding J)', () => {
+    const body = 'Entonces dijo que la noche sería larga. Entonces dijo otra cosa.';
+    const res = validateRosterCoverage(body, new Set<string>(['Mara']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'es');
+    expect(res.missingSpeakers.map((s) => s.name)).not.toContain('Entonces');
+  });
+  it('still gates an unmapped language (pt → no-op)', () => {
+    const body = 'qualquer coisa';
+    const res = validateRosterCoverage(body, new Set<string>(), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'pt');
     expect(res.ok).toBe(true);
-    expect(res.halfStateSpeakers).toEqual([]);
+    expect(res.missingSpeakers).toEqual([]);
+  });
+});
+
+describe('validateAttributionCoverage — localized half-state (es/ru) #1051', () => {
+  it('flags a rostered Spanish speaker prose-tagged but with 0 attributed lines', () => {
+    const body = '—Está bien —dijo Berrin, mirando la campana.';
+    const roster = [{ id: 'berrin', name: 'Berrin' }];
+    const chapterSentences = [{ characterId: 'narrator' }]; // Berrin's quote stranded on narrator
+    const res = validateAttributionCoverage(body, roster, chapterSentences, DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'es');
+    expect(res.ok).toBe(false);
+    expect(res.halfStateSpeakers.map((s) => s.id)).toContain('berrin');
+  });
+  it('does not flag a rostered Spanish speaker who already has lines', () => {
+    const body = '—Está bien —dijo Berrin.';
+    const roster = [{ id: 'berrin', name: 'Berrin' }];
+    const chapterSentences = [{ characterId: 'berrin' }]; // has a line → not a half-state
+    const res = validateAttributionCoverage(body, roster, chapterSentences, DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'es');
+    expect(res.halfStateSpeakers.map((s) => s.id)).not.toContain('berrin');
+  });
+  it('still gates an unmapped language (pt → no-op)', () => {
+    const res = validateAttributionCoverage('qualquer', [{ id: 'x', name: 'X' }], [], DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'pt');
+    expect(res.ok).toBe(true);
   });
 });

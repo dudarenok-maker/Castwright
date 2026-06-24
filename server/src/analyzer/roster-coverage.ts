@@ -29,9 +29,9 @@
    Purity: no I/O, no model calls (the stage-1 call is injected). Mirrors the
    env-override + injected-`call` shape of stage2-coverage.ts. */
 
-import { DIALOGUE_VERBS } from './dialogue-verbs.js';
 import { safeId } from '../util/safe-id.js';
-import { isNonEnglish } from '../tts/language.js';
+import { grammarFor, tagScanRegexesFor } from './tag-grammar.js';
+import { normaliseBookLanguage } from '../tts/language.js';
 
 export interface RosterCoverageThresholds {
   /** A candidate with fewer than this many tags must be quote-adjacent to count. */
@@ -164,7 +164,19 @@ function rosterTokenSet(rosterNames: Iterable<string>): Set<string> {
   return set;
 }
 
-const QUOTE_CHARS = /["“”]/;
+// Quote glyphs for the adjacency window, written as \u escapes so an editor
+// can't silently flatten the curly/guillemet chars (P-1 regression guard).
+// QUOTE_CHARS (en, narrow): straight " + curly open/close \u201C \u201D.
+const QUOTE_CHARS = /[\u0022\u201C\u201D]/;
+// QUOTE_CHARS_WIDE (es/ru/fr/de): + \u201E (German low), \u00AB \u00BB (guillemets), \u2014 \u2013 (dashes).
+const QUOTE_CHARS_WIDE = /[\u0022\u201C\u201D\u201E\u00AB\u00BB\u2014\u2013]/;
+
+/** A grammar's language sentence-opener stopwords as a Set (es/ru/fr/de). Empty
+    for en (no g.stopwords) so the English path stays byte-identical — the loop
+    still applies the existing isStopword() de-pluralization predicate first. */
+function langStopwords(g: { stopwords?: readonly string[] }): Set<string> {
+  return new Set<string>(g.stopwords ?? []);
+}
 
 /** Scan chapter prose for `<Name> <speech-verb>` tags whose Name is not on the
     roster. See the module header for the false-positive bounding. */
@@ -174,50 +186,54 @@ export function validateRosterCoverage(
   thresholds?: RosterCoverageThresholds,
   language: string = 'en',
 ): RosterCoverageVerdict {
-  // fs-41/fs-50 §4.3 — the [A-Z]+verb roster heuristic is English-only (German
-  // capitalises every noun → false positives; ES/FR invert verb/name → false
-  // negatives). Gate it off for non-English; localisation is a follow-up.
-  if (isNonEnglish(language)) return { ok: true, missingSpeakers: [], issues: [] };
+  const g = grammarFor(language);
+  if (!g) return { ok: true, missingSpeakers: [], issues: [] }; // unmapped → gated
   const t = resolveThresholds(thresholds);
   const roster = rosterTokenSet(rosterNames);
   const ignore = ignoredNames();
-  const verbAlt = DIALOGUE_VERBS.join('|');
-  /* Name = a capitalised token (letters, internal apostrophes/hyphens) directly
-     followed by a lowercase speech verb. Case-sensitive: the verb must be
-     lowercase (a real tag is `Lessom said`, never `Lessom Said`). */
-  const tagRe = new RegExp(`\\b([A-Z][A-Za-z’'\\-]+)\\s+(?:${verbAlt})\\b`, 'g');
+  const langStops = langStopwords(g); // language sentence-opener stopwords (es/ru/fr/de)
+  const tagRes = tagScanRegexesFor(g);
+  // P-1: English keeps the historical NARROW quote set (byte-identity); es/ru/fr/de
+  // use the wide set their dialogue marks require.
+  const quoteChars = normaliseBookLanguage(language) === 'en' ? QUOTE_CHARS : QUOTE_CHARS_WIDE;
 
   const body = bodyText || '';
   interface Acc { name: string; tagCount: number; sampleTag: string; quoteAdjacent: boolean }
   const candidates = new Map<string, Acc>();
+  const seenSpans = new Set<number>(); // R2-1: count each source span once
 
-  for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
-    const rawName = stripPossessive(m[1]);
-    const key = rawName.toLowerCase();
-    // Disguise notation ("Marlow-as-Lady-Renna") — the underlying character is
-    // already cast; the prose alias isn't a new speaker.
-    if (key.includes('-as-')) continue;
-    // Contraction guard: "I've"/"You've"/"They'll" → test the root before the
-    // apostrophe against the stopword set so contracted pronouns don't slip in.
-    const root = key.split(/['’]/)[0];
-    if (isStopword(key) || isStopword(root) || ignore.has(key)) continue;
-    if (roster.has(key)) continue;
-    // last-token match (tag "Casper" vs roster token "casper") already covered
-    // because rosterTokenSet stores last tokens too.
-    const start = Math.max(0, m.index - t.quoteProximityChars);
-    const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
-    const adjacent = QUOTE_CHARS.test(body.slice(start, end));
-    const prev = candidates.get(key);
-    if (prev) {
-      prev.tagCount += 1;
-      prev.quoteAdjacent = prev.quoteAdjacent || adjacent;
-    } else {
-      candidates.set(key, {
-        name: rawName,
-        tagCount: 1,
-        sampleTag: m[0].trim(),
-        quoteAdjacent: adjacent,
-      });
+  for (const tagRe of tagRes) {
+    for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
+      const nameIdx = m.index + m[0].indexOf(m[1]);
+      if (seenSpans.has(nameIdx)) continue; // matched by another order already
+      seenSpans.add(nameIdx);
+      const rawName = stripPossessive(m[1]);
+      const key = rawName.toLowerCase();
+      // Disguise notation ("Marlow-as-Lady-Renna") — the underlying character is
+      // already cast; the prose alias isn’t a new speaker.
+      if (key.includes('-as-')) continue;
+      // Contraction guard: "I’ve"/"You’ve"/"They’ll" → test the root before the
+      // apostrophe against the stopword set so contracted pronouns don’t slip in.
+      const root = key.split(/[‘’]/)[0];
+      // English de-pluralization via isStopword (byte-identical); language
+      // sentence-openers via langStops (finding J). en → langStops empty.
+      if (isStopword(key) || isStopword(root) || langStops.has(key) || ignore.has(key)) continue;
+      if (roster.has(key)) continue;
+      const start = Math.max(0, m.index - t.quoteProximityChars);
+      const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
+      const adjacent = quoteChars.test(body.slice(start, end));
+      const prev = candidates.get(key);
+      if (prev) {
+        prev.tagCount += 1;
+        prev.quoteAdjacent = prev.quoteAdjacent || adjacent;
+      } else {
+        candidates.set(key, {
+          name: rawName,
+          tagCount: 1,
+          sampleTag: m[0].trim(),
+          quoteAdjacent: adjacent,
+        });
+      }
     }
   }
 
@@ -313,13 +329,14 @@ export function validateAttributionCoverage(
   thresholds?: RosterCoverageThresholds,
   language: string = 'en',
 ): AttributionCoverageVerdict {
-  // fs-41/fs-50 §4.3 — same English-only gate as validateRosterCoverage.
-  if (isNonEnglish(language)) return { ok: true, halfStateSpeakers: [], issues: [] };
+  const g = grammarFor(language);
+  if (!g) return { ok: true, halfStateSpeakers: [], issues: [] }; // unmapped → gated
   const t = resolveThresholds(thresholds);
   const tokenToId = rosterTokenToId(roster);
   const ignore = ignoredNames();
-  const verbAlt = DIALOGUE_VERBS.join('|');
-  const tagRe = new RegExp(`\\b([A-Z][A-Za-z’'\\-]+)\\s+(?:${verbAlt})\\b`, 'g');
+  const langStops = langStopwords(g);
+  const tagRes = tagScanRegexesFor(g);
+  const quoteChars = normaliseBookLanguage(language) === 'en' ? QUOTE_CHARS : QUOTE_CHARS_WIDE;
   const body = bodyText || '';
 
   /* Attributed-line counts per character id for THIS chapter. */
@@ -337,31 +354,37 @@ export function validateAttributionCoverage(
     quoteAdjacent: boolean;
   }
   const candidates = new Map<string, Acc>(); // keyed by character id
+  const seenSpans = new Set<number>(); // R2-1
 
-  for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
-    const rawName = stripPossessive(m[1]);
-    const key = rawName.toLowerCase();
-    if (key.includes('-as-')) continue;
-    const root = key.split(/['’]/)[0];
-    if (isStopword(key) || isStopword(root) || ignore.has(key)) continue;
-    const id = tokenToId.get(key);
-    if (!id) continue; // not a rostered speaker — that's validateRosterCoverage's job
-    if (id === 'narrator' || id.startsWith('unknown-')) continue; // buckets never flag
-    const start = Math.max(0, m.index - t.quoteProximityChars);
-    const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
-    const adjacent = QUOTE_CHARS.test(body.slice(start, end));
-    const prev = candidates.get(id);
-    if (prev) {
-      prev.tagCount += 1;
-      prev.quoteAdjacent = prev.quoteAdjacent || adjacent;
-    } else {
-      candidates.set(id, {
-        id,
-        name: rawName,
-        tagCount: 1,
-        sampleTag: m[0].trim(),
-        quoteAdjacent: adjacent,
-      });
+  for (const tagRe of tagRes) {
+    for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
+      const nameIdx = m.index + m[0].indexOf(m[1]);
+      if (seenSpans.has(nameIdx)) continue;
+      seenSpans.add(nameIdx);
+      const rawName = stripPossessive(m[1]);
+      const key = rawName.toLowerCase();
+      if (key.includes('-as-')) continue;
+      const root = key.split(/[‘’]/)[0];
+      if (isStopword(key) || isStopword(root) || langStops.has(key) || ignore.has(key)) continue;
+      const id = tokenToId.get(key);
+      if (!id) continue; // not a rostered speaker — that’s validateRosterCoverage's job
+      if (id === 'narrator' || id.startsWith('unknown-')) continue; // buckets never flag
+      const start = Math.max(0, m.index - t.quoteProximityChars);
+      const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
+      const adjacent = quoteChars.test(body.slice(start, end));
+      const prev = candidates.get(id);
+      if (prev) {
+        prev.tagCount += 1;
+        prev.quoteAdjacent = prev.quoteAdjacent || adjacent;
+      } else {
+        candidates.set(id, {
+          id,
+          name: rawName,
+          tagCount: 1,
+          sampleTag: m[0].trim(),
+          quoteAdjacent: adjacent,
+        });
+      }
     }
   }
 

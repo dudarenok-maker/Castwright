@@ -20,7 +20,7 @@
    keep a 0-line speaker that the prose clearly tags (backstop for speakers whose
    quote isn't narrator-adjacent and so can't be flipped). Pure — no I/O. */
 
-import { grammarFor, tagRegexFor, verbBeatRegexFor, isQuoteBearing } from './tag-grammar.js';
+import { grammarFor, tagRegexesFor, verbBeatRegexFor, isQuoteBearing } from './tag-grammar.js';
 
 interface Sentence {
   id: number;
@@ -100,13 +100,15 @@ export function taggedSpeakerIds(
   if (!g) return new Set<string>(); // unmapped language → stay gated
   const stop = stopwordsFor(g.stopwords);
   const nameToId = buildNameToId(roster, stop);
-  const tagRe = tagRegexFor(g);
+  const tagRes = tagRegexesFor(g);
   const ids = new Set<string>();
   for (const s of sentences) {
-    const m = tagRe.exec(s.text);
-    if (!m) continue;
-    const id = resolveNameToId(m[1], nameToId, stop);
-    if (id) ids.add(id);
+    for (const tagRe of tagRes) {
+      const m = tagRe.exec(s.text);
+      if (!m) continue;
+      const id = resolveNameToId(m[1], nameToId, stop);
+      if (id) ids.add(id);
+    }
   }
   return ids;
 }
@@ -124,10 +126,19 @@ export function recoverTaggedNarratorLines<T extends Sentence>(
   if (!g) return { sentences, flipped: 0, byId: new Map() }; // unmapped → no-op
   const stop = stopwordsFor(g.stopwords);
   const nameToId = buildNameToId(roster, stop);
-  const tagRe = tagRegexFor(g);
+  const tagRes = tagRegexesFor(g);
   const out = sentences.map((s) => ({ ...s }));
   const byId = new Map<string, number>();
   let flipped = 0;
+
+  // helper local to recoverTaggedNarratorLines:
+  const firstTagMatch = (text: string): RegExpExecArray | null => {
+    for (const tagRe of tagRes) {
+      const m = tagRe.exec(text);
+      if (m) return m;
+    }
+    return null;
+  };
 
   const flipQ = (q: T, id: string) => {
     if (q.characterId !== NARRATOR_ID || q.characterId === id) return;
@@ -139,7 +150,7 @@ export function recoverTaggedNarratorLines<T extends Sentence>(
   if (g.flipStrategy === 'preceding') {
     // English — UNCHANGED behaviour: the tag is its own beat; flip the prior sentence.
     for (let i = 1; i < out.length; i++) {
-      const m = tagRe.exec(out[i].text);
+      const m = firstTagMatch(out[i].text);
       if (!m) continue;
       const id = resolveNameToId(m[1], nameToId, stop);
       if (!id) continue;
@@ -161,7 +172,7 @@ export function recoverTaggedNarratorLines<T extends Sentence>(
     !verbBeat.test(q.text); // a neighbour that is itself a tag is never stolen
 
   for (let i = 0; i < out.length; i++) {
-    const m = tagRe.exec(out[i].text);
+    const m = firstTagMatch(out[i].text);
     if (!m) continue;
     const id = resolveNameToId(m[1], nameToId, stop);
     if (!id) continue;

@@ -35,6 +35,11 @@
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { taggedSpeakerIds } from './recover-tagged-lines.js';
 import { normaliseBookLanguage } from '../tts/language.js';
+/* isDescriptorName moved to descriptor-grammar.ts (#1050). Import for the fold's
+   internal use at the `isDescriptorName(c.name, language)` call site, and re-export
+   the same binding for back-compat with existing importers (fold-minor-cast.test.ts). */
+import { isDescriptorName } from './descriptor-grammar.js';
+export { isDescriptorName };
 
 export interface FoldOptions {
   /** A character whose attributed line count is strictly below this
@@ -133,127 +138,6 @@ export function matchesProtectedRole(role: string | undefined, protectedRoles: s
   return protectedRoles.some((protectedRole) => normalised.includes(protectedRole.toLowerCase()));
 }
 
-/* Generic-role nouns that, when they appear as the LAST word of a
-   character name preceded by at least one other word, indicate a
-   descriptor rather than a proper name: "Drooly Boy", "Old Man",
-   "Tall Woman". A bare "Boy" / "Man" alone is also descriptive but
-   rarely emitted by the model — those would be caught by the
-   line-count threshold downstream. Kept narrow on purpose: a future
-   "<adj> Doctor" / "<adj> Captain" extension is easy if observed in
-   real runs. */
-const GENERIC_ROLE_TAIL = new Set([
-  'boy',
-  'girl',
-  'man',
-  'woman',
-  'guy',
-  'lady',
-  'kid',
-  'person',
-  'figure',
-  'stranger',
-  'voice',
-]);
-
-/* Russian generic-role nouns that read as descriptors rather than proper
-   names ("девушка" = girl, "парень" = guy, "незнакомец" = stranger). Only
-   consulted when the book language is Russian. Unlike the English tail-word
-   rule these match a BARE single-word name (Russian background speakers are
-   typically emitted as a lone noun, not "<adj> <noun>"). Russian inflection
-   means this is PARTIAL coverage for v1 — case-declined forms ("девушку",
-   "парня") and adjective-prefixed phrases are not stemmed; we match the
-   nominative singular only. Extending to a stemmer is deliberately out of
-   scope (don't over-engineer). */
-const GENERIC_ROLE_RU = new Set([
-  'девушка',
-  'парень',
-  'юноша',
-  'мужчина',
-  'женщина',
-  'незнакомец',
-  'незнакомка',
-  'человек',
-  'голос',
-  'старик',
-  'старуха',
-  'парнишка',
-  'оператор',
-  'водитель',
-]);
-
-/* Russian function words (prepositions + a few conjunctions) that appear as a
-   standalone token ONLY inside a descriptive PHRASE — "женщина С двумя
-   овчарками НА поводке", "молодой В куртке". A proper Russian name (first ·
-   patronymic · surname · diminutive) structurally never contains one of these
-   as a separate word, so a multi-word "name" carrying a function-word token is
-   a description, not a person — the highest-precision fold signal we have, with
-   effectively zero false-positive risk against real names (the #938 lesson:
-   never let a widened fold swallow a real character). Single-letter forms
-   (с/в/к/у/о/а/и) are included on purpose — capitalised initials carry a dot
-   ("А.") so they don't collide. Russian-only, mirrors GENERIC_ROLE_RU. */
-const RU_FUNCTION_WORDS = new Set([
-  'с', 'со', 'в', 'во', 'на', 'по', 'под', 'из', 'у', 'за', 'к', 'ко',
-  'о', 'об', 'обо', 'при', 'про', 'для', 'без', 'до', 'от', 'над',
-  'и', 'или', 'а', 'но',
-]);
-
-/* Decides whether a character's `name` reads as a descriptor rather
-   than a proper name. The three patterns we catch in order:
-     1. `^Unknown\b...` — the Stage-1 contract ("Unknown <descriptor>"
-        for nameless speakers). Stable across analyzer engines.
-     2. `^The <Word>($| <Word>$)` — definite-article-led descriptor.
-        Models routinely emit "The Jogger", "The Stranger", "The
-        Shopkeeper" in spite of the Stage-1 instruction. Capped at
-        two words after "The" so multi-word proper titles
-        ("The Council of Twelve", "The Forbidden Cities") don't get
-        folded — those are usually places, not speakers, and the
-        skill drops them anyway.
-     3. Trailing generic-role word ("Drooly Boy", "Old Man",
-        "Ponytail Girl"). Requires at least one word before the
-        role tail so a bare proper name that happens to be a role
-        ("Boy" used as a nickname) doesn't get folded.
-   Trim + lowercase normalisation up front so the model's casing
-   choices don't matter.
-
-   When `language` is Russian the English patterns above still apply (the
-   model occasionally emits "Unknown …" even on a Russian book) AND two further
-   Russian-only signals fold:
-     - a bare Russian generic noun ("девушка", "парень", "оператор") — see
-       `GENERIC_ROLE_RU`;
-     - a multi-word phrase carrying a standalone function word ("женщина С
-       двумя овчарками", "молодой В куртке") — a description, never a proper
-       name (see `RU_FUNCTION_WORDS`).
-   Deliberately NOT folded: "<adjective> <role-noun>" forms like "Тёмный маг"
-   (could be a meaningful role character) — those are left to the post-stage-2
-   line-count fold. Russian inflection still means partial coverage for v1. */
-export function isDescriptorName(name: string, language?: string): boolean {
-  const trimmed = name.trim();
-  if (!trimmed) return false;
-  if (/^unknown\b/i.test(trimmed)) return true;
-  if (/^the\s+\S+(\s+\S+)?$/i.test(trimmed)) return true;
-  const parts = trimmed.split(/\s+/);
-  if (parts.length >= 2) {
-    const tail = parts[parts.length - 1].toLowerCase();
-    if (GENERIC_ROLE_TAIL.has(tail)) return true;
-  }
-  if (normaliseBookLanguage(language) === 'ru') {
-    /* Match a lone Russian generic noun (the typical background-speaker form). */
-    if (parts.length === 1 && GENERIC_ROLE_RU.has(parts[0].toLowerCase())) return true;
-    /* A multi-word Russian phrase carrying a standalone function-word token is
-       a DESCRIPTION, not a proper name ("женщина с двумя овчарками на поводке",
-       "молодой в яркой оранжевой куртке"). Strip leading/trailing dashes from
-       each token so a "Имя — с …" dash beat still tokenises cleanly. Safe
-       against real names — they never contain a preposition/conjunction word
-       (see RU_FUNCTION_WORDS). */
-    if (parts.length >= 2) {
-      const hasFunctionWord = parts.some((p) =>
-        RU_FUNCTION_WORDS.has(p.toLowerCase().replace(/^[—–-]+|[—–-]+$/g, '')),
-      );
-      if (hasFunctionWord) return true;
-    }
-  }
-  return false;
-}
 
 function pickBucket(c: CharacterOutput): string {
   /* Female only when the analyzer explicitly tagged it; everything else
