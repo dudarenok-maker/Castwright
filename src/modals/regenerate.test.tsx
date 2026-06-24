@@ -24,6 +24,7 @@ describe('RegenerateModal — defaultScope', () => {
       <RegenerateModal
         chapter={chapter}
         defaultScope="forward"
+        defaultModelKey="qwen3-tts-0.6b"
         onClose={() => {}}
         onConfirm={onConfirm}
       />,
@@ -34,7 +35,14 @@ describe('RegenerateModal — defaultScope', () => {
 
   it('defaults to "Just this chapter" when no scope is forced', () => {
     const onConfirm = vi.fn();
-    render(<RegenerateModal chapter={chapter} onClose={() => {}} onConfirm={onConfirm} />);
+    render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultModelKey="qwen3-tts-0.6b"
+        onClose={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
     fireEvent.click(screen.getByRole('button', { name: /^Regenerate$/ }));
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ scope: 'this' }));
   });
@@ -51,6 +59,7 @@ describe('RegenerateModal — forward ETA reflects actual affected count', () =>
         chapter={chapter}
         defaultScope="forward"
         forwardCount={20}
+        defaultModelKey="qwen3-tts-0.6b"
         onClose={() => {}}
         onConfirm={() => {}}
       />,
@@ -65,6 +74,7 @@ describe('RegenerateModal — forward ETA reflects actual affected count', () =>
         chapter={chapter}
         defaultScope="forward"
         forwardCount={1}
+        defaultModelKey="qwen3-tts-0.6b"
         onClose={() => {}}
         onConfirm={() => {}}
       />,
@@ -80,7 +90,14 @@ describe('RegenerateModal — ETA scales with audio duration × RTF', () => {
   const tenMin: Chapter = { ...chapter, duration: '10:00' };
 
   it('derives the single-chapter ETA from the chapter duration (≈25 min for 10:00)', () => {
-    render(<RegenerateModal chapter={tenMin} onClose={() => {}} onConfirm={() => {}} />);
+    render(
+      <RegenerateModal
+        chapter={tenMin}
+        defaultModelKey="qwen3-tts-0.6b"
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
     expect(screen.getByText('≈25 min')).toBeInTheDocument();
     expect(screen.queryByText('≈3 min')).not.toBeInTheDocument();
   });
@@ -93,10 +110,46 @@ describe('RegenerateModal — ETA scales with audio duration × RTF', () => {
         forwardCount={3}
         /* 3 × 10:00 = 1800s → 1800 × 2.5 = 4500s = 75 min → "1h 15m". */
         forwardDurationSec={1800}
+        defaultModelKey="qwen3-tts-0.6b"
         onClose={() => {}}
         onConfirm={() => {}}
       />,
     );
     expect(screen.getByText('≈1h 15m for 3 chapters')).toBeInTheDocument();
+  });
+});
+
+describe('RegenerateModal — per-regenerate model override (#4)', () => {
+  it('confirms with the session default model when the picker is untouched', () => {
+    const onConfirm = vi.fn();
+    render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultModelKey="qwen3-tts-0.6b"
+        onClose={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate$/ }));
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ modelKey: 'qwen3-tts-0.6b' }),
+    );
+  });
+
+  it('lets the user pick the Qwen 1.7B quality tier for this regenerate', () => {
+    const onConfirm = vi.fn();
+    render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultModelKey="qwen3-tts-0.6b"
+        onClose={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByText('Qwen3-TTS 1.7B'));
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate$/ }));
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ modelKey: 'qwen3-tts-1.7b' }),
+    );
   });
 });

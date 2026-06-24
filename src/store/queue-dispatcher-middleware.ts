@@ -238,7 +238,9 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            and key the runner handle. */
         runner.open(
           e.bookId,
-          ui.ttsModelKey,
+          /* Per-entry model override (a regenerate requested at a chosen quality
+             tier, e.g. Qwen 1.7B); absent → the session default. */
+          e.modelKey ?? ui.ttsModelKey,
           { chapterIds: [e.chapterId], force: true },
           {
             queueEntryId: e.id,

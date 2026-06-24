@@ -3774,6 +3774,13 @@ components:
           type: string
           nullable: true
           description: Required when scope === 'character'; null otherwise.
+        modelKey:
+          type: string
+          enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+          description: |
+            Optional per-entry TTS model override (e.g. a regenerate that should
+            run at the Qwen 1.7B quality tier instead of the session default).
+            When absent the dispatcher uses the global `ui.ttsModelKey`.
         addedAt:
           type: string
           format: date-time

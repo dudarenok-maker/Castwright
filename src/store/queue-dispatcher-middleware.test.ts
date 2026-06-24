@@ -568,5 +568,28 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect(call).toBeDefined();
       expect((call![0] as { fallbackConfirmed?: boolean }).fallbackConfirmed).toBe(true);
     });
+
+    it('threads the entry modelKey override into the stream open (regenerate at a chosen tier)', async () => {
+      const store = makeStore(2);
+      store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b')); // session default
+      seed(store, [entry({ id: 'a1', bookId: 'book-A', chapterId: 1, modelKey: 'qwen3-tts-1.7b' })]);
+      await flushMicro();
+      const call = streamGenerationMock.mock.calls.find(
+        (c) => (c[0] as { bookId?: string }).bookId === 'book-A',
+      );
+      expect(call).toBeDefined();
+      expect((call![0] as { modelKey?: string }).modelKey).toBe('qwen3-tts-1.7b');
+    });
+
+    it('falls back to the session ttsModelKey when the entry has no model override', async () => {
+      const store = makeStore(2);
+      store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+      seed(store, [entry({ id: 'a1', bookId: 'book-A', chapterId: 1 })]);
+      await flushMicro();
+      const call = streamGenerationMock.mock.calls.find(
+        (c) => (c[0] as { bookId?: string }).bookId === 'book-A',
+      );
+      expect((call![0] as { modelKey?: string }).modelKey).toBe('qwen3-tts-0.6b');
+    });
   });
 });
