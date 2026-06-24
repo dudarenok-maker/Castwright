@@ -25,6 +25,9 @@ export function parseLocaleNumber(raw: string, sep: Sep): number {
     String(Number(...))) so float-repr artifacts can't leak in. */
 export function speakNumber(raw: string, norm: LangNormalizer): string {
   const v = parseLocaleNumber(raw, norm.separators);
+  // Malformed/ambiguous input (e.g. a stray "1,50" in an English book) parses to
+  // NaN — leave it untouched rather than emitting "" / "NaN".
+  if (!Number.isFinite(v)) return raw;
   if (Number.isInteger(v)) return norm.cardinal(v);
   // The fraction digits follow the separator parseLocaleNumber treated as the
   // decimal point: normally the locale decimal char, but a LONE non-grouping
