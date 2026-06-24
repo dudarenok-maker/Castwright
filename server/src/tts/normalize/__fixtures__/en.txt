@@ -1,0 +1,13 @@
+# fs-53 English normalisation fixtures (input ⇒ expected)
+He paid $1,200.50 for it. ⇒ He paid one thousand two hundred dollars and fifty cents for it.
+It rose 50% in 1999. ⇒ It rose fifty percent in nineteen ninety-nine.
+See No. 5 on January 3rd, 2026. ⇒ See Number five on January third, twenty twenty-six.
+The 1990s were loud. ⇒ The nineteen nineties were loud.
+Dr. Vance met Mr. Poe. ⇒ Doctor Vance met Mister Poe.
+# known-failure: Room number reads as a year (limitation #1)
+Go to Room 1999. ⇒ Go to Room nineteen ninety-nine.
+# St. only expands before a capital
+Main St. was quiet. ⇒ Main St. was quiet.
+St. James waited. ⇒ Saint James waited.
+# No. negation untouched
+No. I refuse. ⇒ No. I refuse.
