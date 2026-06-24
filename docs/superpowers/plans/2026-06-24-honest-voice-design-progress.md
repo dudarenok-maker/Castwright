@@ -260,7 +260,7 @@ git commit -m "feat(sidecar): report_progress callback at design/mint phase seam
 def test_design_route_posts_progress_when_token_present(monkeypatch):
     import main
     import numpy as np
-    from starlette.testclient import TestClient
+    from fastapi.testclient import TestClient  # matches test_batch_synthesis.py; used WITHOUT `with` so lifespan/preload never fires
 
     class _FakeQwen:
         def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None, report_progress=None):
@@ -505,13 +505,15 @@ Export the broadcast for the relay (add `export` to `function broadcast`). Expor
 
 - [ ] **Step 2: Write the failing relay test**
 
+> Drive the REAL registry + broadcast path — do NOT `vi.spyOn` the `single-design.js` named exports: the relay binds `resolveProgressToken`/`broadcast` at import, so a namespace spy wouldn't intercept its calls (and spying ESM named exports is unreliable). Register a real token + a fake subscriber and assert the subscriber receives the event (plan review PR-D).
+
 ```typescript
 // server/src/routes/design-progress-relay.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { designProgressRelayRouter } from './design-progress-relay.js';
-import * as single from './single-design.js';
+import { registerProgressToken, dropProgressToken, type SingleJob } from './single-design.js';
 
 function appWith() {
   const app = express();
@@ -520,28 +522,28 @@ function appWith() {
   return app;
 }
 
+function fakeJob() {
+  const sent: unknown[] = [];
+  const sub = { send: (p: unknown) => sent.push(p), res: {} as never, keepAlive: 0 as never };
+  const job = { characterId: 'c1', phase: 'freeing-vram', subscribers: new Set([sub]) } as unknown as SingleJob;
+  return { job, sent };
+}
+
 describe('POST /api/internal/design-progress', () => {
-  beforeEach(() => vi.restoreAllMocks());
-
-  it('broadcasts the phase to the job on a valid token from loopback', async () => {
-    const sent: unknown[] = [];
-    const job = { characterId: 'c1', subscribers: new Set() } as unknown as single.SingleJob;
-    vi.spyOn(single, 'resolveProgressToken').mockReturnValue(job);
-    const bcast = vi.spyOn(single, 'broadcast').mockImplementation((_j, ev) => sent.push(ev));
-
+  it('broadcasts the phase to the job subscribers + advances job.phase on a valid token', async () => {
+    const { job, sent } = fakeJob();
+    registerProgressToken('tok', job);
     const res = await request(appWith())
       .post('/api/internal/design-progress')
-      .set('X-Forwarded-For', '') // supertest connects over loopback
       .send({ token: 'tok', phase: 'designing' });
-
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(bcast).toHaveBeenCalledOnce();
-    expect(sent[0]).toEqual({ type: 'phase', phase: 'designing', characterId: 'c1' });
+    expect(sent).toEqual([{ type: 'phase', phase: 'designing', characterId: 'c1' }]);
+    expect(job.phase).toBe('designing');
+    dropProgressToken('tok');
   });
 
   it('no-ops on an unknown token', async () => {
-    vi.spyOn(single, 'resolveProgressToken').mockReturnValue(undefined);
     const res = await request(appWith())
       .post('/api/internal/design-progress')
       .send({ token: 'nope', phase: 'designing' });
@@ -559,6 +561,16 @@ describe('POST /api/internal/design-progress', () => {
     app.use('/api/internal', designProgressRelayRouter);
     const res = await request(app).post('/api/internal/design-progress').send({ token: 't', phase: 'designing' });
     expect(res.status).toBe(403);
+  });
+
+  it('rejects an unknown phase string (400)', async () => {
+    const { job } = fakeJob();
+    registerProgressToken('tok2', job);
+    const res = await request(appWith())
+      .post('/api/internal/design-progress')
+      .send({ token: 'tok2', phase: 'bogus' });
+    expect(res.status).toBe(400);
+    dropProgressToken('tok2');
   });
 });
 ```
@@ -597,10 +609,13 @@ designProgressRelayRouter.post('/design-progress', (req: Request, res: Response)
   if (!token || !PHASES.has(phase)) return res.status(400).json({ error: 'bad request' });
   const job = resolveProgressToken(token);
   if (!job) return res.status(200).json({ ok: false });
+  job.phase = phase as SingleJob['phase']; // keep the resume-seed current (PR-D)
   broadcast(job, { type: 'phase', phase, characterId: job.characterId });
   return res.status(200).json({ ok: true });
 });
 ```
+
+Add `type SingleJob` to the `single-design.js` import.
 
 - [ ] **Step 5: Mount it in `app.ts`**
 
@@ -634,7 +649,7 @@ git commit -m "feat(server): loopback-gated internal relay for single-design pha
 
 **Interfaces:**
 - Consumes: `serverLoopbackBaseUrl` (Task 3), `registerProgressToken`/`dropProgressToken` (Task 4), `DesignQwenVoiceParams.progressToken`/`progressUrl` (Task 3).
-- Produces: each single-design job mints a random token, registers it, passes `progressToken` + `progressUrl = serverLoopbackBaseUrl() + '/api/internal/design-progress'` into `designQwenVoiceForCharacter`, and drops the token in `endJob`. The fake `job.phase = 'rendering'` + its broadcast (lines ~140-141) are removed (the sidecar now drives `rendering`); the initial `'designing'` broadcast (lines ~115-116) stays as the honest pre-call baseline.
+- Produces: each single-design job mints a random token, registers it, passes `progressToken` + `progressUrl = serverLoopbackBaseUrl() + '/api/internal/design-progress'` into `designQwenVoiceForCharacter`, and drops the token in `endJob`. BOTH fake phase broadcasts are removed — the initial `'designing'` (lines ~115-116) AND the `'rendering'`-before-persist (lines ~140-141) — because the sidecar now drives every phase via the relay; leaving the fake `'designing'` in place would poison the client's monotonic guard (it'd swallow the real `loading-model`/`freeing-vram` that follow — plan review PR-B). The job's initial `phase` field is set to `'freeing-vram'` at construction (the resume seed before any relay event).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -661,12 +676,21 @@ Import `registerProgressToken` / `dropProgressToken` at the top from this same m
 
 Add `progressToken` + `progressUrl` to the `designQwenVoiceForCharacter({ … })` argument object.
 
-Delete these two lines (the fake transition, ~140-141):
+Delete the fake `'rendering'` transition (~140-141):
 
 ```typescript
     job.phase = 'rendering';
     broadcast(job, { type: 'phase', phase: 'rendering', characterId: job.characterId });
 ```
+
+AND delete the fake initial `'designing'` broadcast (~115-116) — keep the `job.phase = 'designing'` line only if you change it to `job.phase = 'freeing-vram'`; remove the `broadcast(job, { type: 'phase', phase: 'designing', … })`:
+
+```typescript
+    job.phase = 'designing';
+    broadcast(job, { type: 'phase', phase: 'designing', characterId: job.characterId });
+```
+
+Wherever the `SingleJob` object is constructed (the `phase: 'designing'` initializer), set it to `phase: 'freeing-vram'` so the resume seed matches the lowest rank (PR-B).
 
 In `endJob`, after `inFlightByBook.delete`, drop any token for the job:
 
@@ -674,7 +698,7 @@ In `endJob`, after `inFlightByBook.delete`, drop any token for the job:
   for (const [tok, j] of tokenToJob) if (j === job) tokenToJob.delete(tok);
 ```
 
-(Update `job.phase` assignments elsewhere — when the relay broadcasts, the SSE carries the phase; the server's own `job.phase` field is now only the initial `'designing'` baseline + the `status` snapshot, which is acceptable.)
+The relay (Task 4) now keeps `job.phase` current as real phases arrive, so the `status` probe + reload `resume_from` seed reflect reality.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -751,6 +775,16 @@ export function phaseRank(p: DesignPhase): number {
   return DESIGN_PHASE_ORDER.indexOf(p);
 }
 
+/* The phases a single BASE-voice design (the cast-drawer flow that drives
+   DesignProgress) actually emits — `design_voice`, never `mint_variant`. The
+   progress bar's fill/ETA math sums budgets over THIS subset, not all 7, or it
+   over-counts the mint-only phases (anchoring/performing) that never arrive
+   (plan review PR-A). Mint phases stay in the vocab for the relay/SSE + any
+   future bulk opt-in. */
+export const DESIGN_PATH_PHASES: DesignPhase[] = [
+  'freeing-vram', 'loading-model', 'designing', 'distilling', 'rendering',
+];
+
 export const DESIGN_PHASE_LABELS: Record<DesignPhase, string> = {
   'freeing-vram': 'Freeing GPU memory…',
   'loading-model': 'Loading the design model…',
@@ -793,32 +827,48 @@ Extend `mockStartSingleDesign` to emit the richer sequence:
 
 - [ ] **Step 6: Write the failing monotonic-reducer test**
 
+> **The snapshot is opened by `castDesignActions.beginSingle`** (line ~234) — NOT `designSingleRequested` (a no-op middleware-trigger). Tests use `castDesignSlice.reducer` + `castDesignActions.*` (the file's established style). The realistic event order is `loading-model → designing → …`, so the seed must be the LOWEST rank or the guard swallows the early phases (plan review PR-B).
+
 Add to `src/store/cast-design-slice.test.ts`:
 
 ```typescript
-it('setPhase advances forward but never rewinds (monotonic)', () => {
-  let s = reducer(undefined, designSingleRequested({ bookId: 'b', characterId: 'c', name: 'N', mode: 'first', lastTickAt: 0 }));
-  s = reducer(s, setPhase({ bookId: 'b', characterId: 'c', phase: 'designing', lastTickAt: 1 }));
+import { castDesignSlice, castDesignActions } from './cast-design-slice';
+
+it('beginSingle seeds the lowest phase so early phases still show', () => {
+  const s = castDesignSlice.reducer(
+    undefined,
+    castDesignActions.beginSingle({ bookId: 'b', characterId: 'c', name: 'N', mode: 'first', lastTickAt: 0 }),
+  );
+  expect(s.active?.phase).toBe('freeing-vram');
+});
+
+it('setPhase advances forward through the real phase order but never rewinds', () => {
+  let s = castDesignSlice.reducer(
+    undefined,
+    castDesignActions.beginSingle({ bookId: 'b', characterId: 'c', name: 'N', mode: 'first', lastTickAt: 0 }),
+  );
+  s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'loading-model', lastTickAt: 1 }));
+  expect(s.active?.phase).toBe('loading-model'); // advances from the freeing-vram seed
+  s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'designing', lastTickAt: 2 }));
   expect(s.active?.phase).toBe('designing');
-  // a late, lower-rank phase must be ignored
-  s = reducer(s, setPhase({ bookId: 'b', characterId: 'c', phase: 'loading-model', lastTickAt: 2 }));
+  // a late, duplicated/out-of-order lower-rank POST must be ignored (AR5)
+  s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'loading-model', lastTickAt: 3 }));
   expect(s.active?.phase).toBe('designing');
-  // a higher-rank phase advances
-  s = reducer(s, setPhase({ bookId: 'b', characterId: 'c', phase: 'rendering', lastTickAt: 3 }));
+  s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b', characterId: 'c', phase: 'rendering', lastTickAt: 4 }));
   expect(s.active?.phase).toBe('rendering');
 });
 ```
 
-(Import `setPhase`, `designSingleRequested`, and the reducer per the file's existing imports.)
-
 - [ ] **Step 7: Run it to verify it fails**
 
 Run: `npx vitest run src/store/cast-design-slice.test.ts`
-Expected: FAIL — `loading-model` overwrites `designing` (current `setPhase` is unconditional) / type error on the new phase strings.
+Expected: FAIL — `beginSingle` seeds `'designing'` (not `'freeing-vram'`); `setPhase` is unconditional (no monotonic guard); type errors on the new phase strings.
 
-- [ ] **Step 8: Make `setPhase` monotonic + widen the slice phase types**
+- [ ] **Step 8: Seed `beginSingle` low, make `setPhase` monotonic, widen the slice phase types**
 
-Widen the two `phase: 'designing' | 'rendering'` types in the slice (the `setPhase` payload + the snapshot/state type) to `DesignPhase` (import from `../lib/design-phase`). Replace the body of `setPhase`'s final two lines with:
+Widen the `phase` field types in the slice (the `beginSingle` snapshot type, the `setPhase` payload, and the active-snapshot state type) from `'designing' | 'rendering'` to `DesignPhase`; `import { type DesignPhase, phaseRank } from '../lib/design-phase';`.
+
+Change the `beginSingle` reducer's `phase: 'designing'` seed (line ~253) to `phase: 'freeing-vram'` — the lowest rank, so the first real event (`loading-model`, or `freeing-vram` itself) always advances the bar (PR-B). Replace the body of `setPhase`'s final two lines with:
 
 ```typescript
       const cur = snap.phase as DesignPhase | undefined;
@@ -827,7 +877,7 @@ Widen the two `phase: 'designing' | 'rendering'` types in the slice (the `setPha
       snap.lastTickAt = action.payload.lastTickAt;
 ```
 
-(import `phaseRank`). Also widen the `designSingleRequested` initial `phase: 'designing'` — it stays `'designing'` but the field type is now `DesignPhase`.
+> **Middleware (`cast-design-stream-middleware.ts`): verified no change needed.** Its `onPhase`/`onResumeSingle` handlers pass `phase` straight through to `castDesignActions.setPhase` / `beginSingle` (lines ~158/163) — widening the `api.ts` callback union is sufficient.
 
 - [ ] **Step 9: Run the tests to verify they pass**
 
@@ -928,7 +978,7 @@ import {
   type DesignPhase,
   DESIGN_PHASE_LABELS,
   DESIGN_PHASE_BUDGETS_MS,
-  DESIGN_PHASE_ORDER,
+  DESIGN_PATH_PHASES,
   phaseRank,
 } from '../lib/design-phase';
 
@@ -947,19 +997,18 @@ function fmt(ms: number): string {
   return `${Math.floor(t / 60)}:${(t % 60).toString().padStart(2, '0')}`;
 }
 
-/* Cumulative budget at the START of `phase` and the TOTAL, over the phases that
-   actually run for the detected path (a mint emits anchoring/performing; a
-   design emits `designing`). We approximate the total as every phase at or
-   before the highest-seen rank plus the canonical tail, which is close enough —
-   the bar self-corrects on each real event (AR8). */
+/* Cumulative budget at the START of `phase` and the TOTAL — summed over the
+   DESIGN-path phases only (the single-design drawer never mints, so anchoring/
+   performing never arrive; counting them would inflate the denominator and the
+   ETA — plan review PR-A). The bar self-corrects on each real event (AR8). */
 function budgetBounds(phase: DesignPhase): { before: number; total: number } {
-  const rank = phaseRank(phase);
+  const idx = DESIGN_PATH_PHASES.indexOf(phase);
   let before = 0;
   let total = 0;
-  DESIGN_PHASE_ORDER.forEach((p, i) => {
+  DESIGN_PATH_PHASES.forEach((p, i) => {
     const b = DESIGN_PHASE_BUDGETS_MS[p];
     total += b;
-    if (i < rank) before += b;
+    if (idx >= 0 && i < idx) before += b;
   });
   return { before, total };
 }
@@ -1156,3 +1205,46 @@ PR title: `feat(frontend,server,sidecar): honest streamed-phase voice-design pro
 - **AR coverage:** AR1 urllib (T2), AR2 loopback URL + unverified SSL (T2/T3), AR3 loopback gate (T4), AR4 always-emit loading-model (T1), AR5 monotonic (T6), AR6 completion snap (T7 `complete`), AR7 best-effort/no-op (T2/T4), AR8 warm/cold self-correct (T7 fill math), AR9 e2e order-only (T9 note). ✓
 - **Placeholder scan:** code shown for every code step; commands + expected output on every run step. ✓
 - **Type consistency:** `DesignPhase` defined once (T6) and imported everywhere; `report_progress` signature identical across T1/T2; `registerProgressToken`/`resolveProgressToken`/`dropProgressToken` consistent across T4/T5; `serverLoopbackBaseUrl` consistent T3/T5. ✓
+
+## Plan adversarial review (2026-06-24)
+
+Stress-tested the plan against the code; fixes folded into the tasks above.
+
+- **PR-A — DesignProgress budget over the design-path subset.** `DesignProgress`
+  is used ONLY in `voice-engine-picker` (the single base-design drawer flow),
+  never for mints — verified by grep. Summing budgets over all 7 phases would
+  count the mint-only `anchoring`/`performing` (~66s) that never arrive,
+  inflating the ETA/fill. Fixed: `DESIGN_PATH_PHASES` (T6) + `budgetBounds` sums
+  over it (T7).
+- **PR-B — the monotonic guard vs. the initial seed (the big one).**
+  `beginSingle` seeded `phase: 'designing'` (rank 2) and the server pre-broadcast
+  `'designing'`; with the AR5 monotonic guard, the real `loading-model`/
+  `freeing-vram` (lower rank) that follow would be SWALLOWED — the user would
+  never see them, defeating the feature. The plan's original Task 6 test even
+  asserted this buggy behavior. Fixed: seed `beginSingle` to `'freeing-vram'`
+  (lowest rank), REMOVE both server fake broadcasts (T5), keep the guard, and
+  rewrite the test to verify the realistic forward sequence (T6).
+- **PR-C — slice test used the wrong action/style.** The snapshot is opened by
+  `castDesignActions.beginSingle`, not `designSingleRequested` (a no-op
+  middleware trigger); tests use `castDesignSlice.reducer` + `castDesignActions.*`.
+  Fixed (T6).
+- **PR-D — relay test can't `vi.spyOn` ESM named exports.** The relay binds
+  `resolveProgressToken`/`broadcast` at import, so a namespace spy wouldn't
+  intercept them. Rewritten to drive the real registry + a fake subscriber
+  (T4); the relay also advances `job.phase` for resume accuracy.
+- **PR-E — TestClient import + lifespan.** Use `fastapi.testclient.TestClient`
+  WITHOUT `with` (matches `test_batch_synthesis.py`), so the startup preload
+  never fires in the unit test (T2).
+- **PR-F — middleware needs no change.** `cast-design-stream-middleware`'s
+  `onPhase`/`onResumeSingle` relay `phase` straight through to `setPhase`/
+  `beginSingle`; widening the `api.ts` union suffices (noted in T6).
+- **PR-G — mint `freeing-vram` gate.** Emit it only when Kokoro is RESIDENT
+  (`getattr(kok, "_kokoro", None) is not None`), not merely when the engine
+  object exists (mint calls `unload()` unconditionally). The T1 mint test guards
+  this (expected sequence has no `freeing-vram`).
+- **Known limitation (follow-up, not a blocker):** if the best-effort relay POST
+  fails entirely (e.g. the rare LAN https-loopback handshake issue), the bar
+  stays on the `freeing-vram` seed with a ticking clock + overage shimmer until
+  the real `done`/`preview_ready` SSE event (which does NOT go through the relay)
+  snaps it to 100%. A future tweak can add a client-side time-estimate fallback
+  that advances the label when no real event arrives within a phase budget.
