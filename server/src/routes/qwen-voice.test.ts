@@ -864,6 +864,73 @@ describe('qwenVoicePtPath containment', () => {
   });
 });
 
+describe('SidecarDesignError', () => {
+  /* Call designQwenVoiceForCharacter directly so we can assert on the thrown
+     error object — the HTTP route maps it to a 502, losing the shape. */
+  let designQwenVoiceForCharacter: typeof import('./qwen-voice.js').designQwenVoiceForCharacter;
+  let sdeBookDir: string;
+
+  beforeAll(async () => {
+    ({ designQwenVoiceForCharacter } = await import('./qwen-voice.js'));
+  });
+
+  beforeEach(async () => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    sdeBookDir = await mkdtemp(join(tmpdir(), 'sde-'));
+    await mkdir(join(sdeBookDir, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(sdeBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'char1',
+            name: 'Char One',
+            voiceId: 'v_char1',
+            voiceUuid: 'uuid-char1',
+            voiceStyle: 'a warm narrator',
+            evidence: [{ quote: '"Hello there."' }],
+          },
+        ],
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(sdeBookDir, { recursive: true, force: true });
+  });
+
+  function makeVariantParams(): import('./qwen-voice.js').DesignQwenVoiceParams {
+    return {
+      bookDir: sdeBookDir,
+      character: {
+        id: 'char1',
+        name: 'Char One',
+        voiceId: 'v_char1',
+        voiceUuid: 'uuid-char1',
+        voiceStyle: 'a warm narrator',
+        evidence: [{ quote: '"Hello there."' }],
+        role: 'supporting',
+      },
+      characterId: 'char1',
+      persona: 'a warm narrator',
+      sampleVoiceId: 'v_char1',
+      modelKey: QWEN_KEY,
+      language: 'English',
+      emotion: 'angry',
+    };
+  }
+
+  it('throws SidecarDesignError carrying status/code/reason on a 503', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 'base17-unavailable', reason: 'not-installed', detail: 'x' }), { status: 503 }),
+    );
+    await expect(
+      designQwenVoiceForCharacter(makeVariantParams()),
+    ).rejects.toMatchObject({ name: 'SidecarDesignError', status: 503, code: 'base17-unavailable' });
+  });
+});
+
 describe('srv-43 — qwenStorageKey routing through design-voice', () => {
   /* These tests verify that the storage key used by designQwenVoiceForCharacter
      follows qwenStorageKey: uuid-backed voices go to qwen-<uuid>.pt; legacy

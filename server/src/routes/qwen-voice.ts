@@ -54,6 +54,19 @@ import {
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { nanoid } from 'nanoid';
 
+export class SidecarDesignError extends Error {
+  status: number;
+  code?: string;
+  reason?: string;
+  constructor(message: string, status: number, code?: string, reason?: string) {
+    super(message);
+    this.name = 'SidecarDesignError';
+    this.status = status;
+    this.code = code;
+    this.reason = reason;
+  }
+}
+
 export const qwenVoiceRouter = Router();
 
 interface CastFile {
@@ -309,132 +322,97 @@ export async function designQwenVoiceForCharacter(
     return withGpuLoad(async () => {
       const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
       const sidecarUrl = getResolvedSidecarUrl();
-      /* fs-55: emotion variants go to /qwen/mint-variant (anchored to the base
-         identity, so the base persona is not re-described — only the delivery
-         clause is added). Base voice design still goes to /qwen/design-voice. */
-      const target = p.emotion
-        ? `${sidecarUrl}/qwen/mint-variant`
-        : `${sidecarUrl}/qwen/design-voice`;
-      const controller = new AbortController();
-      const startedAt = Date.now();
-      let abortReason: 'unreachable' | 'absolute' | null = null;
-      const livenessTimer = setInterval(() => {
-        void (async () => {
-          const { probeSidecarHealth } = await import('./sidecar-health.js');
-          const health = (await probeSidecarHealth()).status; // 'reachable' | 'unreachable'
-          const decision = evaluateDesignLiveness({
-            startedAt,
-            now: Date.now(),
-            health,
-            absoluteMaxMs: DESIGN_ABSOLUTE_MAX_MS,
-          });
-          if (decision.action === 'abort') {
-            abortReason = decision.reason;
-            controller.abort();
-          } else {
-            console.warn(
-              `[qwen-voice] design slow (${Math.round((Date.now() - startedAt) / 1000)}s) ` +
-                `— sidecar /health reachable, extending (ceiling ${DESIGN_ABSOLUTE_MAX_MS / 1000}s).`,
-            );
-          }
-        })();
-      }, DESIGN_LIVENESS_INTERVAL_MS);
-      const onExternalAbort = () => controller.abort();
-      if (p.signal) {
-        if (p.signal.aborted) controller.abort();
-        else p.signal.addEventListener('abort', onExternalAbort, { once: true });
-      }
-      try {
-        let upstream: Awaited<ReturnType<typeof fetch>>;
-        try {
-          /* fs-55: emotion variant path sends { baseVoiceId, variantVoiceId,
-             emotionInstruct, ... } to /qwen/mint-variant. The base path sends
-             { voiceId, instruct, ... } to /qwen/design-voice unchanged. */
-          const fetchBody = p.emotion
-            ? JSON.stringify({
-                baseVoiceId,
-                variantVoiceId: voiceId,
-                emotionInstruct: EMOTION_INSTRUCT[p.emotion],
-                voiceUuid: p.character.voiceUuid ?? null,
-                language: p.language,
-                calibrationText,
-              })
-            : JSON.stringify({
-                voiceId,
-                voiceUuid: p.character.voiceUuid ?? null,
-                instruct: p.persona,
-                language: p.language,
-                calibrationText,
-              });
-          upstream = await fetch(target, {
-            method: 'POST',
-            signal: controller.signal,
-            headers: { 'Content-Type': 'application/json' },
-            body: fetchBody,
-          });
-        } catch (e) {
-          const err = e as { name?: string; message?: string };
-          if (err.name === 'AbortError') {
-            if (p.signal?.aborted) {
-              throw new Error('Voice design was cancelled.');
-            }
-            if (abortReason === 'unreachable') {
-              throw new Error(
-                `TTS sidecar (${sidecarUrl}) stopped responding to /health during voice design — the process may have crashed or been recycled.`,
+
+      const postDesignAndCache = async (
+        target: string,
+        fetchBody: string,
+        outVoiceId: string,
+      ): Promise<{ voiceId: string; url: string }> => {
+        const controller = new AbortController();
+        const startedAt = Date.now();
+        let abortReason: 'unreachable' | 'absolute' | null = null;
+        const livenessTimer = setInterval(() => {
+          void (async () => {
+            const { probeSidecarHealth } = await import('./sidecar-health.js');
+            const health = (await probeSidecarHealth()).status;
+            const decision = evaluateDesignLiveness({ startedAt, now: Date.now(), health, absoluteMaxMs: DESIGN_ABSOLUTE_MAX_MS });
+            if (decision.action === 'abort') {
+              abortReason = decision.reason;
+              controller.abort();
+            } else {
+              console.warn(
+                `[qwen-voice] design slow (${Math.round((Date.now() - startedAt) / 1000)}s) ` +
+                  `— sidecar /health reachable, extending (ceiling ${DESIGN_ABSOLUTE_MAX_MS / 1000}s).`,
               );
             }
-            throw new Error(
-              `Sidecar ${target} did not complete within ${DESIGN_ABSOLUTE_MAX_MS}ms — voice design is unusually slow or the process is stuck.`,
+          })();
+        }, DESIGN_LIVENESS_INTERVAL_MS);
+        const onExternalAbort = () => controller.abort();
+        if (p.signal) {
+          if (p.signal.aborted) controller.abort();
+          else p.signal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+        try {
+          let upstream: Awaited<ReturnType<typeof fetch>>;
+          try {
+            upstream = await fetch(target, {
+              method: 'POST', signal: controller.signal,
+              headers: { 'Content-Type': 'application/json' }, body: fetchBody,
+            });
+          } catch (e) {
+            const err = e as { name?: string; message?: string };
+            if (err.name === 'AbortError') {
+              if (p.signal?.aborted) throw new SidecarDesignError('Voice design was cancelled.', 0);
+              if (abortReason === 'unreachable')
+                throw new SidecarDesignError(`TTS sidecar (${sidecarUrl}) stopped responding to /health during voice design.`, 0);
+              throw new SidecarDesignError(`Sidecar ${target} did not complete within ${DESIGN_ABSOLUTE_MAX_MS}ms.`, 0);
+            }
+            throw new SidecarDesignError(`TTS sidecar (${sidecarUrl}) is unreachable — ${err.message || 'request failed'}.`, 0);
+          }
+          if (!upstream.ok) {
+            let detail = '', code: string | undefined, reason: string | undefined;
+            try {
+              const b = (await upstream.json()) as { detail?: string; error?: string; code?: string; reason?: string };
+              detail = b.detail ?? b.error ?? ''; code = b.code; reason = b.reason;
+            } catch { /* not json */ }
+            throw new SidecarDesignError(
+              detail || `Sidecar ${target} returned ${upstream.status} ${upstream.statusText}.`,
+              upstream.status, code, reason,
             );
           }
-          throw new Error(
-            `TTS sidecar (${sidecarUrl}) is unreachable — ${err.message || 'request failed'}.`,
-          );
-        }
-        if (!upstream.ok) {
-          let detail = '';
+          const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
+          const pcm = Buffer.from(await upstream.arrayBuffer());
+          const fileName = voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName: outVoiceId });
+          const filePath = voiceSampleFilePath(fileName);
+          const url = voiceSamplePublicUrl(fileName);
           try {
-            const body = (await upstream.json()) as { detail?: string; error?: string };
-            detail = body.detail ?? body.error ?? '';
-          } catch {
-            /* not json */
+            await mkdir(voiceSampleAudioDir(), { recursive: true });
+            const mp3 = await encodePcmToAudio(pcm, sampleRate);
+            await writeFile(filePath, mp3);
+          } catch (encErr) {
+            throw new Error(`Designed the voice but failed to cache its preview: ${(encErr as Error).message}`);
           }
-          throw new Error(
-            detail ||
-              `Sidecar ${target} returned ${upstream.status} ${upstream.statusText}.`,
-          );
+          console.log(`[qwen-voice] book=${p.bookDir} character=${p.characterId} voiceId=${outVoiceId} → cached ${fileName} (${pcm.length} bytes @ ${sampleRate}Hz)`);
+          // fs-45 v1: record the design peak (Base + VoiceDesign resident here).
+          const { maybeSampleSidecarEngine } = await import('../gpu/sidecar-vram-sample.js');
+          await maybeSampleSidecarEngine('qwen:design');
+          return { voiceId: outVoiceId, url };
+        } finally {
+          clearInterval(livenessTimer);
+          if (p.signal) p.signal.removeEventListener('abort', onExternalAbort);
         }
-        const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
-        const pcm = Buffer.from(await upstream.arrayBuffer());
+      };
 
-        const fileName = voiceSampleFileName({
-          cacheScope: p.sampleVoiceId,
-          modelKey: p.modelKey,
-          text: calibrationText,
-          voiceName: voiceId,
-        });
-        const filePath = voiceSampleFilePath(fileName);
-        const url = voiceSamplePublicUrl(fileName);
-        try {
-          await mkdir(voiceSampleAudioDir(), { recursive: true });
-          const mp3 = await encodePcmToAudio(pcm, sampleRate);
-          await writeFile(filePath, mp3);
-        } catch (encErr) {
-          throw new Error(
-            `Designed the voice but failed to cache its preview: ${(encErr as Error).message}`,
-          );
-        }
-        console.log(
-          `[qwen-voice] book=${p.bookDir} character=${p.characterId} voiceId=${voiceId} ` +
-            `→ cached ${fileName} (${pcm.length} bytes @ ${sampleRate}Hz)`,
-        );
-        // fs-45 v1: record the design peak (Base + VoiceDesign resident here).
-        const { maybeSampleSidecarEngine } = await import('../gpu/sidecar-vram-sample.js');
-        await maybeSampleSidecarEngine('qwen:design');
-        return { voiceId, url };
+      try {
+        /* fs-55: emotion variants go to /qwen/mint-variant (anchored to the base
+           identity, so the base persona is not re-described — only the delivery
+           clause is added). Base voice design still goes to /qwen/design-voice. */
+        const target = p.emotion ? `${sidecarUrl}/qwen/mint-variant` : `${sidecarUrl}/qwen/design-voice`;
+        const fetchBody = p.emotion
+          ? JSON.stringify({ baseVoiceId, variantVoiceId: voiceId, emotionInstruct: EMOTION_INSTRUCT[p.emotion], voiceUuid: p.character.voiceUuid ?? null, language: p.language, calibrationText })
+          : JSON.stringify({ voiceId, voiceUuid: p.character.voiceUuid ?? null, instruct: p.persona, language: p.language, calibrationText });
+        return await postDesignAndCache(target, fetchBody, voiceId);
       } finally {
-        clearInterval(livenessTimer);
-        if (p.signal) p.signal.removeEventListener('abort', onExternalAbort);
         releaseGpu();
       }
     });
