@@ -13,9 +13,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
-import { manuscriptEditsJsonPath } from '../workspace/paths.js';
-import { readJson } from '../workspace/state-io.js';
-import { loadAnalysisCache } from '../store/analysis-cache.js';
+import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
@@ -23,49 +21,6 @@ import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 
 export const annotateEmotionRouter = Router();
-
-/* Load the book's POST-FOLD attributed sentences grouped by chapter — the
-   same source synth + the manuscript view use. Prefers manuscript-edits.json
-   (the folded, user-edited list) when present, falling back to the analysis
-   cache. Mirrors the reconciliation in book-state.ts: keep an edit sentence
-   when its id still exists in the cache (or exceeds the max cache id, i.e. a
-   user-created split offspring). */
-export async function loadPostFoldSentencesByChapter(
-  manuscriptId: string,
-  bookDir: string,
-): Promise<Map<number, SentenceOutput[]>> {
-  const cache = await loadAnalysisCache(manuscriptId);
-  const cachedSentences = Object.values(cache.chapters ?? {}).flat();
-  const edits = await readJson<{ sentences?: SentenceOutput[] }>(manuscriptEditsJsonPath(bookDir));
-
-  let sentences: SentenceOutput[];
-  if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
-    if (cachedSentences.length > 0) {
-      const cacheIds = new Set<number>();
-      let maxCacheId = 0;
-      for (const s of cachedSentences) {
-        cacheIds.add(s.id);
-        if (s.id > maxCacheId) maxCacheId = s.id;
-      }
-      sentences = edits.sentences.filter(
-        (s) => typeof s?.id !== 'number' || cacheIds.has(s.id) || s.id > maxCacheId,
-      );
-    } else {
-      sentences = edits.sentences;
-    }
-  } else {
-    sentences = cachedSentences;
-  }
-
-  const byChapter = new Map<number, SentenceOutput[]>();
-  for (const s of sentences) {
-    if (typeof s?.chapterId !== 'number') continue;
-    const bucket = byChapter.get(s.chapterId);
-    if (bucket) bucket.push(s);
-    else byChapter.set(s.chapterId, [s]);
-  }
-  return byChapter;
-}
 
 /* Build the per-chapter emotion-annotation prompt. We send the FULL chapter
    sentence sequence (narrator splits included) so the model has the
