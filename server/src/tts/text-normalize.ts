@@ -42,6 +42,7 @@
    UI caption / manuscript diff still sees the tag for analyst review. */
 
 import { AUDIO_TAGS } from '../parsers/audio-tags.js';
+import { expandForSpeech } from './normalize/index.js';
 
 const ALL_CAPS_RUN = /([A-Z])([A-Z']{2,})/g;
 const DASH_RUN = /\s*[–—]\s*/g;
@@ -131,7 +132,15 @@ export function stripAudioTags(text: string): string {
     then drop audio tags (last so the bracket characters are still present
     while the all-caps detector runs — `[SHOUTING]` is excluded from the
     all-caps fold by the closed-vocabulary check, so order is academic,
-    but keeping the strip last keeps the contract obvious). */
-export function normaliseForTts(text: string): string {
-  return stripAudioTags(softenDashes(denormaliseAllCaps(stripUnsafeForTts(text))));
+    but keeping the strip last keeps the contract obvious).
+
+    fs-53: when `langCode` is supplied, run `expandForSpeech` LAST so numbers,
+    dates, currency, symbols, and the curated abbreviation set are read in spoken
+    form. The one-arg form stays byte-identical to today (no expansion) — every
+    diagnostic / length-only caller keeps the neutral text. `expandForSpeech`
+    self-gates: it no-ops unless the language is supported and has a registered
+    engine, so an unsupported/dormant code is also a pass-through. */
+export function normaliseForTts(text: string, langCode?: string): string {
+  const base = stripAudioTags(softenDashes(denormaliseAllCaps(stripUnsafeForTts(text))));
+  return langCode ? expandForSpeech(base, langCode) : base;
 }

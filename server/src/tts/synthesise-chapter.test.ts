@@ -24,6 +24,7 @@ import {
   type CastCharacter,
 } from './synthesise-chapter.js';
 import { pickVoiceForEngine } from './voice-mapping.js';
+import { normaliseForTts } from './text-normalize.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type {
   SynthesizeInput,
@@ -655,7 +656,9 @@ describe('synthesiseChapter chapter-title beat', () => {
        runs for the synthetic title beat the same way it runs for the
        narrator's own sentences. */
     expect(provider.calls).toHaveLength(2);
-    expect(provider.calls[0].text).toBe('Chapter 2. Moolark.');
+    /* fs-53: the title is synthesised through `normaliseForTts(text, 'en')`
+       (langCode defaults to 'en'), so the bare "2" reads as the spoken "two". */
+    expect(provider.calls[0].text).toBe('Chapter two. Moolark.');
     expect(GEMINI_NARRATOR_VOICES, `title voiced by ${provider.calls[0].voiceName}`).toContain(
       provider.calls[0].voiceName,
     );
@@ -766,7 +769,9 @@ describe('synthesiseChapter chapter-title beat', () => {
        1.5 s leading silence — sanity-check that the silence padding
        actually contributed to runningBytes. */
     expect(events[0]).toBe('title-start');
-    expect(events[1]).toBe('synth:Chapter 1.');
+    /* fs-53: title synth runs through `normaliseForTts(text, 'en')`, so the
+       bare "1" reads as the spoken "one". */
+    expect(events[1]).toBe('synth:Chapter one.');
     expect(events[2]).toBe('title-complete:past-leading-silence');
     expect(events[3]).toBe('synth:Body.');
   });
@@ -1837,7 +1842,11 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     /* Flatten the batched items in call order; OFF must reproduce the body
        sentences in narrative order (groups[1..8] — anchor excluded). */
     const flatTexts = offP.batchCalls.flatMap((c) => c.items.map((i) => i.text));
-    expect(flatTexts).toEqual(VARIED_SENTENCES.slice(1).map((s) => s.text));
+    /* fs-53: synth-input text is `normaliseForTts(text, 'en')` (langCode
+       defaults to 'en'), so the bare "number 3/5/7/9" reads as spoken words.
+       The composition/ordering invariant under test is unchanged — compare
+       against the SAME normalised form the synth path emits. */
+    expect(flatTexts).toEqual(VARIED_SENTENCES.slice(1).map((s) => normaliseForTts(s.text, 'en')));
 
     /* ON instead emits length-homogeneous batches (shorts paired with shorts,
        longs with longs) — proves the default flips the composition. (Batch
