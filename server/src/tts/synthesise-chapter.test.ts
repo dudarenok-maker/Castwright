@@ -2014,6 +2014,132 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     );
   });
 
+  /* ── fs-57 liveInstruct budget accounting (task 8a) ─────────────────────
+     On the liveInstruct path the per-item effective length fed to the
+     token-budget packer must include the resolved instruct text length, so a
+     batch of long-instruct items doesn't overflow the per-forward budget.
+     The liveInstruct=false path must remain byte-identical to today. */
+
+  /* Cast for liveInstruct budget tests: all 1.7B Qwen voices. */
+  const INSTRUCT_CAST: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      ttsModelKey: 'qwen3-tts-1.7b',
+    },
+  ];
+
+  /* Build a sentence with an explicit instruct phrase (fs-57). */
+  function instructSentence(id: number, text: string, instruct: string): SentenceOutput {
+    return { id, chapterId: 1, characterId: 'narrator', text, instruct };
+  }
+
+  it('fs-57: liveInstruct packer counts instruct length — splits when text+instruct exceeds budget', async () => {
+    /* TEXT alone is short (10 chars each). INSTRUCT is long (30 chars each).
+       budget=50: text-only packing → 5×10=50 ≤ 50 (5 items per batch);
+       text+instruct packing → 5×(10+30)=200 > 50, 1×40=40 ≤ 50 (1 per batch).
+       Anchor is group 0 (synthed as single), so body = 4 more sentences.
+       With text-only: all 4 bodies fit one batch (4×10=40 ≤ 50).
+       With text+instruct: 4×40=160 > 50 → each must split to width 1 → singles.
+       (A budget-1 item → single call, not batch.) */
+    const INSTRUCT = 'i'.repeat(30); // 30-char instruct
+    const TEXT = 'a'.repeat(10);     // 10-char text → effective length 40 with instruct
+    const budget = 50;
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT), // anchor
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: INSTRUCT_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
+      liveInstruct: true,
+    });
+    /* With instruct accounted, effective length per item = 40; 2×40=80 > 50, so
+       every body group gets its own work item → no batch calls; only singles. */
+    expect(p.batchCalls).toHaveLength(0);
+    expect(p.singleCalls.length).toBeGreaterThanOrEqual(4); // 4 body groups
+  });
+
+  it('fs-57: liveInstruct=false leaves packing byte-identical (no instruct counted)', async () => {
+    /* Same setup as above; liveInstruct=false → text-only → all 4 bodies fit
+       in one batch (4×10=40 ≤ 50). Proves the off-path is unchanged. */
+    const INSTRUCT = 'i'.repeat(30);
+    const TEXT = 'a'.repeat(10);
+    const budget = 50;
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT),
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: INSTRUCT_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
+      liveInstruct: false, // off → text-only budget
+    });
+    /* text-only: 4×10=40 ≤ 50 → all 4 bodies in a single batch call. */
+    expect(p.batchCalls).toHaveLength(1);
+    expect(p.batchCalls[0].items).toHaveLength(4);
+  });
+
+  it('fs-57: liveInstruct budget never splits a 0.6B batch (0.6B ignores instruct)', async () => {
+    /* On 0.6B, resolveInstructForGroup returns {} regardless of liveInstruct,
+       so the packer must NOT count instruct tokens for 0.6B groups — they still
+       pack by text length alone. Verifies the is17b gate in the packer. */
+    const INSTRUCT = 'i'.repeat(30);
+    const TEXT = 'a'.repeat(10);
+    const budget = 50;
+    const cast06b: CastCharacter[] = [{
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      /* no ttsModelKey → 0.6B default */
+    }];
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT),
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: cast06b,
+      provider: p,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
+      liveInstruct: true, // liveInstruct ON but 0.6B → text-only
+    });
+    /* text-only: 4×10=40 ≤ 50 → bodies batched together. */
+    expect(p.batchCalls).toHaveLength(1);
+    expect(p.batchCalls[0].items).toHaveLength(4);
+  });
+
   /* ── fs-56 Quality tier: 1.7B batch partitioning (critical bug fix) ──────
      A chapter mixing 0.6B and 1.7B characters MUST NOT co-batch them — the
      sidecar runs a single-model forward and mixing tiers causes a prompt-tensor

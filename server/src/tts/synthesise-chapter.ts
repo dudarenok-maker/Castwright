@@ -1301,9 +1301,21 @@ export async function synthesiseChapter(
       }
     }
     /* Model-side length precomputed once across all batchable groups — shared by
-       the length-bucketing sort (plan 128) and the token-budget packer (plan 136). */
+       the length-bucketing sort (plan 128) and the token-budget packer (plan 136).
+       fs-57 (task 8a): on the liveInstruct path the effective length includes the
+       resolved instruct text so the packer accounts for the extra decode tokens a
+       long-instruct batch consumes. The liveInstruct=false path is byte-identical
+       (short-circuits immediately). Neutral items carry NEUTRAL_INSTRUCT="" → 0
+       extra chars, so they're counted uniformly but add nothing. */
     const allBatchable: SentenceGroup[] = Array.from(batchableByModel.values()).flat();
-    const lenOf = new Map(allBatchable.map((g) => [g, normaliseForTts(g.text).length]));
+    const lenOf = new Map(allBatchable.map((g) => {
+      const textLen = normaliseForTts(g.text).length;
+      if (!liveInstruct) return [g, textLen] as const;
+      const { route } = resolveGroup(g);
+      const is17b = route.modelKey === 'qwen3-tts-1.7b';
+      const instructLen = resolveInstructForGroup(g, { is17b, liveInstruct }).instruct?.length ?? 0;
+      return [g, textLen + instructLen] as const;
+    }));
     const pushBatch = (slice: SentenceGroup[]): void => {
       workItems.push(
         slice.length === 1 ? { kind: 'single', group: slice[0] } : { kind: 'batch', groups: slice },
