@@ -49,7 +49,9 @@ live synth payload **do not exist** and are built here.
    operator trigger as the existing emotion-annotation button** (one action runs emotion +
    instruct/vocalization). Strict non-re-attributing envelope, like fs-33.
 3. **Synthesis = unified live-instruct channel on the 1.7B**: one main base voice + per-line
-   instruct, **no anchored multi-variants** on this tier — this is the model's intended use.
+   instruct, **no anchored multi-variants** on this tier — this is the model's intended use. *(This
+   is the end state once a book opts in via the per-book `liveInstruct` flag of §4.1; the flag
+   bridges the migration so flag-off 1.7B books keep variants until they opt in — §4.3 R3-M1.)*
    Per-emotion intensity tuning is explicitly **deferred**. Anchored variants remain the **0.6B
    Fast-tier** mechanism, untouched.
 4. **Vocabulary = open-ended / LLM-driven** (a style guide, not a hardcoded list) — chosen so the
@@ -60,11 +62,12 @@ live synth payload **do not exist** and are built here.
 "Additive" holds at the **data/schema layer**: a pre-fs-57 analysis (no `instruct`, no
 vocalization marker) validates and loads unchanged, and the **0.6B Fast tier, Kokoro, and Coqui
 paths are byte-identical to today**. It does **not** hold at the **audio layer for the 1.7B
-tier**: §4.3 moves 1.7B synthesis from the `generate_voice_clone` wrapper to a raw-`generate`
-bypass, and drops anchored `__emotion` variant selection on that tier — so 1.7B audio changes even
-for neutral lines and for books previously rendered with tuned variants. This is an accepted,
-operator-known consequence of decision 3 (the model's intended use), not a regression to hide. See
-§4.3 (C1/C2) for the migration + verification gates.
+tier**, once a book opts in via `liveInstruct` (§4.1): §4.3 then moves its 1.7B synthesis from the
+`generate_voice_clone` wrapper to a raw-`generate` bypass and drops anchored `__emotion` variant
+selection — so 1.7B audio changes even for neutral lines and for books previously rendered with
+tuned variants. This is an accepted, operator-known consequence of decision 3 (the model's intended
+use), not a regression to hide; the flag (default off) keeps it from touching existing renders
+until the operator chooses it. See §4.3 (C1/C2) for the migration + verification gates.
 
 ## 3. The multilingual split (the key constraint this design respects)
 
