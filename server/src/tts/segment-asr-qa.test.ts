@@ -171,6 +171,65 @@ describe('looksLikeCalibrationBleed', () => {
   });
 });
 
+describe('compound-word tolerance', () => {
+  // Whisper splits closed compounds the manuscript writes solid
+  // ("Curvebuster" → "Curve Buster") and joins ones it writes open
+  // ("good bye" → "goodbye"). On a short sentence a single split is 1 sub + 1
+  // ins on a tiny denominator → WER 0.5 > 0.4 → a false 'drift' on audio that
+  // says exactly the right words. The bridge reconciles solid↔split forms.
+
+  it('Whisper splitting a solid compound is not drift (Curvebuster → Curve Buster)', () => {
+    const c = classifyTranscript('They called her Curvebuster.', 'They called her Curve Buster?', CLEAN);
+    expect(c.verdict).toBe('ok');
+    expect(c.wer).toBe(0);
+    expect(c.sub).toBe(0);
+    expect(c.ins).toBe(0);
+  });
+
+  it('Whisper joining an open compound is not drift (good bye → goodbye)', () => {
+    const c = classifyTranscript('Tell him good bye now please.', 'Tell him goodbye now please.', CLEAN);
+    expect(c.verdict).toBe('ok');
+    expect(c.wer).toBe(0);
+    expect(c.del).toBe(0);
+    expect(c.sub).toBe(0);
+  });
+
+  it('does NOT mask a genuine wrong-word swap as a compound', () => {
+    // None of these substitutions concatenate to the expected token, so the
+    // bridge must leave them as real drift.
+    const c = classifyTranscript(
+      'She opened the wooden door slowly.',
+      'She closed the metal gate quickly.',
+      CLEAN,
+    );
+    expect(c.verdict).toBe('drift');
+    expect(c.wer).toBeGreaterThan(0.4);
+  });
+});
+
+describe('hallucination deny-list', () => {
+  // Whisper emits training-data boilerplate (pirate-EPUB watermarks, subtitle
+  // credits, "thanks for watching") *confidently* on short/ambiguous audio, so
+  // it sails past the logprob / no-speech guards and lands as 'drift'. These are
+  // never real book content → inconclusive, not a re-record.
+  const long = 'Sophie hurried down the long museum hallway toward the bright exit.';
+
+  it('OceansofPDF.com watermark hallucination → inconclusive, not drift', () => {
+    const c = classifyTranscript(long, 'OceansofPDF.com', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('subtitle-credit hallucination → inconclusive', () => {
+    const c = classifyTranscript(long, 'Subtitles by the Amara.org community', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('thanks-for-watching hallucination → inconclusive', () => {
+    const c = classifyTranscript(long, 'Thank you for watching!', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+});
+
 describe('verifySegmentTranscript', () => {
   it('transcribes via the injected fn and classifies', async () => {
     const c = await verifySegmentTranscript(Buffer.from([0, 0]), 24000, EXPECTED, {
