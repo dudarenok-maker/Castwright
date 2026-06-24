@@ -49,6 +49,7 @@ import { exportLanRouter } from './routes/export-lan.js';
 import { certRootRouter } from './routes/cert-root.js';
 import { devicesRouter } from './routes/devices.js';
 import { pairSessionRouter, pairRedeemRouter } from './routes/pairing.js';
+import { designProgressRelayRouter } from './routes/design-progress-relay.js';
 import { requireLanToken } from './lan-auth.js';
 import { requireSameOrigin } from './csrf-origin.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
@@ -130,6 +131,7 @@ app.use('/api/companion', companionRouter); // interim — GET/HEAD /apk: downlo
 app.use('/api/samples', samplesRouter); // fs-22 — list + load the bundled demo book
 app.use('/api', devicesRouter); // srv-33 — companion per-device tokens: GET/POST /devices, DELETE /devices/:id
 app.use('/api/pair', pairSessionRouter); // QR pairing — loopback-only session mint (post-guard)
+app.use('/api/internal', designProgressRelayRouter); // sidecar→server single-design phase relay (loopback only)
 app.use('/api/library', libraryRouter);
 app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest
 app.use('/api/library', seriesMemoryRouter); // fe-40 — GET /api/library/series-memory

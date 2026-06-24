@@ -43,13 +43,13 @@ interface Subscriber {
   keepAlive: ReturnType<typeof setInterval>;
 }
 
-interface SingleJob {
+export interface SingleJob {
   bookId: string;
   bookDir: string;
   characterId: string;
   characterName: string;
   mode: 'first' | 'redesign';
-  phase: 'designing' | 'rendering';
+  phase: 'freeing-vram' | 'loading-model' | 'designing' | 'anchoring' | 'performing' | 'distilling' | 'rendering';
   preview: boolean;
   subscribers: Set<Subscriber>;
   controller: AbortController;
@@ -58,7 +58,21 @@ interface SingleJob {
 const inFlightByBook = new Map<string, SingleJob>();
 const HEARTBEAT_MS = 6000;
 
-function broadcast(job: SingleJob, ev: unknown): void {
+/* Progress-token registry: the sidecar POSTs phase progress to the loopback
+   relay carrying this token; the relay maps it back to the in-flight job. A
+   token is valid only while its job runs (deleted in endJob). */
+const tokenToJob = new Map<string, SingleJob>();
+export function registerProgressToken(token: string, job: SingleJob): void {
+  tokenToJob.set(token, job);
+}
+export function resolveProgressToken(token: string): SingleJob | undefined {
+  return tokenToJob.get(token);
+}
+export function dropProgressToken(token: string): void {
+  tokenToJob.delete(token);
+}
+
+export function broadcast(job: SingleJob, ev: unknown): void {
   for (const sub of job.subscribers) {
     try {
       sub.send(ev);
