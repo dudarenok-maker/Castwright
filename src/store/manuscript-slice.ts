@@ -326,6 +326,40 @@ export const manuscriptSlice = createSlice({
       }
     },
 
+    /* fs-57 — bulk-apply Stage-3 vocalization annotations for one chapter.
+       Three-rule contract:
+       1. Staleness (TOCTOU): if no sentence with the given id exists, DROP
+          the annotation — a merge/split may have removed it after Stage 3 ran.
+       2. Idempotency: if the sentence is ALREADY vocalization:true, SKIP IT
+          entirely (text AND instruct). A text edit is NOT idempotent, so
+          the skip-if-flagged guard is what makes re-running safe.
+       3. Apply (fresh sentence):
+          - text: set via the same single mutation setSentenceText performs
+            (changing sent.text is sufficient to mark it for re-synth — audio
+            is keyed on sentence text downstream; no separate dirty flag exists).
+          - instruct: fill-only — written only when the sentence has no
+            hand-set instruct (manual instruct always wins, mirroring how
+            applyDetectedEmotions never overwrites a hand-set emotion).
+          - vocalization: fill-only — only written when currently falsy. */
+    applyDetectedInstruct: (
+      s,
+      a: PayloadAction<{
+        chapterId: number;
+        annotations: Array<{ sentenceId: number; text?: string; instruct?: string; vocalization?: boolean }>;
+      }>,
+    ) => {
+      for (const ann of a.payload.annotations) {
+        const sent = s.sentences.find(
+          (x) => x.chapterId === a.payload.chapterId && x.id === ann.sentenceId,
+        );
+        if (!sent) continue; // TOCTOU — sentence was merged/split away
+        if (sent.vocalization) continue; // idempotency — already a vocalization, skip
+        if (ann.text !== undefined) sent.text = ann.text; // mark dirty for re-synth (text is the key)
+        if (!sent.instruct && ann.instruct !== undefined) sent.instruct = ann.instruct; // fill-only
+        if (!sent.vocalization && ann.vocalization) sent.vocalization = ann.vocalization; // fill-only
+      }
+    },
+
     /* User edit: reassign a batch of sentences at once. Used by the
        boundary-drag handle and the segment inspector. Scoped to one
        chapter — the caller batches ids from a single chapter's segments. */

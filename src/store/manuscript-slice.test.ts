@@ -834,3 +834,106 @@ describe('hydrateFromBookState — merge tombstone persistence (task-2b)', () =>
     expect(b.mergedAwayKeys).toEqual([]); // B's load doesn't inherit A's tombstone
   });
 });
+
+describe('fs-57 — applyDetectedInstruct (Stage-3 vocalization annotations)', () => {
+  const start = () =>
+    baseState(
+      sentences([
+        { id: 1, chapterId: 1, text: 'He entered the room.', characterId: 'narrator' },
+        { id: 2, chapterId: 1, text: 'Ow.', characterId: 'wren' },
+        { id: 3, chapterId: 1, text: 'That hurt!', characterId: 'wren', instruct: 'shout this' },
+      ]),
+    );
+
+  it('fills instruct + marks vocalization + applies text on a fresh sentence', () => {
+    const next = manuscriptSlice.reducer(
+      start(),
+      manuscriptActions.applyDetectedInstruct({
+        chapterId: 1,
+        annotations: [
+          { sentenceId: 2, text: 'Ah!', instruct: 'a sharp gasp of pain', vocalization: true },
+        ],
+      }),
+    );
+    const s = next.sentences.find((x) => x.id === 2);
+    expect(s?.text).toBe('Ah!');
+    expect(s?.instruct).toBe('a sharp gasp of pain');
+    expect(s?.vocalization).toBe(true);
+  });
+
+  it('is idempotent — a second dispatch does not overwrite text again', () => {
+    const annotation = {
+      chapterId: 1,
+      annotations: [
+        { sentenceId: 2, text: 'Ah!', instruct: 'a sharp gasp of pain', vocalization: true },
+      ],
+    };
+    // First apply — sets everything
+    const after1 = manuscriptSlice.reducer(
+      start(),
+      manuscriptActions.applyDetectedInstruct(annotation),
+    );
+    // Simulate a user editing the text after first apply
+    const userEdited = manuscriptSlice.reducer(
+      after1,
+      manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 2, text: 'Ah! Ah!' }),
+    );
+    // Second apply — must NOT overwrite the (user-edited) text because vocalization is already true
+    const after2 = manuscriptSlice.reducer(
+      userEdited,
+      manuscriptActions.applyDetectedInstruct(annotation),
+    );
+    expect(after2.sentences.find((x) => x.id === 2)?.text).toBe('Ah! Ah!');
+  });
+
+  it('never overwrites a hand-set instruct', () => {
+    const next = manuscriptSlice.reducer(
+      start(),
+      manuscriptActions.applyDetectedInstruct({
+        chapterId: 1,
+        annotations: [
+          {
+            sentenceId: 3,
+            text: 'Oof!',
+            instruct: 'detected instruct — should lose',
+            vocalization: true,
+          },
+        ],
+      }),
+    );
+    // sentence 3 already had a hand-set instruct — detection must not overwrite it
+    expect(next.sentences.find((x) => x.id === 3)?.instruct).toBe('shout this');
+    // but text and vocalization are applied (sentence was not yet vocalization:true)
+    expect(next.sentences.find((x) => x.id === 3)?.text).toBe('Oof!');
+    expect(next.sentences.find((x) => x.id === 3)?.vocalization).toBe(true);
+  });
+
+  it('drops an annotation whose sentenceId is absent (TOCTOU / merge-away)', () => {
+    const next = manuscriptSlice.reducer(
+      start(),
+      manuscriptActions.applyDetectedInstruct({
+        chapterId: 1,
+        annotations: [{ sentenceId: 99, text: 'Ah!', instruct: 'gasp', vocalization: true }],
+      }),
+    );
+    // No new sentence created; existing sentences untouched
+    expect(next.sentences).toHaveLength(3);
+    expect(next.sentences.every((s) => s.instruct !== 'gasp')).toBe(true);
+  });
+
+  it('is scoped by chapterId — annotation for ch2 does not touch ch1', () => {
+    const withCh2 = baseState([
+      ...sentences([{ id: 1, chapterId: 1, text: 'Quiet.', characterId: 'narrator' }]),
+      ...sentences([{ id: 1, chapterId: 2, text: 'Hmm.', characterId: 'wren' }]),
+    ]);
+    const next = manuscriptSlice.reducer(
+      withCh2,
+      manuscriptActions.applyDetectedInstruct({
+        chapterId: 2,
+        annotations: [{ sentenceId: 1, text: 'Hmm!', instruct: 'a low hum', vocalization: true }],
+      }),
+    );
+    expect(next.sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe('Quiet.');
+    expect(next.sentences.find((s) => s.chapterId === 2 && s.id === 1)?.text).toBe('Hmm!');
+  });
+});
