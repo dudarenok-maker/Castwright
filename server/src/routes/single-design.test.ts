@@ -14,12 +14,18 @@ import request from 'supertest';
 // Stub the shared design core so the job runs without a sidecar/GPU.
 // vi.mock is hoisted to the top of the file, so it runs before any imports —
 // these stubs are in effect for all dynamic imports in beforeAll too.
+let capturedDesignArgs: Record<string, unknown> | null = null;
+let resolveDesignCall: (() => void) | null = null;
 vi.mock('./qwen-voice.js', async (orig) => ({
   ...(await orig<typeof import('./qwen-voice.js')>()),
-  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string; preview?: boolean }) => ({
-    voiceId: p.preview ? `qwen-${p.characterId}-preview` : `qwen-${p.characterId}`,
-    url: `/api/voice-sample/${p.characterId}.mp3`,
-  })),
+  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string; preview?: boolean; progressToken?: string; progressUrl?: string }) => {
+    capturedDesignArgs = p as Record<string, unknown>;
+    if (resolveDesignCall) resolveDesignCall();
+    return {
+      voiceId: p.preview ? `qwen-${p.characterId}-preview` : `qwen-${p.characterId}`,
+      url: `/api/voice-sample/${p.characterId}.mp3`,
+    };
+  }),
 }));
 
 const applyOverrideStub = vi.fn(async () => 1);
@@ -130,17 +136,17 @@ function collectSse(res: request.Response): Record<string, unknown>[] {
 }
 
 describe('single-design job — first design', () => {
-  it('streams phase events, persists the override, and ends with designed', async () => {
+  it('streams the designed event, persists the override, and does NOT fake phase events', async () => {
+    capturedDesignArgs = null;
     const res = await request(app)
       .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
       .send({ persona: 'a warm, confident voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
 
     expect(res.status).toBe(200);
     const events = collectSse(res);
-    const types = events.map((e) => e.type);
-    expect(types).toContain('phase');
-    expect(events.find((e) => e.type === 'phase' && e.phase === 'designing')).toBeTruthy();
-    expect(events.find((e) => e.type === 'phase' && e.phase === 'rendering')).toBeTruthy();
+    // The sidecar now drives phase events — the server no longer fakes them.
+    expect(events.find((e) => e.type === 'phase' && e.phase === 'designing')).toBeFalsy();
+    expect(events.find((e) => e.type === 'phase' && e.phase === 'rendering')).toBeFalsy();
     const designed = events.find((e) => e.type === 'designed');
     expect(designed).toMatchObject({ characterId: 'c1', voiceId: 'qwen-c1' });
     expect(applyOverrideStub).toHaveBeenCalledWith(
@@ -205,5 +211,47 @@ describe('single-design job — reattach + busy', () => {
     } finally {
       designLock.clearDesignBusy(bookDir);
     }
+  });
+});
+
+describe('single-design job — progress token (task-5)', () => {
+  it('passes a non-empty progressToken + progressUrl to the design core, token resolves during design and is gone after', async () => {
+    capturedDesignArgs = null;
+    const { resolveProgressToken } = await import('./single-design.js');
+
+    // Wire resolveDesignCall so we can capture the token resolution state from
+    // inside the mock, before endJob cleans the token up.
+    let tokenLiveDuringDesign: boolean | null = null;
+    resolveDesignCall = () => {
+      const token = (capturedDesignArgs as Record<string, unknown> | null)?.progressToken;
+      tokenLiveDuringDesign = typeof token === 'string' ? resolveProgressToken(token) !== undefined : false;
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm, confident voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+    resolveDesignCall = null; // reset for other tests
+
+    expect(res.status).toBe(200);
+
+    // (a) designQwenVoiceForCharacter was called with a non-empty progressToken
+    //     and a progressUrl ending in /api/internal/design-progress.
+    expect(capturedDesignArgs).not.toBeNull();
+    const { progressToken, progressUrl } = capturedDesignArgs as { progressToken: unknown; progressUrl: unknown };
+    expect(typeof progressToken).toBe('string');
+    expect((progressToken as string).length).toBeGreaterThan(0);
+    expect(typeof progressUrl).toBe('string');
+    expect((progressUrl as string).endsWith('/api/internal/design-progress')).toBe(true);
+
+    // (b) Token was live inside the design call (before endJob), and gone after.
+    expect(tokenLiveDuringDesign).toBe(true);
+    const tokenAfter = resolveProgressToken(progressToken as string);
+    expect(tokenAfter).toBeUndefined();
+
+    // (c) Server itself does NOT broadcast phase:'rendering' or phase:'designing'.
+    const events = collectSse(res);
+    expect(events.find((e) => e.type === 'phase' && e.phase === 'rendering')).toBeFalsy();
+    expect(events.find((e) => e.type === 'phase' && e.phase === 'designing')).toBeFalsy();
   });
 });
