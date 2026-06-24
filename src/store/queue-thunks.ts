@@ -16,6 +16,7 @@
 
 import type { AppDispatch, RootState } from './index';
 import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
+import type { TtsModelKey } from '../lib/types';
 import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
 import { mockQueueRequest } from '../mocks/mock-queue';
@@ -45,6 +46,9 @@ export interface EnqueueInput {
   scope: QueueScope;
   /** Required when scope === 'character'. */
   characterId?: string;
+  /** Optional per-entry TTS model override (regenerate at a chosen quality
+      tier, e.g. Qwen 1.7B). Absent → the dispatcher uses `ui.ttsModelKey`. */
+  modelKey?: TtsModelKey;
   addedAt?: string;
 }
 

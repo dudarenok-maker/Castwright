@@ -5,9 +5,17 @@ import { REGEN_REASONS } from '../data/regen-reasons';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { parseDuration, formatHours } from '../lib/time';
 import { estimateGenMinutes } from '../lib/generation-progress';
-import type { Chapter } from '../lib/types';
+import type { Chapter, TtsModelKey } from '../lib/types';
 
 export type RegenScope = 'this' | 'forward';
+
+/* Quality tiers offered as a per-regenerate model override (#4). The Qwen 1.7B
+   tier is otherwise a per-character setting; here it can be chosen for the whole
+   regenerate without re-casting. */
+const QWEN_TIERS: { id: TtsModelKey; label: string; hint: string }[] = [
+  { id: 'qwen3-tts-0.6b', label: 'Qwen3-TTS 0.6B', hint: 'Faster' },
+  { id: 'qwen3-tts-1.7b', label: 'Qwen3-TTS 1.7B', hint: 'Higher quality, slower' },
+];
 
 interface Props {
   chapter: Chapter | null;
@@ -25,8 +33,16 @@ interface Props {
       not just the count. Falls back to a uniform-length guess off this
       chapter when the caller omits it. */
   forwardDurationSec?: number;
+  /** The session's current TTS model — the default selection + the option shown
+      when it isn't one of the Qwen quality tiers. */
+  defaultModelKey: TtsModelKey;
   onClose: () => void;
-  onConfirm: (args: { reason: string; scope: RegenScope; note: string }) => void;
+  onConfirm: (args: {
+    reason: string;
+    scope: RegenScope;
+    note: string;
+    modelKey: TtsModelKey;
+  }) => void;
 }
 
 export function RegenerateModal({
@@ -34,12 +50,19 @@ export function RegenerateModal({
   defaultScope = 'this',
   forwardCount = 1,
   forwardDurationSec,
+  defaultModelKey,
   onClose,
   onConfirm,
 }: Props) {
   const [reason, setReason] = useState('voice');
   const [scope, setScope] = useState<RegenScope>(defaultScope);
   const [note, setNote] = useState('');
+  const [modelKey, setModelKey] = useState<TtsModelKey>(defaultModelKey);
+  /* Always offer the two Qwen tiers; if the session default is some other engine
+     (Kokoro / Coqui / Gemini), surface it as a "keep current" option too. */
+  const modelOptions = QWEN_TIERS.some((t) => t.id === defaultModelKey)
+    ? QWEN_TIERS
+    : [{ id: defaultModelKey, label: 'Session default', hint: defaultModelKey }, ...QWEN_TIERS];
   if (!chapter) return null;
   /* Generation wall-clock tracks the real-time factor: it takes ~RTF seconds
      to synthesise one second of finished audio. So the ETA scales with the
@@ -134,6 +157,24 @@ export function RegenerateModal({
               </div>
             </section>
 
+            <section>
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+                Model
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {modelOptions.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setModelKey(m.id)}
+                    className={`text-left p-3 rounded-2xl border transition-all ${modelKey === m.id ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
+                  >
+                    <p className="text-sm font-semibold text-ink">{m.label}</p>
+                    <p className="text-xs text-ink/55 mt-0.5">{m.hint}</p>
+                  </button>
+                ))}
+              </div>
+            </section>
+
             <div className="p-4 rounded-2xl bg-canvas border border-ink/10 flex items-center gap-3">
               <span className="w-9 h-9 rounded-full bg-white border border-ink/10 grid place-items-center text-ink/70">
                 <IconClock className="w-4 h-4" />
@@ -154,7 +195,10 @@ export function RegenerateModal({
             <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">
               Cancel
             </button>
-            <PrimaryButton variant="dark" onClick={() => onConfirm({ reason, scope, note })}>
+            <PrimaryButton
+              variant="dark"
+              onClick={() => onConfirm({ reason, scope, note, modelKey })}
+            >
               Regenerate
             </PrimaryButton>
           </div>

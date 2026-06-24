@@ -18,7 +18,7 @@
  *     per-chapter `{ scope: 'this' }` entries; this server-side shape
  *     never carries 'forward' as a row. */
 
-import type { TtsEngine } from '../tts/index.js';
+import type { TtsEngine, TtsModelKey } from '../tts/index.js';
 
 export type QueueScope = 'this' | 'character';
 export type QueueStatus =
@@ -42,6 +42,10 @@ export interface QueueEntry {
   chapterId: number;
   scope: QueueScope;
   characterId?: string;
+  /* Optional per-entry TTS model override (e.g. a regenerate requested at the
+     Qwen 1.7B quality tier). Absent → the dispatcher uses the session default
+     `ui.ttsModelKey`. Mirrored in openapi.yaml's QueueEntry. */
+  modelKey?: TtsModelKey;
   addedAt: string; // ISO 8601
   status: QueueStatus;
   order: number;
@@ -82,6 +86,8 @@ export interface EnqueueInput {
   chapterId: number;
   scope: QueueScope;
   characterId?: string;
+  /* Optional per-entry TTS model override (regenerate at a chosen quality tier). */
+  modelKey?: TtsModelKey;
   addedAt?: string; // optional — defaults to now()
   /* Plan 108 Wave 3 — engine set stamped by the route from the chapter's
      speaking characters. Omitted when cast/analysis isn't available. */
@@ -106,6 +112,7 @@ export function enqueue(file: QueueFile, inputs: EnqueueInput[]): QueueFile {
       chapterId: input.chapterId,
       scope: input.scope,
       ...(input.characterId ? { characterId: input.characterId } : {}),
+      ...(input.modelKey ? { modelKey: input.modelKey } : {}),
       addedAt: input.addedAt ?? new Date().toISOString(),
       status: 'queued',
       order: 0, // overwritten by renumber below

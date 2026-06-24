@@ -34,6 +34,16 @@ const sampleEntry = (id: string, bookId = 'book-A', chapterId = 1): EnqueueInput
 });
 
 describe('queue-io.enqueue', () => {
+  it('carries an optional per-entry modelKey onto the stored entry (#4)', () => {
+    const f = enqueue(emptyFile(), [
+      { ...sampleEntry('e1'), modelKey: 'qwen3-tts-1.7b' },
+      sampleEntry('e2'),
+    ]);
+    expect(f.entries.find((e) => e.id === 'e1')?.modelKey).toBe('qwen3-tts-1.7b');
+    // No override → field omitted; the dispatcher falls back to the session default.
+    expect(f.entries.find((e) => e.id === 'e2')).not.toHaveProperty('modelKey');
+  });
+
   it('appends entries at the bottom and renumbers contiguously', () => {
     let f = emptyFile();
     f = enqueue(f, [sampleEntry('e1'), sampleEntry('e2')]);
