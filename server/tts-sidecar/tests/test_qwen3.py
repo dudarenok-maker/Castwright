@@ -1398,3 +1398,76 @@ def test_base17_weights_present_false_when_absent(tmp_path, monkeypatch):
     import main
     monkeypatch.setattr(main, "_qwen_hub_cache_dir", lambda: str(tmp_path))
     assert main._qwen_base17_weights_present() is False
+
+
+# ── Task 2 (srv-52): _ensure_base17_for_mint + /qwen/mint-variant 503/500 ──
+
+
+def test_ensure_base17_for_mint_not_installed(fake_qwen_runtime, monkeypatch):
+    import main
+    eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: False)
+    with pytest.raises(main.Base17UnavailableError) as ei:
+        eng._ensure_base17_for_mint()
+    assert ei.value.reason == "not-installed"
+
+
+def test_ensure_base17_for_mint_corrupt_on_nonoom(fake_qwen_runtime, monkeypatch):
+    import main
+    eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    def boom(): raise RuntimeError("bad safetensors header")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", boom)
+    with pytest.raises(main.Base17UnavailableError) as ei:
+        eng._ensure_base17_for_mint()
+    assert ei.value.reason == "corrupt"
+
+
+def test_ensure_base17_for_mint_reraises_oom(fake_qwen_runtime, monkeypatch):
+    import main
+    eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    def oom(): raise RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
+    with pytest.raises(RuntimeError) as ei:   # NOT Base17UnavailableError
+        eng._ensure_base17_for_mint()
+    assert "out of memory" in str(ei.value).lower()
+    assert not isinstance(ei.value, main.Base17UnavailableError)
+
+
+def test_mint_variant_route_503_not_installed(fake_qwen_runtime, monkeypatch):
+    """base voice exists; base17 weights absent → 503 with code=base17-unavailable."""
+    import main
+    eng = fake_qwen_runtime["engine"]
+    # Design the base voice so the 409 path isn't hit.
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: False)
+    client = TestClient(main.app)
+    r = client.post("/qwen/mint-variant", json={
+        "baseVoiceId": "v1",
+        "variantVoiceId": "v1__angry",
+        "emotionInstruct": "Delivered angrily.",
+    })
+    assert r.status_code == 503
+    body = r.json()
+    assert body["code"] == "base17-unavailable"
+    assert body["reason"] == "not-installed"
+
+
+def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):
+    """OOM during base17 load → generic 500, not a 503 fallback signal."""
+    import main
+    eng = fake_qwen_runtime["engine"]
+    # Design the base voice so the 409 path isn't hit.
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    def oom(): raise RuntimeError("CUDA out of memory")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
+    client = TestClient(main.app)
+    r = client.post("/qwen/mint-variant", json={
+        "baseVoiceId": "v1",
+        "variantVoiceId": "v1__angry",
+        "emotionInstruct": "Delivered angrily.",
+    })
+    assert r.status_code == 500
+    assert "code" not in r.json()  # NOT a fallback signal

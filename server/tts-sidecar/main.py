@@ -1145,6 +1145,19 @@ class VoiceNotDesignedError(RuntimeError):
     """Base voice has no cached .pt — design it before minting a variant."""
 
 
+class Base17UnavailableError(Exception):
+    """The 1.7B-Base model can't be used for an anchored mint for a
+    deterministic reason the separate VoiceDesign model won't share. The
+    mint route maps it to a 503 the server treats as a design-voice fallback
+    signal. `reason` is 'not-installed' (weights absent) or 'corrupt' (weights
+    present but the load raised a non-OOM error). A CUDA OOM is NOT this — it
+    re-raises as a generic error (no fallback)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Qwen 1.7B-Base unavailable ({reason}).")
+        self.reason = reason
+
+
 class QwenEngine(Engine):
     """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
 
@@ -1471,6 +1484,25 @@ class QwenEngine(Engine):
                 )
                 self._base17 = self._load_qwen_model(self.BASE17_MODEL)
                 log.info("Qwen 1.7B-Base loaded.")
+
+    def _ensure_base17_for_mint(self) -> None:
+        """Mint-only: ensure the 1.7B-Base is available, raising a typed
+        Base17UnavailableError the mint route maps to the 503 fallback signal.
+        A CUDA OOM is re-raised unchanged (generic 500, no fallback). Other
+        callers keep using _ensure_base17_loaded() and are unaffected."""
+        import torch  # type: ignore
+
+        if not _qwen_base17_weights_present():
+            raise Base17UnavailableError("not-installed")
+        try:
+            self._ensure_base17_loaded()
+        except Exception as e:  # noqa: BLE001 — classify then re-raise
+            msg = str(e).lower()
+            if "out of memory" in msg or isinstance(
+                e, getattr(torch.cuda, "OutOfMemoryError", ())
+            ):
+                raise  # OOM → generic 500, NEVER a fallback
+            raise Base17UnavailableError("corrupt") from e
 
     def unload_base17(self) -> None:
         """Drop the 1.7B-Base model and free VRAM. Idempotent.
@@ -2003,9 +2035,9 @@ class QwenEngine(Engine):
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
-            self._ensure_base17_loaded()
+            self._ensure_base17_for_mint()
             with self._synth_lock:
-                self._ensure_base17_loaded()
+                self._ensure_base17_for_mint()
                 rc = base_item.ref_code
                 rc = rc.to(self._device) if hasattr(rc, "to") else rc
                 ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
@@ -4099,6 +4131,12 @@ async def qwen_mint_variant(req: Request) -> Response:
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
         return JSONResponse({"detail": str(exc)}, status_code=409)
+    except Base17UnavailableError as exc:
+        log.warning("/qwen/mint-variant: 1.7B-Base %s", exc.reason)
+        return JSONResponse(
+            {"code": "base17-unavailable", "reason": exc.reason, "detail": str(exc)},
+            status_code=503,
+        )
     except Exception:
         log.exception("/qwen/mint-variant failed (baseVoiceId=%s)", base_voice_id)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
