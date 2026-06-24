@@ -23,6 +23,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
+import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
 export const voiceStyleRouter = Router();
@@ -62,7 +63,8 @@ voiceStyleRouter.post(
     }
 
     try {
-      const voiceStyle = await generateVoiceStylePersona(cast.characters[idx]);
+      const prep = await preparePersonaBatch(bookDir);
+      const voiceStyle = await generateVoiceStylePersona(cast.characters[idx], prep);
       cast.characters[idx] = { ...cast.characters[idx], voiceStyle };
       await writeJsonAtomic(castJsonPath(bookDir), cast);
       console.log(
@@ -103,15 +105,17 @@ voiceStyleRouter.post(
     const voiceStyles: Record<string, string> = {};
     const failures: Record<string, string> = {};
 
-    /* ONE Gemini call per character, sequentially. The shared rate limiter
-       already gates the call cadence, so a sequential loop keeps the code
-       simple while staying inside the per-model RPM. A per-character throw
-       is caught and recorded so one bad character can't abort the batch. */
+    /* Resolve the GPU plan once for the whole batch — one evict / one decision,
+       not per-character — then thread prep into every generateVoiceStylePersona
+       call. ONE Gemini/Ollama call per character; the shared rate limiter gates
+       cadence. A per-character throw is caught and recorded so one bad character
+       can't abort the batch. */
+    const prep = await preparePersonaBatch(bookDir);
     for (let i = 0; i < cast.characters.length; i++) {
       const c = cast.characters[i];
       if (!includeNarrator && isNarrator(c)) continue;
       try {
-        const voiceStyle = await generateVoiceStylePersona(c);
+        const voiceStyle = await generateVoiceStylePersona(c, prep);
         cast.characters[i] = { ...c, voiceStyle };
         voiceStyles[c.id] = voiceStyle;
       } catch (e) {

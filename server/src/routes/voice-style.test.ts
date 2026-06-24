@@ -11,7 +11,13 @@
 
    The Gemini generator is mocked (no network). Lazy-import pattern mirrors
    the sibling cast route tests so WORKSPACE_DIR is set before paths.ts
-   binds BOOKS_ROOT. */
+   binds BOOKS_ROOT.
+
+   A second describe block (at the bottom) pins the GPU plan wiring:
+   preparePersonaBatch is called once per /generate and once total for
+   /generate-all, and its result is threaded into every generateVoiceStylePersona
+   call. These use a lightweight supertest setup (no disk) to verify the
+   call-site contract. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
@@ -19,6 +25,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* Mock the GPU plan helper so the integration tests never touch real GPU state.
+   preparePersonaBatch returns the off-GPU default (gemini engine). */
+const mockPreparePersonaBatch = vi.fn<() => Promise<{ onCpu: boolean; keepAlive: string | number }>>();
+vi.mock('../tts/persona-gpu-plan.js', () => ({
+  preparePersonaBatch: mockPreparePersonaBatch,
+  GpuBusyForPersonaError: class GpuBusyForPersonaError extends Error {},
+}));
 
 /* Mock the generator so the route test never touches Gemini. Default
    echoes a per-character persona; individual tests override via mockImpl. */
@@ -104,6 +118,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   generateVoiceStylePersona.mockReset();
+  mockPreparePersonaBatch.mockReset();
+  mockPreparePersonaBatch.mockResolvedValue({ onCpu: false, keepAlive: 0 });
   /* Default: persona derived from the character id so assertions can pin
      which character drove which call. */
   generateVoiceStylePersona.mockImplementation(async (c: { id: string }) => `persona-for-${c.id}`);
@@ -190,5 +206,49 @@ describe('POST /api/books/:bookId/cast/voice-style/generate-all', () => {
     writeBookOnDisk([]);
     const res = await request(app).post(`/api/books/${bookId}/cast/voice-style/generate-all`);
     expect(res.status).toBe(409);
+  });
+});
+
+/* --- GPU plan wiring (srv-48 Task 8) ----------------------------------------
+   Pin that preparePersonaBatch is called once per /generate and ONCE for
+   the whole /generate-all batch, and that its result is threaded into every
+   generateVoiceStylePersona call. The disk-backed `app` above is reused;
+   mockPreparePersonaBatch is already wired at the top. */
+
+describe('voice-style routes apply the persona GPU plan', () => {
+  it('/generate calls preparePersonaBatch and threads prep into generateVoiceStylePersona', async () => {
+    const prep = { onCpu: true, keepAlive: 0 };
+    mockPreparePersonaBatch.mockResolvedValue(prep);
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/wren/voice-style/generate`);
+    expect(res.status).toBe(200);
+
+    /* preparePersonaBatch called once for this single-character request */
+    expect(mockPreparePersonaBatch).toHaveBeenCalledTimes(1);
+
+    /* generateVoiceStylePersona received (character, prep) — not bare character */
+    expect(generateVoiceStylePersona).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'wren' }),
+      prep,
+    );
+  });
+
+  it('/generate-all calls preparePersonaBatch ONCE (not per character) and threads same prep', async () => {
+    const prep = { onCpu: false, keepAlive: '5m' };
+    mockPreparePersonaBatch.mockResolvedValue(prep);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/voice-style/generate-all`)
+      .send({});
+    expect(res.status).toBe(200);
+
+    /* One prepare for the whole batch — never per character */
+    expect(mockPreparePersonaBatch).toHaveBeenCalledTimes(1);
+
+    /* Both speaking characters were generated with the SAME prep object */
+    expect(generateVoiceStylePersona).toHaveBeenCalledTimes(2); // narrator skipped
+    for (const call of generateVoiceStylePersona.mock.calls) {
+      expect(call[1]).toEqual(prep);
+    }
   });
 });

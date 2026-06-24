@@ -27,10 +27,12 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
-import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { getResolvedGeminiApiKey, getResolvedOllamaModel } from '../workspace/user-settings.js';
 import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
 import { readPrompt } from '../config/prompts.js';
+import { configValue } from '../config/resolver.js';
+import { generatePersonaViaOllama } from './ollama.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
     loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
@@ -47,11 +49,24 @@ export async function loadVoiceStyleSkill(): Promise<string> {
   return (await readPrompt('prompt.voiceStyle')).text;
 }
 
-/** Pinned voice-style model. `gemini-3.1-flash-lite` per the locked
-    decision; env-overridable for ops triage without a rebuild. */
+/** Voice-style (persona) Gemini model. Sourced from the registry knob
+    `analyzer.gemini.voiceStyleModel` (env VOICE_STYLE_MODEL → user override →
+    default `gemini-3.1-flash-lite`). Previously this returned a hardcoded
+    literal and ignored the knob — srv-48 wires it up. */
 export function resolveVoiceStyleModel(): string {
-  const raw = process.env.VOICE_STYLE_MODEL?.trim();
-  return raw && raw.length > 0 ? raw : 'gemini-3.1-flash-lite';
+  return configValue<string>('analyzer.gemini.voiceStyleModel');
+}
+
+/** Persona generation provider — `local` (Ollama) or `gemini`. Default gemini. */
+export function resolvePersonaEngine(): 'local' | 'gemini' {
+  return configValue<string>('analyzer.personaGeneration.engine') === 'local' ? 'local' : 'gemini';
+}
+
+/** Ollama model for the local persona path. Blank ⇒ inherit the analyzer's
+    resolved local model (single source of truth, zero extra download). */
+export function resolvePersonaLocalModel(): string {
+  const explicit = configValue<string>('analyzer.personaGeneration.localModel').trim();
+  return explicit.length > 0 ? explicit : getResolvedOllamaModel();
 }
 
 /* Tone metrics are 0–100. Translate the two that matter most for a voice
@@ -130,6 +145,11 @@ Voice-design persona:`;
    so a multi-line answer still lands as one clean instruct. */
 export function cleanPersona(raw: string): string {
   let s = stripCodeFences(raw).trim();
+  /* Local thinking models may ignore think:false and emit a reasoning block
+     ahead of the persona. The structured analyzer path is protected by
+     constrained decoding; this freeform path is not. Drop a leading
+     <think>…</think> (DOTALL) before the rest of the cleanup. */
+  s = s.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim();
   /* Drop a leading label like "Persona:" / "Voice:" the model sometimes
      prepends despite the instruction. */
   s = s.replace(/^(voice[- ]?design persona|persona|voice style|voice)\s*[:\-—]\s*/i, '');
@@ -140,11 +160,41 @@ export function cleanPersona(raw: string): string {
   return s;
 }
 
-/** Generate a voice-style persona for ONE character via a single
-    `gemini-3.1-flash-lite` call, rate-limited through the shared limiter.
-    Throws when no Gemini API key resolves, or when the model returns an
-    empty response. */
-export async function generateVoiceStylePersona(character: CastCharacter): Promise<string> {
+/** Generate a voice-style persona for ONE character.
+    Dispatches to the local Ollama path (`PERSONA_GEN_ENGINE=local`) or the
+    Gemini path (default). The optional `opts` are forwarded to the local
+    branch only; existing callers that pass no opts remain backward-compatible.
+
+    - local  → generateViaOllama (never touches Gemini; throws LocalUnreachableError
+                when the daemon is down — NO silent Gemini fallback).
+    - gemini → generateViaGemini (existing inline Google-GenAI code, verbatim;
+                retains geminiRateLimiter.acquire to prevent 429 storms). */
+export async function generateVoiceStylePersona(
+  character: CastCharacter,
+  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+): Promise<string> {
+  const engine = resolvePersonaEngine();
+  return engine === 'local' ? generateViaOllama(character, opts) : generateViaGemini(character);
+}
+
+async function generateViaOllama(
+  character: CastCharacter,
+  opts: { onCpu?: boolean; keepAlive?: string | number },
+): Promise<string> {
+  const model = resolvePersonaLocalModel();
+  const prompt = await buildVoiceStylePrompt(character);
+  const persona = cleanPersona(await generatePersonaViaOllama(prompt, model, opts));
+  if (!persona) {
+    throw new Error(`Voice-style generation for "${character.id}" returned an empty persona.`);
+  }
+  return persona;
+}
+
+/* generateViaGemini = the previous generateVoiceStylePersona body, unchanged:
+   getResolvedGeminiApiKey() guard → resolveVoiceStyleModel() → buildVoiceStylePrompt
+   → geminiRateLimiter.acquire(model, estTokens) → GoogleGenAI generateContent
+   → cleanPersona → empty-persona guard. MUST retain geminiRateLimiter.acquire. */
+async function generateViaGemini(character: CastCharacter): Promise<string> {
   const apiKey = getResolvedGeminiApiKey();
   if (!apiKey) {
     throw new Error(

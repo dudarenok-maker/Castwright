@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
+import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
@@ -682,11 +683,61 @@ export class OllamaAnalyzer implements Analyzer {
   }
 }
 
+/** One-shot freeform Ollama call for persona generation. Unlike
+    OllamaAnalyzer.chat() this sends NO response `format` (freeform text),
+    does not stream, and is GPU-plan aware:
+      - onCpu  → num_gpu:0 (system RAM only) AND skip the GPU semaphore
+                 (a CPU call must not queue behind GPU synthesis).
+      - !onCpu → acquire gpuSemaphore(costForEngine('analyzer')) around the fetch.
+      - keepAlive is caller-controlled (resident window for a bulk pre-pass; 0
+        for one-shot / CPU). */
+export async function generatePersonaViaOllama(
+  prompt: string,
+  model: string,
+  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+): Promise<string> {
+  const onCpu = opts.onCpu === true;
+  const url = getResolvedOllamaUrl();
+  const body = {
+    model,
+    messages: [{ role: 'user' as const, content: prompt }],
+    stream: false,
+    think: false,
+    keep_alive: opts.keepAlive ?? 0,
+    options: {
+      temperature: resolveOllamaTemperature(),
+      ...(onCpu ? { num_gpu: 0 } : {}),
+    },
+  };
+
+  const release = onCpu ? null : await gpuSemaphore.acquire(costForEngine('analyzer'));
+  try {
+    let response: Response;
+    try {
+      response = await fetch(`${url}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      throw classifyConnectError(err, url);
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Ollama ${url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+    }
+    const json = (await response.json().catch(() => ({}))) as { message?: { content?: string } };
+    return json.message?.content ?? '';
+  } finally {
+    release?.();
+  }
+}
+
 /* Map a fetch / stream-read failure to either LocalUnreachableError (triggers
    fallback) or a plain Error (hard-fail). Undici surfaces connection-level
    errors as `TypeError: fetch failed` with `.cause` carrying the inner
    SystemError; we read `.cause.code` to discriminate. */
-function classifyConnectError(err: unknown, url: string): Error {
+export function classifyConnectError(err: unknown, url: string): Error {
   const e = err as { cause?: { code?: string }; name?: string; code?: string; message?: string };
   const innerCode = e?.cause?.code ?? e?.code;
   if (innerCode && UNREACHABLE_CODES.has(innerCode)) {

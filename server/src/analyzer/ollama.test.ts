@@ -666,6 +666,57 @@ describe('OllamaAnalyzer — output truncation (#528)', () => {
   });
 });
 
+import { gpuSemaphore } from '../gpu/semaphore.js';
+
+function mockChatResponse(text: string) {
+  // Non-streaming /api/chat returns one JSON object.
+  return new Response(JSON.stringify({ message: { content: text }, done: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+describe('generatePersonaViaOllama', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('GPU path: acquires the semaphore and sends the caller keep_alive', async () => {
+    const acquire = vi.spyOn(gpuSemaphore, 'acquire');
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A warm voice.'));
+    const { generatePersonaViaOllama } = await import('./ollama.js');
+    const out = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
+    expect(out).toBe('A warm voice.');
+    expect(acquire).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.keep_alive).toBe('5m');
+    expect(body.stream).toBe(false);
+    expect(body.format).toBeUndefined();
+    expect(body.think).toBe(false);
+    expect(body.options?.num_gpu).toBeUndefined(); // GPU path leaves num_gpu unset
+  });
+
+  it('CPU path: num_gpu:0, keep_alive:0, and does NOT acquire the semaphore', async () => {
+    const acquire = vi.spyOn(gpuSemaphore, 'acquire');
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A cool voice.'));
+    const { generatePersonaViaOllama } = await import('./ollama.js');
+    const out = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: true });
+    expect(out).toBe('A cool voice.');
+    expect(acquire).not.toHaveBeenCalled();
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.options.num_gpu).toBe(0);
+    expect(body.keep_alive).toBe(0);
+  });
+
+  it('connection refusal surfaces LocalUnreachableError', async () => {
+    vi.spyOn(global, 'fetch').mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }),
+    );
+    const { generatePersonaViaOllama, LocalUnreachableError } = await import('./ollama.js');
+    await expect(generatePersonaViaOllama('P', 'qwen3.5:9b', { onCpu: true })).rejects.toBeInstanceOf(
+      LocalUnreachableError,
+    );
+  });
+});
+
 afterAll(async () => {
   /* Tidy test inbox/outbox files. */
   for (const id of [

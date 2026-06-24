@@ -12,9 +12,14 @@
    the test never touches the real filesystem and verifies the static
    instruction is sourced from the file. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { geminiRateLimiter } from './rate-limit.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
+import {
+  resolveVoiceStyleModel,
+  resolvePersonaEngine,
+  resolvePersonaLocalModel,
+} from './voice-style.js';
 
 const generateContent = vi.fn();
 
@@ -27,8 +32,23 @@ vi.mock('@google/genai', () => ({
 let mockApiKey: string | null = 'test-key';
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedGeminiApiKey: () => mockApiKey,
+  getResolvedOllamaModel: () => 'llama2',
   readConfigOverrides: () => ({}),
 }));
+
+vi.mock('../config/resolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/resolver.js')>();
+  return {
+    ...actual,
+    configValue: (key: string) => {
+      // Override just the persona config keys; delegate others to the real implementation
+      if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
+      if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
+      // For other keys, use the real configValue function (includes analyzer.gemini.voiceStyleModel)
+      return actual.configValue(key);
+    },
+  };
+});
 
 /* Canonical static instruction text — matches the content of
    skills/audiobook-voice-style.md so the assertions below are stable
@@ -183,6 +203,49 @@ describe('cleanPersona', () => {
     const { cleanPersona } = await import('./voice-style.js');
     expect(cleanPersona('a warm,\n  steady\nvoice')).toBe('a warm, steady voice');
   });
+
+  describe('cleanPersona <think> guard', () => {
+    it('strips a leading <think>…</think> block a local thinking model may emit', async () => {
+      const { cleanPersona } = await import('./voice-style.js');
+      const raw = '<think>The character is a gruff miner, so low pitch…</think>\nA gruff, low-pitched man\'s voice, slow and weary, for audiobook narration.';
+      expect(cleanPersona(raw)).toBe(
+        "A gruff, low-pitched man's voice, slow and weary, for audiobook narration.",
+      );
+    });
+
+    it('leaves a persona with no think block unchanged', async () => {
+      const { cleanPersona } = await import('./voice-style.js');
+      const raw = 'A bright teenage girl\'s voice, medium-high pitch, for audiobook narration.';
+      expect(cleanPersona(raw)).toBe(raw);
+    });
+  });
+});
+
+describe('persona generation config', () => {
+  const ENV_KEYS = ['VOICE_STYLE_MODEL', 'PERSONA_GEN_ENGINE', 'PERSONA_GEN_LOCAL_MODEL'];
+  afterEach(() => {
+    for (const k of ENV_KEYS) delete process.env[k];
+    vi.restoreAllMocks();
+  });
+
+  it('resolveVoiceStyleModel reflects the registry default and an env override', () => {
+    expect(resolveVoiceStyleModel()).toBe('gemini-3.1-flash-lite'); // registry default, not a code literal
+    process.env.VOICE_STYLE_MODEL = 'gemini-3.1-pro';
+    expect(resolveVoiceStyleModel()).toBe('gemini-3.1-pro');
+  });
+
+  it('resolvePersonaEngine defaults to gemini, honours the env toggle', () => {
+    expect(resolvePersonaEngine()).toBe('gemini');
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    expect(resolvePersonaEngine()).toBe('local');
+  });
+
+  it('resolvePersonaLocalModel: blank inherits the analyzer model; explicit wins', async () => {
+    const { getResolvedOllamaModel } = await import('../workspace/user-settings.js');
+    expect(resolvePersonaLocalModel()).toBe(getResolvedOllamaModel()); // blank ⇒ inherit
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
+    expect(resolvePersonaLocalModel()).toBe('qwen3.5:9b');
+  });
 });
 
 describe('generateVoiceStylePersona', () => {
@@ -227,5 +290,53 @@ describe('generateVoiceStylePersona', () => {
     generateContent.mockResolvedValue({ text: '   ' });
     const { generateVoiceStylePersona } = await import('./voice-style.js');
     await expect(generateVoiceStylePersona(MAERIN)).rejects.toThrow(/empty persona/);
+  });
+});
+
+import { generateVoiceStylePersona } from './voice-style.js';
+
+const CHAR = { id: 'miner', name: 'Old Tom' } as any;
+
+describe('generateVoiceStylePersona dispatch', () => {
+  const ENV = ['PERSONA_GEN_ENGINE', 'GEMINI_API_KEY', 'OLLAMA_MODEL'];
+  afterEach(() => {
+    for (const k of ENV) delete process.env[k];
+    mockApiKey = 'test-key';
+    vi.restoreAllMocks();
+  });
+
+  it('local engine routes to Ollama and never touches Gemini', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    const ollama = await import('./ollama.js');
+    const spy = vi.spyOn(ollama, 'generatePersonaViaOllama').mockResolvedValue('A weary miner\'s voice.');
+    const out = await generateVoiceStylePersona(CHAR, { onCpu: true });
+    expect(out).toBe("A weary miner's voice.");
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it('local engine with daemon down throws LocalUnreachableError (no Gemini fallback)', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    const ollama = await import('./ollama.js');
+    vi.spyOn(ollama, 'generatePersonaViaOllama').mockRejectedValue(
+      new ollama.LocalUnreachableError('Ollama unreachable'),
+    );
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toBeInstanceOf(ollama.LocalUnreachableError);
+  });
+
+  it('gemini engine with no key throws the clear message', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'gemini';
+    mockApiKey = null;
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toThrow(/GEMINI_API_KEY is required/);
+  });
+
+  it('gemini branch still acquires the rate limiter', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'gemini';
+    process.env.GEMINI_API_KEY = 'k';
+    const acquire = vi.spyOn(geminiRateLimiter, 'acquire').mockResolvedValue(undefined as any);
+    // Use vi.mock factory form — prototype spy on GoogleGenAI is fragile across SDK versions.
+    // The top-level vi.mock('@google/genai') already stubs generateContent; just ensure it resolves.
+    generateContent.mockResolvedValue({ text: 'A persona.' });
+    await generateVoiceStylePersona(CHAR);
+    expect(acquire).toHaveBeenCalled();
   });
 });
