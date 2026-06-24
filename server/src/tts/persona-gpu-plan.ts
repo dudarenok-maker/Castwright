@@ -1,6 +1,10 @@
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { activeGenerationBooks } from '../routes/generation.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { shouldEvictBeforeSidecarLoad } from '../gpu/residency.js';
+import { getLastKnownVram } from '../gpu/vram-state.js';
+import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
+import { resolveAnalyzerKeepAlive } from '../analyzer/ollama.js';
 
 /** Thrown when the sidecar can't be safely unloaded for a persona run because a
     render is active. The caller falls back to CPU persona generation. */
@@ -40,4 +44,28 @@ export async function unloadResidentSidecar(): Promise<void> {
   } finally {
     release();
   }
+}
+
+export interface PersonaGpuPlan {
+  onCpu: boolean;
+  evict: boolean;
+  keepAlive: string | number;
+}
+
+/** Decide how the local persona call should use the GPU for `bookDir`. See the
+    spec's decision table. "Busy" combines the instantaneous semaphore hold and
+    the durable render flag (a render is mid-job even between per-chunk holds). */
+export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
+  const constrained = shouldEvictBeforeSidecarLoad(getLastKnownVram());
+  if (!constrained) return { onCpu: false, evict: false, keepAlive: 0 };
+
+  const busy =
+    gpuSemaphore.inFlight > 0 ||
+    activeGenerationBooks().length > 0 ||
+    isOtherBookDesignBusy(bookDir) ||
+    isAnyAnalysisBusy();
+
+  return busy
+    ? { onCpu: true, evict: false, keepAlive: 0 }
+    : { onCpu: false, evict: true, keepAlive: resolveAnalyzerKeepAlive() };
 }
