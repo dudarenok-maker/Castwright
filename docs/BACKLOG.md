@@ -422,6 +422,11 @@ _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-t
 - _Benefit (technical / community):_ unblocks FA2 on the real stack; community goodwill + visibility.
 _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.8/§10 · [#1001](https://github.com/dudarenok-maker/Castwright/issues/1001).
 
+#### `srv-52` — Mint-variant fallback to design-voice when the 1.7B-Base is unavailable ([#1091](https://github.com/dudarenok-maker/Castwright/issues/1091))
+
+- _What:_ When an emotion variant is requested but the Qwen 1.7B-Base (the anchored-mint engine) is not installed or fails to load, route the variant through `/qwen/design-voice` with `persona + EMOTION_INSTRUCT[emotion]` (the old design path) — logged, not silent — instead of orphaning the `.pt` into a silent Kokoro fallback (the #1057/#1063 class). Use the anchored mint only when both base models are available.
+- _Benefit (user / technical):_ emotion variants still ship via the old design path when the 1.7B isn't resident, instead of a silent Kokoro fallback / orphaned `.pt`. Surfaced during #1089.
+
 ### Revisions & regen
 
 #### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history) ([#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415))
