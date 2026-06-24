@@ -24,8 +24,14 @@ Qwen 1.7B Base.
 
 This is the full vertical (the parent spec's "Option B"): data model + analysis emission +
 runtime synthesis + the two guardrails (Script Review must not strip vocalizations; ASR
-content-QA must not false-flag them). Everything is **additive** — a sentence without `instruct`
-synthesises byte-identically to today.
+content-QA must not false-flag them). It is **additive at the data layer** — a pre-fs-57 analysis
+loads and validates unchanged, and the 0.6B/Kokoro/Coqui audio paths stay byte-identical — but the
+**1.7B audio path changes by design** (a new live-instruct synth path, gated per book). See §2.1
+for the honest scope of "additive".
+
+**Draft gate.** This spec stays `status: draft` until the **C2 sidecar gate** (what empty/neutral
+instruct actually produces) and the **re-established perf baseline** (§5) land — mirroring the
+parent spec's R2-C1 gate. fs-57 does not assume the parent spike's audio/perf findings.
 
 **Scope correction vs. the parent spec.** The parent assumed fs-56 had already shipped a
 per-sentence `instruct` field and a live instruct synth path. It had not: fs-56 shipped only the
@@ -93,14 +99,24 @@ along since the instruct is English regardless).
 
   Manual edits win (consistent with `emotion`'s "manual wins"). On the 1.7B tier a sentence with
   `emotion` but no `instruct` derives an English phrase from the enum; on the 0.6B tier `emotion`
-  keeps driving anchored-variant selection unchanged.
+  keeps driving anchored-variant selection unchanged. **The emotion→phrase derivation runs
+  synth-side (R2-M4)** (`synthesise-chapter.ts`), not the analyzer — so the stored `instruct` field
+  holds only genuine analyzer/manual instructs, and the phrase map can evolve without re-analysis.
+- **Live-instruct enable is a per-book flag, separate from tier (R2-M3).** Selecting the 1.7B tier
+  alone does **not** switch a character to the live-instruct path; a per-book `liveInstruct` opt-in
+  (book-meta, default **off**) gates it. So existing 1.7B-cast books keep today's behaviour until
+  the operator opts in and re-renders — this is what makes the "no silent restyle" promise (§4.3
+  C1) actually hold. With the flag off, 1.7B stays on `generate_voice_clone` + anchored variants
+  exactly as today.
 - Manuscript edits are **not** cross-tab broadcast (`broadcast-middleware.ts`) — no sync worry;
   `instruct` follows `emotion`'s persistence (cast/manuscript state + manuscript-edits).
 - **Vocalization marker (M3).** Add an optional `vocalization?: boolean` to the Sentence schema
   (+ OpenAPI + types), set by Stage 3 when it authored a non-verbal sound. This is the **explicit
   signal** the srv-31 carve-out reads (§4.4) — chosen over the fuzzy "short text + non-empty
   instruct" heuristic so the carve-out is precise and language-agnostic. Absent ⇒ false ⇒ today's
-  ASR behaviour.
+  ASR behaviour. **Note (R2-M1):** the flag marks a sentence as *containing* a vocalization; it does
+  **not** by itself blanket-relax WER — §4.4 gates the relaxation on the vocalization being
+  *dominant*, so a gasp prepended onto a long lexical line keeps ASR protection on the words.
 
 ### 4.2 Analysis — Phase-1 Stage 3 (instruct + vocalization)
 
@@ -117,6 +133,11 @@ along since the instruct is English regardless).
   they can't be delivered independently. Splitting a vocalization into its own sentence (which
   would pull in the sentence-ID-allocation / Script-Review-collision machinery) is a deferred
   follow-up, not v1.
+- **Idempotency guard (R2-M2).** Unlike the emotion pass, a text-prepend is **not** naturally
+  idempotent — and the trigger is re-runnable (like "Detect emotions"). Re-running must **skip any
+  sentence already `vocalization:true`** (and never re-edit `text` for it), so a second click can't
+  produce `"Ah! Ah! …"`. The fill-only rule covers `instruct`/`vocalization`; the skip-if-flagged
+  rule covers `text`.
 - **Open-ended dialect with a style guide** in the prompt: when the narrative makes a non-verbal
   reaction explicit (a gasp, sigh, laugh, hesitation), write the pronounceable vocalization into
   `text` in the **book's language** and an **English** `instruct`. Conservative — omit when not
@@ -128,17 +149,23 @@ along since the instruct is English regardless).
   `setSentenceText` path. **Audio-staleness (M1):** a `text` edit invalidates any already-generated
   segment for that sentence (`segments.json` binding) — Stage 3 must mark the sentence dirty for
   re-gen, exactly as a manual text edit does. The emotion pass never faced this; Stage 3 must.
-- **Pass ordering vs Script Review (M4).** Stage 3 runs **after Stage 2 attribution and after any
-  Script Review** in a given analysis, so it annotates stable sentence IDs and its
-  vocalizations are then protected by Script Review's tested guard on a *subsequent* review. If a
-  Script Review runs *after* Stage 3, Stage 3's `{ sentenceId }` targets are revalidated against
-  the live manuscript at apply time (reuse fs-58's index-map / TOCTOU staleness check) so a
-  merged/split/renumbered sentence drops its annotation rather than mis-applying it.
-- **UI wiring:** add Stage 3 to the analysis form; the shipped **`DetectEmotionsButton`**
-  (`src/components/detect-emotions-button.tsx`, used at `src/views/manuscript.tsx:776`, calls
-  `api.detectEmotions`) triggers Stage 3 alongside the emotion pass in one operator action — but
-  per M1 it dispatches the **new** instruct reducer in addition to `applyDetectedEmotions`, and its
-  confirm copy + progress must cover the heavier (text-mutating, audio-invalidating) work.
+- **Order-independence vs Script Review (M4, reframed per R2-Mo1).** Script Review and Stage 3 are
+  **both operator-triggered post-analysis passes** with no fixed pipeline order — the operator may
+  run them in either order, repeatedly. So the guarantee is **not** "Stage 3 runs after"; it is that
+  **both passes are order-independent and TOCTOU-safe**: every apply revalidates `{ sentenceId }`
+  targets against the live manuscript (reuse fs-58's index-map / staleness check), and Script
+  Review's tested vocalization guard protects vocalizations regardless of when Stage 3 ran. A
+  merged/split/renumbered sentence drops its Stage-3 annotation rather than mis-applying it.
+- **UI wiring + endpoint (R2-Mo2).** Add Stage 3 to the analysis form; the shipped
+  **`DetectEmotionsButton`** (`src/components/detect-emotions-button.tsx`, used at
+  `src/views/manuscript.tsx:776`) is the operator entry point. **Don't overload the emotion-named
+  contract:** `api.detectEmotions` / its SSE events / `DetectEmotionsError` stay emotion-only;
+  Stage 3 gets its **own endpoint + SSE + error type + reducer**, and the button fires both passes
+  (its confirm copy + progress must cover the heavier text-mutating, audio-invalidating work).
+  **Live-generation race:** a Stage-3 `text` edit to a sentence whose audio is generating
+  concurrently (the multi-book invariant) follows the same dirty-then-regen path as a manual edit —
+  the in-flight render finishes against the old text and the sentence is re-queued; no special
+  locking beyond today's manual-edit behaviour.
 - **Language preamble work is explicit (m3).** `languagePreamble` (`gemini.ts`) returns empty for
   English and carries per-language blocks for es/ru/fr/de; Stage 3 adds a clause to **each**
   block: vocalization text in the book's language, `instruct` in English. This is concrete
@@ -167,9 +194,10 @@ along since the instruct is English regardless).
   raw-`generate` bypass (a different code path from `generate_voice_clone`) **and** dropping
   variant selection means 1.7B output differs from today even for neutral lines, and books
   previously rendered with tuned `__emotion` variants now deliver emotion via untuned live
-  instruct. Per §2.1 this is an operator-known consequence. **Migration:** treat the 1.7B-instruct
-  path as a **per-book/opt-in render** ("re-render to hear instruct"); do **not** silently restyle
-  already-accepted 1.7B renders. The 0.6B Fast tier and non-Qwen engines stay byte-identical.
+  instruct. Per §2.1 this is an operator-known consequence. **Migration:** the per-book
+  `liveInstruct` flag (§4.1, default off) gates this path, so existing 1.7B books are **not**
+  silently restyled — they keep `generate_voice_clone` + anchored variants until the operator opts
+  in and re-renders. The 0.6B Fast tier and non-Qwen engines stay byte-identical regardless.
 - **C2 — "empty instruct = no-op" is a hard sidecar gate, not an assumption.** Whether the batched
   raw `generate` accepts a truly empty per-item instruct, or needs a neutral placeholder that
   itself biases delivery, is **unverified**. Before any "neutral parity" language is trusted, a
@@ -197,13 +225,18 @@ along since the instruct is English regardless).
   regression**: a sentence whose `text` is a vocalization **and** carries an `instruct` survives a
   Script Review pass unchanged (text not stripped, instruct not dropped). A `validate_instruct`
   Script-Review op stays **out of scope** (deferred follow-up, per fs-58 Unit B).
-- **srv-31 ASR content-QA — marker-driven carve-out** (not a lexical allowlist — that can't scale
-  to open-ended multilingual). In `classifyTranscript` (`server/src/tts/segment-asr-qa.ts`), a
-  sentence whose `vocalization` flag (§4.1) is true relaxes the verdict to `inconclusive` rather
-  than `drift` (mirroring the existing `nameAllowlist` carve-out shape at ~lines 328-339). The
-  `vocalization` flag must be threaded into the QA call alongside the existing text. The gate is
-  OFF by default and the 12-char `minChars` floor already short-circuits most bare interjections —
-  so this is a narrow, targeted add, not a new subsystem.
+- **srv-31 ASR content-QA — marker-driven, dominance-gated carve-out** (not a lexical allowlist —
+  that can't scale to open-ended multilingual). In `classifyTranscript`
+  (`server/src/tts/segment-asr-qa.ts`), a sentence whose `vocalization` flag (§4.1) is true relaxes
+  the verdict to `inconclusive` rather than `drift` (mirroring the existing `nameAllowlist`
+  carve-out shape at ~lines 328-339). **Dominance gate (R2-M1):** because edit-in-place (§4.2) can
+  prepend a gasp onto a long lexical sentence, the relaxation fires **only when the vocalization is
+  dominant** — i.e. the lexical remainder after stripping the vocalization is below the `minChars`
+  floor (or a small token count). A long line that merely *starts* with `"Ah!"` keeps full WER
+  scoring on its words; a bare `"Haah…"` is relaxed. The `vocalization` flag + the stripped-lexical
+  length are both threaded into the QA call. The gate is OFF by default and the 12-char floor
+  already short-circuits bare interjections — so this is a narrow, targeted add, not a new
+  subsystem.
 - **0.6B Fast-tier degradation (M5).** On the 0.6B tier `instruct` is ignored (no live-instruct
   capability), so a vocalization's `text` (`"Haah…"`) is read by the plain/variant voice with **no
   sigh delivery** — at worst the literal phonemes. v1 accepts this: the vocalization text still
@@ -226,7 +259,10 @@ along since the instruct is English regardless).
   delivery change with identity intact; the drift-guard test for the raw-`generate` signature; the
   instruct length-cap clamp (m4).
 - **Golden-audio** (`test:golden-audio`): a Qwen instruct fixture asserting (a) identity stability
-  across instructs (ECAPA cosine within tolerance) and (b) an audible delivery change.
+  across instructs (ECAPA cosine within tolerance) and (b) an audible delivery change. **Reconcile
+  with fs-55 (R2-Mi1):** the existing anchored-variant-near-base golden test stays scoped to the
+  **0.6B** Fast tier (variants live there now); the new instruct fixture covers the 1.7B
+  live-instruct path — they don't overlap.
 - **Guardrails:** the Script-Review round-trip regression (vocalization `text` + `instruct`
   survive); an ASR carve-out unit test (a `vocalization:true` sentence → `inconclusive`, not
   `drift`).
@@ -246,6 +282,11 @@ along since the instruct is English regardless).
 - A `validate_instruct` Script-Review operation class (defer to an fs-58 follow-up).
 - fr/de vocalization *text* is unvalidated on a canary (rides along because the instruct is
   English regardless); es/ru vocalization text validated on their existing Coalfall canaries.
+- **Disclosure (R2-Mi2):** vocalizations are performance content the **manuscript never
+  contained** — Stage 3 adds words ("Ah!") the author didn't write. This is intentional for an
+  audiobook *performance*, but it diverges from source text; the conservative-by-default Stage 3
+  (omit unless clearly signalled) + the operator-gated trigger are the safeguards, and the
+  `vocalization` flag makes every insertion auditable/reversible.
 
 ## 7. Open tuning debt
 
@@ -255,17 +296,19 @@ along since the instruct is English regardless).
 
 ## 8. Delivery waves
 
-1. **Data model + schema** — `instruct?` + `vocalization?` fields, OpenAPI, types, precedence
-   ladder, emotion→English-phrase map (the 1.7B fallback), absent-parses tests.
+1. **Data model + schema** — `instruct?` + `vocalization?` fields, per-book `liveInstruct` flag,
+   OpenAPI, types, precedence ladder, **synth-side** emotion→English-phrase map (the 1.7B
+   fallback), absent-parses tests.
 2. **Synthesis** — batched ICL+instruct on the 1.7B; the **C2 empty/neutral-instruct gate first**;
    sidecar body + server threading; instruct length cap; drift-guard + packing tests; the
    re-established perf baseline; golden-audio fixture. Validated on **hand-authored instruct
    fixtures** (Wave 2 lands before Stage 3, so there is no analyzer instruct to render yet — m2).
-3. **Analysis — Stage 3** — new skill/prompt/`runStage3`, strict envelope, edit-in-place-only,
-   multilingual `languagePreamble` clauses, new instruct reducer + audio-staleness, analysis-form +
-   `DetectEmotionsButton` wiring, `vocalization` flag, pass-ordering/TOCTOU.
-4. **Guardrails** — Script-Review round-trip regression; srv-31 `vocalization`-flag carve-out;
-   0.6B degraded-render documentation.
+3. **Analysis — Stage 3** — new skill/prompt/`runStage3`, **own endpoint/SSE/error type** (not the
+   emotion contract), strict envelope, edit-in-place-only + **idempotency guard**, multilingual
+   `languagePreamble` clauses, new instruct reducer + audio-staleness, analysis-form +
+   `DetectEmotionsButton` wiring, `vocalization` flag, order-independent TOCTOU apply.
+4. **Guardrails** — Script-Review round-trip regression; srv-31 **dominance-gated** `vocalization`
+   carve-out; 0.6B degraded-render documentation.
 
 (Waves are an ordering aid; delivered per the project's branch/PR conventions. **Closes #997.**)
 
@@ -296,3 +339,31 @@ borrowed perf evidence were the main corrections.
 - **m3 — language-preamble work implicit → FIXED in §4.2.** Per-language Stage-3 clauses named as
   concrete work.
 - **m4 — no instruct length cap → FIXED in §4.3.** Per-line clamp mirrors `design_voice`.
+
+## 10. Adversarial review — resolutions (round 2, 2026-06-24)
+
+Round 2 caught one self-introduced contradiction from the round-1 fold plus two real correctness
+bugs the first pass missed. Architecture unchanged.
+
+- **R2-C1 — §1 still claimed "byte-identical" → FIXED in §1.** Summary now says additive at the
+  data layer; 1.7B audio path changes by design.
+- **R2-M1 — marker over-relaxed ASR on edit-in-place lines → FIXED in §4.1 + §4.4.** Carve-out is
+  now **dominance-gated**: relax only when the lexical remainder is below the floor, so a gasp on a
+  long line keeps WER on the words.
+- **R2-M2 — re-runnable text-prepend was non-idempotent → FIXED in §4.2.** Skip-if-`vocalization`
+  guard prevents `"Ah! Ah! …"` on a second run.
+- **R2-M3 — "opt-in re-render" had no mechanism → FIXED in §4.1 + §4.3.** Added a per-book
+  `liveInstruct` flag (default off) distinct from tier selection, so existing 1.7B books aren't
+  silently restyled.
+- **R2-M4 — emotion→phrase placement unspecified → FIXED in §4.1.** Derivation is synth-side; the
+  stored `instruct` field holds only real instructs.
+- **R2-Mo1 — ordering was operator-controlled, not pipeline-fixed → FIXED in §4.2.** Reframed as
+  order-independent + TOCTOU-safe for both passes.
+- **R2-Mo2 — emotion endpoint conflation + live-gen race → FIXED in §4.2.** Stage 3 gets its own
+  endpoint/SSE/error/reducer; text edits follow the manual-edit dirty-then-regen path.
+- **R2-Mi1 — golden-audio overlap with fs-55 → FIXED in §5.** fs-55 variant test scoped to 0.6B;
+  instruct fixture covers 1.7B.
+- **R2-Mi2 — source-text divergence undisclosed → FIXED in §6.** Added a disclosure + the
+  conservative/auditable safeguards.
+- **R2-Mi3 — no draft gate → FIXED in §1.** Stays `draft` until the C2 sidecar gate + perf
+  baseline land.
