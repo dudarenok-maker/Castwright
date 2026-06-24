@@ -104,6 +104,13 @@ export interface LangNormalizer {
   symbols: Record<string, string>;
   /** Ordered [pattern, replacement] abbreviation rules. */
   abbreviations: Array<[RegExp, string]>;
+  /** Global regex matching a written ordinal, capture group 1 = the digits.
+      en `/\b(\d+)(?:st|nd|rd|th)\b/g`; es `/\b(\d+)\.?[ºª]/g`; fr
+      `/\b(\d+)(?:er|ère|e|ème)\b/g`; ru `/\b(\d+)-(?:й|я|е|го|му|м|х)\b/g`.
+      de: conservative `/\b(\d+)\.(?=\s+[A-ZÄÖÜ])/g` (number-period before a
+      capitalised word) — German bare "3." collides with the sentence period, so
+      standalone German ordinals are mostly left to date() (documented). */
+  ordinalPattern: RegExp;
   /** Russian implements (returns case from the governing preposition); others
       omit → caller defaults to 'nominative'. */
   yearCaseFor?(precedingWord: string | undefined): YearCase;
@@ -136,7 +143,8 @@ describe('en year', () => {
 });
 
 describe('en decade', () => {
-  it('decade(1990) = nineteen nineties', () => expect(en.decade(1990)).toBe('nineteen nineties'));
+  it.each([[1990, 'nineteen nineties'], [1920, 'nineteen twenties'], [2010, 'twenty tens'], [1900, 'nineteen hundreds'], [2000, 'two thousands']])(
+    'decade(%i) = %s', (n, e) => expect(en.decade(n)).toBe(e));
 });
 ```
 
@@ -202,11 +210,13 @@ export function year(n: number): string {
 }
 
 export function decade(start: number): string {
-  // 1990 -> "nineteen nineties"; pluralise the tens word.
+  // 1990 -> "nineteen nineties". Boundary decades need care: TENS[0]/TENS[1]
+  // are empty, so X00s and X10s are special-cased.
   const hi = Math.floor(start / 100), lo = start % 100;
+  if (lo === 0) return start % 1000 === 0 ? cardinal(start) + 's' : under1000(hi) + ' hundreds'; // 2000s/1900s
+  if (lo === 10) return under1000(hi) + ' tens'; // 1910s/2010s
   const tens = TENS[Math.floor(lo / 10)]; // "ninety"
-  const plural = tens.endsWith('y') ? tens.slice(0, -1) + 'ies' : tens + 's';
-  return under1000(hi) + ' ' + plural;
+  return under1000(hi) + ' ' + tens.slice(0, -1) + 'ies'; // ninety -> nineties
 }
 
 const usd: CurrencyUnit = { major: (n) => (n === 1 ? 'dollar' : 'dollars'), minor: (n) => (n === 1 ? 'cent' : 'cents'), connector: 'and' };
@@ -226,6 +236,7 @@ export const en: LangNormalizer = {
   decimalWord: 'point',
   currency: { '$': usd, '£': gbp, '€': eur },
   months: { nominative: MONTHS_EN },
+  ordinalPattern: /\b(\d+)(?:st|nd|rd|th)\b/g,
   symbols: { '%': 'percent', '&': 'and', '°': 'degrees', '×': 'times' },
   abbreviations: [
     [/\bMr\./g, 'Mister'], [/\bMrs\./g, 'Missus'], [/\bMs\./g, 'Miss'],
@@ -304,7 +315,9 @@ Expected: FAIL (`parseLocaleNumber` undefined).
 import type { LangNormalizer, YearCase } from './types.js';
 
 type Sep = { decimal: string; thousands: 'space' | '.' | ',' };
-const SPACE_CLASS = '[\\u0020\\u00A0\\u202F\\u2009]';
+/** One definition of the thousands-whitespace class; re-exported so index.ts
+    imports it instead of duplicating. */
+export const SPACE_CLASS = '[\\u0020\\u00A0\\u202F\\u2009]';
 
 /** Parse a locale-formatted numeric string to a JS number. A thousands
     separator is only honoured when it groups exactly-3-digit runs; a lone
@@ -341,7 +354,7 @@ word — no later refactor needed.)
 ```ts
 import { isSupportedLanguage } from '../language-registry.js';
 import { getNormalizer } from './number-to-words.js';
-import { parseLocaleNumber, speakNumber } from './classifiers.js';
+import { parseLocaleNumber, speakNumber, SPACE_CLASS } from './classifiers.js';
 import type { LangNormalizer } from './types.js';
 
 /** Language-aware expansion of numbers/dates/currency/symbols/abbreviations.
@@ -373,11 +386,10 @@ export function applyPasses(text: string, norm: LangNormalizer): string {
 Then implement each `expand*` helper in `index.ts` (or `classifiers.ts`). English-targeted first; the per-language data drives them so later languages need no new pass code. Reference implementations:
 
 ```ts
-const SP = '[\\u0020\\u00A0\\u202F\\u2009]';
-
+// SPACE_CLASS imported from classifiers.js (single definition).
 function numberToken(norm: LangNormalizer): string {
   // A locale number: digits with optional grouping + optional decimal.
-  const thou = norm.separators.thousands === 'space' ? SP : '\\' + norm.separators.thousands;
+  const thou = norm.separators.thousands === 'space' ? SPACE_CLASS : '\\' + norm.separators.thousands;
   const dec = '\\' + norm.separators.decimal;
   return `\\d{1,3}(?:${thou}\\d{3})+|\\d+(?:${dec}\\d+)?`;
 }
@@ -433,7 +445,7 @@ function expandYears(s: string, norm: LangNormalizer): string {
 }
 
 function expandOrdinals(s: string, norm: LangNormalizer): string {
-  return s.replace(/\b(\d+)(st|nd|rd|th)\b/g, (_m, n) => norm.ordinal(Number(n)));
+  return s.replace(norm.ordinalPattern, (_m, n) => norm.ordinal(Number(n)));
 }
 
 function expandNumbers(s: string, norm: LangNormalizer): string {
@@ -460,10 +472,15 @@ function expandDates(s: string, norm: LangNormalizer): string {
   // "3 January 2026" / "3 января 2026"
   const dm = new RegExp(`\\b(\\d{1,2})\\s+(${names})\\s+(\\d{4})\\b`, 'g');
   s = s.replace(dm, (_m, day, mon, yr) => norm.date(Number(day), idx.get(mon)!, Number(yr)));
-  // "3 января" (no year — common in Russian); render with year 0 sentinel that
-  // norm.date treats as "day month" only. Engines check year !== 0.
-  const dmNoYear = new RegExp(`\\b(\\d{1,2})\\s+(${names})\\b`, 'g');
-  s = s.replace(dmNoYear, (_m, day, mon) => norm.date(Number(day), idx.get(mon)!, 0));
+  // "3 января" (no year — common in Russian). Gated on genitiveDates so this
+  // fires ONLY for languages with a genitive month table (Russian), whose forms
+  // (января…) are unambiguous. Skipped for en/es/fr/de to avoid mis-firing on
+  // month-words ("5 May", "3 March"). year 0 sentinel => norm.date renders
+  // day+month only.
+  if (norm.months.genitiveDates) {
+    const dmNoYear = new RegExp(`\\b(\\d{1,2})\\s+(${names})\\b`, 'g');
+    s = s.replace(dmNoYear, (_m, day, mon) => norm.date(Number(day), idx.get(mon)!, 0));
+  }
   return s;
 }
 ```
@@ -861,6 +878,10 @@ git commit -m "feat(server): fs-53 activation-gate tests + regression plan"
 - **Symbol pass is bounded** (review #1): `°` only after a number, `&` only as ` & `, `×` standalone; `#`/`@` are NOT replaced (out of the v1 closed set) so `C#`/`user@host` survive.
 - **Dates live in the engine** (review #1): the classifier detects spans across nominative ∪ genitive month tables and delegates rendering to `norm.date(day, monthIndex, year)`; `year === 0` ⇒ day+month only. Each engine owns day-ordinal gender (RU neuter) and month case (RU genitive).
 - **Dormant languages** (review #1): fr/de are fixture-tested via the ungated `applyPasses(text, norm)`; `expandForSpeech` (gated) is asserted to no-op for them separately.
+- **Decade boundary cases** (review #2): `en.decade` handles X00s ("nineteen hundreds" / "two thousands") and X10s ("twenty tens"), not just -ties; tested for 1900/2000/2010.
+- **Ordinal detection is per-engine** (review #2): `ordinalPattern` on `LangNormalizer` (en `st|nd|rd|th`, es `º/ª`, fr `er/e`, ru `-й…`, de conservative). `expandOrdinals` uses it, not a hardcoded English suffix.
+- **No-year date pass gated** (review #2): `dmNoYear` fires only when `genitiveDates` exists (Russian), so English "5 May" doesn't mis-fire.
+- **Signed numbers dropped** (review #2): no minus handling in v1 (spec + plan agree); documented limitation.
 - **Decimal-word generality:** handled — `decimalWord` is on `LangNormalizer`
   from Task 1 and `speakNumber` reads it. Each per-language engine (Tasks 4–7)
   must set it: es `coma`, ru pinned form, fr `virgule`, de `Komma`.

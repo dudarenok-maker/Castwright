@@ -227,9 +227,10 @@ Then the ordered passes (operating on the canonicalised numbers):
    prose. Known false positives (`Room 1999`, `Apartment 2024`, `Highway 1500`)
    are accepted and pinned as fixture known-failures (limitation #1).
 7. **Plain numbers** — grouped and bare integers → `cardinal()`; decimals →
-   "three point one four" (digit-by-digit after the point); a leading hyphen
-   that is **preceded by a non-alphanumeric** (so `well-being` / `twenty-one`
-   are untouched) → "minus".
+   "three point one four" (digit-by-digit after the point, per-language decimal
+   word). Signed numbers (leading `-`) are NOT specially handled in v1 —
+   hyphen/minus disambiguation is too error-prone; the sign is dropped
+   (documented limitation).
 8. **Abbreviations** — a **curated, closed, per-language map** where one reading
    dominates: `Mr.`→Mister, `Mrs.`, `Ms.`, `Dr.`→Doctor, `Prof.`, `vs.`, `etc.`,
    `e.g.`/`i.e.`. (`a.m.`/`p.m.` are **deliberately excluded** — TTS engines
