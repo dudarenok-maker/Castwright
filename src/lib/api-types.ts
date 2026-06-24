@@ -2914,6 +2914,13 @@ export interface components {
             /** @description Required when scope === 'character'; null otherwise. */
             characterId?: string | null;
             /**
+             * @description Optional per-entry TTS model override (e.g. a regenerate that should
+             *     run at the Qwen 1.7B quality tier instead of the session default).
+             *     When absent the dispatcher uses the global `ui.ttsModelKey`.
+             * @enum {string}
+             */
+            modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
              * Format: date-time
              * @description ISO 8601 timestamp the entry was enqueued. Drives FIFO ordering when ties on `order` occur during concurrent enqueues.
              */

@@ -30,6 +30,7 @@ import type { Request, Response } from '../http.js';
 import { queueJsonPath } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
+import { isTtsModelKey } from '../tts/model-keys.js';
 import {
   cancel,
   clearQueue,
@@ -77,6 +78,7 @@ interface EnqueueRequestEntry {
   chapterId?: unknown;
   scope?: unknown;
   characterId?: unknown;
+  modelKey?: unknown;
   addedAt?: unknown;
 }
 
@@ -105,6 +107,10 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
       chapterId: r.chapterId,
       scope: r.scope,
       ...(isString(r.characterId) ? { characterId: r.characterId } : {}),
+      /* Per-entry model override (regenerate at a chosen quality tier). Stored
+         only when it's a recognised model key; an unknown value is dropped so
+         the dispatcher falls back to the session default. */
+      ...(isTtsModelKey(r.modelKey) ? { modelKey: r.modelKey } : {}),
       ...(isString(r.addedAt) ? { addedAt: r.addedAt } : {}),
     });
   }

@@ -1461,8 +1461,9 @@ export function Layout() {
             (acc, c) => acc + parseDuration(c.duration),
             0,
           )}
+          defaultModelKey={ui.ttsModelKey}
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
-          onConfirm={({ reason, scope, note }) => {
+          onConfirm={({ reason, scope, note, modelKey }) => {
             const chapter = ui.regenChapter;
             /* Close the regen modal first so the reverse-guard modal
                (rendered below) doesn't stack on top of it. */
@@ -1500,6 +1501,9 @@ export function Layout() {
                       bookId,
                       chapterId,
                       scope: 'this',
+                      /* #4 — per-regenerate model override (e.g. Qwen 1.7B);
+                         the dispatcher falls back to ui.ttsModelKey when absent. */
+                      modelKey,
                     })),
                   ),
                 );
