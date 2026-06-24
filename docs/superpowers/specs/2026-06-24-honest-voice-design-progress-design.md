@@ -74,10 +74,18 @@ their response body. A new best-effort progress side-channel reports phases:
    `broadcast(job, { type: 'phase', phase })` onto the **existing** single-design
    SSE. On job end the token is deleted from the Map.
 
-**Why callback POST and not a streaming response:** `design_voice` holds
-`_synth_lock` across the forwards and would have to become a generator to
-`yield` between phases — invasive to the locked synth core. The callback leaves
-that core untouched and reuses the SSE the drawer already consumes.
+**Why callback POST and not a streaming response (corrected after adversarial
+review):** the original rationale ("streaming is invasive to the locked core")
+was wrong — `design_voice` takes a `report_progress` callback either way and is
+identical in both designs; only the route-level plumbing differs. The *real*
+reason: the design route returns **raw binary PCM** as its response body
+(`server/src/routes/qwen-voice.ts` reads `upstream.arrayBuffer()` +
+`X-Sample-Rate`), and that response is consumed by **three** callers (bulk
+full-cast, the REST endpoint, the single-design job). A streaming response would
+force reframing that binary contract (base64-inflate the audio or a multipart
+trailer) and gating it for all three callers. The callback is purely **additive
+and opt-in** — only the single-design job passes a token; the other two callers
+pass nothing and get the unchanged PCM response.
 
 ### Phase taxonomy
 
@@ -92,10 +100,13 @@ Replaces today's `'designing' | 'rendering'` union. Real events:
 | `distilling`    | `distilling`    | "Distilling the voice…"        | before 0.6B clone-prompt (`distil_ms`) |
 | `rendering`     | `rendering`     | "Rendering the 12s audition…"  | before audition synth (`audition_ms`) |
 
-`freeing-vram` and `loading-model` are emitted only when they actually do work
-(Kokoro resident / model cold). A phase that turns out instantaneous (warm
-model) is simply superseded by the next real event arriving early — the client
-snaps forward rather than waiting out its budget.
+`loading-model` is emitted **unconditionally** at its seam (`_ensure_*_loaded`
+is always called; it's a near-instant no-op when the model is warm). Only
+`freeing-vram` is conditional — emitted just before the `_VD_KOKORO.design()`
+arbiter is entered, and only when Kokoro is resident, so the arbiter's
+drain-and-evict wait is visible rather than hidden inside the `with`. A phase
+that turns out instantaneous (warm model) is superseded by the next real event
+arriving early — the client snaps forward rather than waiting out its budget.
 
 ### Per-phase calibration
 
@@ -173,6 +184,55 @@ current phase has run past `budget × N` with no new event — never on a normal
   installed or fails to load, reroute server-side to `/qwen/design-voice` with
   `persona + EMOTION_INSTRUCT[emotion]` (the old path), logged not silent.
   Detection via the sidecar `/health` capability for the 1.7B-Base.
+
+## Adversarial review (2026-06-24)
+
+Findings from stress-testing the spec against the code. All verified; the
+transport decision survived (corrected rationale above) and these become
+must-handle plan items.
+
+- **AR1 — sidecar has no HTTP client.** No `requests`/`httpx`/`aiohttp` is
+  imported or in `requirements/`. The progress POST MUST use stdlib
+  `urllib.request` — adding a dependency for a fire-and-forget POST isn't
+  justified.
+- **AR2 — LAN mode is HTTPS-only on :8443 (the reverse-callback wrinkle).**
+  `server/src/index.ts` listens plain HTTP on :8080 normally but HTTPS-only on
+  :8443 (mkcert cert) when `LAN_HTTPS` is set. The server must compute and pass
+  its own **loopback** callback URL matching what it's actually listening on
+  (`http://127.0.0.1:<PORT>` or `https://127.0.0.1:<LAN_HTTPS_PORT>`), and the
+  sidecar's `urllib` POST must use an **unverified SSL context** for the https
+  loopback (`ssl._create_unverified_context()`) — it's the same host. This is
+  the one part that only breaks on the LAN box, never in tests; the plan must
+  cover both modes.
+- **AR3 — internal route must be loopback-gated, not token-only.** The progress
+  relay route rejects any non-loopback `req.ip`, requires the token, and the
+  token is valid only while its job is in-flight. Belt-and-suspenders against
+  the LAN-exposed https surface.
+- **AR4 — `designQwenVoiceForCharacter` has 3 callers.** Bulk full-cast
+  (`cast-design.ts`), the REST endpoint (`qwen-voice.ts`), and the single job
+  (`single-design.ts`). The new `progressToken`/`progressUrl` params are
+  **optional**; bulk + REST pass nothing → the sidecar skips the POST. Verified
+  backward compatible.
+- **AR5 — client phase monotonicity.** Phase POSTs can arrive late, duplicated,
+  or out of order. The slice treats phase as a monotonic ordinal and **ignores a
+  phase whose rank is ≤ the current** — a delayed POST can never rewind the bar.
+- **AR6 — completion snap on every terminal event.** `DesignProgress.complete`
+  must be driven by `done` (first design) AND `preview_ready` /
+  `ready-to-compare` (redesign) AND `error` (stop, show error) — not just
+  `done`. Confirm the slice maps all terminal events to a non-running state.
+- **AR7 — abort / job-replacement / late POSTs.** On cancel the server aborts
+  the fetch and `endJob` deletes the token; later sidecar POSTs find no job →
+  no-op. A fresh job for the same book gets a new token, so a prior design's
+  stale POSTs can't drive the new bar. (The sidecar synth may run to completion
+  after an abort — its POSTs are harmless no-ops.)
+- **AR8 — warm/cold calibration variance.** `loading-model` is ~10s cold but
+  ~0 warm (model stays warm across back-to-back designs); `designing` dominates.
+  Per-phase budgets are guides: the sub-fill never passes ~92% within a phase
+  before the next real event, and snaps on early arrival, so a warm-skipped
+  `loading-model` leaves no visible stall.
+- **AR9 — e2e is order-only.** The mock single-design path fakes timing, so the
+  Playwright spec asserts phase-label **order**, not durations. Real timing is
+  covered by the on-box run + the sidecar/server unit tests. Not oversold.
 
 ## Open items
 
