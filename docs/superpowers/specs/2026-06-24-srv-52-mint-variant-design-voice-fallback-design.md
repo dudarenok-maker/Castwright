@@ -45,20 +45,37 @@ The fallback routes the variant through `/qwen/design-voice`. **`design_voice`
 runs on the 1.7B-*VoiceDesign* model** (`_ensure_design_loaded` →
 `self._design.generate_voice_design`), a ~3.4 GB model of comparable size to the
 1.7B-Base. So the fallback **does not drop to a 0.6B-only path** — it swaps one
-1.7B dependency (Base) for a different 1.7B dependency (VoiceDesign). The genuine
-win is therefore **narrow**, which is consistent with the issue's
-`moscow:could / low-cost` label:
+1.7B dependency (Base) for a different 1.7B dependency (VoiceDesign). Whether the
+swap helps depends entirely on *why* Base17 was unavailable, which is why srv-52
+fires the fallback for only **two** of the three failure causes:
 
-- **Base17 absent or corrupt while VoiceDesign is present** → the fallback mints
-  a working (lower-fidelity) variant. Note the standard installer
-  (`install-qwen3.mjs:72`) *always* pulls 1.7B-Base and makes VoiceDesign the
-  `--skip-design`-optional one, so this config is unusual (it's the *opposite* of
-  the common lean install) — but it does occur for old/stripped/partial installs
-  and corrupt-weight cases.
-- **Base17 load-failed (VRAM OOM)** → the fallback's own VoiceDesign load is the
-  same size and will *very likely also OOM*; the fallback then fails loudly. Net
-  gain in that case is only "a clear logged failure instead of a generic 500" —
-  see Known limitations.
+| Base17 failure cause | Will VoiceDesign also fail? | srv-52 behaviour |
+|---|---|---|
+| **Not installed** (weights absent) | No — VoiceDesign is a separate model with its own weights | **Fall back** |
+| **Corrupt** (weights present but won't load: bad/partial download, format error) | No — VoiceDesign weights are independent and likely intact | **Fall back** |
+| **OOM** (transient VRAM exhaustion) | **Yes** — VoiceDesign is the same size and would OOM identically | **Do NOT fall back** — fail loudly, no churn |
+
+The genuine win is therefore **narrow** (consistent with the issue's
+`moscow:could / low-cost` label): a variant still ships when Base17 is
+absent/corrupt but VoiceDesign is fine. Note the standard installer
+(`install-qwen3.mjs:72`) *always* pulls 1.7B-Base and makes VoiceDesign the
+`--skip-design`-optional one, so "Base17 absent, VoiceDesign present" is the
+*opposite* of the common lean install — but it does occur for old/stripped/
+partial installs and corrupt-weight cases. **OOM is deliberately excluded**: a
+fallback there would just OOM VoiceDesign too, so srv-52 leaves it as the
+existing loud per-character failure rather than burning a second 1.7B load.
+
+#### Telling "corrupt" from "OOM"
+
+Both are exceptions raised from loading the Base17 model, so the sidecar must
+classify them. A VRAM exhaustion raises a detectable, specific exception
+(`torch.cuda.OutOfMemoryError`, or an `"out of memory"` substring for older/CPU
+paths); **any other** load exception (missing/partial blob, deserialization /
+format error, etc.) is treated as **corrupt**. This is the one heuristic in the
+design — if a future failure mode is misclassified, the safe direction is
+"corrupt → fall back" (you get a lower-fidelity variant) rather than
+"OOM → fall back" (you get a second OOM); the classifier biases toward calling an
+ambiguous error *corrupt* only if it is clearly not an OOM.
 
 ### What IS safe: the `.pt` file format
 
@@ -78,11 +95,12 @@ makes.
 
 ## Goals
 
-1. When `/qwen/mint-variant` cannot use the 1.7B-Base (not installed/corrupt, or
-   load fails) **and 1.7B-VoiceDesign is usable**, produce a **designed emotion
+1. When the 1.7B-Base is **not installed or corrupt** (a deterministic problem
+   the separate VoiceDesign model won't share), produce a **designed emotion
    variant** via `/qwen/design-voice` (`persona + EMOTION_INSTRUCT[emotion]`)
-   instead of a missing variant. When VoiceDesign is *also* unavailable, fail
-   **loudly and clearly** (never a generic 500, never silent).
+   instead of a missing variant. A transient **OOM** is *not* a fallback trigger
+   — VoiceDesign would OOM too — and stays the existing loud failure. There is
+   **no retry**.
 2. The fallback is **never silent**: a server log line, a per-character note on
    the bulk Design progress stream, and a durable provenance marker in the
    variant's `.json`.
@@ -132,18 +150,29 @@ single-design/REST route) inherits it identically.
    (cheap, side-effect-free) alongside the existing `qwen_base17_loaded`.
 
 3. **`/qwen/mint-variant` returns a distinct error when the 1.7B-Base is
-   unavailable**, replacing the generic 500 for these two cases:
+   not-installed or corrupt**, replacing the generic 500. Three load-related
+   outcomes, classified at the route:
    - **Not installed** — when `_qwen_base17_weights_present()` is false, the
      route short-circuits *before* attempting a load and returns:
      `503 { "code": "base17-unavailable", "reason": "not-installed",
      "detail": "Qwen 1.7B-Base weights are not installed." }`
-   - **Load failed** — `mint_variant` is wrapped so a load failure raised from
-     `_ensure_base17_loaded()` is caught and surfaced as:
-     `503 { "code": "base17-unavailable", "reason": "load-failed",
+   - **Corrupt** — a load is attempted and raises a **non-OOM** exception
+     (missing/partial blob, deserialization/format error). Surfaced as:
+     `503 { "code": "base17-unavailable", "reason": "corrupt",
      "detail": "<exc message>" }`
-     A new `Base17UnavailableError` exception (raised by `_ensure_base17_loaded`
-     on failure, or detected via a sentinel) carries the reason so the route can
-     map it cleanly. Any *other* exception keeps the existing generic 500.
+   - **OOM** — a load is attempted and raises a CUDA OOM
+     (`torch.cuda.OutOfMemoryError`, or an `"out of memory"` message substring).
+     This is **NOT** a fallback trigger — it keeps the **existing generic 500**
+     (a fallback would just OOM VoiceDesign too). The route does not dress it up;
+     `mint_variant`'s existing `except Exception → 500` handles it unchanged.
+
+   Implementation: wrap the Base17 load so the route can classify. The cleanest
+   seam is to catch the exception around `mint_variant`'s load and re-raise a
+   typed `Base17CorruptError` for the non-OOM case (OOM falls through to the
+   generic handler). `_ensure_base17_loaded()` is **also** called by the 1.7B
+   synth/batch paths — the classification must be **localized to the mint route**
+   (catch at the `qwen_mint_variant` handler / a mint-only wrapper), so those
+   other callers keep their current behaviour.
    - The existing `VoiceNotDesignedError → 409` (base `.pt` missing) is
      **unchanged** and unrelated to the fallback — a missing base is a real
      error, not a 1.7B-availability problem.
@@ -165,28 +194,29 @@ single-design/REST route) inherits it identically.
    anchored mint and the fallback design-voice call reuse it verbatim (same
    liveness timer **scoped per call**, abort handling, MP3 cache write). The GPU
    semaphore + `withDesignLock`/`withGpuLoad` are acquired **once** in the outer
-   `designQwenVoiceForCharacter` and span the mint attempt, the optional retry,
-   and the fallback — so the whole sequence holds a single GPU slot and the
-   fallback never re-queues behind other work. Pure refactor — no behaviour change
-   on the happy path.
+   `designQwenVoiceForCharacter` and span the mint attempt and the fallback — so
+   the two-call sequence holds a single GPU slot and the fallback never re-queues
+   behind other work. Pure refactor — no behaviour change on the happy path.
 
 2. **Typed error carrying status + code.** On a non-OK response,
    `postDesignAndCache` throws a `SidecarDesignError` exposing `.status` and the
-   parsed body `.code` (in addition to the human message it already builds). Only
-   the **mint** call site inspects it — `err.status === 503 && err.code ===
-   "base17-unavailable"` → branch to retry/fallback, reading `body.reason`
-   (`"not-installed" | "load-failed"`). The **fallback** call site does *not*
-   catch it, so a VoiceDesign failure propagates as a normal loud error. The
+   parsed body `.code`/`.reason` (in addition to the human message it already
+   builds). Only the **mint** call site inspects it — `err.status === 503 &&
+   err.code === "base17-unavailable"` with `reason ∈ {"not-installed",
+   "corrupt"}` → fall back. An OOM never reaches this branch (it's a generic 500,
+   `code` absent), so it propagates as a loud error. The **fallback** call site
+   does *not* catch it, so a VoiceDesign failure also propagates loudly. The
    `SidecarDesignError` message must **not** match `SIDECAR_DOWN_RE`, so the bulk
    job's process-down ride-out loop never mistakes the base17 signal for a
    recycle.
 
-3. **Control flow** (variant case only; `p.emotion` set):
+3. **Control flow** (variant case only; `p.emotion` set) — **no retry**:
    1. POST `/qwen/mint-variant` (anchored) via `postDesignAndCache`.
-   2. `base17-unavailable / not-installed` → **fall back immediately** (no
-      retry — the weights aren't there; retrying is pointless).
-   3. `base17-unavailable / load-failed` → **retry the mint once**; if the
-      retry also returns `base17-unavailable` (either reason) → fall back.
+   2. `503 base17-unavailable` with `reason ∈ {not-installed, corrupt}` →
+      **fall back** (single attempt; the cause is deterministic, retrying the
+      mint can't help).
+   3. Any other error (incl. an OOM-driven generic 500, or `SIDECAR_DOWN_RE`
+      handled by the bulk job's ride-out) → propagate unchanged. **No fallback.**
    4. **Fallback** — POST `/qwen/design-voice` via `postDesignAndCache` with:
       - `voiceId`: the variant id `${baseVoiceId}__${emotion}` (same id the
         anchored mint would have written, so the cast slot resolves correctly).
@@ -200,11 +230,11 @@ single-design/REST route) inherits it identically.
 
 4. **Return shape.** `designQwenVoiceForCharacter` resolves
    `{ voiceId, url, fellBackToDesignVoice?: boolean, fallbackReason?:
-   "not-installed" | "load-failed" }`. Existing callers ignore the new optional
+   "not-installed" | "corrupt" }`. Existing callers ignore the new optional
    fields unless they opt in (below).
 
 5. **Server log** on fallback:
-   `[qwen-voice] 1.7B-Base unavailable (reason=<not-installed|load-failed>) — minted <emotion> variant for <characterId> via design-voice fallback (lower fidelity).`
+   `[qwen-voice] 1.7B-Base unavailable (reason=<not-installed|corrupt>) — minted <emotion> variant for <characterId> via design-voice fallback (lower fidelity).`
 
 ### Bulk Design progress stream (`server/src/routes/cast-design.ts`)
 
@@ -224,11 +254,18 @@ single-design/REST route) inherits it identically.
 
 ## Edge cases
 
-- **VoiceDesign also unavailable** — if 1.7B-VoiceDesign (or the 0.6B distil
-  model) can't load either, the fallback `design-voice` call fails, surfacing as
-  the existing loud per-character failure. srv-52 turns a *generic 500 on the
-  mint* into *either a working fallback variant or a clear failure* — it never
+- **OOM during the Base17 load** — not a fallback trigger (see the design table).
+  It stays the existing loud per-character failure; srv-52 never burns a second
+  1.7B load that would OOM identically.
+- **VoiceDesign also unavailable on the fallback** — if 1.7B-VoiceDesign (or the
+  0.6B distil model) can't load when the fallback runs, the `design-voice` call
+  fails and surfaces as the existing loud per-character failure. srv-52 never
   papers over a genuinely missing model.
+- **Corrupt-vs-OOM misclassification** — the sole heuristic. If a real OOM were
+  mis-tagged "corrupt", the fallback would attempt VoiceDesign and OOM (one wasted
+  load, then loud failure — no worse than no fallback). If corrupt weights were
+  mis-tagged "OOM", the user loses the fallback and gets a loud failure (no
+  variant). Both degrade to "loud failure", never to a silent/wrong result.
 - **Cancel mid-fallback** — the fallback reuses `postDesignAndCache`, which
   honours `p.signal`; a cancel during the fallback aborts it exactly as it would
   abort the anchored mint.
@@ -242,15 +279,13 @@ single-design/REST route) inherits it identically.
 
 ## Known limitations (v1)
 
-- **VRAM-OOM is the weak case.** When the Base17 failure is a VRAM OOM (not a
-  missing install), the fallback's own 1.7B-VoiceDesign load is the same size and
-  will very likely OOM too. The sequence is then: mint OOM → one retry OOM →
-  VoiceDesign OOM → loud failure. Net gain in that path is only "a clear,
-  reasoned failure instead of a generic 500" — *not* a working variant. The
-  genuine "variant still ships" win is concentrated in the **Base17
-  absent/corrupt + VoiceDesign present** config. v1 does **not** add inter-retry
-  VRAM-reclaim/backoff, nor does it pre-check VoiceDesign weights to skip a
-  doomed fallback — both are deferred refinements.
+- **OOM is intentionally out of scope.** A VRAM-OOM Base17 load does **not**
+  fall back (VoiceDesign would OOM identically); it stays the existing loud
+  failure with no retry and no churn. The "variant still ships" win is therefore
+  confined to the **Base17 absent/corrupt + VoiceDesign present** config. v1 does
+  not pre-check VoiceDesign weights to *prove* the fallback will succeed before
+  attempting it — a deterministic absent/corrupt Base17 makes a VoiceDesign
+  success likely, and a failed fallback is still a clean loud error.
 - **Lower-fidelity output.** A fallback variant lacks both the base-speaker
   timbre anchor and the fs-55 per-emotion gain/temperature tuning (which live in
   the mint's instruct-synth, not in `generate_voice_design`). It stays
@@ -269,8 +304,12 @@ Per-harness paired coverage (CLAUDE.md testing discipline):
 - `_qwen_base17_weights_present()` true/false against a stub snapshot dir.
 - `/qwen/mint-variant` returns `503 { code: "base17-unavailable",
   reason: "not-installed" }` when base17 weights absent (no load attempted).
-- `/qwen/mint-variant` returns `503 { …, reason: "load-failed" }` when
-  `_ensure_base17_loaded` raises.
+- `/qwen/mint-variant` returns `503 { …, reason: "corrupt" }` when the Base17
+  load raises a **non-OOM** exception (stub `_ensure_base17_loaded` to raise a
+  generic/format error).
+- `/qwen/mint-variant` returns the **generic 500** (no `base17-unavailable`
+  code) when the load raises a CUDA OOM (stub a `torch.cuda.OutOfMemoryError` /
+  `"out of memory"` exception) — the OOM-not-a-fallback guard.
 - `/qwen/mint-variant` still returns `409` on a missing base `.pt`
   (`VoiceNotDesignedError`) — regression guard that the fallback signal didn't
   swallow the unrelated error.
@@ -283,11 +322,11 @@ Per-harness paired coverage (CLAUDE.md testing discipline):
 - Stubbed `503 base17-unavailable/not-installed` → `designQwenVoiceForCharacter`
   POSTs `/qwen/design-voice` with `instruct === \`${persona} ${EMOTION_INSTRUCT[emotion]}\``
   and `voiceId === \`${baseVoiceId}__${emotion}\``, returns
-  `fellBackToDesignVoice: true, fallbackReason: 'not-installed'`. **No retry**
-  (mint-variant called exactly once).
-- Stubbed `503 …/load-failed` → mint-variant called **twice** (one retry), then
-  design-voice; `fallbackReason: 'load-failed'`.
-- `load-failed` then a *successful* retry → anchored result, **no** fallback.
+  `fellBackToDesignVoice: true, fallbackReason: 'not-installed'`.
+  mint-variant called **exactly once** (no retry anywhere).
+- Stubbed `503 …/corrupt` → same fallback, `fallbackReason: 'corrupt'`.
+- Stubbed **generic 500** (OOM) → the error **propagates**, design-voice is
+  **never** called, `fellBackToDesignVoice` falsy — the OOM-no-fallback guard.
 - 1.7B available (mint-variant 200) → anchored path, design-voice **never**
   called, `fellBackToDesignVoice` falsy — the no-regression guard.
 - The `base17-unavailable` classification does **not** match `SIDECAR_DOWN_RE`.
