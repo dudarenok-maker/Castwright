@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Design spec (authority):** `docs/superpowers/specs/2026-06-25-fs56-manual-instruct-editing-design.md`. Every task implicitly inherits its decisions.
-- **Branch / base:** `feat/frontend-fs-56-instruct-editing`, worktree `C:\Claude\Projects\Audiobook-Generator-wt-fs56`. **PREREQUISITE for Task 4 only:** rebase this branch onto **#1100** (split/merge `instruct`/`vocalization` null-ing) before writing the split/merge guard test. Tasks 1–3, 5–6 run on plain `origin/main`.
+- **Branch / base:** `feat/frontend-fs-56-instruct-editing`, worktree `C:\Claude\Projects\Audiobook-Generator-wt-fs56`. **PREREQUISITE (do ONCE before any task):** `#1100` is already merged to `origin/main` (commit `ce88c662`, "drop stale instruct/vocalization on split fragments + merge survivors"). Rebase this branch onto `origin/main` first — `git fetch origin && git rebase origin/main` — so the whole plan (incl. Task 4's split/merge guard) runs on a base that already carries the null-ing. Verify: `git merge-base --is-ancestor ce88c662 HEAD && echo OK`.
 - **Design tokens only** — no hex literals; use `--ink`, `--peach`, etc. via Tailwind classes (CLAUDE.md convention).
 - **Touch targets** — every control `min-h-[44px] sm:min-h-0` (WCAG 2.5.5); mobile-responsive per the mobile-testing protocol.
 - **Single field, no provenance** — analyzer + manual instruct share `sentence.instruct`. No new schema field, no migration.
@@ -177,6 +177,7 @@ import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { SentenceInstructControl } from './sentence-instruct-control';
+import type { Character } from '../lib/types';
 
 vi.mock('../lib/stale-chapters', () => ({ useMarkCharacterStaleIfRendered: () => vi.fn() }));
 
@@ -189,7 +190,7 @@ function renderControl(props: Partial<React.ComponentProps<typeof SentenceInstru
         chapterId={1}
         sentenceId={2}
         instruct={undefined}
-        character={{ id: 'wren', name: 'Wren', ttsEngine: 'qwen' } as never}
+        character={{ id: 'wren', name: 'Wren', ttsEngine: 'qwen' } as unknown as Character}
         liveInstruct={true}
         {...props}
       />
@@ -204,11 +205,17 @@ describe('fs-56 SentenceInstructControl', () => {
     expect(screen.getByLabelText('Set delivery direction for this line')).toBeInTheDocument();
   });
 
-  it('opens pre-filled with the current (LLM-proposed) instruct and Save dispatches the trimmed value', () => {
+  it('a set chip exposes the edit aria-label (accessible name on both states)', () => {
+    renderControl({ instruct: 'whisper softly' });
+    expect(screen.getByLabelText('Delivery direction: whisper softly — edit')).toBeInTheDocument();
+  });
+
+  it('opens pre-filled, focuses the textarea, and Save dispatches the trimmed value', () => {
     const { spy } = renderControl({ instruct: 'whisper softly' });
     fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
-    expect(ta.value).toBe('whisper softly'); // pre-filled
+    expect(ta.value).toBe('whisper softly');      // pre-filled with the current/LLM instruct
+    expect(document.activeElement).toBe(ta);       // focus-on-open (a11y)
     fireEvent.change(ta, { target: { value: '  shout it  ' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
     expect(spy).toHaveBeenCalledWith(
@@ -225,10 +232,10 @@ describe('fs-56 SentenceInstructControl', () => {
     );
   });
 
-  it('shows the inaudible caption when liveInstruct is off', () => {
+  it('shows the inaudible caption (naming the 1.7B tier) when liveInstruct is off', () => {
     renderControl({ instruct: 'x', liveInstruct: false });
     fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
-    expect(screen.getByText(/Live expressive delivery/i)).toBeInTheDocument();
+    expect(screen.getByText(/Qwen 1\.7B tier with Live expressive delivery on/i)).toBeInTheDocument();
   });
 });
 ```
@@ -345,6 +352,7 @@ export function SentenceInstructControl({
         >
           <textarea
             ref={taRef}
+            aria-label="Enter delivery direction"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -410,7 +418,7 @@ import { selectLiveInstruct } from '../store/book-meta-slice';
 const liveInstruct = useAppSelector(selectLiveInstruct(bookId));
 ```
 
-- [ ] **Step 2: Thread `liveInstruct` to `SegmentRow`** — add `liveInstruct: boolean` to `SegmentRowProps`, pass it at every `<SegmentRow … />` call site, and destructure it in the `SegmentRow({ … })` signature (alongside `findChar`). (One prop, plain boolean — memo-friendly; do NOT call `selectLiveInstruct` inside the row.)
+- [ ] **Step 2: Thread `liveInstruct` to `SegmentRow`** — add `liveInstruct: boolean` to the `SegmentRowProps` interface, pass it at **both** `<SegmentRow … />` call sites (`manuscript.tsx:901` and `:932`), and destructure it in the `SegmentRow({ … })` signature (alongside `findChar`). `SegmentRow` is a plain `function` (NOT `React.memo` — verified, so there is no comparator to update); do NOT call `selectLiveInstruct` inside the row (a per-sentence selector is the 500-call trap). `SentenceInstructControl` is likewise intentionally un-memoized, mirroring `SentenceEmotionControl`.
 
 - [ ] **Step 3: Render the control** immediately after the `SentenceEmotionControl` block (~line 1489), UNGATED (every sentence, narrator included):
 
@@ -443,43 +451,65 @@ git commit -m "feat(frontend): render per-line instruct control in manuscript vi
 
 ---
 
-## Task 4: Split/merge guard test  — **PREREQ: branch rebased onto #1100**
+## Task 4: Split/merge guard tests (base already carries #1100)
 
 **Files:**
 - Modify: `src/store/manuscript-slice.test.ts`
 
-> Do NOT start until this branch is rebased onto **#1100** (which nulls `instruct`/`vocalization` on `splitSentence`/`mergeSentences`). The test asserts the post-#1100 behaviour; on plain `origin/main` it will (correctly) FAIL because the bleed bug is still present. Confirm with: `git log --oneline --grep '#1100'` shows the null-ing commit in the base.
+> Base note: with the up-front rebase done (Global Constraints), `ce88c662` is in the base, so `splitSentence`/`mergeSentences` already null `instruct`/`vocalization`. These tests guard that seam from fs-56's side and fail loudly if the base ever regresses. Defensive check first: `git merge-base --is-ancestor ce88c662 HEAD || { echo "REBASE MISSING"; exit 1; }`.
 
 **Interfaces:**
-- Consumes: `setSentenceInstruct` (Task 1); `splitSentence` / `mergeSentences` (existing, post-#1100).
+- Consumes: `setSentenceInstruct` (Task 1); `splitSentence` (payload `{ chapterId, sentenceId, offsets: number[], characterIds: string[] }`) and `mergeSentences` (existing).
 
-- [ ] **Step 1: Write the guard test**
+- [ ] **Step 1: Write the SPLIT guard test**
 
 ```ts
-it('fs-56 — a hand-set instruct does not bleed onto split fragments (post-#1100)', () => {
+it('fs-56 — a hand-set instruct does not bleed onto split fragments (#1100 base)', () => {
   const tagged = manuscriptSlice.reducer(
     baseState(sentences([{ id: 1, chapterId: 1, text: 'She paused. She ran.', characterId: 'narrator' }])),
     manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless whisper' }),
   );
+  // NOTE: payload is `offsets: number[]` (plural array), NOT `offset`.
   const split = manuscriptSlice.reducer(
     tagged,
-    manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 1, offset: 11, characterIds: ['narrator', 'narrator'] }),
+    manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 1, offsets: [11], characterIds: ['narrator', 'narrator'] }),
   );
-  // The head keeps id+instruct; later fragments must NOT inherit the direction.
   const fragments = split.sentences.filter((s) => s.chapterId === 1);
-  expect(fragments.length).toBe(2);
-  expect(fragments[1].instruct).toBeUndefined();
+  expect(fragments.length).toBe(2); // if not 2, adjust offsets to land a clean 2-piece split
+  expect(fragments[0].instruct).toBe('breathless whisper'); // head keeps it
+  expect(fragments[1].instruct).toBeUndefined();            // tail must NOT inherit it
 });
 ```
 
-> Verify the exact `splitSentence` payload shape against the reducer in `manuscript-slice.ts` (`offset` + `characterIds`) and adjust the args/`offset` to land a clean two-piece split before asserting.
+- [ ] **Step 2: Write the MERGE guard test** (the spec says split/merge, not split alone)
 
-- [ ] **Step 2: Run it — expect PASS** (on the rebased base)
+```ts
+it('fs-56 — a merge does not carry a stale instruct onto the survivor (#1100 base)', () => {
+  const tagged = manuscriptSlice.reducer(
+    baseState(sentences([
+      { id: 1, chapterId: 1, text: 'She paused.', characterId: 'narrator' },
+      { id: 2, chapterId: 1, text: 'She ran.', characterId: 'narrator' },
+    ])),
+    manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless whisper' }),
+  );
+  const merged = manuscriptSlice.reducer(
+    tagged,
+    manuscriptActions.mergeSentences({ chapterId: 1, sentenceIds: [1, 2] }),
+  );
+  const survivor = merged.sentences.find((s) => s.chapterId === 1);
+  expect(survivor?.text).toContain('She ran.'); // merged text
+  expect(survivor?.instruct).toBeUndefined();   // #1100 drops the survivor's stale instruct
+});
+```
+
+> Verify the `mergeSentences` payload shape against the reducer before running (it may be `sentenceIds` or `{firstId,secondId}`); adjust the args to match. Confirm the post-merge survivor lookup matches the reducer's id-keeping rule.
+
+- [ ] **Step 3: Run them — expect PASS** (base carries #1100)
 
 Run: `npm test -- manuscript-slice --run`
-Expected: PASS. If FAIL with `instruct === 'breathless whisper'` on `fragments[1]`, the base is NOT rebased onto #1100 — stop and rebase first.
+Expected: PASS. If a split/merge test FAILS with the instruct still present, the rebase is missing — stop and rebase.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/store/manuscript-slice.test.ts
@@ -499,28 +529,33 @@ git commit -m "test(frontend): guard manual instruct against split/merge bleed (
 
 ```ts
 import { test, expect } from '@playwright/test';
+import { goToConfirm } from './helpers';
 
-test('fs-56 — author edits a per-line instruct and it persists across reload', async ({ page }) => {
-  await page.goto('/'); // mock mode (port 5174 per config)
-  // Navigate to a manuscript view (copy the nav steps from manuscript-emotion-preview.spec.ts).
-  // … reach the manuscript with at least one line …
+test('fs-56 — author edits a per-line instruct; it shows + round-trips in-session', async ({ page }) => {
+  // Nav preamble copied verbatim from manuscript-emotion-preview.spec.ts (proven).
+  await goToConfirm(page);
+  await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+  await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
 
+  // The instruct chip renders on every line (ungated). The empty chip is
+  // opacity-0/hover-reveal but is in the DOM and clickable (Playwright's
+  // actionability check ignores opacity).
   const chip = page.getByTestId('instruct-chip').first();
   await chip.click();
   const ta = page.getByRole('textbox');
   await ta.fill('a slow, dramatic pause');
   await page.getByRole('button', { name: /save/i }).click();
 
-  // Chip now shows the truncated preview.
+  // Chip now shows the truncated preview (redux→view seam works).
   await expect(page.getByTestId('instruct-chip').first()).toContainText('a slow, dramatic');
 
-  // Persists across reload.
-  await page.reload();
-  await expect(page.getByTestId('instruct-chip').first()).toContainText('a slow, dramatic');
+  // Re-open: the saved value round-trips into the textarea (store→control).
+  await page.getByTestId('instruct-chip').first().click();
+  await expect(page.getByRole('textbox')).toHaveValue('a slow, dramatic pause');
 });
 ```
 
-> Fill in the manuscript-navigation steps by copying the working preamble from `e2e/manuscript-emotion-preview.spec.ts`. Do NOT invent selectors — reuse that spec's.
+> The nav preamble (`goToConfirm` + the Confirm button + the URL assertion) is copied verbatim from `e2e/manuscript-emotion-preview.spec.ts:13,37-39`. Reload-across-persistence is intentionally NOT asserted here — mock-mode reload state is unreliable; persistence is locked instead by the `manuscript/setSentenceInstruct` middleware entry being byte-identical to the proven `setSentenceEmotion` path (Task 1).
 
 - [ ] **Step 2: Run it — expect PASS**
 
