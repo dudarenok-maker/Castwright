@@ -28,6 +28,7 @@ const CLASS_LABELS: Record<string, string> = {
   extract_dialogue: 'Extract dialogue',
   merge: 'Merge sentences',
   fix_emotion: 'Fix emotion',
+  validate_instruct: 'Instruct',          // fs-58 validate_instruct
   reattribute: 'Reattribute speaker',     // fs-58 Unit B
   flag_nonstory: 'Exclude non-story',     // fs-58 Unit B
 };
@@ -39,7 +40,44 @@ function classLabel(op: string): string {
 /* Format the before → after preview for a single op row. `before` is the
    live sentence text (the original) when available, so strip_tag shows the
    tagged source struck-through next to the cleaned result. */
-function OpPreview({ op, before }: { op: ReviewOpWithChapter; before?: string }) {
+function OpPreview({
+  op,
+  before,
+  liveInstruct,
+  liveVocalization,
+}: {
+  op: ReviewOpWithChapter;
+  before?: string;
+  liveInstruct?: string;
+  liveVocalization?: boolean;
+}) {
+  void liveVocalization;
+  if (op.op === 'validate_instruct') {
+    if (op.newInstruct !== undefined) {
+      const after = op.newInstruct.trim() === '' ? '(stripped)' : op.newInstruct;
+      return (
+        <span className="text-xs text-ink/70 min-w-0 truncate">
+          instruct: <span className="line-through text-ink/45">{liveInstruct ?? '(none)'}</span>
+          {' → '}
+          <span className="text-ink font-medium">{after}</span>
+        </span>
+      );
+    }
+    if (op.newVocalizationText !== undefined) {
+      return (
+        <span className="text-xs text-ink/70 min-w-0 truncate">
+          {before !== undefined && before !== op.newVocalizationText && (
+            <>
+              <span className="line-through text-ink/45">{before}</span>
+              {' → '}
+            </>
+          )}
+          <span className="text-ink font-medium">{op.newVocalizationText}</span>
+        </span>
+      );
+    }
+    return null;
+  }
   if (op.op === 'strip_tag' && op.newText !== undefined) {
     return (
       <span className="text-xs text-ink/70 min-w-0 truncate">
@@ -222,6 +260,8 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       chapterId: s.chapterId,
       text: s.text,
       characterId: s.characterId,
+      instruct: s.instruct,
+      vocalization: s.vocalization,
     }));
 
     const roster = new Set(cast.map((c) => c.id));
@@ -389,9 +429,9 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                   {classOps.map((op) => {
                     const key = opKey(op.chapterId, op.id, op.op);
                     const isSelected = !!selected[key];
-                    const liveText = sentences.find(
+                    const liveSentence = sentences.find(
                       (s) => s.chapterId === op.chapterId && s.id === op.id,
-                    )?.text;
+                    );
                     return (
                       <div
                         key={key}
@@ -410,7 +450,12 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                           <span className="sr-only">Toggle this {op.op} suggestion</span>
                         </label>
                         <div className="flex-1 min-w-0 space-y-1">
-                          <OpPreview op={op} before={liveText} />
+                          <OpPreview
+                            op={op}
+                            before={liveSentence?.text}
+                            liveInstruct={liveSentence?.instruct}
+                            liveVocalization={liveSentence?.vocalization}
+                          />
                           <p className="text-xs text-ink/55 leading-relaxed">{op.rationale}</p>
                           {op.confidence !== undefined && (
                             <p className="text-[10px] text-ink/40 tabular-nums">

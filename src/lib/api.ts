@@ -3007,6 +3007,20 @@ async function mockReviewScript(
     chapterId: 3,
     ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
   });
+  /* fs-58 validate_instruct (origin/main): strip_tag + validate_instruct on
+     chapter 1, sentence id:1. */
+  onOps?.({
+    chapterId: 1,
+    ops: [
+      { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
+      {
+        id: 1,
+        op: 'validate_instruct',
+        newInstruct: 'a calm tone',
+        rationale: 'contradicts the line',
+      },
+    ],
+  });
   /* fs-58 Unit B: off-roster reattribute on sentence id:3 (dialogue line),
      and flag_nonstory on sentence id:15 (the "p. 42" artefact line).
      Both default OFF in the diff modal (script-review-slice DEFAULT_OFF set). */
@@ -3026,7 +3040,7 @@ async function mockReviewScript(
       },
     ],
   });
-  return { reviewedChapters: 1, totalOps: 3 };
+  return { reviewedChapters: 1, totalOps: 5 };
 }
 
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */

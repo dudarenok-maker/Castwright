@@ -1118,6 +1118,79 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
       expect(review.unappliable.some((u) => u.op.id === 999)).toBe(true);
     });
   });
+
+  /* fs-58 Task 7 — the seed-path guard against the dead-feature window:
+     planApply runs at seed time over the widened live builder, so a
+     validate_instruct REPAIR op against a sentence that ALREADY has an
+     instruct must reach `review.ops`. The sentence is explicitly seeded
+     with `instruct: 'shouting'` — without it the repair guard drops the
+     op (no current instruct) and the test would false-green. */
+  it('seeds a validate_instruct repair op when the live sentence has an instruct', async () => {
+    const user = userEvent.setup();
+    const instructSentence: Sentence = {
+      id: 1,
+      chapterId: 1,
+      characterId: 'narrator',
+      text: 'Live line.',
+      instruct: 'shouting',
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [instructSentence] as never,
+        },
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-1',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+
+    reviewScript.mockImplementation(async (_bookId: string, opts?: { onOps?: (arg: { chapterId: number; ops: object[] }) => void }) => {
+      opts?.onOps?.({
+        chapterId: 1,
+        ops: [{ id: 1, op: 'validate_instruct', newInstruct: 'a calm, even tone', rationale: 'instruct contradicts line' }],
+      });
+    });
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[quarantineChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[instructSentence]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    await waitFor(() => {
+      const state = store.getState() as { scriptReview: { byBook: Record<string, { ops: { id: number }[]; unappliable: { op: { id: number } }[] }> } };
+      const review = state.scriptReview.byBook['bk-1'];
+      expect(review).toBeDefined();
+      /* The repair op lands in ops, NOT unappliable (widened live builder
+         surfaced the seeded instruct so the repair guard passed). */
+      expect(review.ops.some((o) => o.id === 1)).toBe(true);
+      expect(review.unappliable.some((u) => u.op.id === 1)).toBe(false);
+    });
+  });
 });
 
 /* fs-58 — handleReviewScript error surface (Fix 2).

@@ -102,6 +102,10 @@ export interface ChaptersState {
       older servers / before the first hydrate; the view then falls back to the
       time-based change-log heuristic. */
   renderedTextByChapter: Record<number, Record<number, string>>;
+  /** fs-58 — render-time sentence→instructHash map per chapter (1.7b liveInstruct
+      path only). Optional: absent until a hydrate carries one, so the existing
+      ChaptersState test literals need no edit. */
+  renderedInstructByChapter?: Record<number, Record<number, string>>;
 }
 
 const initialState: ChaptersState = {
@@ -260,6 +264,9 @@ export const chaptersSlice = createSlice({
           pre-#1105 servers/renders → left empty, view falls back to the
           change-log heuristic for text edits. */
         renderedTextByChapter?: Record<number, Record<number, string>>;
+        /** fs-58 — render-time sentence→instructHash map per chapter (1.7b
+          liveInstruct path only). Absent → left empty. */
+        renderedInstructByChapter?: Record<number, Record<number, string>>;
       }>,
     ) => {
       const {
@@ -271,10 +278,12 @@ export const chaptersSlice = createSlice({
         chapterLufs,
         renderedSpeakersByChapter,
         renderedTextByChapter,
+        renderedInstructByChapter,
       } = a.payload;
       if (bookId) s.currentBookId = bookId;
       s.renderedSpeakersByChapter = renderedSpeakersByChapter ?? {};
       s.renderedTextByChapter = renderedTextByChapter ?? {};
+      s.renderedInstructByChapter = renderedInstructByChapter ?? {};
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
       for (const c of characters) allCastQueued[c.id] = 'queued';

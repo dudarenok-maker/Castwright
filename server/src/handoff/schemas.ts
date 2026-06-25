@@ -232,16 +232,27 @@ export const scriptReviewSchema = z
         .object({
           id: z.number().int().positive(),
           op: z.enum([
-            'strip_tag', 'split', 'extract_dialogue', 'merge', 'fix_emotion',
+            'strip_tag',
+            'split',
+            'extract_dialogue',
+            'merge',
+            'fix_emotion',
+            // fs-58 validate_instruct (origin/main, PR #1041):
+            'validate_instruct',
             // fs-58 Unit B:
-            'reattribute', 'flag_nonstory',
+            'reattribute',
+            'flag_nonstory',
           ]),
           newText: z.string().optional(),
+          newInstruct: z.string().optional(),
+          newVocalizationText: z.string().optional(),
           anchor: z.string().optional(),
           anchorEnd: z.string().optional(),
           pieceCharacterIds: z.array(z.string()).optional(),
           mergeIds: z.array(z.number().int().positive()).optional(),
           emotion: z.enum(EMOTIONS).optional(),
+          // fs-58 validate_instruct (origin/main) — vocalization toggle:
+          vocalization: z.boolean().optional(),
           // fs-58 Unit B — reattribute targets:
           characterId: z.string().optional(),
           proposed: z

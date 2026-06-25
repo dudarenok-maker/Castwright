@@ -712,6 +712,8 @@ export function ManuscriptView({
         chapterId: s.chapterId,
         text: s.text,
         characterId: s.characterId,
+        instruct: s.instruct,
+        vocalization: s.vocalization,
       }));
       /* planApply filters from allOps whose entries are ReviewOpWithChapter —
          the chapterId is preserved on each returned object at runtime, so

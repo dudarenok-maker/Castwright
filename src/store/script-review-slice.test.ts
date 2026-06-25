@@ -251,6 +251,49 @@ describe('scriptReviewSlice', () => {
     expect(b.selected['1:3:flag_nonstory']).toBe(false);
   });
 
+  it('validate_instruct toggles via opKey/toggleClass like any other class (fs-58, #1041)', () => {
+    // Characterization: the slice is op-agnostic — toggleClass/opKey key on op.op,
+    // so a 6th class `validate_instruct` behaves identically to the existing five
+    // with no slice change. This locks that behaviour.
+    const viOp: ReviewOpWithChapter = {
+      id: 7,
+      op: 'validate_instruct',
+      newInstruct: 'a calm tone',
+      rationale: 'contradicts the line',
+      chapterId: 12,
+    };
+    const store = makeStore();
+    // Seed alongside a strip_tag op so we can assert class isolation too.
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-a',
+        ops: [op1, viOp],
+        unappliable: [],
+      }),
+    );
+    const key = opKey(12, 7, 'validate_instruct');
+    // setReview defaults the validate_instruct op selected ON.
+    expect(selectReview(store.getState(), 'book-a')!.selected[key]).toBe(true);
+
+    // toggleClass flips ONLY validate_instruct off; strip_tag stays on.
+    store.dispatch(
+      scriptReviewActions.toggleClass({ bookId: 'book-a', op: 'validate_instruct' }),
+    );
+    const after1 = selectReview(store.getState(), 'book-a')!;
+    expect(after1.selected[key]).toBe(false);
+    expect(after1.selected[opKey(10, 1, 'strip_tag')]).toBe(true);
+
+    // toggleClass again flips it back on.
+    store.dispatch(
+      scriptReviewActions.toggleClass({ bookId: 'book-a', op: 'validate_instruct' }),
+    );
+    expect(selectReview(store.getState(), 'book-a')!.selected[key]).toBe(true);
+
+    // toggleOp flips the single validate_instruct op by key.
+    store.dispatch(scriptReviewActions.toggleOp({ bookId: 'book-a', key }));
+    expect(selectReview(store.getState(), 'book-a')!.selected[key]).toBe(false);
+  });
+
   it('toggleOp ignores an unknown key (defensive guard)', () => {
     const store = makeStore();
     store.dispatch(

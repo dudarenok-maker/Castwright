@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   collectRenderedFallbackEngines,
+  collectRenderedInstructHashesByChapter,
   collectRenderedQwenVoiceNames,
   collectRenderedSpeakerMaps,
   collectRenderedTextHashesByChapter,
@@ -181,5 +182,53 @@ describe('collectRenderedTextHashesByChapter (#1105)', () => {
   it('returns an empty map when no audio dir exists', async () => {
     rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
     await expect(collectRenderedTextHashesByChapter(bookDir, chapters)).resolves.toEqual({});
+  });
+});
+
+describe('collectRenderedInstructHashesByChapter (fs-58)', () => {
+  /* Mirrors the textHash collector's describe-private fixture writer, adding the
+     fs-58 `instructHash` field (stamped only on the per-group 1.7b liveInstruct
+     path). The chapterId is derived from the slug's numeric prefix. */
+  function writeSegmentsWithInstruct(
+    slug: string,
+    segments: Array<{
+      characterId?: string;
+      sentenceIds?: number[];
+      instructHash?: string;
+      kind?: string;
+    }>,
+  ) {
+    writeFileSync(
+      join(bookDir, 'audio', `${slug}.segments.json`),
+      JSON.stringify({ chapterId: Number(slug.slice(0, 2)), segments }),
+    );
+  }
+
+  it('inverts per-segment instructHash to {chapterId:{sentenceId:hash}}, omitting empty chapters', async () => {
+    /* ch1 has a stamped instructHash on sentence 5; ch2 has none (non-liveInstruct
+       render) → omitted entirely so the client reads it as "can't tell". */
+    writeSegmentsWithInstruct('01-one', [
+      { characterId: 'mira', sentenceIds: [5], instructHash: textHashForStale('a tired sigh') },
+    ]);
+    writeSegmentsWithInstruct('02-two', [{ characterId: 'wren', sentenceIds: [4] }]);
+    await expect(collectRenderedInstructHashesByChapter(bookDir, chapters)).resolves.toEqual({
+      1: { 5: textHashForStale('a tired sigh') },
+    });
+  });
+
+  it('skips segments missing an instructHash and omits a wholly-unstamped chapter', async () => {
+    writeSegmentsWithInstruct('01-one', [
+      { characterId: 'narrator', sentenceIds: [1], kind: 'title' }, // no instructHash
+      { characterId: 'mira', sentenceIds: [2], instructHash: textHashForStale('a calm tone') },
+    ]);
+    writeSegmentsWithInstruct('02-two', [{ characterId: 'wren', sentenceIds: [4] }]);
+    await expect(collectRenderedInstructHashesByChapter(bookDir, chapters)).resolves.toEqual({
+      1: { 2: textHashForStale('a calm tone') },
+    });
+  });
+
+  it('returns an empty map when no audio dir exists', async () => {
+    rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+    await expect(collectRenderedInstructHashesByChapter(bookDir, chapters)).resolves.toEqual({});
   });
 });

@@ -66,6 +66,38 @@ describe('skills/audiobook-script-review.md — M5 vocalization-protection claus
   });
 });
 
+const SKILL_MD = readFileSync(SKILL_PATH, 'utf8');
+
+describe('audiobook-script-review skill — validate_instruct (fs-58)', () => {
+  it('documents the validate_instruct op and the English-instruct rule', () => {
+    expect(SKILL_MD).toMatch(/### `validate_instruct`/);
+    expect(SKILL_MD).toMatch(/always English/i);
+    expect(SKILL_MD).toMatch(/newInstruct/);
+    expect(SKILL_MD).toMatch(/newVocalizationText/);
+  });
+
+  it('documents the conditional instruct + vocalization input fields', () => {
+    const input = SKILL_MD.split('## Input')[1] ?? '';
+    expect(input).toMatch(/"instruct"/);
+    expect(input).toMatch(/"vocalization"/);
+  });
+
+  it('hands intentional vocalizations to validate_instruct in the strip_tag rule', () => {
+    expect(SKILL_MD).toMatch(/leave intentional vocalizations to `validate_instruct`/);
+  });
+
+  // §9 degradation gate (prompt-assembly snapshot half): the existing 5-class op
+  // sections must be byte-identical before/after adding validate_instruct, so the
+  // 6th class can't silently perturb the other five. The validate_instruct section
+  // is appended AFTER fix_emotion, so everything up to it is unchanged.
+  it('leaves the 5-class section text intact above the new section', () => {
+    const fiveClassRegion = SKILL_MD.split('### `validate_instruct`')[0];
+    for (const cls of ['strip_tag', 'split', 'extract_dialogue', 'merge', 'fix_emotion']) {
+      expect(fiveClassRegion).toContain(`### \`${cls}\``);
+    }
+  });
+});
+
 describe('skills/audiobook-script-review.md — fs-58 Unit B classes', () => {
   it('documents reattribute with the characterId-XOR-proposed contract', () => {
     const text = readFileSync(SKILL_PATH, 'utf8');

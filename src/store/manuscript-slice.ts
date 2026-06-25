@@ -287,12 +287,23 @@ export const manuscriptSlice = createSlice({
       if (sent) sent.excludeFromSynthesis = a.payload.excluded;
     },
 
-    /* fs-58 — User edit: replace a sentence's text (strip_tag review op target).
-       Scoped by (chapterId, sentenceId) like setSentenceCharacter. No-op if the
-       sentence is not found. */
-    setSentenceText: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; text: string }>) => {
-      const sent = s.sentences.find((x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
-      if (sent) sent.text = a.payload.text;
+    /* fs-58 — User edit: replace a sentence's text (strip_tag + validate_instruct
+       vocalization targets). Scoped by (chapterId, sentenceId). The optional
+       `vocalization` is TRI-STATE: undefined ⇒ leave the flag untouched (so an
+       unrelated strip_tag text edit can't wipe a vocalization:true sentence —
+       locked by a regression test); true ⇒ set; false ⇒ delete (never store false). */
+    setSentenceText: (
+      s,
+      a: PayloadAction<{ chapterId: number; sentenceId: number; text: string; vocalization?: boolean }>,
+    ) => {
+      const sent = s.sentences.find(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
+      if (!sent) return;
+      sent.text = a.payload.text;
+      if (a.payload.vocalization === undefined) return; // leave the flag untouched
+      if (a.payload.vocalization) sent.vocalization = true;
+      else delete sent.vocalization;
     },
 
     /* fs-25 — User edit: set (or clear) a quote's delivery emotion. Scoped by

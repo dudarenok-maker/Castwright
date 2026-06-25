@@ -387,3 +387,45 @@ describe('sentenceSchema fs-57 fields', () => {
     expect(() => sentenceSchema.parse({ ...base, bogus: 1 })).toThrow();
   });
 });
+
+describe('scriptReviewSchema — validate_instruct (fs-58)', () => {
+  // §9 degradation gate (parse-identity half): adding the 6th op + 3 optional fields
+  // must not change how the existing 5 classes parse.
+  it('parses the 5 existing classes byte-identically after the widening', () => {
+    const five = {
+      ops: [
+        { id: 1, op: 'strip_tag', anchor: 'x', newText: 'y', rationale: 'r' },
+        { id: 2, op: 'split', anchor: 'a', pieceCharacterIds: ['n', 'm'], rationale: 'r' },
+        { id: 3, op: 'extract_dialogue', anchor: 'a', anchorEnd: 'b', pieceCharacterIds: ['n', 'm', 'n'], rationale: 'r' },
+        { id: 4, op: 'merge', mergeIds: [4, 5], rationale: 'r' },
+        { id: 6, op: 'fix_emotion', anchor: 'a', emotion: 'neutral', rationale: 'r' },
+      ],
+    };
+    expect(scriptReviewSchema.parse(five)).toEqual(five);
+  });
+
+  it('parses a validate_instruct op with instruct + vocalization edits', () => {
+    const parsed = scriptReviewSchema.parse({
+      ops: [
+        {
+          id: 14,
+          op: 'validate_instruct',
+          newInstruct: 'a long, tired sigh',
+          newVocalizationText: 'Hhh… She closed her eyes.',
+          vocalization: false,
+          rationale: 'instruct contradicts the calm line',
+          confidence: 0.8,
+        },
+      ],
+    });
+    expect(parsed.ops[0].op).toBe('validate_instruct');
+    expect(parsed.ops[0].newVocalizationText).toContain('Hhh');
+  });
+
+  it('parses a strip (empty newInstruct) with no vocalization fields', () => {
+    const parsed = scriptReviewSchema.parse({
+      ops: [{ id: 3, op: 'validate_instruct', newInstruct: '', rationale: 'leaks spoken content' }],
+    });
+    expect(parsed.ops[0].newInstruct).toBe('');
+  });
+});

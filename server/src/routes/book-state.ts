@@ -59,6 +59,7 @@ import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
 import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-voices.js';
 import {
   collectRenderedFallbackEngines,
+  collectRenderedInstructHashesByChapter,
   collectRenderedSpeakerMaps,
   collectRenderedTextHashesByChapter,
 } from '../audio/segments-io.js';
@@ -453,6 +454,17 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
+    /* fs-58 (#1041) — render-time sentence→instructHash map per rendered chapter.
+       The frontend diffs it against the live manuscript instruct to flag a chapter
+       whose instruct was edited after it rendered (the instruct sibling of
+       renderedTextByChapter; stamped only on the 1.7b liveInstruct path, so a
+       chapter rendered on any other engine is absent). Tolerant of a missing audio
+       dir; empty on books rendered before fs-58. */
+    const renderedInstructByChapter = await collectRenderedInstructHashesByChapter(
+      bookDir,
+      state.chapters,
+    ).catch(() => ({}));
+
     /* Apply the brand default for narratorCredit in the GET response so the
        frontend always sees 'Castwright' when no explicit credit has been set.
        The on-disk value is left untouched — the PATCH/write path persists the
@@ -477,6 +489,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       renderedFallbackByCharacter,
       renderedSpeakersByChapter,
       renderedTextByChapter,
+      renderedInstructByChapter,
       changeLog: changeLog?.events ?? null,
       analysis: { failedChapterIds, failedChapterErrors },
     });

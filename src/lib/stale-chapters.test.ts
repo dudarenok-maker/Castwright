@@ -7,6 +7,7 @@ import {
   textHashForStale,
   isChapterTextEditedSinceRender,
   isChapterExcludedSinceRender,
+  isChapterInstructEditedSinceRender,
 } from './stale-chapters';
 import type { Chapter, ChangeLogEvent } from './types';
 
@@ -236,5 +237,33 @@ describe('isChapterTextEditedSinceRender (#1105 precise text diff)', () => {
   it('returns false when there is no render text map (pre-1105 render → fall back)', () => {
     expect(isChapterTextEditedSinceRender(undefined, [{ id: 1, text: 'x' }])).toBe(false);
     expect(isChapterTextEditedSinceRender({}, [{ id: 1, text: 'x' }])).toBe(false);
+  });
+});
+
+describe('isChapterInstructEditedSinceRender (fs-58 precise instruct diff)', () => {
+  const rendered = { 1: textHashForStale('a tired sigh') } as Record<number, string>;
+  it('not stale when the live instruct matches the stamp', () => {
+    expect(isChapterInstructEditedSinceRender(rendered, [{ id: 1, instruct: 'a tired sigh' }])).toBe(
+      false,
+    );
+  });
+  it('stale when the instruct was edited', () => {
+    expect(isChapterInstructEditedSinceRender(rendered, [{ id: 1, instruct: 'shouting' }])).toBe(
+      true,
+    );
+  });
+  it('stale when the instruct was cleared', () => {
+    expect(isChapterInstructEditedSinceRender(rendered, [{ id: 1 }])).toBe(true);
+  });
+  it('not stale when no stamps exist (non-liveInstruct render)', () => {
+    expect(isChapterInstructEditedSinceRender(undefined, [{ id: 1, instruct: 'x' }])).toBe(false);
+    expect(isChapterInstructEditedSinceRender({}, [{ id: 1, instruct: 'x' }])).toBe(false);
+  });
+  // §6.5 trim invariant: the server stamps the TRIMMED instruct (setSentenceInstruct trims
+  // on write); a live value differing only in surrounding whitespace must read NOT stale.
+  it('not stale when the live instruct differs only by surrounding whitespace', () => {
+    expect(
+      isChapterInstructEditedSinceRender(rendered, [{ id: 1, instruct: '  a tired sigh  ' }]),
+    ).toBe(false);
   });
 });

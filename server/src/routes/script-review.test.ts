@@ -17,6 +17,7 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
+import type { buildReviewSentencesInput as BuildReviewSentencesInput } from './script-review.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -26,6 +27,7 @@ let workspaceRoot: string;
 let app: Express;
 let bookId: string;
 let manuscriptId: string;
+let buildReviewSentencesInput: typeof BuildReviewSentencesInput;
 
 /* The fake analyzer's runScriptReviewChapter — each test swaps its implementation. */
 const { runReview } = vi.hoisted(() => ({ runReview: vi.fn() }));
@@ -120,10 +122,9 @@ const CANNED_OPS: ScriptReviewOutput = {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-script-review-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ scriptReviewRouter }, { makeBookId }] = await Promise.all([
-    import('./script-review.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const [{ scriptReviewRouter, buildReviewSentencesInput: build }, { makeBookId }] =
+    await Promise.all([import('./script-review.js'), import('../workspace/paths.js')]);
+  buildReviewSentencesInput = build;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();
@@ -296,5 +297,21 @@ describe('POST /api/books/:bookId/script-review', () => {
 
     // (c) A final result event arrives.
     expect(events.some((e) => e.kind === 'result')).toBe(true);
+  });
+});
+
+describe('buildReviewSentencesInput (fs-58)', () => {
+  it('includes instruct only when present and vocalization only when true', () => {
+    const out = buildReviewSentencesInput([
+      { id: 1, characterId: 'narrator', text: 'Plain line.' },
+      { id: 2, characterId: 'mira', text: 'Hhh… done.', instruct: 'a tired sigh', vocalization: true },
+      { id: 3, characterId: 'mira', text: 'No instruct.', vocalization: false },
+    ]);
+    expect(out[0]).toEqual({ sentenceId: 1, characterId: 'narrator', text: 'Plain line.' });
+    expect(out[1]).toEqual({
+      sentenceId: 2, characterId: 'mira', text: 'Hhh… done.',
+      instruct: 'a tired sigh', vocalization: true,
+    });
+    expect(out[2]).toEqual({ sentenceId: 3, characterId: 'mira', text: 'No instruct.' });
   });
 });
