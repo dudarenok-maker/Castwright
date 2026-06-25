@@ -85,6 +85,7 @@ import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
+import { runProsodyPasses } from '../store/prosody-thunk';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
@@ -974,6 +975,67 @@ export function Layout() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgKey, dispatch]);
+
+  /* Task 13 (fs-65 Phase 3) — eager prosody auto-trigger keyed on library
+     status. Fires the two-pass prosody annotation (emotions + instruct) for
+     every book that transitions to analysis-complete in library.books —
+     for both the active book AND background books (round-2 Critical: ui.stage
+     is singular and cannot observe background-analysed books).
+
+     Design constraints honoured here:
+     - Keyed on library.books status, NOT stageKind (fires for all books).
+     - Seed-on-mount: existing complete books are added to `considered` on the
+       first run WITHOUT firing (skips the pre-existing library; makes a Layout
+       remount self-healing — round-2 #5).
+     - Authoritative disk gate: reads prosodyEnabled + prosodyAnnotated from
+       getBookState, never from the store selector (opt-out hydration race,
+       round-2 #2).
+     - Detached job: void (async () => {...})() NOT tied to effect cleanup
+       (survives a book-switch, round-1 H2).
+     - Partial-aware watermark: writes prosodyAnnotated:true only when
+       failed === 0; on partial failure removes the book from considered so
+       a subsequent fill-only re-run can top it up (round-2 #6).
+     - Retry-safe: try/catch removes the book from considered on throw
+       (round-1 H3). */
+  const isAnalysisComplete = (s: string) =>
+    s !== 'not_analysed' && s !== 'analysing' && s !== 'unreadable' && s !== 'orphaned';
+
+  const prosodyConsidered = useRef<Set<string>>(new Set());
+  const prosodySeeded = useRef(false);
+  const completeIds = library.books
+    .filter((b) => isAnalysisComplete(b.status))
+    .map((b) => b.bookId);
+  const completeKey = completeIds.join('|');
+  useEffect(() => {
+    if (!prosodySeeded.current) {
+      // First run: mark all currently-complete books as already considered
+      // (no backlog auto-spend; makes a remount self-healing).
+      completeIds.forEach((id) => prosodyConsidered.current.add(id));
+      prosodySeeded.current = true;
+      return;
+    }
+    for (const id of completeIds) {
+      if (prosodyConsidered.current.has(id)) continue; // already handled this session
+      prosodyConsidered.current.add(id);
+      void (async () => {
+        // Detached: not tied to effect cleanup — survives a book-switch.
+        try {
+          const st = await api.getBookState(id);
+          if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
+          if (st.state.prosodyAnnotated) return;               // watermark → no-op
+          const { failed } = await runProsodyPasses(id, { dispatch });
+          if (failed === 0) {
+            api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
+          } else {
+            prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
+          }
+        } catch {
+          prosodyConsidered.current.delete(id); // transient error → retry on next transition
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completeKey]);
 
   if (ui.previewMode) {
     return (
