@@ -352,7 +352,7 @@ it('a failed create surfaces a toast, closes the confirm dialog, and keeps the r
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npm run test -- src/components/script-review-diff.test.tsx -t "failed create"`
-Expected: FAIL — no toast; the confirm dialog state is left inconsistent.
+Expected: FAIL — the **toast** assertion is the discriminator (no error toast is dispatched pre-fix). Note: the other two assertions are NOT discriminating — the confirm dialog closes on its own once the queue is exhausted (`confirmOp` becomes null regardless of `runProposed`), and the review bucket is retained pre-fix too (the throw skips `clearReview`). They pin the desired end-state; only the toast proves the fix.
 
 - [ ] **Step 3: Wrap `runProposed`**
 
