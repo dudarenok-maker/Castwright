@@ -169,3 +169,23 @@ describe('matchQuoteInSource — the Hollow Tide ledger regression', () => {
     expect(matchQuoteInSource(normaliseForMatch(quote), normSource)).toBe(expectedTier);
   });
 });
+
+describe('normaliseForMatch — folds non-English quote styles (multilingual)', () => {
+  /* Regression (2026-06-25): the verifier dropped EVERY German quote because
+     `„` (U+201E) wasn't folded, so a straight-quote model candidate could never
+     match a `„…"` source — whole characters (Maerin, Hart…) vanished. es/fr/ru
+     only "worked" because the model echoed «…» back verbatim; a single straight
+     quote would have failed them the same way. The fold makes every language
+     robust regardless of which quote glyph the model emits. Strings are built
+     from codepoints so the non-ASCII glyphs can't be flattened by an editor. */
+  const cp = (...c: number[]) => String.fromCodePoint(...c);
+  it.each([
+    ['German „…" (low-open + straight-close)', cp(0x201e) + 'Lass es' + '"'],
+    ['German „…“ (low-open + high-close)', cp(0x201e) + 'Lass es' + cp(0x201c)],
+    ['Spanish/Russian guillemets «…»', cp(0x00ab) + 'Lass es' + cp(0x00bb)],
+    ['single guillemets ‹…›', cp(0x2039) + 'Lass es' + cp(0x203a)],
+  ])('a straight-quote candidate matches a %s source verbatim', (_name, sourceQuote) => {
+    const source = normaliseForMatch(sourceQuote + ', sagte Meister Oduvan.');
+    expect(matchQuoteInSource(normaliseForMatch('"Lass es"'), source)).toBe('verbatim');
+  });
+});
