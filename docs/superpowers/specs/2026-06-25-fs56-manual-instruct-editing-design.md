@@ -61,6 +61,12 @@ setSentenceInstruct: (s, a: PayloadAction<{ chapterId: number; sentenceId: numbe
 A blank/whitespace value clears the field rather than storing an empty string, so
 the store never carries a redundant empty instruct (mirrors `'neutral' → delete`).
 
+**Change-log: silent (decision).** Instruct edits do NOT emit a `changeLogActions`
+entry — matching the `setSentenceEmotion` precedent (emotion edits are change-log
+silent; only structural edits like `setSentenceCharacter` boundary-moves are
+logged). The change-log tracks structure/attribution, not per-line delivery tags.
+Stated so an implementer doesn't add logging by analogy with character edits.
+
 ### 2. Persistence (`src/store/persistence-middleware.ts`)
 
 One entry, identical shape to `manuscript/setSentenceEmotion`:
@@ -89,31 +95,51 @@ Mirrors `SentenceEmotionControl`'s scaffolding (outside-click close,
   Save dispatches `setSentenceInstruct(text)`; Clear dispatches it with `''`
   (delete). Escape / outside-click closes without saving.
 - **Edit-the-suggestion is the primary flow.** The textarea is pre-filled with the
-  line's *current* `instruct` — whether the author wrote it OR Stage-3 (the LLM)
-  proposed it. There is one field, so the control is the single edit surface for
-  both. Opening an LLM-instruct'd line shows the AI's suggestion ready to refine;
-  editing it makes it the author's value, which `applyDetectedInstruct`'s fill-only
-  guard then preserves against re-detect. (This is *why* the control is ungated on
-  every line — an LLM may have proposed a direction on any line, narration
-  included, and the author needs to be able to see and amend it.)
-- **Audibility signalling.** The field only reaches synth on a Qwen 1.7B book with
-  live-instruct on (`resolveInstructForGroup` gate). When that condition is NOT
-  met, signal it in TWO places, not just a buried caption: (a) a muted/struck chip
-  style so an inaudible direction reads as inactive at a glance in the margin, and
-  (b) a one-line popover caption — "Audible only on Qwen 1.7B with Live expressive
-  delivery on." The control stays **enabled** regardless: the tag is additive data
-  that survives an engine switch (identical philosophy to the emotion tag), so an
-  author can pre-author directions before flipping live-instruct on. We strengthen
-  the *signal*, we don't disable the control.
+  line's *current* `instruct` via `sentence.instruct ?? ''` (the field is `undefined`
+  in the common empty case) — whether the value was authored OR proposed by Stage-3
+  (the LLM). There is one field, so the control is the single edit surface for both.
+  Opening an LLM-instruct'd line shows the AI's suggestion ready to refine; editing it
+  makes it the author's value, which `applyDetectedInstruct`'s fill-only guard then
+  preserves against re-detect. (This is *why* the control is ungated on every line —
+  an LLM may have proposed a direction on any line, narration included, and the author
+  needs to see and amend it.) The chip reads `sentence.instruct` straight from the
+  store, so it updates reactively after a "Detect emotions" run fills it — no manual
+  refresh. Round-trip: `undefined → pre-fill '' → user edits → Save trims →
+  setSentenceInstruct → '' deletes / non-empty sets`. Consistent across pre-fill,
+  reducer, and Clear.
+- **Audibility signalling — gate on `liveInstruct` ONLY (the reliably-known half).**
+  The server resolver returns `{}` (silent) unless `is17b && liveInstruct`
+  (`resolve-instruct.ts:32`), where `is17b` is the **per-character** 1.7B model key
+  (`synthesise-chapter.ts:813`), which the client does NOT carry. So the client must
+  NOT claim a definitive per-line "audible" verdict — a Qwen **0.6B** character with
+  `liveInstruct` on would render the instruct silently, and a `liveInstruct && qwen`
+  proxy would falsely show "audible" (a silent-data-loss trap). Use only what the
+  client reliably knows — the per-book `liveInstruct` flag — since `!liveInstruct`
+  fails the gate **regardless of model**:
+  - `liveInstruct === false` → **definitely inaudible** → muted chip style
+    (`opacity-50`, the empty-state `text-ink/30` muted token; no new color) + popover
+    caption "Delivery directions play on the Qwen 1.7B tier with Live expressive
+    delivery on."
+  - `liveInstruct === true` → *may* be audible (depends on the per-character 1.7B
+    model the client can't see) → render the chip normally; do NOT assert a per-line
+    verdict. The same caption stays available as an informational reminder of the
+    1.7B-tier requirement, so a 0.6B author still has a hint.
+
+  The control stays **enabled** regardless: the tag is additive data that survives an
+  engine switch (identical philosophy to the emotion tag), so an author can
+  pre-author directions before enabling live-instruct.
 - **Accessibility & mobile (REQUIRED — `min-h-[44px] sm:min-h-0`, design tokens):**
   - Chip `aria-label`: empty → "Set delivery direction for this line"; set →
     `Delivery direction: <text> — edit`.
   - Popover: focus the textarea on open; **Escape** closes and returns focus to the
     chip; outside-click closes. (The emotion *menu* doesn't trap focus; a textarea
     is a heavier interaction, so explicit focus-on-open + return-focus is in scope.)
-  - On `<640px` the popover renders as a bottom sheet (full-width), not a
-    `top-full` absolute menu, so the textarea + Save/Clear never overflow a narrow
-    phone (per the mobile-testing protocol). `sm:` and up keep the inline popover.
+  - Narrow-phone fit WITHOUT net-new infra: there is no reusable bottom-sheet
+    primitive in the codebase, so do NOT build one. Keep the emotion control's
+    `absolute` popover pattern but make it responsive — constrained width
+    (`max-w-[90vw]`), a 2–3 row textarea with `max-h` + internal scroll, and
+    on-screen repositioning so it never overflows a 320px viewport. A compact
+    textarea + Save/Clear fits; a full bottom-sheet is unnecessary scope.
 
 ### 4. Placement (`src/views/manuscript.tsx`)
 
@@ -134,16 +160,18 @@ doesn't thrash on first scroll. Touch note: the empty affordance sits at line-en
 outside the `[data-text-offset]` text span, so a stray tap can't hijack a
 narrator-text selection (selection/split keys on the text span, not the control).
 
-**Data wiring (corrected).** Audibility + staleness need the per-book
-`liveInstruct` flag AND whether the engine is Qwen. `character.ttsEngine` arrives
-by prop (as the emotion control already receives `character`), but **`liveInstruct`
-is NOT on the character** — it lives in `book-meta-slice` keyed by `bookId`
-(`selectLiveInstruct(bookId)`, `book-meta-slice.ts:167`). `bookId` is already read
-at the `Manuscript` top level (`manuscript.tsx:120`); thread it down to the control
-(or read `selectLiveInstruct(bookId)` in the control). Client-side `liveInstruct
-&& character.ttsEngine === 'qwen'` is the audibility proxy — the exact
-`is17b` model-key check is a server detail the resolver owns; the client only needs
-"would this be audible," and `liveInstruct` on implies the 1.7B path.
+**Data wiring (corrected — compute once, thread a boolean).** Audibility + staleness
+need the per-book `liveInstruct` flag. It is NOT on the character — it lives in
+`book-meta-slice` keyed by `bookId` (`selectLiveInstruct(bookId)`,
+`book-meta-slice.ts:167`). `bookId` is already read at the `Manuscript` top level
+(`manuscript.tsx:120`), so resolve `liveInstruct` ONCE there via
+`useAppSelector(selectLiveInstruct(bookId))` and thread the resulting **boolean**
+down through `SegmentRow` to the control. Do NOT call the selector inside each
+per-sentence control — on a 500-sentence chapter that is 500 selector invocations
+per render; a plain boolean prop is memo-friendly and free. The control combines
+that boolean with `character.ttsEngine` only for the conservative staleness/mute
+decisions described above — it deliberately does NOT try to reconstruct the
+per-character `is17b` model key (a server detail the client can't see reliably).
 
 ## Data flow
 
@@ -160,31 +188,31 @@ is stored but silent. Consistent with fs-25 emotion-tag behaviour.
 
 ## Edge cases
 
-- **Staleness — mark-if-it-would-change-audio (corrected).** An instruct edit on an
-  already-rendered chapter MUST flag that audio stale *when the edit would actually
-  change synth output* — i.e. when `liveInstruct && character.ttsEngine === 'qwen'`
-  (the same audibility proxy as above). This mirrors the emotion control, which
-  marks stale only when the change selects a different voice
-  (`sentence-emotion-control.tsx:81`) and stays silent when the tag is inaudible.
-  The earlier "never mark stale" stance was wrong: it would let an author edit a
-  direction, see no "re-render needed" banner, and have the change silently never
-  reach audio. When the edit is inaudible (live-instruct off / non-Qwen), we
-  correctly do NOT flag stale — there is no audio impact. Reuse
-  `useMarkCharacterStaleIfRendered` exactly as the emotion control does.
+- **Staleness — conservative, gated on `liveInstruct` (corrected).** An instruct
+  edit on an already-rendered chapter flags it stale-if-rendered **when
+  `liveInstruct === true`** (the reliably-known signal). It uses the SAME HOOK as the
+  emotion control (`useMarkCharacterStaleIfRendered`, needs only `{id, name}`) but a
+  DIFFERENT predicate: emotion gates on a designed variant existing
+  (`variantVoiceIdFor`, `sentence-emotion-control.tsx:81`); instruct has no variants,
+  so it gates on `liveInstruct`. This is deliberately conservative — on a Qwen 0.6B
+  character with `liveInstruct` on it may over-flag (a harmless "re-render available"
+  the user can ignore), but it NEVER under-flags an audible change. When
+  `liveInstruct === false` we correctly do NOT flag — the edit is definitely silent.
+  (The earlier "never mark stale" stance was the real bug: an author would edit a
+  direction, see no banner, and the change would silently never reach audio.)
   - *Out of scope / surfaced:* fs-58's `setSentenceText` does NOT mark stale on a
-    text edit, which is arguably the same gap for text (text is audible on every
-    engine). That is pre-existing fs-58 behaviour, not fs-56's to fix here — flagged
-    to the user as a separate follow-up.
-- **Split / merge — fs-56 SOFT-DEPENDS on #1100 (corrected).** `splitSentence`
+    text edit — arguably the same gap for text (audible on every engine). Pre-existing
+    fs-58 behaviour, NOT fs-56's to fix here; filed separately as **#1105**.
+- **Split / merge — fs-56 REBASES onto #1100 (ordering fixed).** `splitSentence`
   spreads `{...original}` (`manuscript-slice.ts:411`), so a manual instruct ALREADY
-  bleeds onto both fragments today — a pre-existing fs-57 issue that the in-flight
-  **#1100** fixes by nulling `instruct`/`vocalization` on split/merge. fs-56 makes
-  this more likely to bite (more instructs in play), so: **sequence #1100 to land
-  first** (it's near-done WIP), and fs-56 ships a split/merge-×-manual-instruct
-  regression test **regardless** of order, asserting a fragment does not inherit a
-  stale direction. This build still stays off #1100's uncommitted hunks (separate
-  worktree); the test is the guard that makes the dependency explicit rather than
-  assumed.
+  bleeds onto both fragments today — a pre-existing fs-57 issue that **#1100** fixes
+  by nulling `instruct`/`vocalization` on split/merge. Decision: **#1100 lands first;
+  fs-56 rebases onto it.** So fs-56's base already carries the null-ing, and the
+  split/merge-×-manual-instruct regression test (asserting a fragment does NOT inherit
+  a stale direction) passes against that base. The test is fs-56's, not a duplicate of
+  #1100's null-ing logic — it guards the seam from fs-56's side and fails loudly if the
+  base ever regresses. (Until the rebase, the worktree base is plain `origin/main`; the
+  test is written against the post-rebase base.)
 - **Clear vs re-detect (accepted tradeoff).** Clearing deletes the field; a later
   "Detect emotions" run may refill it (fill-only) — and because the "Detect
   emotions" button runs the Stage-3 instruct pass on every click, a cleared
@@ -219,7 +247,8 @@ is stored but silent. Consistent with fs-25 emotion-tag behaviour.
   the instruct on the serialised sentence (follow the `setSentenceEmotion`
   persistence test).
 - **Staleness**: an instruct edit marks the chapter stale-if-rendered when
-  `liveInstruct && qwen`, and does NOT when inaudible (live-instruct off / non-Qwen).
+  `liveInstruct === true`, and does NOT when `liveInstruct === false` (definitely
+  silent). (Conservative-by-design: no per-character model-key check client-side.)
 - **Component** (`src/components/sentence-instruct-control.test.tsx`): empty chip
   renders the minimal affordance with the correct `aria-label`; opening pre-fills
   the textarea with an existing (LLM-proposed) instruct; typing + Save dispatches
@@ -253,9 +282,9 @@ is stored but silent. Consistent with fs-25 emotion-tag behaviour.
 3. A re-run of "Detect emotions" does not overwrite a hand-set instruct.
 4. Clearing removes the field; a re-detect may refill it (named tradeoff).
 5. On a Qwen 1.7B book with live-instruct on, the hand-set direction reaches synth
-   (`resolveInstructForGroup` returns it); otherwise it is stored silently AND the
-   chip/popover signal that it is currently inaudible.
+   (`resolveInstructForGroup` returns it); with live-instruct OFF it is stored
+   silently AND the chip/popover signal that it is currently inaudible.
 6. Editing an instruct on an already-rendered chapter flags it stale-if-rendered
-   when (and only when) the change would change audio (`liveInstruct && qwen`).
+   when `liveInstruct === true` (conservative; not when live-instruct is off).
 7. A split/merge does not leave a stale hand-set direction on a new fragment.
 8. Paired tests above are green; `npm run verify` passes.
