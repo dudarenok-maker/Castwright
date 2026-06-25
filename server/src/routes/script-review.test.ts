@@ -29,8 +29,14 @@ let bookId: string;
 let manuscriptId: string;
 let buildReviewSentencesInput: typeof BuildReviewSentencesInput;
 
-/* The fake analyzer's runScriptReviewChapter — each test swaps its implementation. */
-const { runReview } = vi.hoisted(() => ({ runReview: vi.fn() }));
+/* The fake analyzer's runScriptReviewChapter — each test swaps its implementation.
+   `selectedEngine` lets a test flip the reported engine to 'local' (so the
+   chunker derives a finite, num_ctx-bound budget and a large chapter splits);
+   it defaults to 'gemini' so the existing single-call tests are unchanged. */
+const { runReview, engineState } = vi.hoisted(() => ({
+  runReview: vi.fn(),
+  engineState: { engine: 'gemini' as 'gemini' | 'local' },
+}));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
@@ -46,7 +52,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
     ...actual,
     selectAnalyzerForPhase: () => ({
       analyzer: fakeAnalyzer,
-      engine: 'gemini' as const,
+      engine: engineState.engine,
       model: 'test-model',
       fallbackModel: null,
     }),
@@ -134,6 +140,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   runReview.mockReset();
+  engineState.engine = 'gemini';
+  delete process.env.ANALYZER_NUM_CTX;
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
 });
 
@@ -154,10 +162,11 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
 
+    // A chunk with no owned ops emits no `ops` event (the chunker only sends
+    // owned ops), so the empty chapter 2 produces no event — but is still counted.
     const opsEvents = events.filter((e) => e.kind === 'ops');
-    expect(opsEvents).toHaveLength(2);
+    expect(opsEvents).toHaveLength(1);
     expect(opsEvents[0]).toMatchObject({ kind: 'ops', chapterId: 1, ops: CANNED_OPS.ops });
-    expect(opsEvents[1]).toMatchObject({ kind: 'ops', chapterId: 2, ops: [] });
 
     const result = events.find((e) => e.kind === 'result');
     expect(result).toMatchObject({ done: true, reviewedChapters: 2 });
@@ -255,47 +264,73 @@ describe('POST /api/books/:bookId/script-review', () => {
     writeBook(SENTENCES);
     runReview.mockImplementation((_m, chapterId): Promise<ScriptReviewOutput> => {
       if (chapterId === 1) return Promise.reject(new Error('flaky chapter'));
-      return Promise.resolve({ ops: [] });
+      // chapter 2 carries sentence id 3 — return an owned op so it visibly emits.
+      return Promise.resolve({
+        ops: [{ id: 3, op: 'strip_tag', anchor: 'okay', newText: '"It will be okay."', rationale: 'r' }],
+      });
     });
 
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
     const events = parseSse(res.text);
     expect(events.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
     expect(events.some((e) => e.kind === 'ops' && e.chapterId === 2)).toBe(true);
-    expect(events.find((e) => e.kind === 'result')).toMatchObject({ reviewedChapters: 1 });
+    // Each chapter is counted once after its chunk loop, so a chapter whose only
+    // chunk failed still counts as reviewed (both chapters here = 2).
+    expect(events.find((e) => e.kind === 'result')).toMatchObject({ reviewedChapters: 2 });
   });
 
-  it('emits chapter-failed for an oversized chapter and continues to the next', async () => {
-    // Build a chapter whose serialised prompt exceeds DEFAULT_STAGE2_CHUNK_CHAR_BUDGET (9000).
-    // buildScriptReviewChapterInbox produces a ~150-char header + JSON-stringified sentences.
-    // Each sentence object serialises to ~{"sentenceId":N,"characterId":"narrator","text":"..."}.
-    // 12 sentences × ~800-char text each ≈ 9600 chars of sentence JSON alone — comfortably over
-    // the 9000-char budget even before the header/roster are added.
+  it('chunks a large chapter across calls and reviews each sentence exactly once', async () => {
+    // Force the local engine + a small num_ctx so chapterChunkBudget() derives a
+    // finite, sub-chapter char budget — a large chapter then splits into >=2 chunks
+    // (gemini's MAX_SAFE_INTEGER budget would never split).
+    engineState.engine = 'local';
+    process.env.ANALYZER_NUM_CTX = '400'; // → budget Math.max(2000, min(24000, 560)) = 2000
+
+    // ~800-char sentences: each chunk fits ~2 sentences before the 2000-char budget,
+    // so 12 sentences split into several overlapping chunks.
     const longText = 'A'.repeat(800);
-    const bigChapterSentences = Array.from({ length: 12 }, (_, i) => ({
+    const chapterSentences = Array.from({ length: 12 }, (_, i) => ({
       id: 100 + i,
       chapterId: 10,
       characterId: 'narrator',
       text: longText,
     }));
-    const normalSentence = { id: 200, chapterId: 11, characterId: 'wren', text: 'Short line.' };
-    writeBook([...bigChapterSentences, normalSentence]);
-    runReview.mockResolvedValue({ ops: [] });
+    writeBook(chapterSentences);
+
+    // Each call returns one strip_tag op per sentenceId present in the prompt it
+    // received (core + overlap context), so without ownership dedupe an overlapped
+    // sentence would be emitted by >1 chunk.
+    runReview.mockImplementation((_m, _c, prompt: string): Promise<ScriptReviewOutput> => {
+      const ids = [...prompt.matchAll(/"sentenceId":\s*(\d+)/g)].map((m) => Number(m[1]));
+      return Promise.resolve({
+        ops: ids.map((id) => ({
+          id,
+          op: 'strip_tag' as const,
+          anchor: 'x',
+          newText: 'x',
+          rationale: 'r',
+        })),
+      });
+    });
 
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
 
-    // (a) Oversized chapter emits chapter-failed with a message about being too large.
-    const failedEvent = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 10);
-    expect(failedEvent).toBeDefined();
-    expect(typeof failedEvent!.message).toBe('string');
-    expect((failedEvent!.message as string).toLowerCase()).toContain('too large');
+    // The chapter split — the analyzer was called more than once.
+    expect(runReview.mock.calls.length).toBeGreaterThan(1);
 
-    // (b) The normal chapter still produces an ops event — the overflow `continue` did not abort.
-    expect(events.some((e) => e.kind === 'ops' && e.chapterId === 11)).toBe(true);
+    // Zero chapter-failed events (the old 9000-char guard is gone).
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
 
-    // (c) A final result event arrives.
+    // The union of emitted op ids equals the chapter's sentence ids, EACH EXACTLY ONCE.
+    const emittedIds = events
+      .filter((e) => e.kind === 'ops')
+      .flatMap((e) => (e.ops as Array<{ id: number }>).map((o) => o.id));
+    const expectedIds = chapterSentences.map((s) => s.id);
+    expect([...emittedIds].sort((a, b) => a - b)).toEqual(expectedIds);
+    expect(new Set(emittedIds).size).toBe(emittedIds.length); // no duplicates
+
     expect(events.some((e) => e.kind === 'result')).toBe(true);
   });
 });
