@@ -177,6 +177,12 @@ export function GenerationView({
      'bookMeta/setLiveInstruct' rule. selectLiveInstruct is keyed by bookId so
      switching books always reflects the correct per-book value. */
   const liveInstruct = useAppSelector(selectLiveInstruct(bookId));
+  /* #1100 — the liveInstruct toggle only does anything when at least one cast
+     member is on the Qwen 1.7B Quality tier (the fs-56 per-character opt-in,
+     `ttsModelKey === 'qwen3-tts-1.7b'`). With no such member it's a pure no-op,
+     so we grey it out rather than offer a switch that changes nothing. Read
+     off the `characters` prop — the same roster the view renders rows from. */
+  const hasLiveInstructMember = characters.some((c) => c.ttsModelKey === 'qwen3-tts-1.7b');
   /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
      is set by the queue modal's "Jump to chapter" affordance (modal pushes
      #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
@@ -853,19 +859,22 @@ export function GenerationView({
             )}
           </p>
           {/* fs-57 — per-book live-instruct toggle. Only meaningful for
-              1.7B-tier characters; shown for all books so the operator can
-              flip it before starting generation. */}
+              1.7B-tier characters; greyed out (#1100) when the cast has none,
+              since flipping it would change nothing. */}
           <label
-            className="mt-2 flex items-center gap-2 cursor-pointer select-none min-h-[44px] sm:min-h-0"
+            className={`mt-2 flex items-center gap-2 select-none min-h-[44px] sm:min-h-0 ${
+              hasLiveInstructMember ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+            }`}
             data-testid="live-instruct-toggle"
           >
             <input
               type="checkbox"
               checked={liveInstruct}
+              disabled={!hasLiveInstructMember}
               onChange={(e) =>
                 dispatch(bookMetaActions.setLiveInstruct({ bookId, value: e.target.checked }))
               }
-              className="accent-magenta w-4 h-4 shrink-0"
+              className="accent-magenta w-4 h-4 shrink-0 disabled:cursor-not-allowed"
             />
             <span className="text-xs text-ink/60 leading-snug">
               <span className="font-medium text-ink/75">
@@ -873,8 +882,9 @@ export function GenerationView({
               </span>{' '}
               — re-render to hear it
               <span className="block text-ink/45 mt-0.5">
-                Uses real-time instruct prompts to shape emotion + vocalizations on
-                Qwen 1.7B characters. Has no effect on Kokoro or 0.6B voices.
+                {hasLiveInstructMember
+                  ? 'Uses real-time instruct prompts to shape emotion + vocalizations on Qwen 1.7B characters. Has no effect on Kokoro or 0.6B voices.'
+                  : 'No effect until a cast member is on the Qwen 1.7B Quality tier — set it per character in the voice picker.'}
               </span>
             </span>
           </label>
