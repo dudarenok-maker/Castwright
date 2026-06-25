@@ -375,16 +375,26 @@ it('omits instructHash when liveInstruct is off', async () => {
 });
 
 it('omits instructHash for an emotion-only group (no explicit instruct)', async () => {
-  const res = await runInstruct({ liveInstruct: true, sentences: [/* a sentence with emotion set, instruct undefined */] });
+  // A sentence with an emotion but NO explicit instruct — copy instructSentence's shape and
+  // set emotion instead: { id: 1, characterId: <1.7b char>, text: 'x', emotion: 'sad' }.
+  const res = await runInstruct({ liveInstruct: true, sentences: [{ id: 1, characterId: INSTRUCT_CAST[0].id, text: 'x', emotion: 'sad' } as never] });
   expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBeUndefined();
 });
 
 // §9 round-2 finding: a Qwen-1.7b group that FELL BACK to Kokoro must NOT be stamped
-// (its audio ignored the instruct). Drive a fallback (e.g. a provider that throws for the
-// 1.7b modelKey so resolveGroup yields a Kokoro post-fallback route, mirroring an existing
-// fallback test in this file) and assert the stamp is absent even though liveInstruct is on.
+// (its audio ignored the instruct). Round-2 ground truth: the fallback is driven by
+// `applyQwenFallback` — `(!voiceName || qwenUnavailable) && resolveForEngine` — NOT by a
+// throwing provider (a throw recycles/hard-fails, it does NOT rewrite the route). So this
+// case CANNOT reuse the plain runInstruct helper; copy the existing "Qwen→Kokoro graceful
+// fallback" suite (~synthesise-chapter.test.ts:2269) + its multiEngine() helper (~:2272),
+// driving the fallback with resolveForEngine + qwenUnavailable:true (mirror :2326-2347):
 it('omits instructHash for a 1.7b group that fell back to Kokoro', async () => {
-  const res = await runInstruct({ liveInstruct: true, sentences: [instructSentence(1, 'x', 'a tired sigh')], /* force fallback */ });
+  const me = multiEngine();
+  const res = await synthesiseChapter({ /* …copy the fallback-suite option object…, */
+    cast: INSTRUCT_CAST, liveInstruct: true,
+    sentences: [instructSentence(1, 'x', 'a tired sigh')],
+    resolveForEngine: me.resolveForEngine, qwenUnavailable: true });
+  // post-fallback route.modelKey is the Kokoro key ≠ 'qwen3-tts-1.7b' → un-stamped
   expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBeUndefined();
 });
 ```
@@ -707,6 +717,23 @@ describe('planApply — validate_instruct (fs-58)', () => {
     expect(appliable.find((o) => o.op === 'strip_tag')).toBeTruthy();
     expect(unappliable.find((u) => u.op.op === 'validate_instruct')).toBeTruthy();
   });
+
+  it('rejects a validate_instruct edit whose id a structural op consumed', () => {
+    // §9: a merge consumes ids 1+2; a validate_instruct on id 1 must be un-appliable.
+    const live = [
+      { id: 1, chapterId: 1, text: 'a', characterId: 'mira', instruct: 'old' },
+      { id: 2, chapterId: 1, text: 'b', characterId: 'mira' },
+    ];
+    const { appliable, unappliable } = planApply(
+      [
+        { id: 1, op: 'merge', mergeIds: [1, 2], rationale: 'r' },
+        { id: 1, op: 'validate_instruct', newInstruct: 'new', rationale: 'r' },
+      ] as never,
+      live,
+    );
+    expect(appliable.find((o) => o.op === 'merge')).toBeTruthy();
+    expect(unappliable.find((u) => u.op.op === 'validate_instruct')).toBeTruthy();
+  });
 });
 ```
 
@@ -809,7 +836,7 @@ In `src/lib/script-review-apply.ts`:
 - `src/components/script-review-diff.tsx:105-110` (Apply-time builder) — add `instruct: s.instruct, vocalization: s.vocalization,` to each mapped sentence.
 - `src/views/manuscript.tsx:695-700` (seed-time builder feeding the `planApply` at `:704`) — add the same two fields.
 
-(`s.instruct`/`s.vocalization` are typed on the manuscript `Sentence`, so both typecheck.) Add a **seed-path test** to `src/views/manuscript.test.tsx`: a seeded `validate_instruct` repair op against a sentence that HAS an instruct survives the seed-time `planApply` (lands in the suggestions, not silently dropped).
+(`s.instruct`/`s.vocalization` are typed on the manuscript `Sentence`, so both typecheck.) Add a **seed-path test** to `src/views/manuscript.test.tsx` (copy the `reviewScript.mockImplementation` → `onOps` → `waitFor` pattern at ~:1073-1116, the load-bearing guard against the dead-feature window): a `validate_instruct` **repair** op against a sentence **explicitly seeded with `instruct: 'shouting'`** (the existing seed fixture at ~:1043 has NO instruct — copying it verbatim would silently drop the op = false green) lands in `review.ops`, NOT `review.unappliable`.
 
 **Round-1 note on Step 1:** until step 3(a) adds `'validate_instruct'` to the `ReviewOp` `op` union, the new op literals are a TS union error — cast each `as never` (as the collision test already does: `planApply(ops as never, …)`) OR accept that `npm run typecheck` is expected-red on this file mid-task (it self-heals at step 3).
 
@@ -1157,13 +1184,13 @@ git commit -m "feat(frontend): wire instruct staleness into the Generate view OR
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/components/script-review-diff.test.tsx` (model the seeding on the existing diff tests in this file — they seed the script-review slice + a manuscript sentence). Seed a `validate_instruct` op (id 1, `newInstruct: 'a calm tone'`) and a live sentence whose `instruct` is `'shouting'`:
+Append to `src/components/script-review-diff.test.tsx`. The file's seeding seam is **`makeStore()`** (`script-review-diff.test.tsx:11`), which seeds both sentences and review ops. Seed a `validate_instruct` op (id 1, `newInstruct: 'a calm tone'`) and a live sentence whose `instruct` is `'shouting'`:
 
 ```ts
 it('renders a validate_instruct row with a class label and before→after instruct (fs-58)', () => {
-  // (use the file's existing render+seed helper; seed sentence 1 with instruct: 'shouting'
-  //  and a validate_instruct suggestion newInstruct: 'a calm tone')
-  renderDiffWith(/* …existing helper… */);
+  // via makeStore(): seed sentence 1 with instruct: 'shouting' and a validate_instruct
+  // suggestion { id: 1, op: 'validate_instruct', newInstruct: 'a calm tone', rationale: 'r' }
+  // then render the modal against that store.
   expect(screen.getByText('Instruct')).toBeInTheDocument();   // CLASS_LABELS heading
   expect(screen.getByText(/shouting/)).toBeInTheDocument();   // before
   expect(screen.getByText(/a calm tone/)).toBeInTheDocument();// after
@@ -1179,9 +1206,9 @@ Expected: FAIL — no `Instruct` label (`classLabel` falls back to the raw op st
 
 (a) `CLASS_LABELS` (script-review-diff.tsx ~19-25): add `validate_instruct: 'Instruct',`.
 
-(b) **`OpPreview` (declaration at ~34, NOT line 69 which is its closing `return null`).** Round-1 ground truth: `OpPreview` is typed `({ op, before }: { op: ReviewOp; before?: string })` and the call site (~235) passes `before={liveText}` — a **bare text string**, not a sentence object. So you MUST thread the live instruct/vocalization explicitly:
-- Add props: `OpPreview({ op, before, liveInstruct, liveVocalization }: { op: ReviewOp; before?: string; liveInstruct?: string; liveVocalization?: boolean })`.
-- At the call site (~235), source them from the same `sentences.find(...)` that already produces `liveText`: pass `liveInstruct={liveSentence?.instruct} liveVocalization={liveSentence?.vocalization}` (lift the `find` into a `const liveSentence` if it's currently inlined for `before`).
+(b) **`OpPreview` (declaration at ~34, NOT line 69 which is its closing `return null`).** Round-2 ground truth: `OpPreview` is typed `({ op, before }: { op: ReviewOpWithChapter; before?: string })` and the call site (~235) passes `before={liveText}` — a **bare text string**, not a sentence object. A liftable `sentences.find(...)` already produces `liveText` at ~214-216. So thread the live instruct/vocalization explicitly:
+- Add props: `OpPreview({ op, before, liveInstruct, liveVocalization }: { op: ReviewOpWithChapter; before?: string; liveInstruct?: string; liveVocalization?: boolean })`.
+- At the call site (~235), source them from that same find: lift it into `const liveSentence = sentences.find(...)`, keep `before={liveSentence?.text}`, and add `liveInstruct={liveSentence?.instruct} liveVocalization={liveSentence?.vocalization}`.
 - Add the `validate_instruct` branch to `OpPreview`:
   - instruct edit (`op.newInstruct !== undefined`): `before = liveInstruct ?? '(none)'`, `after = op.newInstruct.trim() === '' ? '(stripped)' : op.newInstruct`.
   - vocalization edit (`op.newVocalizationText !== undefined`): `before = before /* the live text */`, `after = op.newVocalizationText`.
@@ -1203,8 +1230,9 @@ git commit -m "feat(frontend): validate_instruct diff row (CLASS_LABELS + OpPrev
 ## Task 12: Mock op + e2e + slice coverage
 
 **Files:**
-- Modify: `src/lib/api.ts` (mock `mockReviewScript` — add a canned `validate_instruct` op), `src/mocks/canned-data.ts` (seed an `instruct` on the targeted sentence), `src/store/script-review-slice.test.ts`
-- Create: `e2e/script-review-instruct.spec.ts` (copy `e2e/script-review.spec.ts`). No `coverage.spec.ts` case — validate_instruct adds no new view.
+- Modify: `src/lib/api.ts` (mock `mockReviewScript` — add a canned `validate_instruct` op), `src/store/script-review-slice.test.ts`
+- Seed the fixture instruct via **`window.__store__` injection in the e2e spec** (preferred — sidesteps fixture edits) OR `src/data/sentences.ts` (the actual home of the `id:1, chapterId:3` sentence — NOT `src/mocks/canned-data.ts`, which only re-exports it)
+- Create: `e2e/script-review-instruct.spec.ts` (copy `e2e/script-review.spec.ts`). No `coverage.spec.ts` case — validate_instruct adds no new view (a deliberate deviation from spec §9: coverage.spec is the per-viewport *new-view* net per CLAUDE.md).
 
 **Interfaces:**
 - Consumes: the whole apply path (Tasks 6-11) + the mock.
@@ -1228,9 +1256,9 @@ Expected: PASS without slice changes (op-agnostic) — if it fails, the slice ke
 
 - [ ] **Step 3: Seed the fixture instruct + add the mock op + write the e2e**
 
-**Round-1 CRITICAL:** the mock fixture (`src/mocks/canned-data.ts`, source of `initialSentences`) has **zero `instruct` fields**. `mockReviewScript` (`api.ts:~2985`) targets sentence id 1 / chapter 3. A `validate_instruct` **repair** against a sentence with no instruct is **dropped by T7's guard** → no diff row → the e2e silently no-ops. So:
+**CRITICAL (round-2 corrected the file):** the fixture sentences have **zero `instruct` fields**, and `mockReviewScript` (`api.ts:~2985`) emits its op in bucket `chapterId:1` but it resolves by **sentence id 1, which lives in chapter 3** (`initialSentences[0]` = `{id:1, chapterId:3}`, defined in **`src/data/sentences.ts`**, only *re-exported* by `canned-data.ts`). A `validate_instruct` **repair** against an instruct-less sentence is **dropped by T7's guard** → no diff row → the e2e silently no-ops. So:
 
-(a) In `src/mocks/canned-data.ts`, add an `instruct` (e.g. `'shouting'`) to the sentence `mockReviewScript` targets (chapter 3, id 1) — OR inject it in the spec via `window.__store__` (as the existing spec injects `audioRenderedAt`). Without this the row never renders.
+(a) **Preferred:** inject the instruct in the e2e spec via `window.__store__` (dispatch `manuscript/setSentenceInstruct {chapterId:3, sentenceId:1, instruct:'shouting'}` after load — mirrors how `script-review.spec.ts` injects `audioRenderedAt`). This sidesteps fixture edits entirely. **Alternative:** add `instruct: 'shouting'` to the `id:1` entry in **`src/data/sentences.ts`** (NOT `canned-data.ts` — it has no sentence to edit). Without one of these the row never renders.
 
 (b) In `src/lib/api.ts` `mockReviewScript`, add a `validate_instruct` op (`{ id: 1, op: 'validate_instruct', newInstruct: 'a calm tone', rationale: 'contradicts the line' }`) to the canned op array.
 
@@ -1271,6 +1299,11 @@ git commit -m "test(frontend): validate_instruct mock op + fixture instruct + e2
 
 Run: `npm run verify`
 Expected: typecheck + all tests + e2e + build green.
+
+**Manual / non-automated acceptance (round-2 — call these out in the PR, they have no deterministic test):**
+- **Multilingual behaviour** (the spec §9 "multilingual fixture") is an **LLM decision** — the apply layer never validates English-ness (Global Constraints). Spot-check on-box: an es/ru line + a contradicting English instruct → repair; a non-English instruct → repaired to English; a sound instruct → abstain. Mark non-automated.
+- **PR note (pre-existing data-shape):** `applyDetectedInstruct` writes `ann.instruct` **untrimmed** (`manuscript-slice.ts:377`); if a server-emitted backfill instruct ever carried surrounding whitespace, its (untrimmed) stamp could desync from T9's trimmed client hash. Outside the script-review path; no code owed for v1 — note it.
+- **Overflow caveat (§5.2):** confirm a heavily-annotated chapter doesn't tip over `DEFAULT_STAGE2_CHUNK_CHAR_BUDGET` (9000) → misleading `chapter-failed`.
 
 - [ ] **Step 2: Flip the spec status + ship notes**
 
