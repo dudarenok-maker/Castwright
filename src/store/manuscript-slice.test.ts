@@ -1016,3 +1016,38 @@ describe('fs-57 — applyDetectedInstruct (Stage-3 vocalization annotations)', (
     expect(afterDetect.sentences[0].instruct).toBe('breathless'); // manual preserved
   });
 });
+
+describe('fs-56 — split/merge instruct guard (#1100 base)', () => {
+  it('fs-56 — a hand-set instruct does not bleed onto split fragments (#1100 base)', () => {
+    const tagged = manuscriptSlice.reducer(
+      baseState(sentences([{ id: 1, chapterId: 1, text: 'She paused. She ran.', characterId: 'narrator' }])),
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless whisper' }),
+    );
+    // NOTE: payload is `offsets: number[]` (plural array), NOT `offset`.
+    const split = manuscriptSlice.reducer(
+      tagged,
+      manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 1, offsets: [11], characterIds: ['narrator', 'narrator'] }),
+    );
+    const fragments = split.sentences.filter((s) => s.chapterId === 1);
+    expect(fragments.length).toBe(2); // if not 2, adjust offsets to land a clean 2-piece split
+    expect(fragments[0].instruct).toBe('breathless whisper'); // head keeps it
+    expect(fragments[1].instruct).toBeUndefined();            // tail must NOT inherit it
+  });
+
+  it('fs-56 — a merge does not carry a stale instruct onto the survivor (#1100 base)', () => {
+    const tagged = manuscriptSlice.reducer(
+      baseState(sentences([
+        { id: 1, chapterId: 1, text: 'She paused.', characterId: 'narrator' },
+        { id: 2, chapterId: 1, text: 'She ran.', characterId: 'narrator' },
+      ])),
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless whisper' }),
+    );
+    const merged = manuscriptSlice.reducer(
+      tagged,
+      manuscriptActions.mergeSentences({ chapterId: 1, sentenceIds: [1, 2] }),
+    );
+    const survivor = merged.sentences.find((s) => s.chapterId === 1);
+    expect(survivor?.text).toContain('She ran.'); // merged text
+    expect(survivor?.instruct).toBeUndefined();   // #1100 drops the survivor's stale instruct
+  });
+});
