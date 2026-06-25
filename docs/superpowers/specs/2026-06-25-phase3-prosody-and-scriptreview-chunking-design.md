@@ -1,6 +1,18 @@
 # Phase 3 prosody annotation + analyzer sentence-chunking (script review large chapters)
 
-**Date:** 2026-06-25 · **Status:** design (approved, pre-plan; adversarial rounds 1+2 folded)
+**Date:** 2026-06-25 · **Status:** 2A + 2B SHIPPED (PR #1126, #1128); Phase 3 DEFERRED (gate superseded — see below)
+
+> **Status update (2026-06-25): Phase 3 is DEFERRED.** A concurrent change
+> (`feat/server-1.7b-implies-prosody`) collapses the synth prosody gate to
+> `is17b` alone and **drops `liveInstruct`** ("1.7B implies prosody"). That
+> removes the flag this Phase 3 design gates on (analysis-form toggle *sets*
+> `liveInstruct`; the post-analysis trigger *reads* it). Phase 3's **intent
+> survives** — the per-line prosody annotations still must be generated before a
+> 1.7B render — but its **trigger/gate must be redesigned on the new 1.7B signal**
+> (per-cast `is17b` / the book-level quality override) once that work + the
+> book-level 1.7B override spec land on `main`. Deliverables **2A** (chapter-failed
+> surfacing) and **2B** (script-review chunker) are unaffected and already shipped.
+> The chunker (2B) is the reusable asset Phase 3 will still consume.
 
 Origin: a `/superpowers:systematic-debugging` session over two reported symptoms
 ("Phase 3 doesn't show in the analysing view" and "Review Script is always

@@ -294,6 +294,16 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 
 ## PR3 — Phase 3 prosody annotation (branch `feat/analysis-phase3-prosody`)
 
+> **DEFERRED (2026-06-25).** PR1 (#1126) and PR2 (#1128) shipped. PR3 is paused:
+> the concurrent `feat/server-1.7b-implies-prosody` change drops `liveInstruct`
+> (the gate every task below keys on) in favor of "1.7B implies prosody". Do NOT
+> execute Tasks 7–14 as written. When that change + the book-level 1.7B override
+> land on `main`, **redesign the gate**: replace the `liveInstruct` toggle/trigger
+> (Tasks 11–12) with a trigger keyed on the new 1.7B signal (per-cast `is17b` /
+> book-quality override), and re-confirm the watermark (Task 7) + chunked
+> annotation passes (Tasks 8–10, 13) still apply. The chunker (PR2, merged) is the
+> reusable asset this will consume. Tracked in the deferred Phase-3 issue.
+
 **PREREQUISITE — PR2 MUST be merged first.** Task 8 imports `server/src/analyzer/chapter-chunker.ts`, which only exists once PR2 lands. **Cut `feat/analysis-phase3-prosody` off the updated `origin/main` AFTER PR2 has merged** (do not branch off PR1 or off a pre-PR2 main, or Task 8's import will not resolve).
 
 **COORDINATION GATE (do first):** rebase on latest `origin/main`; check whether the concurrent book-1.7B work has landed a quality flag. Reuse `liveInstruct`; do NOT add a competing flag. If their `bookQualityOverride` exists, the toggle here still SETS `liveInstruct` (annotation generation is gated on `liveInstruct`, independent of their synth-time override).
