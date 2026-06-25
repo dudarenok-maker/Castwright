@@ -230,6 +230,31 @@ export const KNOBS: ConfigKnob[] = [
     default: 0.4, // ← DEFAULT_ASR_THRESHOLDS.maxWer in tts/segment-asr-qa.ts
     apply: 'live', risk: 'low',
   },
+  // Per-language ASR max WER (#1084 scaffold). The ASR gate's English-tuned 0.4
+  // cap went live on non-English books at 3a56bf74 without per-language
+  // validation; these override knobs default to the global maxWer so behaviour
+  // is unchanged until the owed on-box calibration tunes each language.
+  // resolveAsrThresholds(_, language) consults qa.asr.maxWer.<lang> when set.
+  {
+    key: 'qa.asr.maxWer.es',
+    env: 'SEG_ASR_MAX_WER_ES',
+    group: 'qa-gates',
+    label: 'ASR max WER (Spanish)',
+    help: 'Spanish-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
+    type: 'number', min: 0, max: 1, step: 0.05,
+    default: 0.4,
+    apply: 'live', risk: 'low',
+  },
+  {
+    key: 'qa.asr.maxWer.ru',
+    env: 'SEG_ASR_MAX_WER_RU',
+    group: 'qa-gates',
+    label: 'ASR max WER (Russian)',
+    help: 'Russian-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
+    type: 'number', min: 0, max: 1, step: 0.05,
+    default: 0.4,
+    apply: 'live', risk: 'low',
+  },
   {
     key: 'qa.speaker.enabled',
     env: 'SEG_SPK_ENABLED',

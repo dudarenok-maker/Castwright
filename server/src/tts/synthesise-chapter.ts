@@ -18,10 +18,12 @@ import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from 
 import { canonicalModelKeyForEngine } from './model-keys.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
+import { normaliseBookLanguage } from './language.js';
 import { pcmDurationSec } from './pcm.js';
 import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
 import {
+  looksLikeCalibrationBleed,
   verifySegmentTranscript,
   leadingVocalizationTokens,
   type AsrClassification,
@@ -321,6 +323,11 @@ export interface ChapterSegment {
       "fluent but wrong words" surface. Undefined when ASR passed, was
       inconclusive, or did not run. */
   asrSuspect?: boolean;
+  /** True when this segment's audio bled the voice-design calibration clip
+      (#1083) and was QUARANTINED — its take was dropped (replaced with brief
+      silence) rather than shipped, after the ASR re-record budget failed to
+      recover it. A hard `suspect` flag rides alongside. Undefined otherwise. */
+  quarantined?: boolean;
 }
 
 /** Silence padding bookending the spoken chapter-title narration. Each chapter
@@ -331,6 +338,11 @@ export interface ChapterSegment {
     in `docs/features/archive/28-chapter-audio-format.md`; adjust both at once. */
 const CHAPTER_LEAD_SILENCE_SEC = 1.5;
 const CHAPTER_POST_TITLE_SILENCE_SEC = 1.5;
+
+/** Brief silence that replaces a quarantined calibration-bleed take (#1083) —
+    enough to preserve a perceptible sentence slot in the timeline without
+    subjecting the listener to the (typically runaway-long) bled clip. */
+const QUARANTINE_SILENCE_SEC = 0.3;
 
 /** Build a zero-filled mono 16-bit LE PCM buffer of the requested duration.
     Matches the per-chapter PCM contract — same byte layout as what the TTS
@@ -774,6 +786,17 @@ export async function synthesiseChapter(
     liveInstruct = false,
   } = opts;
 
+  /* fs-53: resolve the book language to a concrete BCP-47 primary subtag ONCE,
+     then thread it into every audio-producing normaliseForTts call (title +
+     group synth) AND every site compared against that audio (the batch-length
+     key + the ASR-QA expected text) so spoken-form expansion stays aligned.
+     `normaliseBookLanguage` defaults undefined/empty to 'en', so an English
+     book (which often carries no explicit bookLanguage) still gets normalised —
+     do NOT gate this on `bookLanguage` being truthy. `expandForSpeech`
+     self-gates on supported+registered languages, so a dormant/unknown code is
+     a pass-through. */
+  const langCode = normaliseBookLanguage(bookLanguage);
+
   /* Per-character engine resolver (plan 108). Returns the engine + its
      provider + modelKey for a given character. When the caller supplied
      `resolveForEngine`, each character routes to its own engine's provider;
@@ -924,7 +947,7 @@ export async function synthesiseChapter(
       withTtsRetry(
         () =>
           titleRoute.provider.synthesize({
-            text: normaliseForTts(titleText),
+            text: normaliseForTts(titleText, langCode),
             voiceName: narratorVoice,
             modelKey: titleRoute.modelKey,
             signal,
@@ -1102,7 +1125,7 @@ export async function synthesiseChapter(
         withTtsRetry(
           () =>
             route.provider.synthesize({
-              text: normaliseForTts(group.text),
+              text: normaliseForTts(group.text, langCode),
               voiceName,
               modelKey: route.modelKey,
               signal: sig,
@@ -1156,7 +1179,7 @@ export async function synthesiseChapter(
     const items = batchGroups.map((g) => {
       const { voiceName } = resolveGroup(g);
       return {
-        text: normaliseForTts(g.text),
+        text: normaliseForTts(g.text, langCode),
         voiceName,
         /* fs-57 — attach the resolved instruct phrase when the gate is open.
            resolveInstructForGroup returns {} when liveInstruct=false or is17b=false,
@@ -1313,7 +1336,7 @@ export async function synthesiseChapter(
        extra chars, so they're counted uniformly but add nothing. */
     const allBatchable: SentenceGroup[] = Array.from(batchableByModel.values()).flat();
     const lenOf = new Map(allBatchable.map((g) => {
-      const textLen = normaliseForTts(g.text).length;
+      const textLen = normaliseForTts(g.text, langCode).length;
       if (!liveInstruct) return [g, textLen] as const;
       const { route } = resolveGroup(g);
       const is17b = route.modelKey === 'qwen3-tts-1.7b';
@@ -1498,8 +1521,14 @@ export async function synthesiseChapter(
       c.verdict === 'ok' ? 0 : c.verdict === 'inconclusive' ? 1 : 2;
     const asrBetter = (a: AsrClassification, b: AsrClassification): boolean =>
       rank(a) !== rank(b) ? rank(a) < rank(b) : a.wer < b.wer;
+    /* fs-53: the QA expected text MUST be the same fs-53-normalised string the
+       synth path spoke — otherwise an expanded number ("$1,200" → "one thousand
+       two hundred dollars") would word-error-rate against the raw "$1,200" and
+       false-flag a perfectly faithful render as `drift`. Normalise with the
+       resolved `langCode` so the comparison stays aligned with the audio. fs-57
+       takes the whole `group` so the vocalization carve-out below can read it. */
     const verify = (pcm: Buffer, rate: number, group: SentenceGroup): Promise<AsrClassification> =>
-      verifySegmentTranscript(pcm, rate, group.text, {
+      verifySegmentTranscript(pcm, rate, normaliseForTts(group.text, langCode), {
         language: asr.language,
         nameAllowlist: asr.nameAllowlist,
         thresholds: asr.thresholds,
@@ -1605,12 +1634,27 @@ export async function synthesiseChapter(
     if (r.sampleRate !== sampleRate) {
       pcmForGroup = resamplePcm16(r.pcm, r.sampleRate, sampleRate);
     }
+    const qa = segmentQaByIndex.get(group.index);
+    const asrClass = segmentAsrByIndex.get(group.index);
+    /* Calibration-bleed quarantine (#1083): a runaway clone that echoed its
+       voice-design ref_text (the pangram) into audio must never ship, even as
+       the least-bad take. The ASR re-record budget already tried to recover it
+       above; if the final transcript still bleeds, drop the take — replace it
+       with brief silence — and hard-flag it. Belt-and-suspenders over the
+       flag-only ASR gate. */
+    const quarantined =
+      asrClass != null && looksLikeCalibrationBleed(asrClass.transcript, group.text);
+    if (quarantined) {
+      pcmForGroup = buildSilencePcm16(sampleRate, QUARANTINE_SILENCE_SEC);
+      console.warn(
+        `[synthesiseChapter] quarantined calibration-bleed segment (group ${group.index}): ` +
+          JSON.stringify(asrClass.transcript.slice(0, 80)),
+      );
+    }
     const startSec = pcmDurationSec(runningBytes, sampleRate);
     chunks.push(pcmForGroup);
     runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
-    const qa = segmentQaByIndex.get(group.index);
-    const asrClass = segmentAsrByIndex.get(group.index);
     segments.push({
       groupIndex: group.index,
       characterId: group.characterId,
@@ -1620,9 +1664,10 @@ export async function synthesiseChapter(
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
       qa,
-      suspect: qa?.status === 'suspect' ? true : undefined,
+      suspect: quarantined || qa?.status === 'suspect' ? true : undefined,
       asr: asrClass,
       asrSuspect: asrClass?.verdict === 'drift' ? true : undefined,
+      quarantined: quarantined ? true : undefined,
     });
   }
   void completedCount;

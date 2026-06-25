@@ -453,11 +453,16 @@ export function CastView({
       ttsVoice: stubTtsVoice,
     };
     /* Inject the designed Qwen voiceId so the server resolves it; preserve
-       any other-engine override slots already on the matched voice. */
+       any other-engine override slots already on the matched voice.
+       srv-43: also inject voiceUuid (parity with profile-drawer.tsx) so the
+       server's qwenStorageKey resolves the uuid-keyed cache entry the design
+       route wrote, instead of the legacy name-derived key — otherwise the
+       voice-sample cache hash differs and every Play misses and re-synthesises. */
     const requestSubject: Voice =
       effectiveEngine === 'qwen' && designedQwenVoiceId
         ? {
             ...subject,
+            voiceUuid: voice?.voiceUuid ?? c.voiceUuid,
             overrideTtsVoices: {
               ...(subject.overrideTtsVoices ?? {}),
               qwen: { name: designedQwenVoiceId },

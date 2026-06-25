@@ -56,6 +56,7 @@ import type {
   SeriesMemoryDetail,
 } from './types';
 import type { components as ApiComponents } from './api-types';
+import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -4703,7 +4704,7 @@ export interface CastDesignCallbacks {
       srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
   onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
-  onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string }) => void;
+  onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
   onCharacterSkipped?: (e: { characterId: string }) => void;
   /** A character's design failed; the run continues past it. */
@@ -4718,7 +4719,7 @@ export interface CastDesignCallbacks {
   /** Catastrophic abort (NOT a per-character failure). */
   onError?: (e: { code: string; message: string }) => void;
   /** Single-design sub-phase tick (honest progress). */
-  onPhase?: (e: { characterId: string; phase: 'designing' | 'rendering' }) => void;
+  onPhase?: (e: { characterId: string; phase: DesignPhase }) => void;
   /** Single re-design finished — preview staged, awaiting A/B compare. */
   onPreviewReady?: (e: {
     characterId: string;
@@ -4736,7 +4737,7 @@ export interface CastDesignCallbacks {
     characterId: string;
     name: string;
     mode: 'first' | 'redesign';
-    phase: 'designing' | 'rendering';
+    phase: DesignPhase;
   }) => void;
 }
 
@@ -4754,13 +4755,15 @@ interface CastDesignStreamEvent {
   failures?: Array<{ characterId: string; name: string; error: string }>;
   code?: string;
   message?: string;
-  phase?: 'designing' | 'rendering';
+  phase?: DesignPhase;
   previewVoiceId?: string;
   previewUrl?: string;
   persona?: string;
   voiceUuid?: string;
   mode?: 'first' | 'redesign';
   url?: string;
+  viaFallback?: boolean;
+  fallbackReason?: 'not-installed' | 'corrupt';
 }
 
 /** Status of a possibly-live design job (the layout cold-boot probe reads this
@@ -4798,7 +4801,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId ?? '',
             name: e.name ?? e.characterId ?? '',
             mode: e.mode,
-            phase: e.phase === 'rendering' ? 'rendering' : 'designing',
+            phase: (DESIGN_PHASE_ORDER as string[]).includes(e.phase as string) ? e.phase! : 'designing',
           });
         } else {
           cb.onResumeFrom?.({
@@ -4811,9 +4814,9 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
       case 'phase':
         if (
           typeof e.characterId === 'string' &&
-          (e.phase === 'designing' || e.phase === 'rendering')
+          (DESIGN_PHASE_ORDER as string[]).includes(e.phase as string)
         )
-          cb.onPhase?.({ characterId: e.characterId, phase: e.phase });
+          cb.onPhase?.({ characterId: e.characterId, phase: e.phase! });
         break;
       case 'designed':
         if (typeof e.characterId === 'string' && typeof e.voiceId === 'string')
@@ -4864,6 +4867,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId,
             emotion: e.emotion as Emotion,
             voiceId: e.voiceId,
+            ...(e.viaFallback ? { viaFallback: true, fallbackReason: e.fallbackReason } : {}),
           });
         break;
       case 'character_skipped':
@@ -4999,7 +5003,7 @@ export interface SingleDesignStatus {
   characterId?: string;
   name?: string;
   mode?: 'first' | 'redesign';
-  phase?: 'designing' | 'rendering';
+  phase?: DesignPhase;
 }
 
 async function realGetSingleDesignStatus(bookId: string): Promise<SingleDesignStatus> {
@@ -5013,10 +5017,10 @@ async function mockStartSingleDesign(
   args: SingleDesignArgs,
   cb: CastDesignCallbacks,
 ): Promise<void> {
-  cb.onPhase?.({ characterId: args.characterId, phase: 'designing' });
-  await wait(120);
-  cb.onPhase?.({ characterId: args.characterId, phase: 'rendering' });
-  await wait(80);
+  for (const phase of ['loading-model', 'designing', 'distilling', 'rendering'] as const) {
+    cb.onPhase?.({ characterId: args.characterId, phase });
+    await wait(60);
+  }
   if (args.preview) {
     cb.onPreviewReady?.({
       characterId: args.characterId,

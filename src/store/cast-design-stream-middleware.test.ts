@@ -440,4 +440,51 @@ describe('castDesignMiddleware', () => {
       store.getState().cast.characters.find((c) => c.id === 'a')?.overrideTtsVoices?.qwen?.variants?.angry,
     ).toEqual({ name: 'qwen-a__angry' });
   });
+
+  it('onVariantDesigned with viaFallback dispatches variantFellBack', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c', name: 'Carol' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b',
+        characterIds: [],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'variants',
+        variantTasks: [{ characterId: 'c', emotions: ['angry'] }],
+      }),
+    );
+
+    const { cb } = startCalls[0];
+    cb.onVariantDesigned?.({ characterId: 'c', emotion: 'angry', voiceId: 'qwen-c__angry', viaFallback: true });
+
+    expect(recorded.map((a) => a.type)).toContain('castDesign/variantFellBack');
+    expect(store.getState().castDesign.active?.fallbacks).toEqual([{ characterId: 'c', emotion: 'angry' }]);
+  });
+
+  it('includes a fallback count in the completion toast', () => {
+    const store = makeStore();
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c', name: 'Carol' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b',
+        characterIds: [],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'variants',
+        variantTasks: [{ characterId: 'c', emotions: ['angry'] }],
+      }),
+    );
+
+    const { cb } = startCalls[0];
+    // Record one fallback via the viaFallback path, then call onIdle.
+    cb.onVariantDesigned?.({ characterId: 'c', emotion: 'angry', voiceId: 'qwen-c__angry', viaFallback: true });
+    cb.onIdle?.({ done: 1, total: 1, skipped: 0, failures: [] });
+
+    const toasts = (store.getState() as { notifications: { toasts: { message: string }[] } }).notifications.toasts;
+    expect(toasts.at(-1)?.message).toMatch(/1 via fallback/);
+  });
 });

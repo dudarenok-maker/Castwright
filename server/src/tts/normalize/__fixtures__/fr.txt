@@ -1,0 +1,10 @@
+# fs-53 French fixtures — DORMANT (supported:false), driven via applyPasses(input, fr)
+# (€ → euros; % → "pour cent"; fr decimal word = virgule; space = thousands sep)
+J'ai payé 1 200,50 €. ⇒ J'ai payé mille deux cents euros et cinquante centimes.
+Il a gagné 50% en 1999. ⇒ Il a gagné cinquante pour cent en mille neuf cent quatre-vingt-dix-neuf.
+# separator guard: "1,5" decimal (comma), space would be the thousands sep
+Version 1,5 prête. ⇒ Version un virgule cinq prête.
+# decade keeps the century (no drop), unlike es/de
+Les 1990s étaient bruyantes. ⇒ Les les années quatre-vingt-dix étaient bruyantes.
+# 71/81/91: et only in 71, hyphen-only in 81/91
+Il y avait 71 et 81 et 91 personnes. ⇒ Il y avait soixante et onze et quatre-vingt-un et quatre-vingt-onze personnes.

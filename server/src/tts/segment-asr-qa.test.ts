@@ -10,10 +10,12 @@
      - short sentences are not scored.
    classifyTranscript is pure, so these inject the transcript directly. */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import {
   classifyTranscript,
+  looksLikeCalibrationBleed,
   normalizeForWer,
+  resolveAsrThresholds,
   verifySegmentTranscript,
   leadingVocalizationTokens,
   type AsrSignals,
@@ -33,6 +35,18 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('“Hello,” she said—softly.')).toEqual([
       'hello', 'she', 'said', 'softly',
     ]);
+  });
+
+  it('English-spells integers for English / default language', () => {
+    expect(normalizeForWer('I have 3 keys.')).toEqual(['i', 'have', 'three', 'keys']);
+    expect(normalizeForWer('I have 3 keys.', 'en')).toEqual(['i', 'have', 'three', 'keys']);
+  });
+
+  it('does NOT English-spell integers for a non-English language (keeps the digit)', () => {
+    // "3" → "three" only makes sense against English audio; on a Spanish/Russian
+    // book Whisper hears "tres"/"три", so injecting "three" is a false error (#1084).
+    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', '3', 'llaves']);
+    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', '3', 'ключа']);
   });
 
   it('keeps non-Latin (Cyrillic) words instead of erasing them', () => {
@@ -131,6 +145,135 @@ describe('classifyTranscript', () => {
     const c = classifyTranscript(expected, heard, CLEAN);
     expect(c.verdict).toBe('drift');
     expect(c.wer).toBeGreaterThan(0.4);
+  });
+
+  it('threads language so a non-English digit is not English-spelled into extra errors', () => {
+    // "21" → "twenty one" inflates the expected tokens and mis-aligns against the
+    // Spanish "veintiún" Whisper actually heard; with language=es the digit stays
+    // one token → a single clean substitution (#1084).
+    const esExpected = 'Compró 21 manzanas rojas en el mercado.';
+    const esHeard = 'Compró veintiún manzanas rojas en el mercado.';
+    const withEs = classifyTranscript(esExpected, esHeard, CLEAN, { language: 'es' });
+    const withoutLang = classifyTranscript(esExpected, esHeard, CLEAN);
+    expect(withEs.sub).toBe(1);
+    expect(withEs.del).toBe(0);
+    expect(withEs.verdict).toBe('ok');
+    expect(withoutLang.wer).toBeGreaterThan(withEs.wer);
+  });
+});
+
+describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_MAX_WER_ES;
+  });
+
+  it('defaults every language to the global maxWer', () => {
+    expect(resolveAsrThresholds(undefined, 'es').maxWer).toBe(0.4);
+    expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBe(0.4);
+    expect(resolveAsrThresholds(undefined).maxWer).toBe(0.4);
+  });
+
+  it('honours a per-language override, leaving other languages on the global', () => {
+    process.env.SEG_ASR_MAX_WER_ES = '0.55';
+    expect(resolveAsrThresholds(undefined, 'es').maxWer).toBeCloseTo(0.55);
+    expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBe(0.4);
+    expect(resolveAsrThresholds(undefined, 'en').maxWer).toBe(0.4);
+  });
+});
+
+describe('looksLikeCalibrationBleed', () => {
+  // A bad/runaway Qwen voice clone can echo its ICL ref_text (the voice-design
+  // calibration pangram) into chapter audio (#1074). The detector catches that
+  // bleed in an ASR transcript so the QA path can quarantine it — but only when
+  // the manuscript ITSELF doesn't contain the pangram (a legit quote stays).
+  const NARRATION = 'Sophie hurried down the long museum hallway toward the exit.';
+  const EN_PANGRAM =
+    'The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.';
+
+  it('English calibration pangram in transcript over normal narration → bleed', () => {
+    expect(looksLikeCalibrationBleed(EN_PANGRAM, NARRATION)).toBe(true);
+  });
+
+  it('does NOT fire when the manuscript itself contains the pangram (legit quote)', () => {
+    expect(looksLikeCalibrationBleed(EN_PANGRAM, `He typed it out: ${EN_PANGRAM}`)).toBe(false);
+  });
+
+  it('ordinary transcript that matches the line → not a bleed', () => {
+    expect(looksLikeCalibrationBleed(NARRATION, NARRATION)).toBe(false);
+  });
+
+  it('detects the per-language calibration siblings (es/fr/de/ru)', () => {
+    expect(
+      looksLikeCalibrationBleed('El veloz murciélago hindú comía feliz cardillo y kiwi.', NARRATION),
+    ).toBe(true);
+    expect(
+      looksLikeCalibrationBleed('Portez ce vieux whisky au juge blond qui fume.', NARRATION),
+    ).toBe(true);
+    expect(
+      looksLikeCalibrationBleed('Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich.', NARRATION),
+    ).toBe(true);
+    expect(
+      looksLikeCalibrationBleed('Съешь же ещё этих мягких французских булок да выпей чаю.', NARRATION),
+    ).toBe(true);
+  });
+});
+
+describe('compound-word tolerance', () => {
+  // Whisper splits closed compounds the manuscript writes solid
+  // ("Curvebuster" → "Curve Buster") and joins ones it writes open
+  // ("good bye" → "goodbye"). On a short sentence a single split is 1 sub + 1
+  // ins on a tiny denominator → WER 0.5 > 0.4 → a false 'drift' on audio that
+  // says exactly the right words. The bridge reconciles solid↔split forms.
+
+  it('Whisper splitting a solid compound is not drift (Curvebuster → Curve Buster)', () => {
+    const c = classifyTranscript('They called her Curvebuster.', 'They called her Curve Buster?', CLEAN);
+    expect(c.verdict).toBe('ok');
+    expect(c.wer).toBe(0);
+    expect(c.sub).toBe(0);
+    expect(c.ins).toBe(0);
+  });
+
+  it('Whisper joining an open compound is not drift (good bye → goodbye)', () => {
+    const c = classifyTranscript('Tell him good bye now please.', 'Tell him goodbye now please.', CLEAN);
+    expect(c.verdict).toBe('ok');
+    expect(c.wer).toBe(0);
+    expect(c.del).toBe(0);
+    expect(c.sub).toBe(0);
+  });
+
+  it('does NOT mask a genuine wrong-word swap as a compound', () => {
+    // None of these substitutions concatenate to the expected token, so the
+    // bridge must leave them as real drift.
+    const c = classifyTranscript(
+      'She opened the wooden door slowly.',
+      'She closed the metal gate quickly.',
+      CLEAN,
+    );
+    expect(c.verdict).toBe('drift');
+    expect(c.wer).toBeGreaterThan(0.4);
+  });
+});
+
+describe('hallucination deny-list', () => {
+  // Whisper emits training-data boilerplate (pirate-EPUB watermarks, subtitle
+  // credits, "thanks for watching") *confidently* on short/ambiguous audio, so
+  // it sails past the logprob / no-speech guards and lands as 'drift'. These are
+  // never real book content → inconclusive, not a re-record.
+  const long = 'Sophie hurried down the long museum hallway toward the bright exit.';
+
+  it('OceansofPDF.com watermark hallucination → inconclusive, not drift', () => {
+    const c = classifyTranscript(long, 'OceansofPDF.com', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('subtitle-credit hallucination → inconclusive', () => {
+    const c = classifyTranscript(long, 'Subtitles by the Amara.org community', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('thanks-for-watching hallucination → inconclusive', () => {
+    const c = classifyTranscript(long, 'Thank you for watching!', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
   });
 });
 

@@ -19,7 +19,7 @@ describe('mock single design', () => {
         onIdle: () => {},
       },
     );
-    expect(phases).toEqual(['designing', 'rendering']);
+    expect(phases).toEqual(['loading-model', 'designing', 'distilling', 'rendering']);
     expect(designed).toMatchObject({ characterId: 'c1', voiceId: 'qwen-c1' });
   });
 

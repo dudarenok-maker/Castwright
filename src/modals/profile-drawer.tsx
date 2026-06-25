@@ -42,6 +42,7 @@ import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { type DesignPhase } from '../lib/design-phase';
 
 /* Default preview line. Pangram + a short follow-on so the user can
    hear consonant + vowel coverage AND a held sentence at typical
@@ -254,7 +255,7 @@ export function ProfileDrawer({
       : null,
   );
   const sliceDesigning = singleDesign?.state === 'running';
-  const slicePhase: 'designing' | 'rendering' = singleDesign?.phase ?? 'designing';
+  const slicePhase: DesignPhase = singleDesign?.phase ?? 'designing';
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);

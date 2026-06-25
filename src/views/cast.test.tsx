@@ -331,6 +331,22 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-marrow');
   });
 
+  it('injects the character voiceUuid into the sample subject (srv-43 parity with the profile drawer) so the player resolves the uuid-keyed cache entry', async () => {
+    /* Without the uuid the server's pickVoiceForEngine falls back to the
+       legacy name-derived storage key, computing a different voice-sample
+       cache hash than the design route wrote → a guaranteed cache miss that
+       re-synthesises on every Play. The profile drawer already injects it
+       (profile-drawer.tsx); the cast-review Play path must do the same. */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    renderChars([{ ...marrowQwen, voiceUuid: 'uuid-marrow-123' }]);
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.voice.voiceUuid).toBe('uuid-marrow-123');
+  });
+
   it('shows an inline error (no API call) for a Qwen-pinned row with no designed voice', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
     renderChars([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
@@ -1324,6 +1340,7 @@ describe('CastView — Design full cast button', () => {
     state: 'running' | 'done' | 'halted';
     lastTickAt: number;
     failures: Array<{ characterId: string; name: string; error: string }>;
+    fallbacks: Array<{ characterId: string; emotion: string }>;
   };
 
   function setup(
@@ -1502,6 +1519,7 @@ describe('CastView — Design full cast button', () => {
         state: 'running',
         lastTickAt: 1,
         failures: [],
+        fallbacks: [],
       },
     });
     expect(screen.getByTestId('design-full-cast')).toHaveTextContent('Cancel design · 1/3');

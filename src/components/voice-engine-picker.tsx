@@ -21,6 +21,7 @@
 
 import { IconSparkle, IconRefresh, IconWaveform, IconSpinner, IconPause } from '../lib/icons';
 import type { TtsEngine, TtsModelKey } from '../lib/types';
+import { type DesignPhase } from '../lib/design-phase';
 import { DesignProgress } from './design-progress';
 
 /* Engine value the selector emits. 'default' maps to "no per-character
@@ -66,7 +67,7 @@ interface Props {
   designBusy: boolean;
   /** Sub-phase of the in-flight background design — drives the
       `DesignProgress` label while `designBusy`. Defaults to 'designing'. */
-  designPhase?: 'designing' | 'rendering';
+  designPhase?: DesignPhase;
   /** True while the designed-voice audition is playing (toggles the
       button to a Stop affordance). */
   designPlaying: boolean;

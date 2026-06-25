@@ -1,0 +1,22 @@
+# fs-53 Russian normalisation fixtures (input ⇒ expected)
+# Year-preposition closed set: the final year component inflects to an ordinal
+# in the case the governing preposition demands; a sibling with no preposition
+# stays nominative.
+Это случилось в 1999 году. ⇒ Это случилось в тысяча девятьсот девяносто девятом году.
+С 1999 года прошло время. ⇒ С тысяча девятьсот девяносто девятого года прошло время.
+К 1999 году всё изменилось. ⇒ К тысяча девятьсот девяносто девятому году всё изменилось.
+# Bare year (no preposition) stays nominative ordinal.
+Настал 1999 год. ⇒ Настал тысяча девятьсот девяносто девятый год.
+# Currency 1 / 2–4 / 5+ agreement.
+Цена 5 ₽. ⇒ Цена пять рублей.
+Цена 3 ₽. ⇒ Цена три рубля.
+Цена 1 ₽. ⇒ Цена один рубль.
+# Date: neuter-ordinal day + genitive month (no year).
+3 января пришёл ответ. ⇒ третье января пришёл ответ.
+# Decimal: comma separator, digit-by-digit fraction after "запятая".
+Число 3,14 точно. ⇒ Число три запятая один четыре точно.
+# 1/2 gender heuristic success: feminine -а noun.
+Осталась 1 книга. ⇒ Осталась одна книга.
+# known-failure: soft-sign feminine noun mis-gendered masculine (тень is fem,
+# ends in -ь → heuristic reads masculine). Documented limitation #4.
+Одна тень. ⇒ Одна тень.

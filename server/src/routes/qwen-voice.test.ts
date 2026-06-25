@@ -864,6 +864,137 @@ describe('qwenVoicePtPath containment', () => {
   });
 });
 
+describe('SidecarDesignError', () => {
+  /* Call designQwenVoiceForCharacter directly so we can assert on the thrown
+     error object — the HTTP route maps it to a 502, losing the shape. */
+  let designQwenVoiceForCharacter: typeof import('./qwen-voice.js').designQwenVoiceForCharacter;
+  let sdeBookDir: string;
+
+  beforeAll(async () => {
+    ({ designQwenVoiceForCharacter } = await import('./qwen-voice.js'));
+  });
+
+  beforeEach(async () => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    sdeBookDir = await mkdtemp(join(tmpdir(), 'sde-'));
+    await mkdir(join(sdeBookDir, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(sdeBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'char1',
+            name: 'Char One',
+            voiceId: 'v_char1',
+            voiceUuid: 'uuid-char1',
+            voiceStyle: 'a warm narrator',
+            evidence: [{ quote: '"Hello there."' }],
+          },
+        ],
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(sdeBookDir, { recursive: true, force: true });
+  });
+
+  function makeVariantParams(opts: { persona?: string } = {}): import('./qwen-voice.js').DesignQwenVoiceParams {
+    return {
+      bookDir: sdeBookDir,
+      character: {
+        id: 'char1',
+        name: 'Char One',
+        voiceId: 'v_char1',
+        voiceUuid: 'uuid-char1',
+        voiceStyle: 'a warm narrator',
+        evidence: [{ quote: '"Hello there."' }],
+        role: 'supporting',
+      },
+      characterId: 'char1',
+      persona: opts.persona !== undefined ? opts.persona : 'a warm narrator',
+      sampleVoiceId: 'v_char1',
+      modelKey: QWEN_KEY,
+      language: 'English',
+      emotion: 'angry',
+    };
+  }
+
+  it('throws SidecarDesignError carrying status/code/reason on a 503 (non-fallback code)', async () => {
+    /* A 503 with a code that is NOT 'base17-unavailable' propagates as-is —
+       no fallback is attempted. This tests the SidecarDesignError shape. */
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 'sidecar-overloaded', reason: 'busy', detail: 'x' }), { status: 503 }),
+    );
+    await expect(
+      designQwenVoiceForCharacter(makeVariantParams()),
+    ).rejects.toMatchObject({ name: 'SidecarDesignError', status: 503, code: 'sidecar-overloaded' });
+  });
+
+  it('falls back to design-voice on 503 not-installed (no retry)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'base17-unavailable', reason: 'not-installed', detail: 'x' }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(Buffer.from([0, 0]), { status: 200, headers: { 'X-Sample-Rate': '24000' } }));
+    const r = await designQwenVoiceForCharacter(makeVariantParams({ persona: 'a warm narrator' }));
+    expect(r.fellBackToDesignVoice).toBe(true);
+    expect(r.fallbackReason).toBe('not-installed');
+    // exactly two fetches: mint (503) + design-voice (200) — NO retry
+    const calls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.filter((u) => u.includes('/qwen/mint-variant'))).toHaveLength(1);
+    const dvCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/qwen/design-voice'))!;
+    const sentBody = JSON.parse(String((dvCall[1] as RequestInit).body));
+    // EMOTION_INSTRUCT is module-private; assert structurally instead of pasting
+    // the (long, real) angry clause. The composed instruct is `${persona} ${clause}`.
+    expect(sentBody.instruct.startsWith('a warm narrator ')).toBe(true);
+    expect(sentBody.instruct.length).toBeGreaterThan('a warm narrator '.length);
+    expect(sentBody.voiceId).toMatch(/__angry$/);
+    expect(sentBody.mintMethod).toBe('design-voice-fallback');
+  });
+
+  it('falls back on 503 corrupt', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'base17-unavailable', reason: 'corrupt', detail: 'x' }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(Buffer.from([0, 0]), { status: 200, headers: { 'X-Sample-Rate': '24000' } }));
+    const r = await designQwenVoiceForCharacter(makeVariantParams({ persona: 'a warm narrator' }));
+    expect(r.fallbackReason).toBe('corrupt');
+  });
+
+  it('does NOT fall back on a generic 500 (OOM)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Internal error.' }), { status: 500 }));
+    await expect(designQwenVoiceForCharacter(makeVariantParams({ persona: 'p' }))).rejects.toThrow();
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes('/qwen/design-voice'))).toBe(false);
+  });
+
+  it('declines the fallback when no persona is recoverable', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'base17-unavailable', reason: 'not-installed', detail: 'x' }), { status: 503 }));
+    // readJson stubbed to return no instruct (see setup)
+    await expect(designQwenVoiceForCharacter(makeVariantParams({ persona: '' }))).rejects.toThrow(/no persona on disk/i);
+  });
+
+  it('empty persona but base .json HAS instruct → fallback uses it', async () => {
+    // Write a sidecar JSON for the base voice with an instruct field
+    const { mkdirSync: mkdirSyncSync, writeFileSync: wfs } = await import('node:fs');
+    const { join: joinPath } = await import('node:path');
+    const qwenDir = joinPath(workspaceRoot, 'voices', 'qwen');
+    mkdirSyncSync(qwenDir, { recursive: true });
+    // baseVoiceName = qwenStorageKey(character, characterId) = qwen-uuid-char1 (voiceUuid wins)
+    // character has voiceUuid: 'uuid-char1', voiceId: 'v_char1' → qwen-uuid-char1
+    wfs(joinPath(qwenDir, 'qwen-uuid-char1.json'), JSON.stringify({ voiceId: 'qwen-uuid-char1', instruct: 'a warm narrator from disk' }));
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'base17-unavailable', reason: 'not-installed', detail: 'x' }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(Buffer.from([0, 0]), { status: 200, headers: { 'X-Sample-Rate': '24000' } }));
+    const r = await designQwenVoiceForCharacter(makeVariantParams({ persona: '' }));
+    expect(r.fellBackToDesignVoice).toBe(true);
+    const dvCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/qwen/design-voice'))!;
+    const sentBody = JSON.parse(String((dvCall[1] as RequestInit).body));
+    expect(sentBody.instruct.startsWith('a warm narrator from disk ')).toBe(true);
+  });
+});
+
 describe('srv-43 — qwenStorageKey routing through design-voice', () => {
   /* These tests verify that the storage key used by designQwenVoiceForCharacter
      follows qwenStorageKey: uuid-backed voices go to qwen-<uuid>.pt; legacy
@@ -1044,5 +1175,44 @@ describe('srv-43 mint + collision regression', () => {
 
     /* Clean up the two extra books from the workspace. */
     rmSync(join(workspaceRoot, 'books', AUTHOR, 'Standalones'), { recursive: true, force: true });
+  });
+});
+
+describe('progress token threading (design-progress AR2)', () => {
+  /* Verifies that progressToken + progressUrl are forwarded into BOTH sidecar
+     request bodies (design-voice and mint-variant) when provided, and are absent
+     when not provided. */
+
+  it('threads progressToken + progressUrl into the design-voice body when both are present', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ ...designBody, progressToken: 'tok', progressUrl: 'http://127.0.0.1:8080/api/internal/design-progress' });
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.progressToken).toBe('tok');
+    expect(sent.progressUrl).toBe('http://127.0.0.1:8080/api/internal/design-progress');
+  });
+
+  it('does NOT include progressToken / progressUrl in the design-voice body when omitted', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent).not.toHaveProperty('progressToken');
+    expect(sent).not.toHaveProperty('progressUrl');
+  });
+
+  it('threads progressToken + progressUrl into the mint-variant body when both are present', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ ...designBody, emotion: 'angry', progressToken: 'tok2', progressUrl: 'http://127.0.0.1:8080/api/internal/design-progress' });
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.progressToken).toBe('tok2');
+    expect(sent.progressUrl).toBe('http://127.0.0.1:8080/api/internal/design-progress');
   });
 });

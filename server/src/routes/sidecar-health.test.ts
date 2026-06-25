@@ -426,6 +426,15 @@ describe('GET /api/sidecar/health', () => {
     });
   });
 
+  it('forwards qwen_base17_weights_present', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, qwen_base17_weights_present: true }), { status: 200 }),
+    );
+    const { probeSidecarHealth } = await import('./sidecar-health.js');
+    const r = await probeSidecarHealth();
+    expect(r.qwenBase17WeightsPresent).toBe(true);
+  });
+
   it('tags every response with proxy="sidecar" so the frontend can distinguish Node-layer failures', async () => {
     /* `proxy` is the hop tag the frontend uses to choose between "restart
        Node" and "restart sidecar" recovery copy. The Node layer always

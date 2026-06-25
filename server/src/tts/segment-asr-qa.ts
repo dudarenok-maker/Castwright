@@ -26,7 +26,8 @@
    transcribe call. Env-override pattern mirrors `segment-qa.ts`. */
 
 import { transcribeSegment, type TranscribeResult } from './transcribe-client.js';
-import { configValue } from '../config/resolver.js';
+import { configValue, resolveKnob } from '../config/resolver.js';
+import { allKnobs } from '../config/registry.js';
 
 export type AsrVerdict = 'ok' | 'drift' | 'inconclusive';
 
@@ -76,9 +77,31 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxNoSpeechProb: 0.6,
 };
 
-export function resolveAsrThresholds(override?: Partial<AsrThresholds>): AsrThresholds {
+/** BCP-47 primary subtag, lower-cased ('es-ES' → 'es', '' for nullish). */
+function baseSubtag(language?: string | null): string {
+  return (language ?? '').toLowerCase().split('-')[0];
+}
+
+/** Per-language ASR `maxWer` override (#1084 scaffold). Returns the configured
+    value ONLY when an operator has explicitly set this language's knob (env or
+    app override); otherwise undefined, so the global `maxWer` (including its own
+    override) applies. The per-language knobs default to the global value, so
+    behaviour is unchanged until the owed on-box calibration tunes them. */
+function perLanguageMaxWer(language?: string | null): number | undefined {
+  const lang = baseSubtag(language);
+  if (!lang) return undefined;
+  const knob = allKnobs().find((k) => k.key === `qa.asr.maxWer.${lang}`);
+  if (!knob) return undefined;
+  const state = resolveKnob(knob);
+  return state.source === 'default' ? undefined : (state.effective as number);
+}
+
+export function resolveAsrThresholds(
+  override?: Partial<AsrThresholds>,
+  language?: string | null,
+): AsrThresholds {
   const base: AsrThresholds = {
-    maxWer: configValue<number>('qa.asr.maxWer'),
+    maxWer: perLanguageMaxWer(language) ?? configValue<number>('qa.asr.maxWer'),
     maxDeletionRun: configValue<number>('qa.asr.maxDeletionRun'),
     minChars: configValue<number>('qa.asr.minChars'),
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
@@ -118,6 +141,36 @@ export function buildCastNameAllowlist(
     for (const a of c.aliases ?? []) if (a) names.add(a);
   }
   return [...names];
+}
+
+/* Voice-design calibration / ref_text signatures. The sidecar speaks a short
+   phonetically-rich pangram when cloning a voice (its ICL reference clip);
+   source of truth is `server/tts-sidecar/main.py` CALIBRATION_TEXT (English) +
+   CALIBRATION_TEXTS (per-language siblings). A runaway / bad clone can echo that
+   reference clip into chapter audio (#1074), where it reads as fluent speech the
+   word-error gate flags but ships anyway. These distinctive lowercased
+   substrings detect the bleed in an ASR transcript. Latin signatures are kept
+   ASCII-only (avoiding accent variance in Whisper's output); the Russian one
+   stays Cyrillic, the form Whisper emits for Russian audio. */
+const CALIBRATION_SIGNATURES: readonly string[] = [
+  'quick brown fox', // English
+  'wondered what tomorrow would bring', // English (2nd clause)
+  'cardillo y kiwi', // Spanish
+  'portez ce vieux whisky', // French
+  'sylter deich', // German
+  'французских булок', // Russian
+];
+
+/** True when an ASR transcript is the voice-design calibration clip bleeding
+    into audio (#1083) — it contains a calibration signature that the manuscript
+    sentence does NOT (so a book legitimately quoting the pangram is not a bleed). */
+export function looksLikeCalibrationBleed(transcript: string, expectedText: string): boolean {
+  const norm = (s: string): string =>
+    (s ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ');
+  const t = norm(transcript);
+  if (!t) return false;
+  const e = norm(expectedText);
+  return CALIBRATION_SIGNATURES.some((sig) => t.includes(sig) && !e.includes(sig));
 }
 
 /* --- Normalization --- */
@@ -162,14 +215,22 @@ function spellInteger(n: number): string | null {
   return null;
 }
 
-/** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii,
-    contraction expansion, integer 0..99 → words, strip residual punctuation. */
-export function normalizeForWer(text: string): string[] {
+/** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii, and
+    — for English (or unspecified language) only — contraction expansion and
+    integer 0..99 → words. The English number-speller ("3" → "three") matches
+    Whisper's English word output; on a non-English book Whisper hears "tres" /
+    "три", so spelling the digit in English injects a false substitution, hence
+    it is gated on `language` (#1084). Full per-language number spelling is owed
+    on-box calibration. */
+export function normalizeForWer(text: string, language?: string | null): string[] {
+  const english = baseSubtag(language) === 'en' || !language;
   let s = (text ?? '').normalize('NFKC').toLowerCase();
   s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
-  // Expand contractions before stripping apostrophes.
-  for (const [from, to] of Object.entries(CONTRACTIONS)) {
-    s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+  // Expand contractions before stripping apostrophes (English-only forms).
+  if (english) {
+    for (const [from, to] of Object.entries(CONTRACTIONS)) {
+      s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+    }
   }
   // Drop possessive 's and any remaining apostrophes inside words.
   s = s.replace(/'s\b/g, '').replace(/'/g, '');
@@ -180,6 +241,7 @@ export function normalizeForWer(text: string): string[] {
   // (2026-06-15; mirrors the stage2-coverage.ts fix). English is unchanged.
   s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
   const tokens = s.split(/\s+/).filter(Boolean);
+  if (!english) return tokens; // skip English integer-spelling for other languages
   const out: string[] = [];
   for (const tok of tokens) {
     if (/^\d+$/.test(tok)) {
@@ -192,6 +254,55 @@ export function normalizeForWer(text: string): string[] {
     out.push(tok);
   }
   return out;
+}
+
+/* Known Whisper hallucinations — boilerplate the model emits from its training
+   data on short / ambiguous audio (pirate-EPUB watermarks, subtitle credits,
+   video sign-offs). It emits these CONFIDENTLY, so they pass the avg_logprob /
+   no_speech_prob guards and would otherwise land as content drift. They are
+   never real book content, so a match → `inconclusive` (never a re-record). */
+const HALLUCINATION_PATTERNS: readonly RegExp[] = [
+  /oceansofpdf/i,
+  /\bsub(title|titles|s)?\s+by\b/i,
+  /\bcaptions?\s+by\b/i,
+  /\btranscri(bed|ption)\s+by\b/i,
+  /\bamara\.org\b/i,
+  /\bthanks?\s+(you\s+)?for\s+watching\b/i,
+  /\b(please\s+)?(like\s+and\s+)?subscribe\b/i,
+];
+
+/** True when the transcript is dominated by known Whisper boilerplate. */
+export function looksLikeHallucination(transcript: string): boolean {
+  const s = (transcript ?? '').trim();
+  return s.length > 0 && HALLUCINATION_PATTERNS.some((re) => re.test(s));
+}
+
+/* Reconcile solid↔split compound forms between the expected and actual token
+   streams. Whisper routinely splits a closed compound the manuscript writes
+   solid ("curvebuster" → "curve buster") or joins an open one the manuscript
+   writes apart ("good bye" → "goodbye"); on a short sentence that single
+   re-tokenisation is 1 sub + 1 ins on a tiny denominator → WER over the cap → a
+   false 'drift' on audio that says exactly the right words. We collapse an
+   adjacent PAIR only when its concatenation appears as a single token in the
+   OTHER stream — a genuinely wrong word won't concatenate to the expected
+   token, so this can never mask real drift. Pairs only (2↔1); 3+ token
+   compounds are rare and out of scope. */
+export function bridgeCompounds(expected: string[], actual: string[]): [string[], string[]] {
+  const collapse = (tokens: string[], other: ReadonlySet<string>): string[] => {
+    const out: string[] = [];
+    for (let i = 0; i < tokens.length; i += 1) {
+      if (i + 1 < tokens.length && other.has(tokens[i] + tokens[i + 1])) {
+        out.push(tokens[i] + tokens[i + 1]);
+        i += 1; // consumed the pair
+      } else {
+        out.push(tokens[i]);
+      }
+    }
+    return out;
+  };
+  const expSet = new Set(expected);
+  const actSet = new Set(actual);
+  return [collapse(expected, actSet), collapse(actual, expSet)];
 }
 
 /* --- Word-level alignment (Levenshtein with backtrace) --- */
@@ -270,6 +381,10 @@ export interface ClassifyOptions {
       you…"`). Folded into the same `allow` set as `nameAllowlist` so the gasp
       token doesn't count as drift while the lexical words ARE still scored. */
   vocalizationAllowlist?: Iterable<string>;
+  /** BCP-47 base subtag of the book. Gates English-only normalization (integer
+      spelling / contractions) and selects the per-language `maxWer` (#1084).
+      Unset → English behaviour, byte-identical to before. */
+  language?: string | null;
 }
 
 /** Pure verdict from a transcript + signals. No I/O — inject the transcript. */
@@ -279,7 +394,7 @@ export function classifyTranscript(
   signals: AsrSignals,
   opts: ClassifyOptions = {},
 ): AsrClassification {
-  const t = resolveAsrThresholds(opts.thresholds);
+  const t = resolveAsrThresholds(opts.thresholds, opts.language);
   const reasons: string[] = [];
   const base = (verdict: AsrVerdict, extra: Partial<AsrClassification> = {}): AsrClassification => ({
     verdict,
@@ -296,6 +411,15 @@ export function classifyTranscript(
   // Too short to score reliably — don't act on it.
   if ((expectedText ?? '').trim().length < t.minChars) {
     reasons.push(`Not scored — sentence under the ${t.minChars}-char ASR floor.`);
+    return base('inconclusive');
+  }
+
+  // Known Whisper boilerplate hallucination → untrustworthy transcript, never a
+  // re-record (it's emitted confidently, so the signal guards below miss it).
+  if (looksLikeHallucination(transcript)) {
+    reasons.push(
+      'Transcript is known Whisper boilerplate/hallucination (not book content); not scoring.',
+    );
     return base('inconclusive');
   }
 
@@ -327,8 +451,10 @@ export function classifyTranscript(
     }
   }
 
-  const expectedTokens = normalizeForWer(expectedText);
-  const actualTokens = normalizeForWer(transcript);
+  const [expectedTokens, actualTokens] = bridgeCompounds(
+    normalizeForWer(expectedText, opts.language),
+    normalizeForWer(transcript, opts.language),
+  );
   if (expectedTokens.length === 0) {
     reasons.push('Not scored — expected text normalised to empty.');
     return base('inconclusive');
@@ -338,7 +464,7 @@ export function classifyTranscript(
   for (const src of [opts.nameAllowlist, opts.vocalizationAllowlist]) {
     if (src) {
       for (const name of src) {
-        for (const tok of normalizeForWer(name)) allow.add(tok);
+        for (const tok of normalizeForWer(name, opts.language)) allow.add(tok);
       }
     }
   }
@@ -422,6 +548,11 @@ export async function verifySegmentTranscript(
     expectedText,
     r.text,
     { avgLogprob: r.avgLogprob, noSpeechProb: r.noSpeechProb, compressionRatio: r.compressionRatio },
-    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist, vocalizationAllowlist: opts.vocalizationAllowlist },
+    {
+      thresholds: opts.thresholds,
+      nameAllowlist: opts.nameAllowlist,
+      vocalizationAllowlist: opts.vocalizationAllowlist,
+      language: opts.language,
+    },
   );
 }
