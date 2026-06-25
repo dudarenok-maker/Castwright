@@ -176,3 +176,21 @@ describe('GeminiAnalyzer — runScriptReviewChapter (Task 7b)', () => {
     expect(result.ops[0].id).toBe(1);
   });
 });
+
+// ── Schema coverage tests for fs-58 Unit B ──────────────────────────────────
+
+describe('scriptReviewSchema — fs-58 Unit B ops', () => {
+  it('flag_nonstory ops over the import-residue fixture validate (schema coverage)', async () => {
+    const { scriptReviewSchema } = await import('../handoff/schemas.js');
+
+    const ops = [
+      { id: 2, op: 'flag_nonstory' as const, anchor: '47', rationale: 'page number' },
+      { id: 3, op: 'flag_nonstory' as const, anchor: 'THE COALFALL COMMISSION', rationale: 'running header' },
+      { id: 5, op: 'flag_nonstory' as const, anchor: 'ISBN 978-0-00-000000-0', rationale: 'ISBN line' },
+      { id: 6, op: 'flag_nonstory' as const, anchor: 'Chapter 3', rationale: 'bare chapter marker' },
+    ];
+
+    const result = scriptReviewSchema.safeParse({ ops });
+    expect(result.success).toBe(true);
+  });
+});
