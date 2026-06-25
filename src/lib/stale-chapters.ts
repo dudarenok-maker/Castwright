@@ -111,6 +111,25 @@ export function isChapterTextEditedSinceRender(
   return false;
 }
 
+/* fs-58 Unit B — flag_nonstory precise staleness. Iterate the RENDERED ids
+   (keys that produced a segment at render time, from renderedSpeakersByChapter);
+   if any is now excludeFromSynthesis ⇒ that line will be dropped on the next
+   render ⇒ stale. Asymmetric like isChapterReassignedSinceRender: a never-
+   rendered id can't trip a false positive. The re-include direction (a line
+   excluded AT render, later re-included) is covered coarsely on the manual
+   toggle, not here. */
+export function isChapterExcludedSinceRender(
+  rendered: Record<number, string> | undefined,
+  currentSentences: Array<{ id: number; excludeFromSynthesis?: boolean }>,
+): boolean {
+  if (!rendered || Object.keys(rendered).length === 0) return false;
+  const excluded = new Set(currentSentences.filter((s) => s.excludeFromSynthesis).map((s) => s.id));
+  for (const sidStr of Object.keys(rendered)) {
+    if (excluded.has(Number(sidStr))) return true;
+  }
+  return false;
+}
+
 /** Returns a callback that marks a character's rendered audio stale (no-op when
     the character speaks in no `done` chapter). Reads chapters from the store. */
 export function useMarkCharacterStaleIfRendered(): (character: {

@@ -68,6 +68,7 @@ import {
   isChapterStaleFromReassign,
   isChapterReassignedSinceRender,
   isChapterTextEditedSinceRender,
+  isChapterExcludedSinceRender,
 } from '../lib/stale-chapters';
 import {
   characterLinePositionsByChapter,
@@ -687,6 +688,30 @@ export function GenerationView({
     return set;
   }, [renderedTextByChapter, sentences]);
 
+  /* fs-58 Unit B — the set of chapters whose rendered sentences have since been
+     flagged excludeFromSynthesis (non-story residue). Mirrors reassignedSinceRenderSet:
+     iterate the RENDERED ids from renderedSpeakersByChapter, project only the
+     excludeFromSynthesis flag, and call the pure helper. A never-rendered id can't
+     trip a false positive. */
+  const excludedSinceRenderSet = useMemo(() => {
+    const renderedIds = Object.keys(renderedSpeakersByChapter);
+    if (renderedIds.length === 0) return new Set<number>();
+    const byChapter = new Map<number, Array<{ id: number; excludeFromSynthesis?: boolean }>>();
+    for (const s of sentences) {
+      let arr = byChapter.get(s.chapterId);
+      if (!arr) byChapter.set(s.chapterId, (arr = []));
+      arr.push({ id: s.id, excludeFromSynthesis: s.excludeFromSynthesis });
+    }
+    const set = new Set<number>();
+    for (const cidStr of renderedIds) {
+      const cid = Number(cidStr);
+      if (isChapterExcludedSinceRender(renderedSpeakersByChapter[cid], byChapter.get(cid) ?? [])) {
+        set.add(cid);
+      }
+    }
+    return set;
+  }, [renderedSpeakersByChapter, sentences]);
+
   /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
      stream survives navigating away from this view. The view is a pure
      renderer of slice state now. */
@@ -1178,16 +1203,20 @@ export function GenerationView({
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               stale={
-                /* OR-gate (fs-58 Task 3 + #1105): stale if the precise render-map
-                   diff flags a speaker change OR the precise text-hash diff flags a
-                   text edit (#1105 — strip_tag / manual / direct-JSON edits the
-                   characterId-only diff can't see, derived from JSON so it survives
-                   reload) OR a post-render boundary_move was logged (the time-based
-                   fallback for pre-#1105 renders with no text map). Intentionally
-                   conservative: a move-then-undo still reads stale via the last
-                   clause, but the two precise diffs never false-positive on a revert. */
+                /* OR-gate (fs-58 Task 3 + #1105 + fs-58 Unit B): stale if the
+                   precise render-map diff flags a speaker change OR the precise
+                   text-hash diff flags a text edit (#1105 — strip_tag / manual /
+                   direct-JSON edits the characterId-only diff can't see, derived
+                   from JSON so it survives reload) OR a rendered sentence is now
+                   flagged excludeFromSynthesis (fs-58 Unit B — non-story residue
+                   excluded after render) OR a post-render boundary_move was logged
+                   (the time-based fallback for pre-#1105 renders with no text map).
+                   Intentionally conservative: a move-then-undo still reads stale
+                   via the last clause, but the precise diffs never false-positive
+                   on a revert. */
                 (renderedSpeakersByChapter[ch.id] ? reassignedSinceRenderSet.has(ch.id) : false) ||
                 (renderedTextByChapter[ch.id] ? textEditedSinceRenderSet.has(ch.id) : false) ||
+                (renderedSpeakersByChapter[ch.id] ? excludedSinceRenderSet.has(ch.id) : false) ||
                 isChapterStaleFromReassign(ch, activityEvents)
               }
               subsetProgress={subsetByChapter[ch.id] ?? null}

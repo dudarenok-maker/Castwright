@@ -6,6 +6,7 @@ import {
   isChapterReassignedSinceRender,
   textHashForStale,
   isChapterTextEditedSinceRender,
+  isChapterExcludedSinceRender,
 } from './stale-chapters';
 import type { Chapter, ChangeLogEvent } from './types';
 
@@ -158,6 +159,28 @@ describe('textHashForStale (#1105)', () => {
        client-computed one. Pin a known vector so a drift on either side fails
        loudly here and in the server test. */
     expect(textHashForStale('"Stop," she said.')).toBe('2rq6ja');
+  });
+});
+
+describe('isChapterExcludedSinceRender (fs-58 Unit B)', () => {
+  const rendered = { 1: 'narrator', 2: 'narrator' }; // ids that produced audio
+  it('is stale when a rendered id is now excluded', () => {
+    expect(isChapterExcludedSinceRender(rendered, [
+      { id: 1, excludeFromSynthesis: false }, { id: 2, excludeFromSynthesis: true },
+    ])).toBe(true);
+  });
+  it('is not stale when no rendered id is excluded', () => {
+    expect(isChapterExcludedSinceRender(rendered, [
+      { id: 1, excludeFromSynthesis: false }, { id: 2, excludeFromSynthesis: false },
+    ])).toBe(false);
+  });
+  it('ignores a NON-rendered id that is excluded (no false positive)', () => {
+    expect(isChapterExcludedSinceRender(rendered, [
+      { id: 1, excludeFromSynthesis: false }, { id: 2, excludeFromSynthesis: false }, { id: 99, excludeFromSynthesis: true },
+    ])).toBe(false);
+  });
+  it('returns false for an empty/absent render map', () => {
+    expect(isChapterExcludedSinceRender(undefined, [{ id: 1, excludeFromSynthesis: true }])).toBe(false);
   });
 });
 
