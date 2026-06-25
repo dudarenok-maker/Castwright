@@ -1530,6 +1530,86 @@ describe('GenerationView — precise text-edit staleness via render text map (#1
   });
 });
 
+describe('GenerationView — precise instruct-edit staleness via render instruct map (fs-58)', () => {
+  /* When the server ships a per-chapter render-time sentence→instructHash map (only
+     populated on the qwen-1.7b liveInstruct path), the Generate view flags a done
+     chapter whose live sentence INSTRUCT differs from what was rendered — even when
+     speakers and text are unchanged. Mirrors renderWithTextMap, but feeds
+     renderedInstructByChapter and seeds sentence 1 with a live instruct. */
+  function renderWithInstructMap(renderedInstructByChapter: Record<number, Record<number, string>>): void {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+    });
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a' },
+          { id: 2, title: 'Chapter 2', slug: '02-b' },
+        ],
+        completedSlugs: ['01-a'],
+        characters,
+        /* Speaker + text maps match the fixture → the #650 and #1105 diffs both
+           return false, isolating the fs-58 instruct diff as the only thing that
+           can flag staleness here. */
+        renderedSpeakersByChapter: { 1: { 1: 'narrator', 2: 'marlow', 3: 'marlow' } },
+        renderedTextByChapter: {
+          1: {
+            1: textHashForStale('A long room.'),
+            2: textHashForStale('Hello there friend!'),
+            3: textHashForStale('How are you today on this fine evening?'),
+          },
+        },
+        renderedInstructByChapter,
+      } as any),
+    );
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    /* Seed a live instruct on sentence 1 (copy the const array — don't mutate the
+       shared fixture). The rendered map below stamps 'old'; the live value is 'new'. */
+    const liveSentences = sentences.map((s) =>
+      s.id === 1 ? { ...s, instruct: 'new' } : s,
+    );
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [chapter1, chapter2],
+        sentences: liveSentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="Instruct Map Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('marks a done chapter stale when its rendered instruct was edited (fs-58)', () => {
+    renderWithInstructMap({ 1: { 1: textHashForStale('old') } }); // live instruct is 'new' ≠ 'old'
+    expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
+});
+
 describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', () => {
   /* The banner now carries a "Regenerate all" affordance that confirms
      once and dispatches regenerateChapterIds for every drifted chapter
