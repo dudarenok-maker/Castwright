@@ -46,7 +46,7 @@ describe('prosodySlice — activeStream reducers', () => {
   it('clear sets activeStream to null', () => {
     const s1 = prosodySlice.reducer(
       undefined,
-      prosodyActions.setActive({ bookId: 'b1', progress: 50, label: 'Phase 3 — Detecting prosody' }),
+      prosodyActions.setActive({ bookId: 'b1', progress: 0.5, label: 'Phase 3 — Detecting prosody' }),
     );
     const s2 = prosodySlice.reducer(s1, prosodyActions.clear());
     expect(s2.activeStream).toBeNull();

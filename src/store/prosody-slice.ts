@@ -30,7 +30,7 @@ export const prosodySlice = createSlice({
   initialState,
   reducers: {
     setActive: (s, a: PayloadAction<{ bookId: string; progress: number; label: string }>) => {
-      s.activeStream = { bookId: a.payload.bookId, progress: a.payload.progress, label: a.payload.label };
+      s.activeStream = { bookId: a.payload.bookId, progress: Math.round(a.payload.progress * 100), label: a.payload.label };
     },
     updateProgress: (s, a: PayloadAction<{ bookId: string; progress: number }>) => {
       if (s.activeStream && s.activeStream.bookId === a.payload.bookId) {
