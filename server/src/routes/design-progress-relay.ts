@@ -21,7 +21,11 @@ designProgressRelayRouter.post('/design-progress', (req: Request, res: Response)
   if (!isLoopback(req)) return res.status(403).json({ error: 'loopback only' });
   const token = typeof req.body?.token === 'string' ? req.body.token : '';
   const phase = typeof req.body?.phase === 'string' ? req.body.phase : '';
-  if (!token || !PHASES.has(phase)) return res.status(400).json({ error: 'bad request' });
+  // An unknown phase is a malformed request (400). An empty token is a
+  // well-formed request that simply can't resolve a job — same shape as an
+  // unknown token: 200 {ok:false} (spec PR-D; #1092).
+  if (!PHASES.has(phase)) return res.status(400).json({ error: 'bad request' });
+  if (!token) return res.status(200).json({ ok: false });
   const job = resolveProgressToken(token);
   if (!job) return res.status(200).json({ ok: false });
   job.phase = phase as SingleJob['phase']; // keep the resume-seed current (PR-D)
