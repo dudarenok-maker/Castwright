@@ -90,11 +90,7 @@ test.describe('single-design progress phase labels', () => {
     const phaseText = await page.evaluate(() => {
       const eta = document.querySelector('[data-testid="design-eta"]');
       if (!eta) return null;
-      /* Walk from design-eta up to the DesignProgress wrapper, then find
-         the sibling row that holds the phase label (it's the element
-         immediately before design-eta in the wrapper). */
-      const wrapper = eta.parentElement;
-      if (!wrapper) return null;
+      /* The phase-label row is the element immediately before design-eta. */
       const labelRow = eta.previousElementSibling;
       return labelRow?.querySelector('span')?.textContent?.trim() ?? null;
     });
@@ -106,8 +102,8 @@ test.describe('single-design progress phase labels', () => {
     expect(phaseText).toMatch(
       /loading the design model|designing the voice|distilling the voice|rendering the 12s audition|freeing gpu memory|anchoring to the base voice|performing the emotion/i,
     );
-    /* Explicitly confirm the old fake copy is gone. */
-    expect(phaseText).not.toMatch(/about 15s/i);
+    /* The "about 15s" fake-copy guard lives on design-eta above (the real
+       surface it appeared on); a duplicate check on the label added nothing. */
 
     await page.clock.resume();
   });
