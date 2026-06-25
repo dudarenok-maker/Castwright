@@ -284,7 +284,6 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         onBoundaryMove: (chapterId) =>
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
       },
-      roster,
     );
 
     if (proposedOps.length > 0) {
