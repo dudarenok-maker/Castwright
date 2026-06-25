@@ -17,6 +17,7 @@ import { applyProposedReattributions } from '../lib/apply-proposed';
 import { changeLogActions } from '../store/change-log-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { castActions } from '../store/cast-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { CreateCharacterForm } from './create-character-form';
 import { IconClose } from '../lib/icons';
@@ -188,22 +189,37 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      review bucket. Called once, after the LAST confirm resolves. */
   async function runProposed(finalized: FinalizedProposed[], startBookId: string) {
     const rosterByName = new Map(cast.map((c) => [c.name.trim().toLowerCase(), { id: c.id }]));
-    await applyProposedReattributions(finalized, {
-      rosterByName,
-      createCharacter: async (p) => {
-        // api.createCharacter resolves to a { character } envelope — unwrap it.
-        // `p` widens gender/ageRange to string (the proposed shape); the API's
-        // narrower enum tolerates the values the form's <select>s produce.
-        const { character } = await api.createCharacter(startBookId, p as never);
-        return character;
-      },
-      addCharacter: (c) => dispatch(castActions.addCharacter(c as never)),
-      setSentenceCharacter: (chapterId, sentenceId, characterId) =>
-        dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId, characterId })),
-      onBoundaryMove: (chapterId) =>
-        dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
-      isSameBook: () => stageBookIdRef.current === startBookId,
-    });
+    try {
+      await applyProposedReattributions(finalized, {
+        rosterByName,
+        createCharacter: async (p) => {
+          // api.createCharacter resolves to a { character } envelope — unwrap it.
+          // `p` widens gender/ageRange to string (the proposed shape); the API's
+          // narrower enum tolerates the values the form's <select>s produce.
+          const { character } = await api.createCharacter(startBookId, p as never);
+          return character;
+        },
+        addCharacter: (c) => dispatch(castActions.addCharacter(c as never)),
+        setSentenceCharacter: (chapterId, sentenceId, characterId) =>
+          dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId, characterId })),
+        onBoundaryMove: (chapterId) =>
+          dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
+        isSameBook: () => stageBookIdRef.current === startBookId,
+      });
+    } catch {
+      // A create failed mid-batch. Reset the confirm machine and surface a toast,
+      // but DON'T clearReview — the operator can re-trigger. Re-run is safe because
+      // setSentenceCharacter is idempotent for an already-applied reattribute.
+      setConfirm(null);
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: "Couldn't create character",
+          dedupeKey: 'create-character',
+        }),
+      );
+      return;
+    }
     setConfirm(null);
     dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
   }
