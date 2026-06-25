@@ -237,3 +237,59 @@ test.describe('fs-58 Unit B — reattribute + flag_nonstory accept flow', () => 
     ).toBeVisible({ timeout: 5_000 });
   });
 });
+
+/* fs-63 — auto-voice a created off-roster character.
+   On a Qwen project, the off-roster reattribute that mints "Ferra" surfaces a
+   sticky "Design now" nudge; tapping it enqueues bespoke design (the design job
+   activates — pill "Designing"/"Designed N" + the cast-design-done toast). On a
+   preset-engine project no nudge would fire (covered by the unit tests). */
+test.describe('fs-63 — off-roster auto-voice nudge', () => {
+  test('Qwen project: off-roster create surfaces a Design-now nudge that kicks design', async ({
+    page,
+  }) => {
+    await page.goto('/#/books/sb/manuscript');
+    await expect(page.getByRole('heading', { name: /^Chapter \d+/i, level: 1 })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    /* Put the project on Qwen so the nudge gate (engineForModelKey === 'qwen')
+       passes. setTtsModelKey flips ttsModelKeyExplicit, so the default-seed
+       effect won't overwrite it. */
+    await page.evaluate(() => {
+      const store = (window as unknown as { __store__: Store }).__store__;
+      store.dispatch({ type: 'ui/setTtsModelKey', payload: 'qwen3-tts-0.6b' });
+    });
+
+    /* Open review, opt into the off-roster reattribute class, apply. */
+    const reviewBtn = page.getByTestId('review-script-chapter');
+    await expect(reviewBtn).toBeVisible({ timeout: 5_000 });
+    await expect(reviewBtn).toBeEnabled();
+    await reviewBtn.click();
+    await expect(page.getByRole('heading', { name: /Script review suggestions/i })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const reattributeToggle = page.getByTestId('class-toggle-reattribute');
+    await expect(reattributeToggle).toBeVisible();
+    await reattributeToggle.check();
+
+    await page.getByTestId('apply-button').click();
+
+    /* Confirm the off-roster create of «Ferra». */
+    await expect(page.getByTestId('confirm-reattribute')).toBeVisible({ timeout: 5_000 });
+    await page.getByTestId('create-character-submit').click();
+
+    /* fs-63 — a sticky "Design now" nudge appears for the newly-created Ferra. */
+    const designNow = page.getByRole('button', { name: /design now/i });
+    await expect(designNow).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/Ferra.*needs a voice/i)).toBeVisible();
+
+    /* Tapping enqueues bespoke design → the design job activates. The mock
+       streams onProgress → onCharacterDesigned → onIdle, the last of which
+       pushes a "Designed 1." summary toast (viewport-independent, lingers ~5s),
+       so a "design(ing|ed)" match is race-free. "Design now" itself does not
+       match this regex (no ing/ed), and the nudge is dismissed on tap. */
+    await designNow.click();
+    await expect(page.getByText(/design(ing|ed)/i)).toBeVisible({ timeout: 8_000 });
+  });
+});
