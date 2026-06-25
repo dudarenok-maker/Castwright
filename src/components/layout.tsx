@@ -86,11 +86,12 @@ import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { runProsodyPasses } from '../store/prosody-thunk';
+import { prosodyActions } from '../store/prosody-slice';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
-import { IconRefresh, IconWarning } from '../lib/icons';
+import { IconRefresh, IconSpinner, IconWarning } from '../lib/icons';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
    styled post-action dialog (e.g. BooksRoute after delete/reparse) pull
@@ -158,6 +159,7 @@ export function Layout() {
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
+  const prosodyStream = useAppSelector((s) => s.prosody.activeStream);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
@@ -1020,17 +1022,25 @@ export function Layout() {
       prosodyConsidered.current.add(id);
       void (async () => {
         // Detached: not tied to effect cleanup — survives a book-switch.
+        let pillActive = false;
         try {
           const st = await api.getBookState(id);
           if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
           if (st.state.prosodyAnnotated) return;               // watermark → no-op
-          const { failed } = await runProsodyPasses(id, { dispatch });
+          dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Phase 3 — Detecting prosody' }));
+          pillActive = true;
+          const { failed } = await runProsodyPasses(id, {
+            dispatch,
+            onProgress: (f) => dispatch(prosodyActions.updateProgress({ bookId: id, progress: f })),
+          });
+          dispatch(prosodyActions.clear());
           if (failed === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
           } else {
             prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
           }
         } catch {
+          if (pillActive) dispatch(prosodyActions.clear());
           prosodyConsidered.current.delete(id); // transient error → retry on next transition
         }
       })();
@@ -1329,6 +1339,14 @@ export function Layout() {
     };
   })();
 
+  /* Phase 3 prosody-progress pill — anchored to the transient `prosody.activeStream`
+     slice (Task 14). Absent when no prosody pass is running; shows label + percent
+     while the two-pass annotation runs. No navigation: the pass runs silently in
+     the background. */
+  const prosodyPill: { label: string; percent: number } | null = prosodyStream
+    ? { label: prosodyStream.label, percent: prosodyStream.progress }
+    : null;
+
   /* Third status pill — the in-flight "Design full cast" bulk job. Mirrors the
      analysis/generation pill IIFEs: anchored to the cross-book `castDesign`
      snapshot, recomputed inline so the per-second forceClockTick refreshes the
@@ -1476,6 +1494,21 @@ export function Layout() {
       <BuildStamp />
 
       <ToastStack />
+
+      {/* Phase 3 prosody-progress pill (Task 14, fs-65). Fixed bottom-left,
+          above the mini-player reserved gap. Absent when no prosody pass is
+          running. Uses design tokens only — no hex literals. */}
+      {prosodyPill && (
+        <div
+          data-testid="prosody-pill"
+          className="fixed bottom-24 left-6 z-60 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-peach/15 text-magenta shadow-card"
+        >
+          <IconSpinner className="w-3.5 h-3.5" />
+          <span className="tabular-nums">
+            {prosodyPill.label} · {prosodyPill.percent}%
+          </span>
+        </div>
+      )}
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer

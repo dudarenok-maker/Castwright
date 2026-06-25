@@ -42,6 +42,7 @@ import { listenProgressSlice } from './listen-progress-slice';
 import { settingsSlice } from './settings-slice';
 import { continueListeningSlice } from './continue-listening-slice';
 import { notificationsSlice } from './notifications-slice';
+import { prosodySlice } from './prosody-slice';
 import type { LibraryBook } from '../lib/types';
 
 /* ── Module mocks ──────────────────────────────────────────────────────── */
@@ -138,6 +139,7 @@ function makeStore() {
       settings: settingsSlice.reducer,
       continueListening: continueListeningSlice.reducer,
       notifications: notificationsSlice.reducer,
+      prosody: prosodySlice.reducer,
     },
   });
 }
@@ -265,7 +267,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     await waitFor(() => {
       expect(runProsodyPassesMock).toHaveBeenCalledTimes(1);
-      expect(runProsodyPassesMock).toHaveBeenCalledWith('b1', { dispatch: store.dispatch });
+      const [calledId, calledOpts] = runProsodyPassesMock.mock.calls[0] as [string, Record<string, unknown>];
+      expect(calledId).toBe('b1');
+      expect(calledOpts.dispatch).toBe(store.dispatch);
+      expect(typeof calledOpts.onProgress).toBe('function');
     });
   });
 
@@ -293,7 +298,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     });
 
     await waitFor(() => {
-      expect(runProsodyPassesMock).toHaveBeenCalledWith('b2', { dispatch: store.dispatch });
+      expect(runProsodyPassesMock).toHaveBeenCalledTimes(1);
+      const [calledId, calledOpts] = runProsodyPassesMock.mock.calls[0] as [string, Record<string, unknown>];
+      expect(calledId).toBe('b2');
+      expect(calledOpts.dispatch).toBe(store.dispatch);
     });
   });
 
@@ -544,7 +552,9 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     });
 
     const [_bookId, opts] = runProsodyPassesMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(Object.keys(opts)).toEqual(['dispatch']);
+    /* Task 14: onProgress is now passed for the global prosody pill. */
+    expect(Object.keys(opts).sort()).toEqual(['dispatch', 'onProgress'].sort());
     expect(opts.signal).toBeUndefined();
+    expect(typeof opts.onProgress).toBe('function');
   });
 });

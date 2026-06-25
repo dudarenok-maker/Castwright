@@ -59,6 +59,7 @@ import { configSlice } from './config-slice';
 import { tourSlice } from './tour-slice';
 import { continueListeningSlice } from './continue-listening-slice';
 import { scriptReviewSlice } from './script-review-slice';
+import { prosodySlice } from './prosody-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -203,6 +204,7 @@ export const store = configureStore({
     tour: tourSlice.reducer,
     continueListening: continueListeningSlice.reducer,
     scriptReview: scriptReviewSlice.reducer,
+    prosody: prosodySlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({

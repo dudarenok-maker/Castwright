@@ -36,6 +36,8 @@ import { tourSlice } from '../store/tour-slice';
 import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
+import { notificationsSlice } from '../store/notifications-slice';
+import { prosodySlice } from '../store/prosody-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -135,6 +137,10 @@ vi.mock('../routes/prefetch', () => ({
   importUploadView: vi.fn(() => Promise.resolve({})),
 }));
 
+vi.mock('../store/prosody-thunk', () => ({
+  runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0 })),
+}));
+
 import { Layout } from './layout';
 import { api } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
@@ -164,6 +170,8 @@ function makeStore() {
       listenProgress: listenProgressSlice.reducer,
       settings: settingsSlice.reducer,
       continueListening: continueListeningSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      prosody: prosodySlice.reducer,
     },
   });
 }
