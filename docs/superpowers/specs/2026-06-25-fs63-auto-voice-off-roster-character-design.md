@@ -57,64 +57,76 @@ intact.
 
 ## 3. Architecture & data flow
 
-Three small touch points; no new server route, no new infra beyond a generic actionable-toast
-capability.
+Three small touch points; no new server route, no new infra. The nudge is a **dedicated,
+cast-design-aware component**, not a generic actionable-toast capability — see §3.2 for why.
 
-### 3.1 `src/lib/apply-proposed.ts` — return the created ids
+### 3.1 `src/lib/apply-proposed.ts` — return the created characters
 
 `applyProposedReattributions` already tracks ids minted this batch in its `memo` map. Extend its
 return from `{ created: number; aborted: boolean }` to
-`{ created: number; createdIds: string[]; aborted: boolean }`. `createdIds` lists the ids
-actually minted this batch (empty when every proposed op deduped to an existing roster member).
-The order matches creation order; on an aborted batch it carries the ids created before the
-abort.
+`{ created: number; createdCharacters: { id: string; name: string }[]; aborted: boolean }`.
+`createdCharacters` carries the `{id, name}` of every character actually minted this batch
+(empty when every proposed op deduped to an existing roster member). The `name` rides along so
+the nudge copy can name the character without a second lookup — `createCharacter` already returns
+`{id, name}`. The order matches creation order; on an aborted batch it carries the characters
+created before the abort.
 
-### 3.2 `src/store/notifications-slice.ts` + `src/components/toast-stack.tsx` — actionable toasts
+### 3.2 The nudge is a dedicated, busy-aware component — NOT a generic actionable toast
 
-Extend the `Toast` model with an optional, **serializable** action descriptor:
+A first design sketched a generic `{ label, dispatch }` action on every `Toast`. It was rejected
+on two grounds:
 
-```ts
-interface ToastAction {
-  /** Button label, e.g. "Design now" / "Design all". */
-  label: string;
-  /** A plain, serializable Redux action object dispatched on click. */
-  dispatch: { type: string; payload: unknown };
-}
-```
+1. **YAGNI.** A serializable-action-on-any-toast capability is speculative for a single consumer.
+2. **It can't handle the re-entrancy reality.** The cast-design middleware enforces ONE in-flight
+   design stream at a time, for any book: `cast-design-stream-middleware.ts` early-returns on
+   `if (handle) …` when a bulk, single (drawer), or cold-boot-resubscribe stream is already open.
+   The Cast view copes by **disabling its "Design full cast" button** while a run is active
+   (`designRunningHere` / `designRunningElsewhere`). A dumb dispatch-then-dismiss toast has no way
+   to know the middleware is busy — tapping it would silently no-op AND dismiss the nudge, leaving
+   the character undesigned with zero feedback.
 
-- `pushToast`'s payload gains an optional `action?: ToastAction`.
-- `ToastItem` renders `action.label` as a button beside the dismiss control; on click it
-  dispatches `toast.action.dispatch` then dismisses the toast.
-- **Actionable toasts are sticky** — the 6 s auto-dismiss timer is skipped when `action` is
-  present, so the operator doesn't lose the window before a GPU action. Plain toasts are
-  unchanged (still auto-dismiss at 6 s).
+So the nudge is its own small component (`src/components/voice-nudge-toast.tsx`), rendered by
+`ToastStack` for a new `Toast.kind: 'action'` carrying a typed `nudge` payload
+(`{ bookId, characterIds, modelKey, names: string[] }`) — NOT an opaque action object. It reads
+`castDesign.active` live and mirrors the Cast view's busy semantics:
 
-This is a **generic** capability (any future toast can carry an action), not a cast-design
-special-case. The notifications slice stays decoupled: it holds an opaque `{ type, payload }`
-object and never imports cast-design. The action object is a plain serializable literal, so RTK's
-`serializableCheck` is satisfied.
+- **Idle:** the action button reads "Design now" / "Design all"; tapping dispatches
+  `castDesignActions.designAllRequested(...)` (built from the `nudge` payload) and dismisses.
+- **A design is already running (any book):** the button is **disabled** with sub-text
+  *"A voice design is already running…"* — the nudge **stays** (sticky), so the operator can act
+  once the current run settles. No silent loss.
+- **Sticky.** Action-kind toasts skip the 6 s auto-dismiss (a GPU action needs a real window);
+  they clear on action, on manual dismiss, or via dedupe replacement.
+
+`notifications-slice.ts` gains the `'action'` kind + the typed `nudge` field on `Toast`; the
+payload is a plain serializable literal (ids + strings), so RTK's `serializableCheck` is satisfied
+and the slice still never imports cast-design (the *component* owns that dependency).
 
 ### 3.3 `src/components/script-review-diff.tsx` `runProposed` — push the nudge
 
 `ttsModelKey` is read once at component scope via `useAppSelector(s => s.ui.ttsModelKey)`
 (the async `runProposed` can't call hooks). Mirror the existing `stageBookIdRef` pattern if a
-fresh value is needed at resolve time. After `applyProposedReattributions` resolves with
-non-empty `createdIds`:
+fresh value is needed at resolve time. After `applyProposedReattributions` resolves with a
+non-empty `createdCharacters`:
 
-1. Compute the effective engine via `engineForModelKey(ttsModelKey)`.
-2. **Only when the effective engine is `'qwen'`**, push the actionable toast. Its baked action is:
+1. Compute the effective engine via `engineForModelKey(ttsModelKey)` — mirroring exactly how
+   `cast.tsx` derives the active engine, so the gate can't diverge from the Cast view.
+2. **Only when the effective engine is `'qwen'`**, push the action-kind nudge with payload:
 
    ```ts
-   castDesignActions.designAllRequested({
+   {
      bookId: startBookId,
-     characterIds: createdIds,
+     characterIds: createdCharacters.map((c) => c.id),
      modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
-     scope: 'bases',
-   })
+     names: createdCharacters.map((c) => c.name),
+   }
    ```
 
-One toast covers the whole batch (designs all `createdIds` at once), not one toast per character.
-The message is count-aware: singular names the character, plural states the count.
+   plus `dedupeKey: \`off-roster-voice-nudge:${startBookId}\`` so a second off-roster batch
+   replaces the prior nudge rather than stacking a duplicate.
+
+One nudge covers the whole batch (designs all created ids at once via `scope: 'bases'`), not one
+per character. The copy is count-aware: singular names the character, plural states the count.
 
 ## 4. Edge cases & gating
 
@@ -128,22 +140,33 @@ The message is count-aware: singular names the character, plural states the coun
   bulk job no-ops against a book that has moved on).
 - **Already designed before the tap.** The bulk job's freshness-skip already protects a character
   that gained a Qwen voice in the interim — it is skipped, never clobbered.
-- **Batch with mixed creates + reattribute-to-existing.** Only minted ids enter `createdIds`;
-  reattribute-to-existing decisions never mint a character, so they never trigger a nudge.
+- **A design is already running when the operator taps.** The nudge button is disabled with
+  *"A voice design is already running…"* (§3.2) and the nudge stays sticky — no silent no-op.
+  Once the in-flight run settles, the button re-enables and the operator can act.
+- **Batch with mixed creates + reattribute-to-existing.** Only minted characters enter
+  `createdCharacters`; reattribute-to-existing decisions never mint a character, so they never
+  trigger a nudge.
+- **Relationship to the generation-time fallback gate.** The created character also trips the
+  existing `computeQwenKokoroFallbackSet`, which *pauses the chapter at generation time* to warn
+  about the generic-Kokoro fallback. The nudge is the **proactive complement** to that safety
+  net — design early via the nudge and the generation-time pause never fires. The two reinforce
+  each other; neither is removed.
 
 ## 5. Testing
 
-- **Unit — `src/lib/apply-proposed.test.ts`:** `createdIds` lists every minted id for new
-  creates; empty when all proposed ops dedupe to existing roster members; carries
-  partial ids on an aborted (book-switch) batch.
-- **Unit — `src/components/toast-stack.test.tsx`:** an actionable toast renders its label
-  button and dispatches the stored action on click; actionable toasts are sticky (no
-  auto-dismiss); plain toasts still auto-dismiss at 6 s.
+- **Unit — `src/lib/apply-proposed.test.ts`:** `createdCharacters` lists `{id, name}` for every
+  minted character; empty when all proposed ops dedupe to existing roster members; carries
+  partial entries on an aborted (book-switch) batch.
+- **Unit — `src/components/voice-nudge-toast.test.tsx`:** idle → the action button dispatches
+  `designAllRequested` with the right `characterIds`/`modelKey`/`scope` then dismisses;
+  **design-running → button disabled, nudge stays (not dismissed)**; count-aware copy (singular
+  names the character, plural states the count); action-kind toasts are sticky (no 6 s
+  auto-dismiss) while plain toasts still auto-dismiss.
 - **Unit — `src/components/script-review-diff.test.tsx`:** a Qwen-effective project pushes the
-  nudge with the correct `characterIds` + `modelKey`; a preset-engine project pushes nothing;
-  a batch that only reattributes-to-existing pushes nothing.
+  nudge with the correct payload; a preset-engine project pushes nothing; a batch that only
+  reattributes-to-existing pushes nothing.
 - **E2E — `e2e/script-review.spec.ts`:** off-roster reattribute on a Qwen mock book → nudge
-  toast appears → tap the action → the `DesignPill` activates. One spec, per the e2e bar for
+  appears → tap the action → the `DesignPill` activates. One spec, per the e2e bar for
   behaviour crossing router / redux / layout seams.
 
 ## 6. Non-goals & notes
