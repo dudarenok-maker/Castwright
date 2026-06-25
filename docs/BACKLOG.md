@@ -360,7 +360,7 @@ _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-indextts2-en
 - _Benefit (user):_ the best-quality, expressive, multilingual engine within reach of quality-chasers on a mainstream 16GB card (no 24GB required).
 _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-fish-audio-s2pro-engine-design.md` (brainstormed + 3 adversarial reviews) · [#964](https://github.com/dudarenok-maker/Castwright/issues/964).
 
-#### `side-18` — Nonverbal performance cues ((laughs)/(sighs)/breaths) — spike first ([#979](https://github.com/dudarenok-maker/Castwright/issues/979))
+#### `side-18` — Engine-native bracket cues `(laughs)`/`(sighs)` — non-Qwen sibling of fs-57, depends on fs-48/fs-49 ([#979](https://github.com/dudarenok-maker/Castwright/issues/979))
 
 - _What:_ A scripted-cue layer for `(laughs)`/`(sighs)`/breaths, model-native in Orpheus/Dia/Chatterbox. **Spike before committing an engine.** Rides on the expressive-engine decision (`fs-48`/`fs-49`). **Reframed 2026-06-22:** the **Qwen** path for non-verbal sounds is now `fs-57` (pronounceable text + instruct, spike-validated); side-18 is scoped to these **other, bracket-cue-native engines** — the sibling extension, not a duplicate of fs-57.
 - _Benefit (user):_ extends the expressive performance lead beyond emotion sliders.
