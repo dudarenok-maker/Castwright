@@ -22,16 +22,20 @@ import { scriptReviewSlice } from '../store/script-review-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
+import { castSlice } from '../store/cast-slice';
 import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
-/* fs-58 — api mock for reviewScript trigger tests. */
-const { reviewScript } = vi.hoisted(() => ({ reviewScript: vi.fn() }));
+/* fs-58 — api mock for reviewScript + createCharacter trigger tests. */
+const { reviewScript, createCharacter } = vi.hoisted(() => ({
+  reviewScript: vi.fn(),
+  createCharacter: vi.fn(),
+}));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
-  return { ...actual, api: { ...(actual as { api: object }).api, reviewScript } };
+  return { ...actual, api: { ...(actual as { api: object }).api, reviewScript, createCharacter } };
 });
 
 const characters: Character[] = [
@@ -1311,5 +1315,100 @@ describe('ManuscriptView — excluded sentence UX (fs-58 Unit B)', () => {
     /* After click the sentence is no longer excluded in the store. */
     const after = store.getState().manuscript.sentences;
     expect(after[0].excludeFromSynthesis).toBe(false);
+  });
+});
+
+/* fs-58 Unit B Task 14 — "Add character" button opens CreateCharacterForm,
+   submits via api.createCharacter, and dispatches castActions.addCharacter
+   so the new member appears in the Detected sidebar. */
+describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () => {
+  const addCharChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: { narrator: 'done' },
+  };
+
+  function renderAddCharView() {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        cast: castSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-addchar',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        cast: {
+          characters: [{ id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' }],
+          renderedFallbackByCharacter: {},
+        },
+      },
+    });
+    return { store, ...render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={[{ id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' }]}
+          chapters={[addCharChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    ) };
+  }
+
+  beforeEach(() => {
+    createCharacter.mockReset();
+    createCharacter.mockResolvedValue({
+      character: { id: 'ferra', name: 'Ferra', role: 'character', color: 'unset' },
+    });
+  });
+
+  it('opens the create-character form and creates on submit (fs-58 Unit B)', async () => {
+    const user = userEvent.setup();
+    const { store } = renderAddCharView();
+
+    /* Before clicking "Add character", the form must not be visible. */
+    expect(screen.queryByTestId('create-character-form')).toBeNull();
+
+    /* Click the "Add character" button in the Detected sidebar. */
+    fireEvent.click(screen.getByRole('button', { name: /add character/i }));
+
+    /* The CreateCharacterForm must now be visible. */
+    expect(screen.getByTestId('create-character-form')).toBeInTheDocument();
+
+    /* Type a name and submit. */
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Ferra' } });
+    await user.click(screen.getByTestId('create-character-submit'));
+
+    /* api.createCharacter must have been called with the bookId and name. */
+    await waitFor(() =>
+      expect(createCharacter).toHaveBeenCalledWith(
+        'bk-addchar',
+        expect.objectContaining({ name: 'Ferra' }),
+      ),
+    );
+
+    /* castActions.addCharacter must have been dispatched — Ferra is in the cast store. */
+    await waitFor(() => {
+      const castState = store.getState().cast as { characters: { id: string; name: string }[] };
+      expect(castState.characters.some((c) => c.name === 'Ferra')).toBe(true);
+    });
+
+    /* The form must be dismissed after a successful create. */
+    await waitFor(() => expect(screen.queryByTestId('create-character-form')).toBeNull());
   });
 });

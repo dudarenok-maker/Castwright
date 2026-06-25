@@ -22,6 +22,7 @@ import {
   IconSearch,
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
+import { CreateCharacterForm } from '../components/create-character-form';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { SentenceInstructControl } from '../components/sentence-instruct-control';
@@ -33,6 +34,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { castActions } from '../store/cast-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
@@ -611,6 +613,15 @@ export function ManuscriptView({
      rendered as their own subtrees so the same markup can show inline
      on `lg:` (sticky asides) AND inside drawer/sheet overlays on
      `<lg:`. */
+  const handleCreateCharacter = useCallback(
+    async (fields: { name: string; gender?: string; ageRange?: string }) => {
+      if (!bookId) return;
+      const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
+      dispatch(castActions.addCharacter(result.character));
+    },
+    [bookId, dispatch],
+  );
+
   const sidebarPanels = (
     <SidebarPanels
       chapters={chapters}
@@ -626,6 +637,8 @@ export function ManuscriptView({
       filterChar={filterChar}
       setFilterChar={setFilterChar}
       onOpenProfile={onOpenProfile}
+      bookId={bookId}
+      onCreateCharacter={handleCreateCharacter}
     />
   );
 
@@ -1031,6 +1044,8 @@ interface SidebarPanelsProps {
   filterChar: string | null;
   setFilterChar: (v: string | null) => void;
   onOpenProfile?: (id: string) => void;
+  bookId: string | null;
+  onCreateCharacter: (fields: { name: string; gender?: string; ageRange?: string }) => void | Promise<void>;
 }
 
 function SidebarPanels({
@@ -1047,7 +1062,10 @@ function SidebarPanels({
   filterChar,
   setFilterChar,
   onOpenProfile,
+  bookId: _bookId,
+  onCreateCharacter,
 }: SidebarPanelsProps) {
+  const [addingChar, setAddingChar] = useState(false);
   return (
     <>
       <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
@@ -1217,9 +1235,22 @@ function SidebarPanels({
               );
             })}
           </ul>
-          <button className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors">
+          <button
+            onClick={() => setAddingChar(true)}
+            className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors"
+          >
             <IconPlus className="w-4 h-4" /> Add character
           </button>
+          {addingChar && (
+            <div className="mt-3">
+              <CreateCharacterForm
+                rosterByName={new Map(characters.map((c) => [c.name.trim().toLowerCase(), { id: c.id, name: c.name }]))}
+                onSubmit={async (f) => { await onCreateCharacter(f); setAddingChar(false); }}
+                onReattributeExisting={() => setAddingChar(false)}
+                onCancel={() => setAddingChar(false)}
+              />
+            </div>
+          )}
           <hr className="my-5 border-ink/10" />
           <div className="text-xs text-ink/50 leading-relaxed space-y-2">
             <p>
