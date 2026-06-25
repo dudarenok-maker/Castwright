@@ -28,25 +28,25 @@ export function qwenStorageKey(
    designed Qwen voiceId, so the only synth-time lever is picking a different
    voice name; the sidecar contract is untouched.
 
-   fs-57 — on the liveInstruct path (Qwen + liveInstruct=true), delivery
-   direction is carried as an `instruct` string to the sidecar; the voice stays
-   the BASE voice (no `__emotion` suffix). Returning the base here means the
-   sidecar never sees an `__emotion` key it would have to resolve separately —
+   fs-57 / 1.7B-implies-prosody — on the 1.7B tier, delivery direction is
+   carried as an `instruct` phrase to the sidecar; the voice stays the BASE
+   voice (no `__emotion` suffix). Returning the base here means the sidecar
+   never sees an `__emotion` key it would have to resolve separately —
    the instruct phrase IS the delivery direction for that path. */
 export function pickEmotionVariantVoice(
   engine: TtsEngine,
   variants: Partial<Record<string, { name: string }>> | null | undefined,
   emotion: string | undefined,
   baseVoice: string,
-  liveInstruct?: boolean,
+  is17b?: boolean,
 ): string {
   /* STRICT no-op for every engine except Qwen — emotion is never read on
      Kokoro/XTTS, so a tagged chapter on those engines resolves byte-identical
      voices to today. This is the load-bearing safety gate (plan 177 invariant 3). */
   if (engine !== 'qwen') return baseVoice;
-  /* fs-57 — on the liveInstruct path the delivery direction travels as an
-     instruct phrase; no emotion-variant suffix is appended. */
-  if (liveInstruct) return baseVoice;
+  /* 1.7B implies prosody: the delivery direction travels as an instruct phrase,
+     so no __emotion variant suffix is appended on the 1.7B tier. */
+  if (is17b) return baseVoice;
   if (!emotion || emotion === 'neutral') return baseVoice;
   /* srv-43 — derive the variant storage key from the (already uuid-resolved)
      base; a designed variant slot only signals PRESENCE. Missing → base. */

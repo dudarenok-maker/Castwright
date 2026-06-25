@@ -340,6 +340,19 @@ describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selectio
   });
 });
 
+describe('pickEmotionVariantVoice — is17b gate', () => {
+  const variants = { angry: { name: 'x' } };
+  it('returns base voice on 1.7B (emotion travels as instruct)', () => {
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren', true)).toBe('wren');
+  });
+  it('appends __emotion on 0.6B when a variant exists', () => {
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren', false)).toBe('wren__angry');
+  });
+  it('non-Qwen is always the base voice', () => {
+    expect(pickEmotionVariantVoice('kokoro', variants, 'angry', 'af_sky', false)).toBe('af_sky');
+  });
+});
+
 describe('srv-43 qwen storage key', () => {
   it('qwenStorageKey returns qwen-<voiceUuid> when uuid is present', () => {
     expect(qwenStorageKey({ voiceUuid: 'U1' }, 'wren')).toBe('qwen-U1');
