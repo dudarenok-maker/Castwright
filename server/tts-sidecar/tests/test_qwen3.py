@@ -1104,8 +1104,12 @@ from conftest import _qwen_weights_present
 
 @pytest.mark.skipif(not _qwen_weights_present(), reason="weights absent")
 def test_minted_variant_holds_base_identity() -> None:
-    """On a GPU box with weights: base and variant share speaker identity
-    (cosine distance < 0.30 — threshold calibrated in Task 4 Step 6)."""
+    """0.6B-tier anchored-variant identity golden (#1099 scope): on a GPU box,
+    a minted emotion variant rendered through the **0.6B Base** shares speaker
+    identity with its base (cosine distance < 0.30 — threshold calibrated in
+    Task 4 Step 6). This is the variant path the 0.6B Fast tier uses; the 1.7B
+    Quality tier delivers emotion live via instruct (no variants) and is covered
+    by tests/golden/test_instruct_golden.py, not here."""
     eng = main.ENGINES["qwen"]
     assert isinstance(eng, main.QwenEngine)
     eng.design_voice("rv1", "A warm mid-30s British female narrator.", "English", None, None)
