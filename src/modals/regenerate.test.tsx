@@ -119,6 +119,33 @@ describe('RegenerateModal — ETA scales with audio duration × RTF', () => {
   });
 });
 
+describe('RegenerateModal — scroll-safe on short viewports (footer never clipped)', () => {
+  /* Regression: the card is centered with `grid place-items-center` and is
+     `overflow-hidden`. Without a max-height + an internal scroll region, a short
+     desktop window pushes the footer (Cancel + Regenerate) below the viewport
+     with no way to scroll to it. The card must cap its height as a flex column
+     and let the body scroll, keeping header + footer visible — the same pattern
+     CharacterRegenerateModal already uses. */
+  it('caps the card height and makes the body the scroll region', () => {
+    const { container } = render(
+      <RegenerateModal
+        chapter={chapter}
+        defaultModelKey="qwen3-tts-0.6b"
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    const card = container.querySelector('.max-w-xl') as HTMLElement;
+    expect(card).not.toBeNull();
+    // Height-capped flex column so the footer can't be pushed off-screen.
+    expect(card.className).toMatch(/max-h-\[90vh\]/);
+    expect(card.className).toContain('flex-col');
+    // The middle region (body) is the scroller; the header + footer stay put.
+    const body = card.children[1] as HTMLElement;
+    expect(body.className).toContain('overflow-y-auto');
+  });
+});
+
 describe('RegenerateModal — per-regenerate model override (#4)', () => {
   it('confirms with the session default model when the picker is untouched', () => {
     const onConfirm = vi.fn();
