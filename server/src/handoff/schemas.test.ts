@@ -332,6 +332,19 @@ describe('fs-58 — script review schema (flat envelope)', () => {
   });
 });
 
+describe('sentenceSchema excludeFromSynthesis (fs-58 Unit B)', () => {
+  it('accepts a sentence carrying excludeFromSynthesis', () => {
+    const r = sentenceSchema.safeParse({
+      id: 1, chapterId: 1, characterId: 'narrator', text: 'A line.', excludeFromSynthesis: true,
+    });
+    expect(r.success).toBe(true);
+  });
+  it('still accepts a sentence WITHOUT the field (additive)', () => {
+    const r = sentenceSchema.safeParse({ id: 1, chapterId: 1, characterId: 'narrator', text: 'A line.' });
+    expect(r.success).toBe(true);
+  });
+});
+
 describe('sentenceSchema fs-57 fields', () => {
   const base = { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' };
 

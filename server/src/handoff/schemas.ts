@@ -130,6 +130,9 @@ export const sentenceSchema = z
     /* fs-57 — Stage 3 authored a non-verbal vocalization into `text`. Drives
        the srv-31 ASR carve-out. Additive. */
     vocalization: z.boolean().optional(),
+    /* fs-58 Unit B — flag_nonstory soft-exclude. Absent/false ⇒ synthesised
+       as today; true ⇒ filtered out of buildSentenceGroups. Additive. */
+    excludeFromSynthesis: z.boolean().optional(),
   })
   .strict();
 
