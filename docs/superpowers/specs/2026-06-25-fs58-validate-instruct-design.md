@@ -1,6 +1,6 @@
 ---
 title: 'fs-58 validate_instruct — Script Review class: flag/repair per-line instruct + vocalization'
-status: draft
+status: active
 date: 2026-06-25
 issue: '#1041'
 related:
