@@ -4,7 +4,7 @@
 
 **Goal:** Stop script review from silently failing on normal-sized chapters, make it work on huge (Cyrillic) chapters via a sentence-chunker, and auto-generate per-line prosody annotations as a gated post-analysis pass.
 
-**Architecture:** Three independent PRs. PR1 surfaces a dropped SSE event (client only). PR2 adds a server sentence-chunker (owned-core ownership rule) consumed by script-review. PR3 auto-triggers the existing annotation routes (through PR2's chunker) after analysis when a per-book `liveInstruct` flag is on, with a completion watermark.
+**Architecture:** Three independent PRs. PR1 surfaces a dropped SSE event (client only). PR2 adds a server sentence-chunker (owned-core ownership rule) consumed by script-review. PR3 (gate redesigned post-fs-66) auto-triggers the existing annotation routes (through PR2's chunker) after analysis via a single reactive effect gated on a nullable per-book `prosodyEnabled` intent flag OR a cast-derived 1.7B signal (the cast-time safety net), deduped by a completion watermark.
 
 **Tech Stack:** Vite + React 18 + Redux Toolkit (frontend, Vitest + jsdom); Node/Express + TypeScript (server, Vitest + node env); Playwright (e2e). SSE for streamed analyzer passes.
 
@@ -19,7 +19,7 @@
 - **Commit convention:** `<type>(<scope>): <subject>`. End every commit body with `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 - **One branch = one PR.** PR1 `fix/frontend-scriptreview-chapter-failed`; PR2 `feat/server-analyzer-chapter-chunker`; PR3 `feat/analysis-phase3-prosody`. Cut each off the latest `origin/main`.
 - **Verify gates:** frontend `npm test`; server `cd server && npm run test`; full `npm run verify` before each PR push.
-- **PR3 coordination:** a concurrent session owns `docs/superpowers/specs/2026-06-25-book-level-higher-quality-tier-design.md` (the synth-time book 1.7B override). PR3 MUST reuse the shared `liveInstruct` flag and MUST NOT introduce a competing book-quality flag. Rebase + reconcile before PR3 lands.
+- **PR3 gate (post-fs-66):** fs-66 ("1.7B implies prosody") has merged — synth gate is `is17b` alone, the "go 1.7B" decision is the cast `ttsModelKey`. PR3 renames the orphaned `liveInstruct` flag to a nullable `prosodyEnabled` intent flag (Task 11) and MUST NOT introduce any competing book-quality flag. There is no concurrent session to reconcile with; just cut off latest `origin/main`.
 
 ---
 
@@ -153,7 +153,7 @@ git commit -m "fix(frontend): toast on script-review chapter-failed instead of e
 
 ### Task 3: PR1 verify + open
 
-- [ ] `npm run verify` (frontend leg green). Rebase on `origin/main`. Push `fix/frontend-scriptreview-chapter-failed`. Open PR titled `fix(frontend): surface script-review chapter-failed instead of a silent empty modal`, body links the spec §2A + `Closes #<2A issue>`.
+- [ ] `npm run verify` (frontend leg green). Rebase on `origin/main`. Push `fix/frontend-scriptreview-chapter-failed`. Open PR titled `fix(frontend): surface script-review chapter-failed instead of a silent empty modal`, body links the spec §2A + `Closes #1124`. **(SHIPPED — PR #1126.)**
 
 ---
 
@@ -288,38 +288,40 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 
 ### Task 6: PR2 verify + open
 
-- [ ] `npm run verify` (server + server-slow legs). Rebase on `origin/main`. Push `feat/server-analyzer-chapter-chunker`. PR title `feat(server): chunk script review over large chapters (owned-core sentence chunker)`, body links spec §2B + shared-component section + `Closes #<2B issue>`.
+- [ ] `npm run verify` (server + server-slow legs). Rebase on `origin/main`. Push `feat/server-analyzer-chapter-chunker`. PR title `feat(server): chunk script review over large chapters (owned-core sentence chunker)`, body links spec §2B + shared-component section + `Closes #1127`. **(SHIPPED — PR #1128.)**
 
 ---
 
 ## PR3 — Phase 3 prosody annotation (branch `feat/analysis-phase3-prosody`)
 
-> **DEFERRED (2026-06-25).** PR1 (#1126) and PR2 (#1128) shipped. PR3 is paused:
-> the concurrent `feat/server-1.7b-implies-prosody` change drops `liveInstruct`
-> (the gate every task below keys on) in favor of "1.7B implies prosody". Do NOT
-> execute Tasks 7–14 as written. When that change + the book-level 1.7B override
-> land on `main`, **redesign the gate**: replace the `liveInstruct` toggle/trigger
-> (Tasks 11–12) with a trigger keyed on the new 1.7B signal (per-cast `is17b` /
-> book-quality override), and re-confirm the watermark (Task 7) + chunked
-> annotation passes (Tasks 8–10, 13) still apply. The chunker (PR2, merged) is the
-> reusable asset this will consume. Tracked in the deferred Phase-3 issue.
+> **GATE REDESIGNED (2026-06-25) — ready to execute.** PR1 (#1126) and PR2
+> (#1128) shipped. fs-66 ("1.7B implies prosody", PR #1136) has now landed on
+> `main`: the synth prosody gate is `is17b` alone, `liveInstruct` is orphaned
+> plumbing (set by no UI, read at no synth site), and the "go 1.7B" decision is a
+> **cast-time** signal (`ttsModelKey === 'qwen3-tts-1.7b'`, per-character or via
+> the book bulk-pin `POST /cast/tier`). Tasks 7–10 + 14 are unchanged. The gate
+> tasks are redesigned below: **Task 11 (new)** renames `liveInstruct` →
+> `prosodyEnabled`; **Task 12** is the smart-default analysis-form toggle;
+> **Task 13** is the single reactive auto-trigger whose cast dependency IS the
+> cast-time safety net. See the spec's "Gate model" section (read it — the
+> tri-state flag + cast-derived auto-rule are folded there).
 
-**PREREQUISITE — PR2 MUST be merged first.** Task 8 imports `server/src/analyzer/chapter-chunker.ts`, which only exists once PR2 lands. **Cut `feat/analysis-phase3-prosody` off the updated `origin/main` AFTER PR2 has merged** (do not branch off PR1 or off a pre-PR2 main, or Task 8's import will not resolve).
+**PREREQUISITE — satisfied.** Task 8 imports `server/src/analyzer/chapter-chunker.ts`, which landed with PR2 (#1128, merged). **Cut `feat/analysis-phase3-prosody` off the latest `origin/main`** (which now contains both PR2 and fs-66).
 
-**COORDINATION GATE (do first):** rebase on latest `origin/main`; check whether the concurrent book-1.7B work has landed a quality flag. Reuse `liveInstruct`; do NOT add a competing flag. If their `bookQualityOverride` exists, the toggle here still SETS `liveInstruct` (annotation generation is gated on `liveInstruct`, independent of their synth-time override).
+**No coordination gate.** The concurrent book-1.7B work (fs-66) is merged; it did **not** introduce a `bookQualityOverride` flag — the override is the cast `ttsModelKey` written by `POST /cast/tier`. Do NOT add any competing book-quality flag; the only intent flag is `prosodyEnabled` (Task 11).
 
 ### Task 7: book-state `prosodyAnnotated` watermark
 
 **Files:**
-- Modify: `server/src/workspace/scan.ts` (`BookStateJson`, near `liveInstruct?` at lines 230–236); `server/src/routes/book-state.ts` (the `case 'state':` patch handler, lines 605–765).
+- Modify: `server/src/workspace/scan.ts` (`BookStateJson`, near the existing `liveInstruct?` / `prosodyEnabled?` boolean field at lines 230–236); `server/src/routes/book-state.ts` (the `case 'state':` patch handler, lines 605–765).
 - Test: `server/src/routes/book-state.test.ts` (extend).
 
 **Interfaces:**
-- Produces: `BookStateJson.prosodyAnnotated?: boolean` — true once both prosody passes complete for the book; the auto-trigger fires only when absent/false.
+- Produces: `BookStateJson.prosodyAnnotated?: boolean` — true once both prosody passes complete for the book; the auto-trigger fires only when absent/false. **Distinct from the `prosodyEnabled` intent flag (Task 11): `prosodyEnabled` = "should we annotate", `prosodyAnnotated` = "annotation finished".**
 
 - [ ] **Step 1: Write the failing test** — `PUT /api/books/:bookId/state {patch:{prosodyAnnotated:true}}` persists the field; an absent/non-boolean patch leaves it unchanged.
 - [ ] **Step 2: Run, verify fail** — `cd server && npm run test -- book-state` → FAIL.
-- [ ] **Step 3: Implement** — add the optional field (JSDoc, additive — do NOT bump `CURRENT_STATE_SCHEMA`, mirror the `liveInstruct` note) + a boolean picker in the `case 'state':` spread (mirror the existing `liveInstruct` ternary).
+- [ ] **Step 3: Implement** — add the optional field (JSDoc, additive — do NOT bump `CURRENT_STATE_SCHEMA`, mirror the existing single-boolean field's note) + a boolean picker in the `case 'state':` spread (mirror the existing single-boolean ternary in that handler).
 - [ ] **Step 4: Run, verify pass.**
 - [ ] **Step 5: Commit** — `feat(server): prosodyAnnotated watermark on book state`.
 
@@ -376,47 +378,94 @@ annotatedChapters += 1; // once per chapter, after the chunk loop — keep the e
 
 - [ ] TDD: test that it calls both api passes in order and dispatches both apply actions; mock `api`. Commit `refactor(frontend): extract runProsodyPasses from DetectEmotionsButton`.
 
-### Task 11: analysis-form "High-quality prosody (Qwen 1.7B)" toggle
+### Task 11: rename `liveInstruct` → `prosodyEnabled` (nullable Phase-3 intent flag)
+
+The fs-66-orphaned `liveInstruct` flag is renamed and repurposed as the Phase-3 intent flag, and its semantics flip from plain-boolean (`?? false`) to **nullable** (undefined = "auto") so the Task-13 gate can distinguish undefined/true/false.
 
 **Files:**
-- Modify: `src/views/analysing.tsx` (the start-analysis surface, near the "Start analysis" button ~line 1172) — add the toggle. On change: `dispatch(bookMetaActions.setLiveInstruct({ bookId, value }))` AND `void api.putBookState(bookId, { slice: 'state', patch: { liveInstruct: value } })` for durability. **Do NOT gate the analysis POST on this** — round-2 established Phase 3 runs *after* analysis with a client-side gate, so the server never reads `liveInstruct` during analysis. There is no "await PUT before POST" requirement (the original plan's wording was wrong: `setLiveInstruct` persistence is not awaitable middleware, and ordering doesn't matter here). The store value is the source of truth for the Task-12 trigger; the PUT is just so it survives reload.
-- Test: `src/views/analysing-prosody-toggle.test.tsx` + one e2e `e2e/analysis-prosody-toggle.spec.ts`.
+- Modify: `server/src/workspace/scan.ts` — rename `BookStateJson.liveInstruct?` → `prosodyEnabled?` (line 236) + rewrite its JSDoc (it is NO LONGER a synth-path flag — it is the Phase-3 annotation intent flag; undefined ⇒ auto-by-cast).
+- Modify: `server/src/routes/book-state.ts` — the `case 'state':` picker that reads `liveInstruct` (lines 706–708) → `prosodyEnabled`.
+- Modify: `src/store/book-meta-slice.ts` — rename `liveInstruct` field (55, 61), hydration (94), `setLiveInstruct` (119–120), `selectLiveInstruct` (167–170) to `prosodyEnabled`/`setProsodyEnabled`/`selectProsodyEnabled`. **Flip to nullable:** hydration preserves undefined (`s.prosodyEnabled[bookId] = state.prosodyEnabled` — drop the `?? false`); the selector returns `s.bookMeta.prosodyEnabled[bookId]` with **NO `?? false`** (the gate needs the three states).
+- Modify: `src/components/layout.tsx:790` — hydration `liveInstruct: res.state.liveInstruct ?? false` → `prosodyEnabled: res.state.prosodyEnabled` (preserve undefined).
+- Modify: `openapi.yaml` — rename the book-state `liveInstruct` property (line 3361) → `prosodyEnabled` + rewrite its description. **Do NOT touch line 4910** (the Sentence `instruct` "Qwen 1.7B liveInstruct path" comment names the synth path, not this flag). Then regenerate: `npm run openapi:types` (updates `src/lib/api-types.ts`).
+- Modify tests: `src/store/book-meta-slice.test.ts`, `server/src/routes/book-state.test.ts`, and any `setLiveInstruct`/`selectLiveInstruct` references.
 
 **Interfaces:**
-- Consumes: `bookMetaActions.setLiveInstruct({ bookId, value })` (`book-meta-slice.ts:119`); `selectLiveInstruct(bookId)` (`:167`).
+- Produces: `bookMetaActions.setProsodyEnabled({ bookId, value: boolean })`; `selectProsodyEnabled(bookId): (s: RootState) => boolean | undefined`; `BookStateJson.prosodyEnabled?: boolean` (undefined when absent).
+- **Do NOT** rename the unrelated `instructHash`/`renderedInstructHashes` "liveInstruct render" comments in `segments-io.ts`/`stale-chapters.ts` — they name the synth path.
 
-- [ ] TDD: toggling sets `bookMeta.liveInstruct[bookId]` and issues the PUT; default off. Commit `feat(frontend): high-quality prosody toggle on the analysis form`.
+- [ ] **Step 1: Enumerate sites** — `git grep -n "liveInstruct\|LiveInstruct" src server/src openapi.yaml` and cross-check against the Files list; set aside the segments-io / stale-chapters synth-path comments.
+- [ ] **Step 2: Write the failing test** — extend `book-meta-slice.test.ts`: `selectProsodyEnabled(bookId)` returns `undefined` for an unset book; `true`/`false` after `setProsodyEnabled`; hydrating `{ prosodyEnabled: undefined }` leaves it undefined (NOT coerced to false).
+- [ ] **Step 3: Run, verify fail** — `npm test -- book-meta` → FAIL (action/selector not renamed yet).
+- [ ] **Step 4: Implement** — perform the rename across the Files list; flip the slice selector + both hydration sites to preserve undefined (the one non-mechanical change); `npm run openapi:types`.
+- [ ] **Step 5: Run, verify pass** — `npm test -- book-meta` + `cd server && npm run test -- book-state` + `npm run typecheck` → PASS.
+- [ ] **Step 6: Commit** — `refactor: rename liveInstruct flag to nullable prosodyEnabled (Phase-3 intent)`.
 
-### Task 12: post-analysis auto-trigger + watermark
+### Task 12: analysis-form "Expressive directions (Qwen 1.7B)" toggle (smart default)
 
 **Files:**
-- Modify: `src/components/layout.tsx` — add a `useEffect` that **mirrors the existing voice-match auto-trigger** (`layout.tsx:895-917`), which uses a `useRef` guard + a `cancelled` cleanup boolean (it has NO AbortController — create one here). Shape:
+- Modify: `src/views/analysing.tsx` (start-analysis surface, near the "Start analysis" button ~line 1172) — add the toggle.
+- Test: `src/views/analysing-prosody-toggle.test.tsx`.
+
+**Interfaces:**
+- Consumes: `selectProsodyEnabled(bookId)` + `bookMetaActions.setProsodyEnabled` (Task 11); `state.account.defaultTtsModelKey`.
+
+Behaviour:
+- **Checked state** = `stored ?? (defaultTtsModelKey === 'qwen3-tts-1.7b')`, where `stored = useAppSelector(selectProsodyEnabled(bookId))`. A 1.7B-default user sees it pre-ticked ("we assume you'll take the quality pass"); a Kokoro user sees it un-ticked. An untouched book stores nothing (undefined = auto).
+- **On change:** `dispatch(bookMetaActions.setProsodyEnabled({ bookId, value }))` AND `void api.putBookState(bookId, { slice: 'state', patch: { prosodyEnabled: value } })` for durability. **Do NOT gate the analysis POST on it** — Phase 3 runs after analysis via the client-side Task-13 trigger; the server never reads this during analysis.
+- Label "Expressive directions (Qwen 1.7B)"; helper text "Generate per-line emotion + delivery directions for the richer 1.7B voice. Runs in the background after analysis."
+
+- [ ] **Step 1: Write the failing test** — with `defaultTtsModelKey='qwen3-tts-1.7b'` + no stored value → toggle renders **checked**; with a Kokoro default + no stored value → **unchecked**; toggling dispatches `setProsodyEnabled` and issues the PUT carrying the explicit boolean.
+- [ ] **Step 2: Run, verify fail** — `npm test -- analysing-prosody-toggle` → FAIL.
+- [ ] **Step 3: Implement** the toggle per Behaviour above.
+- [ ] **Step 4: Run, verify pass.**
+- [ ] **Step 5: Commit** — `feat(frontend): expressive-directions toggle on the analysis form (smart default)`.
+
+### Task 13: reactive auto-trigger (intent flag + cast-time safety net) + watermark
+
+**Files:**
+- Modify: `src/components/layout.tsx` — add a `useEffect` mirroring the existing voice-match auto-trigger (`layout.tsx:895-917`): `useRef` fired-guard + an `AbortController` cleanup (the voice-match sibling has none — create one here).
+- Test: `src/store/prosody-autotrigger.test.tsx`.
+
+**Interfaces:**
+- Consumes: `runProsodyPasses` (Task 10); `selectProsodyEnabled` (Task 11); the cast slice; `api.getBookState`/`api.putBookState`.
+
 ```tsx
+const prosodyEnabled = useAppSelector(selectProsodyEnabled(bookId));        // boolean | undefined
+const bookCastIs17b = useAppSelector((s) =>
+  (s.cast?.characters ?? []).some((c) => c.ttsModelKey === 'qwen3-tts-1.7b'));
+const shouldAnnotate =
+  prosodyEnabled === false ? false
+  : prosodyEnabled === true ? true
+  : bookCastIs17b;                                                          // "auto" / safety-net case
+
 const prosodyFiredFor = useRef<string | null>(null);
 useEffect(() => {
-  if (stageKind !== 'confirm') { prosodyFiredFor.current = null; return; }
-  if (!bookId || !liveInstruct) return;                 // liveInstruct = useAppSelector(selectLiveInstruct(bookId))
+  if (stageKind !== 'confirm' && stageKind !== 'ready') { prosodyFiredFor.current = null; return; }
+  if (!bookId || !shouldAnnotate) return;          // MUST precede the guard set, so a later flip can still fire
   if (prosodyFiredFor.current === bookId) return;
   prosodyFiredFor.current = bookId;
   const ac = new AbortController();
   (async () => {
     const st = await api.getBookState(bookId);
-    if (ac.signal.aborted || st?.state.prosodyAnnotated) return;   // watermark complete → never re-run
+    if (ac.signal.aborted || st?.state.prosodyAnnotated) return;            // watermark complete → never re-run
     await runProsodyPasses(bookId, { dispatch, signal: ac.signal });
     if (!ac.signal.aborted) void api.putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: true } });
   })();
   return () => ac.abort();
-}, [stageKind, bookId, liveInstruct]);
+}, [stageKind, bookId, shouldAnnotate]);
 ```
-`prosodyAnnotated` is NOT hydrated into any slice today, so it MUST be fetched inline via `api.getBookState` (returns `BookStateResponse | null`; read `st?.state.prosodyAnnotated`). The AbortController is created in the effect (the voice-match sibling has none) and aborted in cleanup so a stage change cancels an in-flight run.
-- Test: `src/store/prosody-autotrigger.test.tsx`.
+- **`shouldAnnotate` is the single gate dependency** — folding `prosodyEnabled` + `bookCastIs17b` into it means a late cast bulk-pin (which flips `bookCastIs17b` true via the cast slice) re-runs the effect → the **cast-time safety net**, with no separate `POST /cast/tier` instrumentation.
+- The `if (!shouldAnnotate) return;` **must** come before `prosodyFiredFor.current = bookId` so a book that started ineligible (false) and later flips eligible isn't blocked by a prematurely-set guard.
+- `prosodyAnnotated` is NOT hydrated into any slice, so it is fetched inline via `api.getBookState` (`BookStateResponse | null`; read `st?.state.prosodyAnnotated`). The watermark dedupes both trigger paths.
 
-**Interfaces:**
-- Consumes: `runProsodyPasses` (Task 10); `selectLiveInstruct` (Task 11); `prosodyAnnotated` from book state (Task 7, read via book-meta hydration or a fetch).
+- [ ] **Step 1: Write the failing test** — gate truth-table: `undefined` + 1.7B cast → fires `runProsodyPasses` once; `undefined` + Kokoro cast → never fires; `false` + 1.7B cast → suppressed; `true` + Kokoro cast → fires; `getBookState` returns `{prosodyAnnotated:true}` → fires guard but no `runProsodyPasses`; **late pin: rerender with a 1.7B cast member appended → fires exactly once** (assert call count 1 across the rerender); on completion `putBookState` writes `prosodyAnnotated:true`.
+- [ ] **Step 2: Run, verify fail.**
+- [ ] **Step 3: Implement** per the shape above.
+- [ ] **Step 4: Run, verify pass.**
+- [ ] **Step 5: Commit** — `feat(frontend): reactive prosody auto-trigger (intent flag + cast-time safety net)`.
 
-- [ ] TDD: fires exactly once when gate on + watermark incomplete; does NOT fire when off or watermark complete; a re-fire after partial fills only empties (assert `applyDetectedInstruct` fill-only-empty preserved). Commit `feat(frontend): auto-run prosody passes after analysis when enabled`.
-
-### Task 13: global prosody progress pill
+### Task 14: global prosody progress pill
 
 **Files:**
 - Create: `src/store/prosody-slice.ts` (`activeStream: { bookId, progress, label } | null`), registered in `src/store/index.ts` reducer map only. **The slice is TRANSIENT** — UI-only progress state, like `notifications`: add ONLY the reducer to the map; do NOT add it to `persistence-middleware` or `broadcast-middleware` (no persistence/cross-tab sync). Confirm by grepping `src/store/index.ts` for how `notifications` is wired and match that (reducer-only).
@@ -425,16 +474,17 @@ useEffect(() => {
 
 - [ ] TDD: slice set/clear; pill renders label + percent while active, absent when null. Commit `feat(frontend): global prosody-detection progress pill`.
 
-### Task 14: PR3 e2e + verify + open
+### Task 15: PR3 e2e + verify + open
 
-- [ ] e2e `e2e/analysis-prosody-toggle.spec.ts`: toggle on → analysis completes → user reaches cast while the prosody pill runs → annotations land (assert a sentence gains an `instruct`).
-- [ ] `npm run verify` (full battery incl. e2e). Rebase on `origin/main` + reconcile with the concurrent 1.7B branch. Push `feat/analysis-phase3-prosody`. PR title `feat: auto-generate per-line prosody annotations after analysis (Phase 3)`, body links the spec §Deliverable-1 + the coordination note + `Closes #<Phase3 issue>`.
+- [ ] e2e `e2e/analysis-prosody-toggle.spec.ts`: a 1.7B-default book (or the toggle on) → analysis completes → user reaches cast while the prosody pill runs → annotations land (assert a sentence gains an `instruct`).
+- [ ] `npm run verify` (full battery incl. e2e). Rebase on latest `origin/main`. Push `feat/analysis-phase3-prosody`. PR title `feat: auto-generate per-line prosody annotations after analysis (Phase 3)`, body links the spec §Deliverable-1 + the gate-model section + `Closes #1129`.
 
 ---
 
 ## Self-review notes
 
-- **Spec coverage:** §2A → PR1 Tasks 1–2 + PR3 Task 9 (detect handlers). §2B shared chunker → PR2 Task 4; script-review consumption → Task 5. §Deliverable-1: toggle → Task 11; separate post-analysis trigger → Task 12; watermark → Task 7; chunker reuse by annotation passes → Task 8; global-pill surfacing → Task 13; reusable pass → Task 10. Coordination note → PR3 gate.
+- **Spec coverage:** §2A → PR1 Tasks 1–2 + PR3 Task 9 (detect handlers). §2B shared chunker → PR2 Task 4; script-review consumption → Task 5. §Deliverable-1 (gate model): flag rename → Task 11; analysis-form toggle (smart default) → Task 12; reactive auto-trigger + cast-time safety net → Task 13; watermark → Task 7; chunker reuse by annotation passes → Task 8; global-pill surfacing → Task 14; reusable pass → Task 10.
 - **Owned-core rule** (the round-2 fix) is centralized in Task 4 and consumed by Tasks 5 + 8 — no `opKey` cross-chunk dedupe anywhere.
-- **No 4th in-pipeline phase / no `PHASE_WEIGHTS` edits** (round-2 blast-radius avoided): Phase 3 surfaces via its own `prosody-slice` pill (Task 13), not `ANALYSIS_PHASES`.
-- **liveInstruct is the single shared flag** (Tasks 11–12) — no competing book-quality flag; the concurrent synth-time override reads `liveInstruct || bookQualityOverride`.
+- **No 4th in-pipeline phase / no `PHASE_WEIGHTS` edits** (round-2 blast-radius avoided): Phase 3 surfaces via its own `prosody-slice` pill (Task 14), not `ANALYSIS_PHASES`.
+- **`prosodyEnabled` is the single intent flag** (Tasks 11–13), nullable (undefined = auto-by-cast). The synth-time gate is `is17b` alone (fs-66) — there is NO competing book-quality flag and NO `bookQualityOverride`; the cast-time signal is `ttsModelKey === 'qwen3-tts-1.7b'`.
+- **Two distinct booleans, don't conflate:** `prosodyEnabled` (Task 11 — "should we annotate", nullable intent) vs `prosodyAnnotated` (Task 7 — "annotation finished", watermark).
