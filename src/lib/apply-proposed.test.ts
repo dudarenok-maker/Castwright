@@ -22,7 +22,7 @@ describe('fs-58 Unit B — applyProposedReattributions', () => {
       [{ chapterId: 1, id: 5, op: 'reattribute', proposed: { name: 'Ferra' } }] as any, d);
     expect(d.createCharacter).toHaveBeenCalledTimes(1);
     expect(d.spy).toEqual([['add', 'ferra'], ['reassign', 5, 'ferra']]);
-    expect(r).toEqual({ created: 1, aborted: false });
+    expect(r).toEqual({ created: 1, createdCharacters: [{ id: 'ferra', name: 'Ferra' }], aborted: false });
   });
 
   it('dedupes the same proposed name to ONE create within a batch', async () => {
@@ -40,6 +40,41 @@ describe('fs-58 Unit B — applyProposedReattributions', () => {
     await applyProposedReattributions([{ chapterId: 1, id: 5, op: 'reattribute', proposed: { name: 'Ferra' } }] as any, d);
     expect(d.createCharacter).not.toHaveBeenCalled();
     expect(d.spy).toEqual([['reassign', 5, 'ferra']]);
+  });
+
+  it('returns createdCharacters with {id,name} for each minted member (dedup within batch)', async () => {
+    const d = deps();
+    const r = await applyProposedReattributions([
+      { chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Mara' } },
+      { chapterId: 1, id: 11, op: 'reattribute', proposed: { name: 'mara ' } }, // dup name → one create
+      { chapterId: 2, id: 12, op: 'reattribute', proposed: { name: 'Tom' } },
+    ] as any, d);
+    expect(r.created).toBe(2);
+    expect(r.createdCharacters).toEqual([
+      { id: 'mara', name: 'Mara' },
+      { id: 'tom', name: 'Tom' },
+    ]);
+    expect(r.aborted).toBe(false);
+  });
+
+  it('returns empty createdCharacters when every op dedupes to an existing roster member', async () => {
+    const d = deps({ rosterByName: new Map([['hart', { id: 'hart-1' }]]) });
+    const r = await applyProposedReattributions(
+      [{ chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Hart' } }] as any, d);
+    expect(r.createdCharacters).toEqual([]);
+  });
+
+  it('carries partial createdCharacters when the batch aborts on a book switch', async () => {
+    // isSameBook is checked once right after each create: true for Mara (recorded),
+    // false for Tom (abort BEFORE Tom is recorded).
+    const isSameBook = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const d = deps({ isSameBook });
+    const r = await applyProposedReattributions([
+      { chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Mara' } },
+      { chapterId: 2, id: 12, op: 'reattribute', proposed: { name: 'Tom' } },
+    ] as any, d);
+    expect(r.aborted).toBe(true);
+    expect(r.createdCharacters).toEqual([{ id: 'mara', name: 'Mara' }]);
   });
 
   it('aborts remaining ops when the book changed mid-await', async () => {
