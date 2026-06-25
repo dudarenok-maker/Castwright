@@ -428,6 +428,28 @@ describe('persistenceMiddleware — payload shape', () => {
       patch: { liveInstruct: false },
     });
   });
+
+  it('fs-58 Unit B — dispatching setSentenceExcluded triggers a manuscript PUT', async () => {
+    /* B1 correctness guard: the exclude flag must survive reload.
+       Without a PERSIST_RULES entry the flag would be silently lost on
+       the next page refresh and the excluded sentence would get synthesised. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      manuscript: {
+        sentences: [{ id: 1, chapterId: 1, text: 'p. 42', excludeFromSynthesis: true }],
+        mergedAwayKeys: [],
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'manuscript/setSentenceExcluded' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'manuscript',
+      patch: {
+        sentences: [{ id: 1, chapterId: 1, text: 'p. 42', excludeFromSynthesis: true }],
+        mergedAwayKeys: [],
+      },
+    });
+  });
 });
 
 describe('persistenceMiddleware — error handling', () => {
