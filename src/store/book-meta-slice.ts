@@ -165,9 +165,11 @@ export const selectIsDirty = (s: RootState): boolean =>
 /** fs-65 Phase 3 — per-book prosody annotation intent flag.
     Returns undefined for any book that has not been hydrated yet or where
     the flag was absent on disk. The Task-13 trigger gate is
-    `prosodyEnabled !== false` (absent ⇒ on). */
+    `prosodyEnabled !== false` (absent ⇒ on).
+    Guards `s.bookMeta?.prosodyEnabled` so tests that omit the bookMeta
+    slice from their store don't throw (they get the safe undefined/on default). */
 export const selectProsodyEnabled =
   (bookId: string | null) =>
   (s: RootState): boolean | undefined =>
-    bookId != null ? s.bookMeta.prosodyEnabled[bookId] : undefined;
+    bookId != null ? (s.bookMeta?.prosodyEnabled ?? {})[bookId] : undefined;
 
