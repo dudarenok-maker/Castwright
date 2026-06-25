@@ -19,9 +19,9 @@ export function normaliseForMatch(s: string): string {
   return stripEdges(
     s
       .toLowerCase()
-      .replace(/[‘’]/g, "'")
-      .replace(/[“”]/g, '"')
-      .replace(/[—–]/g, '-')
+      .replace(/[‘’‚‛‹›]/g, "'")
+      .replace(/[“”„‟«»]/g, '"')
+      .replace(/[—–―]/g, '-')
       .replace(/…/g, '...'),
     /[\s"'`]/,
   ).replace(/\s+/g, ' ');
