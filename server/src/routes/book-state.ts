@@ -706,6 +706,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           liveInstruct: typeof (patch as { liveInstruct?: unknown }).liveInstruct === 'boolean'
             ? (patch as { liveInstruct: boolean }).liveInstruct
             : (state.liveInstruct ?? false),
+          prosodyAnnotated: typeof (patch as { prosodyAnnotated?: unknown }).prosodyAnnotated === 'boolean'
+            ? (patch as { prosodyAnnotated: boolean }).prosodyAnnotated
+            : state.prosodyAnnotated,
           updatedAt: new Date().toISOString(),
         };
 

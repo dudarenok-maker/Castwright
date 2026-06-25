@@ -234,6 +234,15 @@ export interface BookStateJson {
      Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
      (plan 27 rename-vs-add policy). */
   liveInstruct?: boolean;
+  /* fs-65 Phase 3 — completion watermark set once BOTH prosody annotation
+     passes (emotion + instruct) finish without any chapter failures.
+     Absent (undefined) or false ⇒ not yet annotated; the auto-trigger
+     re-runs when absent. Distinct from `prosodyEnabled` (Task 11 intent
+     flag): `prosodyEnabled` = "should we annotate", `prosodyAnnotated`
+     = "annotation finished".
+     Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
+     (plan 27 rename-vs-add policy). */
+  prosodyAnnotated?: boolean;
 }
 
 /** Resolved chapter audio format for a book — `audioFormat` from

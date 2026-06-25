@@ -369,6 +369,11 @@ export interface BookStateJson {
       the Qwen 1.7B live-instruct synth path. Absent on books written before
       fs-57 — treat absence as false. */
   liveInstruct?: boolean;
+  /** fs-65 Phase 3 — completion watermark; true once both prosody annotation
+      passes (emotion + instruct) finish without chapter failures. Absent
+      (undefined) or false ⇒ not yet annotated. Mirror of the server's
+      BookStateJson type (`server/src/workspace/scan.ts`). */
+  prosodyAnnotated?: boolean;
 }
 
 export interface BookStateResponse {
