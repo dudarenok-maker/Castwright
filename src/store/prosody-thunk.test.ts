@@ -230,4 +230,105 @@ describe('runProsodyPasses', () => {
     // instruct at 1.0 progress → fraction 1.0 (0.5 + 1.0 * 0.5)
     expect(progressValues).toEqual([0.25, 1.0]);
   });
+
+  it('forwards onPhase label strings to onStatus', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 3' });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onPhase?.({ progress: 1.0, label: 'Instruct — chapter 5' });
+        return EMPTY_INSTRUCT;
+      },
+    );
+
+    const dispatch = vi.fn();
+    const statusValues: string[] = [];
+    await runProsodyPasses(bookId, { dispatch, onStatus: (s) => statusValues.push(s) });
+
+    // Pass 1 label, then inter-pass message, then pass 2 label
+    expect(statusValues).toEqual([
+      'Detecting emotions — chapter 3',
+      'Adding natural reactions…',
+      'Instruct — chapter 5',
+    ]);
+  });
+
+  it('does NOT call onStatus for onPhase events without a label', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onPhase?.({ progress: 0.5 }); // no label
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockResolvedValue(EMPTY_INSTRUCT);
+
+    const dispatch = vi.fn();
+    const statusValues: string[] = [];
+    await runProsodyPasses(bookId, { dispatch, onStatus: (s) => statusValues.push(s) });
+
+    // Only the inter-pass message fires (no label from pass 1)
+    expect(statusValues).toEqual(['Adding natural reactions…']);
+  });
+
+  it('always calls onStatus with the inter-pass message between pass 1 and pass 2', async () => {
+    vi.mocked(api.detectEmotions).mockResolvedValue(EMPTY_EMOTIONS);
+    vi.mocked(api.detectInstruct).mockResolvedValue(EMPTY_INSTRUCT);
+
+    const dispatch = vi.fn();
+    const statusValues: string[] = [];
+    await runProsodyPasses(bookId, { dispatch, onStatus: (s) => statusValues.push(s) });
+
+    expect(statusValues).toEqual(['Adding natural reactions…']);
+  });
+
+  it('forwards onThrottle from pass 1 to the opts onThrottle callback', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onThrottle?.({ chapterId: 2, waitMs: 2000, reason: 'rate-limit' });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockResolvedValue(EMPTY_INSTRUCT);
+
+    const dispatch = vi.fn();
+    const onThrottle = vi.fn();
+    await runProsodyPasses(bookId, { dispatch, onThrottle });
+
+    expect(onThrottle).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards onThrottle from pass 2 to the opts onThrottle callback', async () => {
+    vi.mocked(api.detectEmotions).mockResolvedValue(EMPTY_EMOTIONS);
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onThrottle?.({ chapterId: 4, waitMs: 1500, reason: 'rate-limit' });
+        return EMPTY_INSTRUCT;
+      },
+    );
+
+    const dispatch = vi.fn();
+    const onThrottle = vi.fn();
+    await runProsodyPasses(bookId, { dispatch, onThrottle });
+
+    expect(onThrottle).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not throw when onStatus and onThrottle are absent (Task 13 path)', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 1' });
+        opts.onThrottle?.({ chapterId: 1, waitMs: 1000, reason: 'rate-limit' });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockResolvedValue(EMPTY_INSTRUCT);
+
+    const dispatch = vi.fn();
+    // Neither onStatus nor onThrottle passed — must not throw
+    await expect(runProsodyPasses(bookId, { dispatch })).resolves.toMatchObject({ failed: 0 });
+  });
 });

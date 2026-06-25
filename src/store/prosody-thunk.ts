@@ -24,6 +24,13 @@ export interface RunProsodyPassesOpts {
   signal?: AbortSignal;
   /** Called with 0–1 fraction as the two passes progress. */
   onProgress?: (fraction: number) => void;
+  /** Called with a human-readable status label from each pass's onPhase events,
+   *  and with the inter-pass "Adding natural reactions…" message. Optional —
+   *  Task 13 does not pass this. */
+  onStatus?: (label: string) => void;
+  /** Called when either pass emits an onThrottle event (rate-limit wait). Optional —
+   *  Task 13 does not pass this. */
+  onThrottle?: () => void;
 }
 
 export interface RunProsodyPassesResult {
@@ -40,7 +47,7 @@ export interface RunProsodyPassesResult {
  */
 export async function runProsodyPasses(
   bookId: string,
-  { dispatch, signal, onProgress }: RunProsodyPassesOpts,
+  { dispatch, signal, onProgress, onStatus, onThrottle }: RunProsodyPassesOpts,
 ): Promise<RunProsodyPassesResult> {
   let failed = 0;
 
@@ -49,19 +56,26 @@ export async function runProsodyPasses(
     signal,
     onPhase: (e) => {
       onProgress?.(e.progress * 0.5);
+      if (e.label) onStatus?.(e.label);
     },
+    onThrottle: () => onThrottle?.(),
     onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedEmotions(e)),
     onChapterFailed: () => {
       failed++;
     },
   });
 
+  // Inter-pass status label — mirrors the old button behaviour.
+  onStatus?.('Adding natural reactions…');
+
   // Pass 2: instruct/vocalization — progress 50–100%
   const instructResult = await api.detectInstruct(bookId, {
     signal,
     onPhase: (e) => {
       onProgress?.(0.5 + e.progress * 0.5);
+      if (e.label) onStatus?.(e.label);
     },
+    onThrottle: () => onThrottle?.(),
     onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedInstruct(e)),
     onChapterFailed: () => {
       failed++;

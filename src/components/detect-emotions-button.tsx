@@ -47,6 +47,8 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         dispatch,
         signal: controller.signal,
         onProgress: (fraction) => setProgress(fraction),
+        onStatus: (label) => setStatus(label),
+        onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
       });
       setStatus(
         `Tagged ${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'} across ` +
