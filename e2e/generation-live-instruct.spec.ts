@@ -47,15 +47,38 @@ test.describe('liveInstruct toggle (fs-57)', () => {
     await page.getByRole('button', { name: /^Generate$/ }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
 
-    /* Toggle should be rendered and unchecked by default */
+    /* Toggle is rendered but GREYED OUT (disabled) — the default mock cast has
+       no Qwen 1.7B member, so flipping it would be a no-op (#1100). */
     const toggle = page.getByTestId('live-instruct-toggle');
     await expect(toggle).toBeVisible({ timeout: 5_000 });
 
     const checkbox = toggle.locator('input[type="checkbox"]');
     await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toBeDisabled();
 
     /* Store confirms liveInstruct starts false */
     expect(await liveInstructFromStore(page)).toBe(false);
+
+    /* Promote the first cast member to the 1.7B Quality tier so the toggle
+       becomes active (the view's `characters` prop reads s.cast.characters). */
+    await page.evaluate(() => {
+      const s = (
+        window as unknown as {
+          __store__?: {
+            getState: () => { cast: { characters: Array<{ id: string }> } };
+            dispatch: (a: unknown) => void;
+          };
+        }
+      ).__store__;
+      if (!s) throw new Error('window.__store__ is not exposed');
+      const chars = s.getState().cast.characters;
+      if (!chars.length) throw new Error('no cast characters to promote to 1.7B');
+      s.dispatch({
+        type: 'cast/updateCharacter',
+        payload: { ...chars[0], ttsModelKey: 'qwen3-tts-1.7b' },
+      });
+    });
+    await expect(checkbox).toBeEnabled();
 
     /* Click to enable */
     await checkbox.click();

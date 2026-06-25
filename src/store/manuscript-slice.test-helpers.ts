@@ -8,7 +8,15 @@ import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
  *  present. `manuscriptId: 'm1'` ensures hydrateFromAnalysis takes the
  *  merge/append branch (not the wholesale-replace branch). */
 export function start(
-  sentencesArray: Array<{ id: number; chapterId: number; characterId: string; text: string; emotion?: string }>,
+  sentencesArray: Array<{
+    id: number;
+    chapterId: number;
+    characterId: string;
+    text: string;
+    emotion?: string;
+    instruct?: string;
+    vocalization?: boolean;
+  }>,
 ) {
   return manuscriptSlice.reducer(
     {

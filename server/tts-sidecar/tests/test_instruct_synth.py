@@ -366,17 +366,48 @@ def test_gain_for_item_variant_path_unchanged() -> None:
     assert main._gain_for_item({"voice": "base-voice", "emotion": "angry"}, False) == pytest.approx(1.0)
 
 
-def test_synthesize_batch_live_instruct_gain_applied() -> None:
-    """synthesize_batch(live_instruct=True) applies per-emotion gain to each item's PCM.
+def _amp_ratios(pcms: list[bytes]) -> list[float]:
+    """Mean absolute int16 amplitude of each PCM buffer, normalised to [0, 1]."""
+    INT16_MAX = 32767
+    return [
+        float(np.abs(np.frombuffer(p, dtype="<i2").astype(np.float32) / INT16_MAX).mean())
+        for p in pcms
+    ]
 
-    The synth is mocked so no GPU is needed.  We feed a known-amplitude float32
-    waveform and assert the output int16 amplitude ratio matches the expected gain.
+
+def test_synthesize_batch_live_instruct_gain_drives_real_method(monkeypatch) -> None:
+    """Integration seam (#1100): drive the REAL QwenEngine.synthesize_batch on the
+    1.7B live-instruct path with ONLY the inner model forward mocked, and assert the
+    per-emotion gain lands on the returned PCM.
+
+    Unlike the prior version (which reimplemented the gain loop in the test), this
+    exercises the real call site — `_gain_for_item(items[i], live_instruct)` +
+    `_float_audio_to_int16_le` inside `synthesize_batch`. So a call-site regression
+    (e.g. reverting to `_apply_emotion_gain` keyed on the voice name, or dropping the
+    `live_instruct` flag) is now caught here, not silently passed.
     """
+    import contextlib
+
     engine = main.ENGINES["qwen"]
     assert isinstance(engine, main.QwenEngine)
 
-    # Amplitude of the fake wav — high enough that whisper×0.35 stays non-zero.
-    AMPLITUDE = 0.5
+    AMPLITUDE = 0.5  # high enough that whisper×0.35 stays well above the int16 floor
+    SR = 24000
+    fake_wav = np.full(6000, AMPLITUDE, dtype=np.float32)
+
+    # Neutralise every model/VRAM touchpoint so no GPU/weights are needed; the
+    # gain application below is the REAL code under test.
+    monkeypatch.setattr(engine, "_design", None, raising=False)
+    monkeypatch.setattr(engine, "_base17_activity", lambda: contextlib.nullcontext())
+    monkeypatch.setattr(engine, "_ensure_base17_loaded", lambda: None)
+    monkeypatch.setattr(engine, "_load_voice_prompt_17b", lambda voice: (object(), "English", True))
+    # The inner batched forward returns one fake wav per text and NO gain — the
+    # real synthesize_batch must add the per-emotion gain on top.
+    monkeypatch.setattr(
+        engine,
+        "_icl_instruct_synth_batch",
+        lambda prompt_lists, texts, instructs, langs: ([fake_wav.copy() for _ in texts], SR),
+    )
 
     items = [
         {"voice": "base-voice", "text": "Whispering softly.", "emotion": "whisper"},
@@ -384,79 +415,55 @@ def test_synthesize_batch_live_instruct_gain_applied() -> None:
         {"voice": "base-voice", "text": "Feeling sad.", "emotion": "sad"},
         {"voice": "base-voice", "text": "Neutral line.", "emotion": "neutral"},
     ]
+    result = engine.synthesize_batch("1.7b", items, live_instruct=True)
 
-    fake_wav = np.full(6000, AMPLITUDE, dtype=np.float32)
-    fake_sr = 24000
-
-    expected_gains = [0.35, 1.7, 0.6, 1.0]
-
-    # Patch synthesize_batch to bypass the model entirely, returning fake wavs.
-    def fake_synthesize_batch(model, items_arg, live_instruct=False):
-        from main import SynthBatchResult
-        wavs = [fake_wav.copy() for _ in items_arg]
-        # Replicate the real gain application logic directly.
-        pcms = [
-            main._float_audio_to_int16_le(
-                np.asarray(w, dtype=np.float32) * g
-                if (g := main._gain_for_item(items_arg[i], live_instruct)) != 1.0
-                else w
-            )
-            for i, w in enumerate(wavs)
-        ]
-        return SynthBatchResult(pcms=pcms, sample_rate=fake_sr, gen_ms=0.0, audio_ms=0.0)
-
-    result = fake_synthesize_batch("1.7b", items, live_instruct=True)
-
+    assert result.sample_rate == SR
     assert len(result.pcms) == 4
-
-    INT16_MAX = 32767
-    for i, (pcm_bytes, expected_gain) in enumerate(zip(result.pcms, expected_gains)):
-        arr = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / INT16_MAX
-        # All samples should be AMPLITUDE * expected_gain (within clamp).
-        expected_val = min(AMPLITUDE * expected_gain, 1.0)
-        assert np.allclose(arr, expected_val, atol=1e-2), (
-            f"item {i} (emotion={items[i].get('emotion')!r}): "
-            f"expected amplitude ~{expected_val:.4f}, got mean {arr.mean():.4f}"
+    for ratio, emo in zip(_amp_ratios(result.pcms), ["whisper", "angry", "sad", "neutral"]):
+        expected = min(AMPLITUDE * main._live_instruct_gain(emo), 1.0)
+        assert abs(ratio - expected) < 1e-2, (
+            f"emotion={emo!r}: expected amplitude ~{expected:.4f}, got {ratio:.4f} "
+            "— the live-instruct gain call site may have regressed."
         )
 
 
-def test_synthesize_batch_variant_path_gain_unchanged() -> None:
-    """synthesize_batch(live_instruct=False) still uses voice __<emotion> suffix gain.
-
-    The anchored-variant path must be byte-identical to its pre-fs-57 behaviour.
+def test_synthesize_batch_variant_path_gain_drives_real_method(monkeypatch) -> None:
+    """Integration seam (#1100): drive the REAL synthesize_batch on the anchored-variant
+    path (live_instruct=False) with only the wrapper forward mocked, asserting the gain
+    is keyed on the voice's `__<emotion>` suffix — NOT the per-item emotion key. Guards
+    the variant path against the same class of call-site regression.
     """
+    engine = main.ENGINES["qwen"]
+    assert isinstance(engine, main.QwenEngine)
+
     AMPLITUDE = 0.5
-    items_variant = [
-        {"voice": "qwen-x__whisper", "text": "Whispering variant."},
+    SR = 24000
+    fake_wav = np.full(6000, AMPLITUDE, dtype=np.float32)
+
+    class _FakeBase:
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return ([fake_wav.copy() for _ in text], SR)
+
+    monkeypatch.setattr(engine, "_design", None, raising=False)
+    monkeypatch.setattr(engine, "_ensure_base_loaded", lambda: None)
+    monkeypatch.setattr(engine, "_load_voice_prompt", lambda voice: (object(), "English", True))
+    monkeypatch.setattr(engine, "_base", _FakeBase(), raising=False)
+
+    # `emotion` is set but must be IGNORED on the variant path — only the voice
+    # suffix drives gain there.
+    items = [
+        {"voice": "qwen-x__whisper", "text": "Whispering variant.", "emotion": "angry"},
         {"voice": "qwen-narrator", "text": "Neutral narrator."},
     ]
-    expected_gains = [0.45, 1.0]
+    result = engine.synthesize_batch("0.6b", items, live_instruct=False)
 
-    fake_wav = np.full(6000, AMPLITUDE, dtype=np.float32)
-    fake_sr = 24000
-
-    def fake_synthesize_batch_variant(model, items_arg, live_instruct=False):
-        from main import SynthBatchResult
-        wavs = [fake_wav.copy() for _ in items_arg]
-        pcms = [
-            main._float_audio_to_int16_le(
-                np.asarray(w, dtype=np.float32) * g
-                if (g := main._gain_for_item(items_arg[i], live_instruct)) != 1.0
-                else w
-            )
-            for i, w in enumerate(wavs)
-        ]
-        return SynthBatchResult(pcms=pcms, sample_rate=fake_sr, gen_ms=0.0, audio_ms=0.0)
-
-    result = fake_synthesize_batch_variant("0.6b", items_variant, live_instruct=False)
-
-    INT16_MAX = 32767
-    for i, (pcm_bytes, expected_gain) in enumerate(zip(result.pcms, expected_gains)):
-        arr = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / INT16_MAX
-        expected_val = min(AMPLITUDE * expected_gain, 1.0)
-        assert np.allclose(arr, expected_val, atol=1e-2), (
-            f"item {i} (voice={items_variant[i]['voice']!r}): "
-            f"expected amplitude ~{expected_val:.4f}, got mean {arr.mean():.4f}"
+    assert result.sample_rate == SR
+    expected_gains = [0.45, 1.0]  # __whisper suffix, then unity — emotion key ignored
+    for ratio, expected_gain in zip(_amp_ratios(result.pcms), expected_gains):
+        expected = min(AMPLITUDE * expected_gain, 1.0)
+        assert abs(ratio - expected) < 1e-2, (
+            f"expected amplitude ~{expected:.4f}, got {ratio:.4f} "
+            "— the variant gain call site may have regressed."
         )
 
 

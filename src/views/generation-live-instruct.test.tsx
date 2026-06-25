@@ -88,6 +88,11 @@ function HostedOutlet() {
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
 ];
+/* #1100 — a roster with one 1.7B Quality-tier member, which enables the toggle. */
+const charactersWith17: Character[] = [
+  { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+  { id: 'wren', name: 'Wren', role: 'Lead', color: 'magenta', ttsModelKey: 'qwen3-tts-1.7b' },
+];
 const chapter1: Chapter = {
   id: 1,
   title: 'Chapter 1',
@@ -121,12 +126,12 @@ function makeStore(liveInstruct = false) {
   return store;
 }
 
-function renderView(store: ReturnType<typeof makeStore>) {
+function renderView(store: ReturnType<typeof makeStore>, roster: Character[] = charactersWith17) {
   return render(
     <Provider store={store}>
       <HostedGenerationView
         chapters={[chapter1]}
-        characters={characters}
+        characters={roster}
         paused
         title="The Coalfall Commission"
         bookId="book-1"
@@ -187,6 +192,24 @@ describe('GenerationView — liveInstruct toggle (fs-57)', () => {
     const toggle = screen.getByTestId('live-instruct-toggle');
     expect(toggle.className).toContain('min-h-[44px]');
     expect(toggle.className).toContain('sm:min-h-0');
+  });
+
+  it('greys out + disables the toggle when no cast member is on the 1.7B tier (#1100)', () => {
+    renderView(makeStore(false), characters); // narrator only — no 1.7B member
+    const toggle = screen.getByTestId('live-instruct-toggle');
+    const checkbox = toggle.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(true);
+    expect(toggle.className).toContain('opacity-50');
+    expect(toggle.className).toContain('cursor-not-allowed');
+    expect(screen.getByText(/No effect until a cast member is on the Qwen 1\.7B/)).toBeInTheDocument();
+  });
+
+  it('enables the toggle when a cast member is on the 1.7B tier (#1100)', () => {
+    renderView(makeStore(false), charactersWith17);
+    const toggle = screen.getByTestId('live-instruct-toggle');
+    const checkbox = toggle.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(false);
+    expect(toggle.className).toContain('cursor-pointer');
   });
 });
 
