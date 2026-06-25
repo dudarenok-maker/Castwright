@@ -146,9 +146,10 @@ resume hole — `cast.json`/`state.json` are written before it (`analysis.ts:408
 even though annotations don't affect casting (`result` is the *only* signal that
 moves `analysing → confirm`, `ui-slice.ts:195`).
 
-So Phase 3 runs as a **separate streamed pass that auto-fires once a freshly
-analysed book reaches the `confirm` stage, unless the user opted out, and prosody
-is not yet complete.** It reuses the **existing** `detectEmotions` +
+So Phase 3 runs as a **separate streamed pass that auto-fires once a book
+transitions to analysis-complete (`cast_pending`), unless the user opted out and
+prosody is not yet complete — for the active book AND books analysed in the
+background.** It reuses the **existing** `detectEmotions` +
 `detectInstruct` routes (factored out of `DetectEmotionsButton.run`), now driven
 through the PR2 chunker so they don't truncate large chapters. The user proceeds
 to cast immediately; prosody annotates in the background.
@@ -171,61 +172,69 @@ field), where **absent ⇒ ON**:
 
 | `prosodyEnabled` | Meaning | Auto-fires after analysis? |
 |---|---|---|
-| `undefined` (default) / `true` | **On** (eager) | Yes — at the `confirm` stage of a fresh analysis |
+| `undefined` (default) / `true` | **On** (eager) | Yes — when the book transitions to analysis-complete this session |
 | `false` (toggled off pre-analysis) | **Explicit opt-out** | No — honored even if the book later goes 1.7B |
 
 **Effective gate:**
 
 ```
-shouldAnnotate = prosodyEnabled !== false
-fire = shouldAnnotate && !prosodyAnnotated && stageKind === 'confirm'
+# decided per-book inside the launch, from the AUTHORITATIVE disk state (not the store):
+launchEligible(state) = state.prosodyEnabled !== false && !state.prosodyAnnotated
 ```
 
-- **`confirm`-only, not `ready`.** Firing only on the post-analysis `confirm`
-  transition means a **fresh** analysis annotates, but **pre-existing** library
-  books (which open straight to `ready`) are NOT retro-annotated on every visit —
-  no surprise backlog-wide quota spend on upgrade, and no `getBookState` fetch on
-  the hot Listen path. Old books top up via the manual "Detect emotions" button.
-- **No cast read.** Eligibility does not depend on the cast, so there is no
-  cast-1.7B signal to derive, no cast-hydration race, and the cast bulk-pin needs
-  no instrumentation. (This deliberately drops the earlier "cast-time safety net":
-  with eager-default every fresh book is already annotated, so the only uncovered
-  case is an explicit opt-out that later goes 1.7B — see Limitations + the
-  render-time hint below.)
+- **Trigger keyed on library status, NOT the active stage (round-2 Critical).**
+  `stageKind === 'confirm'` is structurally a **single-active-book** signal
+  (`ui.stage` is singular; `analysisComplete` is guarded to the active analysing
+  stage), so a book analysed in the **background** while another is active would
+  *never* be observed at `confirm` and would silently never annotate — violating
+  the first-class concurrent-multi-book invariant. Instead, **one effect fans out
+  over `library.books` statuses** (the substrate the plan-83 background poll
+  already uses, `layout.tsx:940-976`) and fires for any book that **transitions**
+  into an analysis-complete status (`cast_pending` and later — sentences exist),
+  active or background alike.
+- **Seed-on-mount to skip pre-existing books.** `Layout` is the persistent app
+  shell (mounts once). On the effect's **first run**, every already-complete book
+  is added to a `considered` ref-`Set` *without firing* — so the existing library
+  is not retro-annotated (no backlog-wide quota spend on upgrade). Only books that
+  reach analysis-complete *later in the session* (a fresh or background analysis)
+  fire. This seed also makes a `Layout` remount self-healing: a re-seed re-marks
+  any in-flight book as considered, so it can't double-fire (round-2 #5).
+- **No cast read.** Eligibility does not depend on the cast — no cast-1.7B signal,
+  no cast-hydration race. (Drops the earlier "cast-time safety net": with
+  eager-default every fresh book is annotated; the only uncovered case is an
+  explicit opt-out that later goes 1.7B — see Limitations + the render-time hint.)
 
 - **Toggle.** An analysis-form toggle (`src/views/analysing.tsx`) labeled
   "Expressive directions" — **checked by default** (eager). Checked state =
   `stored !== false`. Unchecking stores `false` (opt-out); re-checking stores
-  `true`. It writes the **frontend store** (`book-meta-slice`) + a durable
-  `putBookState` PUT; the analysis POST is **not** gated on it (the trigger is
-  client-side, post-analysis).
+  `true`. It writes the **frontend store** (`book-meta-slice`) AND a durable
+  `putBookState` PUT — the **PUT is load-bearing**: the trigger reads the opt-out
+  from disk (below), not the store, so the durable value is the gate. The analysis
+  POST is **not** gated on it.
 
-- **Trigger — one effect, per-book + retry-safe.** A `useEffect` in
-  `src/components/layout.tsx`, modeled on the voice-match auto-trigger
-  (`layout.tsx:895-917`) but hardened per the round-1 review. Dependency set:
-  `[stageKind, bookId, prosodyEnabled]`.
-  - **Per-book guard** (round-1 H2): the fired set is keyed by `bookId`
-    (a `Set<string>`/ref-`Map`), NOT a single slot — concurrent multi-book is a
-    first-class invariant, and a background book's pass must not be torn down when
-    the user switches the active book. The pass is launched as a tracked
-    background job (fire-and-forget, fill-only-empty, idempotent), aborted only on
-    unmount, **not** on a benign `bookId` change.
-  - **Retry-safe** (round-1 H3): the run body is wrapped in `try/finally` and the
-    per-book guard is cleared on failure, so a transient analyzer/quota error does
-    not permanently silence Phase 3 for the session.
-  - **Watermark check** before launch: `api.getBookState(bookId)` →
-    `state.prosodyAnnotated` (fetched once at `confirm`, cheap; not on every mount).
+- **Launch — authoritative, per-book, retry-safe.** For each newly-complete book
+  the effect launches a detached background job:
+  1. `state = await api.getBookState(bookId)` — read **both** `prosodyEnabled` and
+     `prosodyAnnotated` from this one disk fetch. Gating on the fetched
+     `prosodyEnabled !== false` (not the possibly-un-hydrated store selector)
+     **eliminates the opt-out hydration race** (round-2 #2) and honors the opt-out
+     authoritatively. `prosodyAnnotated` truthy ⇒ no-op (watermark).
+  2. `const { failed } = await runProsodyPasses(bookId, { dispatch })`.
+  3. **Watermark only on full success:** `if (failed === 0) putBookState(…
+     prosodyAnnotated:true)`; **else remove the book from `considered`** so the
+     fill-only-empty re-run can top up the failed chapters (round-2 #6 — the
+     passes resolve on *partial* failure, so an unconditional watermark would
+     wrongly mark a partial book complete and block recovery).
+  4. The whole job is wrapped in `try/catch`; on throw, remove from `considered`
+     (retry-safe, round-1 H3). The job is **detached** from the effect's cleanup
+     (NOT cancelled on a `bookId`/active-stage change), so a background book's pass
+     survives the user switching books (round-1 H2).
 
 - **Surfacing.** Phase 3 progress shows in the **global progress pill**
   (`layout.tsx` AnalysisPill region) + a card on the confirm/manuscript view,
   labeled "Phase 3 — Detecting prosody". The analysing view's 3-phase list is
   **unchanged** (no `ANALYSIS_PHASES`/`PHASE_WEIGHTS` edits — Phase 3 has its own
   progress surface, not a 4th in-pipeline phase).
-- **Resume / idempotency.** A completion watermark `prosodyAnnotated`
-  (`state.json`) records completion. The passes are fill-only-empty
-  (`applyDetectedEmotions`/`applyDetectedInstruct`), so an interrupted run is
-  recovered by re-firing — it fills the remaining empties; the watermark stops a
-  completed book from ever re-running.
 - **Non-blocking.** The pass never blocks navigation or casting.
 - **The "Detect emotions" button stays** as the manual re-run / top-up — the
   recovery for an opted-out book that later goes 1.7B, and for pre-existing books.
@@ -269,9 +278,14 @@ unrelated `instructHash`/`renderedInstructHashes` "liveInstruct render" comments
   [Turn on]" wired to re-enable + the manual "Detect emotions" recovery. *(Small
   UX add; if it risks scope it ships as an immediate follow-up, not silently
   dropped.)*
-- **Pre-existing books are not retro-annotated.** The `confirm`-only trigger means
-  library books that predate this feature only gain prosody via the manual button.
-  Deliberate — avoids a backlog-wide auto-spend on upgrade.
+- **Pre-existing books are not retro-annotated.** The seed-on-mount considered-set
+  means books already analysis-complete when the app shell mounts are skipped; they
+  gain prosody only via the manual "Detect emotions" button. Deliberate — avoids a
+  backlog-wide auto-spend on upgrade. **Accepted edge:** a book that completes in
+  the *exact* render the shell first mounts is seeded as pre-existing and skipped
+  (covered by the manual button); and a book whose analysis finished while the app
+  was closed is treated as pre-existing on next launch. Both are the conservative
+  side of the trade (skip, don't double-spend).
 - Multi-book: each book's Phase 3 is a separate background stream sharing the
   per-model analyzer rate-limit bucket (same as today's button). The trigger's
   per-book guard keeps concurrent books' passes independent. No per-manuscript
@@ -290,19 +304,25 @@ unrelated `instructHash`/`renderedInstructHashes` "liveInstruct render" comments
   sentence is emitted exactly once.
 - **2B:** server route test — a chapter over budget yields chunked `ops` with no
   `chapter-failed`; a boundary-straddling `merge` is emitted once.
-- **Phase 3:** frontend test — the **gate truth-table**: `prosodyEnabled`
-  `undefined` at `confirm` → fires (eager default); `true` → fires; `false` →
-  suppressed; `stageKind === 'ready'` (no fresh `confirm`) → does NOT fire (no
-  retro-annotation); watermark-complete (`getBookState` → `prosodyAnnotated:true`)
-  → fires the guard but no `runProsodyPasses`. Trigger robustness: **two books at
-  `confirm` each fire once and a book-switch does NOT abort the first's run**
-  (per-book guard, round-1 H2); **a failed pass clears the guard and a re-entry
-  retries** (round-1 H3). Toggle: **checked by default** (`stored !== false`);
-  unchecking stores `false` + issues the PUT; re-checking stores `true`. The
-  global pill renders progress. Server test — the annotation routes run through
-  the chunker; the watermark is written on completion. One e2e: analysis completes
-  → user reaches the confirm/cast stage while the prosody pill runs → annotations
-  land (a sentence gains an `instruct`).
+- **Phase 3:** frontend test — the **library-status trigger**: a book that
+  **transitions** into `cast_pending` after mount fires `runProsodyPasses` once
+  (eager); a book already complete **at mount** is seeded as considered and does
+  NOT fire (no retro-annotation); a **background** book (not the active stage) that
+  transitions fires (the Critical #1 regression — assert it fires even though
+  `stageKind`/`bookId` reference a *different* active book). Authoritative gate
+  (round-2 #2): with `getBookState` returning `prosodyEnabled:false` → no
+  `runProsodyPasses` even though the store selector is `undefined`; returning
+  `prosodyAnnotated:true` → no-op. Robustness: **two books transitioning each fire
+  once and a book-switch does not abort either** (H2); a **rejected** pass removes
+  the book from `considered` so a later transition retries (H3); a resolved pass
+  with `failed > 0` does NOT write the watermark and removes the book from
+  `considered` (round-2 #6); `failed === 0` writes `prosodyAnnotated:true`. Toggle:
+  **checked by default** (`stored !== false`); unchecking stores `false` + issues
+  the PUT; re-checking stores `true`. The global pill renders progress. Server
+  test — the annotation routes run through the chunker; the watermark is written
+  on completion. One e2e: analysis completes → the prosody pill runs in the
+  background → annotations land (a sentence gains an `instruct`); a second book
+  with the toggle unchecked pre-analysis does NOT run the pass.
 
 ## PR decomposition
 
