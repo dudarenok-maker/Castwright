@@ -13,7 +13,6 @@ const OVERAGE_MULT = 2;
 
 interface Props {
   phase: DesignPhase;
-  complete?: boolean;
 }
 
 function fmt(ms: number): string {
@@ -37,7 +36,7 @@ function budgetBounds(phase: DesignPhase): { before: number; total: number } {
   return { before, total };
 }
 
-export function DesignProgress({ phase, complete = false }: Props) {
+export function DesignProgress({ phase }: Props) {
   const [now, setNow] = useState(0);
   const startRef = useRef(Date.now());
   const phaseStartRef = useRef(Date.now());
@@ -50,10 +49,9 @@ export function DesignProgress({ phase, complete = false }: Props) {
   }
 
   useEffect(() => {
-    if (complete) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [complete]);
+  }, []);
 
   const elapsedTotal = now === 0 ? 0 : now - startRef.current;
   const inPhase = now === 0 ? 0 : now - phaseStartRef.current;
@@ -63,16 +61,18 @@ export function DesignProgress({ phase, complete = false }: Props) {
   // Cumulative fill: phases before this one are "done"; within this phase ease
   // toward (but never past) its budget until the next real event arrives.
   const inPhaseFill = Math.min(inPhase, budget * 0.92);
-  const pct = complete ? 100 : Math.min(99, ((before + inPhaseFill) / total) * 100);
+  const pct = Math.min(99, ((before + inPhaseFill) / total) * 100);
 
-  const slow = !complete && inPhase > budget * OVERAGE_MULT;
+  // Slow when EITHER this phase has run past 2× its budget OR the whole design
+  // has run past 2× the expected total (the spec's OR-clause: catches a run that
+  // is uniformly slow across phases without any single one tripping the per-phase
+  // bar — e.g. a contended GPU).
+  const slow = inPhase > budget * OVERAGE_MULT || elapsedTotal > total * OVERAGE_MULT;
   const remaining = Math.max(0, total - before - inPhase);
 
-  const fillStyle: CSSProperties = complete
-    ? { width: '100%', transition: 'width 300ms ease-out', animation: 'none' }
-    : slow
-      ? { width: `${pct}%`, transition: 'width 700ms ease-out' }
-      : { width: `${pct}%`, transition: 'width 700ms ease-out', animation: 'none' };
+  const fillStyle: CSSProperties = slow
+    ? { width: `${pct}%`, transition: 'width 700ms ease-out' }
+    : { width: `${pct}%`, transition: 'width 700ms ease-out', animation: 'none' };
   const fillClass = `design-fill mt-2${slow ? ' design-fill--indeterminate' : ''}`;
 
   return (
@@ -96,9 +96,7 @@ export function DesignProgress({ phase, complete = false }: Props) {
       <div className="mt-1 text-[11px] text-ink/40" data-testid="design-eta">
         {slow
           ? 'Taking longer than usual — the GPU may be busy with another job.'
-          : complete
-            ? 'Done'
-            : `~${fmt(remaining)} left`}
+          : `~${fmt(remaining)} left`}
       </div>
     </div>
   );

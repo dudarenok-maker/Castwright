@@ -1244,8 +1244,9 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
       );
     });
     expect(await screen.findByTestId('design-waveform')).toBeInTheDocument();
-    // beginSingle sets phase:'freeing-vram' — the real phase now flows through
-    expect(screen.getByText(/freeing gpu memory/i)).toBeInTheDocument();
+    // beginSingle seeds phase:'loading-model' (#1092 — avoids the freeing-vram
+    // flash); the real phase still flows through via the SSE relay.
+    expect(screen.getByText(/loading the design model/i)).toBeInTheDocument();
   });
 
   it('opens the compare modal when the slice is ready-to-compare for this character', async () => {

@@ -275,7 +275,11 @@ export const castDesignSlice = createSlice({
         currentName: action.payload.name,
         characterId: action.payload.characterId,
         mode: action.payload.mode,
-        phase: 'freeing-vram',
+        /* #1092 — seed 'loading-model', not 'freeing-vram': a single BASE-voice
+           design doesn't reliably emit a freeing-vram event, so seeding it made
+           the drawer flash "Freeing GPU memory…" before "Loading the design
+           model…" arrived. The real freeing-vram event still shows if it fires. */
+        phase: 'loading-model',
         state: 'running',
         lastTickAt: action.payload.lastTickAt,
         failures: [],

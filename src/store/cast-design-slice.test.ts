@@ -119,13 +119,13 @@ describe('castDesignSlice — active snapshot reducers', () => {
 });
 
 describe('single-design snapshot', () => {
-  it('beginSingle opens a kind:single snapshot with phase freeing-vram', () => {
+  it('beginSingle opens a kind:single snapshot seeded at phase loading-model', () => {
     const s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
       bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'first', lastTickAt: 10,
     }));
     expect(s.active).toMatchObject({
       kind: 'single', bookId: 'b1', characterId: 'c1', currentName: 'Aria',
-      total: 1, done: 0, mode: 'first', phase: 'freeing-vram', state: 'running',
+      total: 1, done: 0, mode: 'first', phase: 'loading-model', state: 'running',
     });
   });
 
@@ -179,12 +179,12 @@ describe('single-design snapshot', () => {
     expect(s.active?.preview?.voiceUuid).toBeUndefined();
   });
 
-  it('beginSingle seeds the lowest phase so early phases still show', () => {
+  it('beginSingle seeds loading-model, not freeing-vram, to avoid the GPU-memory flash (#1092)', () => {
     const s = castDesignSlice.reducer(
       undefined,
       castDesignActions.beginSingle({ bookId: 'b', characterId: 'c', name: 'N', mode: 'first', lastTickAt: 0 }),
     );
-    expect(s.active?.phase).toBe('freeing-vram');
+    expect(s.active?.phase).toBe('loading-model');
   });
 
   it('setPhase advances forward through the real phase order but never rewinds', () => {
