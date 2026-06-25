@@ -828,6 +828,30 @@ describe('setSentenceText', () => {
   });
 });
 
+const find1 = (s: ReturnType<typeof reducer>) =>
+  s.sentences.find((x) => x.chapterId === 1 && x.id === 1)!;
+
+describe('setSentenceText — vocalization tri-state (fs-58)', () => {
+  const base = () =>
+    start([{ chapterId: 1, id: 1, characterId: 'mira', text: 'Hhh… done.', vocalization: true }]);
+
+  it('leaves an existing vocalization:true intact when no param is passed (strip_tag path)', () => {
+    const s = reducer(base(), manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'done.' }));
+    expect(find1(s).vocalization).toBe(true);
+  });
+
+  it('sets the flag when vocalization:true', () => {
+    const s0 = start([{ chapterId: 1, id: 1, characterId: 'mira', text: 'X' }]);
+    const s = reducer(s0, manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'Ah! X', vocalization: true }));
+    expect(find1(s).vocalization).toBe(true);
+  });
+
+  it('deletes the flag when vocalization:false (absent, not === false)', () => {
+    const s = reducer(base(), manuscriptActions.setSentenceText({ chapterId: 1, sentenceId: 1, text: 'done.', vocalization: false }));
+    expect('vocalization' in find1(s)).toBe(false);
+  });
+});
+
 describe('mergeSentences', () => {
   it('merges into the lowest id, concatenates in order, drops the rest, tombstones', () => {
     const s = start([
