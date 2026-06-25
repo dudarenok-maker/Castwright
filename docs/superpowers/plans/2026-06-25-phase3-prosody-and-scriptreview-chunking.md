@@ -4,7 +4,7 @@
 
 **Goal:** Stop script review from silently failing on normal-sized chapters, make it work on huge (Cyrillic) chapters via a sentence-chunker, and auto-generate per-line prosody annotations as a gated post-analysis pass.
 
-**Architecture:** Three independent PRs. PR1 surfaces a dropped SSE event (client only). PR2 adds a server sentence-chunker (owned-core ownership rule) consumed by script-review. PR3 (gate redesigned post-fs-66, eager-default per the 2026-06-25 decision) auto-triggers the existing annotation routes (through PR2's chunker) at the post-analysis `confirm` stage whenever the per-book `prosodyEnabled` flag is not `false` (absent ⇒ on), via a per-book + retry-safe effect, deduped by a completion watermark. No cast read.
+**Architecture:** Three independent PRs. PR1 surfaces a dropped SSE event (client only). PR2 adds a server sentence-chunker (owned-core ownership rule) consumed by script-review. PR3 (gate redesigned post-fs-66, eager-default per the 2026-06-25 decision) auto-triggers the existing annotation routes (through PR2's chunker) when a book **transitions to analysis-complete in `library.books`** (active OR background — round-2 Critical), whenever the per-book `prosodyEnabled` flag (read authoritatively from disk) is not `false` (absent ⇒ on), via a seeded, detached, retry-safe effect deduped by a completion watermark. No cast read.
 
 **Tech Stack:** Vite + React 18 + Redux Toolkit (frontend, Vitest + jsdom); Node/Express + TypeScript (server, Vitest + node env); Playwright (e2e). SSE for streamed analyzer passes.
 
@@ -19,7 +19,7 @@
 - **Commit convention:** `<type>(<scope>): <subject>`. End every commit body with `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 - **One branch = one PR.** PR1 `fix/frontend-scriptreview-chapter-failed`; PR2 `feat/server-analyzer-chapter-chunker`; PR3 `feat/analysis-phase3-prosody`. Cut each off the latest `origin/main`.
 - **Verify gates:** frontend `npm test`; server `cd server && npm run test`; full `npm run verify` before each PR push.
-- **PR3 gate (post-fs-66, eager-default):** fs-66 ("1.7B implies prosody") has merged — synth gate is `is17b` alone. **Ground truth:** 1.7B is never an account/book default (the picker offers only Qwen 0.6b); it's chosen late (cast bulk-pin or regen override), so there is NO analysis-time 1.7B signal. Decision (2026-06-25): **annotate eagerly by default** — the gate is `prosodyEnabled !== false` (absent ⇒ on), fired at the `confirm` stage. PR3 renames the orphaned `liveInstruct` flag to `prosodyEnabled` (Task 11) and MUST NOT introduce any competing book-quality flag. Cut off latest `origin/main`.
+- **PR3 gate (post-fs-66, eager-default):** fs-66 ("1.7B implies prosody") has merged — synth gate is `is17b` alone. **Ground truth:** 1.7B is never an account/book default (the picker offers only Qwen 0.6b); it's chosen late (cast bulk-pin or regen override), so there is NO analysis-time 1.7B signal. Decision (2026-06-25): **annotate eagerly by default** — the gate is `prosodyEnabled !== false` (absent ⇒ on), fired when a book transitions to analysis-complete in `library.books` (round-2 re-key: active + background books, not the active `stageKind`). PR3 renames the orphaned `liveInstruct` flag to `prosodyEnabled` (Task 11) and MUST NOT introduce any competing book-quality flag. Cut off latest `origin/main`.
 
 ---
 
@@ -302,10 +302,11 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 > the book bulk-pin `POST /cast/tier`). Tasks 7–10 + 14 are unchanged. The gate
 > tasks are redesigned below: **Task 11 (new)** renames `liveInstruct` →
 > `prosodyEnabled` (absent ⇒ on); **Task 12** is the analysis-form toggle
-> (checked by default); **Task 13** is the eager, `confirm`-only, per-book +
-> retry-safe auto-trigger (no cast read); **Task 13b** adds the opt-out
-> render-time hint. See the spec's "Gate model" section (read it — the
-> eager-default decision + round-1 review fixes are folded there).
+> (checked by default); **Task 13** is the eager auto-trigger keyed on
+> `library.books` status transitions (active + background books), seeded,
+> detached, retry-safe, authoritative-disk gate (no cast read); **Task 13b**
+> adds the opt-out render-time hint. See the spec's "Gate model" section (read
+> it — the eager-default decision + round-1 AND round-2 review fixes are folded there).
 
 **PREREQUISITE — satisfied.** Task 8 imports `server/src/analyzer/chapter-chunker.ts`, which landed with PR2 (#1128, merged). **Cut `feat/analysis-phase3-prosody` off the latest `origin/main`** (which now contains both PR2 and fs-66).
 
@@ -314,16 +315,17 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 ### Task 7: book-state `prosodyAnnotated` watermark
 
 **Files:**
-- Modify: `server/src/workspace/scan.ts` (`BookStateJson`, near the existing `liveInstruct?` / `prosodyEnabled?` boolean field at lines 230–236); `server/src/routes/book-state.ts` (the `case 'state':` patch handler, lines 605–765).
+- Modify: `server/src/workspace/scan.ts` (server `BookStateJson`, near the existing `liveInstruct?` / `prosodyEnabled?` boolean field at lines 230–236); `server/src/routes/book-state.ts` (the `case 'state':` patch handler, lines 605–765).
+- Modify: **`src/lib/types.ts`** — the **hand-maintained frontend `BookStateJson`** (~line 285; this is NOT generated from `api-types.ts`). Add `prosodyAnnotated?: boolean` so `st?.state.prosodyAnnotated` typechecks in Task 13's trigger (`BookStateResponse.state: BookStateJson`, `types.ts:375`). **Omitting this is a frontend TS error that fails `npm run typecheck`** (round-2 D-7c).
 - Test: `server/src/routes/book-state.test.ts` (extend).
 
 **Interfaces:**
-- Produces: `BookStateJson.prosodyAnnotated?: boolean` — true once both prosody passes complete for the book; the auto-trigger fires only when absent/false. **Distinct from the `prosodyEnabled` intent flag (Task 11): `prosodyEnabled` = "should we annotate", `prosodyAnnotated` = "annotation finished".**
+- Produces: `BookStateJson.prosodyAnnotated?: boolean` (BOTH the server `scan.ts` type and the frontend `src/lib/types.ts` type) — true once both prosody passes complete for the book; the trigger fires only when absent/false. **Distinct from the `prosodyEnabled` intent flag (Task 11): `prosodyEnabled` = "should we annotate", `prosodyAnnotated` = "annotation finished".**
 
 - [ ] **Step 1: Write the failing test** — `PUT /api/books/:bookId/state {patch:{prosodyAnnotated:true}}` persists the field; an absent/non-boolean patch leaves it unchanged.
 - [ ] **Step 2: Run, verify fail** — `cd server && npm run test -- book-state` → FAIL.
-- [ ] **Step 3: Implement** — add the optional field (JSDoc, additive — do NOT bump `CURRENT_STATE_SCHEMA`, mirror the existing single-boolean field's note) + a boolean picker in the `case 'state':` spread (mirror the existing single-boolean ternary in that handler).
-- [ ] **Step 4: Run, verify pass.**
+- [ ] **Step 3: Implement** — add the optional field to **both** `BookStateJson` types (server `scan.ts` + frontend `src/lib/types.ts`; JSDoc, additive — do NOT bump `CURRENT_STATE_SCHEMA`, mirror the existing single-boolean field's note) + a boolean picker in the `case 'state':` spread (mirror the existing single-boolean ternary in that handler).
+- [ ] **Step 4: Run, verify pass** — server `book-state` test + `npm run typecheck` (catches the frontend-type omission).
 - [ ] **Step 5: Commit** — `feat(server): prosodyAnnotated watermark on book state`.
 
 ### Task 8: annotation routes consume the chunker
@@ -375,9 +377,9 @@ annotatedChapters += 1; // once per chapter, after the chunk loop — keep the e
 - Test: `src/store/prosody-thunk.test.ts`.
 
 **Interfaces:**
-- Produces: `runProsodyPasses(bookId, { dispatch, signal, onProgress? }): Promise<{ totalAnnotations: number; totalChapters: number; failed: number }>` — runs `api.detectEmotions` then `api.detectInstruct`, dispatching `applyDetectedEmotions`/`applyDetectedInstruct`, summing failures via `onChapterFailed`.
+- Produces: `runProsodyPasses(bookId, { dispatch, signal?, onProgress? }): Promise<{ totalAnnotations: number; totalChapters: number; failed: number }>` — runs `api.detectEmotions` then `api.detectInstruct`, dispatching `applyDetectedEmotions`/`applyDetectedInstruct`, summing failures via `onChapterFailed`. **`signal` is OPTIONAL** (round-2 D-1a): Task 13's detached background job passes none. The returned `failed` count is load-bearing — Task 13 only writes the watermark when `failed === 0`.
 
-- [ ] TDD: test that it calls both api passes in order and dispatches both apply actions; mock `api`. Commit `refactor(frontend): extract runProsodyPasses from DetectEmotionsButton`.
+- [ ] TDD: test that it calls both api passes in order and dispatches both apply actions; that a `chapter-failed` event increments `failed`; that it resolves (does NOT throw) on partial failure. Mock `api`. Commit `refactor(frontend): extract runProsodyPasses from DetectEmotionsButton`.
 
 ### Task 11: rename `liveInstruct` → `prosodyEnabled` (eager-default Phase-3 intent flag)
 
@@ -388,6 +390,7 @@ The fs-66-orphaned `liveInstruct` flag is renamed and repurposed as the Phase-3 
 - Modify: `server/src/routes/book-state.ts` — the `case 'state':` picker that reads `liveInstruct` (lines 706–708) → `prosodyEnabled` (keep the same boolean-typeof guard).
 - Modify: `src/store/book-meta-slice.ts` — rename `liveInstruct` field (55, 61), the `setLiveInstruct`-payload type (72), hydration (94), `setLiveInstruct` (119–120), `selectLiveInstruct` (167–170) to `prosodyEnabled`/`setProsodyEnabled`/`selectProsodyEnabled`. **Preserve undefined:** hydration `s.prosodyEnabled[bookId] = state.prosodyEnabled` (drop `?? false`); the selector returns `s.bookMeta.prosodyEnabled[bookId]` with **NO `?? false`** (the gate distinguishes `false` from absent). Rewrite the stale JSDoc at 114–118 (it claims a non-existent "persistence-middleware watches this action" — there is no such middleware; the durable PUT is issued by the Task-12 toggle).
 - Modify: `src/components/layout.tsx:790` — hydration `liveInstruct: res.state.liveInstruct ?? false` → `prosodyEnabled: res.state.prosodyEnabled` (preserve undefined).
+- Modify: **`src/lib/types.ts`** — the hand-maintained frontend `BookStateJson` has its own `liveInstruct?: boolean` (~line 371, distinct from `api-types.ts`); rename it → `prosodyEnabled?: boolean` + update the adjacent comment (~line 429 names the `instructHash` render path — leave THAT one). Omitting this is a frontend TS error (round-2 D-7c sibling).
 - Modify: `openapi.yaml` — rename the book-state `liveInstruct` property (line 3361) → `prosodyEnabled` + rewrite its description (absent ⇒ on). **Do NOT touch line 4910** (the Sentence `instruct` "Qwen 1.7B liveInstruct path" comment names the synth path, not this flag). Then regenerate: `npm run openapi:types` (updates `src/lib/api-types.ts`).
 - Modify tests: `src/store/book-meta-slice.test.ts`, `server/src/routes/book-state.test.ts` (the liveInstruct cases ~2128–2168), and any `setLiveInstruct`/`selectLiveInstruct` references.
 
@@ -413,6 +416,7 @@ The fs-66-orphaned `liveInstruct` flag is renamed and repurposed as the Phase-3 
 
 Behaviour:
 - **Checked state** = `stored !== false`, where `stored = useAppSelector(selectProsodyEnabled(bookId))`. So it is **checked by default** (eager) — unset (`undefined`) and `true` both render checked; only an explicit `false` renders unchecked.
+- **Null `bookId` guard** (round-2 D-2b): `bookId` can be `null` on the analysing surface (`analysing.tsx:660`). `selectProsodyEnabled(null)` returns `undefined` (safe to read), but `setProsodyEnabled` needs a non-null `bookId` — **hide/disable the toggle when `bookId == null`**.
 - **On change:** `dispatch(bookMetaActions.setProsodyEnabled({ bookId, value }))` AND `void api.putBookState(bookId, { slice: 'state', patch: { prosodyEnabled: value } })` for durability. Unchecking stores `false`; re-checking stores `true`. **Do NOT gate the analysis POST on it** — Phase 3 runs after analysis via the client-side Task-13 trigger; the server never reads this during analysis.
 - Label "Expressive directions"; helper text "Generate per-line emotion + delivery directions for the higher-quality (1.7B) voice. Runs in the background after analysis."
 
@@ -422,49 +426,62 @@ Behaviour:
 - [ ] **Step 4: Run, verify pass.**
 - [ ] **Step 5: Commit** — `feat(frontend): expressive-directions toggle on the analysis form (on by default)`.
 
-### Task 13: eager auto-trigger (`confirm`-only, per-book, retry-safe) + watermark
+### Task 13: eager auto-trigger keyed on library status (background-safe, retry-safe, authoritative)
+
+**Round-2 Critical:** a `stageKind === 'confirm'` trigger is a single-active-book signal (`ui.stage` is singular) and would never observe a book analysed in the **background** — violating the concurrent-multi-book invariant. So the trigger keys off **`library.books` status transitions** instead (the substrate the plan-83 fan-out at `layout.tsx:940-976` already uses), seeded on first mount to skip pre-existing books, and reads the gate authoritatively from disk.
 
 **Files:**
-- Modify: `src/components/layout.tsx` — add a `useEffect` modeled on the voice-match auto-trigger (`layout.tsx:895-917`), but with a **per-book** fired-guard (a `Set<string>` in a ref, NOT a single slot) and the run launched as a **tracked background job that survives a `bookId` change** (concurrent multi-book is a first-class invariant — a background book's pass must not be aborted when the user switches the active book).
+- Modify: `src/components/layout.tsx` — add a NEW `useEffect` near the plan-83 background fan-out (`:940-976`). It is **NOT** modeled on the cleanup-tied voice-match effect (`:895-917`) — its launched jobs are deliberately **detached** (must survive a book-switch). Reads `library.books` (the same `library` already in scope for `bgBookIds`).
 - Test: `src/store/prosody-autotrigger.test.tsx`.
 
 **Interfaces:**
-- Consumes: `runProsodyPasses` (Task 10); `selectProsodyEnabled` (Task 11); `api.getBookState`/`api.putBookState`. **No cast read** (eager-default does not depend on the cast).
+- Consumes: `runProsodyPasses` (Task 10); `api.getBookState`/`api.putBookState`; `library.books[].status`/`.bookId`. **No cast read, no `selectProsodyEnabled` read** — the gate (`prosodyEnabled`) and the watermark (`prosodyAnnotated`) are both read from the launch's authoritative `getBookState`, which kills the opt-out hydration race (round-2 #2).
 
 ```tsx
-const prosodyEnabled = useAppSelector(selectProsodyEnabled(bookId));   // boolean | undefined
-const shouldAnnotate = prosodyEnabled !== false;                       // eager default: absent/true ⇒ on
+// A book is "analysis-complete" once it has sentences — cast_pending and later.
+const isAnalysisComplete = (s: string) =>
+  s !== 'not_analysed' && s !== 'analysing' && s !== 'unreadable' && s !== 'orphaned';
 
-const prosodyFiredFor = useRef<Set<string>>(new Set());
+const prosodyConsidered = useRef<Set<string>>(new Set());
+const prosodySeeded = useRef(false);
+const completeIds = library.books.filter((b) => isAnalysisComplete(b.status)).map((b) => b.bookId);
+const completeKey = completeIds.join('|');                         // stable dep digest
 useEffect(() => {
-  if (stageKind !== 'confirm') return;             // fresh-analysis transition only — NOT 'ready' (no retro-annotation)
-  if (!bookId || !shouldAnnotate) return;
-  if (prosodyFiredFor.current.has(bookId)) return; // per-book guard
-  prosodyFiredFor.current.add(bookId);
-  // Tracked background job: deliberately NOT tied to this effect's cleanup, so
-  // switching the active book does not abort an in-flight pass (round-1 H2).
-  (async () => {
-    try {
-      const st = await api.getBookState(bookId);
-      if (st?.state.prosodyAnnotated) return;       // watermark complete → no-op
-      await runProsodyPasses(bookId, { dispatch });
-      void api.putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: true } });
-    } catch {
-      prosodyFiredFor.current.delete(bookId);        // retry-safe (round-1 H3): a failed pass can re-fire this session
-    }
-  })();
-}, [stageKind, bookId, shouldAnnotate]);
+  if (!prosodySeeded.current) {                                    // first run: existing library = pre-existing
+    completeIds.forEach((id) => prosodyConsidered.current.add(id));
+    prosodySeeded.current = true;
+    return;
+  }
+  for (const id of completeIds) {
+    if (prosodyConsidered.current.has(id)) continue;               // already handled this session
+    prosodyConsidered.current.add(id);
+    void (async () => {                                            // detached: survives a book-switch (H2)
+      try {
+        const st = await api.getBookState(id);
+        if (!st || st.state.prosodyEnabled === false) return;      // authoritative opt-out (round-2 #2)
+        if (st.state.prosodyAnnotated) return;                     // watermark → no-op
+        const { failed } = await runProsodyPasses(id, { dispatch });
+        if (failed === 0) api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
+        else prosodyConsidered.current.delete(id);                 // partial → allow fill-only re-run (round-2 #6)
+      } catch {
+        prosodyConsidered.current.delete(id);                      // transient error → retry (round-1 H3)
+      }
+    })();
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [completeKey]);
 ```
-- **`confirm`-only** (not `ready`): fires on the post-analysis transition, so a fresh analysis annotates but pre-existing library books (opened straight to `ready`) are not retro-annotated — no backlog-wide auto-spend, no `getBookState` on the Listen path.
-- **Per-book guard + book-switch-safe** (round-1 H2): the `Set<string>` ref tracks every book that has fired; the IIFE is intentionally detached from the effect's render lifecycle (no `AbortController` keyed on `bookId`) so a background book's pass completes even after the user navigates to another book.
-- **Retry-safe** (round-1 H3): the `try/catch` clears the per-book guard on failure, so a transient analyzer/quota error does not permanently silence Phase 3 for the session.
-- `prosodyAnnotated` is NOT hydrated into any slice, so it is fetched inline via `api.getBookState` (`BookStateResponse | null`; read `st?.state.prosodyAnnotated`) — once, at `confirm`.
+- **Library-status keyed, not active stage** (round-2 Critical): fires for the active book AND background books the instant their status reaches analysis-complete. No dependence on `stageKind`/`bookId`.
+- **Seed-on-mount** skips the pre-existing library (no backlog auto-spend) and makes a `Layout` remount self-healing — a re-seed re-marks any in-flight book as considered, so it can't double-fire (round-2 #5).
+- **Authoritative disk gate** (round-2 #2): both `prosodyEnabled` and `prosodyAnnotated` come from the single `getBookState`, never the store selector — so the opt-out can't be lost to a hydration race.
+- **Partial-aware watermark** (round-2 #6): writes `prosodyAnnotated:true` only when `failed === 0`; a partial run is left un-watermarked and removed from `considered` so the fill-only-empty re-run tops it up.
+- **Detached + retry-safe** (round-1 H2/H3): the job is not tied to the effect's cleanup (survives book-switch); `try/catch` removes the book from `considered` on throw.
 
-- [ ] **Step 1: Write the failing test** — `undefined` + `confirm` → fires `runProsodyPasses` once (eager); `true` + `confirm` → fires; `false` + `confirm` → never fires; `stageKind='ready'` (no `confirm`) → never fires; `getBookState` returns `{prosodyAnnotated:true}` → no `runProsodyPasses`; **two distinct bookIds each reach `confirm` → each fires once and the first's run is NOT aborted when bookId changes** (assert both completed); **a rejected `runProsodyPasses` clears the guard so a second `confirm` for the same book re-fires**; on success `putBookState` writes `prosodyAnnotated:true`.
+- [ ] **Step 1: Write the failing test** (drive the effect via a `library.books` rerender): a book that **appears as `cast_pending` after the seeded first render** fires `runProsodyPasses` once; a book already complete **on the first render** is seeded and never fires (no retro-annotation); a **background** book transitioning fires even though no active stage references it (the Critical regression); `getBookState` → `{prosodyEnabled:false}` → no `runProsodyPasses` (authoritative opt-out, even with the store selector `undefined`); `{prosodyAnnotated:true}` → no-op; **two books transitioning → each fires once, neither aborted**; a resolved `{failed:1}` → no `putBookState` and the book is re-eligible on a later transition; `{failed:0}` → `putBookState` writes the watermark; a **rejected** pass removes the book from `considered`.
 - [ ] **Step 2: Run, verify fail.**
 - [ ] **Step 3: Implement** per the shape above.
 - [ ] **Step 4: Run, verify pass.**
-- [ ] **Step 5: Commit** — `feat(frontend): eager confirm-stage prosody auto-trigger (per-book, retry-safe)`.
+- [ ] **Step 5: Commit** — `feat(frontend): eager prosody auto-trigger keyed on library status (background-safe)`.
 
 ### Task 13b: opt-out render-time hint (round-1 M5)
 
@@ -495,9 +512,10 @@ When a book with `prosodyEnabled === false` is rendered at 1.7B it gets only the
 
 ## Self-review notes
 
-- **Spec coverage:** §2A → PR1 Tasks 1–2 + PR3 Task 9 (detect handlers). §2B shared chunker → PR2 Task 4; script-review consumption → Task 5. §Deliverable-1 (gate model): flag rename → Task 11; analysis-form toggle (checked by default) → Task 12; eager `confirm`-only per-book/retry-safe auto-trigger → Task 13; opt-out render hint (M5) → Task 13b; watermark → Task 7; chunker reuse by annotation passes → Task 8; global-pill surfacing → Task 14; reusable pass → Task 10.
+- **Spec coverage:** §2A → PR1 Tasks 1–2 + PR3 Task 9 (detect handlers). §2B shared chunker → PR2 Task 4; script-review consumption → Task 5. §Deliverable-1 (gate model): flag rename → Task 11; analysis-form toggle (checked by default) → Task 12; eager library-status auto-trigger (background-safe, authoritative, retry-safe) → Task 13; opt-out render hint (M5) → Task 13b; watermark → Task 7; chunker reuse by annotation passes → Task 8; global-pill surfacing → Task 14; reusable pass → Task 10.
 - **Owned-core rule** (the round-2 fix) is centralized in Task 4 and consumed by Tasks 5 + 8 — no `opKey` cross-chunk dedupe anywhere.
 - **No 4th in-pipeline phase / no `PHASE_WEIGHTS` edits** (round-2 blast-radius avoided): Phase 3 surfaces via its own `prosody-slice` pill (Task 14), not `ANALYSIS_PHASES`.
 - **`prosodyEnabled` is the single intent flag** (Tasks 11–13), eager (`!== false` ⇒ on). The synth-time gate is `is17b` alone (fs-66) — there is NO competing book-quality flag and NO cast read in the gate.
-- **Round-1 review folded:** C1/M6 dissolved by eager-default (no cast-derived eligibility); H2 (per-book guard, book-switch-safe) + H3 (retry-safe) in Task 13; H4 resolved by `confirm`-only firing; M5 hint in Task 13b. Round-2 review TBD.
+- **Round-1 review folded:** C1/M6 dissolved by eager-default (no cast-derived eligibility); H2 (detached job, book-switch-safe) + H3 (retry-safe) in Task 13; M5 hint in Task 13b.
+- **Round-2 review folded:** Critical (active-stage trigger misses background books) → Task 13 re-keyed to `library.books` status transitions + seed-on-mount; #2 (opt-out hydration race) → authoritative-disk gate in Task 13; #6 (partial-watermark) → `failed===0` guard; #5 (remount double-fire) → seed-on-mount; D-1a (`signal` optional) → Task 10; D-7c (frontend `BookStateJson`) → Tasks 7 + 11 touch `src/lib/types.ts`; D-2b (null bookId) → Task 12.
 - **Two distinct booleans, don't conflate:** `prosodyEnabled` (Task 11 — "should we annotate", eager) vs `prosodyAnnotated` (Task 7 — "annotation finished", watermark).
