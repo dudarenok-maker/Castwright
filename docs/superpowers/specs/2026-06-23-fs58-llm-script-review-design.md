@@ -23,7 +23,9 @@ inspiration: github.com/Finrandojin/alexandria-audiobook (Alexandria — LLM Scr
 >   reducers are needed (`setSentenceText`, `mergeSentences`) — see §5.2; this is NOT zero-new-infra.
 > - **Unit B (deferred, §13):** `reattribute` + `flag_nonstory`. Carved out — each drags in a real
 >   dependency (cast-create wiring; a new `excludeFromSynthesis` field + exclusion-staleness; a fixture).
-> - **Deferred to fs-56:** `validate_instruct` (the per-sentence `instruct` field doesn't exist yet).
+> - **~~Deferred to fs-56:~~ `validate_instruct` — DELIVERED 2026-06-25** (#1041, PR #1116) as the 6th class
+>   once fs-57 landed the per-sentence `instruct` field. Spec:
+>   [2026-06-25-fs58-validate-instruct-design.md](2026-06-25-fs58-validate-instruct-design.md).
 >
 > **Supersedes** the §4.6 sketch in `2026-06-22-expressive-tts-instruct-tiers-design.md` (incl. its
 > "before `manuscript-edits.json`" placement). **#998 + the BACKLOG row must be rewritten** (old: 5 classes
