@@ -35,6 +35,12 @@ let workspaceRoot: string;
 let bookDir: string;
 let app: Express;
 let bookId: string;
+/* #1105 — imported DYNAMICALLY in beforeAll (after WORKSPACE_DIR is set), not at
+   the top, because segments-io.js pulls in the workspace-path module graph; a
+   static import here would initialise it before beforeAll sets WORKSPACE_DIR and
+   poison the cached workspace root (every GET /state then 404s "Book not found").
+   Same reason book-state.js itself is dynamically imported below. */
+let textHashForStale: (s: string) => string;
 
 beforeAll(async () => {
   /* Plan 45 (vitest pool tuning) — async mkdtemp yields the event loop during
@@ -43,10 +49,12 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-changelog-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ bookStateRouter }, { makeBookId }] = await Promise.all([
+  const [{ bookStateRouter }, { makeBookId }, segmentsIo] = await Promise.all([
     import('./book-state.js'),
     import('../workspace/paths.js'),
+    import('../audio/segments-io.js'),
   ]);
+  textHashForStale = segmentsIo.textHashForStale;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -215,6 +223,39 @@ describe('book-state router — renderedFallbackByCharacter (fe-16)', () => {
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
     expect(res.body.renderedFallbackByCharacter).toEqual({ wren: 'kokoro' });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+  });
+});
+
+describe('book-state router — renderedTextByChapter (#1105)', () => {
+  /* The GET ships a per-chapter sentence→textHash map recovered from each rendered
+     chapter's segments file, so the Generate view can flag a chapter whose text was
+     edited after it rendered. */
+  it('returns {} when no segments files exist', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.renderedTextByChapter).toEqual({});
+  });
+
+  it('maps rendered sentenceIds to their stamped textHash per chapter', async () => {
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    /* Chapter 1 slug = 'chapter-one' (beforeAll). */
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [
+          { characterId: 'narrator', sentenceIds: [1], textHash: textHashForStale('The fire caught.') },
+          { characterId: 'marlow', sentenceIds: [2], textHash: textHashForStale('"Run," she said.') },
+        ],
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.renderedTextByChapter).toEqual({
+      1: { 1: textHashForStale('The fire caught.'), 2: textHashForStale('"Run," she said.') },
+    });
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
   });
 });

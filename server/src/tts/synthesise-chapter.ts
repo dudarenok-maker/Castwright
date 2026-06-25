@@ -35,6 +35,7 @@ import {
   type EmbeddingRow,
 } from '../audio/render-integrity/embeddings-io.js';
 import { MIN_DURATION_SEC } from '../audio/render-integrity/constants.js';
+import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
@@ -287,6 +288,11 @@ export interface ChapterSegment {
   startSec: number;
   /** Exclusive end time in the chapter audio, in seconds. */
   endSec: number;
+  /** #1105 — djb2-base36 hash of this group's RAW sentence text, stamped so the
+      frontend can flag a chapter whose text was edited after it rendered (synth is
+      keyed on text → stale on every engine). Absent on the title beat (no manuscript
+      sentence) and on pre-#1105 renders. See audio/segments-io.ts textHashForStale. */
+  textHash?: string;
   /** Discriminator for synthetic segments that aren't backed by a manuscript
       sentence. `'title'` marks the narrator-voiced chapter-title beat
       prepended to each chapter (see CHAPTER_LEAD_SILENCE_SEC below). Body
@@ -1659,6 +1665,7 @@ export async function synthesiseChapter(
       groupIndex: group.index,
       characterId: group.characterId,
       sentenceIds: group.sentenceIds.slice(),
+      textHash: textHashForStale(group.text),
       startSec,
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,

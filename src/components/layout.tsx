@@ -759,6 +759,11 @@ export function Layout() {
                Older servers omit it; the slice leaves the map empty and the
                view falls back to the time-based heuristic. */
             renderedSpeakersByChapter: res.renderedSpeakersByChapter,
+            /* #1105 — render-time sentence→textHash map per chapter so the Generate
+               view can flag chapters whose text was edited since they rendered.
+               Older servers/renders omit it; the slice leaves the map empty and the
+               view falls back to the time-based heuristic for text edits. */
+            renderedTextByChapter: res.renderedTextByChapter,
           }),
         );
         dispatch(

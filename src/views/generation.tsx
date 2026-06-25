@@ -67,6 +67,7 @@ import { stripChapterPrefix } from '../lib/format-chapter-title';
 import {
   isChapterStaleFromReassign,
   isChapterReassignedSinceRender,
+  isChapterTextEditedSinceRender,
 } from '../lib/stale-chapters';
 import {
   characterLinePositionsByChapter,
@@ -166,6 +167,11 @@ export function GenerationView({
      reassignment-staleness diff (vs the time-based change-log fallback). */
   const renderedSpeakersByChapter = useAppSelector(
     (s) => s.chapters.renderedSpeakersByChapter,
+  );
+  /* #1105 — render-time sentence→textHash map per chapter, for the PRECISE
+     text-edit-staleness diff (the text sibling of the speaker-map diff). */
+  const renderedTextByChapter = useAppSelector(
+    (s) => s.chapters.renderedTextByChapter,
   );
   /* Drives the "View queue · N" pill in the header. Reflects real workspace
      queue entries when present, else the live generation run (the primary,
@@ -656,6 +662,30 @@ export function GenerationView({
     }
     return set;
   }, [renderedSpeakersByChapter, sentences]);
+
+  /* #1105 — the set of chapters whose live sentence TEXT differs from what was
+     rendered (precise text-edit staleness). Mirrors reassignedSinceRenderSet but
+     diffs text hashes instead of speakers, so a strip_tag / manual / JSON text edit
+     flags the chapter stale even though characterIds are unchanged. Only chapters
+     the server shipped a render TEXT map for (post-#1105 renders) are considered. */
+  const textEditedSinceRenderSet = useMemo(() => {
+    const renderedIds = Object.keys(renderedTextByChapter);
+    if (renderedIds.length === 0) return new Set<number>();
+    const byChapter = new Map<number, Array<{ id: number; text: string }>>();
+    for (const s of sentences) {
+      let arr = byChapter.get(s.chapterId);
+      if (!arr) byChapter.set(s.chapterId, (arr = []));
+      arr.push({ id: s.id, text: s.text });
+    }
+    const set = new Set<number>();
+    for (const cidStr of renderedIds) {
+      const cid = Number(cidStr);
+      if (isChapterTextEditedSinceRender(renderedTextByChapter[cid], byChapter.get(cid) ?? [])) {
+        set.add(cid);
+      }
+    }
+    return set;
+  }, [renderedTextByChapter, sentences]);
 
   /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
      stream survives navigating away from this view. The view is a pure
@@ -1148,14 +1178,16 @@ export function GenerationView({
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               stale={
-                /* OR-gate (fs-58 Task 3): stale if the precise render-map diff
-                   flags a speaker change OR a post-render boundary_move was
-                   logged (covers text/emotion edits the characterId-only precise
-                   diff can't see — strip_tag / fix_emotion + the retained
-                   split/extract piece). Intentionally conservative: a
-                   move-then-undo still reads stale, trading that rare false
-                   positive for catching edits that don't change characterIds. */
+                /* OR-gate (fs-58 Task 3 + #1105): stale if the precise render-map
+                   diff flags a speaker change OR the precise text-hash diff flags a
+                   text edit (#1105 — strip_tag / manual / direct-JSON edits the
+                   characterId-only diff can't see, derived from JSON so it survives
+                   reload) OR a post-render boundary_move was logged (the time-based
+                   fallback for pre-#1105 renders with no text map). Intentionally
+                   conservative: a move-then-undo still reads stale via the last
+                   clause, but the two precise diffs never false-positive on a revert. */
                 (renderedSpeakersByChapter[ch.id] ? reassignedSinceRenderSet.has(ch.id) : false) ||
+                (renderedTextByChapter[ch.id] ? textEditedSinceRenderSet.has(ch.id) : false) ||
                 isChapterStaleFromReassign(ch, activityEvents)
               }
               subsetProgress={subsetByChapter[ch.id] ?? null}

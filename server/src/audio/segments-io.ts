@@ -50,8 +50,28 @@ export interface SegmentsFile {
       `renderedFallbackEngine` is the per-SEGMENT fallback engine (srv-36 aggregate
       reads this to exclude individual fallback lines from anchor-eligible set;
       do NOT use `characterSnapshots[id].renderedFallbackEngine` for this — that
-      is a per-CHARACTER collapse that over-excludes). */
-  segments?: Array<{ characterId?: string; sentenceIds?: number[]; renderedFallbackEngine?: string | null }>;
+      is a per-CHARACTER collapse that over-excludes).
+      `textHash` (#1105) is the djb2-base36 hash of the segment's RAW rendered
+      sentence text, stamped at synthesis time. The frontend diffs it against the
+      live manuscript text to flag a chapter whose text was edited after it
+      rendered (the text sibling of the speaker-map diff). Absent on pre-#1105
+      renders. */
+  segments?: Array<{
+    characterId?: string;
+    sentenceIds?: number[];
+    renderedFallbackEngine?: string | null;
+    textHash?: string;
+  }>;
+}
+
+/* #1105 — djb2 base-36 hash of a sentence's RAW text. Byte-identical to
+   src/lib/stale-chapters.ts textHashForStale (the cross-package staleness
+   contract is pinned by a shared vector in both test files). Stamped into each
+   segment at render time and compared client-side against the live text. */
+export function textHashForStale(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
 }
 
 /* Load every rendered chapter's segments file for a book, in chapter order.
@@ -129,6 +149,34 @@ export async function collectRenderedSpeakerMaps(
     /* Only surface chapters that actually carried per-sentence segments — an
        empty map (legacy file without `segments`) would otherwise read as "every
        sentence reassigned" on the client. */
+    if (Object.keys(map).length > 0) out[seg.chapterId] = map;
+  }
+  return out;
+}
+
+/* #1105 — the render-time sentence→textHash map per rendered chapter, recovered
+   from each segment's `textHash`. Shape: `{ [chapterId]: { [sentenceId]: textHash } }`.
+   The frontend diffs it against the live manuscript text to flag a `done` chapter
+   whose text was EDITED after it rendered (synth is keyed on sentence text, so the
+   audio is stale on every engine) — the text sibling of collectRenderedSpeakerMaps.
+
+   Only chapters with at least one stamped textHash appear; a chapter rendered
+   before #1105 (no textHash on any segment) is omitted so the client reads it as
+   "can't tell" rather than "every sentence edited". */
+export async function collectRenderedTextHashesByChapter(
+  bookDir: string,
+  chapters: Array<{ id: number; slug: string }>,
+): Promise<Record<number, Record<number, string>>> {
+  const out: Record<number, Record<number, string>> = {};
+  const segs = await loadSegmentsFiles(bookDir, chapters);
+  for (const seg of segs) {
+    const map: Record<number, string> = {};
+    for (const s of seg.segments ?? []) {
+      if (!s.textHash || !Array.isArray(s.sentenceIds)) continue;
+      for (const sid of s.sentenceIds) {
+        if (typeof sid === 'number') map[sid] = s.textHash;
+      }
+    }
     if (Object.keys(map).length > 0) out[seg.chapterId] = map;
   }
   return out;
