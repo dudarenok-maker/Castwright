@@ -107,6 +107,8 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       chapterId: s.chapterId,
       text: s.text,
       characterId: s.characterId,
+      instruct: s.instruct,
+      vocalization: s.vocalization,
     }));
 
     const { appliable } = planApply(selectedOps, live);

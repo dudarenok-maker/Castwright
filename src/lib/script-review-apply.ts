@@ -42,8 +42,11 @@ export function rpdWarningFor(chapterCount: number, model: string | undefined): 
 
 export interface ReviewOp {
   id: number;
-  op: 'strip_tag' | 'split' | 'extract_dialogue' | 'merge' | 'fix_emotion';
+  op: 'strip_tag' | 'split' | 'extract_dialogue' | 'merge' | 'fix_emotion' | 'validate_instruct';
   newText?: string;
+  newInstruct?: string;
+  newVocalizationText?: string;
+  vocalization?: boolean;
   anchor?: string;
   anchorEnd?: string;
   pieceCharacterIds?: string[];
@@ -88,7 +91,7 @@ export function resolveAnchorOffset(text: string, anchor: string): number | null
 
 export function planApply(
   ops: ReviewOp[],
-  live: Array<{ id: number; chapterId: number; text: string; characterId: string }>,
+  live: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>,
 ): { appliable: ReviewOp[]; unappliable: Array<{ op: ReviewOp; reason: string }> } {
   const byId = new Map(live.map((s) => [s.id, s]));
   const appliable: ReviewOp[] = [];
@@ -120,11 +123,70 @@ export function planApply(
     }
   }
 
-  for (const op of ops.filter((o) => !STRUCTURAL.has(o.op))) {
+  const textTargets = new Set<number>(); // strip_tag / validate_instruct-vocalization collisions
+
+  // strip_tag first so it deterministically wins a same-id text collision.
+  const nonStructural = ops.filter((o) => !STRUCTURAL.has(o.op));
+  const ordered = [
+    ...nonStructural.filter((o) => o.op === 'strip_tag'),
+    ...nonStructural.filter((o) => o.op !== 'strip_tag'),
+  ];
+
+  for (const op of ordered) {
     if (consumed.has(op.id)) { unappliable.push({ op, reason: 'id consumed by a structural op' }); continue; }
-    if (!byId.has(op.id)) { unappliable.push({ op, reason: 'target id missing' }); continue; }
-    if (op.op === 'fix_emotion' && !REVIEW_EMOTIONS.includes(op.emotion as never)) { unappliable.push({ op, reason: 'invalid emotion value' }); continue; }
-    appliable.push(op);
+    const s = byId.get(op.id);
+    if (!s) { unappliable.push({ op, reason: 'target id missing' }); continue; }
+
+    if (op.op === 'strip_tag') {
+      textTargets.add(op.id);
+      appliable.push(op);
+      continue;
+    }
+
+    if (op.op === 'fix_emotion') {
+      if (!REVIEW_EMOTIONS.includes(op.emotion as never)) { unappliable.push({ op, reason: 'invalid emotion value' }); continue; }
+      appliable.push(op);
+      continue;
+    }
+
+    if (op.op === 'validate_instruct') {
+      // Normalize: keep only the appliable halves.
+      const norm: ReviewOp = { ...op };
+      // instruct half
+      if (norm.newInstruct !== undefined) {
+        const isStrip = norm.newInstruct.trim() === '';
+        if (isStrip) {
+          if (!s.instruct) delete norm.newInstruct; // strip on instruct-less = no-op, drop
+        } else if (!s.instruct || s.instruct === norm.newInstruct.trim()) {
+          delete norm.newInstruct; // repair needs an existing, different instruct
+        }
+      }
+      // vocalization half — capture WHY it dropped so a collision is surfaced, not silent
+      let vocalDropReason: string | null = null;
+      if (norm.newVocalizationText !== undefined) {
+        if (!s.vocalization) vocalDropReason = 'sentence is not a vocalization';
+        else if (textTargets.has(op.id)) vocalDropReason = 'text already claimed by strip_tag'; // strip_tag wins
+        if (vocalDropReason) {
+          delete norm.newVocalizationText;
+          delete norm.vocalization;
+        } else {
+          textTargets.add(op.id);
+        }
+      }
+      const hasInstruct = norm.newInstruct !== undefined;
+      const hasVocal = norm.newVocalizationText !== undefined;
+      if (!hasInstruct && !hasVocal) {
+        // A pure-strip-on-instruct-less instruct edit is a silent no-op (not surfaced).
+        // A DROPPED vocalization edit (wrong sentence OR strip_tag collision) IS surfaced
+        // as un-appliable — the collision test asserts this.
+        if (vocalDropReason) unappliable.push({ op, reason: vocalDropReason });
+        continue;
+      }
+      appliable.push(norm);
+      continue;
+    }
+
+    appliable.push(op); // any other non-structural op unchanged
   }
   return { appliable, unappliable };
 }
@@ -132,7 +194,7 @@ export function planApply(
 export function dispatchAcceptedOps(
   dispatch: Dispatch,
   accepted: ReviewOp[],
-  live: Array<{ id: number; chapterId: number; text: string; characterId: string }>,
+  live: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>,
   { onBoundaryMove }: { onBoundaryMove: (chapterId: number) => void },
 ): void {
   const byId = new Map(live.map((s) => [s.id, s]));
