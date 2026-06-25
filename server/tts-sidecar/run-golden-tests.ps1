@@ -41,20 +41,34 @@ if ($LASTEXITCODE -ne 0) {
     exit 0
 }
 
-# Kokoro weights gate. Honor KOKORO_MODEL_PATH / KOKORO_VOICES_PATH env
-# overrides; otherwise the default download location next to main.py.
+# Weights gate. The golden suite spans Kokoro (length goldens) AND Qwen (the
+# 1.7B live-instruct golden, #1099), so proceed when EITHER weight set is
+# present -- a Qwen-only box must still run the instruct golden. Each test
+# self-gates on its own engine, so a present-but-wrong-engine box is a clean
+# per-test SKIP. Honor KOKORO_MODEL_PATH / KOKORO_VOICES_PATH env overrides;
+# otherwise the default download location next to main.py.
 $modelPath = $env:KOKORO_MODEL_PATH
 if (-not $modelPath) { $modelPath = Join-Path $here "voices\kokoro\kokoro-v1.0.onnx" }
 $voicesPath = $env:KOKORO_VOICES_PATH
 if (-not $voicesPath) { $voicesPath = Join-Path $here "voices\kokoro\voices-v1.0.bin" }
+$kokoroPresent = (Test-Path $modelPath) -and (Test-Path $voicesPath)
 
-if (-not (Test-Path $modelPath) -or -not (Test-Path $voicesPath)) {
+# Qwen-weights probe -- only when Kokoro is absent (importing torch costs a few
+# seconds; skip it on the common Kokoro-present path). Same check the Python
+# tests use: qwen_tts importable AND a CUDA device.
+$qwenPresent = $false
+if (-not $kokoroPresent) {
+    & $venvPython -c "import sys, qwen_tts, torch; sys.exit(0 if torch.cuda.is_available() else 1)" *> $null
+    if ($LASTEXITCODE -eq 0) { $qwenPresent = $true }
+}
+
+if (-not $kokoroPresent -and -not $qwenPresent) {
     Write-Host ""
-    Write-Host "SKIP: golden-audio -- Kokoro weights not found."
-    Write-Host "        model:  $modelPath"
-    Write-Host "        voices: $voicesPath"
-    Write-Host "      Download them once:"
-    Write-Host "        server\tts-sidecar\scripts\install-kokoro.ps1"
+    Write-Host "SKIP: golden-audio -- no golden weights found (Kokoro or Qwen)."
+    Write-Host "        kokoro model:  $modelPath"
+    Write-Host "        kokoro voices: $voicesPath"
+    Write-Host "      Install Kokoro:  server\tts-sidecar\scripts\install-kokoro.ps1"
+    Write-Host "      Install Qwen:    node scripts\install-qwen3.mjs"
     Write-Host ""
     exit 0
 }

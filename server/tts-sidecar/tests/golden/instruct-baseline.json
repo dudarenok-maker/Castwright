@@ -1,0 +1,35 @@
+{
+  "description": "Blessed baseline for the 1.7B live-instruct golden (#1099). Records identity cosines across instructs, per-emotion delivery loudness (the _LIVE_INSTRUCT_GAIN lever), and the batched-RTF baseline for the expressive_passage fixture. Bless on a GPU box with Qwen weights: npm run test:golden-audio -- --bless (or GOLDEN_BLESS=1). Unblessed (entries null) => the assert test SKIPs.",
+  "voice": "qwen-8434989a52184d08be265",
+  "model": "1.7b",
+  "tolerances": {
+    "identity_cosine_max": 0.15,
+    "loudness_dbfs_abs": 4.0,
+    "rtf_max": 1.0
+  },
+  "metadata": {
+    "blessed_at": "2026-06-25",
+    "box": "8GB CUDA GPU (Windows 11), Qwen3-TTS-12Hz-1.7B-Base, warm, clean VRAM at start",
+    "notes": "Identity cosine max ~0.0125 across instructs (spike ~0.0139); batched RTF 0.51 on the 15-sentence expressive_passage mixed-emotion fixture."
+  },
+  "identity": {
+    "anchor": "neutral",
+    "cosine": {
+      "whisper": 0.0125,
+      "sad": 0.0058,
+      "excited": 0.0051,
+      "angry": 0.007
+    },
+    "max": 0.0125
+  },
+  "loudness_dbfs": {
+    "whisper": -31.17,
+    "neutral": -21.16,
+    "excited": -20.96,
+    "angry": -17.3,
+    "sad": -25.81
+  },
+  "rtf": {
+    "batched": 0.5089
+  }
+}
