@@ -32,6 +32,7 @@ import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
+import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -307,6 +308,9 @@ export function AnalysingView({
      preserving the cloud-no-probe invariant. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
   const analyzerModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  /* fs-65 Task 12 — per-book prosody annotation toggle. Eager default: absent
+     (undefined) or true → checked; only an explicit false → unchecked. */
+  const prosodyStored = useAppSelector(selectProsodyEnabled(bookId ?? null));
   /* Populate the local-tag list only after a failure surfaces the retry picker
      — never on a healthy (possibly cloud) run, so the Ollama probe stays off
      the cloud path. */
@@ -1169,6 +1173,35 @@ export function AnalysingView({
               const disabled = !isRunning && !isAnalyzerReady;
               return (
                 <div className="mt-6 flex flex-col items-center gap-2">
+                  {/* fs-65 Task 12 — Expressive directions toggle (eager default ON).
+                      Hidden when bookId is null (setProsodyEnabled needs a non-null id).
+                      Minimum 44px touch target on phone per mobile rule. */}
+                  {bookId != null && (
+                    <label className="flex items-start gap-3 cursor-pointer select-none max-w-sm w-full px-1 min-h-[44px] sm:min-h-0">
+                      <input
+                        type="checkbox"
+                        checked={prosodyStored !== false}
+                        onChange={(e) => {
+                          const value = e.target.checked;
+                          dispatch(
+                            bookMetaActions.setProsodyEnabled({ bookId: bookId, value }),
+                          );
+                          void api.putBookState(bookId, {
+                            slice: 'state',
+                            patch: { prosodyEnabled: value },
+                          });
+                        }}
+                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+                      />
+                      <span className="flex flex-col gap-0.5">
+                        <span className="text-sm font-medium text-ink">Expressive directions</span>
+                        <span className="text-[11px] text-ink/50">
+                          Generate per-line emotion + delivery directions for the higher-quality
+                          (1.7B) voice. Runs in the background after analysis.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                   <button
                     type="button"
                     onClick={onClick}
