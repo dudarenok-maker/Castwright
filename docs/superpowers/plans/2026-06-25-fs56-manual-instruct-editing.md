@@ -502,7 +502,7 @@ it('fs-56 — a merge does not carry a stale instruct onto the survivor (#1100 b
 });
 ```
 
-> Verify the `mergeSentences` payload shape against the reducer before running (it may be `sentenceIds` or `{firstId,secondId}`); adjust the args to match. Confirm the post-merge survivor lookup matches the reducer's id-keeping rule.
+> Payload pinned (verified): `mergeSentences({ chapterId, sentenceIds: number[] })`; the **lowest id survives** (here id 1), higher ids are spliced + tombstoned. Per `ce88c662`, `mergeSentences` sets `live[0].instruct = undefined`, so the survivor drops the stale direction — the assertion holds on the rebased base.
 
 - [ ] **Step 3: Run them — expect PASS** (base carries #1100)
 
