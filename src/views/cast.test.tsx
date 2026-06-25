@@ -25,6 +25,7 @@ vi.mock('../lib/api', () => ({
     /* fe-16 — the cast view auto-loads Qwen on entry for non-English books. */
     loadSidecar: vi.fn().mockResolvedValue({}),
     pauseCastDesign: vi.fn().mockResolvedValue(undefined),
+    setCastTier: vi.fn().mockResolvedValue({ updated: 0 }),
   },
 }));
 
@@ -1726,5 +1727,141 @@ describe('CastView — variant glyph strip in the Status column', () => {
     expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');
     expect(within(row).queryByTestId('variants-badge')).not.toBeInTheDocument();
     expect(within(row).queryByTestId('missing-variants-hint')).not.toBeInTheDocument();
+  });
+});
+
+describe('CastView — bulk 1.7B tier pin + reset', () => {
+  /* PR4 Task 8 — "Pin higher quality to all cast" button writes ttsModelKey
+     onto every Qwen member via api.setCastTier (durable cross-book) and
+     dispatches castActions.updateCharacter (local redux reflection).
+     "Reset tier" reverses it with null.
+     A per-row "1.7B" badge appears when ttsModelKey === 'qwen3-tts-1.7b'. */
+
+  const qwenA: Character = {
+    id: 'qwenA',
+    name: 'Wren',
+    role: 'Hero',
+    color: 'mentor',
+    lines: 20,
+    scenes: 5,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    voiceId: 'vid-wren',
+  };
+  const qwenB: Character = {
+    id: 'qwenB',
+    name: 'Fen',
+    role: 'Villain',
+    color: 'rival',
+    lines: 10,
+    scenes: 3,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-fen' } },
+    voiceId: 'vid-fen',
+  };
+  const kokoroC: Character = {
+    id: 'kokoroC',
+    name: 'Ash',
+    role: 'Guide',
+    color: 'neutral',
+    lines: 5,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'kokoro',
+  };
+
+  function setupTierTest(chars: Character[] = [qwenA, qwenB, kokoroC]) {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bTier', status: 'complete' }));
+    store.dispatch(castSlice.actions.setCharacters(chars));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={chars}
+          setCharacters={() => {}}
+          library={[]}
+          title="Tier Test"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.setCastTier).mockClear();
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+  });
+
+  it('shows the "Pin higher quality" button when ≥1 Qwen member is in the roster', () => {
+    setupTierTest();
+    expect(screen.getByTestId('pin-higher-quality')).toBeInTheDocument();
+  });
+
+  it('does not show "Pin higher quality" for a non-Qwen roster', () => {
+    setupTierTest([kokoroC]);
+    expect(screen.queryByTestId('pin-higher-quality')).toBeNull();
+  });
+
+  it('pins ttsModelKey on every Qwen cast member when "Pin higher quality" is confirmed', async () => {
+    const store = setupTierTest();
+    fireEvent.click(screen.getByTestId('pin-higher-quality'));
+    /* click the confirm button (label "Pin to all cast") */
+    fireEvent.click(screen.getByRole('button', { name: /Pin to all cast/i }));
+    /* api called once per distinct voiceId on Qwen members (2 Qwen, 1 Kokoro) */
+    await waitFor(() => expect(vi.mocked(api.setCastTier)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-wren', 'qwen3-tts-1.7b');
+    expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-fen', 'qwen3-tts-1.7b');
+    /* local redux reflects the pin */
+    await waitFor(() =>
+      expect(store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey).toBe(
+        'qwen3-tts-1.7b',
+      ),
+    );
+    expect(store.getState().cast.characters.find((c) => c.id === 'kokoroC')?.ttsModelKey).toBeUndefined();
+  });
+
+  it('shows the 1.7B badge on pinned Qwen rows and hides it on non-pinned / kokoro rows', async () => {
+    const store = setupTierTest();
+    /* no badge before pin */
+    expect(screen.queryByTestId('tier-badge-qwenA')).toBeNull();
+    /* pin */
+    fireEvent.click(screen.getByTestId('pin-higher-quality'));
+    fireEvent.click(screen.getByRole('button', { name: /Pin to all cast/i }));
+    await waitFor(() =>
+      expect(store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey).toBe(
+        'qwen3-tts-1.7b',
+      ),
+    );
+    /* Badge visible on pinned Qwen rows; kokoro row never gets one */
+    expect(screen.queryByTestId('tier-badge-qwenA')).not.toBeNull();
+    expect(screen.queryByTestId('tier-badge-kokoroC')).toBeNull();
+  });
+
+  it('resets ttsModelKey to null via the Reset tier confirm dialog', async () => {
+    /* Start with characters pre-pinned so reset makes sense */
+    const pinned = [
+      { ...qwenA, ttsModelKey: 'qwen3-tts-1.7b' as const },
+      { ...qwenB, ttsModelKey: 'qwen3-tts-1.7b' as const },
+      kokoroC,
+    ];
+    const store = setupTierTest(pinned);
+    fireEvent.click(screen.getByTestId('reset-tier'));
+    fireEvent.click(screen.getByRole('button', { name: /Reset to 0\.6B/i }));
+    await waitFor(() => expect(vi.mocked(api.setCastTier)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-wren', null);
+    expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-fen', null);
+    await waitFor(() =>
+      expect(store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey).toBeUndefined(),
+    );
+    /* badge gone after reset */
+    expect(screen.queryByTestId('tier-badge-qwenA')).toBeNull();
   });
 });
