@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 issue: 1122
 area: fs
 type: chore
@@ -213,4 +213,13 @@ softened rationale for the `assignSelectionTo` belt-and-suspenders guard.
 
 ## Ship notes
 
-_(filled at ship time: date, commit SHA; close #1122.)_
+Shipped 2026-06-25 via the fs-58 Unit B polish branch (`chore/frontend-fs58-unit-b-polish`), Closes #1122.
+
+Five code commits (`26d1fff7..6ba895fd`):
+- `26d1fff7` chore — `type="button"` on CreateCharacterForm + reattribute-vs-create routing tests (Items 4a, 2)
+- `a2ce8e9e` refactor — drop unused `_roster` param from `dispatchAcceptedOps` (Item 4b)
+- `cd42a67c` fix — toast + keep-open on a failed sidebar character-create (Item 3a)
+- `fe433a40` fix — toast + clean reset on a failed off-roster reattribute batch (Item 3b)
+- `6ba895fd` fix — no split/drag affordance on excluded manuscript lines: `isExcludedSentenceId` predicate + popover/assignSelectionTo/onMove gates + Playwright e2e (Item 1)
+
+Built via subagent-driven development (implementer + per-task review each, opus whole-branch review: 0 Critical/Important). Spec + plan each passed one adversarial review round before execution. Deferred cosmetic test-clarity Minors (zero-risk): tighten the toast-assert regex; a non-discriminating-assertion comment in the script-review batch test; `isExcludedSentenceId` placement; e2e `toHaveCount(0)` vs `not.toBeVisible()`.
