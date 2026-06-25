@@ -708,6 +708,7 @@ export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[
      hole in the concatenated PCM. A dropped sentence has no spoken audio, so it
      correctly contributes no segment. */
   return sentences
+    .filter((s) => !s.excludeFromSynthesis) // fs-58 Unit B — flag_nonstory
     .filter((s) => normaliseForTts(s.text).trim() !== '')
     .map((s, i) => ({
       index: i,

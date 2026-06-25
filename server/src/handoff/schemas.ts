@@ -130,6 +130,9 @@ export const sentenceSchema = z
     /* fs-57 — Stage 3 authored a non-verbal vocalization into `text`. Drives
        the srv-31 ASR carve-out. Additive. */
     vocalization: z.boolean().optional(),
+    /* fs-58 Unit B — flag_nonstory soft-exclude. Absent/false ⇒ synthesised
+       as today; true ⇒ filtered out of buildSentenceGroups. Additive. */
+    excludeFromSynthesis: z.boolean().optional(),
   })
   .strict();
 
@@ -212,8 +215,9 @@ export const stage1GrammarSchema = z
 
 /* ── fs-58 Script Review schema (Task 6) ────────────────────────────────────
    Flat envelope for LLM script-review ops. No discriminated union — Gemini
-   can't constrain it; Ollama only softly. Per-op validation is imperative
-   client-side (Task 4) and server pre-apply is N/A (apply is client-side).
+   can't constrain it; Ollama only softly. This schema validates the model's
+   response on BOTH engines (Ollama grammar + Gemini safeParse); a rejected op
+   fails the chapter, so every op class lives here.
 
    Typical ops: strip_tag (remove formatting), split (sentence across speakers),
    extract_dialogue (narration → dialogue), merge (join sentences), fix_emotion
@@ -233,7 +237,11 @@ export const scriptReviewSchema = z
             'extract_dialogue',
             'merge',
             'fix_emotion',
+            // fs-58 validate_instruct (origin/main, PR #1041):
             'validate_instruct',
+            // fs-58 Unit B:
+            'reattribute',
+            'flag_nonstory',
           ]),
           newText: z.string().optional(),
           newInstruct: z.string().optional(),
@@ -243,11 +251,34 @@ export const scriptReviewSchema = z
           pieceCharacterIds: z.array(z.string()).optional(),
           mergeIds: z.array(z.number().int().positive()).optional(),
           emotion: z.enum(EMOTIONS).optional(),
+          // fs-58 validate_instruct (origin/main) — vocalization toggle:
           vocalization: z.boolean().optional(),
+          // fs-58 Unit B — reattribute targets:
+          characterId: z.string().optional(),
+          proposed: z
+            .object({
+              name: z.string().min(1),
+              gender: z.enum(['male', 'female', 'neutral']).optional(),
+              ageRange: z.enum(['child', 'teen', 'adult', 'elderly']).optional(),
+            })
+            .strict()
+            .optional(),
           rationale: z.string(),
           confidence: z.number().min(0).max(1).optional(),
         })
-        .strict(),
+        .strict()
+        .superRefine((op, ctx) => {
+          if (op.op === 'reattribute') {
+            const hasId = op.characterId != null;
+            const hasProposed = op.proposed != null;
+            if (hasId === hasProposed) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'reattribute requires exactly one of characterId or proposed',
+              });
+            }
+          }
+        }),
     ),
   })
   .strict();

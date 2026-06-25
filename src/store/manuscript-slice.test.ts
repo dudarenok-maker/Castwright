@@ -1041,6 +1041,48 @@ describe('fs-57 — applyDetectedInstruct (Stage-3 vocalization annotations)', (
   });
 });
 
+describe('setSentenceExcluded (fs-58 Unit B)', () => {
+  it('sets and clears the excludeFromSynthesis flag, scoped by (chapterId, sentenceId)', () => {
+    const s = start([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'p. 42' }]);
+    const excluded = manuscriptSlice.reducer(
+      s,
+      manuscriptActions.setSentenceExcluded({ chapterId: 1, sentenceId: 1, excluded: true }),
+    );
+    expect(excluded.sentences[0].excludeFromSynthesis).toBe(true);
+    const restored = manuscriptSlice.reducer(
+      excluded,
+      manuscriptActions.setSentenceExcluded({ chapterId: 1, sentenceId: 1, excluded: false }),
+    );
+    expect(restored.sentences[0].excludeFromSynthesis).toBe(false);
+  });
+
+  it('preserves excludeFromSynthesis across re-analysis (hydrate-merge)', () => {
+    const s = start([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'p. 42' }]);
+    const excluded = manuscriptSlice.reducer(
+      s,
+      manuscriptActions.setSentenceExcluded({ chapterId: 1, sentenceId: 1, excluded: true }),
+    );
+    // Re-analysis delivers a fresh sentence with SAME (chapterId,id) and no exclude flag:
+    const reanalysed = manuscriptSlice.reducer(
+      excluded,
+      manuscriptActions.hydrateFromAnalysis({
+        bookId: 'b1',
+        sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'p. 42' }],
+      } as never),
+    );
+    expect(reanalysed.sentences[0].excludeFromSynthesis).toBe(true);
+  });
+
+  it('is a no-op for an unknown (chapterId, sentenceId)', () => {
+    const s = start([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'p. 42' }]);
+    const next = manuscriptSlice.reducer(
+      s,
+      manuscriptActions.setSentenceExcluded({ chapterId: 1, sentenceId: 99, excluded: true }),
+    );
+    expect(next.sentences[0].excludeFromSynthesis).toBeUndefined();
+  });
+});
+
 describe('fs-56 — split/merge instruct guard (#1100 base)', () => {
   it('fs-56 — a hand-set instruct does not bleed onto split fragments (#1100 base)', () => {
     const tagged = manuscriptSlice.reducer(

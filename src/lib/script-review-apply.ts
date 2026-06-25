@@ -42,7 +42,15 @@ export function rpdWarningFor(chapterCount: number, model: string | undefined): 
 
 export interface ReviewOp {
   id: number;
-  op: 'strip_tag' | 'split' | 'extract_dialogue' | 'merge' | 'fix_emotion' | 'validate_instruct';
+  op:
+    | 'strip_tag'
+    | 'split'
+    | 'extract_dialogue'
+    | 'merge'
+    | 'fix_emotion'
+    | 'validate_instruct'
+    | 'reattribute'
+    | 'flag_nonstory';
   newText?: string;
   newInstruct?: string;
   newVocalizationText?: string;
@@ -52,6 +60,9 @@ export interface ReviewOp {
   pieceCharacterIds?: string[];
   mergeIds?: number[];
   emotion?: string;
+  // fs-58 Unit B — reattribute targets (exactly one is set):
+  characterId?: string;
+  proposed?: { name: string; gender?: string; ageRange?: string };
   rationale: string;
   confidence?: number;
 }
@@ -92,6 +103,7 @@ export function resolveAnchorOffset(text: string, anchor: string): number | null
 export function planApply(
   ops: ReviewOp[],
   live: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>,
+  roster: Set<string> = new Set(),
 ): { appliable: ReviewOp[]; unappliable: Array<{ op: ReviewOp; reason: string }> } {
   const byId = new Map(live.map((s) => [s.id, s]));
   const appliable: ReviewOp[] = [];
@@ -186,7 +198,15 @@ export function planApply(
       continue;
     }
 
-    appliable.push(op); // any other non-structural op unchanged
+    // fs-58 Unit B — reattribute to an existing roster member must hit the roster.
+    // (proposed/off-roster reattributions are handled by the async create→reassign
+    // path before dispatch, so they're not gated here.)
+    if (op.op === 'reattribute' && op.characterId != null && !roster.has(op.characterId)) {
+      unappliable.push({ op, reason: 'reattribute characterId not in roster' });
+      continue;
+    }
+
+    appliable.push(op); // any other non-structural op unchanged (reattribute, flag_nonstory)
   }
   return { appliable, unappliable };
 }
@@ -196,6 +216,7 @@ export function dispatchAcceptedOps(
   accepted: ReviewOp[],
   live: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>,
   { onBoundaryMove }: { onBoundaryMove: (chapterId: number) => void },
+  _roster: Set<string> = new Set(),
 ): void {
   const byId = new Map(live.map((s) => [s.id, s]));
   for (const op of accepted) {
@@ -236,6 +257,16 @@ export function dispatchAcceptedOps(
       }
       case 'merge':
         dispatch(manuscriptActions.mergeSentences({ chapterId, sentenceIds: op.mergeIds ?? [] }));
+        break;
+      case 'reattribute':
+        // On-roster only here — proposed/off-roster ops are handled by the
+        // async create→reassign path (apply-proposed.ts) BEFORE this runs.
+        if (op.characterId) {
+          dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId: op.id, characterId: op.characterId }));
+        }
+        break;
+      case 'flag_nonstory':
+        dispatch(manuscriptActions.setSentenceExcluded({ chapterId, sentenceId: op.id, excluded: true }));
         break;
     }
     if (changedTextOrStructure) onBoundaryMove(chapterId);

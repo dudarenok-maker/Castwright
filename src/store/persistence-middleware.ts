@@ -122,6 +122,13 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
+  /* fs-58 Unit B — exclude flag (flag_nonstory review op). Persisted the same
+     way as other sentence edits so the exclusion survives reload and is visible
+     to the generation pipeline via manuscript-edits.json. */
+  'manuscript/setSentenceExcluded': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
 
   /* dismissed ids ride with every revisions persist so the backend drift
      detector can filter ids the user has waved off (read in

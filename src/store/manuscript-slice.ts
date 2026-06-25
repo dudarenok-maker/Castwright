@@ -143,7 +143,7 @@ export const manuscriptSlice = createSlice({
              incoming but preserve characterId (the user's reassignment) and
              text (in case the sentence was split — splitSentence rewrites
              text in place and the analyzer wouldn't know about it). */
-          merged.push({ ...inc, characterId: x.characterId, text: x.text });
+          merged.push({ ...inc, characterId: x.characterId, text: x.text, excludeFromSynthesis: x.excludeFromSynthesis });
         } else {
           /* Either a split offspring (id assigned above analyzer max) or a
              sentence the new analysis dropped. Keep it — the GET-side merge
@@ -272,6 +272,19 @@ export const manuscriptSlice = createSlice({
         (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
       );
       if (sent) sent.characterId = a.payload.characterId;
+    },
+
+    /* fs-58 Unit B — User/review edit: mark a sentence excluded from synthesis
+       (flag_nonstory) or re-include it. Scoped by (chapterId, sentenceId) like
+       setSentenceText. No-op if the sentence is not found. */
+    setSentenceExcluded: (
+      s,
+      a: PayloadAction<{ chapterId: number; sentenceId: number; excluded: boolean }>,
+    ) => {
+      const sent = s.sentences.find(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
+      if (sent) sent.excludeFromSynthesis = a.payload.excluded;
     },
 
     /* fs-58 — User edit: replace a sentence's text (strip_tag + validate_instruct

@@ -22,6 +22,7 @@ import {
   IconSearch,
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
+import { CreateCharacterForm } from '../components/create-character-form';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { SentenceInstructControl } from '../components/sentence-instruct-control';
@@ -30,8 +31,10 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
 import { useAppDispatch, useAppSelector } from '../store';
+import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { castActions } from '../store/cast-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
@@ -586,6 +589,20 @@ export function ManuscriptView({
     window.getSelection()?.removeAllRanges();
   }
 
+  /* The sidebar (chapters + detected) and the inspector panel are
+     rendered as their own subtrees so the same markup can show inline
+     on `lg:` (sticky asides) AND inside drawer/sheet overlays on
+     `<lg:`. This hook MUST live before the `if (!currentChapter) return null`
+     guard below — hooks cannot be called conditionally (Rules of Hooks). */
+  const handleCreateCharacter = useCallback(
+    async (fields: { name: string; gender?: string; ageRange?: string }) => {
+      if (!bookId) return;
+      const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
+      dispatch(castActions.addCharacter(result.character));
+    },
+    [bookId, dispatch],
+  );
+
   /* Defensive guard for the empty-chapters transient (e.g. the manuscript
      slice rehydrating after a reparse, or a stale URL pointing at a book
      whose chapter list hasn't loaded yet). The whole view dereferences
@@ -606,10 +623,6 @@ export function ManuscriptView({
 
   const selectedSegObj = segments.find((s) => s.id === selectedSeg);
 
-  /* The sidebar (chapters + detected) and the inspector panel are
-     rendered as their own subtrees so the same markup can show inline
-     on `lg:` (sticky asides) AND inside drawer/sheet overlays on
-     `<lg:`. */
   const sidebarPanels = (
     <SidebarPanels
       chapters={chapters}
@@ -625,6 +638,8 @@ export function ManuscriptView({
       filterChar={filterChar}
       setFilterChar={setFilterChar}
       onOpenProfile={onOpenProfile}
+      bookId={bookId}
+      onCreateCharacter={handleCreateCharacter}
     />
   );
 
@@ -703,7 +718,7 @@ export function ManuscriptView({
       /* planApply filters from allOps whose entries are ReviewOpWithChapter —
          the chapterId is preserved on each returned object at runtime, so
          casting back to the wider type is safe here. */
-      const { appliable, unappliable } = planApply(allOps, live) as {
+      const { appliable, unappliable } = planApply(allOps, live, new Set(characters.map((c) => c.id))) as {
         appliable: ReviewOpWithChapter[];
         unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
       };
@@ -1032,6 +1047,8 @@ interface SidebarPanelsProps {
   filterChar: string | null;
   setFilterChar: (v: string | null) => void;
   onOpenProfile?: (id: string) => void;
+  bookId: string | null;
+  onCreateCharacter: (fields: { name: string; gender?: string; ageRange?: string }) => void | Promise<void>;
 }
 
 function SidebarPanels({
@@ -1048,7 +1065,10 @@ function SidebarPanels({
   filterChar,
   setFilterChar,
   onOpenProfile,
+  bookId: _bookId,
+  onCreateCharacter,
 }: SidebarPanelsProps) {
+  const [addingChar, setAddingChar] = useState(false);
   return (
     <>
       <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
@@ -1218,9 +1238,22 @@ function SidebarPanels({
               );
             })}
           </ul>
-          <button className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors">
+          <button
+            onClick={() => setAddingChar(true)}
+            className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors"
+          >
             <IconPlus className="w-4 h-4" /> Add character
           </button>
+          {addingChar && (
+            <div className="mt-3">
+              <CreateCharacterForm
+                rosterByName={new Map(characters.map((c) => [c.name.trim().toLowerCase(), { id: c.id, name: c.name }]))}
+                onSubmit={async (f) => { await onCreateCharacter(f); setAddingChar(false); }}
+                onReattributeExisting={() => setAddingChar(false)}
+                onCancel={() => setAddingChar(false)}
+              />
+            </div>
+          )}
           <hr className="my-5 border-ink/10" />
           <div className="text-xs text-ink/50 leading-relaxed space-y-2">
             <p>
@@ -1385,6 +1418,8 @@ function SegmentRow({
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const reassignBtnRef = useRef<HTMLButtonElement>(null);
+  const dispatch = useAppDispatch();
+  const markStale = useMarkCharacterStaleIfRendered();
   const char = findChar(seg.characterId);
   const c = CHAR_COLORS[char?.color as CharColor] ?? CHAR_COLORS.narrator;
 
@@ -1480,30 +1515,49 @@ function SegmentRow({
                 <span
                   data-sentence-id={s.id}
                   data-sentence-idx={s.absIdx}
-                  className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}`}
+                  className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}${s.excludeFromSynthesis ? ' line-through opacity-50' : ''}`}
                   {...(s.absIdx === 0 ? { 'data-tour-id': 'manuscript-line' } : {})}
                 >
                   {renderSentenceText(s.text)}
                 </span>
-                {/* fs-25 — per-quote emotion control. Shown for dialogue (the
-                    common case) and for any already-tagged sentence, rendered
-                    outside the text span so selection offsets are unaffected. */}
-                {(seg.characterId !== 'narrator' || s.emotion) && (
-                  <SentenceEmotionControl
-                    chapterId={s.chapterId}
-                    sentenceId={s.id}
-                    emotion={s.emotion}
-                    character={char}
-                  />
+                {/* fs-58 Unit B — excluded lines: re-include toggle outside the
+                    span so split offsets are unaffected; chips suppressed.
+                    follow-up: disable split/drag affordance on excluded lines. */}
+                {s.excludeFromSynthesis ? (
+                  <button
+                    data-testid={`reinclude-toggle-${s.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dispatch(manuscriptActions.setSentenceExcluded({ chapterId: s.chapterId, sentenceId: s.id, excluded: false }));
+                      markStale({ id: s.characterId, name: char?.name ?? s.characterId });
+                    }}
+                    className="ml-1 align-baseline text-[10px] min-h-[44px] sm:min-h-0 text-ink/45 hover:text-ink underline"
+                  >
+                    include
+                  </button>
+                ) : (
+                  <>
+                    {/* fs-25 — per-quote emotion control. Shown for dialogue (the
+                        common case) and for any already-tagged sentence, rendered
+                        outside the text span so selection offsets are unaffected. */}
+                    {(seg.characterId !== 'narrator' || s.emotion) && (
+                      <SentenceEmotionControl
+                        chapterId={s.chapterId}
+                        sentenceId={s.id}
+                        emotion={s.emotion}
+                        character={char}
+                      />
+                    )}
+                    {/* fs-56 — per-line delivery-direction control, ungated (narrator included). */}
+                    <SentenceInstructControl
+                      chapterId={s.chapterId}
+                      sentenceId={s.id}
+                      instruct={s.instruct}
+                      character={char}
+                      liveInstruct={liveInstruct}
+                    />
+                  </>
                 )}
-                {/* fs-56 — per-line delivery-direction control, ungated (narrator included). */}
-                <SentenceInstructControl
-                  chapterId={s.chapterId}
-                  sentenceId={s.id}
-                  instruct={s.instruct}
-                  character={char}
-                  liveInstruct={liveInstruct}
-                />
                 {!isLast && ' '}
               </Fragment>
             );

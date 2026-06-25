@@ -19,6 +19,7 @@ import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castNotLinkedToRouter } from './routes/cast-not-linked-to.js';
 import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
 import { castAddFromRosterRouter } from './routes/cast-add-from-roster.js';
+import { castCreateRouter } from './routes/cast-create.js';
 import { voiceStyleRouter } from './routes/voice-style.js';
 import { qwenVoiceRouter } from './routes/qwen-voice.js';
 import { castDesignRouter } from './routes/cast-design.js';
@@ -151,6 +152,7 @@ app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (
 app.use('/api/books', castNotLinkedToRouter); // mounts /:bookId/cast/:characterId/not-linked-to (plan 101 — mark cross-book duplicate as intentional variant)
 app.use('/api/books', castSeriesPatchRouter); // mounts /:bookId/cast/:characterId/series-patch (cross-book Compare save propagation, BACKLOG #7)
 app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from-roster (new local character pulled from a prior series-mate)
+app.use('/api/books', castCreateRouter); // mounts /:bookId/cast/create (fs-58 Unit B — mint a net-new cast member)
 app.use('/api/books', voiceStyleRouter); // mounts /:bookId/cast/{:characterId/voice-style/generate,voice-style/generate-all} (plan 108 — Gemini voice-design personas)
 app.use('/api/books', qwenVoiceRouter); // mounts /:bookId/cast/:characterId/design-voice (plan 108 Wave 4 — Qwen bespoke-voice design + audition proxy)
 app.use('/api/books', castDesignRouter); // mounts /:bookId/cast/design{,/status,/pause} ("Design full cast" bulk-design job — server-owned SSE)

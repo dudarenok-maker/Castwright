@@ -82,4 +82,6 @@ export const initialSentences: Sentence[] = [
     characterId: 'narrator',
     text: 'He said it to the empty galley, which is the only place a man like Marcus ever truly spoke first.',
   },
+  /* fs-58 Unit B — mock flag_nonstory target: a page-number artefact sentence. */
+  { id: 15, chapterId: 3, characterId: 'narrator', text: 'p. 42' },
 ];

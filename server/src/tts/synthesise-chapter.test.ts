@@ -877,6 +877,16 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
     // index is re-sequenced contiguously over the kept groups (scatter-back key)
     expect(groups.map((g) => g.index)).toEqual([0, 1, 2]);
   });
+
+  it('drops excluded sentences and re-sequences index with no gap (fs-58 Unit B)', () => {
+    const groups = buildSentenceGroups([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Kept one.' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'p. 42', excludeFromSynthesis: true },
+      { id: 3, chapterId: 1, characterId: 'narrator', text: 'Kept two.' },
+    ] as any);
+    expect(groups.map((g) => g.sentenceIds[0])).toEqual([1, 3]);
+    expect(groups.map((g) => g.index)).toEqual([0, 1]); // no hole at the dropped slot
+  });
 });
 
 /* ── plan 107 — within-chapter sentence parallelism ──────────────────────

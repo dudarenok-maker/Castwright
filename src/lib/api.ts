@@ -398,6 +398,20 @@ export interface AddFromSeriesRosterArgs {
 export interface AddFromSeriesRosterResponse {
   character: import('./types').Character;
 }
+/* POST /api/books/:bookId/cast/create — mint a brand-new cast member that
+   was not discovered during analysis (e.g. a narrator added by the user, or
+   a character the analyzer missed). Server appends the row to cast.json and
+   returns the full character record so the frontend can dispatch
+   castActions.addCharacter immediately. */
+export interface CreateCharacterFields {
+  name: string;
+  gender?: 'male' | 'female' | 'neutral';
+  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+  role?: string;
+}
+export interface CreateCharacterResponse {
+  character: import('./types').Character;
+}
 /* POST /api/books/:bookId/cast/unlink-alias — split a misplaced alias
    chip off its current character and back into its own standalone cast
    member. Server reads the preserved Phase-0a chapterCast to identify
@@ -2987,7 +3001,14 @@ async function mockReviewScript(
   { onOps, onPhase }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
-  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 1 });
+  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 3 });
+  /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
+  onOps?.({
+    chapterId: 3,
+    ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
+  });
+  /* fs-58 validate_instruct (origin/main): strip_tag + validate_instruct on
+     chapter 1, sentence id:1. */
   onOps?.({
     chapterId: 1,
     ops: [
@@ -3000,7 +3021,26 @@ async function mockReviewScript(
       },
     ],
   });
-  return { reviewedChapters: 1, totalOps: 2 };
+  /* fs-58 Unit B: off-roster reattribute on sentence id:3 (dialogue line),
+     and flag_nonstory on sentence id:15 (the "p. 42" artefact line).
+     Both default OFF in the diff modal (script-review-slice DEFAULT_OFF set). */
+  onOps?.({
+    chapterId: 3,
+    ops: [
+      {
+        id: 3,
+        op: 'reattribute',
+        proposed: { name: 'Ferra', gender: 'female' },
+        rationale: 'speaker not in cast',
+      },
+      {
+        id: 15,
+        op: 'flag_nonstory',
+        rationale: 'page number artefact',
+      },
+    ],
+  });
+  return { reviewedChapters: 1, totalOps: 5 };
 }
 
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */
@@ -3635,6 +3675,51 @@ async function mockAddFromSeriesRoster(
         bookTitle: prior.bookTitle,
         confidence: 1,
       },
+    } as import('./types').Character,
+  };
+}
+
+async function realCreateCharacter(
+  bookId: string,
+  fields: CreateCharacterFields,
+): Promise<CreateCharacterResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Create character failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+export async function mockCreateCharacter(
+  _bookId: string,
+  fields: CreateCharacterFields,
+): Promise<CreateCharacterResponse> {
+  await wait(120);
+  const slug =
+    fields.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_|_$/g, '') || 'character';
+  return {
+    character: {
+      id: slug,
+      name: fields.name.trim(),
+      role: fields.role ?? 'character',
+      color: 'unset',
+      gender: fields.gender,
+      ageRange: fields.ageRange,
+      voiceState: 'generated',
     } as import('./types').Character,
   };
 }
@@ -7075,6 +7160,7 @@ const real = {
   notLinkedTo: realNotLinkedTo,
   removeNotLinkedTo: realRemoveNotLinkedTo,
   addFromSeriesRoster: realAddFromSeriesRoster,
+  createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
   loadSample: realLoadSample,
@@ -7338,6 +7424,7 @@ const mock = {
   notLinkedTo: mockNotLinkedTo,
   removeNotLinkedTo: mockRemoveNotLinkedTo,
   addFromSeriesRoster: mockAddFromSeriesRoster,
+  createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
   loadSample: mockLoadSample,

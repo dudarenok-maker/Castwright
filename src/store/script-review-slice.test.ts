@@ -235,6 +235,22 @@ describe('scriptReviewSlice', () => {
     expect(bookBAfter.selected).toEqual(bookBSelectedBefore);
   });
 
+  it('seeds reattribute + flag_nonstory deselected, others selected (fs-58 Unit B)', () => {
+    const ops = [
+      { chapterId: 1, id: 1, op: 'strip_tag', rationale: 'r' },
+      { chapterId: 1, id: 2, op: 'reattribute', characterId: 'ferra', rationale: 'r' },
+      { chapterId: 1, id: 3, op: 'flag_nonstory', rationale: 'r' },
+    ] as any;
+    const s = scriptReviewSlice.reducer(
+      { byBook: {} },
+      scriptReviewActions.setReview({ bookId: 'b1', ops, unappliable: [] }),
+    );
+    const b = s.byBook['b1']!;
+    expect(b.selected['1:1:strip_tag']).toBe(true);
+    expect(b.selected['1:2:reattribute']).toBe(false);
+    expect(b.selected['1:3:flag_nonstory']).toBe(false);
+  });
+
   it('validate_instruct toggles via opKey/toggleClass like any other class (fs-58, #1041)', () => {
     // Characterization: the slice is op-agnostic — toggleClass/opKey key on op.op,
     // so a 6th class `validate_instruct` behaves identically to the existing five

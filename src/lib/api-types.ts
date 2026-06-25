@@ -3677,6 +3677,8 @@ export interface components {
             instruct?: string;
             /** @description fs-57 — true when Stage 3 authored a non-verbal vocalization into text; drives the ASR content-QA carve-out. */
             vocalization?: boolean;
+            /** @description fs-58 Unit B — when true, this sentence is import residue (page number, running header, etc.) and is excluded from synthesis. */
+            excludeFromSynthesis?: boolean;
         };
         /**
          * @description fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly
