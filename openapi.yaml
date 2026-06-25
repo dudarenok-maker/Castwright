@@ -1283,6 +1283,39 @@ paths:
         '409':
           description: Book has no cast yet
 
+  /api/books/{bookId}/cast/tier:
+    post:
+      summary: Set or clear the Qwen quality tier for a cast voice across the series
+      operationId: setCastTier
+      parameters:
+        - { name: bookId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [voiceId, ttsModelKey]
+              properties:
+                voiceId: { type: string }
+                ttsModelKey:
+                  oneOf:
+                    - { type: string, enum: [qwen3-tts-1.7b] }
+                    - { type: 'null' }
+      responses:
+        '200':
+          description: number of cast characters updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties: { updated: { type: integer } }
+        '400':
+          description: voiceId missing or ttsModelKey invalid
+        '404':
+          description: Book not found
+
   /api/queue:
     get:
       summary: Read the workspace-level chapter-generation queue

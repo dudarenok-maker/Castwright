@@ -1845,6 +1845,33 @@ async function realSetVoiceOverride(
     );
 }
 
+/* POST /api/books/:bookId/cast/tier
+   Sets or clears ttsModelKey ('qwen3-tts-1.7b' | null) across every cast
+   member sharing a voiceId in the same series. Series-scoped; the standalone
+   exclusion is internal to the server walker. */
+async function realSetCastTier(
+  bookId: string,
+  voiceId: string,
+  ttsModelKey: 'qwen3-tts-1.7b' | null,
+): Promise<{ updated: number }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/tier`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voiceId, ttsModelKey }),
+  });
+  if (!res.ok) throw new Error(`setCastTier failed: ${res.status}`);
+  return (await res.json()) as { updated: number };
+}
+
+async function mockSetCastTier(
+  _bookId: string,
+  _voiceId: string,
+  _ttsModelKey: 'qwen3-tts-1.7b' | null,
+): Promise<{ updated: number }> {
+  // mock mode: PR4's local redux updateCharacter is the source of truth
+  return { updated: 0 };
+}
+
 /* POST /api/books/:bookId/cast/:characterId/voice-override-linked (plan 122).
    Name/alias-aware series voice write used by the rebaseline approve: unifies
    voiceId across the recurring character's whole name/alias group and writes
@@ -7121,6 +7148,7 @@ const real = {
   getBaseVoices: realGetBaseVoices,
   setVoiceOverride: realSetVoiceOverride,
   setVoiceOverrideLinked: realSetVoiceOverrideLinked,
+  setCastTier: realSetCastTier,
   getBookState: realGetBookState,
   putBookState: realPutBookState,
   getListenProgress: realGetListenProgress,
@@ -7385,6 +7413,7 @@ const mock = {
   getBaseVoices: mockGetBaseVoices,
   setVoiceOverride: mockSetVoiceOverride,
   setVoiceOverrideLinked: mockSetVoiceOverrideLinked,
+  setCastTier: mockSetCastTier,
   getBookState: mockGetBookState,
   putBookState: mockPutBookState,
   getListenProgress: mockGetListenProgress,
