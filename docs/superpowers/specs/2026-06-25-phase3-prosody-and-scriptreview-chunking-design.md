@@ -1,18 +1,22 @@
 # Phase 3 prosody annotation + analyzer sentence-chunking (script review large chapters)
 
-**Date:** 2026-06-25 · **Status:** 2A + 2B SHIPPED (PR #1126, #1128); Phase 3 DEFERRED (gate superseded — see below)
+**Date:** 2026-06-25 · **Status:** 2A + 2B SHIPPED (PR #1126, #1128); Phase 3 gate **REDESIGNED** 2026-06-25 (fs-66 landed — see below); ready to plan/build
 
-> **Status update (2026-06-25): Phase 3 is DEFERRED.** A concurrent change
-> (`feat/server-1.7b-implies-prosody`) collapses the synth prosody gate to
-> `is17b` alone and **drops `liveInstruct`** ("1.7B implies prosody"). That
-> removes the flag this Phase 3 design gates on (analysis-form toggle *sets*
-> `liveInstruct`; the post-analysis trigger *reads* it). Phase 3's **intent
-> survives** — the per-line prosody annotations still must be generated before a
-> 1.7B render — but its **trigger/gate must be redesigned on the new 1.7B signal**
-> (per-cast `is17b` / the book-level quality override) once that work + the
-> book-level 1.7B override spec land on `main`. Deliverables **2A** (chapter-failed
-> surfacing) and **2B** (script-review chunker) are unaffected and already shipped.
-> The chunker (2B) is the reusable asset Phase 3 will still consume.
+> **Gate redesign (2026-06-25, fs-65 #1129).** fs-66 ("1.7B implies prosody",
+> PR #1136) collapsed the synth prosody gate to `is17b` alone and **dropped
+> `liveInstruct` as a synth gate** — leaving it as orphaned per-book plumbing
+> (`BookStateJson.liveInstruct`, `book-meta-slice`), persisted but set by no UI
+> (the #1100 toggle was deleted) and read at no synth site. fs-66 also moved the
+> "go 1.7B" decision from analysis-time to **cast-time** (per-character
+> `ttsModelKey === 'qwen3-tts-1.7b'` or the book bulk-pin `POST /cast/tier`).
+> Phase 3's **intent is unchanged** — the per-line prosody annotations still must
+> exist *before* a 1.7B render, otherwise that render gets only the four canned
+> `emotionToInstruct` phrases — but its **trigger/gate is redesigned on the new
+> 1.7B signal** (this revision). The orphaned `liveInstruct` field is **renamed
+> `prosodyEnabled`** and repurposed as a nullable intent flag (see Deliverable 1).
+> Deliverables **2A** (chapter-failed surfacing) and **2B** (script-review
+> chunker) shipped and are unaffected; the chunker (2B) is the reusable asset
+> Phase 3 still consumes.
 
 Origin: a `/superpowers:systematic-debugging` session over two reported symptoms
 ("Phase 3 doesn't show in the analysing view" and "Review Script is always
@@ -142,57 +146,92 @@ even though annotations don't affect casting (`result` is the *only* signal that
 moves `analysing → confirm`, `ui-slice.ts:195`).
 
 So Phase 3 runs as a **separate streamed pass that auto-fires once the book
-reaches the confirm/ready stage with `liveInstruct` on and prosody not yet
+reaches the confirm/ready stage when the gate is open and prosody not yet
 complete.** It reuses the **existing** `detectEmotions` + `detectInstruct`
 routes (factored out of `DetectEmotionsButton.run`), now driven through the PR2
 chunker so they don't truncate large chapters. The user proceeds to cast
 immediately; prosody annotates in the background.
 
-- **Gate / trigger.** A new form toggle "High-quality prosody (Qwen 1.7B)" on the
-  analysis-start surface (`src/views/analysing.tsx`) sets the book's
-  `liveInstruct=true` (default off — extra quota + vocalization mutates text).
-  The post-analysis auto-trigger reads `liveInstruct` from the **frontend store**
-  (`book-meta-slice`, already hydrated) — **no server-side analysis-time read is
-  needed.** Setting the toggle pre-analysis is what makes prosody run
-  automatically right after the first analysis; toggling it on later (or the
-  manual button) covers the rest.
+### Gate model — nullable intent flag + cast-derived auto-rule
+
+The fs-66 world has no analysis-time `liveInstruct` synth gate; the "go 1.7B"
+decision is now a **cast-time** signal (`ttsModelKey === 'qwen3-tts-1.7b'`, set
+per-character or via the book bulk-pin `POST /cast/tier`). So Phase 3 gates on a
+**per-book intent flag `prosodyEnabled`** (the renamed, repurposed `liveInstruct`
+field) that is effectively **tri-state**, combined with the live cast signal:
+
+| `prosodyEnabled` | Meaning | Fires the pass when… |
+|---|---|---|
+| `undefined` (default, untouched) | **Auto** | the book's cast actually renders at 1.7B |
+| `true` (toggled on) | **Explicit opt-in** | always (after analysis), even before any 1.7B pin |
+| `false` (toggled off) | **Explicit opt-out** | never auto — honored even if the book is later pinned to 1.7B |
+
+**Effective gate** (evaluated once the book reaches confirm/ready, so sentences
+exist):
+
+```
+bookCastIs17b = cast.characters.some(c => c.ttsModelKey === 'qwen3-tts-1.7b')   // ANY member (mirrors selectEnginesInUse)
+shouldAnnotate =
+    prosodyEnabled === false ? false
+  : prosodyEnabled === true  ? true
+  : bookCastIs17b              // the "auto" / safety-net case
+fire = shouldAnnotate && !prosodyAnnotated && stageKind ∈ {confirm, ready}
+```
+
+This covers all four real users without special cases:
+- **Default-1.7B user** → flag `undefined`, fresh cast inherits `defaultTtsModelKey`
+  = 1.7B → fires right after analysis. *This is "default ON when 1.7B loaded,"
+  achieved even if the toggle is never touched.*
+- **Default-Kokoro user who pins 1.7B late** → flag `undefined` → the bulk-pin
+  flips `bookCastIs17b` → **safety net** fires.
+- **1.7B user who doesn't want it on this book** → toggles OFF → `false` → suppressed.
+- **Kokoro user prepping a planned 1.7B switch** → toggles ON → `true` → annotates eagerly.
+
+- **Toggle.** An analysis-form toggle (`src/views/analysing.tsx`) labeled
+  "Expressive directions (Qwen 1.7B)". Its **checked-default** =
+  `account.defaultTtsModelKey === 'qwen3-tts-1.7b'`. Untouched → store nothing
+  (`undefined` = auto); touched → store the explicit boolean. It reads/writes the
+  **frontend store** (`book-meta-slice`) + a durable `putBookState` PUT; **no
+  server-side analysis-time read** is needed (the trigger is client-side, post-analysis).
+
+- **Trigger — one reactive effect (the two paths are one implementation).** A
+  single `useEffect` in `src/components/layout.tsx` mirrors the existing
+  voice-match auto-trigger (`layout.tsx:895-917` — `useRef` fired-guard +
+  `cancelled` cleanup + a fresh `AbortController`). Dependency set:
+  `[stageKind, bookId, prosodyEnabled, bookCastIs17b]`. It re-evaluates the gate
+  on any change and fires once. The **cast-time safety net is not a separate code
+  path**: the bulk-pin writes `ttsModelKey` into the cast slice → the
+  `bookCastIs17b` dependency flips → the effect re-fires. Reactivity *is* the
+  safety net, so no path that lands a 1.7B cast member can be missed.
+
 - **Surfacing.** Phase 3 progress shows in the **global progress pill**
-  (`src/components/layout.tsx` AnalysisPill region) + a card on the
-  confirm/manuscript view, labeled "Phase 3 — Detecting prosody". The analysing
-  view's 3-phase list is **unchanged** (no `ANALYSIS_PHASES`/`PHASE_WEIGHTS`
-  edits — the static-const blast radius is avoided entirely by not making it a
-  4th in-pipeline phase).
-- **Resume / idempotency.** A completion watermark on the book (a `state.json`
-  field, e.g. `prosodyAnnotated` per chapter or a single status) records
-  progress. The passes are fill-only-empty (`applyDetectedEmotions`/
-  `applyDetectedInstruct`), so an interrupted run is recovered by re-firing — it
-  fills the remaining empties. The auto-trigger fires only when the watermark is
-  incomplete, so it never re-runs needlessly or loops.
-- **Cancellable + non-blocking.** The pass is abortable (existing
-  AbortController path) and never blocks navigation or casting.
-- **The "Detect emotions" button stays** as the manual re-run / top-up.
+  (`layout.tsx` AnalysisPill region) + a card on the confirm/manuscript view,
+  labeled "Phase 3 — Detecting prosody". The analysing view's 3-phase list is
+  **unchanged** (no `ANALYSIS_PHASES`/`PHASE_WEIGHTS` edits — Phase 3 has its own
+  progress surface, not a 4th in-pipeline phase).
+- **Resume / idempotency.** A completion watermark `prosodyAnnotated`
+  (`state.json`) records progress. The passes are fill-only-empty
+  (`applyDetectedEmotions`/`applyDetectedInstruct`), so an interrupted run is
+  recovered by re-firing. The trigger fires only when the watermark is incomplete,
+  so it never re-runs needlessly or loops — and it dedupes the two paths (if the
+  toggle path already annotated, a later 1.7B pin sees the watermark complete and
+  no-ops).
+- **Cancellable + non-blocking.** The pass is abortable and never blocks
+  navigation or casting.
+- **The "Detect emotions" button stays** as the manual re-run / top-up — and the
+  explicit recovery for a `prosodyEnabled === false` book that later goes 1.7B.
 
-### Coordination with the concurrent "Book-level Higher quality (1.7B)" spec
+### Flag rename: `liveInstruct` → `prosodyEnabled`
 
-A parallel design (`docs/superpowers/specs/2026-06-25-book-level-higher-quality-tier-design.md`)
-adds a **book "Higher quality (1.7B)" override + bulk pin** that, at **synth /
-regenerate time**, forces every Qwen cast member to the 1.7B model and opens the
-`liveInstruct` AND-gate. That control and this Phase 3 are **two stages of one
-feature, not duplicates**, and must use the **same `liveInstruct` flag** — do not
-introduce a competing book-quality flag here:
-
-- **Their toggle is meaningful later** (regenerate/generation): it enforces 1.7B
-  + opens the gate at synth.
-- **This Phase 3 toggle is meaningful at analysis time**: it must stay on the
-  analysis UX so the per-line prosody **annotations are generated *before*
-  generation reaches the 1.7B model** — otherwise opening their gate only yields
-  the four canned `emotionToInstruct` phrases, not real per-line delivery.
-- **Shared signal:** the analysis-form "High-quality prosody (Qwen 1.7B)" toggle
-  sets `liveInstruct`; their override reads `liveInstruct || bookQualityOverride`.
-  One intent, two entry points. The two specs cross-reference each other and the
-  work is coordinated with that session (the user oversees both). If the concurrent
-  feature lands a unified "quality" control first, this toggle becomes an
-  analysis-stage surfacing of the same flag rather than a new switch.
+The orphaned `liveInstruct` plumbing (set by no UI, read at no synth site post-fs-66)
+is **renamed `prosodyEnabled`** and repurposed as the nullable intent flag above.
+Sites: `BookStateJson.liveInstruct` (`server/src/workspace/scan.ts`) +
+`book-state.ts` patch picker; `book-meta-slice` (`liveInstruct` record +
+`setLiveInstruct`/`selectLiveInstruct`); the `layout.tsx:790` hydration; `api-types.ts`
+(regenerated from `openapi.yaml`). The dead synth meaning is gone, so the old name
+is now a trap — a small, mechanical rename for clarity. **Do not** touch the
+unrelated `instructHash`/`renderedInstructHashes` "liveInstruct render" comments in
+`segments-io.ts`/`stale-chapters.ts` — those name the synth path, not this flag.
 
 ## Error handling
 
@@ -200,15 +239,17 @@ introduce a competing book-quality flag here:
   carries on (one bad chunk never kills the chapter or the pass).
 - `DailyQuotaExhaustedError` keeps its `error{code:'quota_exhausted'}` behaviour
   (already client-handled) — partial progress is preserved and the user re-runs.
-- Phase 3 with `liveInstruct` off simply never fires — a deliberate non-event,
-  not an error. The progress pill is absent.
+- Phase 3 with `prosodyEnabled === false` (or `undefined` + a non-1.7B cast)
+  simply never fires — a deliberate non-event, not an error. The progress pill is
+  absent.
 
 ## Known accepted limitations
 
-- `liveInstruct` (the trigger gate) is *not* the synth-time gate
-  (`is17b && liveInstruct`, `resolve-instruct.ts`). A user can toggle prosody on,
+- `prosodyEnabled` (the trigger intent) is *not* the synth-time gate (which is
+  `is17b` alone post-fs-66, `resolve-instruct.ts`). A user can toggle prosody on,
   get annotations, then render with Kokoro (which ignores `instruct`), wasting
-  the passes. Accepted: explicit user choice.
+  the passes. Accepted: explicit user choice. Conversely the `false` opt-out is
+  honored even against a 1.7B render (canned phrases only) — also explicit.
 - Multi-book: each book's Phase 3 is a separate stream sharing the per-model
   analyzer rate-limit bucket (same as today's button). No per-manuscript
   prioritisation; throttles queue internally. Acceptable.
@@ -226,13 +267,16 @@ introduce a competing book-quality flag here:
   sentence is emitted exactly once.
 - **2B:** server route test — a chapter over budget yields chunked `ops` with no
   `chapter-failed`; a boundary-straddling `merge` is emitted once.
-- **Phase 3:** frontend test — the form toggle sets `liveInstruct`; the
-  post-analysis auto-trigger fires once when `liveInstruct` on + watermark
-  incomplete, and does NOT fire when off or when the watermark is complete;
-  re-fire fills only empties; the global pill renders progress. Server test —
-  the annotation routes run through the chunker; the watermark is written on
-  completion. One e2e: toggle on → analysis completes → user reaches cast while
-  the prosody pill runs → annotations land.
+- **Phase 3:** frontend test — the **gate truth-table** (the four user rows):
+  `prosodyEnabled` `undefined` + 1.7B cast → fires; `undefined` + Kokoro cast →
+  doesn't; `false` + 1.7B cast → suppressed; `true` → fires regardless of cast;
+  watermark-complete → never re-fires; **a late cast-pin flips `bookCastIs17b`
+  and fires once** (the safety net); re-fire fills only empties; the toggle's
+  checked-default = `defaultTtsModelKey === 'qwen3-tts-1.7b'`; untouched stores
+  `undefined`, touched stores the boolean; the global pill renders progress.
+  Server test — the annotation routes run through the chunker; the watermark is
+  written on completion. One e2e: default-1.7B book → analysis completes → user
+  reaches cast while the prosody pill runs → annotations land.
 
 ## PR decomposition
 
@@ -240,11 +284,12 @@ introduce a competing book-quality flag here:
    reported "useless empty modal" immediately).
 2. `feat/server-analyzer-chapter-chunker` — the shared chunker + 2B (script
    review consumes it).
-3. `feat/analysis-phase3-prosody` — form toggle + post-analysis auto-trigger of
-   the annotation passes (through the chunker) + global-pill surfacing +
-   completion watermark. Cross-cutting (server watermark + frontend trigger/UI),
-   but smaller than the tail-of-stream version (no analysis.ts surgery, no
-   4th-phase static-array changes).
+3. `feat/analysis-phase3-prosody` — `liveInstruct` → `prosodyEnabled` rename +
+   the nullable-intent gate model, analysis-form toggle (smart default), the
+   single reactive auto-trigger (covers both the analysis-toggle and cast-time
+   safety-net paths) + global-pill surfacing + completion watermark. Cross-cutting
+   (server rename/watermark + frontend trigger/UI), but smaller than the
+   tail-of-stream version (no analysis.ts surgery, no 4th-phase static-array changes).
 
 Sequence 2 before 3 (Phase 3's passes consume the chunker). 1 is independent.
 
