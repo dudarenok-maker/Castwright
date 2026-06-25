@@ -16,7 +16,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
@@ -45,17 +45,35 @@ interface CastFile {
    Only id/characterId/text go out for the sentences; the model returns a
    flat list of ops each with an anchor and optional new-text/pieceCharacterIds
    /mergeIds/emotion. */
+/* fs-58 — serialize the per-sentence review input. `instruct` (always English)
+   rides along only when present, and `vocalization` only when `true` (never
+   `false`), so the prompt sees the fields exactly as the apply layer stores
+   them. Lifted out of buildScriptReviewChapterInbox so it can be unit-tested. */
+export function buildReviewSentencesInput(
+  sentences: Array<{
+    id: number;
+    characterId: string;
+    text: string;
+    instruct?: string;
+    vocalization?: boolean;
+  }>,
+): Array<Record<string, unknown>> {
+  return sentences.map((s) => ({
+    sentenceId: s.id,
+    characterId: s.characterId,
+    text: s.text,
+    ...(s.instruct ? { instruct: s.instruct } : {}),
+    ...(s.vocalization ? { vocalization: true } : {}),
+  }));
+}
+
 export function buildScriptReviewChapterInbox(
   manuscriptId: string,
   chapterId: number,
   sentences: SentenceOutput[],
   roster: CastCharacterSlim[],
 ): string {
-  const sentencePayload = sentences.map((s) => ({
-    sentenceId: s.id,
-    characterId: s.characterId,
-    text: s.text,
-  }));
+  const sentencePayload = buildReviewSentencesInput(sentences);
   const rosterPayload = roster.map((c) => ({
     id: c.id,
     name: c.name,
@@ -223,6 +241,7 @@ scriptReviewRouter.post(
             prompt,
             {
               signal: controller.signal,
+              language: bookStateLanguage(located.state),
               onChunk: (info) =>
                 heartbeat(0, chapterId, {
                   receivedBytes: info.receivedBytes,
