@@ -7,7 +7,12 @@
    narrator. stripHtml decoded only the DECIMAL `&#39;`, never the hex form. */
 
 import { describe, it, expect } from 'vitest';
-import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
+import {
+  stripHtml,
+  extractFirstHeading,
+  stripTitleHeading,
+  GENERIC_NCX_RE,
+} from './html-utils.js';
 
 describe('stripHtml — tag stripping', () => {
   it('still strips tags and reaches a fixed point (replace-until-stable)', () => {
@@ -54,6 +59,54 @@ describe('stripHtml — numeric character references', () => {
 describe('extractFirstHeading — numeric character references', () => {
   it('decodes a hex apostrophe in the heading text', () => {
     expect(extractFirstHeading('<h1>Oduvan&#x27;s Forge</h1>')).toBe("Oduvan's Forge");
+  });
+});
+
+/* The chapter's <h1> is promoted to the title (spoken by synthesise-chapter's
+   title beat) AND, because stripHtml flattens the whole document, it also
+   survives as the body's opening line — so the listener hears the chapter name
+   twice (the EPUB/MOBI duplicate-title bug). stripTitleHeading removes that one
+   leading heading element when its text is already represented in the resolved
+   title, but leaves a heading carrying content the title doesn't cover. */
+describe('stripTitleHeading — drop the leading heading already spoken as the title', () => {
+  it('removes the leading <h1> when it equals the resolved title', () => {
+    const html = '<h1>The Berth at Liverpool</h1><p>It was cold.</p>';
+    expect(stripHtml(stripTitleHeading(html, 'The Berth at Liverpool'))).toBe('It was cold.');
+  });
+
+  it('removes the heading when the title is the merged "Chapter N — Heading" form', () => {
+    const html = '<h2>The Berth at Liverpool</h2><p>It was cold.</p>';
+    expect(stripHtml(stripTitleHeading(html, 'Chapter 1 — The Berth at Liverpool'))).toBe(
+      'It was cold.',
+    );
+  });
+
+  it('matches case- and punctuation-insensitively (and through hex entities)', () => {
+    const html = "<h1>Oduvan&#x27;s Forge</h1><p>Body.</p>";
+    expect(stripHtml(stripTitleHeading(html, "ODUVAN'S FORGE"))).toBe('Body.');
+  });
+
+  it('leaves the body untouched when the heading is content the title does not cover', () => {
+    // NCX title won outright; the body heading is a different string → keep it.
+    const html = '<h1>Part One: Beginnings</h1><p>Body.</p>';
+    expect(stripTitleHeading(html, 'The Arrival')).toBe(html);
+  });
+
+  it('does not strip on a partial within-word match', () => {
+    const html = '<h1>Arr</h1><p>Body.</p>';
+    expect(stripTitleHeading(html, 'The Arrival')).toBe(html);
+  });
+
+  it('is a no-op when there is no heading', () => {
+    const html = '<p>Just prose, no heading.</p>';
+    expect(stripTitleHeading(html, 'Chapter 1')).toBe(html);
+  });
+
+  it('removes only the first heading, leaving later section headings in the body', () => {
+    const html = '<h1>The Title</h1><p>Intro.</p><h2>A Section</h2><p>More.</p>';
+    const out = stripHtml(stripTitleHeading(html, 'The Title'));
+    expect(out.startsWith('The Title')).toBe(false);
+    expect(out).toContain('A Section');
   });
 });
 
