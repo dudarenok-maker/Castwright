@@ -1002,9 +1002,10 @@ export function Layout() {
 
   const prosodyConsidered = useRef<Set<string>>(new Set());
   const prosodySeeded = useRef(false);
-  const completeIds = library.books
-    .filter((b) => isAnalysisComplete(b.status))
-    .map((b) => b.bookId);
+  const completeIds = useMemo(
+    () => library.books.filter((b) => isAnalysisComplete(b.status)).map((b) => b.bookId),
+    [library.books],
+  );
   const completeKey = completeIds.join('|');
   useEffect(() => {
     if (!prosodySeeded.current) {
@@ -1025,7 +1026,7 @@ export function Layout() {
           if (st.state.prosodyAnnotated) return;               // watermark → no-op
           const { failed } = await runProsodyPasses(id, { dispatch });
           if (failed === 0) {
-            api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
+            await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
           } else {
             prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
           }

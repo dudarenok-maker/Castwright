@@ -423,6 +423,14 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     await waitFor(() => {
       expect(runProsodyPassesMock).toHaveBeenCalledTimes(2);
     });
+
+    /* On the successful second pass (failed:0), the watermark IS written. */
+    await waitFor(() => {
+      expect(putBookStateMock).toHaveBeenCalledWith('b1', {
+        slice: 'state',
+        patch: { prosodyAnnotated: true },
+      });
+    });
   });
 
   // ── Test 8: failed:0 → putBookState writes watermark ──
