@@ -38,21 +38,24 @@ describe('DesignProgress (honest)', () => {
 
   it('flips to the honest slow warning only past a real per-phase overage', () => {
     render(<DesignProgress phase="designing" />);
-    act(() => vi.advanceTimersByTime(140_000)); // > 2× the designing budget
+    // 60s > 2× the designing budget (~39.8s) but < 2× the total (~117.4s), so
+    // this isolates the per-phase trip from the total-elapsed OR-clause.
+    act(() => vi.advanceTimersByTime(60_000));
     expect(screen.getByTestId('design-eta')).toHaveTextContent(/taking longer than usual/i);
   });
 
   it('flips to slow via the total-elapsed OR-clause after a past phase overran (#1092)', () => {
-    // Total design budget ≈ 86.5s; the OR-clause fires past 2× that (≈173s).
+    // Total design budget ≈ 58.7s (on-box calibrated); the OR-clause fires past
+    // 2× that (≈117.4s).
     const { rerender } = render(<DesignProgress phase="designing" />);
     // designing overran badly (per-phase warning fired here), then advanced on.
-    act(() => vi.advanceTimersByTime(160_000));
+    act(() => vi.advanceTimersByTime(110_000));
     rerender(<DesignProgress phase="rendering" />); // resets the in-phase clock
-    // In rendering the in-phase clock is small (no per-phase trip, budget 12s),
+    // In rendering the in-phase clock is small (no per-phase trip, budget ≈20s),
     // but the cumulative elapsed is still climbing toward 2× the total.
-    act(() => vi.advanceTimersByTime(12_000)); // total 172s < 173s → still quiet
+    act(() => vi.advanceTimersByTime(5_000)); // total 115s < 117.4s → still quiet
     expect(screen.getByTestId('design-eta')).not.toHaveTextContent(/taking longer than usual/i);
-    act(() => vi.advanceTimersByTime(2_000)); // total 174s > 173s, in-phase 14s < 24s
+    act(() => vi.advanceTimersByTime(5_000)); // total 120s > 117.4s, in-phase 10s < 40.6s
     expect(screen.getByTestId('design-eta')).toHaveTextContent(/taking longer than usual/i);
   });
 
