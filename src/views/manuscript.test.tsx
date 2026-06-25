@@ -21,6 +21,7 @@ import { tourSlice } from '../store/tour-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
 import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView } from './manuscript';
@@ -954,6 +955,7 @@ describe('ManuscriptView — review-menu dismissal', () => {
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
         ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
       preloadedState: {
         ui: {
@@ -1047,6 +1049,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
         ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
       preloadedState: {
         manuscript: {
@@ -1143,6 +1146,7 @@ describe('ManuscriptView — handleReviewScript error toast', () => {
         scriptReview: scriptReviewSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
       preloadedState: {
         ui: {

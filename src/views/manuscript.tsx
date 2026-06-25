@@ -24,6 +24,8 @@ import {
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { SentenceEmotionControl } from '../components/sentence-emotion-control';
+import { SentenceInstructControl } from '../components/sentence-instruct-control';
+import { selectLiveInstruct } from '../store/book-meta-slice';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
@@ -118,6 +120,7 @@ export function ManuscriptView({
   const dispatch = useAppDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
+  const liveInstruct = useAppSelector(selectLiveInstruct(bookId));
   const [reviewLoading, setReviewLoading] = useState(false);
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
@@ -914,6 +917,7 @@ export function ManuscriptView({
                           onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
                           onOpenProfile={onOpenProfile}
                           findChar={findChar}
+                          liveInstruct={liveInstruct}
                         />
                         {!isLast && (
                           <BoundaryHandle
@@ -945,6 +949,7 @@ export function ManuscriptView({
                       onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
                       onOpenProfile={onOpenProfile}
                       findChar={findChar}
+                      liveInstruct={liveInstruct}
                     />
                     {segIdx < segments.length - 1 && (
                       <BoundaryHandle
@@ -1357,6 +1362,7 @@ interface SegmentRowProps {
   onReassignSegment: (newCharId: string) => void;
   onOpenProfile?: (id: string) => void;
   findChar: (id: string) => Character | undefined;
+  liveInstruct: boolean;
 }
 
 function SegmentRow({
@@ -1372,6 +1378,7 @@ function SegmentRow({
   onReassignSegment,
   onOpenProfile,
   findChar,
+  liveInstruct,
 }: SegmentRowProps) {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1487,6 +1494,14 @@ function SegmentRow({
                     character={char}
                   />
                 )}
+                {/* fs-56 — per-line delivery-direction control, ungated (narrator included). */}
+                <SentenceInstructControl
+                  chapterId={s.chapterId}
+                  sentenceId={s.id}
+                  instruct={s.instruct}
+                  character={char}
+                  liveInstruct={liveInstruct}
+                />
                 {!isLast && ' '}
               </Fragment>
             );
