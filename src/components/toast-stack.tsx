@@ -15,6 +15,7 @@ import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { IconClose, IconWarning, IconCheck } from '../lib/icons';
 import { notificationsActions, selectToasts, type Toast } from '../store/notifications-slice';
+import { VoiceNudgeToast } from './voice-nudge-toast';
 
 const AUTO_DISMISS_MS = 6000;
 
@@ -27,9 +28,9 @@ export function ToastStack() {
       aria-live="polite"
       className="fixed bottom-20 right-6 z-60 flex flex-col gap-2"
     >
-      {toasts.map((t) => (
-        <ToastItem key={t.id} toast={t} />
-      ))}
+      {toasts.map((t) =>
+        t.nudge ? <VoiceNudgeToast key={t.id} toast={t} /> : <ToastItem key={t.id} toast={t} />,
+      )}
     </div>
   );
 }
