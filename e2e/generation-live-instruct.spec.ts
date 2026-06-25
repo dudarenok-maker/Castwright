@@ -23,12 +23,16 @@ async function liveInstructFromStore(page: Page): Promise<boolean> {
     const s = (
       window as unknown as {
         __store__?: {
-          getState: () => { bookMeta: { liveInstruct: boolean } };
+          getState: () => { bookMeta: { liveInstruct: Record<string, boolean> } };
         };
       }
     ).__store__;
     if (!s) throw new Error('window.__store__ is not exposed (main.tsx DEV/e2e gate regressed)');
-    return s.getState().bookMeta.liveInstruct ?? false;
+    /* liveInstruct is a per-book map (the real selector reads liveInstruct[bookId]);
+       read the flag for the book currently in the URL, not the whole map object. */
+    const map = s.getState().bookMeta.liveInstruct ?? {};
+    const bookId = window.location.hash.match(/#\/books\/([^/]+)/)?.[1];
+    return bookId ? (map[bookId] ?? false) : false;
   });
 }
 
