@@ -75,6 +75,7 @@ export function CreateCharacterForm({
 
       <div className="flex gap-2">
         <button
+          type="button"
           data-testid="create-character-submit"
           disabled={disabled}
           onClick={() =>
@@ -90,7 +91,7 @@ export function CreateCharacterForm({
         >
           {existing ? `Reattribute to «${existing.name}»` : 'Create character'}
         </button>
-        <button onClick={onCancel} className="px-4 min-h-[44px] sm:min-h-0 text-sm text-ink/50">
+        <button type="button" onClick={onCancel} className="px-4 min-h-[44px] sm:min-h-0 text-sm text-ink/50">
           Cancel
         </button>
       </div>

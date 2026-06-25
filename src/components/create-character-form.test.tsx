@@ -20,6 +20,50 @@ it('offers reattribute-to-existing when the name matches a roster member', () =>
   expect(onReattributeExisting).toHaveBeenCalledWith('halloran');
 });
 
+it('routes a roster-name match to onReattributeExisting and never onSubmit', () => {
+  const onSubmit = vi.fn();
+  const onReattributeExisting = vi.fn();
+  render(
+    <CreateCharacterForm
+      initial={{ name: 'Halloran' }}
+      rosterByName={new Map([['halloran', { id: 'halloran', name: 'Halloran' }]])}
+      onSubmit={onSubmit}
+      onReattributeExisting={onReattributeExisting}
+      onCancel={() => {}}
+    />,
+  );
+  const submit = screen.getByTestId('create-character-submit');
+  expect(submit).toHaveTextContent(/Reattribute to «Halloran»/);
+  fireEvent.click(submit);
+  expect(onReattributeExisting).toHaveBeenCalledWith('halloran');
+  expect(onSubmit).not.toHaveBeenCalled();
+});
+
+it('routes a novel name to onSubmit and never onReattributeExisting', () => {
+  const onSubmit = vi.fn();
+  const onReattributeExisting = vi.fn();
+  render(
+    <CreateCharacterForm
+      rosterByName={new Map([['halloran', { id: 'halloran', name: 'Halloran' }]])}
+      onSubmit={onSubmit}
+      onReattributeExisting={onReattributeExisting}
+      onCancel={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Ferra' } });
+  const submit = screen.getByTestId('create-character-submit');
+  expect(submit).toHaveTextContent('Create character');
+  fireEvent.click(submit);
+  expect(onSubmit).toHaveBeenCalledWith({ name: 'Ferra', gender: undefined, ageRange: undefined });
+  expect(onReattributeExisting).not.toHaveBeenCalled();
+});
+
+it('gives both action buttons an explicit type="button"', () => {
+  render(<CreateCharacterForm rosterByName={new Map()} onSubmit={() => {}} onCancel={() => {}} />);
+  expect(screen.getByTestId('create-character-submit')).toHaveAttribute('type', 'button');
+  expect(screen.getByRole('button', { name: /cancel/i })).toHaveAttribute('type', 'button');
+});
+
 describe('gender and ageRange selects', () => {
   it('renders gender select with all options and empty default', () => {
     render(<CreateCharacterForm rosterByName={new Map()} onSubmit={() => {}} onCancel={() => {}} />);
