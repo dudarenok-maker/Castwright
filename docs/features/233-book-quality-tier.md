@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-25
 owner: null
 ---
 
 # fs-66 — Book-wide higher-quality (Qwen 1.7B) tier
 
-> Status: active
+> Status: stable
 > Key files: `server/src/tts/resolve-instruct.ts`, `server/src/tts/voice-mapping.ts`,
 > `server/src/tts/synthesise-chapter.ts`, `server/src/routes/generation.ts`,
 > `server/src/routes/voices.ts`, `server/src/routes/cast-tier.ts`,
@@ -104,5 +104,10 @@ Run in mock mode (`VITE_USE_MOCKS=true`).
 
 ## Ship notes
 
-_Pending merge (integration branch `integration/book-quality-tier`; PRs squashed
-into one delivery). Fill shipped date + merge SHA on merge._
+Shipped **2026-06-25** via PR [#1136](https://github.com/dudarenok-maker/Castwright/pull/1136),
+merge commit `6e080bb7`, Closes [#1134](https://github.com/dudarenok-maker/Castwright/issues/1134).
+Delivered as one integration PR (four logical units: gate collapse, manuscript reader
+migration + #1100 toggle removal, series-tier endpoint, cast bulk pin). Built via SDD
+(spec ×2 review rounds + plan ×2 review rounds + per-task reviews + opus whole-branch
+review). Full `npm run verify` green before merge. Follow-up: [#1135](https://github.com/dudarenok-maker/Castwright/issues/1135)
+(pre-existing clipped RegenerateModal footer, surfaced by the e2e).
