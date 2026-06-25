@@ -2897,6 +2897,7 @@ export interface ReviewScriptOpts {
   onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
+  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
 }
 export interface ReviewScriptResult {
   reviewedChapters: number;
@@ -2914,7 +2915,7 @@ export class ReviewScriptError extends Error {
 
 async function realReviewScript(
   bookId: string,
-  { chapterId, model, signal, onPhase, onThrottle, onOps }: ReviewScriptOpts = {},
+  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   const body: Record<string, unknown> = {};
   if (chapterId !== undefined) body.chapterId = chapterId;
@@ -2961,6 +2962,11 @@ async function realReviewScript(
           });
         }
         break;
+      case 'chapter-failed':
+        if (typeof p.chapterId === 'number') {
+          onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
+        }
+        break;
       case 'result':
         result = {
           reviewedChapters: typeof p.reviewedChapters === 'number' ? p.reviewedChapters : 0,
@@ -2998,7 +3004,7 @@ async function realReviewScript(
 
 async function mockReviewScript(
   _bookId: string,
-  { onOps, onPhase }: ReviewScriptOpts = {},
+  { onOps, onPhase, onChapterFailed: _onChapterFailed }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
   onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 3 });
