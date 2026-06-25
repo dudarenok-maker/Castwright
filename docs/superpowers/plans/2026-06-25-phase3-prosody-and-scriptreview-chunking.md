@@ -294,6 +294,8 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 
 ## PR3 — Phase 3 prosody annotation (branch `feat/analysis-phase3-prosody`)
 
+**PREREQUISITE — PR2 MUST be merged first.** Task 8 imports `server/src/analyzer/chapter-chunker.ts`, which only exists once PR2 lands. **Cut `feat/analysis-phase3-prosody` off the updated `origin/main` AFTER PR2 has merged** (do not branch off PR1 or off a pre-PR2 main, or Task 8's import will not resolve).
+
 **COORDINATION GATE (do first):** rebase on latest `origin/main`; check whether the concurrent book-1.7B work has landed a quality flag. Reuse `liveInstruct`; do NOT add a competing flag. If their `bookQualityOverride` exists, the toggle here still SETS `liveInstruct` (annotation generation is gated on `liveInstruct`, independent of their synth-time override).
 
 ### Task 7: book-state `prosodyAnnotated` watermark
@@ -314,15 +316,33 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 ### Task 8: annotation routes consume the chunker
 
 **Files:**
-- Modify: `server/src/routes/instruct-annotation.ts` (the per-chapter loop ~129) and `server/src/routes/annotate-emotion.ts` (its sibling loop).
+- Modify: `server/src/routes/instruct-annotation.ts` (per-chapter loop, lines 129–186 — builds `buildInstructChapterInbox(...)`, calls `selection.analyzer.runStage3Chapter(...)`, then `send({kind:'annotation', chapterId, annotations: result.annotations})`).
+- Modify: `server/src/routes/annotate-emotion.ts` (the structurally-identical sibling loop — builds `buildEmotionChapterInbox(...)`, calls `selection.analyzer.runEmotionChapter(...)`, same `send({kind:'annotation',...})`). Both verified same shape by review.
 - Test: `server/src/routes/instruct-annotation.test.ts`, `server/src/routes/annotate-emotion.test.ts` (extend).
 
 **Interfaces:**
-- Consumes: PR2's `chunkSentencesByBudget`/`chunkWithContext`/`chapterChunkBudget`; annotation ownership uses `coreIds.has(ann.sentenceId)` (no structural ops here — annotations are per-sentence).
+- Consumes: PR2's `chunkSentencesByBudget`/`chunkWithContext`/`chapterChunkBudget` (`chapter-chunker.ts` — requires PR2 merged, see PREREQUISITE); annotation ownership is `chunk.coreIds.has(ann.sentenceId)` (no structural ops — annotations are per-sentence, so no `primarySentenceId` needed here).
 
-- [ ] **Step 1: Write the failing test** — with a forced-low `num_ctx`, a large chapter is chunked; each sentence's annotation is emitted exactly once (owned-core), no truncation/`chapter-failed`.
-- [ ] **Step 2: Run, verify fail.**
-- [ ] **Step 3: Implement** — wrap the existing `runStage3Chapter` / emotion call in a per-chunk loop building the inbox from `chunkWithContext(chunk)`, filtering returned annotations to `chunk.coreIds.has(ann.sentenceId)` before `send({kind:'annotation',...})`.
+- [ ] **Step 1: Write the failing test** — stub `resolveAnalyzerNumCtx` low + `selection.engine='local'`; a multi-sentence chapter splits into ≥2 chunks; each sentence's annotation is emitted exactly once (owned-core), zero `chapter-failed`/truncation. Assert the union of emitted `sentenceId`s == the chapter's sentence ids, each once.
+- [ ] **Step 2: Run, verify fail** — `cd server && npm run test -- instruct-annotation annotate-emotion` → FAIL.
+- [ ] **Step 3: Implement** — in EACH route, replace the single-call body inside the per-chapter loop with a per-chunk loop (identical shape in both; only the inbox builder + analyzer method name differ):
+
+```ts
+const sentences = byChapter.get(chapterId) ?? [];
+const chunks = chunkSentencesByBudget(sentences, {
+  charBudget: chapterChunkBudget(selection.engine),
+  overlap: 3,
+  serialize: (s) => JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text }),
+});
+for (const chunk of chunks) {
+  if (closed) break;
+  const prompt = buildInstructChapterInbox(manuscriptId, chapterId, chunkWithContext(chunk)); // annotate-emotion: buildEmotionChapterInbox
+  const result = await selection.analyzer.runStage3Chapter(manuscriptId, chapterId, prompt, { /* same StageCall opts */ }); // annotate-emotion: runEmotionChapter
+  const owned = result.annotations.filter((a) => chunk.coreIds.has(a.sentenceId));
+  if (owned.length) { send({ kind: 'annotation', chapterId, annotations: owned }); totalAnnotations += owned.length; }
+}
+annotatedChapters += 1; // once per chapter, after the chunk loop — keep the existing try/catch (chapter-failed) around the loop body
+```
 - [ ] **Step 4: Run, verify pass.**
 - [ ] **Step 5: Commit** — `feat(server): emotion+instruct annotation passes chunk large chapters`.
 
@@ -360,7 +380,25 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 ### Task 12: post-analysis auto-trigger + watermark
 
 **Files:**
-- Modify: `src/components/layout.tsx` — add a `useEffect` that **mirrors the existing voice-match auto-trigger** (`layout.tsx:895-917`): a `prosodyFiredFor = useRef<string|null>(null)` guard, gated on `stageKind === 'confirm'` (reset the ref to null when not confirm). When `stageKind === 'confirm'` && `bookId` && `selectLiveInstruct(bookId)` && `prosodyFiredFor.current !== bookId`: set `prosodyFiredFor.current = bookId`, then `const st = await api.getBookState(bookId)` — if `st.state.prosodyAnnotated` is already true, return (watermark complete; never re-run); else `await runProsodyPasses(bookId, { dispatch, signal })` and on success `void api.putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: true } })`. `prosodyAnnotated` is NOT hydrated into any slice today, so it MUST be fetched inline via `api.getBookState` (do not assume a store field). Effect deps: `[stageKind, bookId]`.
+- Modify: `src/components/layout.tsx` — add a `useEffect` that **mirrors the existing voice-match auto-trigger** (`layout.tsx:895-917`), which uses a `useRef` guard + a `cancelled` cleanup boolean (it has NO AbortController — create one here). Shape:
+```tsx
+const prosodyFiredFor = useRef<string | null>(null);
+useEffect(() => {
+  if (stageKind !== 'confirm') { prosodyFiredFor.current = null; return; }
+  if (!bookId || !liveInstruct) return;                 // liveInstruct = useAppSelector(selectLiveInstruct(bookId))
+  if (prosodyFiredFor.current === bookId) return;
+  prosodyFiredFor.current = bookId;
+  const ac = new AbortController();
+  (async () => {
+    const st = await api.getBookState(bookId);
+    if (ac.signal.aborted || st?.state.prosodyAnnotated) return;   // watermark complete → never re-run
+    await runProsodyPasses(bookId, { dispatch, signal: ac.signal });
+    if (!ac.signal.aborted) void api.putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: true } });
+  })();
+  return () => ac.abort();
+}, [stageKind, bookId, liveInstruct]);
+```
+`prosodyAnnotated` is NOT hydrated into any slice today, so it MUST be fetched inline via `api.getBookState` (returns `BookStateResponse | null`; read `st?.state.prosodyAnnotated`). The AbortController is created in the effect (the voice-match sibling has none) and aborted in cleanup so a stage change cancels an in-flight run.
 - Test: `src/store/prosody-autotrigger.test.tsx`.
 
 **Interfaces:**
