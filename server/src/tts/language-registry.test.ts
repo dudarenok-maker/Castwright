@@ -50,11 +50,13 @@ describe('getLanguageEntry', () => {
 });
 
 describe('isSupportedLanguage', () => {
-  it('is true for en/ru/es (es canary-validated), false otherwise', () => {
+  it('is true for en/ru/es/fr/de (canary-validated), false otherwise', () => {
     expect(isSupportedLanguage('en')).toBe(true);
     expect(isSupportedLanguage('ru')).toBe(true);
     expect(isSupportedLanguage('es')).toBe(true);
-    expect(isSupportedLanguage('de')).toBe(false);
+    expect(isSupportedLanguage('fr')).toBe(true);
+    expect(isSupportedLanguage('de')).toBe(true);
+    expect(isSupportedLanguage('zh')).toBe(false); // absent from the registry (fs-59)
     expect(isSupportedLanguage('')).toBe(false);
   });
 });
@@ -71,19 +73,22 @@ describe('detect field + Latin entries', () => {
     expect(e?.supported).toBe(true);
   });
 
-  it('fr/de exist, are Latin, and are NOT yet supported', () => {
+  it('fr/de exist, are Latin, and ARE supported (canary-validated, plan 229)', () => {
     for (const [code, iso] of [['fr', 'fra'], ['de', 'deu']] as const) {
       const e = getLanguageEntry(code);
       expect(e?.detect).toEqual({ script: 'latin', iso6393: iso });
-      expect(e?.supported).toBe(false);
+      expect(e?.supported).toBe(true);
     }
   });
 });
 
-describe('isSupportedLanguage with a present-but-unsupported entry', () => {
-  it('is false for fr (present, supported:false) — not just for absent codes', () => {
-    expect(getLanguageEntry('fr')).toBeDefined();
-    expect(isSupportedLanguage('fr')).toBe(false);
+describe('isSupportedLanguage distinguishes absent from present', () => {
+  // With en/ru/es/fr/de all supported, no present-but-`false` entry remains;
+  // an absent code (zh, until fs-59 adds it as supported:false) exercises the
+  // `?? false` path. The present-but-false distinction returns when fs-59 lands.
+  it('is false for an absent code (zh not in the registry)', () => {
+    expect(getLanguageEntry('zh')).toBeUndefined();
+    expect(isSupportedLanguage('zh')).toBe(false);
   });
 });
 
@@ -94,6 +99,8 @@ describe('supportedLanguages', () => {
       { code: 'en', label: 'English' },
       { code: 'ru', label: 'Russian' },
       { code: 'es', label: 'Spanish' },
+      { code: 'fr', label: 'French' },
+      { code: 'de', label: 'German' },
     ]);
   });
 });

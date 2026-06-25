@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-25
 owner: null
 ---
 
@@ -199,7 +199,21 @@ A language is "done" when steps 2–5 pass and the operator accepts the MP3.
 
 ## Ship notes
 
-_Pending._ Fill per language on flip: date, the commit SHA flipping `supported`,
-the eval recall/precision scored, and one line on the operator's audio verdict.
-When both fr and de have shipped, move this plan to `docs/features/archive/` and
-close/advance #974 (or `Refs #974` per-language until both land).
+**Shipped 2026-06-25 (fr + de together).** Both flipped to `supported:true` in
+`language-registry.ts` on branch `chore/fs50-fr-de-canary-prep` (PR #1078).
+
+- **Gate cleared:** operator **audio** acceptance. Four designed Coalfall samples
+  — FR narrator + FR Oduvan, DE narrator + DE Oduvan — synthesised via the real
+  Qwen design path (voices designed against the production French/German
+  calibration pangrams `main.py` `CALIBRATION_TEXTS`; the audition speaks the
+  verbatim fixture line). Operator confirmed intelligible, correctly-accented
+  French/German with distinct voices → "we are good to go."
+- **Attribution-eval recall** was offered but **deferred** at operator request
+  (flip on audio alone). The FR/DE aliases are already in
+  `coalfall-ground-truth.json`, so a recall pass can be run any time from a real
+  analysis without further setup.
+- **Tests re-pointed:** `language-registry.test.ts` (supported matrix +
+  `supportedLanguages` ordering + the absent-vs-present test), `detect-language.test.ts`
+  (fr/de → `supported:true`), `import.test.ts` (supported-list).
+- ZH/JA remain fs-59 (#1004); Kokoro/XTTS engine relaxation remains fs-60 (#1005).
+  With ES+FR+DE+RU live, the **fs-50 Latin Qwen tranche is complete** → closes #974.

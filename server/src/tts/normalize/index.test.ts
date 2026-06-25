@@ -15,13 +15,15 @@ describe('speakNumber NaN guard', () => {
   it('returns raw on non-finite parse', () => expect(speakNumber('1,50', en)).toBe('1,50'));
 });
 
-describe('expandForSpeech dormancy gate', () => {
-  // fr is registered but supported:false — the gate must no-op end-to-end even
-  // though the fr engine itself works (exercised directly via applyPasses).
-  it('fr (supported:false) no-ops end-to-end', () =>
-    expect(expandForSpeech('J’ai 5 €.', 'fr')).toBe('J’ai 5 €.'));
-  it('de (supported:false) no-ops end-to-end', () =>
-    expect(expandForSpeech('Ich habe 5 €.', 'de')).toBe('Ich habe 5 €.'));
+describe('expandForSpeech — fr/de activate once supported (plan 229)', () => {
+  // fr/de flipped supported:true (plan 229), so the gate now lets their engines
+  // run end-to-end (previously dormant behind supported:false). The exact output
+  // is pinned in lang/fr.test.ts + lang/de.test.ts; here we just assert the gate
+  // opened — the input no longer passes through unchanged.
+  it('fr now expands end-to-end (no longer dormant)', () =>
+    expect(expandForSpeech('J’ai 5 €.', 'fr')).not.toBe('J’ai 5 €.'));
+  it('de now expands end-to-end (no longer dormant)', () =>
+    expect(expandForSpeech('Ich habe 5 €.', 'de')).not.toBe('Ich habe 5 €.'));
 });
 
 describe('expandForSpeech activation gate', () => {

@@ -17,16 +17,16 @@ describe('detectManuscriptLanguage', () => {
     expect(detectManuscriptLanguage(es)).toEqual({ language: 'es', supported: true });
   });
 
-  it('detects French (not yet supported)', () => {
+  it('detects French (supported, plan 229)', () => {
     const fr =
       "Le four avait refroidi jusqu'à la couleur d'un coucher de soleil couvert de cendre, et Wren raclait la dernière scorie lorsque l'on frappa à la porte de son atelier.";
-    expect(detectManuscriptLanguage(fr)).toEqual({ language: 'fr', supported: false });
+    expect(detectManuscriptLanguage(fr)).toEqual({ language: 'fr', supported: true });
   });
 
-  it('detects German (not yet supported)', () => {
+  it('detects German (supported, plan 229)', () => {
     const de =
       'Der Ofen war bis zur Farbe eines aschbedeckten Sonnenuntergangs abgekühlt, und Wren kratzte die letzte Schlacke ab, als es an der Tür ihrer Werkstatt klopfte.';
-    expect(detectManuscriptLanguage(de)).toEqual({ language: 'de', supported: false });
+    expect(detectManuscriptLanguage(de)).toEqual({ language: 'de', supported: true });
   });
 
   it('keeps an English manuscript English even when dense with French proper nouns', () => {
