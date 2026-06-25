@@ -411,6 +411,13 @@ export const manuscriptSlice = createSlice({
           id: isFirst ? original.id : ++newIdCounter,
           text: piece,
           characterId: a.payload.characterIds[i] ?? original.characterId,
+          /* fs-57 follow-up (#1100): per-sentence delivery hints describe the
+             ORIGINAL text. The first piece is the original sentence's head (it
+             keeps the id + the hints); every later fragment is NEW text, so
+             null both — a stale `vocalization:true` would turn real narration
+             into a sound-effect token, and an `instruct` written for the whole
+             sentence may not fit a fragment. */
+          ...(isFirst ? {} : { instruct: undefined, vocalization: undefined }),
         });
       }
       if (pieces.length === 0) return;
@@ -467,6 +474,13 @@ export const manuscriptSlice = createSlice({
       if (members.some((m) => !m)) return;
       const live = members as NonNullable<(typeof members)[number]>[];
       live[0].text = live.map((m) => m.text).join(' ');
+      /* fs-57 follow-up (#1100): the survivor's joined text is NEW — drop its
+         instruct/vocalization (a `vocalization:true` flag on a now-much-longer
+         merged sentence is wrong; an `instruct` written for the old short text
+         may no longer fit). The merged-away members' fields were already
+         discarded with their rows. */
+      live[0].instruct = undefined;
+      live[0].vocalization = undefined;
       for (const m of live.slice(1)) {
         const i = s.sentences.findIndex((x) => x.chapterId === a.payload.chapterId && x.id === m.id);
         if (i >= 0) s.sentences.splice(i, 1);

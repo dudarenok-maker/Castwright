@@ -39,6 +39,30 @@ describe('manuscriptSlice — splitSentence', () => {
     expect(next.sentences[1]).toMatchObject({ id: 2, text: 'world.', characterId: 'eliza' });
   });
 
+  it('keeps instruct/vocalization on the first piece only, nulls them on later fragments (#1100)', () => {
+    const start = baseState(
+      sentences([
+        { id: 1, text: '*gasp* he froze', characterId: 'wren', instruct: 'a sharp gasp', vocalization: true },
+      ]),
+    );
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.splitSentence({
+        chapterId: 1,
+        sentenceId: 1,
+        offsets: [7],
+        characterIds: ['wren', 'wren'],
+      }),
+    );
+    expect(next.sentences).toHaveLength(2);
+    // First piece is the original's head — keeps the id + the delivery hints.
+    expect(next.sentences[0]).toMatchObject({ id: 1, text: '*gasp* ', instruct: 'a sharp gasp', vocalization: true });
+    // Later fragment is NEW text — a stale vocalization:true would turn narration into a sound-effect token.
+    expect(next.sentences[1].text).toBe('he froze');
+    expect(next.sentences[1].instruct).toBeUndefined();
+    expect(next.sentences[1].vocalization).toBeUndefined();
+  });
+
   it('splits at multiple offsets into N+1 pieces with new sequential ids', () => {
     const start = baseState(
       sentences([
@@ -815,6 +839,19 @@ describe('mergeSentences', () => {
     const s = start([{ id: 5, chapterId: 3, characterId: 'narrator', text: 'A.' }]);
     expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 9] })).sentences).toHaveLength(1);
     expect(reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5] })).sentences).toHaveLength(1);
+  });
+
+  it('clears the survivor instruct/vocalization — the joined text is new (#1100)', () => {
+    const s = start([
+      { id: 5, chapterId: 3, characterId: 'wren', text: 'Ah!', instruct: 'a sharp gasp', vocalization: true },
+      { id: 6, chapterId: 3, characterId: 'wren', text: 'he froze.', instruct: 'whisper this' },
+    ]);
+    const next = reducer(s, manuscriptActions.mergeSentences({ chapterId: 3, sentenceIds: [5, 6] }));
+    const survivor = next.sentences.find((x) => x.chapterId === 3 && x.id === 5);
+    expect(survivor?.text).toBe('Ah! he froze.');
+    // A vocalization flag / instruct written for the old short text must not ride the merged sentence.
+    expect(survivor?.vocalization).toBeUndefined();
+    expect(survivor?.instruct).toBeUndefined();
   });
 });
 
