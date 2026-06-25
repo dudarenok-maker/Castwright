@@ -1,6 +1,6 @@
 ---
 title: 'fs-58 validate_instruct — Script Review class: flag/repair per-line instruct + vocalization'
-status: active
+status: stable
 date: 2026-06-25
 issue: '#1041'
 related:
@@ -510,3 +510,16 @@ code.** New findings, folded above:
 - **Confirmed NOT gaps:** mock client op-agnostic; `ReviewOp`/SkillName/SKILL_FILES untouched; scope-honesty
   framing accurate (the instruct-only fallback drops only §6.2/§6.3 ≈ 40% of the work); overflow caveat
   proportionate.
+
+## Ship notes
+
+**Shipped 2026-06-25** — PR [#1116](https://github.com/dudarenok-maker/Castwright/pull/1116), merge commit
+`48d238b7`, branch `docs/docs-fs58-validate-instruct`. Closes [#1041](https://github.com/dudarenok-maker/Castwright/issues/1041).
+
+Built spec-first over two adversarial review rounds (spec + plan), then executed task-by-task via TDD (T1–T12,
+33 files, +3014/−35). Full `npm run verify` green locally (lint, typecheck FE+server, 3186 frontend tests,
+server + 264 server-slow, scripts, sidecar, 230 e2e, build). Plan:
+[2026-06-25-fs58-validate-instruct.md](../plans/2026-06-25-fs58-validate-instruct.md).
+
+**Owed (non-blocking):** on-box multilingual repair spot-check (LLM decision, non-automated, §9); the §5.2
+overflow-budget acceptance check. Builds on fs-58 Unit A (#1047) + fs-57 (#1095) + #1105 (all on `main`).

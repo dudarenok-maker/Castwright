@@ -6,7 +6,7 @@ issue: fs-57 (#997)
 related:
   - 2026-06-22-expressive-tts-instruct-tiers-design.md — parent spec (this drills §4.5 into a delivery)
   - fs-56 (#996) — per-line instruct on the Qwen 1.7B tier (tier *selection* shipped; live instruct *payload* did not — this spec builds it)
-  - fs-58 (#998) — LLM Script Review (vocalization-protection guard already shipped + tested)
+  - fs-58 (#998) — LLM Script Review (vocalization-protection guard shipped + tested); its `validate_instruct` class (#1041, shipped 2026-06-25) is the QA counterpart that flags/repairs the `instruct` + vocalization this spec generates
   - srv-31 (plan 186) — per-sentence ASR content-QA gate (gets the vocalization carve-out)
   - fs-33 (#596) — emotion-annotation backfill pass (the structural template for Stage 3)
   - reference: Qwen VoiceDesign persona/instruct stays English (accent rides a separate calibration channel)
