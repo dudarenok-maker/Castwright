@@ -62,4 +62,12 @@ describe('POST /api/internal/design-progress', () => {
     expect(res.status).toBe(400);
     dropProgressToken('tok2');
   });
+
+  it('no-ops (200 {ok:false}) on an empty token with a valid phase (#1092)', async () => {
+    const res = await request(appWith())
+      .post('/api/internal/design-progress')
+      .send({ token: '', phase: 'designing' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: false });
+  });
 });
