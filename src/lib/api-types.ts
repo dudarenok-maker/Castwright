@@ -2575,14 +2575,14 @@ export interface components {
              */
             language?: string;
             /**
-             * @description fs-57 — per-book live-instruct flag. When `true`, `synthesiseChapter`
-             *     uses the Qwen 1.7B live-instruct synth path instead of the standard
-             *     path. Default `false` (absent on books written before fs-57 — readers
-             *     treat absence as `false`). Toggled by the UI (Task 16) and gated by
-             *     the synth route (Task 8). Persisted to `BookStateJson.liveInstruct`
-             *     in `<bookDir>/.audiobook/state.json`.
+             * @description fs-65 Phase 3 — prosody annotation intent flag. Absent (undefined)
+             *     ⇒ ON (eager default); only an explicit `false` opts out. The
+             *     client-side Task-13 trigger gate is `prosodyEnabled !== false`.
+             *     Persisted to `BookStateJson.prosodyEnabled` in
+             *     `<bookDir>/.audiobook/state.json`. Renamed from `liveInstruct`
+             *     (fs-57); legacy books without the field are treated as opted-in.
              */
-            liveInstruct?: boolean;
+            prosodyEnabled?: boolean;
         };
         ImportCandidate: {
             /** @enum {string} */

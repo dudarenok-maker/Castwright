@@ -227,13 +227,13 @@ export interface BookStateJson {
      (plan 27 rename-vs-add policy). Set at confirm time by
      `server/src/routes/import.ts`. */
   language?: string;
-  /* fs-57 — per-book live-instruct flag. When true, synthesiseChapter will
-     use the Qwen 1.7B live-instruct synth path instead of the standard
-     1.7B path. Default `false` (absent on books written before fs-57).
-     Toggled by the UI (Task 16) and gated by the synth route (Task 8).
+  /* fs-65 Phase 3 — prosody annotation intent flag. Absent (undefined) ⇒ ON
+     (eager default); only an explicit `false` opts out. The Task-13 client
+     trigger gate is `prosodyEnabled !== false`. Renamed from `liveInstruct`
+     (fs-57); legacy books without the field are treated as opted-in.
      Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
      (plan 27 rename-vs-add policy). */
-  liveInstruct?: boolean;
+  prosodyEnabled?: boolean;
   /* fs-65 Phase 3 — completion watermark set once BOTH prosody annotation
      passes (emotion + instruct) finish without any chapter failures.
      Absent (undefined) or false ⇒ not yet annotated; the auto-trigger

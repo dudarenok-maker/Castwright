@@ -703,9 +703,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           notes: pickNotes(patch.notes, state.notes),
           audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
           tags: pickTags(patch.tags, state.tags),
-          liveInstruct: typeof (patch as { liveInstruct?: unknown }).liveInstruct === 'boolean'
-            ? (patch as { liveInstruct: boolean }).liveInstruct
-            : (state.liveInstruct ?? false),
+          prosodyEnabled: typeof (patch as { prosodyEnabled?: unknown }).prosodyEnabled === 'boolean'
+            ? (patch as { prosodyEnabled: boolean }).prosodyEnabled
+            : state.prosodyEnabled,
           prosodyAnnotated: typeof (patch as { prosodyAnnotated?: unknown }).prosodyAnnotated === 'boolean'
             ? (patch as { prosodyAnnotated: boolean }).prosodyAnnotated
             : state.prosodyAnnotated,

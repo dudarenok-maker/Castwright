@@ -365,10 +365,10 @@ export interface BookStateJson {
       BookStateJson; drives the Listen language badge + cast-view Qwen lock
       for non-English books. */
   language?: string;
-  /** fs-57 — per-book live-instruct flag. When true, synthesiseChapter uses
-      the Qwen 1.7B live-instruct synth path. Absent on books written before
-      fs-57 — treat absence as false. */
-  liveInstruct?: boolean;
+  /** fs-65 Phase 3 — prosody annotation intent flag. Absent (undefined) ⇒ ON
+      (eager default); only an explicit `false` opts out. The Task-13 trigger
+      gate is `prosodyEnabled !== false`. */
+  prosodyEnabled?: boolean;
   /** fs-65 Phase 3 — completion watermark; true once both prosody annotation
       passes (emotion + instruct) finish without chapter failures. Absent
       (undefined) or false ⇒ not yet annotated. Mirror of the server's

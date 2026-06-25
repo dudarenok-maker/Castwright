@@ -2169,46 +2169,47 @@ describe('book-state router — prosodyAnnotated watermark (fs-65)', () => {
   });
 });
 
-// fs-57 — per-book liveInstruct flag persistence
-describe('book-state router — liveInstruct flag (fs-57)', () => {
-  it('GET returns state.liveInstruct as false (default) for a legacy book without the field', async () => {
+// fs-65 Phase 3 — per-book prosodyEnabled flag persistence (renamed from fs-57 liveInstruct)
+describe('book-state router — prosodyEnabled flag (fs-65 Phase-3)', () => {
+  it('GET returns state.prosodyEnabled as undefined (absent) for a legacy book without the field', async () => {
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
-    expect(res.body.state.liveInstruct ?? false).toBe(false);
+    // Absent ⇒ undefined; eager-default means the gate treats it as ON
+    expect(res.body.state.prosodyEnabled).toBeUndefined();
   });
 
-  it('PUT slice=state round-trips liveInstruct=true and persists it to disk', async () => {
+  it('PUT slice=state round-trips prosodyEnabled=true and persists it to disk', async () => {
     const put = await request(app)
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
-      .send({ slice: 'state', patch: { liveInstruct: true } });
+      .send({ slice: 'state', patch: { prosodyEnabled: true } });
     expect(put.status).toBe(204);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
-    expect(onDisk.liveInstruct).toBe(true);
+    expect(onDisk.prosodyEnabled).toBe(true);
   });
 
-  it('PUT slice=state round-trips liveInstruct=false (explicit off)', async () => {
+  it('PUT slice=state round-trips prosodyEnabled=false (explicit opt-out)', async () => {
     const put = await request(app)
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
-      .send({ slice: 'state', patch: { liveInstruct: false } });
+      .send({ slice: 'state', patch: { prosodyEnabled: false } });
     expect(put.status).toBe(204);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
-    expect(onDisk.liveInstruct).toBe(false);
+    expect(onDisk.prosodyEnabled).toBe(false);
   });
 
-  it('PUT slice=state preserves liveInstruct when patch omits the field', async () => {
+  it('PUT slice=state preserves prosodyEnabled when patch omits the field', async () => {
     /* Seed to true, then omit from patch — should remain true. */
     await request(app)
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
-      .send({ slice: 'state', patch: { liveInstruct: true } });
+      .send({ slice: 'state', patch: { prosodyEnabled: true } });
     const put = await request(app)
       .put(`/api/books/${bookId}/state`)
       .set('Content-Type', 'application/json')
       .send({ slice: 'state', patch: { narratorCredit: 'Witness' } });
     expect(put.status).toBe(204);
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
-    expect(onDisk.liveInstruct).toBe(true);
+    expect(onDisk.prosodyEnabled).toBe(true);
   });
 });
