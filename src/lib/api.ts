@@ -3001,12 +3001,32 @@ async function mockReviewScript(
   { onOps, onPhase }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
-  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 1 });
+  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 3 });
+  /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
   onOps?.({
-    chapterId: 1,
+    chapterId: 3,
     ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
   });
-  return { reviewedChapters: 1, totalOps: 1 };
+  /* fs-58 Unit B: off-roster reattribute on sentence id:3 (dialogue line),
+     and flag_nonstory on sentence id:15 (the "p. 42" artefact line).
+     Both default OFF in the diff modal (script-review-slice DEFAULT_OFF set). */
+  onOps?.({
+    chapterId: 3,
+    ops: [
+      {
+        id: 3,
+        op: 'reattribute',
+        proposed: { name: 'Ferra', gender: 'female' },
+        rationale: 'speaker not in cast',
+      },
+      {
+        id: 15,
+        op: 'flag_nonstory',
+        rationale: 'page number artefact',
+      },
+    ],
+  });
+  return { reviewedChapters: 1, totalOps: 3 };
 }
 
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */

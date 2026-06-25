@@ -589,6 +589,20 @@ export function ManuscriptView({
     window.getSelection()?.removeAllRanges();
   }
 
+  /* The sidebar (chapters + detected) and the inspector panel are
+     rendered as their own subtrees so the same markup can show inline
+     on `lg:` (sticky asides) AND inside drawer/sheet overlays on
+     `<lg:`. This hook MUST live before the `if (!currentChapter) return null`
+     guard below — hooks cannot be called conditionally (Rules of Hooks). */
+  const handleCreateCharacter = useCallback(
+    async (fields: { name: string; gender?: string; ageRange?: string }) => {
+      if (!bookId) return;
+      const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
+      dispatch(castActions.addCharacter(result.character));
+    },
+    [bookId, dispatch],
+  );
+
   /* Defensive guard for the empty-chapters transient (e.g. the manuscript
      slice rehydrating after a reparse, or a stale URL pointing at a book
      whose chapter list hasn't loaded yet). The whole view dereferences
@@ -608,19 +622,6 @@ export function ManuscriptView({
   };
 
   const selectedSegObj = segments.find((s) => s.id === selectedSeg);
-
-  /* The sidebar (chapters + detected) and the inspector panel are
-     rendered as their own subtrees so the same markup can show inline
-     on `lg:` (sticky asides) AND inside drawer/sheet overlays on
-     `<lg:`. */
-  const handleCreateCharacter = useCallback(
-    async (fields: { name: string; gender?: string; ageRange?: string }) => {
-      if (!bookId) return;
-      const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
-      dispatch(castActions.addCharacter(result.character));
-    },
-    [bookId, dispatch],
-  );
 
   const sidebarPanels = (
     <SidebarPanels
