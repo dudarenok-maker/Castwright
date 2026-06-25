@@ -30,6 +30,7 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
 import { useAppDispatch, useAppSelector } from '../store';
+import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
@@ -1383,6 +1384,8 @@ function SegmentRow({
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const reassignBtnRef = useRef<HTMLButtonElement>(null);
+  const dispatch = useAppDispatch();
+  const markStale = useMarkCharacterStaleIfRendered();
   const char = findChar(seg.characterId);
   const c = CHAR_COLORS[char?.color as CharColor] ?? CHAR_COLORS.narrator;
 
@@ -1478,30 +1481,49 @@ function SegmentRow({
                 <span
                   data-sentence-id={s.id}
                   data-sentence-idx={s.absIdx}
-                  className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}`}
+                  className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}${s.excludeFromSynthesis ? ' line-through opacity-50' : ''}`}
                   {...(s.absIdx === 0 ? { 'data-tour-id': 'manuscript-line' } : {})}
                 >
                   {renderSentenceText(s.text)}
                 </span>
-                {/* fs-25 — per-quote emotion control. Shown for dialogue (the
-                    common case) and for any already-tagged sentence, rendered
-                    outside the text span so selection offsets are unaffected. */}
-                {(seg.characterId !== 'narrator' || s.emotion) && (
-                  <SentenceEmotionControl
-                    chapterId={s.chapterId}
-                    sentenceId={s.id}
-                    emotion={s.emotion}
-                    character={char}
-                  />
+                {/* fs-58 Unit B — excluded lines: re-include toggle outside the
+                    span so split offsets are unaffected; chips suppressed.
+                    follow-up: disable split/drag affordance on excluded lines. */}
+                {s.excludeFromSynthesis ? (
+                  <button
+                    data-testid={`reinclude-toggle-${s.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dispatch(manuscriptActions.setSentenceExcluded({ chapterId: s.chapterId, sentenceId: s.id, excluded: false }));
+                      markStale({ id: s.characterId, name: char?.name ?? s.characterId });
+                    }}
+                    className="ml-1 align-baseline text-[10px] min-h-[44px] sm:min-h-0 text-ink/45 hover:text-ink underline"
+                  >
+                    include
+                  </button>
+                ) : (
+                  <>
+                    {/* fs-25 — per-quote emotion control. Shown for dialogue (the
+                        common case) and for any already-tagged sentence, rendered
+                        outside the text span so selection offsets are unaffected. */}
+                    {(seg.characterId !== 'narrator' || s.emotion) && (
+                      <SentenceEmotionControl
+                        chapterId={s.chapterId}
+                        sentenceId={s.id}
+                        emotion={s.emotion}
+                        character={char}
+                      />
+                    )}
+                    {/* fs-56 — per-line delivery-direction control, ungated (narrator included). */}
+                    <SentenceInstructControl
+                      chapterId={s.chapterId}
+                      sentenceId={s.id}
+                      instruct={s.instruct}
+                      character={char}
+                      liveInstruct={liveInstruct}
+                    />
+                  </>
                 )}
-                {/* fs-56 — per-line delivery-direction control, ungated (narrator included). */}
-                <SentenceInstructControl
-                  chapterId={s.chapterId}
-                  sentenceId={s.id}
-                  instruct={s.instruct}
-                  character={char}
-                  liveInstruct={liveInstruct}
-                />
                 {!isLast && ' '}
               </Fragment>
             );
