@@ -568,6 +568,49 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(failed[0].errorReason as string).toMatch(/voice catalog is out of sync/i);
     expect(ticks[ticks.length - 1].type).toBe('idle');
   });
+
+  it('fails an all-excluded chapter with a distinct reason, not a 0-byte success (fs-58 Unit B)', async () => {
+    /* Seed ch1 with sentences that are ALL excludeFromSynthesis:true.
+       The guard must fire before synthesis and broadcast chapter_failed
+       with the "flagged non-story" reason — NOT produce a 0-byte complete. */
+    const cacheModule = await import('../store/analysis-cache.js');
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {
+        1: [
+          {
+            id: 1,
+            chapterId: 1,
+            characterId: 'narrator',
+            text: 'p. 42',
+            excludeFromSynthesis: true,
+          },
+        ],
+        2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+      },
+    });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+      expect(res.status).toBe(200);
+      const ticks = parseTicks(res.text);
+      const failed = ticks.find(
+        (t) => t.type === 'chapter_failed' && t.chapterId === 1,
+      );
+      expect(failed).toBeDefined();
+      expect(failed?.errorReason as string).toMatch(/flagged non-story/i);
+      /* The run must NOT produce a chapter_complete for the all-excluded chapter. */
+      expect(ticks.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(false);
+    } finally {
+      /* Restore the seeded cache so other tests are unaffected. */
+      await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+        chapters: {
+          1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+          2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+        },
+      });
+    }
+  });
 });
 
 /* Bug E — every LIVE broadcast tick (progress / chapter_assembling /

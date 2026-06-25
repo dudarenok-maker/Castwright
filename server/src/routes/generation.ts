@@ -1057,6 +1057,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       return;
     }
 
+    /* fs-58 Unit B — all-excluded guard. If every sentence is flagged
+       excludeFromSynthesis, synthesiseChapter would receive an empty group
+       list and produce a 0-byte "complete". Fail early with a distinct reason
+       instead so the user knows what happened. */
+    const keptCount = sentences.filter((s) => !s.excludeFromSynthesis).length;
+    if (keptCount === 0) {
+      job.runInProgress.delete(chapter.id);
+      broadcast(job, {
+        type: 'chapter_failed',
+        chapterId: chapter.id,
+        errorReason: 'All content in this chapter is flagged non-story — nothing to synthesise.',
+      });
+      return;
+    }
+
     /* Loud-fallback gate. Before emitting any progress, check whether this
        chapter would SILENTLY render an undesigned Qwen voice in Kokoro. If so,
        park the entry on `awaiting_confirm` and release this worker (without
