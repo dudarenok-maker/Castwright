@@ -398,6 +398,20 @@ export interface AddFromSeriesRosterArgs {
 export interface AddFromSeriesRosterResponse {
   character: import('./types').Character;
 }
+/* POST /api/books/:bookId/cast/create — mint a brand-new cast member that
+   was not discovered during analysis (e.g. a narrator added by the user, or
+   a character the analyzer missed). Server appends the row to cast.json and
+   returns the full character record so the frontend can dispatch
+   castActions.addCharacter immediately. */
+export interface CreateCharacterFields {
+  name: string;
+  gender?: 'male' | 'female' | 'neutral';
+  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+  role?: string;
+}
+export interface CreateCharacterResponse {
+  character: import('./types').Character;
+}
 /* POST /api/books/:bookId/cast/unlink-alias — split a misplaced alias
    chip off its current character and back into its own standalone cast
    member. Server reads the preserved Phase-0a chapterCast to identify
@@ -3627,6 +3641,51 @@ async function mockAddFromSeriesRoster(
         bookTitle: prior.bookTitle,
         confidence: 1,
       },
+    } as import('./types').Character,
+  };
+}
+
+async function realCreateCharacter(
+  bookId: string,
+  fields: CreateCharacterFields,
+): Promise<CreateCharacterResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Create character failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+export async function mockCreateCharacter(
+  _bookId: string,
+  fields: CreateCharacterFields,
+): Promise<CreateCharacterResponse> {
+  await wait(120);
+  const slug =
+    fields.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_|_$/g, '') || 'character';
+  return {
+    character: {
+      id: slug,
+      name: fields.name.trim(),
+      role: fields.role ?? 'character',
+      color: 'unset',
+      gender: fields.gender,
+      ageRange: fields.ageRange,
+      voiceState: 'generated',
     } as import('./types').Character,
   };
 }
@@ -7067,6 +7126,7 @@ const real = {
   notLinkedTo: realNotLinkedTo,
   removeNotLinkedTo: realRemoveNotLinkedTo,
   addFromSeriesRoster: realAddFromSeriesRoster,
+  createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
   loadSample: realLoadSample,
@@ -7330,6 +7390,7 @@ const mock = {
   notLinkedTo: mockNotLinkedTo,
   removeNotLinkedTo: mockRemoveNotLinkedTo,
   addFromSeriesRoster: mockAddFromSeriesRoster,
+  createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
   loadSample: mockLoadSample,

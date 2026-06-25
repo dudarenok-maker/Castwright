@@ -10,6 +10,7 @@ import {
   _resetMockListenStats,
   readE2eUpdateOverride,
   readCastDesignStream,
+  mockCreateCharacter,
   api,
 } from './api';
 
@@ -185,5 +186,38 @@ describe('readE2eUpdateOverride (fe-27 update override)', () => {
       updateAvailable: true,
       latestVersion: '9.9.9',
     });
+  });
+});
+
+describe('mockCreateCharacter (fs-58 Unit B)', () => {
+  it('mints a deterministic slug id from name', async () => {
+    const { character: c } = await mockCreateCharacter('b1', { name: 'Ferra', gender: 'female' });
+    expect(c.name).toBe('Ferra');
+    expect(c.id).toMatch(/ferra/);
+    expect(c.voiceState).toBe('generated');
+  });
+
+  it('returns a full Character with required fields (id, name, role, color)', async () => {
+    const { character: c } = await mockCreateCharacter('b1', { name: 'The Narrator' });
+    expect(c.id).toBe('the_narrator');
+    expect(c.role).toBe('character');
+    expect(c.color).toBe('unset');
+    expect(c.voiceState).toBe('generated');
+  });
+
+  it('preserves optional gender and ageRange fields', async () => {
+    const { character: c } = await mockCreateCharacter('b2', {
+      name: 'Old Crow',
+      gender: 'male',
+      ageRange: 'elderly',
+      role: 'narrator',
+    });
+    expect(c.gender).toBe('male');
+    expect(c.ageRange).toBe('elderly');
+    expect(c.role).toBe('narrator');
+  });
+
+  it('is registered on the api object (mock surface)', () => {
+    expect(typeof api.createCharacter).toBe('function');
   });
 });
