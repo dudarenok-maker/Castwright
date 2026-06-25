@@ -294,6 +294,11 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 
 ## PR3 — Phase 3 prosody annotation (branch `feat/analysis-phase3-prosody`)
 
+> **IMPLEMENTED 2026-06-26.** Tasks 7–14 + the Task-15 e2e are built on
+> `feat/analysis-phase3-prosody` (SDD, per-task reviews, a dedicated Task-13
+> trigger review, and an Opus whole-branch review — no Critical). Full
+> `npm run verify` green (incl. e2e 234 passed). Closes #1129.
+
 > **GATE REDESIGNED (2026-06-25) — ready to execute.** PR1 (#1126) and PR2
 > (#1128) shipped. fs-66 ("1.7B implies prosody", PR #1136) has now landed on
 > `main`: the synth prosody gate is `is17b` alone, `liveInstruct` is orphaned

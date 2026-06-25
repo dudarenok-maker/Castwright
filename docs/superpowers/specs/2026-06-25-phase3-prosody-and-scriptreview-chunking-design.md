@@ -1,6 +1,6 @@
 # Phase 3 prosody annotation + analyzer sentence-chunking (script review large chapters)
 
-**Date:** 2026-06-25 · **Status:** 2A + 2B SHIPPED (PR #1126, #1128); Phase 3 gate **REDESIGNED** 2026-06-25 (fs-66 landed — see below); ready to plan/build
+**Date:** 2026-06-25 · **Status:** 2A + 2B SHIPPED (PR #1126, #1128); **Phase 3 IMPLEMENTED** 2026-06-26 on `feat/analysis-phase3-prosody` (Tasks 7–14 + e2e; built via SDD with round-1 + round-2 adversarial reviews + an Opus whole-branch review; full `npm run verify` green incl. e2e). Closes #1129.
 
 > **Gate redesign (2026-06-25, fs-65 #1129).** fs-66 ("1.7B implies prosody",
 > PR #1136) collapsed the synth prosody gate to `is17b` alone and **dropped
