@@ -49,13 +49,6 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 
 ### Reach & perception — win the comparison
 
-#### `fs-50` — Language packs: ES/FR/DE end-to-end, Latin Qwen tranche ([#974](https://github.com/dudarenok-maker/Castwright/issues/974))
-
-- _What:_ Stand up **ES/FR/DE** end-to-end through **Qwen design** (Latin-script tranche), folding in `fs-41` (auto-detect on ingest + voice-library language filtering). Keeps the shipped `non-English ⇒ Qwen, fail-loud` invariant unchanged; the bulk is the engine-independent **analyze half** (detection, chapter/quote/attribution/token + the English prompt skills) plus the Qwen design-path i18n. **CJK (ZH/JA) split to `fs-59`; the Kokoro/XTTS engine relaxation split to `fs-60`.**
-- _Status:_ **ES (Spanish) SHIPPED 2026-06-23** — `es.supported:true` (#1031), canary-validated + operator-accepted, attribution-eval harness merged (#1032). **FR/DE remain** — each needs its own on-box canary before its flip; they are **NOT** gated by persona-i18n (ES shipped fine with English personas). `fs-62` (#1034, "translate the persona") was **closed won't-fix** — Qwen VoiceDesign's `instruct` is English/Chinese only and spoken-language/accent ride a separate calibration channel (#1019), so the persona stays English by design (see [persona-language research](research/2026-06-23-qwen-voicedesign-persona-language.md)). Follow-ups from the ES canary: #1027 (per-language sample books → `fs-61` below), #1028 (minor-cast bug), #1029/#1030 (closed).
-- _Benefit (user / strategic):_ the **biggest single perception gap** — rivals market 1,158 languages, we show 2. Now spec'd + decomposed into 5 desk-verifiable seams.
-_Spec:_ [`2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md`](superpowers/specs/2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md) · _Detail:_ [#974](https://github.com/dudarenok-maker/Castwright/issues/974).
-
 #### `fs-59` — CJK (Chinese/Japanese) language support ([#1004](https://github.com/dudarenok-maker/Castwright/issues/1004))
 
 - _What:_ ZH/JA end-to-end — the deferred CJK follow-on to `fs-50`. Needs its own foundations: a server-side word segmenter (`Intl.Segmenter`/jieba/fugashi), CJK quote handling (「」), a CJK token divisor, per-language prompt examples, and fluent ZH/JA labelers for the attribution gate.
@@ -151,12 +144,6 @@ blocked companion follow-up.
 - _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
 _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
-#### `fs-58` — LLM Script Review (Unit A): per-chapter read-only annotation-repair pass ([#998](https://github.com/dudarenok-maker/Castwright/issues/998))
-
-- _What:_ Operator-triggered ("Review Script"), **per-chapter, read-only** LLM pass that proposes annotation repairs and applies the accepted ones **client-side** (dispatching the existing manual-edit Redux reducers). Unit A = five classes: `strip_tag`, `split`, `extract_dialogue` (two-anchor), `merge` (adjacent same-speaker narrator runs), `fix_emotion`. Accept/reject diff modal. Standalone job, runnable anytime (incl. post-generation), optional `chapterId` (per-chapter default; whole-book opt-in with an RPD warning). **Engine-agnostic — no TTS engine load** (analyzer Ollama/Gemini only). `validate_instruct` → fs-56 (#1041); `reattribute`/`flag_nonstory` → Unit B (#1040).
-- _Benefit (user):_ higher annotation quality, fewer manual fixes; Alexandria parity.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-23-fs58-llm-script-review-design.md` · plan `docs/superpowers/plans/2026-06-23-fs58-script-review-unit-a.md` · [#998](https://github.com/dudarenok-maker/Castwright/issues/998).
-
 #### `fs-58 Unit B` — LLM Script Review: `reattribute` + `flag_nonstory` ([#1040](https://github.com/dudarenok-maker/Castwright/issues/1040))
 
 - _What:_ The two deferred Script Review classes on the Unit A harness — `reattribute` (re-assign a dialogue line to the correct existing cast member) and `flag_nonstory` (flag import residue for synthesis exclusion). Each carries an unmet dependency (cast-create wiring + cross-chapter context for reattribute; a new `excludeFromSynthesis` field + a positive fixture for flag_nonstory), so it's tracked separately from Unit A. Both default OFF.
@@ -200,14 +187,6 @@ _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on. _(Promoted Could → Should 2026-06-21 — a demo/marketing centerpiece.)_
 _Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414).
-
-### Reliability & observability
-
-#### `fs-55` — Acoustic variant-fidelity gate: flag variants that don't sound like the base character ([#993](https://github.com/dudarenok-maker/Castwright/issues/993))
-
-- _What:_ Reuse the shipped `srv-36` ECAPA per-character centroid machinery to validate that an emotion/style variant still sounds like _that_ character. Variants designed via Qwen VoiceDesign (and fs-25 emotion variants) sometimes **slip** — the timbre drifts far enough to read as a different person. Embed the variant's audition render, compare timbre-only cosine to the base character, flag those below a per-character fidelity cutoff so the operator can redesign before it ships. Design questions (where to hook, reference, isolating timbre from the intentional expressive delta) resolve in the plan (`needs-plan`).
-- _Benefit (user):_ "every variant still sounds like your character" — protects the core casting promise once expressive variants are in play, catching the slip before the listener hears it.
-_Full detail + acceptance:_ [#993](https://github.com/dudarenok-maker/Castwright/issues/993).
 
 ### Ops & maintenance
 
@@ -325,12 +304,6 @@ _Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
-
-#### `srv-48` — Local-model option for voice-design persona generation (Gemini-only today; fails offline) ([#1038](https://github.com/dudarenok-maker/Castwright/issues/1038))
-
-- _What:_ `generateVoiceStylePersona()` is Gemini-only and throws hard without an API key, so a fully-local install can analyze + synthesize but cannot design voices. Add a `local | gemini` provider toggle mirroring the analyzer's `ANALYZER` switch (default Gemini for persona quality; local Ollama as fallback/opt-in), with mutual fallback.
-- _Benefit (user):_ offline / no-Gemini installs can design Qwen voices end-to-end. _(About the persona's **provider** — distinct from fs-62 #1034, which proposed translating the persona's **language** and was closed won't-fix.)_
-_Full detail + acceptance:_ [#1038](https://github.com/dudarenok-maker/Castwright/issues/1038).
 
 ### Ingest & languages
 
