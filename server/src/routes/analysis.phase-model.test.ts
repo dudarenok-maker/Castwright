@@ -61,6 +61,9 @@ function buildSpyPhase0Analyzer(): Analyzer {
     async runScriptReviewChapter() {
       throw new Error('Phase-0 analyzer does not run script review calls');
     },
+    async runStage3Chapter() {
+      throw new Error('Phase-0 analyzer does not run instruct-annotation calls');
+    },
   };
 }
 
@@ -94,6 +97,9 @@ function buildSpyPhase1Analyzer(): Analyzer {
     },
     async runScriptReviewChapter() {
       throw new Error('Phase-1 analyzer does not run script review calls');
+    },
+    async runStage3Chapter() {
+      throw new Error('Phase-1 analyzer does not run instruct-annotation calls');
     },
   };
 }

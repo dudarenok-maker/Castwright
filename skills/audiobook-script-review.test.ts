@@ -50,4 +50,18 @@ describe('skills/audiobook-script-review.md — M5 vocalization-protection claus
     // No mojibake sequence for … (C3 A2 E2 80 A6 mangled as latin1)
     expect(buf.includes(Buffer.from([0xc3, 0xa2]))).toBe(false);
   });
+
+  /* fs-57 lock: the guard names the canonical non-verbal vocalization examples
+     ("Ah!", "Haah…", "Mmm") that correspond to the new fs-57 `vocalization: true`
+     field. If this test fails the prompt has been edited in a way that could cause
+     the LLM to strip vocalizations that are authored as `vocalization: true` sentences. */
+  it('(fs-57) names the canonical vocalization examples that map to the vocalization field', () => {
+    const text = readFileSync(SKILL_PATH, 'utf8');
+    // "Ah!" — prototypical short non-verbal
+    expect(text).toContain('"Ah!"');
+    // "Haah…" — uses the real U+2026 ellipsis
+    expect(text).toContain('"Haah…"');
+    // "Mmm" — prototypical hum
+    expect(text).toContain('"Mmm"');
+  });
 });

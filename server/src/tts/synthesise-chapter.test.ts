@@ -2023,6 +2023,132 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     );
   });
 
+  /* ── fs-57 liveInstruct budget accounting (task 8a) ─────────────────────
+     On the liveInstruct path the per-item effective length fed to the
+     token-budget packer must include the resolved instruct text length, so a
+     batch of long-instruct items doesn't overflow the per-forward budget.
+     The liveInstruct=false path must remain byte-identical to today. */
+
+  /* Cast for liveInstruct budget tests: all 1.7B Qwen voices. */
+  const INSTRUCT_CAST: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      ttsModelKey: 'qwen3-tts-1.7b',
+    },
+  ];
+
+  /* Build a sentence with an explicit instruct phrase (fs-57). */
+  function instructSentence(id: number, text: string, instruct: string): SentenceOutput {
+    return { id, chapterId: 1, characterId: 'narrator', text, instruct };
+  }
+
+  it('fs-57: liveInstruct packer counts instruct length — splits when text+instruct exceeds budget', async () => {
+    /* TEXT alone is short (10 chars each). INSTRUCT is long (30 chars each).
+       budget=50: text-only packing → 5×10=50 ≤ 50 (5 items per batch);
+       text+instruct packing → 5×(10+30)=200 > 50, 1×40=40 ≤ 50 (1 per batch).
+       Anchor is group 0 (synthed as single), so body = 4 more sentences.
+       With text-only: all 4 bodies fit one batch (4×10=40 ≤ 50).
+       With text+instruct: 4×40=160 > 50 → each must split to width 1 → singles.
+       (A budget-1 item → single call, not batch.) */
+    const INSTRUCT = 'i'.repeat(30); // 30-char instruct
+    const TEXT = 'a'.repeat(10);     // 10-char text → effective length 40 with instruct
+    const budget = 50;
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT), // anchor
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: INSTRUCT_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
+      liveInstruct: true,
+    });
+    /* With instruct accounted, effective length per item = 40; 2×40=80 > 50, so
+       every body group gets its own work item → no batch calls; only singles. */
+    expect(p.batchCalls).toHaveLength(0);
+    expect(p.singleCalls.length).toBeGreaterThanOrEqual(4); // 4 body groups
+  });
+
+  it('fs-57: liveInstruct=false leaves packing byte-identical (no instruct counted)', async () => {
+    /* Same setup as above; liveInstruct=false → text-only → all 4 bodies fit
+       in one batch (4×10=40 ≤ 50). Proves the off-path is unchanged. */
+    const INSTRUCT = 'i'.repeat(30);
+    const TEXT = 'a'.repeat(10);
+    const budget = 50;
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT),
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: INSTRUCT_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
+      liveInstruct: false, // off → text-only budget
+    });
+    /* text-only: 4×10=40 ≤ 50 → all 4 bodies in a single batch call. */
+    expect(p.batchCalls).toHaveLength(1);
+    expect(p.batchCalls[0].items).toHaveLength(4);
+  });
+
+  it('fs-57: liveInstruct budget never splits a 0.6B batch (0.6B ignores instruct)', async () => {
+    /* On 0.6B, resolveInstructForGroup returns {} regardless of liveInstruct,
+       so the packer must NOT count instruct tokens for 0.6B groups — they still
+       pack by text length alone. Verifies the is17b gate in the packer. */
+    const INSTRUCT = 'i'.repeat(30);
+    const TEXT = 'a'.repeat(10);
+    const budget = 50;
+    const cast06b: CastCharacter[] = [{
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      /* no ttsModelKey → 0.6B default */
+    }];
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT),
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: cast06b,
+      provider: p,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
+      liveInstruct: true, // liveInstruct ON but 0.6B → text-only
+    });
+    /* text-only: 4×10=40 ≤ 50 → bodies batched together. */
+    expect(p.batchCalls).toHaveLength(1);
+    expect(p.batchCalls[0].items).toHaveLength(4);
+  });
+
   /* ── fs-56 Quality tier: 1.7B batch partitioning (critical bug fix) ──────
      A chapter mixing 0.6B and 1.7B characters MUST NOT co-batch them — the
      sidecar runs a single-model forward and mixing tiers causes a prompt-tensor
@@ -2833,5 +2959,109 @@ describe('fs-56 — per-character 1.7B Quality-tier model key routing', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].modelKey).toBe('kokoro-v1');
+  });
+});
+
+/* ── fs-57 Task 9A — C1 safety lock: liveInstruct=false 1.7B byte-identical ──
+   REGRESSION LOCK: with liveInstruct OFF a 1.7B render is byte-identical to
+   pre-fs-57. Specifically:
+     (1) the sidecar batch carries liveInstruct=false and NO per-item instruct,
+     (2) pickEmotionVariantVoice still selects the __angry variant voice —
+         the liveInstruct no-op ONLY fires when liveInstruct=true.
+   This is a CODE-PATH / request-shape assertion (GPU-free). */
+describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', () => {
+  /* A character on the 1.7B tier with a designed __angry variant. */
+  const CAST_17B: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      ttsModelKey: 'qwen3-tts-1.7b',
+      overrideTtsVoices: {
+        qwen: {
+          name: 'qwen-narrator',
+          variants: { angry: { name: 'qwen-narrator__angry' } },
+        },
+      },
+    },
+  ];
+
+  function makeLiveInstructBatchProvider(): TtsProvider & {
+    batchCalls: SynthesizeBatchInput[];
+    singleCalls: SynthesizeInput[];
+  } {
+    const batchCalls: SynthesizeBatchInput[] = [];
+    const singleCalls: SynthesizeInput[] = [];
+    return {
+      batchCalls,
+      singleCalls,
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        singleCalls.push(input);
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch(input: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        batchCalls.push(input);
+        return {
+          pcms: input.items.map((it) => Buffer.alloc(it.text.length * 2)),
+          sampleRate: 24000,
+        };
+      },
+    };
+  }
+
+  it('sends liveInstruct=false + no per-item instruct, and selects the __angry variant voice (not base)', async () => {
+    /* Sentence 1 = anchor (single, groups[0] always synthed solo for the sample-rate
+       anchor). Sentences 2+3 = two angry-tagged body sentences → a size-2 batch.
+       A size-1 slice routes to synthGroup (single), not synthBatch, so we need at
+       least 2 batchable body groups to exercise the batch path.
+
+       With liveInstruct=false the C1 contract requires:
+         (1) batch carries liveInstruct=false/absent and NO per-item instruct,
+         (2) pickEmotionVariantVoice STILL selects qwen-narrator__angry (not base) —
+             the no-op fires ONLY when liveInstruct=true. */
+    const provider = makeLiveInstructBatchProvider();
+
+    await synthesiseChapter({
+      sentences: [
+        // groups[0] → anchor single (no emotion).
+        { id: 1, chapterId: 1, characterId: 'narrator', text: 'The opening line.' },
+        // groups[1]+[2] → batched together; both angry-tagged with a designed variant.
+        { id: 2, chapterId: 1, characterId: 'narrator', text: 'Stop right there.', emotion: 'angry' },
+        { id: 3, chapterId: 1, characterId: 'narrator', text: 'I said stop.', emotion: 'angry' },
+      ],
+      cast: CAST_17B,
+      provider,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      liveInstruct: false, // THE FLAG UNDER TEST — off path
+    });
+
+    // Anchor was a single call (first group in Qwen batching, synthesized solo).
+    expect(provider.singleCalls).toHaveLength(1);
+    // The two angry body sentences batched into one call.
+    expect(provider.batchCalls).toHaveLength(1);
+
+    const batchCall = provider.batchCalls[0];
+    expect(batchCall.items).toHaveLength(2);
+
+    // (1) Batch-level flag: liveInstruct is absent/false (pre-fs-57 contract).
+    expect(batchCall.liveInstruct ?? false).toBe(false);
+
+    // (2) No per-item instruct field — the liveInstruct path is off, so no
+    //     instruct phrase should appear on any item (not even the angry ones).
+    for (const item of batchCall.items) {
+      expect(item).not.toHaveProperty('instruct');
+    }
+
+    // (3) Variant selection is INTACT: both angry items use qwen-narrator__angry,
+    //     NOT the base qwen-narrator. This proves pickEmotionVariantVoice's no-op
+    //     guard only fires when liveInstruct=true, not when it's false.
+    for (const item of batchCall.items) {
+      expect(item.voiceName).toBe('qwen-narrator__angry');
+    }
+
+    // (4) The 1.7B modelKey reaches the batch call — the tier override is wired.
+    expect(batchCall.modelKey).toBe('qwen3-tts-1.7b');
   });
 });

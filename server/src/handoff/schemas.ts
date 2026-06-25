@@ -124,6 +124,12 @@ export const sentenceSchema = z
     /* fs-25 — optional per-quote delivery emotion (4a Phase-1 inline). Absent
        = neutral. Strictly additive: pre-fs-25 analyses validate unchanged. */
     emotion: z.enum(EMOTIONS).optional(),
+    /* fs-57 — optional free-text delivery direction (English), live on the
+       Qwen 1.7B liveInstruct path. Absent ⇒ today's behaviour. Additive. */
+    instruct: z.string().optional(),
+    /* fs-57 — Stage 3 authored a non-verbal vocalization into `text`. Drives
+       the srv-31 ASR carve-out. Additive. */
+    vocalization: z.boolean().optional(),
   })
   .strict();
 
@@ -238,3 +244,26 @@ export const scriptReviewSchema = z
 
 export type ScriptReviewOp = z.infer<typeof scriptReviewSchema>['ops'][number];
 export type ScriptReviewOutput = z.infer<typeof scriptReviewSchema>;
+
+/* ── fs-57 Stage 3 instruct-annotation schema ────────────────────────────────
+   The instruct-annotation pass reads a chapter's already-attributed sentences
+   and returns ONLY {sentenceId, text?, instruct?, vocalization?} for sentences
+   that need a delivery direction or vocalization flag. Strict: no `characterId`
+   — the pass must NOT re-attribute. `.min(1)` is deliberately omitted: a
+   chapter with nothing to annotate returns `{ annotations: [] }`. */
+export const stage3ChapterSchema = z
+  .object({
+    annotations: z.array(
+      z
+        .object({
+          sentenceId: z.number().int().positive(),
+          text: z.string().optional(),
+          instruct: z.string().optional(),
+          vocalization: z.boolean().optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type Stage3ChapterOutput = z.infer<typeof stage3ChapterSchema>;

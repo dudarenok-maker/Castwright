@@ -26,6 +26,7 @@ test_qwen3.py.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -120,18 +121,66 @@ class _FakePromptItem:
         self.ref_code = voice_marker
 
 
+class _FakeSpeechTokenizer:
+    """Decode stand-in for the inner model's speech_tokenizer. The raw 1.7B
+    liveInstruct batch path decodes a LIST of `{audio_codes}` dicts in one call
+    and expects (list_of_wavs, sample_rate). Each fake `audio_codes` here is a
+    1-D numpy array whose first element is the per-item text+voice marker; we
+    echo it back as the wav so the batch demux can be asserted."""
+
+    def decode(self, code_dicts: Any) -> tuple[list[Any], int]:
+        wavs = []
+        for d in code_dicts:
+            c = d["audio_codes"]
+            wavs.append(np.asarray(c, dtype=np.float32))
+        return wavs, 24000
+
+
 class _BatchFakeInner:
     """Inner nn.Module of the Qwen3TTSModel wrapper — the ONLY object with a
     `.to()`. The wrapper itself has none (the loader moves `model.model` and
-    resyncs `model.device`), so the fake must too."""
+    resyncs `model.device`), so the fake must too.
+
+    Also carries a `generate()` + `speech_tokenizer` so the raw 1.7B
+    liveInstruct batch bypass (which calls `_base17.model.generate(...)`
+    directly, not `generate_voice_clone`) can run on the fake. `generate`
+    records its kwargs (so `instruct_ids` can be inspected per item) and returns
+    one code tensor per `input_ids` entry, each stamped with that item's
+    text+voice marker so the batch demux is verifiable."""
 
     def __init__(self) -> None:
         self.device: Any = None
         self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+        self.speech_tokenizer = _FakeSpeechTokenizer()
+        self.generate_calls: list[dict[str, Any]] = []
 
     def to(self, device: Any) -> "_BatchFakeInner":
         self.device = device
         return self
+
+    def generate(self, **kwargs: Any) -> tuple[list[Any], Any]:
+        # The raw batched bypass passes parallel per-item lists. We pair
+        # input_ids[i] (carries the text marker) with voice_clone_prompt's
+        # ref_code[i] (carries the voice marker) and emit one code array per
+        # item stamped with BOTH — so the batch demux proves text i kept voice
+        # i (no cross-bleed) AND each item's own instruct_ids[i] is recorded.
+        self.generate_calls.append(dict(kwargs))
+        input_ids = kwargs["input_ids"]
+        vcp = kwargs["voice_clone_prompt"]
+        ref_codes = vcp["ref_code"]
+        codes = []
+        for i, tok in enumerate(input_ids):
+            # tok is the (kind, text) tuple stamped by the fake _tokenize_texts;
+            # the assistant text embeds the source text's first char.
+            text_marker = ord(tok[1][2]) if len(tok[1]) > 2 else 0
+            voice_marker = int(ref_codes[i]) if ref_codes[i] is not None else 0
+            # Encode the markers the SAME way _wav_for does so they round-trip
+            # through main._float_audio_to_int16_le → _read_sample.
+            arr = np.zeros(2, dtype=np.float32)
+            arr[0] = ((text_marker & 0x7FFF) + 0.5) / 32767.0
+            arr[1] = ((voice_marker & 0x7FFF) + 0.5) / 32767.0
+            codes.append(arr)
+        return codes, None
 
 
 class _BatchFakeQwen:
@@ -190,6 +239,33 @@ class _BatchFakeQwen:
         wavs = [_wav_for(t, p.ref_code) for t, p in zip(texts, prompt_items)]
         return wavs, 24000
 
+    # ── helpers used by the raw 1.7B liveInstruct batch bypass ───────────────
+    # The bypass calls _base17.model.generate(...) directly (not
+    # generate_voice_clone), building per-item input_ids / ref_ids /
+    # instruct_ids / voice_clone_prompt via these wrapper helpers — mirroring
+    # _icl_instruct_synth lifted to a batch. The fakes preserve enough structure
+    # for the engine to assemble the parallel lists; identity markers ride
+    # through ref_code (voice) and the assistant text (source text).
+
+    def _build_assistant_text(self, t: str) -> str:
+        return f"A:{t}"
+
+    def _build_ref_text(self, t: str) -> str:
+        return f"R:{t}"
+
+    def _build_instruct_text(self, t: str) -> str:
+        # Mirror the real wrapper: `<|im_start|>user\n{t}<|im_end|>\n`.
+        return f"<|im_start|>user\n{t}<|im_end|>\n"
+
+    def _tokenize_texts(self, texts: list[str]) -> list[tuple[str, str]]:
+        return [("ids", s) for s in texts]
+
+    def _merge_generate_kwargs(self, **_kw: Any) -> dict[str, Any]:
+        return {}
+
+    def _prompt_items_to_voice_clone_prompt(self, items: Any) -> dict[str, Any]:
+        return {"ref_code": [getattr(it, "ref_code", None) for it in items]}
+
 
 @pytest.fixture
 def qwen_batch_runtime(monkeypatch, tmp_path):
@@ -217,6 +293,10 @@ def qwen_batch_runtime(monkeypatch, tmp_path):
     fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
         is_available=lambda: False, empty_cache=lambda: None
     )
+    # The raw 1.7B liveInstruct bypass (_icl_instruct_synth_batch) wraps the
+    # generate call in `torch.no_grad()`; the unit-test fakes never hit the
+    # tensor `torch.cat` trim branch (fake ref_codes are non-tensor markers).
+    fake_torch.no_grad = contextlib.nullcontext  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     engine = main.ENGINES["qwen"]
@@ -497,7 +577,9 @@ def test_frame_splits_on_first_newline_only(qwen_batch_runtime, monkeypatch) -> 
     monkeypatch.setattr(
         engine,
         "synthesize_batch",
-        lambda model, items: main.SynthBatchResult(pcms=[pcm_a, pcm_b], sample_rate=24000),
+        lambda model, items, live_instruct=False: main.SynthBatchResult(
+            pcms=[pcm_a, pcm_b], sample_rate=24000
+        ),
     )
     client = TestClient(main.app)
     resp = client.post(
@@ -777,3 +859,342 @@ def test_synthesize_batch_0_6b_does_not_touch_base17(qwen_batch_runtime, monkeyp
     assert not base17_calls, f"0.6b batch touched _base17 methods: {base17_calls}"
     assert not base17_loaded_calls, "_ensure_base17_loaded called during 0.6b batch"
     assert len(res.pcms) == 2
+
+
+# ── fs-57 Task 6: batch-level liveInstruct path (1.7B only) ─────────────────
+#
+# When synthesize_batch is called with model='1.7b' AND liveInstruct=True, EVERY
+# item runs the raw `_base17.model.generate(...)` bypass in ONE batched forward
+# (P-C1: a single forward can't mix the generate_voice_clone wrapper and the raw
+# bypass, so the path is chosen at BATCH level, not per item). Each item's
+# instruct_ids is built from its own `instruct`, or NEUTRAL_INSTRUCT when absent
+# — so a neutral item still rides the bypass, never the wrapper. liveInstruct is
+# 1.7B-only and ignored on 0.6B.
+
+
+def _instruct_text_of(tok_entry: Any) -> str:
+    """Recover the instruct text the engine tokenised for one item.
+
+    The fake `_tokenize_texts` returns ("ids", build_string); the engine builds
+    each instruct via `_build_instruct_text(instruct)` →
+    `<|im_start|>user\\n{instruct}<|im_end|>\\n`. tok_entry is that tuple."""
+    return tok_entry[1] if tok_entry is not None else ""
+
+
+def _setup_17b_engine(engine, monkeypatch, voices, prompt_offset=5000):
+    """Wire a fake _base17 + stubbed loaders so the 1.7B liveInstruct batch runs
+    without weights. Returns {voice: voice_marker} for output-demux assertions."""
+    markers = {v: _design(engine, v) for v in voices}
+    fake17 = _BatchFakeQwen("qwen3-1.7b-fake")
+    monkeypatch.setattr(engine, "_base17", fake17)
+    monkeypatch.setattr(engine, "_ensure_base17_loaded", lambda: None)
+
+    def _fake_prompt_17b(voice: str):
+        marker = markers.get(voice, 0) + prompt_offset
+        # ref_text is the per-voice ICL ref; ref_code carries the voice marker.
+        return [_FakePromptItem(marker, f"ref-{voice}")], "English", False
+
+    monkeypatch.setattr(engine, "_load_voice_prompt_17b", _fake_prompt_17b)
+    engine._base.clone_calls.clear()
+    return markers, fake17, prompt_offset
+
+
+def test_batch_live_instruct_two_different_instructs_no_cross_bleed(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """(a) liveInstruct=True, two items with DIFFERENT instructs → two non-empty
+    PCM buffers, each carrying ITS OWN text+voice (no demux swap) and ITS OWN
+    instruct_ids (no cross-bleed of the delivery direction)."""
+    engine = qwen_batch_runtime["engine"]
+    markers, fake17, off = _setup_17b_engine(engine, monkeypatch, ("p", "q"))
+
+    items = [
+        {"voice": "p", "text": "Apple.", "instruct": "Whispering, afraid."},
+        {"voice": "q", "text": "Banana.", "instruct": "Shouting with joy."},
+    ]
+    res = engine.synthesize_batch("1.7b", items, live_instruct=True)
+
+    # Raw bypass: exactly ONE generate() forward on the inner model; the
+    # generate_voice_clone wrapper is NEVER called on the liveInstruct path.
+    assert len(fake17.model.generate_calls) == 1
+    assert len(fake17.clone_calls) == 0, "liveInstruct must NOT call generate_voice_clone"
+    call = fake17.model.generate_calls[0]
+
+    # Per-item parallel lists of the SAME length (one entry per item).
+    assert len(call["input_ids"]) == 2
+    assert len(call["instruct_ids"]) == 2
+    assert len(call["voice_clone_prompt"]["ref_code"]) == 2
+
+    # Each item's instruct_ids carries ITS OWN instruct text (no cross-bleed).
+    assert "Whispering, afraid." in _instruct_text_of(call["instruct_ids"][0])
+    assert "Shouting with joy." in _instruct_text_of(call["instruct_ids"][1])
+
+    # Two non-empty PCM buffers, demux intact: text p→voice p, text q→voice q.
+    assert len(res.pcms) == 2
+    assert all(len(p) > 0 for p in res.pcms)
+    assert _read_sample(res.pcms[0], 0) == ord("A")           # "Apple."
+    assert _read_sample(res.pcms[0], 1) == markers["p"] + off  # voice p prompt
+    assert _read_sample(res.pcms[1], 0) == ord("B")           # "Banana."
+    assert _read_sample(res.pcms[1], 1) == markers["q"] + off  # voice q prompt
+
+
+def test_batch_live_instruct_neutral_item_uses_neutral_instruct(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """(b) liveInstruct=True with one instructed + one NEUTRAL (no `instruct`)
+    item → BOTH go through the bypass; the neutral item's instruct_ids is built
+    from main.NEUTRAL_INSTRUCT (the empty-template form), never the wrapper."""
+    engine = qwen_batch_runtime["engine"]
+    markers, fake17, off = _setup_17b_engine(engine, monkeypatch, ("p", "q"))
+
+    items = [
+        {"voice": "p", "text": "Apple.", "instruct": "Mournfully."},
+        {"voice": "q", "text": "Banana."},  # no instruct → NEUTRAL_INSTRUCT
+    ]
+    res = engine.synthesize_batch("1.7b", items, live_instruct=True)
+
+    # Single bypass forward; wrapper never touched.
+    assert len(fake17.model.generate_calls) == 1
+    assert len(fake17.clone_calls) == 0
+    call = fake17.model.generate_calls[0]
+
+    # The instructed item carries its instruct; the neutral one carries the
+    # empty-template NEUTRAL_INSTRUCT (`<|im_start|>user\n<|im_end|>\n`), NOT a
+    # missing/None entry (which would be the wrong path).
+    assert "Mournfully." in _instruct_text_of(call["instruct_ids"][0])
+    neutral_built = engine._base17._build_instruct_text(main.NEUTRAL_INSTRUCT)
+    assert _instruct_text_of(call["instruct_ids"][1]) == neutral_built
+    assert call["instruct_ids"][1] is not None
+
+    assert len(res.pcms) == 2
+    assert all(len(p) > 0 for p in res.pcms)
+
+
+def test_batch_live_instruct_false_uses_generate_voice_clone_ignores_instruct(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """(c) liveInstruct=False → the existing generate_voice_clone path runs and
+    `instruct` is ignored entirely (no raw generate() bypass)."""
+    engine = qwen_batch_runtime["engine"]
+    markers, fake17, off = _setup_17b_engine(engine, monkeypatch, ("p", "q"))
+
+    items = [
+        {"voice": "p", "text": "Apple.", "instruct": "ignored entirely"},
+        {"voice": "q", "text": "Banana."},
+    ]
+    res = engine.synthesize_batch("1.7b", items, live_instruct=False)
+
+    # Wrapper path: ONE generate_voice_clone call, NO raw generate() bypass.
+    assert len(fake17.clone_calls) == 1
+    assert len(fake17.model.generate_calls) == 0, (
+        "liveInstruct=False must use generate_voice_clone, not the raw bypass"
+    )
+    assert len(res.pcms) == 2
+
+
+def test_batch_live_instruct_defaults_false(qwen_batch_runtime, monkeypatch) -> None:
+    """Back-compat: omitting live_instruct keeps the existing wrapper path (the
+    default is False), so legacy callers are unaffected."""
+    engine = qwen_batch_runtime["engine"]
+    _setup_17b_engine(engine, monkeypatch, ("p",))
+    fake17 = engine._base17
+
+    engine.synthesize_batch("1.7b", [{"voice": "p", "text": "Hi.", "instruct": "x"}])
+    assert len(fake17.clone_calls) == 1
+    assert len(fake17.model.generate_calls) == 0
+
+
+def test_batch_live_instruct_ignored_on_0_6b(qwen_batch_runtime, monkeypatch) -> None:
+    """0.6B ignores live_instruct entirely (no live instruct on 0.6B): even with
+    live_instruct=True + per-item instruct, the 0.6B wrapper path runs and
+    _base17 is never touched."""
+    engine = qwen_batch_runtime["engine"]
+    for v in ("a", "b"):
+        _design(engine, v)
+
+    class _Sentry:
+        def __getattr__(self, name: str) -> Any:
+            def _boom(*_a: Any, **_k: Any) -> Any:
+                raise AssertionError(f"_base17.{name} called during 0.6b liveInstruct batch")
+            return _boom
+
+    monkeypatch.setattr(engine, "_base17", _Sentry())
+    engine._base.clone_calls.clear()
+
+    res = engine.synthesize_batch(
+        "0.6b",
+        [{"voice": "a", "text": "Hi.", "instruct": "loud"}, {"voice": "b", "text": "Bye."}],
+        live_instruct=True,
+    )
+    # 0.6B wrapper path ran exactly once; live_instruct + instruct were ignored.
+    assert len(engine._base.clone_calls) == 1
+    assert len(res.pcms) == 2
+
+
+# ── route: /synthesize-batch threads liveInstruct + per-item instruct ───────
+
+
+def test_route_passes_live_instruct_and_instruct_through(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """The /synthesize-batch route forwards a top-level `liveInstruct` flag and
+    per-item `instruct` to engine.synthesize_batch, so Task 8's chapter driver
+    can drive the 1.7B live-instruct path over HTTP."""
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    seen: dict[str, Any] = {}
+
+    def _spy(model, items, live_instruct=False):
+        seen["model"] = model
+        seen["items"] = items
+        seen["live_instruct"] = live_instruct
+        return main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [{"voice": "a", "text": "Hi.", "instruct": "softly"}],
+        },
+    )
+    assert resp.status_code == 200
+    assert seen["live_instruct"] is True
+    assert seen["items"][0]["instruct"] == "softly"
+
+
+def test_route_live_instruct_defaults_false(qwen_batch_runtime, monkeypatch) -> None:
+    """Omitting `liveInstruct` in the body defaults the engine flag to False —
+    legacy clients (no liveInstruct key) keep the wrapper path."""
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    seen: dict[str, Any] = {}
+
+    def _spy(model, items, live_instruct=False):
+        seen["live_instruct"] = live_instruct
+        return main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={"engine": "qwen", "model": "0.6b", "items": [{"voice": "a", "text": "Hi."}]},
+    )
+    assert resp.status_code == 200
+    assert seen["live_instruct"] is False
+
+
+# ── fs-57 Task 7 (m4): instruct length cap on /synthesize-batch ─────────────
+#
+# A per-item `instruct` that exceeds _max_text_length() must be rejected with
+# HTTP 400 and a message matching `instruct` too long (N chars > cap).
+# The cap applies ONLY when liveInstruct=True; a long `instruct` with
+# liveInstruct=False (or absent) must pass validation silently.
+
+
+def test_route_rejects_over_cap_instruct_when_live_instruct_on(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """liveInstruct=True + an instruct that exceeds the cap → HTTP 400 with
+    a message mentioning `instruct` too long and the item index."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 10)  # tiny cap for test
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [
+                {"voice": "a", "text": "Hello.",
+                 "instruct": "X" * 11},  # 11 > cap 10
+            ],
+        },
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "instruct" in detail
+    assert "too long" in detail
+    assert "11" in detail  # length reported
+    assert "10" in detail  # cap reported
+
+
+def test_route_rejects_over_cap_instruct_names_correct_item_index(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """The 400 message must name the item index of the first over-cap instruct
+    (item 1 here — the first item is fine)."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 5)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [
+                {"voice": "a", "text": "Hi.", "instruct": "ok"},     # fine
+                {"voice": "a", "text": "Hi.", "instruct": "Y" * 6},  # over cap
+            ],
+        },
+    )
+    assert resp.status_code == 400
+    assert "item 1" in resp.json()["detail"]
+
+
+def test_route_allows_instruct_at_exact_cap(qwen_batch_runtime, monkeypatch) -> None:
+    """An instruct exactly at the cap boundary (len == cap) must pass validation."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 5)
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    seen: dict[str, Any] = {}
+
+    def _spy(model, items, live_instruct=False):
+        seen["called"] = True
+        return main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "1.7b",
+            "liveInstruct": True,
+            "items": [{"voice": "a", "text": "Hi.", "instruct": "A" * 5}],  # == cap
+        },
+    )
+    assert resp.status_code == 200
+    assert seen.get("called")
+
+
+def test_route_ignores_over_cap_instruct_when_live_instruct_off(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """liveInstruct=False (or absent): per-item `instruct` is ignored entirely,
+    so even a pathologically long one must NOT trigger the 400."""
+    monkeypatch.setattr(main, "_max_text_length", lambda: 5)
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    def _spy(model, items, live_instruct=False):
+        return main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "0.6b",
+            "liveInstruct": False,
+            "items": [{"voice": "a", "text": "Hi.", "instruct": "Z" * 9999}],
+        },
+    )
+    assert resp.status_code == 200

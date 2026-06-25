@@ -353,11 +353,34 @@ function alignTokens(expected: string[], actual: string[]): Op[] {
   return ops;
 }
 
+/** fs-57 / srv-31 — return the normalized tokens of the leading vocalization
+    run in `text`: the characters up to and including the first terminal mark
+    (`!`, U+2026 ellipsis, `.`, `?`).  Called only when the synthesised
+    group has `vocalization === true` so the leading gasp token(s) are folded
+    into the ASR `allow` set rather than counted as content drift.
+
+    Examples:
+      'Ah! I did not see you.'         → ['ah']
+      'Haah… so tired.'           → ['haah']
+      'No vocalization here.'          → ['no', 'vocalization', 'here']   (safe: only called when flag set)
+*/
+export function leadingVocalizationTokens(text: string): string[] {
+  // Match from the start up to and including the first !, … (…), ., or ?
+  const m = /^([^!.…?]*[!.…?])/.exec(text);
+  if (!m) return [];
+  return normalizeForWer(m[1]);
+}
+
 export interface ClassifyOptions {
   thresholds?: Partial<AsrThresholds>;
   /** Per-book proper-noun allowlist (cast names). Tokens here don't count as
       drift when substituted/deleted — Whisper mangles invented names. */
   nameAllowlist?: Iterable<string>;
+  /** fs-57 / srv-31 vocalization carve-out. Normalized tokens of the leading
+      vocalization prepended by Stage 3 (e.g. `['ah']` for `"Ah! I didn't see
+      you…"`). Folded into the same `allow` set as `nameAllowlist` so the gasp
+      token doesn't count as drift while the lexical words ARE still scored. */
+  vocalizationAllowlist?: Iterable<string>;
   /** BCP-47 base subtag of the book. Gates English-only normalization (integer
       spelling / contractions) and selects the per-language `maxWer` (#1084).
       Unset → English behaviour, byte-identical to before. */
@@ -438,9 +461,11 @@ export function classifyTranscript(
   }
 
   const allow = new Set<string>();
-  if (opts.nameAllowlist) {
-    for (const name of opts.nameAllowlist) {
-      for (const tok of normalizeForWer(name, opts.language)) allow.add(tok);
+  for (const src of [opts.nameAllowlist, opts.vocalizationAllowlist]) {
+    if (src) {
+      for (const name of src) {
+        for (const tok of normalizeForWer(name, opts.language)) allow.add(tok);
+      }
     }
   }
 
@@ -523,6 +548,11 @@ export async function verifySegmentTranscript(
     expectedText,
     r.text,
     { avgLogprob: r.avgLogprob, noSpeechProb: r.noSpeechProb, compressionRatio: r.compressionRatio },
-    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist, language: opts.language },
+    {
+      thresholds: opts.thresholds,
+      nameAllowlist: opts.nameAllowlist,
+      vocalizationAllowlist: opts.vocalizationAllowlist,
+      language: opts.language,
+    },
   );
 }

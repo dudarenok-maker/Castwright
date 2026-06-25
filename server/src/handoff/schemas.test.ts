@@ -331,3 +331,23 @@ describe('fs-58 — script review schema (flat envelope)', () => {
     expect(op.op).toBe('extract_dialogue');
   });
 });
+
+describe('sentenceSchema fs-57 fields', () => {
+  const base = { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' };
+
+  it('parses without instruct/vocalization (pre-fs-57 analysis)', () => {
+    expect(sentenceSchema.parse(base)).toMatchObject(base);
+  });
+
+  it('accepts optional instruct + vocalization', () => {
+    const s = { ...base, text: 'Ah! Hello.', instruct: 'a short gasp', vocalization: true };
+    expect(sentenceSchema.parse(s)).toMatchObject(s);
+  });
+
+  it('rejects a non-string instruct (string validator)', () => {
+    expect(() => sentenceSchema.parse({ ...base, instruct: 5 })).toThrow();
+  });
+  it('still rejects unknown keys (.strict preserved)', () => {
+    expect(() => sentenceSchema.parse({ ...base, bogus: 1 })).toThrow();
+  });
+});

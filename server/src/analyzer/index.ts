@@ -14,6 +14,7 @@ import type {
   Stage2ChapterOutput,
   EmotionAnnotationOutput,
   ScriptReviewOutput,
+  Stage3ChapterOutput,
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
@@ -102,6 +103,16 @@ export interface Analyzer {
     promptMd: string,
     call: StageCall,
   ): Promise<ScriptReviewOutput>;
+  /* fs-57 — instruct-annotation pass. Reads a chapter's already-attributed
+     sentences and returns {sentenceId, text?, instruct?, vocalization?} for
+     sentences that need a delivery direction or vocalization flag. Never
+     re-attributes (no characterId in the output schema). */
+  runStage3Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage3ChapterOutput>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -275,6 +286,23 @@ export class FallbackAnalyzer implements Analyzer {
           promptMd,
           call,
         );
+      }
+      throw err;
+    }
+  }
+
+  async runStage3Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage3ChapterOutput> {
+    try {
+      return await this.primary.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      if (err instanceof LocalUnreachableError) {
+        return await this.fallback.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
     }

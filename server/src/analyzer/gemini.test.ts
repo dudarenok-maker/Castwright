@@ -318,6 +318,57 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
     expect(sys).not.toMatch(/opening Claude windows|writing files/i);
   });
 
+  describe('fs-57 — Stage-3 reinforcement clause (instruct_annotation + non-English)', () => {
+    it('adds the vocalization-language clause for instruct_annotation + non-English language', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const sys = buildSystemInstruction('SKILL', 'ru', 'instruct_annotation');
+      expect(sys).toMatch(/vocalization/i);
+      expect(sys).toMatch(/manuscript.*language|native orthography/i);
+      expect(sys).toMatch(/instruct.*English/i);
+    });
+
+    it('adds the clause for instruct_annotation + Spanish', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const sys = buildSystemInstruction('SKILL', 'es', 'instruct_annotation');
+      expect(sys).toMatch(/vocalization/i);
+      expect(sys).toMatch(/instruct.*English/i);
+    });
+
+    it('English (en) is byte-identical to today — no Stage-3 clause', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const withSkill = buildSystemInstruction('SKILL', 'en', 'instruct_annotation');
+      const withoutSkill = buildSystemInstruction('SKILL', 'en');
+      expect(withSkill).toBe(withoutSkill);
+      expect(withSkill).not.toMatch(/vocalization.*manuscript.*language|instruct.*English/i);
+    });
+
+    it('absent language is byte-identical to today — no Stage-3 clause', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const withSkill = buildSystemInstruction('SKILL', undefined, 'instruct_annotation');
+      const withoutSkill = buildSystemInstruction('SKILL');
+      expect(withSkill).toBe(withoutSkill);
+    });
+
+    it('a different skill (e.g. whole_book_stage1) with ru gets no Stage-3 clause', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const sys = buildSystemInstruction('SKILL', 'ru', 'whole_book_stage1');
+      // The language preamble still fires (cast/attribution guidance)
+      expect(sys).toMatch(/manuscript text is in Russian/i);
+      // But no Stage-3 clause
+      expect(sys).not.toMatch(/For THIS pass.*vocalization/i);
+    });
+
+    it('no skillName arg at all + ru produces no Stage-3 clause (backward-compat)', async () => {
+      const { buildSystemInstruction } = await import('./gemini.js');
+      const withSkillName = buildSystemInstruction('SKILL', 'ru', 'instruct_annotation');
+      const withoutSkillName = buildSystemInstruction('SKILL', 'ru');
+      // Without a skillName the clause must NOT appear
+      expect(withoutSkillName).not.toMatch(/For THIS pass.*vocalization/i);
+      // With the skillName it DOES appear — the two outputs differ
+      expect(withSkillName).not.toBe(withoutSkillName);
+    });
+  });
+
   it('estimateInputTokens: Latin uses chars/4, Cyrillic ~chars/2.5, mixed between', async () => {
     const { estimateInputTokens } = await import('./gemini.js');
     const latin = 'a'.repeat(1000);
@@ -676,6 +727,86 @@ describe('GeminiAnalyzer.runStage1Chapter — two-schema runStage tolerates a to
     expect(result.characters).toHaveLength(1);
     expect(result.characters[0].tone).toBeUndefined(); // absent is fine
   });
+});
+
+describe('GeminiAnalyzer.runStage3Chapter — fs-57 instruct-annotation pass', () => {
+  /* Valid stage-3 envelope: annotations[] with sentenceId + optional fields.
+     The schema is .strict() so extra fields must be rejected. */
+  const VALID_STAGE3 = JSON.stringify({
+    annotations: [
+      { sentenceId: 1, instruct: 'speak slowly', vocalization: false },
+      { sentenceId: 3, text: '[laughs]', vocalization: true },
+      { sentenceId: 5, instruct: 'hushed' },
+    ],
+  });
+
+  it('loads the instruct_annotation skill, calls the model, and returns parsed annotations', async () => {
+    const slices = chunksOf(VALID_STAGE3, 32);
+    generateContentStream.mockResolvedValue(asyncFromArray(slices.map((text) => ({ text }))));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const result = await analyzer.runStage3Chapter('m_s3', 2, '# instruct prompt', {});
+
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+    expect(result.annotations).toHaveLength(3);
+    expect(result.annotations[0]).toEqual({ sentenceId: 1, instruct: 'speak slowly', vocalization: false });
+    expect(result.annotations[1]).toEqual({ sentenceId: 3, text: '[laughs]', vocalization: true });
+    expect(result.annotations[2]).toEqual({ sentenceId: 5, instruct: 'hushed' });
+  });
+
+  it('strips an unrecognized field (characterId) rather than rejecting — mirrors the constrained-decoding tolerance', async () => {
+    /* The parseAndValidate stray-key tolerance strips unrecognized_keys rather
+       than hard-failing (so a model that stamps characterId on a stage-3 response
+       doesn't discard the whole chapter). Verify the field is absent in output. */
+    const withExtra = JSON.stringify({
+      annotations: [{ sentenceId: 1, instruct: 'ok', characterId: 'narrator' }],
+    });
+    generateContentStream.mockResolvedValueOnce(
+      asyncFromArray(chunksOf(withExtra, 64).map((text) => ({ text }))),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const result = await analyzer.runStage3Chapter('m_s3_extra', 2, '# prompt', {});
+    expect(result.annotations).toHaveLength(1);
+    expect(result.annotations[0].sentenceId).toBe(1);
+    expect(result.annotations[0].instruct).toBe('ok');
+    /* characterId must NOT appear on the output — it is not in the Stage3 schema. */
+    expect((result.annotations[0] as Record<string, unknown>)['characterId']).toBeUndefined();
+  });
+
+  it('accepts an empty annotations array (chapter with nothing to annotate)', async () => {
+    const empty = JSON.stringify({ annotations: [] });
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: empty }]));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const result = await analyzer.runStage3Chapter('m_s3_empty', 4, '# prompt', {});
+    expect(result.annotations).toHaveLength(0);
+  });
+
+  it('stage3ChapterSchema rejects a sentenceId of 0 (must be positive integer)', async () => {
+    /* Unit-test the schema directly — the positive() constraint is the load-bearing
+       assertion; no need to drive the full Gemini retry loop for a schema unit test. */
+    const { stage3ChapterSchema } = await import('../handoff/schemas.js');
+    const bad = { annotations: [{ sentenceId: 0, instruct: 'ok' }] };
+    expect(stage3ChapterSchema.safeParse(bad).success).toBe(false);
+    const good = { annotations: [{ sentenceId: 1, instruct: 'ok' }] };
+    expect(stage3ChapterSchema.safeParse(good).success).toBe(true);
+  });
+});
+
+afterAll(async () => {
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_s3-stageinstruct-ch2.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_s3_extra-stageinstruct-ch2.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_s3_empty-stageinstruct-ch4.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_s3_badid-stageinstruct-ch4.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_s3-stageinstruct-ch2.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_s3_empty-stageinstruct-ch4.json'), { force: true });
 });
 
 describe('appendBounded — stream accumulator cap', () => {

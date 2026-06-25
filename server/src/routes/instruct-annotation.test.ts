@@ -1,12 +1,12 @@
-/* fs-33 — integration tests for the emotion-only backfill route
-   POST /api/books/:bookId/annotate-emotion.
+/* fs-57 — integration tests for the instruct-annotation route
+   POST /api/books/:bookId/instruct-annotation.
 
    The analyzer is faked via vi.mock('../analyzer/select-analyzer.js') so no
    real LLM is hit. The route is the contract under test: it streams per-chapter
-   `annotation` events with {sentenceId, emotion}, NEVER returns characterId
-   (re-attribution is out of scope), guards an unattributed book with a
-   `no_attribution` error, and on mid-pass DailyQuotaExhaustedError emits a
-   `quota_exhausted` error after the chapters it already streamed. */
+   `annotation` events with {sentenceId, text?, instruct?, vocalization?}, NEVER
+   returns characterId (re-attribution is out of scope), guards an unattributed
+   book with a `no_attribution` error, and on mid-pass DailyQuotaExhaustedError
+   emits a `quota_exhausted` error after the chapters it already streamed. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
-import type { EmotionAnnotationOutput } from '../handoff/schemas.js';
+import type { Stage3ChapterOutput } from '../handoff/schemas.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -26,8 +26,8 @@ let app: Express;
 let bookId: string;
 let manuscriptId: string;
 
-/* The fake analyzer's runEmotionChapter — each test swaps its implementation. */
-const { runEmotion } = vi.hoisted(() => ({ runEmotion: vi.fn() }));
+/* The fake analyzer's runStage3Chapter — each test swaps its implementation. */
+const { runStage3 } = vi.hoisted(() => ({ runStage3: vi.fn() }));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
@@ -35,9 +35,9 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('not used')),
     runStage2Chapter: () => Promise.reject(new Error('not used')),
-    runEmotionChapter: (m, c, p, call) => runEmotion(m, c, p, call),
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
-    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runStage3Chapter: (m, c, p, call) => runStage3(m, c, p, call),
   };
   return {
     ...actual,
@@ -95,26 +95,26 @@ function parseSse(body: string): Array<Record<string, unknown>> {
 
 const SENTENCES = [
   { id: 1, chapterId: 1, characterId: 'narrator', text: 'The room was quiet.' },
-  { id: 2, chapterId: 1, characterId: 'wren', text: '“Get down!”' },
-  { id: 3, chapterId: 2, characterId: 'marlow', text: '“It will be okay,” he whispered.' },
+  { id: 2, chapterId: 1, characterId: 'wren', text: '"Get down!"' },
+  { id: 3, chapterId: 2, characterId: 'marlow', text: '"It will be okay," he whispered.' },
 ];
 
 beforeAll(async () => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-annotate-emotion-test-'));
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-instruct-annotation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ annotateEmotionRouter }, { makeBookId }] = await Promise.all([
-    import('./annotate-emotion.js'),
+  const [{ instructAnnotationRouter }, { makeBookId }] = await Promise.all([
+    import('./instruct-annotation.js'),
     import('../workspace/paths.js'),
   ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();
   app.use(express.json());
-  app.use('/api/books', annotateEmotionRouter);
+  app.use('/api/books', instructAnnotationRouter);
 });
 
 beforeEach(() => {
-  runEmotion.mockReset();
+  runStage3.mockReset();
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
 });
 
@@ -123,62 +123,74 @@ afterAll(() => {
   delete process.env.WORKSPACE_DIR;
 });
 
-describe('POST /api/books/:bookId/annotate-emotion', () => {
-  it('streams per-chapter annotation events with {sentenceId, emotion} and a final result', async () => {
+describe('POST /api/books/:bookId/instruct-annotation', () => {
+  it('streams per-chapter annotation events with Stage-3 fields and a final result', async () => {
     writeBook(SENTENCES);
-    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> => {
-      if (chapterId === 1) return Promise.resolve({ annotations: [{ sentenceId: 2, emotion: 'angry' }] });
-      return Promise.resolve({ annotations: [{ sentenceId: 3, emotion: 'whisper' }] });
+    runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> => {
+      if (chapterId === 1)
+        return Promise.resolve({
+          annotations: [{ sentenceId: 2, instruct: 'urgent, sharp', vocalization: false }],
+        });
+      return Promise.resolve({
+        annotations: [{ sentenceId: 3, text: '[whispers]', instruct: 'whisper softly', vocalization: true }],
+      });
     });
 
-    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
 
     const annotations = events.filter((e) => e.kind === 'annotation');
     expect(annotations).toEqual([
-      { kind: 'annotation', chapterId: 1, annotations: [{ sentenceId: 2, emotion: 'angry' }] },
-      { kind: 'annotation', chapterId: 2, annotations: [{ sentenceId: 3, emotion: 'whisper' }] },
+      {
+        kind: 'annotation',
+        chapterId: 1,
+        annotations: [{ sentenceId: 2, instruct: 'urgent, sharp', vocalization: false }],
+      },
+      {
+        kind: 'annotation',
+        chapterId: 2,
+        annotations: [{ sentenceId: 3, text: '[whispers]', instruct: 'whisper softly', vocalization: true }],
+      },
     ]);
 
     const result = events.find((e) => e.kind === 'result');
     expect(result).toMatchObject({ done: true, annotatedChapters: 2, totalAnnotations: 2 });
   });
 
-  it('sends the already-attributed sentences (id/characterId/text) and never asks for re-attribution', async () => {
+  it('sends the already-attributed sentences in the prompt and never asks for re-attribution', async () => {
     writeBook(SENTENCES);
-    runEmotion.mockResolvedValue({ annotations: [] });
+    runStage3.mockResolvedValue({ annotations: [] });
 
-    await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
 
     // Chapter 1 call should carry both ch-1 sentences in the prompt.
-    const ch1Call = runEmotion.mock.calls.find((c) => c[1] === 1);
+    const ch1Call = runStage3.mock.calls.find((c) => c[1] === 1);
     expect(ch1Call).toBeTruthy();
     const prompt = ch1Call![2] as string;
     expect(prompt).toContain('"sentenceId": 1');
     expect(prompt).toContain('"sentenceId": 2');
     expect(prompt).toContain('"characterId": "wren"');
     // The output contract carries no characterId — re-attribution is impossible.
-    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
     for (const e of parseSse(res.text).filter((e) => e.kind === 'annotation')) {
       for (const a of e.annotations as Array<Record<string, unknown>>) {
         expect(a).not.toHaveProperty('characterId');
-        expect(a).not.toHaveProperty('text');
       }
     }
   });
 
   it('emits a no_attribution error when the book has no attributed sentences', async () => {
     writeBook(null); // no manuscript-edits.json, no cache
-    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
     const events = parseSse(res.text);
     expect(events.some((e) => e.kind === 'error' && e.code === 'no_attribution')).toBe(true);
     expect(events.some((e) => e.kind === 'result')).toBe(false);
-    expect(runEmotion).not.toHaveBeenCalled();
+    expect(runStage3).not.toHaveBeenCalled();
   });
 
   it('404s for an unknown book', async () => {
-    const res = await request(app).post(`/api/books/does-not-exist/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/does-not-exist/instruct-annotation`).send({});
     expect(res.status).toBe(404);
   });
 
@@ -187,20 +199,20 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
       { id: 1, title: 'One', slug: 'one' },
       { id: 2, title: 'Two', slug: 'two', excluded: true },
     ]);
-    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> =>
+    runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> =>
       Promise.resolve({
         annotations:
           chapterId === 1
-            ? [{ sentenceId: 2, emotion: 'angry' }]
-            : [{ sentenceId: 3, emotion: 'sad' }],
+            ? [{ sentenceId: 2, instruct: 'sharp' }]
+            : [{ sentenceId: 3, vocalization: true }],
       }),
     );
 
-    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
     expect(res.status).toBe(200);
 
     // The analyzer is only called for the included chapter, never the excluded one.
-    const calledChapters = runEmotion.mock.calls.map((c) => c[1]);
+    const calledChapters = runStage3.mock.calls.map((c) => c[1]);
     expect(calledChapters).toContain(1);
     expect(calledChapters).not.toContain(2);
 
@@ -212,12 +224,12 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
   it('on mid-pass daily-quota exhaustion, keeps already-streamed chapters and stops with quota_exhausted', async () => {
     writeBook(SENTENCES);
     const { DailyQuotaExhaustedError } = await import('../analyzer/rate-limit.js');
-    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> => {
-      if (chapterId === 1) return Promise.resolve({ annotations: [{ sentenceId: 2, emotion: 'angry' }] });
+    runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> => {
+      if (chapterId === 1) return Promise.resolve({ annotations: [{ sentenceId: 2, instruct: 'urgent' }] });
       return Promise.reject(new DailyQuotaExhaustedError('test-model', new Date('2099-01-01')));
     });
 
-    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
     const events = parseSse(res.text);
 
     // Chapter 1 annotation survived.
@@ -229,12 +241,12 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
 
   it('a single chapter failure does not abort the rest of the pass', async () => {
     writeBook(SENTENCES);
-    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> => {
+    runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> => {
       if (chapterId === 1) return Promise.reject(new Error('flaky chapter'));
-      return Promise.resolve({ annotations: [{ sentenceId: 3, emotion: 'sad' }] });
+      return Promise.resolve({ annotations: [{ sentenceId: 3, vocalization: true }] });
     });
 
-    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
     const events = parseSse(res.text);
     expect(events.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
     expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 2)).toBe(true);

@@ -26,6 +26,7 @@ import {
   stage2ChapterSchema,
   emotionAnnotationSchema,
   scriptReviewSchema,
+  stage3ChapterSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   type Stage1Output,
@@ -33,6 +34,7 @@ import {
   type Stage2ChapterOutput,
   type EmotionAnnotationOutput,
   type ScriptReviewOutput,
+  type Stage3ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { AnalyzerTruncatedError } from './errors.js';
@@ -317,6 +319,24 @@ export class OllamaAnalyzer implements Analyzer {
     return this.runStage(manuscriptId, key, 'script_review', promptMd, scriptReviewSchema, scriptReviewSchema, call);
   }
 
+  async runStage3Chapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<Stage3ChapterOutput> {
+    const key = `instruct-ch${chapterId}` as const;
+    return this.runStage(
+      manuscriptId,
+      key,
+      'instruct_annotation',
+      promptMd,
+      stage3ChapterSchema,
+      stage3ChapterSchema,
+      call,
+    );
+  }
+
   private async runStage<T>(
     manuscriptId: string,
     key: HandoffKey,
@@ -329,7 +349,7 @@ export class OllamaAnalyzer implements Analyzer {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
-    const systemInstruction = buildSystemInstruction(skill, call.language);
+    const systemInstruction = buildSystemInstruction(skill, call.language, skillName);
     /* Convert the GRAMMAR schema into a JSON Schema for Ollama 0.5+ structured-
        output (constrained decoding). grammarSchema may differ from
        validationSchema — e.g. stage1ChapterGrammarSchema makes tone REQUIRED so

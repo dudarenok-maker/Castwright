@@ -402,6 +402,32 @@ describe('persistenceMiddleware — payload shape', () => {
       },
     });
   });
+
+  it('fs-57 — sends { liveInstruct: true } for bookMeta/setLiveInstruct (slice="state")', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      bookMeta: { draft: null, saved: {}, liveInstruct: { 'book-1': true } },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'bookMeta/setLiveInstruct' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'state',
+      patch: { liveInstruct: true },
+    });
+  });
+
+  it('fs-57 — sends { liveInstruct: false } for bookMeta/setLiveInstruct when toggled off', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      bookMeta: { draft: null, saved: {}, liveInstruct: { 'book-1': false } },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'bookMeta/setLiveInstruct' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'state',
+      patch: { liveInstruct: false },
+    });
+  });
 });
 
 describe('persistenceMiddleware — error handling', () => {

@@ -237,6 +237,49 @@ describe('dispatchAcceptedOps', () => {
     // onBoundaryMove should not have been called
     expect(spy).not.toHaveBeenCalled();
   });
+
+  /* fs-57 preservation lock — a strip_tag apply must NOT drop the fs-57 sibling
+     fields `instruct` and `vocalization` when it rewrites a sentence's `text`.
+     The sentence carries a non-verbal vocalization author note ("a gasp", real
+     U+2026 in the text) and vocalization: true; the strip_tag removes only the
+     attribution tag. Both sibling fields must survive unchanged. */
+  it('(fs-57) strip_tag preserves instruct and vocalization fields on the rewritten sentence', () => {
+    // Seed: sentence with a real attribution tag AND fs-57 sibling fields.
+    // "Ah… he said" → strip_tag → "Ah…"
+    // instruct and vocalization must survive on the resulting sentence.
+    const vocSentence = {
+      id: 10,
+      chapterId: 3,
+      characterId: 'halloran',
+      text: 'Ah… he said',   // U+2026 — real ellipsis
+      instruct: 'a gasp',          // fs-57 delivery direction
+      vocalization: true,           // fs-57 ASR carve-out flag
+    };
+    const store = configureStore({
+      reducer: { manuscript: manuscriptSlice.reducer },
+      preloadedState: { manuscript: start([vocSentence] as never) },
+    });
+
+    const liveForVoc = [{ id: 10, chapterId: 3, text: vocSentence.text, characterId: 'halloran' }];
+    const stripOp: ReviewOp = {
+      id: 10,
+      op: 'strip_tag',
+      newText: 'Ah…',         // attribution tag removed; ellipsis intact
+      rationale: 'strip attribution tag',
+    };
+    const spy = vi.fn();
+    dispatchAcceptedOps(store.dispatch, [stripOp], liveForVoc, { onBoundaryMove: spy });
+
+    const result = store.getState().manuscript.sentences.find((x) => x.chapterId === 3 && x.id === 10);
+    // Text updated — tag stripped, real U+2026 intact
+    expect(result?.text).toBe('Ah…');
+    // fs-57 sibling fields preserved — the regression lock
+    expect((result as never as typeof vocSentence)?.instruct).toBe('a gasp');
+    expect((result as never as typeof vocSentence)?.vocalization).toBe(true);
+    // onBoundaryMove fired once
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(3);
+  });
 });
 
 describe('rpdWarningFor', () => {

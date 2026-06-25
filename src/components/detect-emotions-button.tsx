@@ -1,18 +1,25 @@
-/* fs-33 — "Detect emotions" trigger for the manuscript header.
+/* fs-33/fs-57 — "Detect emotions" trigger for the manuscript header.
 
-   Runs the emotion-only backfill pass (api.detectEmotions) over the whole book:
-   a quota/time confirm → a lightweight inline progress bar → per-chapter
-   annotation batches dispatched to the manuscript store (fill-only-empty, so a
-   hand-set emotion always wins) which persist to manuscript-edits.json. The pass
-   is non-sticky: navigating away aborts it, but already-applied chapters are
-   already persisted, so re-running just fills the remaining neutrals.
+   Runs two sequential LLM passes over the whole book:
+   1. Emotion-only backfill pass (api.detectEmotions) — per-quote delivery
+      emotions (fill-only-empty; hand-set emotions never overwritten).
+   2. Stage-3 instruct/vocalization pass (api.detectInstruct) — natural
+      reactions (a gasp, sigh, laugh) inserted as new text + delivery
+      instructions (fill-only-empty; manual edits always win). Because
+      Stage 3 can mutate sentence text, operators see that called out
+      clearly in the confirm dialog.
+
+   Both passes share a single AbortController so Cancel stops the whole
+   sequence. Progress is reported on a 0-100% scale: emotions occupies
+   0–50%, instruct occupies 50–100%. The result summary shows totals
+   from both passes combined.
 
    Whole-book only for v1 (a per-chapter trigger is a tracked follow-up). */
 
 import { useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { api, DetectEmotionsError } from '../lib/api';
+import { api, DetectEmotionsError, DetectInstructError } from '../lib/api';
 import { IconSparkle, IconSpinner } from '../lib/icons';
 
 type Phase = 'idle' | 'confirm' | 'running';
@@ -36,18 +43,37 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const result = await api.detectEmotions(bookId, {
+      // Pass 1: emotion backfill — progress 0–50%
+      const emotionResult = await api.detectEmotions(bookId, {
         signal: controller.signal,
         onPhase: (e) => {
-          setProgress(e.progress);
+          setProgress(e.progress * 0.5);
           if (e.label) setStatus(e.label);
         },
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
         onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedEmotions(e)),
       });
+
+      // Pass 2: instruct/vocalization — progress 50–100%
+      setStatus('Adding natural reactions…');
+      const instructResult = await api.detectInstruct(bookId, {
+        signal: controller.signal,
+        onPhase: (e) => {
+          setProgress(0.5 + e.progress * 0.5);
+          if (e.label) setStatus(e.label);
+        },
+        onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
+        onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedInstruct(e)),
+      });
+
+      const totalAnnotations = emotionResult.totalAnnotations + instructResult.totalAnnotations;
+      const totalChapters = Math.max(
+        emotionResult.annotatedChapters,
+        instructResult.annotatedChapters,
+      );
       setStatus(
-        `Tagged ${result.totalAnnotations} line${result.totalAnnotations === 1 ? '' : 's'} across ` +
-          `${result.annotatedChapters} chapter${result.annotatedChapters === 1 ? '' : 's'}.`,
+        `Tagged ${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'} across ` +
+          `${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,
       );
       setPhase('idle');
     } catch (e) {
@@ -56,11 +82,13 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         setPhase('idle');
         return;
       }
-      setError(
-        e instanceof DetectEmotionsError && e.code === 'no_attribution'
-          ? 'Run analysis first — there are no attributed lines to tag.'
-          : (e as Error).message,
-      );
+      if (e instanceof DetectEmotionsError && e.code === 'no_attribution') {
+        setError('Run analysis first — there are no attributed lines to tag.');
+      } else if (e instanceof DetectInstructError) {
+        setError(e.message);
+      } else {
+        setError((e as Error).message);
+      }
       setPhase('idle');
     } finally {
       abortRef.current = null;
@@ -97,7 +125,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         title={
           disabled
             ? 'Analyse the book first to detect emotions'
-            : 'Detect per-quote delivery emotions across all included chapters'
+            : 'Detect per-quote delivery emotions and natural reactions across all included chapters'
         }
         className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm font-semibold text-ink hover:bg-ink/5 disabled:opacity-40"
       >
@@ -121,9 +149,10 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
           className="absolute z-50 left-0 top-full mt-2 w-72 rounded-xl border border-ink/10 bg-white picker-surface shadow-lg p-3 text-left"
         >
           <p className="text-xs text-ink/70 leading-snug">
-            Run an LLM pass over all included chapters to detect per-quote delivery emotions. This
-            uses your analyzer quota and can take a few minutes on a long book. Hand-set emotions
-            are never overwritten.
+            Run an LLM pass over all included chapters to detect per-quote delivery emotions and
+            add natural reactions — a gasp, sigh, or laugh — to the text where the scene calls
+            for it. This uses your analyzer quota and can take a few minutes on a long book.
+            Hand-set emotions are never overwritten; sentences you have edited are skipped.
           </p>
           <div className="mt-3 flex items-center justify-end gap-2">
             <button

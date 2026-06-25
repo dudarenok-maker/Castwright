@@ -678,6 +678,9 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           notes: pickNotes(patch.notes, state.notes),
           audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
           tags: pickTags(patch.tags, state.tags),
+          liveInstruct: typeof (patch as { liveInstruct?: unknown }).liveInstruct === 'boolean'
+            ? (patch as { liveInstruct: boolean }).liveInstruct
+            : (state.liveInstruct ?? false),
           updatedAt: new Date().toISOString(),
         };
 

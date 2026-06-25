@@ -365,6 +365,10 @@ export interface BookStateJson {
       BookStateJson; drives the Listen language badge + cast-view Qwen lock
       for non-English books. */
   language?: string;
+  /** fs-57 — per-book live-instruct flag. When true, synthesiseChapter uses
+      the Qwen 1.7B live-instruct synth path. Absent on books written before
+      fs-57 — treat absence as false. */
+  liveInstruct?: boolean;
 }
 
 export interface BookStateResponse {

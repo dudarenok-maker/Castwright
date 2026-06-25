@@ -1088,6 +1088,17 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
 # (e.g. QWEN_GAIN_WHISPER=0.5). Gain>1 clips via _float_audio_to_int16_le's clamp.
 _EMOTION_OUTPUT_GAIN: dict[str, float] = {"whisper": 0.45, "angry": 1.5}
 
+# Per-emotion output gain for the liveInstruct path (fs-57).  Keyed on the
+# explicit `emotion` field in the batch item (not the voice name suffix, which
+# is absent on the liveInstruct path).  Env-tunable via QWEN_LIVE_GAIN_<EMOTION>
+# (e.g. QWEN_LIVE_GAIN_WHISPER=0.4), mirroring the QWEN_GAIN_* pattern above.
+_LIVE_INSTRUCT_GAIN: dict[str, float] = {
+    "whisper": 0.35,
+    "angry": 1.7,
+    "sad": 0.6,
+    "excited": 1.15,
+}
+
 
 def _emotion_output_gain(voice: str) -> float:
     if not isinstance(voice, str) or "__" not in voice:
@@ -1100,6 +1111,39 @@ def _emotion_output_gain(voice: str) -> float:
         except ValueError:
             pass
     return _EMOTION_OUTPUT_GAIN.get(emo, 1.0)
+
+
+def _live_instruct_gain(emotion: Optional[str]) -> float:
+    """Per-emotion output gain for the liveInstruct path.
+
+    Uses `_LIVE_INSTRUCT_GAIN` (separate from `_EMOTION_OUTPUT_GAIN` so the
+    anchored-variant / 0.6B path is UNCHANGED).  Env-override:
+    ``QWEN_LIVE_GAIN_<EMOTION>`` (e.g. ``QWEN_LIVE_GAIN_WHISPER=0.4``).
+    Returns 1.0 for absent / unknown emotions.
+    """
+    emo = (emotion or "").lower()
+    if not emo:
+        return 1.0
+    raw = os.environ.get(f"QWEN_LIVE_GAIN_{emo.upper()}")
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _LIVE_INSTRUCT_GAIN.get(emo, 1.0)
+
+
+def _gain_for_item(item: dict, live_instruct: bool) -> float:
+    """Return the output gain multiplier for a batch item.
+
+    On the liveInstruct path, uses the item's explicit ``emotion`` field via
+    `_live_instruct_gain`.  On the standard (anchored-variant) path, derives
+    the gain from the voice name's ``__<emotion>`` suffix via
+    `_emotion_output_gain`.  This keeps the two paths strictly independent.
+    """
+    if live_instruct:
+        return _live_instruct_gain(item.get("emotion"))
+    return _emotion_output_gain(item.get("voice") or "")
 
 
 def _apply_emotion_gain(audio: Any, voice: Optional[str]) -> Any:
@@ -1277,6 +1321,26 @@ class QwenEngine(Engine):
             "и она подумала, что принесёт завтрашний день."
         ),
     }
+
+    # C2 gate (fs-57, Task 5): canonical no-op instruct value for sentences
+    # that carry no delivery direction on the live-instruct synth path (Task 6).
+    #
+    # Measurement: _icl_instruct_synth was driven with instruct="" and with a
+    # neutral-placeholder string ("Delivered in a calm, natural narration voice.")
+    # on the real 1.7B-Base (dev box, 2026-06-24).  Both produced valid, non-empty
+    # PCM.  The empty string is adopted as the canonical no-op because:
+    #   1. It minimises token overhead — _build_instruct_text("") produces only
+    #      the chat-template wrapper tokens (<|im_start|>user\n<|im_end|>\n) with
+    #      NO content tokens, which is the closest structural analogue to
+    #      instruct_ids=None (the true skip path in generate()).
+    #   2. A fixed-wording placeholder drifts if the model is retrained; the
+    #      empty template is model-agnostic.
+    #   3. The smoke test (tests/golden/instruct_smoke.py) already confirmed that
+    #      instruct_ids=[None] (truly no instruct) produces natural narration on
+    #      the 1.7B-Base; the empty-template produces the same token structure.
+    #
+    # Task 6 and Task 8 import this constant — never a bare "".
+    NEUTRAL_INSTRUCT: str = ""
 
     def _calibration_text(self, language: Optional[str]) -> str:
         """Short, phonetically rich calibration/ref_text line in `language` (the
@@ -1672,6 +1736,140 @@ class QwenEngine(Engine):
             wav = wav[cut:]
 
         return wav, int(sr)
+
+    def _icl_instruct_synth_batch(
+        self,
+        prompt_items_per_item: "list[list]",
+        texts: "list[str]",
+        instructs: "list[str]",
+        langs: "list[str]",
+    ) -> "tuple[list[Any], int]":
+        """Batched twin of `_icl_instruct_synth` (fs-57 Task 6): synth N items in
+        ONE `model.generate()` raw-bypass forward, each carrying its OWN
+        per-item instruct.
+
+        The public `generate_voice_clone` wrapper can't carry an instruct, and a
+        single batched forward can't mix the wrapper with the raw bypass — so the
+        whole 1.7B-liveInstruct batch runs here (P-C1). The inner
+        `model.generate(...)` (qwen_tts 0.1.1, modeling_qwen3_tts.py ~2022)
+        natively accepts PARALLEL per-item lists: it iterates `instruct_ids`
+        per index, treating a `None` entry as "no instruct for that item". We
+        build a HETEROGENEOUS `instruct_ids` list — each item's `instruct` (or
+        `NEUTRAL_INSTRUCT` when absent) tokenised via `_build_instruct_text` —
+        so a neutral item rides the same single forward as an instructed one,
+        never the wrapper.
+
+        Mirrors the single-item helper's ICL trim, but per item: the trim is
+        guarded per-item with `hasattr(rc, "to")` (real ref_code is a tensor;
+        the non-GPU unit-test fakes pass non-tensor markers / None → trim
+        skipped) so it matches `generate_voice_clone`'s per-item demux exactly.
+
+        Requires `_base17` loaded; the CALLER holds `_synth_lock` +
+        `_base17_activity()` (the production idiom — same as the single path)."""
+        import inspect  # noqa: PLC0415
+        import torch  # noqa: PLC0415
+
+        w = self._base17
+        m = w.model
+
+        # fs-57 Task 7 (M2): drift guard — verify the raw `generate()` on the
+        # inner qwen_tts model still accepts BOTH `instruct_ids` AND
+        # `voice_clone_prompt` before we call it.  Pure signature introspection:
+        # weight-free, runs on every box.  If a future qwen_tts upgrade drops or
+        # renames either param the error here is clear ("generate() missing param
+        # 'instruct_ids'") rather than a silent mis-synthesis that looked like it
+        # worked but ignored the instruct or used the wrong voice.
+        #
+        # A function with a VAR_KEYWORD (**kwargs) parameter accepts any keyword
+        # argument, so we only flag drift when the explicit named params are absent
+        # AND no catch-all **kwargs is present.
+        _gen_sig = inspect.signature(m.generate)
+        _has_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in _gen_sig.parameters.values()
+        )
+        if not _has_var_kw:
+            _missing = [
+                p for p in ("instruct_ids", "voice_clone_prompt")
+                if p not in _gen_sig.parameters
+            ]
+            if _missing:
+                raise RuntimeError(
+                    f"qwen_tts model.generate() signature drift detected — "
+                    f"missing required parameter(s): {_missing}. "
+                    f"Upgrade may have renamed or dropped them; "
+                    f"update _icl_instruct_synth_batch."
+                )
+
+        # Flatten each item's (length-1) prompt-item list into ONE prompt item
+        # per text, then merge to a single parallel-list voice_clone_prompt dict
+        # — exactly as generate_voice_clone does for a batch.
+        flat_items = []
+        for pis in prompt_items_per_item:
+            pis = pis if isinstance(pis, list) else [pis]
+            flat_items.append(pis[0])
+        vcp = w._prompt_items_to_voice_clone_prompt(flat_items)
+
+        # Per-item parallel lists for the batched forward.
+        input_ids = [
+            w._tokenize_texts([w._build_assistant_text(t)])[0] for t in texts
+        ]
+        ref_ids = []
+        for pi in flat_items:
+            rt = getattr(pi, "ref_text", None)
+            ref_ids.append(
+                w._tokenize_texts([w._build_ref_text(rt)])[0] if rt else None
+            )
+        instruct_ids = [
+            w._tokenize_texts([w._build_instruct_text(ins)])[0] for ins in instructs
+        ]
+
+        gk = w._merge_generate_kwargs()
+        # fs-55 emotion tuning (same knobs as the single path — keep in sync).
+        import os as _os  # noqa: PLC0415
+        gk["temperature"] = float(_os.environ.get("QWEN_INSTRUCT_TEMP", "1.6"))
+        gk["subtalker_temperature"] = float(
+            _os.environ.get("QWEN_INSTRUCT_SUBTALKER_TEMP", "1.8")
+        )
+        gk["top_p"] = float(_os.environ.get("QWEN_INSTRUCT_TOP_P", "0.90"))
+
+        with torch.no_grad():
+            codes, _ = m.generate(
+                input_ids=input_ids,
+                ref_ids=ref_ids,
+                instruct_ids=instruct_ids,
+                voice_clone_prompt=vcp,
+                languages=list(langs),
+                non_streaming_mode=True,
+                **gk,
+            )
+
+        # Per-item ICL trim — prepend each item's ref_code so the decoder emits
+        # the reference clip, then cut it back off. Guarded per item so a None /
+        # non-tensor ref_code (unit-test fakes) skips cleanly.
+        rcl = vcp.get("ref_code") or [None] * len(codes)
+        cfd = []
+        for i, c in enumerate(codes):
+            rc = rcl[i] if i < len(rcl) else None
+            if rc is not None and hasattr(rc, "to") and hasattr(c, "shape"):
+                cfd.append(torch.cat([rc.to(c.device), c], dim=0))
+            else:
+                cfd.append(c)
+
+        wavs, sr = m.speech_tokenizer.decode([{"audio_codes": c} for c in cfd])
+
+        out: list[Any] = []
+        for i, wav in enumerate(wavs):
+            rc = rcl[i] if i < len(rcl) else None
+            if rc is not None and hasattr(rc, "shape") and hasattr(cfd[i], "shape"):
+                total = max(int(cfd[i].shape[0]), 1)
+                ref_len = int(rc.shape[0])
+                cut = int(ref_len / total * wav.shape[0])
+                out.append(wav[cut:])
+            else:
+                out.append(wav)
+
+        return out, int(sr)
 
     def speaker_distance(
         self,
@@ -2376,11 +2574,14 @@ class QwenEngine(Engine):
         )
         return SynthResult(pcm=_float_audio_to_int16_le(_apply_emotion_gain(audio, voice)), sample_rate=int(sr))
 
-    def synthesize_batch(self, model: str, items: list[dict]) -> SynthBatchResult:
+    def synthesize_batch(
+        self, model: str, items: list[dict], live_instruct: bool = False
+    ) -> SynthBatchResult:
         """TRUE batching (plan 112): synth N sentences in ONE batched forward.
 
-        Each item is `{voice, text}`. We load every item's cached clone prompt
-        + manifest language and pass parallel lists to a single
+        Each item is `{voice, text}` (plus an optional `instruct` on the 1.7B
+        live-instruct path). We load every item's cached clone prompt + manifest
+        language and pass parallel lists to a single
         `generate_voice_clone(text=[…], language=[…], voice_clone_prompt=[…])`
         call, so the model runs one batched forward per decode step instead of
         N separate ones. Two properties make this safe where plan 70d's
@@ -2397,7 +2598,18 @@ class QwenEngine(Engine):
 
         Fails fast (RuntimeError naming the item index) if any voice hasn't
         been designed — the whole batch fails and the caller retries / fails
-        the chapter exactly as a single call would."""
+        the chapter exactly as a single call would.
+
+        fs-57 Task 6 — `live_instruct` (1.7B ONLY): when True, EVERY item runs
+        the raw `model.generate()` instruct bypass in one batched forward
+        (`_icl_instruct_synth_batch`) — each item's `instruct` (or
+        `NEUTRAL_INSTRUCT` when absent) carried in a heterogeneous per-item
+        `instruct_ids` list. Path selection is BATCH-level, not per item (P-C1):
+        a single forward can't mix the `generate_voice_clone` wrapper with the
+        raw bypass, so the flag — not "any item has an instruct" — keeps the
+        whole 1.7B tier on one path. `live_instruct=False` (default) keeps the
+        existing wrapper path and ignores `instruct`. The 0.6B branch ignores
+        `live_instruct` entirely (no live instruct on 0.6B)."""
         # See synthesize(): a real batch synth means generation, so free the
         # transient VoiceDesign model first (no-op once freed). Before any
         # _synth_lock acquire — the lock is non-reentrant.
@@ -2418,6 +2630,11 @@ class QwenEngine(Engine):
             # hold the synth lock during potentially slow prompt loading.
             # `_base17_activity()` keeps it warm across the book's batches and
             # stops the idle watchdog freeing it mid-generate (issue #1024).
+            # Per-item prompt LISTS (kept un-flattened) so the live-instruct
+            # bypass can build heterogeneous per-item instruct_ids; the wrapper
+            # path flattens them just like 0.6B.
+            prompt_lists: list[Any] = []
+            instructs: list[str] = []
             with self._base17_activity():
                 self._ensure_base17_loaded()
                 for i, item in enumerate(items):
@@ -2433,18 +2650,31 @@ class QwenEngine(Engine):
                         raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
                     texts.append(text)
                     langs.append(lang)
+                    prompt_lists.append(prompt if isinstance(prompt, list) else [prompt])
                     # Flatten per-voice prompt-item list (same rationale as the 0.6B
                     # path below; see comment there for the list-of-lists danger).
                     prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+                    # Per-item instruct for the live-instruct path. A neutral item
+                    # (no instruct) rides NEUTRAL_INSTRUCT through the SAME bypass —
+                    # never the wrapper (P-C1). Ignored when live_instruct=False.
+                    raw = item.get("instruct")
+                    instructs.append(raw if isinstance(raw, str) and raw else NEUTRAL_INSTRUCT)
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
                 gen_start = time.perf_counter()
                 with self._synth_lock:
                     # Re-ensure under the lock (same rationale as synthesize()).
                     self._ensure_base17_loaded()
-                    wavs, sr = self._base17.generate_voice_clone(
-                        text=texts, language=langs, voice_clone_prompt=prompts
-                    )
+                    if live_instruct:
+                        # P-C1: EVERY item runs the raw instruct bypass in ONE
+                        # batched forward — heterogeneous per-item instruct_ids.
+                        wavs, sr = self._icl_instruct_synth_batch(
+                            prompt_lists, texts, instructs, langs
+                        )
+                    else:
+                        wavs, sr = self._base17.generate_voice_clone(
+                            text=texts, language=langs, voice_clone_prompt=prompts
+                        )
                 gen_ms = (time.perf_counter() - gen_start) * 1000.0
         else:
             # ── 0.6B-Base batch path (default) ───────────────────────────────
@@ -2513,7 +2743,11 @@ class QwenEngine(Engine):
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
         pcms = [
-            _float_audio_to_int16_le(_apply_emotion_gain(w, items[i].get("voice")))
+            _float_audio_to_int16_le(
+                np.asarray(w, dtype=np.float32) * g
+                if (g := _gain_for_item(items[i], live_instruct)) != 1.0
+                else w
+            )
             for i, w in enumerate(wavs)
         ]
         return SynthBatchResult(
@@ -2763,6 +2997,12 @@ ENGINES: dict[str, Engine] = {
     "kokoro": KokoroEngine(),
     "qwen": QwenEngine(),
 }
+
+# fs-57 C2 gate — canonical no-op instruct value for the live-instruct synth path
+# (Task 6).  Re-exported at module level so callers import `main.NEUTRAL_INSTRUCT`
+# rather than going through the class.  The authoritative definition + rationale
+# comment lives on QwenEngine.NEUTRAL_INSTRUCT above.
+NEUTRAL_INSTRUCT: str = QwenEngine.NEUTRAL_INSTRUCT
 
 
 # Default seconds of voice-design inactivity before the watchdog frees the
@@ -4583,6 +4823,10 @@ async def synthesize_batch(req: Request) -> Response:
     engine_id = body.get("engine")
     model = body.get("model")
     items = body.get("items")
+    # fs-57 Task 6: batch-level live-instruct flag. Default False so legacy
+    # callers (no key) keep the wrapper path. Per-item `instruct` rides on each
+    # items[] entry and is only honoured on the 1.7B live-instruct path.
+    live_instruct = bool(body.get("liveInstruct", False))
 
     # Batching is a Qwen-only capability: only generate_voice_clone runs a true
     # batched forward. Coqui/Kokoro have no list API, so the Node side never
@@ -4608,6 +4852,17 @@ async def synthesize_batch(req: Request) -> Response:
             raise HTTPException(
                 status_code=400,
                 detail=f"item {i}: `text` too long ({len(item['text'])} chars > {_cap} cap).",
+            )
+        # fs-57 Task 7 (m4): cap per-item `instruct` on the live-instruct path.
+        # A pathologically long instruct (copy-paste accident, fuzzer input) can
+        # overflow the tokenizer context just as an oversized `text` can.  Mirror
+        # the text cap exactly: same _cap constant, same HTTP 400 shape.  Only
+        # enforced when live_instruct is on (the instruct key is ignored otherwise).
+        instruct_val = item.get("instruct")
+        if live_instruct and isinstance(instruct_val, str) and _cap > 0 and len(instruct_val) > _cap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"item {i}: `instruct` too long ({len(instruct_val)} chars > {_cap} cap).",
             )
 
     engine = ENGINES["qwen"]
@@ -4643,7 +4898,9 @@ async def synthesize_batch(req: Request) -> Response:
     try:
         # Offload like /synthesize so /health stays responsive while the
         # (potentially multi-second) batched forward runs on a worker thread.
-        result = await asyncio.to_thread(engine.synthesize_batch, model, items)
+        result = await asyncio.to_thread(
+            engine.synthesize_batch, model, items, live_instruct
+        )
     except Exception as e:
         # Internal-only — forensic log + CUDA-poison detection, never a body.
         err_str = f"{e}"

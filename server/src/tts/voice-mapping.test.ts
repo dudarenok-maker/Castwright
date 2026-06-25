@@ -316,6 +316,28 @@ describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selectio
       'wren-base__angry',
     );
   });
+
+  /* fs-57 — on the liveInstruct path the delivery direction travels as an
+     instruct phrase; the voice stays the base voice (no __emotion suffix).
+     The old __emotion-variant path and the liveInstruct path are mutually
+     exclusive. */
+  it('fs-57: liveInstruct=true returns the base voice even when a variant is present', () => {
+    const variants = { angry: { name: 'wren__angry' } };
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren-base', true)).toBe('wren-base');
+  });
+
+  it('fs-57: liveInstruct=false is byte-identical to the original (no liveInstruct arg)', () => {
+    const variants = { angry: { name: 'wren__angry' } };
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren-base', false)).toBe(
+      'wren-base__angry',
+    );
+  });
+
+  it('fs-57: liveInstruct=true on a non-Qwen engine is still a no-op (base voice)', () => {
+    /* The liveInstruct gate only has effect on Qwen; the outer engine guard
+       fires first for non-Qwen engines. */
+    expect(pickEmotionVariantVoice('kokoro', { angry: { name: 'x' } }, 'angry', 'am_onyx', true)).toBe('am_onyx');
+  });
 });
 
 describe('srv-43 qwen storage key', () => {

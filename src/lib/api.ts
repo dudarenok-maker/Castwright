@@ -2745,6 +2745,134 @@ async function mockDetectEmotions(
   return { annotatedChapters: 1, totalAnnotations: 1 };
 }
 
+/* fs-57 — Stage-3 instruct-annotation SSE stream. Mirrors realDetectEmotions'
+   SSE reader. Emits per-chapter annotation batches; the caller applies them
+   via applyDetectedInstruct (fill-only-empty, manual edits always win). */
+export interface DetectInstructOpts {
+  signal?: AbortSignal;
+  model?: string;
+  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
+  onAnnotation?: (e: {
+    chapterId: number;
+    annotations: Array<{ sentenceId: number; text?: string; instruct?: string; vocalization?: boolean }>;
+  }) => void;
+}
+export interface DetectInstructResult {
+  annotatedChapters: number;
+  totalAnnotations: number;
+}
+export class DetectInstructError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'DetectInstructError';
+  }
+}
+
+async function realDetectInstruct(
+  bookId: string,
+  { signal, model, onPhase, onThrottle, onAnnotation }: DetectInstructOpts = {},
+): Promise<DetectInstructResult> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/instruct-annotation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(model !== undefined ? { model } : {}),
+    signal,
+  });
+  if (res.status === 404) throw new DetectInstructError('Book not found.', 'not_found');
+  if (!res.ok || !res.body) throw new Error(`Detect-instruct stream failed (${res.status}).`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: DetectInstructResult | null = null;
+
+  const handle = (p: Record<string, unknown>) => {
+    switch (p.kind) {
+      case 'phase':
+        if (typeof p.progress === 'number') {
+          onPhase?.({
+            progress: p.progress,
+            label: typeof p.label === 'string' ? p.label : undefined,
+            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+          });
+        }
+        break;
+      case 'throttle':
+        if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
+          onThrottle?.({
+            chapterId: p.chapterIndex,
+            waitMs: p.waitMs,
+            reason: String(p.reason ?? ''),
+          });
+        }
+        break;
+      case 'annotation':
+        if (typeof p.chapterId === 'number' && Array.isArray(p.annotations)) {
+          onAnnotation?.({
+            chapterId: p.chapterId,
+            annotations: p.annotations as Array<{
+              sentenceId: number;
+              text?: string;
+              instruct?: string;
+              vocalization?: boolean;
+            }>,
+          });
+        }
+        break;
+      case 'result':
+        result = {
+          annotatedChapters: typeof p.annotatedChapters === 'number' ? p.annotatedChapters : 0,
+          totalAnnotations: typeof p.totalAnnotations === 'number' ? p.totalAnnotations : 0,
+        };
+        break;
+      case 'error':
+        throw new DetectInstructError(
+          typeof p.message === 'string' ? p.message : 'Instruct detection failed.',
+          typeof p.code === 'string' ? p.code : 'unknown',
+        );
+      /* heartbeat / chapter-failed are advisory — ignored by the client. */
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
+      if (!dataLines.length) continue;
+      handle(JSON.parse(dataLines.join('\n')) as Record<string, unknown>);
+    }
+  }
+
+  if (!result) throw new Error('Detect-instruct stream ended without a result event.');
+  return result;
+}
+
+async function mockDetectInstruct(
+  _bookId: string,
+  { onPhase, onAnnotation }: DetectInstructOpts = {},
+): Promise<DetectInstructResult> {
+  await wait(60);
+  onPhase?.({ progress: 0.5, label: 'Detecting instruct — chapter 1', chapterId: 1 });
+  onAnnotation?.({
+    chapterId: 1,
+    annotations: [{ sentenceId: 1, text: '[laughs]', instruct: 'warm, amused', vocalization: true }],
+  });
+  onPhase?.({ progress: 1, label: 'Done' });
+  return { annotatedChapters: 1, totalAnnotations: 1 };
+}
+
 /* fs-58 — LLM script-review SSE stream. Mirrors realDetectEmotions' SSE
    reader. Emits per-chapter op batches; the caller applies them via
    script-review-apply.ts. */
@@ -6927,6 +7055,7 @@ const real = {
   fetchDesignedPersona: realFetchDesignedPersona,
   designQwenVoice: realDesignQwenVoice,
   detectEmotions: realDetectEmotions,
+  detectInstruct: realDetectInstruct,
   reviewScript: realReviewScript,
   removeQwenVariant: realRemoveQwenVariant,
   promoteQwenVoice: realPromoteQwenVoice,
@@ -7189,6 +7318,7 @@ const mock = {
   fetchDesignedPersona: mockFetchDesignedPersona,
   designQwenVoice: mockDesignQwenVoice,
   detectEmotions: mockDetectEmotions,
+  detectInstruct: mockDetectInstruct,
   reviewScript: mockReviewScript,
   removeQwenVariant: mockRemoveQwenVariant,
   promoteQwenVoice: mockPromoteQwenVoice,

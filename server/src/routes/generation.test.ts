@@ -1337,3 +1337,77 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
     expect(ch1.generationError).toBeUndefined();
   });
 });
+
+// fs-57 — liveInstruct threading from state.json through to synthesiseChapter
+describe('fs-57 — generation route threads liveInstruct from state into synthesiseChapter', () => {
+  let capturedOpts: Record<string, unknown>[] = [];
+
+  beforeEach(() => {
+    capturedOpts = [];
+    synthesiseImpl = async (args: unknown) => {
+      capturedOpts.push(args as Record<string, unknown>);
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+  });
+
+  async function patchStateLiveInstruct(value: boolean | undefined) {
+    const { readJson, writeJsonAtomic } = await import('../workspace/state-io.js');
+    const { stateJsonPath } = await import('../workspace/paths.js');
+    const statePath = stateJsonPath(join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE));
+    const current = await readJson<Record<string, unknown>>(statePath);
+    const next = { ...current };
+    if (value === undefined) {
+      delete next.liveInstruct;
+    } else {
+      next.liveInstruct = value;
+    }
+    await writeJsonAtomic(statePath, next);
+  }
+
+  it('passes liveInstruct=true into synthesiseChapter when state has liveInstruct=true', async () => {
+    await patchStateLiveInstruct(true);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+    /* synthesiseImpl was called at least once; every call should carry liveInstruct=true. */
+    expect(capturedOpts.length).toBeGreaterThan(0);
+    for (const opts of capturedOpts) {
+      expect(opts.liveInstruct).toBe(true);
+    }
+  });
+
+  it('passes liveInstruct=false (default) when state omits the field (legacy book)', async () => {
+    await patchStateLiveInstruct(undefined);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+    expect(capturedOpts.length).toBeGreaterThan(0);
+    for (const opts of capturedOpts) {
+      /* The generation route's `?? false` guard MUST have fired — the value
+         reaching synthesiseChapter is strictly `false`, never `undefined`. */
+      expect(opts.liveInstruct).toBe(false);
+    }
+    /* Reset state for subsequent tests. */
+    await patchStateLiveInstruct(false);
+  });
+
+  afterEach(async () => {
+    /* Ensure state doesn't bleed between tests. */
+    await patchStateLiveInstruct(false);
+  });
+});

@@ -372,12 +372,6 @@ _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-20-fish-audio-s
 - _Benefit (user):_ extends the expressive performance lead beyond emotion sliders.
 _Full detail + acceptance:_ [#979](https://github.com/dudarenok-maker/Castwright/issues/979).
 
-#### `fs-57` — Non-verbal vocalizations (pronounceable text + instruct) ([#997](https://github.com/dudarenok-maker/Castwright/issues/997))
-
-- _What:_ The analysis LLM writes pronounceable vocalizations ("Ah!", "Haah…", "Haha!") into `text` + a matching `instruct`, riding the `fs-56` instruct field. The **Qwen-instruct counterpart to `side-18`** (bracket cues `(laughs)`/`(sighs)`, other engines) — the 2026-06-22 spike validated the pronounceable+instruct path. `side-18` is the **sibling** that covers non-verbal sounds for the *other* (bracket-cue-native) engines — not a duplicate.
-- _Benefit (user):_ lifelike gasps/sighs/laughter without bracket-tag hacks.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.5 · depends on `fs-56` · [#997](https://github.com/dudarenok-maker/Castwright/issues/997).
-
 ### Reliability & observability
 
 #### `srv-30` — CPU-only analyzer device (large RAM-resident model, concurrent with GPU TTS) ([#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507))
