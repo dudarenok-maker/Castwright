@@ -272,8 +272,8 @@ export interface SentenceGroup {
       absent/`neutral` → the base voice. Ignored entirely for non-Qwen engines. */
   emotion?: Emotion;
   /** fs-57 — optional explicit delivery direction authored by Stage 3. When
-      set on the 1.7B liveInstruct path it takes precedence over the emotion
-      phrase; ignored on all other paths. */
+      set and the speaker is on the 1.7B tier it takes precedence over the
+      emotion phrase; ignored on all other paths. */
   instruct?: string;
   /** fs-57 — true when Stage 3 authored a non-verbal vocalization into `text`.
       Drives the srv-31 ASR carve-out. Absent = normal sentence. */
@@ -294,9 +294,9 @@ export interface ChapterSegment {
       sentence) and on pre-#1105 renders. See audio/segments-io.ts textHashForStale. */
   textHash?: string;
   /** fs-58 (#1041) — djb2-base36 hash of this group's RAW explicit `instruct`,
-      stamped ONLY when the group rendered on the per-group qwen-1.7b liveInstruct
-      path (so an instruct edit can stale the chapter only where the instruct
-      shaped the audio). The instruct sibling of `textHash`. Absent otherwise. */
+      stamped ONLY when the group rendered on the qwen-1.7b tier (so an instruct
+      edit can stale the chapter only where the instruct shaped the audio).
+      The instruct sibling of `textHash`. Absent otherwise. */
   instructHash?: string;
   /** Discriminator for synthetic segments that aren't backed by a manuscript
       sentence. `'title'` marks the narrator-voiced chapter-title beat
@@ -635,14 +635,6 @@ export interface SynthesiseChapterOpts {
       throws `RecycleStormError` so the chapter fails fast (no infinite grind).
       Only consulted when `onRecoverRecycle` is provided. Default 2. */
   maxRecycleRecoveries?: number;
-  /** fs-57 — per-book liveInstruct flag. When true (and the group's resolved
-      model key is `qwen3-tts-1.7b`), the synth path:
-        - bypasses emotion-variant voice selection (base voice only), and
-        - attaches a per-item `instruct` phrase to every batch item via
-          `resolveInstructForGroup`.
-      Read from `state.liveInstruct ?? false` in generation.ts so absent
-      (legacy books) is NEVER truthy. Default false. */
-  liveInstruct?: boolean;
 }
 
 /** Options for the per-sentence ASR content-QA pass (srv-31). */
@@ -795,7 +787,6 @@ export async function synthesiseChapter(
     asr,
     onRecoverRecycle,
     maxRecycleRecoveries = 2,
-    liveInstruct = false,
   } = opts;
 
   /* fs-53: resolve the book language to a concrete BCP-47 primary subtag ONCE,
@@ -1019,15 +1010,16 @@ export async function synthesiseChapter(
        resolves the base voice unchanged. Applied BEFORE the Kokoro fallback so a
        designed variant counts as a present Qwen voice.
 
-       fs-57 — on the liveInstruct path the delivery direction travels as an
-       instruct phrase; pickEmotionVariantVoice returns the base voice (strict
+       1.7B implies prosody — on the 1.7B tier the delivery direction travels as
+       an instruct phrase; pickEmotionVariantVoice returns the base voice (strict
        no-op, no __emotion suffix) so the sidecar sees the unadorned voice key. */
+    const groupIs17b = baseRoute.modelKey === 'qwen3-tts-1.7b';
     const voiceForGroup = pickEmotionVariantVoice(
       baseRoute.engine,
       character.overrideTtsVoices?.qwen?.variants,
       group.emotion,
       baseVoice,
-      liveInstruct,
+      groupIs17b,
     );
     /* Capture the CONFIGURED engine before any fallback rewrite so the SPK
        embed filter can include fallback-rendered groups (e.g. Qwen→Kokoro)
@@ -1193,19 +1185,19 @@ export async function synthesiseChapter(
       return {
         text: normaliseForTts(g.text, langCode),
         voiceName,
-        /* fs-57 — attach the resolved instruct phrase when the gate is open.
-           resolveInstructForGroup returns {} when liveInstruct=false or is17b=false,
-           so the spread is a no-op on the standard path. */
-        ...resolveInstructForGroup(g, { is17b, liveInstruct }),
-        /* fs-57 — forward the group's emotion so the sidecar can look up the
-           liveInstruct gain.  Absent/neutral groups send no key → unity gain. */
+        /* 1.7B implies prosody — attach the resolved instruct phrase when is17b.
+           resolveInstructForGroup returns {} when is17b=false,
+           so the spread is a no-op on the 0.6B path. */
+        ...resolveInstructForGroup(g, { is17b }),
+        /* Forward the group's emotion so the sidecar can look up the
+           _LIVE_INSTRUCT_GAIN.  Absent/neutral groups send no key → unity gain. */
         ...(g.emotion != null ? { emotion: g.emotion } : {}),
       };
     });
     const out = await withHeartbeat(lead, () =>
       withCallTimeout('batch', (sig) =>
         withTtsRetry(
-          () => batchFn.call(route.provider, { items, modelKey: route.modelKey, liveInstruct, signal: sig }),
+          () => batchFn.call(route.provider, { items, modelKey: route.modelKey, liveInstruct: is17b, signal: sig }),
           {
             signal: sig,
             onRetry: (info) =>
@@ -1341,18 +1333,16 @@ export async function synthesiseChapter(
     }
     /* Model-side length precomputed once across all batchable groups — shared by
        the length-bucketing sort (plan 128) and the token-budget packer (plan 136).
-       fs-57 (task 8a): on the liveInstruct path the effective length includes the
+       1.7B implies prosody: on the 1.7B tier the effective length includes the
        resolved instruct text so the packer accounts for the extra decode tokens a
-       long-instruct batch consumes. The liveInstruct=false path is byte-identical
-       (short-circuits immediately). Neutral items carry NEUTRAL_INSTRUCT="" → 0
-       extra chars, so they're counted uniformly but add nothing. */
+       long-instruct batch consumes. 0.6B groups carry no instruct → 0 extra chars,
+       counted uniformly. Neutral items carry no phrase → 0 extra chars. */
     const allBatchable: SentenceGroup[] = Array.from(batchableByModel.values()).flat();
     const lenOf = new Map(allBatchable.map((g) => {
       const textLen = normaliseForTts(g.text, langCode).length;
-      if (!liveInstruct) return [g, textLen] as const;
       const { route } = resolveGroup(g);
       const is17b = route.modelKey === 'qwen3-tts-1.7b';
-      const instructLen = resolveInstructForGroup(g, { is17b, liveInstruct }).instruct?.length ?? 0;
+      const instructLen = resolveInstructForGroup(g, { is17b }).instruct?.length ?? 0;
       return [g, textLen + instructLen] as const;
     }));
     const pushBatch = (slice: SentenceGroup[]): void => {
@@ -1668,14 +1658,14 @@ export async function synthesiseChapter(
     runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
     /* fs-58 (#1041) — stamp the RAW EXPLICIT instruct hash iff this group rode
-       the per-group qwen-1.7b liveInstruct path. `resolveGroup(group).route` is
-       POST-fallback, so a 1.7b group that fell back to Kokoro has a Kokoro
-       modelKey and is correctly un-stamped (its audio ignored the instruct).
-       Emotion-derived instructs have `group.instruct == null` and are not
-       stamped (and hashing the resolved phrase would crash on undefined). */
+       the per-group qwen-1.7b path. `resolveGroup(group).route` is POST-fallback,
+       so a 1.7b group that fell back to Kokoro has a Kokoro modelKey and is
+       correctly un-stamped (its audio ignored the instruct). Emotion-derived
+       instructs have `group.instruct == null` and are not stamped (and hashing
+       the resolved phrase would crash on undefined). */
     const groupIs17b = resolveGroup(group).route.modelKey === 'qwen3-tts-1.7b';
     const instructHash =
-      group.instruct != null && liveInstruct && groupIs17b
+      group.instruct != null && groupIs17b
         ? textHashForStale(group.instruct)
         : undefined;
     segments.push({
