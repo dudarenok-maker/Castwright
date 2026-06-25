@@ -262,6 +262,33 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     expect(cleared.sentences[1].emotion).toBeUndefined();
   });
 
+  it('fs-56 — setSentenceInstruct sets / trims / clears, scoped by (chapter, id)', () => {
+    const start = baseState(
+      sentences([
+        { id: 1, text: 'a', characterId: 'narrator' },
+        { id: 2, text: 'b', characterId: 'wren' },
+      ]),
+    );
+    const set = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 2, instruct: '  a sharp whisper  ' }),
+    );
+    expect(set.sentences[1].instruct).toBe('a sharp whisper'); // trimmed
+    expect(set.sentences[0].instruct).toBeUndefined(); // scoped — line 1 untouched
+    // empty / whitespace clears the field back to undefined.
+    const cleared = manuscriptSlice.reducer(
+      set,
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 2, instruct: '   ' }),
+    );
+    expect(cleared.sentences[1].instruct).toBeUndefined();
+    // unknown id is a no-op (no throw).
+    const noop = manuscriptSlice.reducer(
+      set,
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 99, instruct: 'x' }),
+    );
+    expect(noop.sentences[1].instruct).toBe('a sharp whisper');
+  });
+
   describe('fs-33 — applyDetectedEmotions (bulk backfill, fill-only-empty)', () => {
     const start = () =>
       baseState(
@@ -972,5 +999,55 @@ describe('fs-57 — applyDetectedInstruct (Stage-3 vocalization annotations)', (
     );
     expect(next.sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe('Quiet.');
     expect(next.sentences.find((s) => s.chapterId === 2 && s.id === 1)?.text).toBe('Hmm!');
+  });
+
+  it('fs-56 — a hand-set instruct is NOT overwritten by applyDetectedInstruct (manual wins)', () => {
+    const manual = manuscriptSlice.reducer(
+      baseState(sentences([{ id: 1, chapterId: 1, text: 'a', characterId: 'wren' }])),
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless' }),
+    );
+    const afterDetect = manuscriptSlice.reducer(
+      manual,
+      manuscriptActions.applyDetectedInstruct({
+        chapterId: 1,
+        annotations: [{ sentenceId: 1, instruct: 'shouting' }],
+      }),
+    );
+    expect(afterDetect.sentences[0].instruct).toBe('breathless'); // manual preserved
+  });
+});
+
+describe('fs-56 — split/merge instruct guard (#1100 base)', () => {
+  it('fs-56 — a hand-set instruct does not bleed onto split fragments (#1100 base)', () => {
+    const tagged = manuscriptSlice.reducer(
+      baseState(sentences([{ id: 1, chapterId: 1, text: 'She paused. She ran.', characterId: 'narrator' }])),
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless whisper' }),
+    );
+    // NOTE: payload is `offsets: number[]` (plural array), NOT `offset`.
+    const split = manuscriptSlice.reducer(
+      tagged,
+      manuscriptActions.splitSentence({ chapterId: 1, sentenceId: 1, offsets: [11], characterIds: ['narrator', 'narrator'] }),
+    );
+    const fragments = split.sentences.filter((s) => s.chapterId === 1);
+    expect(fragments.length).toBe(2); // if not 2, adjust offsets to land a clean 2-piece split
+    expect(fragments[0].instruct).toBe('breathless whisper'); // head keeps it
+    expect(fragments[1].instruct).toBeUndefined();            // tail must NOT inherit it
+  });
+
+  it('fs-56 — a merge does not carry a stale instruct onto the survivor (#1100 base)', () => {
+    const tagged = manuscriptSlice.reducer(
+      baseState(sentences([
+        { id: 1, chapterId: 1, text: 'She paused.', characterId: 'narrator' },
+        { id: 2, chapterId: 1, text: 'She ran.', characterId: 'narrator' },
+      ])),
+      manuscriptActions.setSentenceInstruct({ chapterId: 1, sentenceId: 1, instruct: 'breathless whisper' }),
+    );
+    const merged = manuscriptSlice.reducer(
+      tagged,
+      manuscriptActions.mergeSentences({ chapterId: 1, sentenceIds: [1, 2] }),
+    );
+    const survivor = merged.sentences.find((s) => s.chapterId === 1);
+    expect(survivor?.text).toContain('She ran.'); // merged text
+    expect(survivor?.instruct).toBeUndefined();   // #1100 drops the survivor's stale instruct
   });
 });

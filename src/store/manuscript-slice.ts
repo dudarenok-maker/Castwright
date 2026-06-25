@@ -299,6 +299,25 @@ export const manuscriptSlice = createSlice({
       else sent.emotion = a.payload.emotion as typeof sent.emotion;
     },
 
+    /* fs-56 — User edit: set (or clear) a sentence's free-text delivery `instruct`.
+       The MANUAL write site for the resolver's top "manual" rung. Scoped by
+       (chapterId, sentenceId) like setSentenceEmotion. A blank/whitespace value
+       deletes the field (so the store never carries an empty instruct, and a
+       re-detect may refill it). A hand-set instruct wins over analyzer instruct
+       because applyDetectedInstruct is fill-only. */
+    setSentenceInstruct: (
+      s,
+      a: PayloadAction<{ chapterId: number; sentenceId: number; instruct: string }>,
+    ) => {
+      const sent = s.sentences.find(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
+      if (!sent) return;
+      const trimmed = a.payload.instruct.trim();
+      if (trimmed === '') delete sent.instruct;
+      else sent.instruct = trimmed;
+    },
+
     /* fs-33 — bulk-apply the emotion-only backfill pass for one chapter.
        Fill-ONLY-empty: a detected emotion is written only where the sentence
        currently has no (non-neutral) emotion, so a hand-set tag ALWAYS wins and

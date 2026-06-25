@@ -193,12 +193,6 @@ _Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
 
-#### `fs-56` — Expressive narration: per-line free-text instruct on the Qwen 1.7B tier ([#996](https://github.com/dudarenok-maker/Castwright/issues/996))
-
-- _What:_ Free-text per-line delivery `instruct` on Qwen via a 1.7B-Base ICL clone path (raw `generate()` composes the cloned identity + `instruct_ids`), surfaced as a hardware-gated tier (Fast 0.6B / Default 1.7B-ICL, instruct optional). Adds optional `instruct?` to `Sentence` alongside `emotion` (additive). The same machinery mints identity-anchored variants at design time — **resolves `fs-55` (#993)**. Feasibility proven on-box 2026-06-22 (ICL holds identity; 1.7B > 0.6B). Sibling route to `fs-49` (per-line emotion via IndexTTS-2).
-- _Benefit (user / strategic):_ true per-line acting (Alexandria parity) with cloned-identity stability; a quality lift; the root-cause fix for emotion-variant drift.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` · depends on `side-20` · [#996](https://github.com/dudarenok-maker/Castwright/issues/996).
-
 ### Listener experience & playback
 
 #### `fs-3` — Streaming audio for live playback during chapter generation ([#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414))

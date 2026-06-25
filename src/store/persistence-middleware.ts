@@ -92,6 +92,13 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
+  /* fs-56 — a hand-set per-line instruct persists like the emotion tag, so the
+     manual delivery direction survives reload and reaches synth via
+     manuscript-edits.json. */
+  'manuscript/setSentenceInstruct': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
   /* fs-33 — the bulk emotion backfill persists like a manual tag so detected
      emotions survive reload and reach synth via manuscript-edits.json. */
   'manuscript/applyDetectedEmotions': {

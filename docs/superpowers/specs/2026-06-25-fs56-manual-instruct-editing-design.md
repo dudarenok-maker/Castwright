@@ -1,0 +1,290 @@
+# fs-56 — Manual per-line instruct editing UI
+
+**Issue:** [#996](https://github.com/dudarenok-maker/Castwright/issues/996) · **Date:** 2026-06-25 · **Status:** design (approved, pre-plan)
+
+## Problem
+
+fs-57 (PR #1095) shipped the entire `instruct` *engine* path on the Qwen 1.7B
+tier — the `instruct?: string` field on `Sentence`, the live-instruct synth path,
+the Stage-3 LLM pass that auto-generates instruct, the per-book "Live expressive
+delivery" toggle, and a precedence ladder `manual › analyzer › emotion-derived ›
+neutral` (`server/src/tts/resolve-instruct.ts`).
+
+The top rung — **manual** — is unreachable. Nothing in the UI can write a
+per-line `instruct`, so the field is effectively LLM-fill-only. An author cannot
+direct a line ("a sharp, startled whisper") themselves; they can only accept what
+Stage-3 guessed. fs-56 closes that gap with the author-facing control.
+
+## Scope
+
+In scope: a user-editable free-text `instruct` on **every** manuscript line
+(narrator included — fs-56 is *expressive narration*, the value over fs-25's
+dialogue-only emotion tags), surfaced as an inline chip → popover textarea that
+mirrors the existing `SentenceEmotionControl`.
+
+Out of scope: any change to the synth path, the resolver, the Stage-3 pass, or
+the schema — all already shipped by fs-57. No new "manual vs analyzer" field (see
+Design rationale).
+
+## Design rationale — why a single field suffices
+
+`resolveInstructForGroup` reads one field, `group.instruct`
+(`server/src/tts/resolve-instruct.ts:33`). The "manual wins over analyzer"
+precedence is **not** a second field — it is the *fill-only* semantics of
+`applyDetectedInstruct` (`src/store/manuscript-slice.ts:358`: `if (!sent.instruct
+&& ann.instruct !== undefined)`). So a manual write to `sent.instruct`:
+
+- overrides any analyzer value (last writer wins), and
+- survives a re-run of "Detect emotions" (fill-only skips a populated field).
+
+This is the exact model fs-25 uses for emotion (`setSentenceEmotion` is the manual
+write site; `applyDetectedEmotions` is fill-only). We reuse it verbatim. No new
+field, no migration.
+
+## Components
+
+### 1. Reducer — `setSentenceInstruct` (`src/store/manuscript-slice.ts`)
+
+Sibling to `setSentenceEmotion`. Scoped by `(chapterId, sentenceId)`; no-op if the
+sentence is absent.
+
+```ts
+setSentenceInstruct: (s, a: PayloadAction<{ chapterId: number; sentenceId: number; instruct: string }>) => {
+  const sent = s.sentences.find((x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId);
+  if (!sent) return;
+  const trimmed = a.payload.instruct.trim();
+  if (trimmed === '') delete sent.instruct;   // clear → fall back to analyzer/emotion/neutral
+  else sent.instruct = trimmed;               // manual override (fill-only applyDetectedInstruct preserves it)
+}
+```
+
+A blank/whitespace value clears the field rather than storing an empty string, so
+the store never carries a redundant empty instruct (mirrors `'neutral' → delete`).
+
+**Change-log: silent (decision).** Instruct edits do NOT emit a `changeLogActions`
+entry — matching the `setSentenceEmotion` precedent (emotion edits are change-log
+silent; only structural edits like `setSentenceCharacter` boundary-moves are
+logged). The change-log tracks structure/attribution, not per-line delivery tags.
+Stated so an implementer doesn't add logging by analogy with character edits.
+
+### 2. Persistence (`src/store/persistence-middleware.ts`)
+
+One entry, identical shape to `manuscript/setSentenceEmotion`:
+
+```ts
+'manuscript/setSentenceInstruct': {
+  slice: 'manuscript',
+  build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+},
+```
+
+`instruct` already serialises as part of each sentence, so the hand-set value lands
+in `manuscript-edits.json` — the same file synth reads — and reaches generation
+exactly like a manual emotion tag.
+
+### 3. Component — `SentenceInstructControl` (`src/components/sentence-instruct-control.tsx`, new)
+
+Mirrors `SentenceEmotionControl`'s scaffolding (outside-click close,
+`contentEditable={false}`, 44×44 touch targets, design tokens only — no hex):
+
+- **Chip:** a 🎬 director's-note button. Empty → faint icon (`text-ink/30`,
+  `coarse-pointer:text-ink/40` so it stays faintly visible on touch). Set → tinted
+  chip showing a truncated preview of the instruct text (e.g. first ~24 chars + `…`),
+  with the full text in the `title`/`aria-label`.
+- **Popover:** a surface containing a `<textarea>` plus **Save** and **Clear**.
+  Save dispatches `setSentenceInstruct(text)`; Clear dispatches it with `''`
+  (delete). Escape / outside-click closes without saving.
+- **Edit-the-suggestion is the primary flow.** The textarea is pre-filled with the
+  line's *current* `instruct` via `sentence.instruct ?? ''` (the field is `undefined`
+  in the common empty case) — whether the value was authored OR proposed by Stage-3
+  (the LLM). There is one field, so the control is the single edit surface for both.
+  Opening an LLM-instruct'd line shows the AI's suggestion ready to refine; editing it
+  makes it the author's value, which `applyDetectedInstruct`'s fill-only guard then
+  preserves against re-detect. (This is *why* the control is ungated on every line —
+  an LLM may have proposed a direction on any line, narration included, and the author
+  needs to see and amend it.) The chip reads `sentence.instruct` straight from the
+  store, so it updates reactively after a "Detect emotions" run fills it — no manual
+  refresh. Round-trip: `undefined → pre-fill '' → user edits → Save trims →
+  setSentenceInstruct → '' deletes / non-empty sets`. Consistent across pre-fill,
+  reducer, and Clear.
+- **Audibility signalling — gate on `liveInstruct` ONLY (the reliably-known half).**
+  The server resolver returns `{}` (silent) unless `is17b && liveInstruct`
+  (`resolve-instruct.ts:32`), where `is17b` is the **per-character** 1.7B model key
+  (`synthesise-chapter.ts:813`), which the client does NOT carry. So the client must
+  NOT claim a definitive per-line "audible" verdict — a Qwen **0.6B** character with
+  `liveInstruct` on would render the instruct silently, and a `liveInstruct && qwen`
+  proxy would falsely show "audible" (a silent-data-loss trap). Use only what the
+  client reliably knows — the per-book `liveInstruct` flag — since `!liveInstruct`
+  fails the gate **regardless of model**:
+  - `liveInstruct === false` → **definitely inaudible** → muted chip style
+    (`opacity-50`, the empty-state `text-ink/30` muted token; no new color) + popover
+    caption "Delivery directions play on the Qwen 1.7B tier with Live expressive
+    delivery on."
+  - `liveInstruct === true` → *may* be audible (depends on the per-character 1.7B
+    model the client can't see) → render the chip normally; do NOT assert a per-line
+    verdict. The same caption stays available as an informational reminder of the
+    1.7B-tier requirement, so a 0.6B author still has a hint.
+
+  The control stays **enabled** regardless: the tag is additive data that survives an
+  engine switch (identical philosophy to the emotion tag), so an author can
+  pre-author directions before enabling live-instruct.
+- **Accessibility & mobile (REQUIRED — `min-h-[44px] sm:min-h-0`, design tokens):**
+  - Chip `aria-label`: empty → "Set delivery direction for this line"; set →
+    `Delivery direction: <text> — edit`.
+  - Popover: focus the textarea on open; **Escape** closes and returns focus to the
+    chip; outside-click closes. (The emotion *menu* doesn't trap focus; a textarea
+    is a heavier interaction, so explicit focus-on-open + return-focus is in scope.)
+  - Narrow-phone fit WITHOUT net-new infra: there is no reusable bottom-sheet
+    primitive in the codebase, so do NOT build one. Keep the emotion control's
+    `absolute` popover pattern but make it responsive — constrained width
+    (`max-w-[90vw]`), a 2–3 row textarea with `max-h` + internal scroll, and
+    on-screen repositioning so it never overflows a 320px viewport. A compact
+    textarea + Save/Clear fits; a full bottom-sheet is unnecessary scope.
+
+### 4. Placement (`src/views/manuscript.tsx`)
+
+Render `SentenceInstructControl` immediately after `SentenceEmotionControl`
+(`manuscript.tsx:1483`), **ungated** — shown for every sentence, narrator included
+(the approved scope). The emotion control keeps its existing dialogue-or-tagged
+gate; only the instruct control is universal.
+
+**Clutter mitigation (the cost of "ungated").** An always-visible chip on every
+narrator line is noisy. The empty-state affordance is therefore *minimal*: a tiny
+dot that reveals the 🎬 on row hover/focus on desktop, and stays faint on touch
+(`coarse-pointer:` opacity, the pattern the manuscript boundary handle already
+uses). A line that HAS an instruct always shows its tinted preview chip. The list
+is virtualised (`estimateSize: 220`, overscan 5 — only ~visible rows mount, so
+this is *not* thousands of live components), but the second per-line control may
+push rows taller; the plan re-checks/raises `estimateSize` so the virtualiser
+doesn't thrash on first scroll. Touch note: the empty affordance sits at line-end,
+outside the `[data-text-offset]` text span, so a stray tap can't hijack a
+narrator-text selection (selection/split keys on the text span, not the control).
+
+**Data wiring (corrected — compute once, thread a boolean).** Audibility + staleness
+need the per-book `liveInstruct` flag. It is NOT on the character — it lives in
+`book-meta-slice` keyed by `bookId` (`selectLiveInstruct(bookId)`,
+`book-meta-slice.ts:167`). `bookId` is already read at the `Manuscript` top level
+(`manuscript.tsx:120`), so resolve `liveInstruct` ONCE there via
+`useAppSelector(selectLiveInstruct(bookId))` and thread the resulting **boolean**
+down through `SegmentRow` to the control. Do NOT call the selector inside each
+per-sentence control — on a 500-sentence chapter that is 500 selector invocations
+per render; a plain boolean prop is memo-friendly and free. The control combines
+that boolean with `character.ttsEngine` only for the conservative staleness/mute
+decisions described above — it deliberately does NOT try to reconstruct the
+per-character `is17b` model key (a server detail the client can't see reliably).
+
+## Data flow
+
+```
+author types → Save → dispatch setSentenceInstruct
+  → Immer writes sent.instruct
+  → persistence-middleware serialises sentences → manuscript-edits.json
+  → synth: resolveInstructForGroup({instruct}, {is17b, liveInstruct})
+       → is17b && liveInstruct ? instruct : (emotion phrase | none)
+```
+
+On Kokoro/XTTS, or with live-instruct off, the resolver returns `{}` — the value
+is stored but silent. Consistent with fs-25 emotion-tag behaviour.
+
+## Edge cases
+
+- **Staleness — conservative, gated on `liveInstruct` (corrected).** An instruct
+  edit on an already-rendered chapter flags it stale-if-rendered **when
+  `liveInstruct === true`** (the reliably-known signal). It uses the SAME HOOK as the
+  emotion control (`useMarkCharacterStaleIfRendered`, needs only `{id, name}`) but a
+  DIFFERENT predicate: emotion gates on a designed variant existing
+  (`variantVoiceIdFor`, `sentence-emotion-control.tsx:81`); instruct has no variants,
+  so it gates on `liveInstruct`. This is deliberately conservative — on a Qwen 0.6B
+  character with `liveInstruct` on it may over-flag (a harmless "re-render available"
+  the user can ignore), but it NEVER under-flags an audible change. When
+  `liveInstruct === false` we correctly do NOT flag — the edit is definitely silent.
+  (The earlier "never mark stale" stance was the real bug: an author would edit a
+  direction, see no banner, and the change would silently never reach audio.)
+  - *Out of scope / surfaced:* fs-58's `setSentenceText` does NOT mark stale on a
+    text edit — arguably the same gap for text (audible on every engine). Pre-existing
+    fs-58 behaviour, NOT fs-56's to fix here; filed separately as **#1105**.
+- **Split / merge — fs-56 REBASES onto #1100 (ordering fixed).** `splitSentence`
+  spreads `{...original}` (`manuscript-slice.ts:411`), so a manual instruct ALREADY
+  bleeds onto both fragments today — a pre-existing fs-57 issue that **#1100** fixes
+  by nulling `instruct`/`vocalization` on split/merge. Decision: **#1100 lands first;
+  fs-56 rebases onto it.** So fs-56's base already carries the null-ing, and the
+  split/merge-×-manual-instruct regression test (asserting a fragment does NOT inherit
+  a stale direction) passes against that base. The test is fs-56's, not a duplicate of
+  #1100's null-ing logic — it guards the seam from fs-56's side and fails loudly if the
+  base ever regresses. (Until the rebase, the worktree base is plain `origin/main`; the
+  test is written against the post-rebase base.)
+- **Clear vs re-detect (accepted tradeoff).** Clearing deletes the field; a later
+  "Detect emotions" run may refill it (fill-only) — and because the "Detect
+  emotions" button runs the Stage-3 instruct pass on every click, a cleared
+  direction CAN be re-suggested. This matches the shipped emotion-backfill
+  precedent (`applyDetectedEmotions` is fill-only too) and is intended: clearing
+  means "let the model decide again." Named as an explicit tradeoff. If it proves
+  annoying in practice, a deferred follow-up adds a per-sentence "suppressed"
+  tombstone (the `mergedAwayKeys` pattern) so re-detect skips an explicitly-cleared
+  line — NOT built in v1 (YAGNI).
+
+## Tradeoffs (v1, explicit)
+
+- **One `instruct` field, no provenance marker.** Analyzer-generated and
+  hand-written instructs share `sent.instruct` with no "who wrote this" flag. This
+  is YAGNI-correct for v1 (a provenance field means a schema migration + UI
+  complexity for no shipping requirement), but it has named costs: the UI can't
+  label AI-suggested vs author-written, and a future "bulk-clear only AI instructs"
+  feature would need a schema migration. Recorded here so the tradeoff is a
+  decision, not an accident.
+
+## Testing
+
+- **Reducer unit** (`src/store/manuscript-slice.test.ts`): set, overwrite,
+  clear-deletes-field, whitespace-clears, wrong-id no-op, scoped by chapter.
+- **Fill-only protection**: after a manual `setSentenceInstruct`, `applyDetectedInstruct`
+  must NOT overwrite it (locks in the "manual wins" claim).
+- **Split / merge guard** (`manuscript-slice.test.ts`): a sentence with a hand-set
+  instruct, when split (and when merged), must not leave a stale direction on a new
+  fragment. (Passes once #1100's null-ing is in; the test makes the dependency
+  explicit and fails loudly if fs-56 somehow ships first.)
+- **Persistence**: assert `setSentenceInstruct` triggers a manuscript persist with
+  the instruct on the serialised sentence (follow the `setSentenceEmotion`
+  persistence test).
+- **Staleness**: an instruct edit marks the chapter stale-if-rendered when
+  `liveInstruct === true`, and does NOT when `liveInstruct === false` (definitely
+  silent). (Conservative-by-design: no per-character model-key check client-side.)
+- **Component** (`src/components/sentence-instruct-control.test.tsx`): empty chip
+  renders the minimal affordance with the correct `aria-label`; opening pre-fills
+  the textarea with an existing (LLM-proposed) instruct; typing + Save dispatches
+  the trimmed value; Clear dispatches `''`; Escape closes and returns focus;
+  outside-click closes without dispatch; the inaudible chip style + caption show
+  when live-instruct is off.
+- **E2E** (`e2e/manuscript-instruct-edit.spec.ts`): the change crosses the
+  redux↔manuscript-view seam, so one Playwright spec — open a line's instruct
+  popover, edit a pre-filled direction, save, reload, assert it persisted and the
+  chip shows the preview.
+
+## Files touched
+
+| File | Change |
+|---|---|
+| `src/store/manuscript-slice.ts` | new `setSentenceInstruct` reducer |
+| `src/store/persistence-middleware.ts` | new persist entry |
+| `src/components/sentence-instruct-control.tsx` | new component |
+| `src/views/manuscript.tsx` | render the control (ungated) |
+| `src/store/manuscript-slice.test.ts` | reducer + persistence tests |
+| `src/components/sentence-instruct-control.test.tsx` | component test (new) |
+| `e2e/manuscript-instruct-edit.spec.ts` | e2e spec (new) |
+| `docs/features/NN-fs56-manual-instruct-editing.md` | regression plan (new, `needs-plan`) |
+
+## Acceptance
+
+1. An author can open any line (narrator included) and see the current `instruct` —
+   including an LLM-proposed one — pre-filled, edit it, Save, and see the chip
+   reflect it.
+2. The value persists across reload (`manuscript-edits.json`).
+3. A re-run of "Detect emotions" does not overwrite a hand-set instruct.
+4. Clearing removes the field; a re-detect may refill it (named tradeoff).
+5. On a Qwen 1.7B book with live-instruct on, the hand-set direction reaches synth
+   (`resolveInstructForGroup` returns it); with live-instruct OFF it is stored
+   silently AND the chip/popover signal that it is currently inaudible.
+6. Editing an instruct on an already-rendered chapter flags it stale-if-rendered
+   when `liveInstruct === true` (conservative; not when live-instruct is off).
+7. A split/merge does not leave a stale hand-set direction on a new fragment.
+8. Paired tests above are green; `npm run verify` passes.
