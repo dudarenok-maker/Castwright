@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -6,7 +6,8 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { SentenceInstructControl } from './sentence-instruct-control';
 import type { Character } from '../lib/types';
 
-vi.mock('../lib/stale-chapters', () => ({ useMarkCharacterStaleIfRendered: () => vi.fn() }));
+const { markStaleSpy } = vi.hoisted(() => ({ markStaleSpy: vi.fn() }));
+vi.mock('../lib/stale-chapters', () => ({ useMarkCharacterStaleIfRendered: () => markStaleSpy }));
 
 function renderControl(props: Partial<React.ComponentProps<typeof SentenceInstructControl>> = {}) {
   const store = configureStore({ reducer: { manuscript: manuscriptSlice.reducer } });
@@ -27,6 +28,10 @@ function renderControl(props: Partial<React.ComponentProps<typeof SentenceInstru
 }
 
 describe('fs-56 SentenceInstructControl', () => {
+  beforeEach(() => {
+    markStaleSpy.mockClear();
+  });
+
   it('empty chip has the set-instruct aria-label', () => {
     renderControl();
     expect(screen.getByLabelText('Set delivery direction for this line')).toBeInTheDocument();
@@ -63,5 +68,24 @@ describe('fs-56 SentenceInstructControl', () => {
     renderControl({ instruct: 'x', liveInstruct: false });
     fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
     expect(screen.getByText(/Qwen 1\.7B tier with Live expressive delivery on/i)).toBeInTheDocument();
+  });
+
+  it('calls markStale with character id+name on Save when liveInstruct is true', () => {
+    renderControl({ instruct: 'whisper softly', liveInstruct: true });
+    fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
+    const ta = screen.getByRole('textbox');
+    fireEvent.change(ta, { target: { value: 'shout it' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(markStaleSpy).toHaveBeenCalledOnce();
+    expect(markStaleSpy).toHaveBeenCalledWith({ id: 'wren', name: 'Wren' });
+  });
+
+  it('does NOT call markStale on Save when liveInstruct is false', () => {
+    renderControl({ instruct: 'whisper softly', liveInstruct: false });
+    fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
+    const ta = screen.getByRole('textbox');
+    fireEvent.change(ta, { target: { value: 'shout it' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(markStaleSpy).not.toHaveBeenCalled();
   });
 });
