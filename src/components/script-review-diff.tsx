@@ -5,6 +5,7 @@
    dispatchAcceptedOps. Mirrors drift-report.tsx overlay pattern. */
 
 import { useRef, useState } from 'react';
+import type { Dispatch } from '@reduxjs/toolkit';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   scriptReviewActions,
@@ -21,6 +22,9 @@ import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { CreateCharacterForm } from './create-character-form';
 import { IconClose } from '../lib/icons';
+import { engineForModelKey } from '../lib/tts-models';
+import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import type { TtsModelKey } from '../lib/types';
 
 /* Human-readable class labels. */
 const CLASS_LABELS: Record<string, string> = {
@@ -36,6 +40,35 @@ const CLASS_LABELS: Record<string, string> = {
 
 function classLabel(op: string): string {
   return CLASS_LABELS[op] ?? op;
+}
+
+/** fs-63 — push the off-roster "Design now" nudge, gated to a Qwen project.
+    Exported (and pure-ish: side effect is the single dispatch) so it's unit
+    testable without driving the confirm UI. No-op on preset engines or an
+    empty batch. */
+export function maybePushVoiceNudge(
+  dispatch: Dispatch,
+  args: { ttsModelKey: TtsModelKey; startBookId: string; createdCharacters: { id: string; name: string }[] },
+): void {
+  const { ttsModelKey, startBookId, createdCharacters } = args;
+  if (createdCharacters.length === 0) return;
+  if (engineForModelKey(ttsModelKey) !== 'qwen') return;
+  dispatch(
+    notificationsActions.pushToast({
+      kind: 'info',
+      message:
+        createdCharacters.length > 1
+          ? `${createdCharacters.length} new characters need voices`
+          : `New character «${createdCharacters[0].name}» needs a voice`,
+      dedupeKey: `off-roster-voice-nudge:${startBookId}`,
+      nudge: {
+        bookId: startBookId,
+        characterIds: createdCharacters.map((c) => c.id),
+        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+        names: createdCharacters.map((c) => c.name),
+      },
+    }),
+  );
 }
 
 /* Format the before → after preview for a single op row. `before` is the
@@ -150,6 +183,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   );
   const stageBookIdRef = useRef(stageBookId);
   stageBookIdRef.current = stageBookId;
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
 
   /* The confirm queue. While `confirm` is non-null we overlay a
      CreateCharacterForm for `confirm.queue[confirm.index]`. Direct ops are
@@ -190,7 +224,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   async function runProposed(finalized: FinalizedProposed[], startBookId: string) {
     const rosterByName = new Map(cast.map((c) => [c.name.trim().toLowerCase(), { id: c.id }]));
     try {
-      await applyProposedReattributions(finalized, {
+      const { createdCharacters } = await applyProposedReattributions(finalized, {
         rosterByName,
         createCharacter: async (p) => {
           // api.createCharacter resolves to a { character } envelope — unwrap it.
@@ -206,6 +240,10 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
         isSameBook: () => stageBookIdRef.current === startBookId,
       });
+      // fs-63 — on success, nudge to auto-voice any newly-created off-roster
+      // character (qwen-only; no-op otherwise). Inside the try so a failed
+      // create falls to the catch and never nudges.
+      maybePushVoiceNudge(dispatch, { ttsModelKey, startBookId, createdCharacters });
     } catch {
       // A create failed mid-batch. Reset the confirm machine and surface a toast,
       // but DON'T clearReview — the operator can re-trigger. Re-run is safe because

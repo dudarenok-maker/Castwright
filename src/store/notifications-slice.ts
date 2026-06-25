@@ -18,12 +18,22 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 
 export type ToastKind = 'error' | 'warn' | 'info';
 
+export interface VoiceNudge {
+  bookId: string;
+  characterIds: string[];
+  modelKey: string;
+  names: string[];
+}
+
 export interface Toast {
   id: string;
   kind: ToastKind;
   message: string;
   dedupeKey?: string;
   createdAt: number;
+  /** fs-63 — present only on the off-roster "Design now" nudge; routes the
+      toast to <VoiceNudgeToast> and exempts it from auto-dismiss. */
+  nudge?: VoiceNudge;
 }
 
 export interface NotificationsState {
@@ -36,6 +46,7 @@ interface PushToastPayload {
   kind: ToastKind;
   message: string;
   dedupeKey?: string;
+  nudge?: VoiceNudge;
 }
 
 export const notificationsSlice = createSlice({
@@ -44,17 +55,30 @@ export const notificationsSlice = createSlice({
   reducers: {
     pushToast: {
       reducer: (s, a: PayloadAction<{ id: string; createdAt: number } & PushToastPayload>) => {
-        const { id, kind, message, dedupeKey, createdAt } = a.payload;
+        const { id, kind, message, dedupeKey, createdAt, nudge } = a.payload;
         if (dedupeKey) {
           const existing = s.toasts.find((t) => t.dedupeKey === dedupeKey);
           if (existing) {
             existing.createdAt = createdAt;
             existing.kind = kind;
             existing.message = message;
+            // fs-63 — union nudge work-lists so a burst of off-roster creates
+            // yields ONE nudge covering every still-unvoiced character.
+            if (nudge && existing.nudge) {
+              for (let i = 0; i < nudge.characterIds.length; i++) {
+                const cid = nudge.characterIds[i];
+                if (!existing.nudge.characterIds.includes(cid)) {
+                  existing.nudge.characterIds.push(cid);
+                  existing.nudge.names.push(nudge.names[i]);
+                }
+              }
+            } else if (nudge) {
+              existing.nudge = nudge;
+            }
             return;
           }
         }
-        s.toasts.push({ id, kind, message, dedupeKey, createdAt });
+        s.toasts.push({ id, kind, message, dedupeKey, createdAt, nudge });
       },
       prepare: (payload: PushToastPayload) => ({
         payload: {
