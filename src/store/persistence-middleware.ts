@@ -270,13 +270,6 @@ const PERSIST_RULES: Record<
     },
   },
 
-  /* fs-57 — per-book live-instruct toggle. Persists immediately (no draft
-     buffer needed — it's a boolean flip, not an editable field). Lands in
-     the `state` slice alongside castConfirmed and the book-meta fields. */
-  'bookMeta/setLiveInstruct': {
-    slice: 'state',
-    build: (s, bookId) => ({ liveInstruct: bookId ? (s.bookMeta.liveInstruct[bookId] ?? false) : false }),
-  },
 };
 
 function bookIdFromState(s: PersistableRootState): string | null {

@@ -920,6 +920,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/tier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set or clear the Qwen quality tier for a cast voice across the series */
+        post: operations["setCastTier"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queue": {
         parameters: {
             query?: never;
@@ -5630,6 +5647,51 @@ export interface operations {
             };
             /** @description Book has no cast yet */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setCastTier: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    voiceId: string;
+                    ttsModelKey: "qwen3-tts-1.7b" | null;
+                };
+            };
+        };
+        responses: {
+            /** @description number of cast characters updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        updated: number;
+                    };
+                };
+            };
+            /** @description voiceId missing or ttsModelKey invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

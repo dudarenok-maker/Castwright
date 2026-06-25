@@ -14,6 +14,7 @@ import { voiceMatchRouter } from './routes/voice-match.js';
 import { castMergeRouter } from './routes/cast-merge.js';
 import { castMergeSuggestionsRouter } from './routes/cast-merge-suggestions.js';
 import { voiceOverrideLinkedRouter } from './routes/voice-override-linked.js';
+import { castTierRouter } from './routes/cast-tier.js';
 import { castAliasesRouter } from './routes/cast-aliases.js';
 import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castNotLinkedToRouter } from './routes/cast-not-linked-to.js';
@@ -147,6 +148,7 @@ app.use('/api/books', voiceMatchRouter); // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter); // mounts /:bookId/cast/merge
 app.use('/api/books', castMergeSuggestionsRouter); // mounts /:bookId/cast/merge-suggestions (list/dismiss/accept)
 app.use('/api/books', voiceOverrideLinkedRouter); // mounts /:bookId/cast/:characterId/voice-override-linked (plan 122 — name/alias-aware series voice write)
+app.use('/api/books', castTierRouter); // mounts /:bookId/cast/tier (series-scoped Qwen quality tier pin)
 app.use('/api/books', castAliasesRouter); // mounts /:bookId/cast/{unlink-alias,add-alias} (editable alias chips on the profile drawer)
 app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)
 app.use('/api/books', castNotLinkedToRouter); // mounts /:bookId/cast/:characterId/not-linked-to (plan 101 — mark cross-book duplicate as intentional variant)

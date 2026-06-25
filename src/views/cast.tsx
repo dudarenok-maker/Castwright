@@ -38,7 +38,9 @@ import type {
 } from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
+import { castActions } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { distinctDriftChapterCount } from '../store/revisions-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -53,6 +55,7 @@ import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
+import { ConfirmDialog } from '../modals/confirm-dialog';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
 import { DesignScopePicker } from '../components/design-scope-picker';
@@ -197,6 +200,9 @@ export function CastView({
   const [assigningVoice, setAssigningVoice] = useState<Voice | null>(null);
   const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
+  /* PR4 — bulk tier pin/reset dialog state */
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
   /* "Design full cast" — the open book + the in-flight bulk-design snapshot. */
@@ -208,6 +214,12 @@ export function CastView({
      design-lifecycle pill. */
   const renderedFallbackByCharacter = useAppSelector(
     (s) => s.cast.renderedFallbackByCharacter ?? EMPTY_FALLBACK_MAP,
+  );
+  /* PR4 — read pinned tiers from the store so the roster badge updates live
+     after dispatch(castActions.updateCharacter). The store is the single
+     source of truth for ttsModelKey after a bulk pin or reset. */
+  const storedTiers = useAppSelector(
+    (s) => new Map(s.cast.characters.map((c) => [c.id, c.ttsModelKey])),
   );
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
@@ -342,6 +354,38 @@ export function CastView({
     if (!bookId || designRunningElsewhere) return;
     setScopeOpen((v) => !v);
   };
+
+  /* PR4 — bulk 1.7B tier pin: sets ttsModelKey on every Qwen cast member
+     durable cross-book (setCastTier endpoint) + local redux reflection. */
+  const qwenMembers = characters.filter(isQwenForVariants);
+
+  async function onConfirmPin() {
+    if (!bookId) return;
+    const voiceIds = [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
+    try {
+      await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, 'qwen3-tts-1.7b')));
+      setPinDialogOpen(false);
+      qwenMembers.forEach((c) =>
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' })),
+      );
+    } catch {
+      dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't pin quality tier. Please try again." }));
+    }
+  }
+
+  async function onConfirmReset() {
+    if (!bookId) return;
+    const voiceIds = [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
+    try {
+      await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, null)));
+      setResetDialogOpen(false);
+      qwenMembers.forEach((c) =>
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null })),
+      );
+    } catch {
+      dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't reset quality tier. Please try again." }));
+    }
+  }
 
   const startDesign = (scope: CastDesignScope) => {
     setScopeOpen(false);
@@ -684,6 +728,27 @@ export function CastView({
                 )}
               </div>
             )}
+            {/* PR4 — bulk 1.7B tier pin/reset buttons; visible only for Qwen books */}
+            {qwenMembers.length > 0 && (
+              <>
+                <button
+                  data-testid="pin-higher-quality"
+                  onClick={() => setPinDialogOpen(true)}
+                  className="min-h-[44px] sm:min-h-0 px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+                  title="Render all Qwen cast members at the 1.7B quality tier (expressive prosody)"
+                >
+                  Pin higher quality
+                </button>
+                <button
+                  data-testid="reset-tier"
+                  onClick={() => setResetDialogOpen(true)}
+                  className="min-h-[44px] sm:min-h-0 px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+                  title="Reset all Qwen cast members to the 0.6B default tier"
+                >
+                  Reset tier
+                </button>
+              </>
+            )}
             <button
               onClick={() => setShowLibrary(!showLibrary)}
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
@@ -915,6 +980,16 @@ export function CastView({
                         >
                           <IconAlertTri className="w-2.5 h-2.5" />
                           {driftChapterCountFor(c.id)}
+                        </span>
+                      )}
+                      {/* PR4 — 1.7B quality tier badge: visible when ttsModelKey is pinned */}
+                      {storedTiers.get(c.id) === 'qwen3-tts-1.7b' && (
+                        <span
+                          data-testid={`tier-badge-${c.id}`}
+                          title="Pinned to Qwen3-TTS 1.7B quality tier"
+                          className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-magenta/10 text-magenta text-[10px] font-bold"
+                        >
+                          1.7B
                         </span>
                       )}
                     </span>
@@ -1399,6 +1474,37 @@ export function CastView({
           </div>
         </div>
       )}
+
+      {/* PR4 — Pin higher quality confirm dialog */}
+      <ConfirmDialog
+        open={pinDialogOpen}
+        title="Pin 1.7B quality to all Qwen cast?"
+        body={
+          <p>
+            Every Qwen voice in this book (and its series) will render at the higher-quality 1.7B
+            tier — expressive prosody included. You can reset this at any time.
+          </p>
+        }
+        confirmLabel="Pin to all cast"
+        cancelLabel="Cancel"
+        onConfirm={() => { void onConfirmPin(); }}
+        onClose={() => setPinDialogOpen(false)}
+      />
+
+      {/* PR4 — Reset tier confirm dialog */}
+      <ConfirmDialog
+        open={resetDialogOpen}
+        title="Reset Qwen cast to 0.6B default?"
+        body={
+          <p>
+            All Qwen voices in this book (and its series) will return to the standard 0.6B tier.
+          </p>
+        }
+        confirmLabel="Reset to 0.6B"
+        cancelLabel="Cancel"
+        onConfirm={() => { void onConfirmReset(); }}
+        onClose={() => setResetDialogOpen(false)}
+      />
     </div>
   );
 }

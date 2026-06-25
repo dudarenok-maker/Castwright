@@ -705,3 +705,23 @@ export async function applyOverrideToCastFiles(
   if (updated > 0) invalidateBaseVoiceCache();
   return updated;
 }
+
+/* Set or clear the per-character Qwen quality tier (ttsModelKey) across every
+   linked cast member in the series — the durable cross-book "pin to higher
+   quality" write. Orthogonal to the voice-identity override: it touches ONLY
+   ttsModelKey, never overrideTtsVoices/ttsEngine. null clears the field. */
+export async function applyTierToCastFiles(
+  voiceId: string,
+  ttsModelKey: 'qwen3-tts-1.7b' | null,
+  seriesFilter?: { author: string; series: string },
+): Promise<number> {
+  return forEachMatchingCastCharacter(voiceId, seriesFilter, (original) => {
+    // Deliberately NOT calling normaliseCastCharacter() (unlike the sibling
+    // applyOverrideToCastFiles): we touch only ttsModelKey and must not rewrite
+    // the legacy overrideTtsVoice field as a side-effect of a tier pin.
+    const replacement: CastCharacter = { ...original };
+    if (ttsModelKey === null) delete replacement.ttsModelKey;
+    else replacement.ttsModelKey = ttsModelKey;
+    return replacement;
+  });
+}

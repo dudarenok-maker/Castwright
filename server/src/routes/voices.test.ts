@@ -28,6 +28,11 @@ let app: Express;
 let bookOneId: string;
 let bookTwoId: string;
 let invalidateBaseVoiceCache: () => void;
+let applyTierToCastFiles: (
+  voiceId: string,
+  ttsModelKey: 'qwen3-tts-1.7b' | null,
+  seriesFilter?: { author: string; series: string },
+) => Promise<number>;
 
 function writeBookOnDisk(
   workspace: string,
@@ -74,11 +79,12 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ voicesRouter }, paths, baseVoices] = await Promise.all([
+  const [{ voicesRouter, applyTierToCastFiles: atcf }, paths, baseVoices] = await Promise.all([
     import('./voices.js'),
     import('../workspace/paths.js'),
     import('../tts/base-voices.js'),
   ]);
+  applyTierToCastFiles = atcf;
   invalidateBaseVoiceCache = baseVoices.invalidateBaseVoiceCache;
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
   bookTwoId = paths.makeBookId(AUTHOR, SERIES, BOOK_TWO);
@@ -964,5 +970,36 @@ describe('GET /api/voices/base', () => {
     expect(coqui).toContain('Damien Black');
     expect(gemini).toContain('Charon');
     expect(gemini.length).toBeGreaterThanOrEqual(30);
+  });
+});
+
+describe('applyTierToCastFiles', () => {
+  afterEach(async () => {
+    /* Clear ttsModelKey from all books between cases so assertions start clean. */
+    await applyTierToCastFiles('v_brann', null);
+  });
+
+  it('pins ttsModelKey across sibling books in the series', async () => {
+    const n = await applyTierToCastFiles('v_brann', 'qwen3-tts-1.7b', {
+      author: AUTHOR,
+      series: SERIES,
+    });
+    expect(n).toBe(2);
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    expect(two.characters[0].ttsModelKey).toBe('qwen3-tts-1.7b');
+  });
+
+  it('clears ttsModelKey when passed null', async () => {
+    await applyTierToCastFiles('v_brann', 'qwen3-tts-1.7b', { author: AUTHOR, series: SERIES });
+    const n = await applyTierToCastFiles('v_brann', null, { author: AUTHOR, series: SERIES });
+    expect(n).toBe(2);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    expect(one.characters[0].ttsModelKey).toBeUndefined();
+  });
+
+  it('does not touch other-series books when seriesFilter is provided', async () => {
+    await applyTierToCastFiles('v_brann', 'qwen3-tts-1.7b', { author: AUTHOR, series: SERIES });
+    const other = readCastFromDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
+    expect(other.characters[0].ttsModelKey).toBeUndefined();
   });
 });

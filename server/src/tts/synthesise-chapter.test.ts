@@ -2034,13 +2034,13 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     );
   });
 
-  /* ── fs-57 liveInstruct budget accounting (task 8a) ─────────────────────
-     On the liveInstruct path the per-item effective length fed to the
+  /* ── 1.7B implies prosody: budget accounting (is17b gate) ──────────────
+     On the 1.7B tier (is17b=true) the per-item effective length fed to the
      token-budget packer must include the resolved instruct text length, so a
      batch of long-instruct items doesn't overflow the per-forward budget.
-     The liveInstruct=false path must remain byte-identical to today. */
+     0.6B groups ignore instruct length entirely (is17b=false → text-only). */
 
-  /* Cast for liveInstruct budget tests: all 1.7B Qwen voices. */
+  /* Cast for 1.7B budget tests: all 1.7B Qwen voices. */
   const INSTRUCT_CAST: CastCharacter[] = [
     {
       id: 'narrator',
@@ -2056,7 +2056,7 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     return { id, chapterId: 1, characterId: 'narrator', text, instruct };
   }
 
-  it('fs-57: liveInstruct packer counts instruct length — splits when text+instruct exceeds budget', async () => {
+  it('1.7B packer counts instruct length (is17b=true) — splits when text+instruct exceeds budget', async () => {
     /* TEXT alone is short (10 chars each). INSTRUCT is long (30 chars each).
        budget=50: text-only packing → 5×10=50 ≤ 50 (5 items per batch);
        text+instruct packing → 5×(10+30)=200 > 50, 1×40=40 ≤ 50 (1 per batch).
@@ -2078,54 +2078,24 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     const p = makeBatchProvider();
     await synthesiseChapter({
       sentences,
-      cast: INSTRUCT_CAST,
+      cast: INSTRUCT_CAST, // ttsModelKey: 'qwen3-tts-1.7b' → is17b=true → instruct counted
       provider: p,
       modelKey: 'qwen3-tts-1.7b',
       engine: 'qwen',
       qwenBatchSize: 8,
       qwenBatchTokenBudget: budget,
-      liveInstruct: true,
     });
-    /* With instruct accounted, effective length per item = 40; 2×40=80 > 50, so
+    /* With instruct accounted (is17b=true), effective length per item = 40; 2×40=80 > 50, so
        every body group gets its own work item → no batch calls; only singles. */
     expect(p.batchCalls).toHaveLength(0);
     expect(p.singleCalls.length).toBeGreaterThanOrEqual(4); // 4 body groups
   });
 
-  it('fs-57: liveInstruct=false leaves packing byte-identical (no instruct counted)', async () => {
-    /* Same setup as above; liveInstruct=false → text-only → all 4 bodies fit
-       in one batch (4×10=40 ≤ 50). Proves the off-path is unchanged. */
-    const INSTRUCT = 'i'.repeat(30);
-    const TEXT = 'a'.repeat(10);
-    const budget = 50;
-    const sentences: SentenceOutput[] = [
-      instructSentence(1, TEXT, INSTRUCT),
-      instructSentence(2, TEXT, INSTRUCT),
-      instructSentence(3, TEXT, INSTRUCT),
-      instructSentence(4, TEXT, INSTRUCT),
-      instructSentence(5, TEXT, INSTRUCT),
-    ];
-
-    const p = makeBatchProvider();
-    await synthesiseChapter({
-      sentences,
-      cast: INSTRUCT_CAST,
-      provider: p,
-      modelKey: 'qwen3-tts-1.7b',
-      engine: 'qwen',
-      qwenBatchSize: 8,
-      qwenBatchTokenBudget: budget,
-      liveInstruct: false, // off → text-only budget
-    });
-    /* text-only: 4×10=40 ≤ 50 → all 4 bodies in a single batch call. */
-    expect(p.batchCalls).toHaveLength(1);
-    expect(p.batchCalls[0].items).toHaveLength(4);
-  });
-
-  it('fs-57: liveInstruct budget never splits a 0.6B batch (0.6B ignores instruct)', async () => {
-    /* On 0.6B, resolveInstructForGroup returns {} regardless of liveInstruct,
-       so the packer must NOT count instruct tokens for 0.6B groups — they still
-       pack by text length alone. Verifies the is17b gate in the packer. */
+  it('0.6B packer uses text-only (is17b=false) — bodies fit one batch even with long instruct', async () => {
+    /* 0.6B tier (ttsModelKey absent → is17b=false) → packer ignores instruct length;
+       text-only: 4×10=40 ≤ 50 → all 4 bodies in a single batch call.
+       Proves the is17b gate in the packer: instruct carries through the data but
+       doesn't inflate the budget for a 0.6B group. */
     const INSTRUCT = 'i'.repeat(30);
     const TEXT = 'a'.repeat(10);
     const budget = 50;
@@ -2134,7 +2104,7 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       name: 'Narrator',
       ttsEngine: 'qwen',
       overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
-      /* no ttsModelKey → 0.6B default */
+      /* no ttsModelKey → 0.6B default, is17b=false */
     }];
     const sentences: SentenceOutput[] = [
       instructSentence(1, TEXT, INSTRUCT),
@@ -2153,7 +2123,43 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       engine: 'qwen',
       qwenBatchSize: 8,
       qwenBatchTokenBudget: budget,
-      liveInstruct: true, // liveInstruct ON but 0.6B → text-only
+    });
+    /* text-only: 4×10=40 ≤ 50 → all 4 bodies in a single batch call. */
+    expect(p.batchCalls).toHaveLength(1);
+    expect(p.batchCalls[0].items).toHaveLength(4);
+  });
+
+  it('0.6B packer never splits even when run-level modelKey is 1.7b (per-cast is17b gate)', async () => {
+    /* A character with no ttsModelKey (0.6B) resolves is17b=false from its OWN route,
+       even when the run-default modelKey is 1.7b. Verifies the per-group is17b
+       derivation in the packer (not the run-level modelKey). */
+    const INSTRUCT = 'i'.repeat(30);
+    const TEXT = 'a'.repeat(10);
+    const budget = 50;
+    const cast06b: CastCharacter[] = [{
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      /* no ttsModelKey → 0.6B default regardless of run modelKey */
+    }];
+    const sentences: SentenceOutput[] = [
+      instructSentence(1, TEXT, INSTRUCT),
+      instructSentence(2, TEXT, INSTRUCT),
+      instructSentence(3, TEXT, INSTRUCT),
+      instructSentence(4, TEXT, INSTRUCT),
+      instructSentence(5, TEXT, INSTRUCT),
+    ];
+
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences,
+      cast: cast06b,
+      provider: p,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: budget,
     });
     /* text-only: 4×10=40 ≤ 50 → bodies batched together. */
     expect(p.batchCalls).toHaveLength(1);
@@ -2973,14 +2979,39 @@ describe('fs-56 — per-character 1.7B Quality-tier model key routing', () => {
   });
 });
 
-/* ── fs-57 Task 9A — C1 safety lock: liveInstruct=false 1.7B byte-identical ──
-   REGRESSION LOCK: with liveInstruct OFF a 1.7B render is byte-identical to
-   pre-fs-57. Specifically:
-     (1) the sidecar batch carries liveInstruct=false and NO per-item instruct,
-     (2) pickEmotionVariantVoice still selects the __angry variant voice —
-         the liveInstruct no-op ONLY fires when liveInstruct=true.
+/* Module-level batch-provider factory used by fs-57 C1 and Task 3 (1.7B implies
+   prosody) tests. Captures both single and batch calls for assertion. */
+function makeLiveInstructBatchProvider(): TtsProvider & {
+  batchCalls: SynthesizeBatchInput[];
+  singleCalls: SynthesizeInput[];
+} {
+  const batchCalls: SynthesizeBatchInput[] = [];
+  const singleCalls: SynthesizeInput[] = [];
+  return {
+    batchCalls,
+    singleCalls,
+    async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      singleCalls.push(input);
+      return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+    },
+    async synthesizeBatch(input: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+      batchCalls.push(input);
+      return {
+        pcms: input.items.map((it) => Buffer.alloc(it.text.length * 2)),
+        sampleRate: 24000,
+      };
+    },
+  };
+}
+
+/* ── 1.7B implies prosody: C1 — 1.7B with is17b-derived instruct gate ──
+   REGRESSION LOCK: On the 1.7B tier, prosody (instruct) is derived purely
+   from the resolved model key (is17b). Specifically:
+     (1) the sidecar batch carries liveInstruct=true (is17b) and per-item instruct,
+     (2) pickEmotionVariantVoice returns the BASE voice (no __emotion suffix) on
+         the 1.7B tier — emotion travels as instruct, not as a variant voice key.
    This is a CODE-PATH / request-shape assertion (GPU-free). */
-describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', () => {
+describe('1.7B implies prosody — C1 request shape', () => {
   /* A character on the 1.7B tier with a designed __angry variant. */
   const CAST_17B: CastCharacter[] = [
     {
@@ -2997,39 +3028,16 @@ describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', ()
     },
   ];
 
-  function makeLiveInstructBatchProvider(): TtsProvider & {
-    batchCalls: SynthesizeBatchInput[];
-    singleCalls: SynthesizeInput[];
-  } {
-    const batchCalls: SynthesizeBatchInput[] = [];
-    const singleCalls: SynthesizeInput[] = [];
-    return {
-      batchCalls,
-      singleCalls,
-      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
-        singleCalls.push(input);
-        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
-      },
-      async synthesizeBatch(input: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
-        batchCalls.push(input);
-        return {
-          pcms: input.items.map((it) => Buffer.alloc(it.text.length * 2)),
-          sampleRate: 24000,
-        };
-      },
-    };
-  }
-
-  it('sends liveInstruct=false + no per-item instruct, and selects the __angry variant voice (not base)', async () => {
+  it('sends liveInstruct=true (is17b) + per-item instruct, and uses base voice (not __emotion variant)', async () => {
     /* Sentence 1 = anchor (single, groups[0] always synthed solo for the sample-rate
        anchor). Sentences 2+3 = two angry-tagged body sentences → a size-2 batch.
        A size-1 slice routes to synthGroup (single), not synthBatch, so we need at
        least 2 batchable body groups to exercise the batch path.
 
-       With liveInstruct=false the C1 contract requires:
-         (1) batch carries liveInstruct=false/absent and NO per-item instruct,
-         (2) pickEmotionVariantVoice STILL selects qwen-narrator__angry (not base) —
-             the no-op fires ONLY when liveInstruct=true. */
+       With is17b=true the C1 contract (1.7B implies prosody) requires:
+         (1) batch carries liveInstruct=true (is17b) and per-item instruct phrases,
+         (2) pickEmotionVariantVoice returns the BASE voice (no __emotion suffix) —
+             emotion travels as an instruct phrase on the 1.7B tier. */
     const provider = makeLiveInstructBatchProvider();
 
     await synthesiseChapter({
@@ -3045,7 +3053,6 @@ describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', ()
       modelKey: 'qwen3-tts-1.7b',
       engine: 'qwen',
       qwenBatchSize: 8,
-      liveInstruct: false, // THE FLAG UNDER TEST — off path
     });
 
     // Anchor was a single call (first group in Qwen batching, synthesized solo).
@@ -3056,20 +3063,18 @@ describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', ()
     const batchCall = provider.batchCalls[0];
     expect(batchCall.items).toHaveLength(2);
 
-    // (1) Batch-level flag: liveInstruct is absent/false (pre-fs-57 contract).
-    expect(batchCall.liveInstruct ?? false).toBe(false);
+    // (1) Batch-level flag: liveInstruct=true (is17b) — the 1.7B tier drives gain.
+    expect(batchCall.liveInstruct).toBe(true);
 
-    // (2) No per-item instruct field — the liveInstruct path is off, so no
-    //     instruct phrase should appear on any item (not even the angry ones).
+    // (2) Per-item instruct is present — is17b=true so emotion→instruct phrase.
     for (const item of batchCall.items) {
-      expect(item).not.toHaveProperty('instruct');
+      expect(item).toHaveProperty('instruct');
     }
 
-    // (3) Variant selection is INTACT: both angry items use qwen-narrator__angry,
-    //     NOT the base qwen-narrator. This proves pickEmotionVariantVoice's no-op
-    //     guard only fires when liveInstruct=true, not when it's false.
+    // (3) Voice selection: 1.7B uses BASE voice (no __emotion variant suffix);
+    //     emotion is carried as instruct, not as a variant voice key.
     for (const item of batchCall.items) {
-      expect(item.voiceName).toBe('qwen-narrator__angry');
+      expect(item.voiceName).toBe('qwen-narrator'); // base, NOT qwen-narrator__angry
     }
 
     // (4) The 1.7B modelKey reaches the batch call — the tier override is wired.
@@ -3077,12 +3082,12 @@ describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', ()
   });
 });
 
-/* fs-58 (#1041) — per-group instructHash stamp on the qwen-1.7b liveInstruct
-   path. The stamp lets the frontend flag a chapter whose per-line instruct was
+/* fs-58 (#1041) — per-group instructHash stamp on the qwen-1.7b tier.
+   The stamp lets the frontend flag a chapter whose per-line instruct was
    edited after it rendered (the instruct sibling of #1105's textHash), but only
    where the instruct actually shaped the audio: an explicit instruct rendered on
-   a 1.7b group with liveInstruct on. Everything else (gate off, emotion-only, or
-   a 1.7b group that fell back to Kokoro) is correctly un-stamped. */
+   a 1.7b group. Everything else (0.6B tier, emotion-only, or a 1.7b group that
+   fell back to Kokoro) is correctly un-stamped. */
 describe('synthesiseChapter — instructHash stamp (fs-58 #1041)', () => {
   /* A 1.7b Qwen cast with a designed voice, so the only way to force a Kokoro
      fallback (test iv) is qwenUnavailable, not a missing voice. */
@@ -3104,41 +3109,53 @@ describe('synthesiseChapter — instructHash stamp (fs-58 #1041)', () => {
     instruct,
   });
 
-  const runInstruct = (opts: { liveInstruct: boolean; sentences: SentenceOutput[] }) =>
+  // Helper: synthesise sentences using the given cast. Run modelKey defaults to
+  // 1.7B but can be overridden — required when testing a 0.6B cast where the
+  // per-character route must also resolve to 0.6B.
+  const runInstruct = (
+    sentences: SentenceOutput[],
+    cast = INSTRUCT_17B_CAST,
+    runModelKey: 'qwen3-tts-1.7b' | 'qwen3-tts-0.6b' = 'qwen3-tts-1.7b',
+  ) =>
     synthesiseChapter({
-      sentences: opts.sentences,
-      cast: INSTRUCT_17B_CAST,
+      sentences,
+      cast,
       provider: makeProvider(),
-      modelKey: 'qwen3-tts-1.7b',
+      modelKey: runModelKey,
       engine: 'qwen',
-      liveInstruct: opts.liveInstruct,
     });
 
-  it('stamps instructHash for a 1.7b liveInstruct group with an explicit instruct', async () => {
-    const res = await runInstruct({
-      liveInstruct: true,
-      sentences: [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
-    });
+  it('stamps instructHash for a 1.7b group with an explicit instruct', async () => {
+    const res = await runInstruct(
+      [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
+    );
     expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBe(
       textHashForStale('a tired sigh'),
     );
   });
 
-  it('omits instructHash when liveInstruct is off', async () => {
-    const res = await runInstruct({
-      liveInstruct: false,
-      sentences: [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
-    });
+  it('omits instructHash for a 0.6B group (tier gate, not liveInstruct)', async () => {
+    const cast06b: CastCharacter[] = [{
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      /* no ttsModelKey → 0.6B default */
+    }];
+    const res = await runInstruct(
+      [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
+      cast06b,
+      'qwen3-tts-0.6b', // run at 0.6B so per-character route resolves is17b=false
+    );
     expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBeUndefined();
   });
 
   it('omits instructHash for an emotion-only group (no explicit instruct)', async () => {
-    const res = await runInstruct({
-      liveInstruct: true,
+    const res = await runInstruct(
       // emotion set, but NO explicit instruct → must not stamp (and must not crash
       // on textHashForStale(undefined)).
-      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'x', emotion: 'sad' }],
-    });
+      [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'x', emotion: 'sad' }],
+    );
     expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBeUndefined();
   });
 
@@ -3164,7 +3181,6 @@ describe('synthesiseChapter — instructHash stamp (fs-58 #1041)', () => {
       provider: qwen,
       modelKey: 'qwen3-tts-1.7b',
       engine: 'qwen',
-      liveInstruct: true,
       resolveForEngine,
       qwenUnavailable: true, // forces the designed 1.7b voice to fall back to Kokoro
     });
@@ -3177,5 +3193,55 @@ describe('synthesiseChapter — instructHash stamp (fs-58 #1041)', () => {
     expect(seg?.renderedFallbackEngine).toBe('kokoro');
     // post-fallback route.modelKey is kokoro-v1 ≠ 'qwen3-tts-1.7b' → un-stamped.
     expect(seg?.instructHash).toBeUndefined();
+  });
+});
+
+/* 1.7B implies prosody — Task 3: derive is17b in resolveGroup; no liveInstruct option.
+   Uses the real batch harness (makeLiveInstructBatchProvider) to assert the batch
+   call shape when per-cast ttsModelKey drives the tier. */
+describe('synthesiseChapter — 1.7B implies prosody (is17b derives from ttsModelKey)', () => {
+  it('a 1.7B group gets an instruct phrase (no liveInstruct option exists)', async () => {
+    const provider = makeLiveInstructBatchProvider();
+    await synthesiseChapter({
+      sentences: [
+        { id: 1, chapterId: 1, characterId: 'narrator', text: 'Anchor line.' },        // anchor → solo
+        { id: 2, chapterId: 1, characterId: 'narrator', text: 'Stop.', emotion: 'angry' },
+        { id: 3, chapterId: 1, characterId: 'narrator', text: 'Now.', emotion: 'angry' },
+      ],
+      cast: [{ id: 'narrator', ttsModelKey: 'qwen3-tts-1.7b', overrideTtsVoices: { qwen: { name: 'wren' } } }],
+      provider, modelKey: 'qwen3-tts-0.6b', engine: 'qwen', qwenBatchSize: 8,
+    });
+    expect(provider.batchCalls[0].items[0].instruct).toBeTruthy();
+  });
+
+  it('a 0.6B group gets no instruct phrase', async () => {
+    const provider = makeLiveInstructBatchProvider();
+    await synthesiseChapter({
+      sentences: [
+        { id: 1, chapterId: 1, characterId: 'n', text: 'Anchor.' },
+        { id: 2, chapterId: 1, characterId: 'n', text: 'Stop.', emotion: 'angry' },
+        { id: 3, chapterId: 1, characterId: 'n', text: 'Now.', emotion: 'angry' },
+      ],
+      cast: [{ id: 'n', overrideTtsVoices: { qwen: { name: 'wren' } } }],
+      provider, modelKey: 'qwen3-tts-0.6b', engine: 'qwen', qwenBatchSize: 8,
+    });
+    expect(provider.batchCalls[0].items[0].instruct).toBeUndefined();
+  });
+
+  it('a 1.7B group with a designed emotion variant routes emotion via instruct, not the __emotion voice', async () => {
+    const provider = makeLiveInstructBatchProvider();
+    await synthesiseChapter({
+      sentences: [
+        { id: 1, chapterId: 1, characterId: 'n', text: 'Anchor.' },
+        { id: 2, chapterId: 1, characterId: 'n', text: 'Stop.', emotion: 'angry' },
+        { id: 3, chapterId: 1, characterId: 'n', text: 'Now.', emotion: 'angry' },
+      ],
+      cast: [{ id: 'n', ttsModelKey: 'qwen3-tts-1.7b',
+               overrideTtsVoices: { qwen: { name: 'wren', variants: { angry: { name: 'wren__angry' } } } } }],
+      provider, modelKey: 'qwen3-tts-0.6b', engine: 'qwen', qwenBatchSize: 8,
+    });
+    // Qwen storage key for character id 'n' with no voiceUuid/voiceId = qwen-n
+    expect(provider.batchCalls[0].items[0].voiceName).toBe('qwen-n'); // base, not qwen-n__angry
+    expect(provider.batchCalls[0].items[0].instruct).toBeTruthy();
   });
 });
