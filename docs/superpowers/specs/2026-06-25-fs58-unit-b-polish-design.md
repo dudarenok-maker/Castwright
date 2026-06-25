@@ -48,8 +48,10 @@ or splits it into pieces (`assignSelectionTo`). Gate at two points:
   chapter's `sentences[]` (the same per-chapter scoping `assignSelectionTo`
   already uses, because sentence ids restart per chapter).
 - Belt-and-suspenders: early-return in `assignSelectionTo` if the resolved
-  sentence is excluded, so a stale selection captured before exclusion can't
-  split.
+  sentence is excluded, so a selection captured before exclusion can't split.
+  (This race is near-unreachable today — a line can only be excluded via the
+  script-review `flag_nonstory` op, not an inline control — so the guard is
+  cheap insurance, not a load-bearing path.)
 
 **(b) Boundary drag.** Dragging a boundary handle highlights a *candidate*
 sentence (`candidateSentenceIdx`) and, on drop, reassigns a contiguous run of
@@ -88,22 +90,46 @@ add an explicit case:
 
 Files: `src/views/manuscript.tsx`, `src/components/script-review-diff.tsx`.
 
-Two create flows `await api.createCharacter` with no `catch`, so a failed
-`POST /cast/create` rejects unhandled — the form/confirm UI is left mid-flow
-with no error surface:
+Two create flows `await api.createCharacter` with no `catch`. The exact current
+behaviour (verified against source, correcting the original spec draft):
 
-- `handleCreateCharacter` (`manuscript.tsx`) — the sidebar "create character"
-  path. Wrap the `await` in `try/catch`; on failure dispatch
-  `notificationsActions.pushToast({ kind: 'error', message: "Couldn't create character", dedupeKey: 'create-character' })`.
-  Keep the form open for retry (do not advance/close on failure).
-- `runProposed` (`script-review-diff.tsx`) — the off-roster reattribute confirm
-  batch runs `applyProposedReattributions`, which calls `api.createCharacter`
-  internally. Wrap the `await`; on failure push the same error toast. Only
-  clear `confirm` / the review bucket on success.
+**(a) Sidebar "Add character" form (`manuscript.tsx`).** The form's `onSubmit`
+is `async (f) => { await onCreateCharacter(f); setAddingChar(false); }`
+(line ~1263), where `onCreateCharacter` is `handleCreateCharacter` (line ~597),
+which `await`s `api.createCharacter`. On rejection the `await` throws, so
+`setAddingChar(false)` is **skipped** — the form already stays open — but the
+async `onSubmit` promise rejects **unhandled** and the user gets **no error
+surface**. Fix:
+
+- In `handleCreateCharacter`, wrap the `await` in `try/catch`; on failure
+  dispatch
+  `notificationsActions.pushToast({ kind: 'error', message: "Couldn't create character", dedupeKey: 'create-character' })`
+  and **re-throw**.
+- In the parent `onSubmit` (line ~1263), wrap in `try/catch`: call
+  `setAddingChar(false)` **only** on success; on the re-thrown error do nothing
+  (form stays open for retry, no unhandled rejection).
+
+This split is deliberate: the close decision lives in the parent (`setAddingChar`),
+so the catch that *suppresses* the rejection must also live there, while the
+toast lives in the handler that knows the API failed.
+
+**(b) Script-review off-roster confirm batch (`script-review-diff.tsx`).**
+`runProposed` (line ~189) calls `applyProposedReattributions`, which calls
+`api.createCharacter` internally. On rejection mid-batch the error propagates,
+so `setConfirm(null)` and `clearReview` (line ~207-208) never run — the confirm
+machinery is left wedged. Fix: wrap the `await applyProposedReattributions(...)`
+in `try/catch`; on failure push the same error toast and call `setConfirm(null)`
+to reset the per-op confirm machine, but **do not** `clearReview` — leaving the
+review bucket lets the operator re-trigger. Partial application is safe to
+re-run: `setSentenceCharacter` is idempotent for an already-applied
+chapter/sentence/character (a reattribute applied before the failing
+`createCharacter` simply re-applies to the same value on retry). Add a one-line
+comment noting this idempotency reliance.
 
 The toast API is the existing `notificationsActions.pushToast` from
-`src/store/notifications-slice.ts` (same pattern as `book-library.tsx`'s
-export-failure toast). Paired tests assert the toast dispatch against a mocked
+`src/store/notifications-slice.ts` (signature `{ kind, message, dedupeKey? }`;
+same pattern as `book-library.tsx`'s export-failure toast). Paired tests assert
+the toast dispatch — and, for (a), that the form stays open — against a mocked
 `api.createCharacter` rejection.
 
 ### Item 4 — Trivia
@@ -121,18 +147,35 @@ export-failure toast). Paired tests assert the toast dispatch against a mocked
 
 - No change to exclusion semantics, the synth filter, or the `flag_nonstory`
   op itself.
-- No new e2e spec — all four items are unit-testable, and the existing
-  `e2e/script-review.spec.ts` already covers the confirm flow end to end.
+- No new error-recovery beyond a toast + keep-open (no automatic retry, no
+  rollback of partially-applied reattributes — idempotent re-run covers it).
 - Items #1119 (fs-63 auto-voice), #1120 (fs-64 cross-chapter context), and
   #1121 (hydrate-merge bug) are tracked separately and out of scope here.
 
 ## Testing
 
-- **Item 1:** Vitest component test on `manuscript.tsx` — an excluded sentence
-  yields no `SelectionPopover` for a selection within it, and the
-  `pointermove` candidate detection skips it. (jsdom can drive the selection /
-  pointer paths the existing manuscript tests already exercise.)
-- **Item 2 / Item 3:** Vitest component tests as described above.
+**Item 1 cannot be unit-tested in jsdom** — both gates depend on
+`window.getSelection()` / `range.getBoundingClientRect()` (popover) and
+`document.elementFromPoint()` (drag), none of which jsdom implements, and no
+existing e2e drives the selection-popover or boundary-drag paths. So:
+
+- **Extract the gate decision into a pure predicate** (e.g.
+  `isExcludedSentence(sentences, chapterId, sentenceId)` in a small helper, or
+  reuse the existing lookup) and **unit-test the predicate** — cheap, real
+  coverage of the decision logic, independent of the DOM.
+- **New Playwright e2e** (`e2e/manuscript-excluded-line-noedit.spec.ts`): on a
+  manuscript with an excluded line, (a) selecting that line's text shows **no**
+  "Assign selection to" popover (a normal line still does — positive control),
+  and (b) dragging a boundary handle over the excluded line never adds the
+  `sentence-candidate` class to it (a normal line does). Getting an excluded
+  line in e2e: prefer seeding a mock manuscript fixture with one
+  `excludeFromSynthesis` sentence; fall back to driving the script-review
+  `flag_nonstory` flow if no fixture seam exists. If the drag-negative
+  assertion proves flaky, keep the selection-popover e2e + predicate unit test
+  and document the drag half as manual acceptance (explicitly, per the
+  before-shipping checklist) rather than shipping a flaky spec.
+- **Item 2 / Item 3:** Vitest component tests as described above (Item 3 also
+  asserts the sidebar form stays open on a mocked rejection).
 - **Item 4:** Covered transitively; `type="button"` asserted in the Item 2
   render, `_roster` removal is a pure refactor caught by `typecheck` + existing
   `script-review-apply` tests.
@@ -150,6 +193,23 @@ export-failure toast). Paired tests assert the toast dispatch against a mocked
    `onReattributeExisting` (0 `api.createCharacter` calls); a novel name calls
    `onSubmit`.
 5. `npm run verify` is green.
+
+## Adversarial review (folded)
+
+Round 1 (against source) found two blockers, both folded above:
+
+- **Item 1 is not jsdom-testable** (`getSelection`/`elementFromPoint` seam, no
+  existing e2e harness) — Testing now specifies a pure predicate unit test + a
+  new Playwright e2e, and the "no new e2e" non-goal was removed.
+- **Item 3's original "keep form open" claim was inverted** — the form already
+  stays open on failure (the throw skips the close); the real defects are an
+  unhandled rejection + no toast, and the fix must span both the handler and
+  the parent `onSubmit`. Item 3 was rewritten around the verified behaviour.
+
+Also folded: `runProposed` partial-failure handling (catch + toast + reset
+confirm, leave review bucket; rely on `setSentenceCharacter` idempotency for
+re-run), the `_roster` call-site removal (5th arg at the call site), and a
+softened rationale for the `assignSelectionTo` belt-and-suspenders guard.
 
 ## Ship notes
 
