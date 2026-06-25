@@ -40,6 +40,7 @@ import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { castActions } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { distinctDriftChapterCount } from '../store/revisions-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -360,25 +361,30 @@ export function CastView({
 
   async function onConfirmPin() {
     if (!bookId) return;
-    setPinDialogOpen(false);
     const voiceIds = [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
-    await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, 'qwen3-tts-1.7b')));
-    qwenMembers.forEach((c) =>
-      dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' })),
-    );
+    try {
+      await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, 'qwen3-tts-1.7b')));
+      setPinDialogOpen(false);
+      qwenMembers.forEach((c) =>
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' })),
+      );
+    } catch {
+      dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't pin quality tier. Please try again." }));
+    }
   }
 
   async function onConfirmReset() {
     if (!bookId) return;
-    setResetDialogOpen(false);
     const voiceIds = [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
-    await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, null)));
-    /* Pass ttsModelKey: undefined explicitly so the reducer's { ...c, ...next }
-       spread overwrites any pinned value with undefined (omitting the key from
-       next would keep the existing stored value). */
-    qwenMembers.forEach((c) =>
-      dispatch(castActions.updateCharacter({ ...c, ttsModelKey: undefined })),
-    );
+    try {
+      await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, null)));
+      setResetDialogOpen(false);
+      qwenMembers.forEach((c) =>
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null })),
+      );
+    } catch {
+      dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't reset quality tier. Please try again." }));
+    }
   }
 
   const startDesign = (scope: CastDesignScope) => {

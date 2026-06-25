@@ -30,17 +30,15 @@ test('picking 1.7B in the regenerate model picker queues a 1.7B render', async (
   /* RegenerateModal opens. Click the "Qwen3-TTS 1.7B" model option. */
   await page.getByText('Qwen3-TTS 1.7B').click();
 
+  /* Select the scope — exercises the real user flow. */
+  await page.getByText('This and all subsequent').click();
+
   /* Click the Regenerate confirm button at the bottom of the modal.
      The RegenerateModal uses overflow-hidden; on a standard 1280×720 Desktop
      Chrome viewport the footer button is clipped below the visible area.
      Use evaluate to dispatch a click event directly, bypassing the
      viewport-visibility check that blocks Playwright's normal click. */
-  await page.evaluate(() => {
-    const btns = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (b) => b.textContent?.trim() === 'Regenerate',
-    );
-    btns[btns.length - 1]?.click();
-  });
+  await page.getByRole('button', { name: 'Regenerate', exact: true }).last().evaluate((b) => (b as HTMLElement).click());
 
   /* Assert the first queued entry carries modelKey = 'qwen3-tts-1.7b'.
      This reads from the in-memory Redux store (the standard e2e store-hook

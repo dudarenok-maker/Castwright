@@ -1859,7 +1859,7 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
     expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-wren', null);
     expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-fen', null);
     await waitFor(() =>
-      expect(store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey).toBeUndefined(),
+      expect(store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey).toBeNull(),
     );
     /* badge gone after reset */
     expect(screen.queryByTestId('tier-badge-qwenA')).toBeNull();
