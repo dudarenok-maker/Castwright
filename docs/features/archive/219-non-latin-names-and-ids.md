@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-25
 owner: null
 ---
 
 # 219 — Non-Latin (Cyrillic) character names, ids & cross-book keys
 
-> Status: active (implemented on `fix/server-stage2-coverage-unicode`; on-box acceptance owed)
+> Status: stable (implemented on `fix/server-stage2-coverage-unicode`; on-box acceptance confirmed 2026-06-25, srv-40 / #823)
 > Key files: `server/src/analyzer/roster-coverage.ts` (`toKebabId`), `server/src/routes/analysis.ts` (`bookIdFromTitle`, ingest), `server/src/store/merge-analysis-cast.ts`, `server/src/workspace/series-prior-dedup.ts`, `server/src/routes/cast-series-patch.ts`, `server/src/routes/voice-override-linked.ts`, `server/tts-sidecar/main.py` (`_voice_paths`), `scripts/recover-missing-character.mjs`, frontend cast-edit paths (TBD — see Phase 0)
 > URL surface: indirect — analysis pipeline + cast/voice persistence
 > OpenAPI ops: none (internal id/key generation)
@@ -344,4 +344,26 @@ Russian — the reliable fix for name/alias fidelity is the **Gemini analyzer**.
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Code shipped 2026-06-15 (impl commit `23afa956`, branch
+`fix/server-stage2-coverage-unicode`, stacked on the plan-181 word-normalizer
+fix) with the Stage-1 chunking / name-fidelity follow-ons (2026-06-16). The
+remaining half — the off-box-unverifiable acceptance, tracked as the `srv-40`
+backlog item ([#823](https://github.com/dudarenok-maker/Castwright/issues/823))
+— was **confirmed on the Windows box 2026-06-25**:
+
+- Full **analyze → generate → export** of a Cyrillic book (`Ночной дозор`) — no
+  stall; cast shows distinct characters with sane ids.
+- **ffmpeg + Cyrillic filesystem paths on Windows** hold through generation and
+  M4B/MP3 export (book dirs use display names verbatim via `bookDirByDisplay`;
+  chapter audio filenames carry the Cyrillic title, e.g. `01-ночной-дозор.mp3`)
+  — no ffmpeg choke, so the ASCII chapter-slug fallback was not needed.
+- Real **model-returned ids** for Cyrillic names (Phase 0 Q1–Q5): distinct +
+  stable across re-analysis (the defense-in-depth `safeId` idempotency held;
+  no surprise vs the ASCII oracle).
+- **Cross-book voice carryover** for a Russian 2-book series.
+- Two designed **Qwen voices** for distinct Cyrillic characters produced two
+  distinct `.pt` files (no overwrite).
+- MAX_PATH headroom for long Cyrillic book ids/titles on Windows.
+
+srv-40 (#823) closed and removed from `docs/BACKLOG.md`; plan moved to
+`docs/features/archive/`.

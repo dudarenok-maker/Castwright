@@ -211,12 +211,6 @@ _Full detail + acceptance:_ [#993](https://github.com/dudarenok-maker/Castwright
 
 ### Ops & maintenance
 
-#### `srv-40` — Non-Latin (Cyrillic) book support: on-box acceptance ([#823](https://github.com/dudarenok-maker/Castwright/issues/823))
-
-- _What:_ Plan [219](docs/features/219-non-latin-names-and-ids.md) (Unicode-aware coverage/ASR normalizers, `safe-id.ts` chokepoint, `makeBookId`/`slug`, cross-book keys, hardened sidecar/voice-sample filename boundaries) is merged with unit/pytest coverage. The off-box-unverifiable bits remain: a full analyze→generate→export of a Cyrillic book on Windows (ffmpeg + Cyrillic paths — pre-existing risk via `bookDirByDisplay`), real model-id shapes for Cyrillic names, and cross-book voice carryover for a Russian series.
-- _Benefit (user):_ non-English (Cyrillic, and other non-Latin) books work end-to-end instead of silently colliding ids / dead cross-book reuse / a stalled analysis.
-_Full detail + acceptance:_ [#823](https://github.com/dudarenok-maker/Castwright/issues/823).
-
 #### `srv-4` — Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai) ([#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431))
 
 - _What:_ Re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump the direct dep whose upstream drops the offending transitive. **Re-confirmed 2026-06-18 (deps round 4 / plan 224):** root is clean; the **server** tree's only deprecation is **`node-domexception`**, pulled via `@google/genai@2.8.0 → google-auth-library@10.7.0 → gaxios@7.1.5 → node-fetch@^3.3.2 → fetch-blob → node-domexception`. The earlier "bump `@google/genai` to 2.8+" fix is **moot** — genai is _already_ at 2.8.0; the real culprit is `gaxios` still depending on `node-fetch` (no published gaxios drops it for native fetch), and bumping `fetch-blob` to 4.x doesn't help (it still pins node-domexception; node-domexception 2.0.2 is also deprecated). **Blocked upstream** until gaxios migrates to native fetch.
