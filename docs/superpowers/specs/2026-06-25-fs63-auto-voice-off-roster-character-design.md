@@ -34,8 +34,9 @@ separate trip to the Cast view to design a voice.
 
 ## 2. Approach
 
-After an off-roster create on a Qwen project, surface a single **actionable toast** nudging the
-operator to design voices for the freshly-created character(s). Tapping the action enqueues
+After an off-roster create on a Qwen project, surface a single **action nudge** (a sticky toast
+with a "Design now" button — see §3.2) prompting the operator to design voices for the
+freshly-created character(s). Tapping the action enqueues
 exactly those characters into the **existing bulk-design pipeline** (`designAllRequested`),
 which runs the srv-48 persona pre-pass + Qwen VoiceDesign and reports progress on the
 `DesignPill` — the same machinery as "Design full cast", scoped to the new ids.
@@ -86,21 +87,50 @@ on two grounds:
    the character undesigned with zero feedback.
 
 So the nudge is its own small component (`src/components/voice-nudge-toast.tsx`), rendered by
-`ToastStack` for a new `Toast.kind: 'action'` carrying a typed `nudge` payload
-(`{ bookId, characterIds, modelKey, names: string[] }`) — NOT an opaque action object. It reads
-`castDesign.active` live and mirrors the Cast view's busy semantics:
+`ToastStack`. It is discriminated by an **optional `nudge` field** on `Toast`, NOT a new
+`kind` value:
 
-- **Idle:** the action button reads "Design now" / "Design all"; tapping dispatches
-  `castDesignActions.designAllRequested(...)` (built from the `nudge` payload) and dismisses.
-- **A design is already running (any book):** the button is **disabled** with sub-text
-  *"A voice design is already running…"* — the nudge **stays** (sticky), so the operator can act
-  once the current run settles. No silent loss.
-- **Sticky.** Action-kind toasts skip the 6 s auto-dismiss (a GPU action needs a real window);
-  they clear on action, on manual dismiss, or via dedupe replacement.
+```ts
+interface VoiceNudge {
+  bookId: string;
+  characterIds: string[];
+  modelKey: string;
+  names: string[];
+}
+// Toast gains:  nudge?: VoiceNudge;   kind stays 'error' | 'warn' | 'info' (use 'info').
+```
 
-`notifications-slice.ts` gains the `'action'` kind + the typed `nudge` field on `Toast`; the
-payload is a plain serializable literal (ids + strings), so RTK's `serializableCheck` is satisfied
-and the slice still never imports cast-design (the *component* owns that dependency).
+**Why a field, not a `kind: 'action'`:** the toast `kind` union is **re-declared as a literal**
+in `layout.tsx` (`pushToast`'s arg type is `kind: 'error' | 'warn' | 'info'`, not an imported
+`ToastKind`), and `toast-stack.tsx`'s `kindClass` switch is non-exhaustive. A new kind would
+compile-break `layout.tsx` and fall through the style switch. Discriminating on the presence of
+`nudge` adds zero churn to either: `ToastStack` renders `<VoiceNudgeToast>` when `toast.nudge` is
+set, else the existing `<ToastItem>`.
+
+`<VoiceNudgeToast>` reads `castDesign.active` live and mirrors the Cast view's busy semantics:
+
+- **Idle** (`castDesign.active?.state !== 'running'`): the button reads "Design now" / "Design
+  all"; tapping dispatches `castDesignActions.designAllRequested({ ...nudge, scope: 'bases' })`
+  and dismisses.
+- **A design is already running** (`castDesign.active?.state === 'running'`, any book — the exact
+  predicate behind the Cast view's `designRunningHere || designRunningElsewhere`): the button is
+  **disabled** with sub-text *"A voice design is already running…"* — the nudge **stays**
+  (sticky), so the operator can act once the current run settles. No silent loss. (The micro-race
+  between this `state` read and the middleware's `handle` guard is the same one the Cast view
+  already lives with — parity, accepted.)
+- **Sticky.** A toast carrying `nudge` skips the 6 s auto-dismiss (a GPU action needs a real
+  window); it clears on action, on manual dismiss, or via merge-dedupe (below).
+
+`notifications-slice.ts` gains the typed `nudge?` field on `Toast`; the payload is a plain
+serializable literal (ids + strings), so RTK's `serializableCheck` is satisfied and the slice
+still never imports cast-design (the *component* owns that dependency).
+
+**Merge-dedupe (load-bearing).** The current `pushToast` dedupe branch copies only
+`createdAt`/`kind`/`message` onto an existing same-key toast — it would NOT update `nudge`, so a
+second off-roster batch would silently keep the first batch's stale `characterIds`. The slice
+must therefore **merge** an incoming `nudge` into the existing same-`dedupeKey` toast: union
+`characterIds` and `names` (dedupe by id, preserve order). A burst of off-roster creates then
+yields ONE nudge covering every still-unvoiced character, not a nudge frozen on the first batch.
 
 ### 3.3 `src/components/script-review-diff.tsx` `runProposed` — push the nudge
 
@@ -123,10 +153,14 @@ non-empty `createdCharacters`:
    ```
 
    plus `dedupeKey: \`off-roster-voice-nudge:${startBookId}\`` so a second off-roster batch
-   replaces the prior nudge rather than stacking a duplicate.
+   **merges** into the prior nudge (§3.2 merge-dedupe) rather than stacking or clobbering it.
 
-One nudge covers the whole batch (designs all created ids at once via `scope: 'bases'`), not one
-per character. The copy is count-aware: singular names the character, plural states the count.
+Push the nudge whenever `createdCharacters` is non-empty — **including an aborted (book-switch)
+batch**: those characters are already persisted on disk and genuinely need voices, and the nudge
+carries their own `startBookId`, so a later tap targets the right book regardless of where the
+operator navigated. One nudge covers the whole batch (designs all created ids at once via
+`scope: 'bases'`), not one per character. The copy is count-aware: singular names the character,
+plural states the count.
 
 ## 4. Edge cases & gating
 
@@ -157,11 +191,14 @@ per character. The copy is count-aware: singular names the character, plural sta
 - **Unit — `src/lib/apply-proposed.test.ts`:** `createdCharacters` lists `{id, name}` for every
   minted character; empty when all proposed ops dedupe to existing roster members; carries
   partial entries on an aborted (book-switch) batch.
+- **Unit — `src/store/notifications-slice.test.ts`:** a `nudge`-bearing push merges (unions
+  `characterIds`/`names`, dedupe by id) into an existing same-`dedupeKey` toast rather than
+  overwriting it; a `nudge` toast is exempt from auto-dismiss.
 - **Unit — `src/components/voice-nudge-toast.test.tsx`:** idle → the action button dispatches
-  `designAllRequested` with the right `characterIds`/`modelKey`/`scope` then dismisses;
-  **design-running → button disabled, nudge stays (not dismissed)**; count-aware copy (singular
-  names the character, plural states the count); action-kind toasts are sticky (no 6 s
-  auto-dismiss) while plain toasts still auto-dismiss.
+  `designAllRequested` with the right `characterIds`/`modelKey`/`scope: 'bases'` then dismisses;
+  **design-running (`castDesign.active.state==='running'`) → button disabled, nudge stays (not
+  dismissed)**; count-aware copy (singular names the character, plural states the count);
+  `ToastStack` routes a `nudge` toast to `VoiceNudgeToast` and a plain toast to `ToastItem`.
 - **Unit — `src/components/script-review-diff.test.tsx`:** a Qwen-effective project pushes the
   nudge with the correct payload; a preset-engine project pushes nothing; a batch that only
   reattributes-to-existing pushes nothing.
