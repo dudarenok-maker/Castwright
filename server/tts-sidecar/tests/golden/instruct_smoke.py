@@ -105,11 +105,20 @@ SYNTH_TEXT = (
 )
 LANGUAGE = "English"
 
+# Production instruct phrases (mirror the server's emotionToInstruct,
+# server/src/tts/emotion-instruct.ts) so this golden reflects what generation
+# actually sends on the live-instruct path.
 INSTRUCTS: dict[str, str | None] = {
     "neutral": None,
-    "angry": "Delivered angrily, with raised intensity and edge.",
-    "whisper": "Delivered in a soft, hushed whisper.",
+    "whisper": "in a soft, breathy whisper",
+    "angry": "in an angry, raised voice",
+    "excited": "with bright, energetic excitement",
+    "sad": "in a subdued, downcast tone",
 }
+
+# Per-emotion output gain on the live-instruct path (mirrors main.py
+# _LIVE_INSTRUCT_GAIN -- the loudness lever: whisper quiet, angry loud).
+_LIVE_INSTRUCT_GAIN: dict[str, float] = {"whisper": 0.35, "angry": 1.7, "sad": 0.6, "excited": 1.15}
 
 # ---------------------------------------------------------------------------
 # Inline cosine distance helper (no scipy / sklearn needed).
@@ -228,23 +237,39 @@ def run_smoke() -> None:
     for emotion, instruct_text in INSTRUCTS.items():
         print(f"[instruct_smoke] Synthesising emotion={emotion!r} ...", flush=True)
 
-        # Build instruct_ids when an emotion instruction is provided.
-        if instruct_text is not None:
-            instruct_ids_arg = [
-                model._tokenize_texts([model._build_instruct_text(instruct_text)])[0]
-            ]
+        # PRODUCTION PATH: raw m.generate (the _icl_instruct_synth bypass) at the
+        # production instruct temperatures, then the per-emotion output gain.
+        # Mirrors QwenEngine._icl_instruct_synth + _LIVE_INSTRUCT_GAIN in main.py
+        # (the old generate_voice_clone-at-default-temp path under-applied emotion).
+        m = model.model
+        items_1_7b = prompt_1_7b if isinstance(prompt_1_7b, list) else [prompt_1_7b]
+        vcp = model._prompt_items_to_voice_clone_prompt(items_1_7b)
+        input_ids = model._tokenize_texts([model._build_assistant_text(SYNTH_TEXT)])
+        ref_ids = [model._tokenize_texts([model._build_ref_text(REF_TEXT)])[0]]
+        instruct_ids = model._tokenize_texts([model._build_instruct_text(instruct_text or "")])
+        gk = model._merge_generate_kwargs()
+        gk["temperature"] = 1.6
+        gk["subtalker_temperature"] = 1.8
+        gk["top_p"] = 0.90
+        with torch.no_grad():
+            codes, _ = m.generate(
+                input_ids=input_ids, ref_ids=ref_ids, instruct_ids=instruct_ids,
+                voice_clone_prompt=vcp, languages=[LANGUAGE],
+                non_streaming_mode=True, **gk,
+            )
+        rcl = vcp.get("ref_code")
+        if rcl and rcl[0] is not None and hasattr(codes[0], "shape"):
+            cfd = [torch.cat([rcl[i].to(c.device), c], dim=0) for i, c in enumerate(codes)]
         else:
-            instruct_ids_arg = [None]
-
-        wavs, sr = model.generate_voice_clone(
-            text=[SYNTH_TEXT],
-            language=[LANGUAGE],
-            voice_clone_prompt=prompt_1_7b,
-            # instruct_ids flows through **kwargs → _merge_generate_kwargs →
-            # model.generate(instruct_ids=...) — the inner generate() accepts it.
-            instruct_ids=instruct_ids_arg,
-        )
-        wav_np = wavs[0]  # float32 numpy
+            cfd = codes
+        wavs, sr = m.speech_tokenizer.decode([{"audio_codes": c} for c in cfd])
+        wav_np = np.asarray(wavs[0], dtype=np.float32)
+        if rcl and rcl[0] is not None and hasattr(cfd[0], "shape"):
+            total = max(int(cfd[0].shape[0]), 1)
+            ref_len = int(rcl[0].shape[0])
+            wav_np = wav_np[int(ref_len / total * wav_np.shape[0]):]
+        # Per-emotion output gain (the loudness lever; mirrors _LIVE_INSTRUCT_GAIN).
+        wav_np = np.clip(wav_np * _LIVE_INSTRUCT_GAIN.get(emotion, 1.0), -1.0, 1.0)
 
         wav_path = out_dir / f"{emotion}.wav"
         sf.write(str(wav_path), wav_np, sr)
