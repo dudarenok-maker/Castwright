@@ -396,3 +396,49 @@ describe('planApply — validate_instruct (fs-58)', () => {
     expect(unappliable.find((u) => u.op.op === 'validate_instruct')).toBeTruthy();
   });
 });
+
+describe('dispatchAcceptedOps — validate_instruct (fs-58)', () => {
+  const live = [{ id: 1, chapterId: 1, text: 'x', characterId: 'mira', instruct: 'old', vocalization: true }];
+
+  it('instruct-only edit dispatches setSentenceInstruct and does NOT bump boundary_move', () => {
+    const dispatched: any[] = []; const bumped: number[] = [];
+    dispatchAcceptedOps(
+      ((a: any) => dispatched.push(a)) as never,
+      [{ id: 1, op: 'validate_instruct', newInstruct: 'new', rationale: 'r' }],
+      live,
+      { onBoundaryMove: (c) => bumped.push(c) },
+    );
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceInstruct'))).toBe(true);
+    expect(bumped).toEqual([]); // engine-aware: instruct-only never time-stales
+  });
+
+  it('vocalization edit dispatches setSentenceText and DOES bump boundary_move', () => {
+    const dispatched: any[] = []; const bumped: number[] = [];
+    dispatchAcceptedOps(
+      ((a: any) => dispatched.push(a)) as never,
+      [{ id: 1, op: 'validate_instruct', newVocalizationText: 'Ah! x', vocalization: false, rationale: 'r' }],
+      live,
+      { onBoundaryMove: (c) => bumped.push(c) },
+    );
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceText'))).toBe(true);
+    expect(bumped).toEqual([1]);
+  });
+
+  // §9 round-2 hole: a "both" row whose vocalization half planApply DROPPED must reach
+  // dispatch as instruct-only → no setSentenceText, no boundary bump (no false-stale on
+  // Kokoro). planApply normalizes the dropped half away, so dispatch sees no newVocalizationText.
+  it('a both-row whose vocalization half was dropped does NOT bump boundary_move', () => {
+    const dispatched: any[] = []; const bumped: number[] = [];
+    // Feed planApply a both-row against a NON-vocalization sentence (vocal half drops),
+    // then dispatch the normalized appliable result — mirrors the modal's real flow.
+    const liveNoVocal = [{ id: 1, chapterId: 1, text: 'x', characterId: 'mira', instruct: 'old' }];
+    const { appliable } = planApply(
+      [{ id: 1, op: 'validate_instruct', newInstruct: 'new', newVocalizationText: 'Ah! x', vocalization: true, rationale: 'r' }] as never,
+      liveNoVocal,
+    );
+    dispatchAcceptedOps(((a: any) => dispatched.push(a)) as never, appliable, liveNoVocal, { onBoundaryMove: (c) => bumped.push(c) });
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceInstruct'))).toBe(true);
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceText'))).toBe(false);
+    expect(bumped).toEqual([]); // instruct-only effect → no false-stale
+  });
+});

@@ -202,6 +202,7 @@ export function dispatchAcceptedOps(
     const target = byId.get(op.op === 'merge' ? (op.mergeIds?.[0] ?? op.id) : op.id);
     if (!target) continue;
     const chapterId = target.chapterId;
+    let changedTextOrStructure = true; // strip_tag/split/extract/merge/fix_emotion all stale on every engine
     switch (op.op) {
       case 'strip_tag':
         dispatch(manuscriptActions.setSentenceText({ chapterId, sentenceId: op.id, text: op.newText ?? target.text }));
@@ -209,6 +210,17 @@ export function dispatchAcceptedOps(
       case 'fix_emotion':
         dispatch(manuscriptActions.setSentenceEmotion({ chapterId, sentenceId: op.id, emotion: op.emotion ?? 'neutral' }));
         break;
+      case 'validate_instruct': {
+        if (op.newInstruct !== undefined)
+          dispatch(manuscriptActions.setSentenceInstruct({ chapterId, sentenceId: op.id, instruct: op.newInstruct }));
+        if (op.newVocalizationText !== undefined)
+          dispatch(manuscriptActions.setSentenceText({ chapterId, sentenceId: op.id, text: op.newVocalizationText, vocalization: op.vocalization }));
+        // Carve-out: bump boundary_move ONLY when the text actually changed (vocalization
+        // half dispatched). An instruct-only edit changes no text and must rely solely on
+        // the precise instructHash path, or it would engine-blind false-stale Kokoro.
+        changedTextOrStructure = op.newVocalizationText !== undefined;
+        break;
+      }
       case 'split': {
         const off = resolveAnchorOffset(target.text, op.anchor ?? '');
         if (off === null) continue;
@@ -226,6 +238,6 @@ export function dispatchAcceptedOps(
         dispatch(manuscriptActions.mergeSentences({ chapterId, sentenceIds: op.mergeIds ?? [] }));
         break;
     }
-    onBoundaryMove(chapterId);
+    if (changedTextOrStructure) onBoundaryMove(chapterId);
   }
 }
