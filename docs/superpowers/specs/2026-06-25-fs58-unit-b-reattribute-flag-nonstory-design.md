@@ -1,6 +1,6 @@
 ---
 title: 'fs-58 — LLM Script Review, Unit B: reattribute + flag_nonstory (+ cast-create)'
-status: draft
+status: active
 date: 2026-06-25
 issue: '#1040'
 related:

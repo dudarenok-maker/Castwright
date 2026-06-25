@@ -144,12 +144,6 @@ blocked companion follow-up.
 - _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
 _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
-#### `fs-58 Unit B` — LLM Script Review: `reattribute` + `flag_nonstory` ([#1040](https://github.com/dudarenok-maker/Castwright/issues/1040))
-
-- _What:_ The two deferred Script Review classes on the Unit A harness — `reattribute` (re-assign a dialogue line to the correct existing cast member) and `flag_nonstory` (flag import residue for synthesis exclusion). Each carries an unmet dependency (cast-create wiring + cross-chapter context for reattribute; a new `excludeFromSynthesis` field + a positive fixture for flag_nonstory), so it's tracked separately from Unit A. Both default OFF.
-- _Benefit (user):_ completes the Script Review error-class set on top of Unit A.
-_Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-23-fs58-llm-script-review-design.md` §13 · [#1040](https://github.com/dudarenok-maker/Castwright/issues/1040).
-
 ### Agents & integrations
 
 #### `fs-44` — MCP agent surface (agents drive Castwright end-to-end) ([#721](https://github.com/dudarenok-maker/Castwright/issues/721))
