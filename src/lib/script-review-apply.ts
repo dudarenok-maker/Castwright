@@ -92,6 +92,7 @@ export function resolveAnchorOffset(text: string, anchor: string): number | null
 export function planApply(
   ops: ReviewOp[],
   live: Array<{ id: number; chapterId: number; text: string; characterId: string }>,
+  roster: Set<string> = new Set(),
 ): { appliable: ReviewOp[]; unappliable: Array<{ op: ReviewOp; reason: string }> } {
   const byId = new Map(live.map((s) => [s.id, s]));
   const appliable: ReviewOp[] = [];
@@ -127,6 +128,9 @@ export function planApply(
     if (consumed.has(op.id)) { unappliable.push({ op, reason: 'id consumed by a structural op' }); continue; }
     if (!byId.has(op.id)) { unappliable.push({ op, reason: 'target id missing' }); continue; }
     if (op.op === 'fix_emotion' && !REVIEW_EMOTIONS.includes(op.emotion as never)) { unappliable.push({ op, reason: 'invalid emotion value' }); continue; }
+    if (op.op === 'reattribute' && op.characterId != null && !roster.has(op.characterId)) {
+      unappliable.push({ op, reason: 'reattribute characterId not in roster' }); continue;
+    }
     appliable.push(op);
   }
   return { appliable, unappliable };
@@ -137,6 +141,7 @@ export function dispatchAcceptedOps(
   accepted: ReviewOp[],
   live: Array<{ id: number; chapterId: number; text: string; characterId: string }>,
   { onBoundaryMove }: { onBoundaryMove: (chapterId: number) => void },
+  _roster: Set<string> = new Set(),
 ): void {
   const byId = new Map(live.map((s) => [s.id, s]));
   for (const op of accepted) {
@@ -165,6 +170,16 @@ export function dispatchAcceptedOps(
       }
       case 'merge':
         dispatch(manuscriptActions.mergeSentences({ chapterId, sentenceIds: op.mergeIds ?? [] }));
+        break;
+      case 'reattribute':
+        // On-roster only here — proposed/off-roster ops are handled by the
+        // async create→reassign path (apply-proposed.ts) BEFORE this runs.
+        if (op.characterId) {
+          dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId: op.id, characterId: op.characterId }));
+        }
+        break;
+      case 'flag_nonstory':
+        dispatch(manuscriptActions.setSentenceExcluded({ chapterId, sentenceId: op.id, excluded: true }));
         break;
     }
     onBoundaryMove(chapterId);

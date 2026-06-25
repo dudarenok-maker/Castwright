@@ -7,7 +7,7 @@ import {
   rpdWarningFor,
   type ReviewOp,
 } from './script-review-apply';
-import { manuscriptSlice } from '../store/manuscript-slice';
+import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { start } from '../store/manuscript-slice.test-helpers';
 
 describe('resolveAnchorOffset', () => {
@@ -279,6 +279,40 @@ describe('dispatchAcceptedOps', () => {
     // onBoundaryMove fired once
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(3);
+  });
+});
+
+describe('reattribute (fs-58 Unit B)', () => {
+  const live = [{ id: 5, chapterId: 1, text: 'Hello, said Ferra.', characterId: 'narrator' }];
+
+  it('on-roster reattribute is appliable when characterId is in roster', () => {
+    const ops = [{ id: 5, op: 'reattribute', anchor: 'said Ferra', characterId: 'ferra', rationale: 'r' }] as any;
+    const { appliable } = planApply(ops, live, new Set(['narrator', 'ferra']));
+    expect(appliable).toHaveLength(1);
+  });
+  it('rejects a reattribute whose characterId is NOT in roster', () => {
+    const ops = [{ id: 5, op: 'reattribute', anchor: 'said Ferra', characterId: 'ghost', rationale: 'r' }] as any;
+    const { appliable, unappliable } = planApply(ops, live, new Set(['narrator']));
+    expect(appliable).toHaveLength(0);
+    expect(unappliable[0].reason).toMatch(/roster/i);
+  });
+  it('dispatchAcceptedOps fires setSentenceCharacter for on-roster reattribute', () => {
+    const calls: any[] = [];
+    dispatchAcceptedOps((a) => { calls.push(a); return a; }, [{ id: 5, op: 'reattribute', anchor: 'x', characterId: 'ferra', rationale: 'r' }] as any, live, { onBoundaryMove: () => {} }, new Set(['ferra']));
+    expect(calls).toContainEqual(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 5, characterId: 'ferra' }));
+  });
+  it('flag_nonstory dispatches setSentenceExcluded(true)', () => {
+    const calls: any[] = [];
+    dispatchAcceptedOps((a) => { calls.push(a); return a; }, [{ id: 5, op: 'flag_nonstory', anchor: 'x', rationale: 'r' }] as any, live, { onBoundaryMove: () => {} }, new Set());
+    expect(calls).toContainEqual(manuscriptActions.setSentenceExcluded({ chapterId: 1, sentenceId: 5, excluded: true }));
+  });
+  it('a proposed (off-roster) reattribute is appliable but NOT dispatched here', () => {
+    const calls: any[] = [];
+    const ops = [{ id: 5, op: 'reattribute', anchor: 'x', proposed: { name: 'Ferra' }, rationale: 'r' }] as any;
+    const { appliable } = planApply(ops, live, new Set());
+    expect(appliable).toHaveLength(1);
+    dispatchAcceptedOps((a) => { calls.push(a); return a; }, appliable, live, { onBoundaryMove: () => {} }, new Set());
+    expect(calls.find((c) => c.type?.includes('setSentenceCharacter'))).toBeUndefined();
   });
 });
 

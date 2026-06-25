@@ -701,7 +701,7 @@ export function ManuscriptView({
       /* planApply filters from allOps whose entries are ReviewOpWithChapter —
          the chapterId is preserved on each returned object at runtime, so
          casting back to the wider type is safe here. */
-      const { appliable, unappliable } = planApply(allOps, live) as {
+      const { appliable, unappliable } = planApply(allOps, live, new Set(characters.map((c) => c.id))) as {
         appliable: ReviewOpWithChapter[];
         unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
       };
