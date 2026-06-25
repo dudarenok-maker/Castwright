@@ -11,15 +11,17 @@
  * Unit B (reattribute + flag_nonstory):
  *  1. Same setup as Unit A.
  *  2. Opt-in to the reattribute + flag_nonstory class-toggles (default OFF).
- *  3. Apply (3 ops selected) → confirm-reattribute dialog for "Ferra".
+ *  3. Apply (4 ops selected) → confirm-reattribute dialog for "Ferra".
  *  4. Submit create-character — off-roster create→reassign runs.
  *  5. Assert: "p. 42" sentence is struck in manuscript, "Ferra" in cast,
  *     chapter 3 stale in Generate view.
  *
- * Mock contract: `mockReviewScript` emits three ops, all in chapterId:3:
- *   strip_tag   id:1  (default ON)
- *   reattribute id:3  proposed «Ferra» (default OFF — off-roster, higher risk)
- *   flag_nonstory id:15 (default OFF — higher risk)
+ * Mock contract: `mockReviewScript` emits five ops across two chapters:
+ *   ch3 strip_tag      id:1   (default ON)
+ *   ch1 strip_tag      id:1   (default ON)
+ *   ch1 validate_instruct id:1 (quarantined at seed — no existing instruct; not counted)
+ *   ch3 reattribute    id:3   proposed «Ferra» (default OFF — off-roster, higher risk)
+ *   ch3 flag_nonstory  id:15  (default OFF — higher risk)
  * `initialSentences` seeds all targets in chapterId:3. */
 
 import { test, expect } from '@playwright/test';
@@ -94,13 +96,14 @@ test.describe('fs-58 — script-review per-chapter accept flow', () => {
     /* The mock op is strip_tag: the class heading "Strip tag" should be visible. */
     await expect(page.getByText(/Strip tag/i)).toBeVisible();
 
-    /* The "Apply N selected" button — 1 op selected by default. The mock also
-       emits a validate_instruct REPAIR op (id:1), but this spec never seeds an
-       instruct on sentence id:1, so the apply guard drops that repair as a no-op,
-       leaving only the strip_tag op appliable. */
+    /* The "Apply N selected" button — 2 ops selected by default (strip_tag on
+       ch3:id1 + strip_tag on ch1:id1). The mock also emits a validate_instruct
+       REPAIR op on ch1:id1, but planApply quarantines it at seed time because
+       sentence id:1 has no existing instruct (repair needs an existing, different
+       instruct to be appliable). The reattribute + flag_nonstory ops default OFF. */
     const applyBtn = page.getByTestId('apply-button');
     await expect(applyBtn).toBeVisible();
-    await expect(applyBtn).toContainText(/Apply 1 selected/i);
+    await expect(applyBtn).toContainText(/Apply 2 selected/i);
 
     /* Accept: click Apply → dispatchAcceptedOps fires setSentenceText on
        sentence id:1 (chapterId:3) with newText:"x" and bumpBoundaryMove for
@@ -182,9 +185,11 @@ test.describe('fs-58 Unit B — reattribute + flag_nonstory accept flow', () => 
     await reattributeToggle.check();
     await flagNonstoryToggle.check();
 
-    /* Now 3 ops are selected (strip_tag + reattribute + flag_nonstory). */
+    /* Now 4 ops are selected (strip_tag ch3 + strip_tag ch1 + reattribute + flag_nonstory).
+       The mock's validate_instruct on ch1:id1 is quarantined at seed time (no existing
+       instruct on that sentence), so it does not count. */
     const applyBtn = page.getByTestId('apply-button');
-    await expect(applyBtn).toContainText(/Apply 3 selected/i);
+    await expect(applyBtn).toContainText(/Apply 4 selected/i);
     await applyBtn.click();
 
     /* The off-roster reattribute triggers the confirm-reattribute dialog.
