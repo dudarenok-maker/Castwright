@@ -69,6 +69,48 @@ export function isChapterReassignedSinceRender(
   return false;
 }
 
+/* #1105 — PRECISE text staleness, the text sibling of isChapterReassignedSinceRender.
+   A rendered chapter whose sentence TEXT was edited after it rendered is stale on
+   EVERY engine (synth is keyed on sentence text), yet the speaker-diff above can't
+   see it (it compares characterId only). Derived from persisted JSON — the live
+   manuscript text vs the render-time text hash stamped into segments.json — so it's
+   precise (edit-then-revert reads not-stale), immediate (no refetch), survives a
+   reload, AND catches EVERY edit path (Script Review strip_tag, a future manual
+   editor, a direct manuscript-edits.json/MCP edit), not just the ones that remember
+   to log a boundary_move.
+
+   djb2 base-36, byte-identical to server/src/audio/segments-io.ts textHashForStale
+   (the cross-package contract is pinned by a shared vector in both test files).
+   Hash the RAW sentence text — the server stamps the raw group text, and this side
+   hashes the live raw `sent.text`, so a normalisation mismatch can't desync them. */
+export function textHashForStale(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+
+/** True when any sentence the chapter RENDERED now has different text (edited) or is
+    gone. Asymmetric on purpose — iterate the RENDERED ids only, mirroring
+    isChapterReassignedSinceRender: a current sentence that was never rendered (a
+    structural/empty line, or one added after render) isn't a key, so it can't trip a
+    false positive. Returns false when no render text map exists (pre-#1105 render),
+    letting the caller fall back to the time-based heuristic. */
+export function isChapterTextEditedSinceRender(
+  renderedTextHashes: Record<number, string> | undefined,
+  currentSentences: Array<{ id: number; text: string }>,
+): boolean {
+  if (!renderedTextHashes || Object.keys(renderedTextHashes).length === 0) return false;
+  const current = new Map<number, string>();
+  for (const s of currentSentences) current.set(s.id, s.text);
+  for (const sidStr of Object.keys(renderedTextHashes)) {
+    const sid = Number(sidStr);
+    const liveText = current.get(sid);
+    if (liveText === undefined) return true; // rendered sentence now gone
+    if (textHashForStale(liveText) !== renderedTextHashes[sid]) return true;
+  }
+  return false;
+}
+
 /** Returns a callback that marks a character's rendered audio stale (no-op when
     the character speaks in no `done` chapter). Reads chapters from the store. */
 export function useMarkCharacterStaleIfRendered(): (character: {

@@ -58,6 +58,7 @@ function renderModal(
         currentBookId: null,
         activeStreams: {},
         renderedSpeakersByChapter: {},
+        renderedTextByChapter: {},
       },
     },
   });

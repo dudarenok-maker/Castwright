@@ -15,6 +15,7 @@ import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { GenerationView, ChapterSegmentStrip } from './generation';
+import { textHashForStale } from '../lib/stale-chapters';
 import { api } from '../lib/api';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import type { LayoutContext } from '../components/layout';
@@ -1438,6 +1439,94 @@ describe('GenerationView — precise reassignment staleness via render map (#650
       </Provider>,
     );
     expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
+});
+
+describe('GenerationView — precise text-edit staleness via render text map (#1105)', () => {
+  /* When the server ships a per-chapter render-time sentence→textHash map, the
+     Generate view flags a done chapter whose live sentence TEXT differs from what
+     was rendered — even when the speaker assignments are unchanged (the case a
+     strip_tag / manual / direct-JSON text edit produces). Chapter 1's fixture
+     sentences are id1 'A long room.', id2 'Hello there friend!',
+     id3 'How are you today on this fine evening?'. */
+  function renderWithTextMap(renderedTextByChapter: Record<number, Record<number, string>>): void {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+    });
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a' },
+          { id: 2, title: 'Chapter 2', slug: '02-b' },
+        ],
+        completedSlugs: ['01-a'],
+        characters,
+        /* Speaker map matches the fixture → the #650 diff returns false, isolating
+           the #1105 text diff as the only thing that can flag staleness here. */
+        renderedSpeakersByChapter: { 1: { 1: 'narrator', 2: 'marlow', 3: 'marlow' } },
+        renderedTextByChapter,
+      } as any),
+    );
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [chapter1, chapter2],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="Text Map Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('shows the caption when a rendered sentence text was edited (speakers unchanged)', () => {
+    /* Render-time text for id2 was the OLD wording; the live fixture now has
+       'Hello there friend!'. Hash differs → stale, even though the speaker map
+       matches and no boundary_move was logged. */
+    renderWithTextMap({
+      1: {
+        1: textHashForStale('A long room.'),
+        2: textHashForStale('Hello there, old friend.'), // edited since render
+        3: textHashForStale('How are you today on this fine evening?'),
+      },
+    });
+    expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the caption when the live text matches the render text map (no false positive)', () => {
+    renderWithTextMap({
+      1: {
+        1: textHashForStale('A long room.'),
+        2: textHashForStale('Hello there friend!'),
+        3: textHashForStale('How are you today on this fine evening?'),
+      },
+    });
+    expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
   });
 });
 

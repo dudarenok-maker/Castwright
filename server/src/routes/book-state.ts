@@ -60,6 +60,7 @@ import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-vo
 import {
   collectRenderedFallbackEngines,
   collectRenderedSpeakerMaps,
+  collectRenderedTextHashesByChapter,
 } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
@@ -442,6 +443,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
+    /* #1105 — render-time sentence→textHash map per rendered chapter. The frontend
+       diffs it against the live manuscript text to flag a `done` chapter whose text
+       was edited after it rendered (the text sibling of renderedSpeakersByChapter;
+       synth is keyed on text, so an edited line is stale on every engine). Tolerant
+       of a missing audio dir; empty on books rendered before #1105. */
+    const renderedTextByChapter = await collectRenderedTextHashesByChapter(
+      bookDir,
+      state.chapters,
+    ).catch(() => ({}));
+
     /* Apply the brand default for narratorCredit in the GET response so the
        frontend always sees 'Castwright' when no explicit credit has been set.
        The on-disk value is left untouched — the PATCH/write path persists the
@@ -465,6 +476,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       chapterLufs,
       renderedFallbackByCharacter,
       renderedSpeakersByChapter,
+      renderedTextByChapter,
       changeLog: changeLog?.events ?? null,
       analysis: { failedChapterIds, failedChapterErrors },
     });

@@ -4,6 +4,8 @@ import {
   latestReassignAt,
   isChapterStaleFromReassign,
   isChapterReassignedSinceRender,
+  textHashForStale,
+  isChapterTextEditedSinceRender,
 } from './stale-chapters';
 import type { Chapter, ChangeLogEvent } from './types';
 
@@ -141,5 +143,75 @@ describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
   it('returns false when there is no render map for the chapter (fall back to heuristic)', () => {
     expect(isChapterReassignedSinceRender(undefined, [{ id: 1, characterId: 'x' }])).toBe(false);
     expect(isChapterReassignedSinceRender({}, [{ id: 1, characterId: 'x' }])).toBe(false);
+  });
+});
+
+describe('textHashForStale (#1105)', () => {
+  it('is deterministic and differs on a text change', () => {
+    expect(textHashForStale('Hello there.')).toBe(textHashForStale('Hello there.'));
+    expect(textHashForStale('Hello there.')).not.toBe(textHashForStale('Hello there!'));
+  });
+
+  it('matches the server djb2-base36 vector (cross-package contract)', () => {
+    /* MUST equal server/src/audio/segments-io.ts textHashForStale for the same
+       input — the staleness diff compares a server-stamped hash against this
+       client-computed one. Pin a known vector so a drift on either side fails
+       loudly here and in the server test. */
+    expect(textHashForStale('"Stop," she said.')).toBe('2rq6ja');
+  });
+});
+
+describe('isChapterTextEditedSinceRender (#1105 precise text diff)', () => {
+  const h = textHashForStale;
+  const rendered = { 1: h('The fire caught.'), 2: h('"Run," she said.'), 3: h('No one moved.') };
+
+  it('not stale when every rendered sentence still has byte-identical text', () => {
+    const current = [
+      { id: 1, text: 'The fire caught.' },
+      { id: 2, text: '"Run," she said.' },
+      { id: 3, text: 'No one moved.' },
+    ];
+    expect(isChapterTextEditedSinceRender(rendered, current)).toBe(false);
+  });
+
+  it('stale when a rendered sentence text was edited', () => {
+    const current = [
+      { id: 1, text: 'The fire caught.' },
+      { id: 2, text: '"Run!" she screamed.' }, // edited
+      { id: 3, text: 'No one moved.' },
+    ];
+    expect(isChapterTextEditedSinceRender(rendered, current)).toBe(true);
+  });
+
+  it('stale when a rendered sentence is gone (split/merge/delete)', () => {
+    const current = [
+      { id: 1, text: 'The fire caught.' },
+      { id: 3, text: 'No one moved.' }, // id 2 removed
+    ];
+    expect(isChapterTextEditedSinceRender(rendered, current)).toBe(true);
+  });
+
+  it('NO false positive on edit-then-revert (the derived-from-JSON win)', () => {
+    const current = [
+      { id: 1, text: 'The fire caught.' },
+      { id: 2, text: '"Run," she said.' },
+      { id: 3, text: 'No one moved.' },
+    ];
+    expect(isChapterTextEditedSinceRender(rendered, current)).toBe(false);
+  });
+
+  it('does not false-positive on a current sentence never in the render map', () => {
+    const current = [
+      { id: 1, text: 'The fire caught.' },
+      { id: 2, text: '"Run," she said.' },
+      { id: 3, text: 'No one moved.' },
+      { id: 99, text: 'A new line.' },
+    ];
+    expect(isChapterTextEditedSinceRender(rendered, current)).toBe(false);
+  });
+
+  it('returns false when there is no render text map (pre-1105 render → fall back)', () => {
+    expect(isChapterTextEditedSinceRender(undefined, [{ id: 1, text: 'x' }])).toBe(false);
+    expect(isChapterTextEditedSinceRender({}, [{ id: 1, text: 'x' }])).toBe(false);
   });
 });

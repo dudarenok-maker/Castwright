@@ -96,6 +96,12 @@ export interface ChaptersState {
       Empty for older servers / before the first hydrate; the view then falls
       back to the time-based change-log heuristic. */
   renderedSpeakersByChapter: Record<number, Record<number, string>>;
+  /** #1105 — render-time sentence→textHash map per rendered chapter, hydrated from
+      the book-state GET. The Generate view diffs it against the live manuscript text
+      to flag a `done` chapter whose text was edited after it rendered. Empty for
+      older servers / before the first hydrate; the view then falls back to the
+      time-based change-log heuristic. */
+  renderedTextByChapter: Record<number, Record<number, string>>;
 }
 
 const initialState: ChaptersState = {
@@ -106,6 +112,7 @@ const initialState: ChaptersState = {
   currentBookId: null,
   activeStreams: {},
   renderedSpeakersByChapter: {},
+  renderedTextByChapter: {},
 };
 
 export const chaptersSlice = createSlice({
@@ -249,6 +256,10 @@ export const chaptersSlice = createSlice({
         /** #650 — render-time sentence→speaker map per chapter. Absent on older
           servers → left empty, view falls back to the change-log heuristic. */
         renderedSpeakersByChapter?: Record<number, Record<number, string>>;
+        /** #1105 — render-time sentence→textHash map per chapter. Absent on
+          pre-#1105 servers/renders → left empty, view falls back to the
+          change-log heuristic for text edits. */
+        renderedTextByChapter?: Record<number, Record<number, string>>;
       }>,
     ) => {
       const {
@@ -259,9 +270,11 @@ export const chaptersSlice = createSlice({
         chapterCharacters,
         chapterLufs,
         renderedSpeakersByChapter,
+        renderedTextByChapter,
       } = a.payload;
       if (bookId) s.currentBookId = bookId;
       s.renderedSpeakersByChapter = renderedSpeakersByChapter ?? {};
+      s.renderedTextByChapter = renderedTextByChapter ?? {};
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
       for (const c of characters) allCastQueued[c.id] = 'queued';

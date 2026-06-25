@@ -103,9 +103,48 @@ immediacy:
   the chapter, else the time-based heuristic — so older servers / mocks still flag
   staleness with no regression.
 
+## Precise per-sentence TEXT diff (#1105 — the text sibling of #650)
+
+The #650 diff compares `characterId` only, so it misses a **text edit** of an
+already-rendered sentence (Script Review `strip_tag`, a future manual editor, or a
+direct `manuscript-edits.json` / MCP edit). Synth is keyed on sentence text, so an
+edited line's audio is stale on **every** engine — yet, before #1105, the only
+text-staleness signal was the transient `boundary_move` the strip_tag UI happened to
+log, invisible to any edit path that touches the JSON directly. #1105 makes text
+staleness **derivable from the persisted JSON**, mirroring #650:
+
+- **Server (render time)** (`synthesise-chapter.ts`): each segment is stamped with a
+  `textHash` — `textHashForStale(group.text)`, a djb2-base36 hash of the RAW sentence
+  text — into `segments.json`. New renders only; pre-#1105 renders carry no hash.
+- **Server (book-state GET)** (`segments-io.ts` `collectRenderedTextHashesByChapter`
+  → `renderedTextByChapter`): inverts each chapter's segments into a
+  `sentenceId → textHash` map. A chapter with no stamped hashes (pre-#1105 render) is
+  omitted, so the client reads it as "can't tell" rather than "all edited".
+- **Frontend** (`isChapterTextEditedSinceRender`): the Generate view hashes the live
+  raw `sent.text` and diffs it against the render-time hash — same asymmetric,
+  reload-surviving, false-positive-free shape as #650 (edit-then-revert ⇒ hashes
+  match ⇒ not stale). Added as a third clause to the Generate-row OR-gate.
+- **Cross-package hash contract:** `textHashForStale` is defined byte-identically in
+  `src/lib/stale-chapters.ts` and `server/src/audio/segments-io.ts`; a shared vector
+  (`'"Stop," she said.'` → `2rq6ja`) is pinned in BOTH test files so a drift on either
+  side fails loudly. Hash the RAW text on both sides (the server stamps `group.text`
+  pre-normalisation; the client hashes live `sent.text`) so normalisation can't desync.
+- **Why not the stale-audio banner:** the `setStaleAudio` banner (emotion/instruct
+  edits) is session-only, character-keyed (wrong semantics for a text change), and
+  invisible to a direct-JSON edit — so it can't be the source of truth for text
+  staleness. The derived diff is.
+
+Coverage: `isChapterTextEditedSinceRender` + `textHashForStale` units
+(`stale-chapters.test.ts`); `collectRenderedTextHashesByChapter` + the hash vector
+(`segments-io.test.ts`); the GET field (`book-state.test.ts`); the Generate-row badge
+on a text edit with speakers unchanged (`generation.test.tsx`).
+
 ## Out of scope
 
-- n/a — the precise diff (#650) closed the only remaining gap.
+- The `setStaleAudio` banner is intentionally NOT fired on text edits (see above).
+- Backfilling text hashes onto books rendered before #1105 — they fall back to the
+  time-based `boundary_move` heuristic until their next render (decision: new renders
+  only, no migration).
 
 ## Ship notes
 

@@ -417,6 +417,14 @@ export interface BookStateResponse {
       immediate. Absent for legacy/unrendered chapters; the view falls back to
       the time-based change-log heuristic when a chapter has no entry. */
   renderedSpeakersByChapter?: Record<number, Record<number, string>>;
+  /** #1105 — render-time sentence→textHash map per rendered chapter
+      (`{ [chapterId]: { [sentenceId]: djb2-base36 } }`), recovered from each
+      chapter's `<slug>.segments.json`. The Generate view diffs it against the live
+      manuscript text to flag a `done` chapter whose text was edited after it
+      rendered (the text sibling of renderedSpeakersByChapter). Absent for
+      pre-#1105/unrendered chapters; the view falls back to the time-based heuristic
+      when a chapter has no entry. */
+  renderedTextByChapter?: Record<number, Record<number, string>>;
   /** Editorial activity trail (regenerate confirms, etc.). Null when no
       change-log.json has been written yet — the layout falls back to an
       empty list so the Activity view doesn't replay a stale demo seed for
