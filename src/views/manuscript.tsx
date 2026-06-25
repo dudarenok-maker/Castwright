@@ -688,6 +688,7 @@ export function ManuscriptView({
     if (!bookId || reviewLoading) return;
     if (!wholeBook && currentChapterId == null) return;
     const allOps: ReviewOpWithChapter[] = [];
+    const failed: Array<{ chapterId: number; message: string }> = [];
     setReviewLoading(true);
     setReviewMenuOpen(false);
     try {
@@ -698,6 +699,7 @@ export function ManuscriptView({
         onOps: ({ chapterId: chId, ops }) => {
           for (const op of ops) allOps.push({ ...op, chapterId: chId });
         },
+        onChapterFailed: (e) => failed.push(e),
       });
       /* fs-58 Task 11 — run planApply at seed time so ops that can't be
          resolved against the LIVE sentences (stale ids, missing anchors,
@@ -722,7 +724,17 @@ export function ManuscriptView({
         appliable: ReviewOpWithChapter[];
         unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
       };
-      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
+      if (appliable.length === 0 && unappliable.length === 0 && failed.length > 0) {
+        dispatch(notificationsActions.pushToast({
+          kind: 'warn',
+          message: failed.length === 1 ? failed[0].message : `${failed.length} chapters couldn't be reviewed (too large or failed).`,
+        }));
+      } else {
+        if (failed.length > 0) {
+          dispatch(notificationsActions.pushToast({ kind: 'warn', message: `${failed.length} chapter(s) skipped; showing the rest.` }));
+        }
+        dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
+      }
     } catch (err) {
       dispatch(
         notificationsActions.pushToast({
