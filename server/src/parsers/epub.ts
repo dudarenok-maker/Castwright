@@ -18,7 +18,7 @@ import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
-import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
+import { stripHtml, extractFirstHeading, stripTitleHeading, GENERIC_NCX_RE } from './html-utils.js';
 import { UnusableMediaError } from './errors.js';
 
 type EpubOpts = { fileName?: string; sourcePath?: string };
@@ -137,9 +137,6 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
           err ? reject(err) : resolve(text ?? ''),
         );
       });
-      const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(html))));
-      if (!body) continue;
-
       // Title from the epub2-supplied NCX/spine label, merged with the body
       // heading via the shared resolver (see {@link mergeChapterTitle}).
       const chTitle = mergeChapterTitle(
@@ -147,6 +144,12 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
         extractFirstHeading(html),
         chapters.length + 1,
       );
+      // Drop the leading title heading from the body so it isn't spoken twice
+      // (title beat + body opening line) — see {@link stripTitleHeading}.
+      const body = tagHesitantDialog(
+        tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(html, chTitle)))),
+      );
+      if (!body) continue;
       chapters.push({ id: chapters.length + 1, title: chTitle, body });
     }
 
@@ -231,8 +234,6 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
        document, so <head>/<title>/<style> text would otherwise leak into the
        prose. */
     const bodyHtml = htmlBodyOnly(buf.toString('utf8'));
-    const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(bodyHtml))));
-    if (!body) continue;
     /* Title from the NCX navLabel (parity with the epub2 path), merged with
        the body heading. Try the raw and URL-decoded chapter paths — mirrors
        resolveEntry, since the NCX src and the manifest href may differ in
@@ -249,6 +250,12 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
       }
     }
     const chTitle = mergeChapterTitle(ncxTitle, extractFirstHeading(bodyHtml), chapters.length + 1);
+    // Drop the leading title heading so it isn't spoken twice — see
+    // {@link stripTitleHeading}.
+    const body = tagHesitantDialog(
+      tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(bodyHtml, chTitle)))),
+    );
+    if (!body) continue;
     chapters.push({ id: chapters.length + 1, title: chTitle, body });
   }
 

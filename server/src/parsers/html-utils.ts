@@ -79,6 +79,38 @@ export function extractFirstHeading(html: string): string | null {
   return raw;
 }
 
+/* Remove the chapter's leading title heading from its HTML body when that
+   heading's text is already represented in the resolved chapter title.
+
+   Why: `extractFirstHeading` promotes the first <h1-3> to the chapter title,
+   which synthesise-chapter speaks as a "title beat" before the body. But
+   `stripHtml` flattens the WHOLE document — including that heading — so the
+   same words also lead the body and get spoken a second time (the EPUB/MOBI
+   duplicate-chapter-name bug). Stripping that one element before stripHtml
+   leaves the title spoken exactly once.
+
+   Conservative by design: it strips ONLY when the resolved title contains the
+   heading text (whole-word, case/punctuation-insensitive). A heading carrying
+   content the title doesn't cover — e.g. NCX title "The Arrival" beside a body
+   <h1>"Part One: Beginnings"> — is left in the body so no prose is lost. */
+function normaliseForTitleMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+export function stripTitleHeading(html: string, resolvedTitle: string): string {
+  const heading = extractFirstHeading(html);
+  if (!heading) return html;
+  const t = ` ${normaliseForTitleMatch(resolvedTitle)} `;
+  const h = ` ${normaliseForTitleMatch(heading)} `;
+  if (h.trim().length === 0 || !t.includes(h)) return html;
+  // FIRST_HEADING_RE is non-global, so this removes only the first heading —
+  // the same element extractFirstHeading just matched.
+  return html.replace(FIRST_HEADING_RE, '');
+}
+
 /* "Chapter 1" / "Chapter IV" / "Chapter Twelve" / "Capítulo 3" / "Глава 2" etc.
    with nothing else. Used to detect generic NCX titles that should be augmented
    with the body's <h1>. Mirrors the bare-numbered-heading test in text.ts but

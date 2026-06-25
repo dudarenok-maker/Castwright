@@ -22,7 +22,7 @@ import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
-import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
+import { stripHtml, extractFirstHeading, stripTitleHeading, GENERIC_NCX_RE } from './html-utils.js';
 import { UnusableMediaError } from './errors.js';
 
 /* Thrown when the MOBI / AZW3 file is DRM-protected. Both upload routes map
@@ -138,8 +138,6 @@ export async function parseMobi(
       const chapter = parser.loadChapter(entry.id);
       const html = chapter?.html ?? '';
       if (!html.trim()) continue;
-      const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(html))));
-      if (!body) continue;
 
       /* Title resolution mirrors the EPUB parser:
          - TOC label is the primary source.
@@ -162,6 +160,12 @@ export async function parseMobi(
       } else {
         chTitle = tocTitle;
       }
+      // Drop the leading title heading so it isn't spoken twice (title beat +
+      // body opening line) — see {@link stripTitleHeading}.
+      const body = tagHesitantDialog(
+        tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(html, chTitle)))),
+      );
+      if (!body) continue;
       chapters.push({ id: chapters.length + 1, title: chTitle, body });
     }
 

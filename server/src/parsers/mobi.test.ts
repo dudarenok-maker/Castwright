@@ -234,6 +234,19 @@ describe('parseMobi — chapters', () => {
     expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
   });
 
+  it('drops the body <h1> once it is promoted to the title (no duplicate-title audio)', async () => {
+    /* The <h1> is spoken by synthesise-chapter's title beat; without this guard
+       it ALSO leads the body, so the listener hears the chapter name twice. */
+    const buf = mobiBufferWithEncryption(0);
+    tocMock = [{ label: 'Chapter 1', href: 'c1' }];
+    chaptersMock = [
+      { id: 'c1', html: '<h1>The Berth at Liverpool</h1><p>It was a cold morning.</p>' },
+    ];
+    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
+    expect(out.chapters[0].body).toBe('It was a cold morning.');
+  });
+
   it('falls back to "Chapter N" when neither TOC nor body heading is present', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>bare body</p>' }];
