@@ -115,7 +115,10 @@ describe('POST /api/books/:bookId/cast/tier', () => {
       .post(`/api/books/${bookAId}/cast/tier`)
       .send({ voiceId: 'v_wren', ttsModelKey: 'qwen3-tts-1.7b' });
     expect(res.status).toBe(200);
-    expect(res.body.updated).toBeGreaterThan(0);
+    /* Both sibling books in the series carry the v_wren character, so the pin
+       must propagate to exactly 2 — a `> 0` assertion would pass even if only
+       the anchor book were written (a silent propagation regression). */
+    expect(res.body.updated).toBe(2);
     const castB = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_B);
     expect(castB.characters[0].ttsModelKey).toBe('qwen3-tts-1.7b');
 
