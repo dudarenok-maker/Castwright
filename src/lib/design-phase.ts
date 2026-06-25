@@ -1,7 +1,9 @@
-/* Shared vocabulary for the honest single-design progress bar. Budgets are
-   placeholder estimates until the on-box `qwen voice design:` numbers seed them
-   (spec Open items); the bar self-corrects when the next real phase event
-   arrives early (AR8). */
+/* Shared vocabulary for the honest single-design progress bar. The design-path
+   budgets (loading-model / designing / distilling / rendering) are seeded from
+   an on-box COLD `qwen voice design:` run (#1092 — the first design, where the
+   ETA matters most). freeing-vram (not emitted when there's nothing to evict)
+   and the mint-only anchoring / performing phases stay estimates. The bar
+   self-corrects when the next real phase event arrives early (AR8). */
 export type DesignPhase =
   | 'freeing-vram'
   | 'loading-model'
@@ -40,11 +42,11 @@ export const DESIGN_PHASE_LABELS: Record<DesignPhase, string> = {
 };
 
 export const DESIGN_PHASE_BUDGETS_MS: Record<DesignPhase, number> = {
-  'freeing-vram': 1_500,
-  'loading-model': 12_000,
-  designing: 55_000,
-  anchoring: 6_000,
-  performing: 60_000,
-  distilling: 6_000,
-  rendering: 12_000,
+  'freeing-vram': 1_500, // estimate — not emitted on a clean box (nothing to evict)
+  'loading-model': 16_700, // on-box cold (#1092)
+  designing: 19_900, // on-box cold (#1092)
+  anchoring: 6_000, // estimate — mint-only, off the single-design path
+  performing: 60_000, // estimate — mint-only, off the single-design path
+  distilling: 300, // on-box cold (#1092)
+  rendering: 20_300, // on-box cold (#1092)
 };
