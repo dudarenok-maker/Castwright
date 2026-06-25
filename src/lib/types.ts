@@ -425,6 +425,10 @@ export interface BookStateResponse {
       pre-#1105/unrendered chapters; the view falls back to the time-based heuristic
       when a chapter has no entry. */
   renderedTextByChapter?: Record<number, Record<number, string>>;
+  /** fs-58 — render-time sentence→instructHash map per chapter, populated only on
+      the 1.7b liveInstruct path. Diffed against the live `instruct` to flag a chapter
+      whose instruct was edited after it rendered. Absent for non-liveInstruct renders. */
+  renderedInstructByChapter?: Record<number, Record<number, string>>;
   /** Editorial activity trail (regenerate confirms, etc.). Null when no
       change-log.json has been written yet — the layout falls back to an
       empty list so the Activity view doesn't replay a stale demo seed for

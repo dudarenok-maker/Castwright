@@ -764,6 +764,7 @@ export function Layout() {
                Older servers/renders omit it; the slice leaves the map empty and the
                view falls back to the time-based heuristic for text edits. */
             renderedTextByChapter: res.renderedTextByChapter,
+            renderedInstructByChapter: res.renderedInstructByChapter,
           }),
         );
         dispatch(
