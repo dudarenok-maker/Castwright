@@ -43,8 +43,13 @@ Root cause (spec §2A): `realReviewScript`'s `handle()` has no `chapter-failed` 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 function sseResponse(events: string[]): Response {
-  const body = events.map((e) => `data: ${e}\n\n`).join('');
-  return new Response(new Blob([body]).stream(), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  // jsdom-safe: ReadableStream + TextEncoder (Blob.stream() is unreliable in jsdom;
+  // this mirrors the existing src/lib/api-detect-emotions.test.ts pattern).
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) { for (const e of events) c.enqueue(encoder.encode(`data: ${e}\n\n`)); c.close(); },
+  });
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
 describe('realReviewScript — chapter-failed is surfaced', () => {
@@ -175,7 +180,7 @@ export function chunkSentencesByBudget<S extends { id: number; text: string }>(
 export function chunkWithContext<S>(chunk: SentenceChunk<S>): S[]; // context-before ++ core ++ context-after
 export function ownsOp(coreIds: Set<number>, primaryId: number): boolean; // primaryId in core
 export function primarySentenceId(op: { id: number; op: string; mergeIds?: number[] }): number; // min(mergeIds) for merge, else id
-export function chapterChunkBudget(engine: 'gemini' | 'local'): number; // wraps stage1ChunkBudgetForEngine w/ resolveAnalyzerNumCtx()
+export function chapterChunkBudget(engine: 'gemini' | 'local'): number; // = resolveStage1ChunkCharBudget(engine) — already num_ctx-derived for local, MAX_SAFE_INTEGER for gemini
 ```
 
 - [ ] **Step 1: Write the failing test** — windowing, overlap, owned-core, ownership.
@@ -220,7 +225,7 @@ describe('ownership', () => {
 
 - [ ] **Step 2: Run it, verify it fails** — `cd server && npm run test -- chapter-chunker` → FAIL (module missing).
 
-- [ ] **Step 3: Implement** — greedy accumulation by serialized char length; cores are disjoint contiguous runs; context = `overlap` sentences each side (clamped); ownership helpers as specified. `chapterChunkBudget(engine)` = `stage1ChunkBudgetForEngine(resolveStage1ChunkCharBudget(engine), resolveAnalyzerNumCtx(), engine)`. (Keep it a pure function over the sentence array; no I/O.)
+- [ ] **Step 3: Implement** — greedy accumulation by serialized char length; cores are disjoint contiguous runs; context = `overlap` sentences each side (clamped); ownership helpers as specified. `chapterChunkBudget(engine)` returns `resolveStage1ChunkCharBudget(engine)` **directly** — it already derives from `num_ctx` for `'local'` and returns `Number.MAX_SAFE_INTEGER` for `'gemini'`; do NOT re-wrap it in `stage1ChunkBudgetForEngine` (that double-derives and corrupts the budget). `chunkSentencesByBudget` stays a pure function over the sentence array (no I/O); only `chapterChunkBudget` reads config.
 
 - [ ] **Step 4: Run it, verify it passes** — `cd server && npm run test -- chapter-chunker` → PASS.
 
@@ -344,7 +349,7 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 ### Task 11: analysis-form "High-quality prosody (Qwen 1.7B)" toggle
 
 **Files:**
-- Modify: `src/views/analysing.tsx` (the start-analysis surface) — add the toggle; on change dispatch `bookMetaActions.setLiveInstruct({ bookId, value })` and PUT `{slice:'state',patch:{liveInstruct}}` (existing book-state PUT path); **await the PUT before the analysis POST fires** (spec ordering note).
+- Modify: `src/views/analysing.tsx` (the start-analysis surface, near the "Start analysis" button ~line 1172) — add the toggle. On change: `dispatch(bookMetaActions.setLiveInstruct({ bookId, value }))` AND `void api.putBookState(bookId, { slice: 'state', patch: { liveInstruct: value } })` for durability. **Do NOT gate the analysis POST on this** — round-2 established Phase 3 runs *after* analysis with a client-side gate, so the server never reads `liveInstruct` during analysis. There is no "await PUT before POST" requirement (the original plan's wording was wrong: `setLiveInstruct` persistence is not awaitable middleware, and ordering doesn't matter here). The store value is the source of truth for the Task-12 trigger; the PUT is just so it survives reload.
 - Test: `src/views/analysing-prosody-toggle.test.tsx` + one e2e `e2e/analysis-prosody-toggle.spec.ts`.
 
 **Interfaces:**
@@ -355,7 +360,7 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 ### Task 12: post-analysis auto-trigger + watermark
 
 **Files:**
-- Modify: `src/components/layout.tsx` (or a small effect host that observes `ui.stage` reaching `confirm`/`ready`) — when `selectLiveInstruct(bookId)` is true AND the book's `prosodyAnnotated` watermark is not set AND no prosody run is active → `runProsodyPasses(bookId, …)`; on success PUT `{patch:{prosodyAnnotated:true}}`.
+- Modify: `src/components/layout.tsx` — add a `useEffect` that **mirrors the existing voice-match auto-trigger** (`layout.tsx:895-917`): a `prosodyFiredFor = useRef<string|null>(null)` guard, gated on `stageKind === 'confirm'` (reset the ref to null when not confirm). When `stageKind === 'confirm'` && `bookId` && `selectLiveInstruct(bookId)` && `prosodyFiredFor.current !== bookId`: set `prosodyFiredFor.current = bookId`, then `const st = await api.getBookState(bookId)` — if `st.state.prosodyAnnotated` is already true, return (watermark complete; never re-run); else `await runProsodyPasses(bookId, { dispatch, signal })` and on success `void api.putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: true } })`. `prosodyAnnotated` is NOT hydrated into any slice today, so it MUST be fetched inline via `api.getBookState` (do not assume a store field). Effect deps: `[stageKind, bookId]`.
 - Test: `src/store/prosody-autotrigger.test.tsx`.
 
 **Interfaces:**
@@ -366,7 +371,7 @@ git commit -m "feat(server): script review chunks large chapters via owned-core 
 ### Task 13: global prosody progress pill
 
 **Files:**
-- Create: `src/store/prosody-slice.ts` (`activeStream: { bookId, progress, label } | null`), registered in `src/store/index.ts`.
+- Create: `src/store/prosody-slice.ts` (`activeStream: { bookId, progress, label } | null`), registered in `src/store/index.ts` reducer map only. **The slice is TRANSIENT** — UI-only progress state, like `notifications`: add ONLY the reducer to the map; do NOT add it to `persistence-middleware` or `broadcast-middleware` (no persistence/cross-tab sync). Confirm by grepping `src/store/index.ts` for how `notifications` is wired and match that (reducer-only).
 - Modify: `src/components/layout.tsx` (lines ~1209–1251, beside `analysisPill`) to render a `prosodyPill` from `s.prosody.activeStream`; `runProsodyPasses` updates it via `onProgress`.
 - Test: `src/store/prosody-slice.test.ts` + `src/components/layout-prosody-pill.test.tsx`.
 
