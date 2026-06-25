@@ -2678,6 +2678,7 @@ export interface DetectEmotionsOpts {
     chapterId: number;
     annotations: Array<{ sentenceId: number; emotion: string }>;
   }) => void;
+  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
 }
 export interface DetectEmotionsResult {
   annotatedChapters: number;
@@ -2695,7 +2696,7 @@ export class DetectEmotionsError extends Error {
 
 async function realDetectEmotions(
   bookId: string,
-  { signal, model, onPhase, onThrottle, onAnnotation }: DetectEmotionsOpts = {},
+  { signal, model, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/annotate-emotion`, {
     method: 'POST',
@@ -2745,12 +2746,20 @@ async function realDetectEmotions(
           totalAnnotations: typeof p.totalAnnotations === 'number' ? p.totalAnnotations : 0,
         };
         break;
+      case 'chapter-failed':
+        if (typeof p.chapterId === 'number') {
+          onChapterFailed?.({
+            chapterId: p.chapterId,
+            message: typeof p.message === 'string' ? p.message : 'Chapter annotation failed.',
+          });
+        }
+        break;
       case 'error':
         throw new DetectEmotionsError(
           typeof p.message === 'string' ? p.message : 'Emotion detection failed.',
           typeof p.code === 'string' ? p.code : 'unknown',
         );
-      /* heartbeat / chapter-failed are advisory — ignored by the client. */
+      /* heartbeat is advisory — ignored by the client. */
     }
   };
 
@@ -2777,7 +2786,7 @@ async function realDetectEmotions(
 
 async function mockDetectEmotions(
   _bookId: string,
-  { onPhase, onAnnotation }: DetectEmotionsOpts = {},
+  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   await wait(60);
   onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 1', chapterId: 1 });
@@ -2798,6 +2807,7 @@ export interface DetectInstructOpts {
     chapterId: number;
     annotations: Array<{ sentenceId: number; text?: string; instruct?: string; vocalization?: boolean }>;
   }) => void;
+  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
 }
 export interface DetectInstructResult {
   annotatedChapters: number;
@@ -2815,7 +2825,7 @@ export class DetectInstructError extends Error {
 
 async function realDetectInstruct(
   bookId: string,
-  { signal, model, onPhase, onThrottle, onAnnotation }: DetectInstructOpts = {},
+  { signal, model, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/instruct-annotation`, {
     method: 'POST',
@@ -2870,12 +2880,20 @@ async function realDetectInstruct(
           totalAnnotations: typeof p.totalAnnotations === 'number' ? p.totalAnnotations : 0,
         };
         break;
+      case 'chapter-failed':
+        if (typeof p.chapterId === 'number') {
+          onChapterFailed?.({
+            chapterId: p.chapterId,
+            message: typeof p.message === 'string' ? p.message : 'Chapter annotation failed.',
+          });
+        }
+        break;
       case 'error':
         throw new DetectInstructError(
           typeof p.message === 'string' ? p.message : 'Instruct detection failed.',
           typeof p.code === 'string' ? p.code : 'unknown',
         );
-      /* heartbeat / chapter-failed are advisory — ignored by the client. */
+      /* heartbeat is advisory — ignored by the client. */
     }
   };
 
@@ -2902,7 +2920,7 @@ async function realDetectInstruct(
 
 async function mockDetectInstruct(
   _bookId: string,
-  { onPhase, onAnnotation }: DetectInstructOpts = {},
+  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   await wait(60);
   onPhase?.({ progress: 0.5, label: 'Detecting instruct — chapter 1', chapterId: 1 });
