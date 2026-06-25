@@ -371,6 +371,11 @@ _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-t
 - _Benefit (technical / community):_ unblocks FA2 on the real stack; community goodwill + visibility.
 _Full detail + acceptance:_ spec `docs/superpowers/specs/2026-06-22-expressive-tts-instruct-tiers-design.md` §4.8/§10 · [#1001](https://github.com/dudarenok-maker/Castwright/issues/1001).
 
+#### `srv-54` — `chunkWithContext` orders chunk context by sentence id (assumes monotonic ids) ([#1143](https://github.com/dudarenok-maker/Castwright/issues/1143))
+
+- _What:_ `chapter-chunker.ts` builds per-chunk context by `s.id` comparison, assuming ids increase in document order; post-fold split offspring (high id, mid-array) break that, so some context sentences are mis-ordered/dropped from the prompt. Ownership uses `coreIds.has` (order-independent), so output correctness is unaffected — prompt-context quality only. Pre-existing pattern shared with script-review (PR2).
+- _Benefit (technical):_ more accurate per-chunk LLM context on books with sentence splits/merges → better annotation + script-review quality on large chunked chapters. Found by the fs-65 Phase 3 whole-branch review (M-1).
+
 ### Revisions & regen
 
 #### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history) ([#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415))
