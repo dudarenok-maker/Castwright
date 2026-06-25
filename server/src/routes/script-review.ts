@@ -8,11 +8,13 @@
    Already-streamed chapters are already applied client-side, so a re-run
    just fills the remaining chapters.
 
-   ASSUMPTION — overflow deferral: when a chapter's prompt text exceeds the
-   model budget (DEFAULT_STAGE2_CHUNK_CHAR_BUDGET), this route emits a
-   `chapter-failed` event with a "chapter too large — split it first" message
-   and continues to the next chapter. Chunk-with-overlap (the richer approach
-   from stage2-chunk.ts) is deferred to a follow-up task. */
+   Large chapters: a chapter whose prompt exceeds the local model's context
+   window is split by `chunkSentencesByBudget` (chapter-chunker.ts) into
+   budgeted chunks. Each chunk carries an OWNED CORE plus overlap CONTEXT; an op
+   is emitted only by the chunk whose core contains its primary sentence
+   (`ownsOp` / `primarySentenceId`), so every sentence is reviewed exactly once
+   across the overlapping chunks. Cloud engines get a MAX_SAFE_INTEGER budget
+   from `chapterChunkBudget`, so they stay one call per chapter. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -24,7 +26,13 @@ import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { DEFAULT_STAGE2_CHUNK_CHAR_BUDGET } from '../analyzer/stage2-chunk.js';
+import {
+  chunkSentencesByBudget,
+  chunkWithContext,
+  ownsOp,
+  primarySentenceId,
+  chapterChunkBudget,
+} from '../analyzer/chapter-chunker.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 
 export const scriptReviewRouter = Router();
@@ -212,74 +220,76 @@ scriptReviewRouter.post(
           chapterId,
         });
 
-        const prompt = buildScriptReviewChapterInbox(
-          manuscriptId,
-          chapterId,
-          byChapter.get(chapterId) ?? [],
-          roster,
-        );
+        /* Split the chapter's sentences into budgeted chunks (one call each).
+           The owned-core rule keeps each sentence reviewed exactly once across
+           the overlapping context windows. A cloud engine gets a huge budget so
+           the whole chapter is a single chunk (unchanged behaviour). */
+        const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
+          charBudget: chapterChunkBudget(selection.engine),
+          overlap: 3,
+          serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
+        });
 
-        /* ASSUMPTION (overflow deferral): if the prompt exceeds the stage-2 char
-           budget we emit chapter-failed with a clear message rather than
-           silently truncating. Chunk-with-overlap (the richer approach) is
-           deferred to a follow-up task. */
-        if (prompt.length > DEFAULT_STAGE2_CHUNK_CHAR_BUDGET) {
-          send({
-            kind: 'chapter-failed',
-            chapterId,
-            message:
-              `Chapter ${chapterId} is too large for a single review call (prompt ${prompt.length} chars ` +
-              `> ${DEFAULT_STAGE2_CHUNK_CHAR_BUDGET} char budget) — split it first.`,
-          });
-          continue;
-        }
-
-        try {
-          const result = await selection.analyzer.runScriptReviewChapter(
+        for (const chunk of chunks) {
+          if (closed) break;
+          const prompt = buildScriptReviewChapterInbox(
             manuscriptId,
             chapterId,
-            prompt,
-            {
-              signal: controller.signal,
-              language: bookStateLanguage(located.state),
-              onChunk: (info) =>
-                heartbeat(0, chapterId, {
-                  receivedBytes: info.receivedBytes,
-                  elapsedMs: info.elapsedMs,
-                  sinceLastChunkMs: info.sinceLastChunkMs,
-                }),
-              onThrottle: (waitMs, reason) =>
-                send({
-                  kind: 'throttle',
-                  phaseId: 0,
-                  chapterIndex: chapterId,
-                  model: selection.model,
-                  waitMs,
-                  reason,
-                }),
-            },
+            chunkWithContext(chunk),
+            roster,
           );
-          send({ kind: 'ops', chapterId, ops: result.ops });
-          totalOps += result.ops.length;
-          reviewedChapters += 1;
-        } catch (err) {
-          if (err instanceof AnalysisAbortedError) break;
-          if (err instanceof DailyQuotaExhaustedError) {
-            send({
-              kind: 'error',
-              code: 'quota_exhausted',
-              message:
-                'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.',
-              resetAt: err.resetAt instanceof Date ? err.resetAt.toISOString() : undefined,
-            });
-            clearInterval(keepAlive);
-            if (!closed) res.end();
-            return;
+          try {
+            const result = await selection.analyzer.runScriptReviewChapter(
+              manuscriptId,
+              chapterId,
+              prompt,
+              {
+                signal: controller.signal,
+                language: bookStateLanguage(located.state),
+                onChunk: (info) =>
+                  heartbeat(0, chapterId, {
+                    receivedBytes: info.receivedBytes,
+                    elapsedMs: info.elapsedMs,
+                    sinceLastChunkMs: info.sinceLastChunkMs,
+                  }),
+                onThrottle: (waitMs, reason) =>
+                  send({
+                    kind: 'throttle',
+                    phaseId: 0,
+                    chapterIndex: chapterId,
+                    model: selection.model,
+                    waitMs,
+                    reason,
+                  }),
+              },
+            );
+            /* Emit only the ops this chunk OWNS (primary sentence in its core),
+               so a sentence appearing in another chunk's context isn't emitted twice. */
+            const owned = result.ops.filter((op) => ownsOp(chunk.coreIds, primarySentenceId(op)));
+            if (owned.length) {
+              send({ kind: 'ops', chapterId, ops: owned });
+              totalOps += owned.length;
+            }
+          } catch (err) {
+            if (err instanceof AnalysisAbortedError) break;
+            if (err instanceof DailyQuotaExhaustedError) {
+              send({
+                kind: 'error',
+                code: 'quota_exhausted',
+                message:
+                  'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.',
+                resetAt: err.resetAt instanceof Date ? err.resetAt.toISOString() : undefined,
+              });
+              clearInterval(keepAlive);
+              if (!closed) res.end();
+              return;
+            }
+            /* One bad chunk shouldn't kill the whole pass — report it and
+               carry on so the rest of the book still gets reviewed. */
+            send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
           }
-          /* One bad chapter shouldn't kill the whole pass — report it and
-             carry on so the rest of the book still gets reviewed. */
-          send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
         }
+        reviewedChapters += 1;
       }
     } finally {
       clearInterval(keepAlive);
