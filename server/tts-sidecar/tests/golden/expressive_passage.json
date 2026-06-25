@@ -1,0 +1,27 @@
+{
+  "description": "Expressive-prose A/B fixture for the #1098 live-instruct delivery comparison. A single Castwright-original micro-scene whose consecutive sentences span all five emotions (whisper/neutral/excited/angry/sad) with natural narrative flow, so each render option produces a MIXED batch you can listen to end-to-end — transitions and pacing included — rather than the same sentence repeated. Safe to commit (Castwright-owned).",
+  "ab_options": {
+    "a_fixed_temp_plain_instruct": "Today's baseline: emotion-derived/plain instruct + the fixed QWEN_INSTRUCT_TEMP. Render with `instruct` stripped (let the pipeline derive from `emotion`).",
+    "b_per_emotion_temp": "The #1098 mechanism: per-emotion temperature (whisper~0.6 / sad~1.0 / neutral~0.9 / excited~1.5 / angry~2.0 — placeholder values from 0.6B-era tuning), plain/derived instruct. Requires the not-yet-built emotion-partitioned batcher.",
+    "c_fixed_temp_rich_instruct": "The leading hypothesis: fold the prosodic intent into the instruct TEXT (the `instruct` field below) at the fixed temp — one big batch, no partitioning. Build (b) only if it clearly beats this."
+  },
+  "voice": "REPLACE_WITH_A_DESIGNED_1.7B_VOICE_ID",
+  "model": "1.7b",
+  "sentences": [
+    { "id": 1, "emotion": "whisper", "text": "Stay close, she breathed, barely louder than the dark itself.", "instruct": "a hushed, breathy whisper, tense and careful, almost no voice" },
+    { "id": 2, "emotion": "whisper", "text": "The floor here remembers every footstep.", "instruct": "whispered and conspiratorial, slow and deliberate" },
+    { "id": 3, "emotion": "neutral", "text": "The corridor narrowed until the lantern light touched both walls at once.", "instruct": "calm, even narration, unhurried" },
+    { "id": 4, "emotion": "neutral", "text": "They had been walking the better part of an hour, and the air grew colder with every turn.", "instruct": "measured, matter-of-fact narration" },
+    { "id": 5, "emotion": "excited", "text": "There, do you see it?", "instruct": "bright and eager, rising with delight" },
+    { "id": 6, "emotion": "excited", "text": "It is the seal, the real one, exactly where the letter said it would be!", "instruct": "fast and thrilled, breathless with excitement" },
+    { "id": 7, "emotion": "neutral", "text": "The bronze disc lay half-buried in the dust, its edges still catching the light.", "instruct": "steady narration with a touch of wonder" },
+    { "id": 8, "emotion": "angry", "text": "You knew, he said, and his voice dropped to something hard.", "instruct": "cold, controlled anger, clipped and sharp" },
+    { "id": 9, "emotion": "angry", "text": "You knew it was here the whole time and you let us crawl through that filth for nothing!", "instruct": "loud and furious, sharp and forceful, rising" },
+    { "id": 10, "emotion": "neutral", "text": "For a moment neither of them moved.", "instruct": "quiet, flat narration, holding the tension" },
+    { "id": 11, "emotion": "sad", "text": "I did not tell you, she said softly, because I knew what it would cost.", "instruct": "soft and heavy with regret, slow and weary" },
+    { "id": 12, "emotion": "sad", "text": "He never came back from the last one either.", "instruct": "grief-stricken and trembling, fading at the end" },
+    { "id": 13, "emotion": "neutral", "text": "The lantern guttered, and the shadows leaned in around them.", "instruct": "subdued narration, closing the scene" },
+    { "id": 14, "emotion": "whisper", "text": "We finish this, she whispered, and then we go home.", "instruct": "a fragile, determined whisper, almost breaking" },
+    { "id": 15, "emotion": "neutral", "text": "Somewhere far above, the old house settled, and went still.", "instruct": "calm, final narration, a slow close" }
+  ]
+}
