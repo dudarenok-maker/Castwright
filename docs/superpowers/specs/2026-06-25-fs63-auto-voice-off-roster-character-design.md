@@ -1,11 +1,15 @@
 ---
-status: draft
+status: stable
 issue: 1119
 backlog-id: fs-63
 follow-up-of: fs-58 Unit B (#1040)
 ---
 
 # fs-63 — Auto-voice a created off-roster character
+
+> **Ship notes.** Shipped 2026-06-25 on branch `feat/frontend-fs-63-auto-voice` (impl commits
+> `8c7f87ec`…`c6d5139b` + e2e). Benefit line softened from "audible in one pass" to "audible in
+> one tap" (the consent-gate consequence — §6). Closes #1119.
 
 ## 1. Problem
 
