@@ -222,6 +222,13 @@ function renderView() {
   );
 }
 
+describe('GenerationView — prosody toggle removed (#1100)', () => {
+  it('does not render the live-expressive-delivery prosody toggle', () => {
+    renderView();
+    expect(screen.queryByText(/expressive delivery/i)).toBeNull();
+  });
+});
+
 describe('GenerationView — chapter & character metadata (regression for screenshot bug)', () => {
   beforeEach(() => {
     /* paused=true so the streamGeneration effect short-circuits */
