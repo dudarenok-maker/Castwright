@@ -85,11 +85,13 @@ import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
+import { runProsodyPasses } from '../store/prosody-thunk';
+import { prosodyActions } from '../store/prosody-slice';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
-import { IconRefresh, IconWarning } from '../lib/icons';
+import { IconRefresh, IconSpinner, IconWarning } from '../lib/icons';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
    styled post-action dialog (e.g. BooksRoute after delete/reparse) pull
@@ -157,6 +159,7 @@ export function Layout() {
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
+  const prosodyStream = useAppSelector((s) => s.prosody.activeStream);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
@@ -787,7 +790,7 @@ export function Layout() {
               publicationDate: res.state.publicationDate ?? null,
               description: res.state.description ?? null,
               notes: res.state.notes ?? null,
-              liveInstruct: res.state.liveInstruct ?? false,
+              prosodyEnabled: res.state.prosodyEnabled,
             },
           }),
         );
@@ -974,6 +977,76 @@ export function Layout() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgKey, dispatch]);
+
+  /* Task 13 (fs-65 Phase 3) — eager prosody auto-trigger keyed on library
+     status. Fires the two-pass prosody annotation (emotions + instruct) for
+     every book that transitions to analysis-complete in library.books —
+     for both the active book AND background books (round-2 Critical: ui.stage
+     is singular and cannot observe background-analysed books).
+
+     Design constraints honoured here:
+     - Keyed on library.books status, NOT stageKind (fires for all books).
+     - Seed-on-mount: existing complete books are added to `considered` on the
+       first run WITHOUT firing (skips the pre-existing library; makes a Layout
+       remount self-healing — round-2 #5).
+     - Authoritative disk gate: reads prosodyEnabled + prosodyAnnotated from
+       getBookState, never from the store selector (opt-out hydration race,
+       round-2 #2).
+     - Detached job: void (async () => {...})() NOT tied to effect cleanup
+       (survives a book-switch, round-1 H2).
+     - Partial-aware watermark: writes prosodyAnnotated:true only when
+       failed === 0; on partial failure removes the book from considered so
+       a subsequent fill-only re-run can top it up (round-2 #6).
+     - Retry-safe: try/catch removes the book from considered on throw
+       (round-1 H3). */
+  const isAnalysisComplete = (s: string) =>
+    s !== 'not_analysed' && s !== 'analysing' && s !== 'unreadable' && s !== 'orphaned';
+
+  const prosodyConsidered = useRef<Set<string>>(new Set());
+  const prosodySeeded = useRef(false);
+  const completeIds = useMemo(
+    () => library.books.filter((b) => isAnalysisComplete(b.status)).map((b) => b.bookId),
+    [library.books],
+  );
+  const completeKey = completeIds.join('|');
+  useEffect(() => {
+    if (!prosodySeeded.current) {
+      // First run: mark all currently-complete books as already considered
+      // (no backlog auto-spend; makes a remount self-healing).
+      completeIds.forEach((id) => prosodyConsidered.current.add(id));
+      prosodySeeded.current = true;
+      return;
+    }
+    for (const id of completeIds) {
+      if (prosodyConsidered.current.has(id)) continue; // already handled this session
+      prosodyConsidered.current.add(id);
+      void (async () => {
+        // Detached: not tied to effect cleanup — survives a book-switch.
+        let pillActive = false;
+        try {
+          const st = await api.getBookState(id);
+          if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
+          if (st.state.prosodyAnnotated) return;               // watermark → no-op
+          dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Phase 3 — Detecting prosody' }));
+          pillActive = true;
+          const { failed } = await runProsodyPasses(id, {
+            dispatch,
+            onProgress: (f) => dispatch(prosodyActions.updateProgress({ bookId: id, progress: f })),
+          });
+          dispatch(prosodyActions.clear());
+          if (failed === 0) {
+            await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
+          } else {
+            prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
+          }
+        } catch {
+          if (pillActive) dispatch(prosodyActions.clear());
+          prosodyConsidered.current.delete(id); // transient error → retry on next transition
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completeKey]);
 
   if (ui.previewMode) {
     return (
@@ -1266,6 +1339,14 @@ export function Layout() {
     };
   })();
 
+  /* Phase 3 prosody-progress pill — anchored to the transient `prosody.activeStream`
+     slice (Task 14). Absent when no prosody pass is running; shows label + percent
+     while the two-pass annotation runs. No navigation: the pass runs silently in
+     the background. */
+  const prosodyPill: { label: string; percent: number } | null = prosodyStream
+    ? { label: prosodyStream.label, percent: prosodyStream.progress }
+    : null;
+
   /* Third status pill — the in-flight "Design full cast" bulk job. Mirrors the
      analysis/generation pill IIFEs: anchored to the cross-book `castDesign`
      snapshot, recomputed inline so the per-second forceClockTick refreshes the
@@ -1413,6 +1494,21 @@ export function Layout() {
       <BuildStamp />
 
       <ToastStack />
+
+      {/* Phase 3 prosody-progress pill (Task 14, fs-65). Fixed bottom-left,
+          above the mini-player reserved gap. Absent when no prosody pass is
+          running. Uses design tokens only — no hex literals. */}
+      {prosodyPill && (
+        <div
+          data-testid="prosody-pill"
+          className="fixed bottom-24 left-6 z-60 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-peach/15 text-magenta shadow-card"
+        >
+          <IconSpinner className="w-3.5 h-3.5" />
+          <span className="tabular-nums">
+            {prosodyPill.label} · {prosodyPill.percent}%
+          </span>
+        </div>
+      )}
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer

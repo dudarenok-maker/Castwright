@@ -8,6 +8,7 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { analysisSlice } from '../store/analysis-slice';
 import { accountSlice } from '../store/account-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
 import { AnalysingView } from './analysing';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
 import type {
@@ -111,6 +112,7 @@ function renderView() {
       cast: castSlice.reducer,
       analysis: analysisSlice.reducer,
       account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
     },
   });
   return {
@@ -536,7 +538,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
      even pre-analysis so the user can pre-warm Ollama from this screen. */
   function renderNoManuscript() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -631,6 +633,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
     });
     render(
@@ -708,7 +711,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 
   it('hides the analyzer pill when a cloud (Gemini) model is selected — nothing to load locally', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -899,7 +902,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -930,7 +933,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1008,7 +1011,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1056,7 +1059,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1121,7 +1124,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
 
   it('renders the cast preview from a pre-hydrated cast slice before any SSE event fires', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     /* Simulate the layout's getBookState → setCharacters hydration that
        runs ahead of the analysing route mounting. With cast.json now
@@ -1157,7 +1160,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
 describe('AnalysingView — dropped-quotes panel', () => {
   function renderWithBookId() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -1519,6 +1522,7 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
       preloadedState: {
         analysis: {
@@ -1612,6 +1616,7 @@ describe('AnalysingView — request-model gating (plan 118)', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
       preloadedState: {
         ui: {
@@ -1672,6 +1677,7 @@ describe('AnalysingView — readiness gate follows the effective per-phase model
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
       preloadedState: {
         ui: {
@@ -1784,6 +1790,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
     });
     render(
@@ -1830,7 +1837,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       );
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1854,7 +1861,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       Promise.resolve(makeBookStateWithErrors([4], {}));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1884,6 +1891,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
     });
     render(
@@ -1927,6 +1935,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
     });
     render(
@@ -1973,6 +1982,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         cast: castSlice.reducer,
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       },
     });
     render(

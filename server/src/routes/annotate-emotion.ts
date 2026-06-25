@@ -19,6 +19,11 @@ import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
+import {
+  chunkSentencesByBudget,
+  chunkWithContext,
+  chapterChunkBudget,
+} from '../analyzer/chapter-chunker.js';
 
 export const annotateEmotionRouter = Router();
 
@@ -138,33 +143,51 @@ annotateEmotionRouter.post(
           chapterId,
         });
 
-        const prompt = buildEmotionChapterInbox(
-          manuscriptId,
-          chapterId,
-          byChapter.get(chapterId) ?? [],
-        );
+        const sentences = byChapter.get(chapterId) ?? [];
+        const chunks = chunkSentencesByBudget(sentences, {
+          charBudget: chapterChunkBudget(selection.engine),
+          overlap: 3,
+          serialize: (s) =>
+            JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text }),
+        });
 
         try {
-          const result = await selection.analyzer.runEmotionChapter(manuscriptId, chapterId, prompt, {
-            signal: controller.signal,
-            onChunk: (info) =>
-              heartbeat(0, chapterId, {
-                receivedBytes: info.receivedBytes,
-                elapsedMs: info.elapsedMs,
-                sinceLastChunkMs: info.sinceLastChunkMs,
-              }),
-            onThrottle: (waitMs, reason) =>
-              send({
-                kind: 'throttle',
-                phaseId: 0,
-                chapterIndex: chapterId,
-                model: selection.model,
-                waitMs,
-                reason,
-              }),
-          });
-          send({ kind: 'annotation', chapterId, annotations: result.annotations });
-          totalAnnotations += result.annotations.length;
+          for (const chunk of chunks) {
+            if (closed) break;
+            const prompt = buildEmotionChapterInbox(
+              manuscriptId,
+              chapterId,
+              chunkWithContext(chunk),
+            );
+            const result = await selection.analyzer.runEmotionChapter(
+              manuscriptId,
+              chapterId,
+              prompt,
+              {
+                signal: controller.signal,
+                onChunk: (info) =>
+                  heartbeat(0, chapterId, {
+                    receivedBytes: info.receivedBytes,
+                    elapsedMs: info.elapsedMs,
+                    sinceLastChunkMs: info.sinceLastChunkMs,
+                  }),
+                onThrottle: (waitMs, reason) =>
+                  send({
+                    kind: 'throttle',
+                    phaseId: 0,
+                    chapterIndex: chapterId,
+                    model: selection.model,
+                    waitMs,
+                    reason,
+                  }),
+              },
+            );
+            const owned = result.annotations.filter((a) => chunk.coreIds.has(a.sentenceId));
+            if (owned.length) {
+              send({ kind: 'annotation', chapterId, annotations: owned });
+              totalAnnotations += owned.length;
+            }
+          }
           annotatedChapters += 1;
         } catch (err) {
           if (err instanceof AnalysisAbortedError) break;

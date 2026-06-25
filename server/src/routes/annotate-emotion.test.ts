@@ -26,8 +26,13 @@ let app: Express;
 let bookId: string;
 let manuscriptId: string;
 
-/* The fake analyzer's runEmotionChapter — each test swaps its implementation. */
-const { runEmotion } = vi.hoisted(() => ({ runEmotion: vi.fn() }));
+/* The fake analyzer's runEmotionChapter — each test swaps its implementation.
+   `engineState` lets a test flip the reported engine to 'local' so the chunker
+   derives a finite, num_ctx-bound budget and a large chapter splits. */
+const { runEmotion, engineState: emotionEngineState } = vi.hoisted(() => ({
+  runEmotion: vi.fn(),
+  engineState: { engine: 'gemini' as 'gemini' | 'local' },
+}));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
@@ -43,7 +48,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
     ...actual,
     selectAnalyzerForPhase: () => ({
       analyzer: fakeAnalyzer,
-      engine: 'gemini' as const,
+      engine: emotionEngineState.engine,
       model: 'test-model',
       fallbackModel: null,
     }),
@@ -115,6 +120,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   runEmotion.mockReset();
+  emotionEngineState.engine = 'gemini';
+  delete process.env.ANALYZER_NUM_CTX;
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
 });
 
@@ -239,5 +246,51 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     expect(events.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
     expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 2)).toBe(true);
     expect(events.find((e) => e.kind === 'result')).toMatchObject({ annotatedChapters: 1 });
+  });
+
+  it('chunks a large chapter across calls and emits each sentence annotation exactly once', async () => {
+    // Force local engine + small num_ctx → chapterChunkBudget derives a finite budget
+    // that splits a large chapter into ≥2 chunks (gemini's MAX_SAFE_INTEGER never splits).
+    emotionEngineState.engine = 'local';
+    process.env.ANALYZER_NUM_CTX = '400'; // → budget Math.max(2000, min(24000, 560)) = 2000
+
+    // ~800-char sentences: 2 per chunk under the 2000-char budget.
+    const longText = 'C'.repeat(800);
+    const chapterSentences = Array.from({ length: 12 }, (_, i) => ({
+      id: 400 + i,
+      chapterId: 40,
+      characterId: 'narrator',
+      text: longText,
+    }));
+    writeBook(chapterSentences);
+
+    // Each call returns one annotation per sentenceId present in the prompt (core + context),
+    // so without ownership filtering an overlapped sentence would be emitted by >1 chunk.
+    runEmotion.mockImplementation((_m, _c, prompt: string): Promise<EmotionAnnotationOutput> => {
+      const ids = [...prompt.matchAll(/"sentenceId":\s*(\d+)/g)].map((m) => Number(m[1]));
+      return Promise.resolve({
+        annotations: ids.map((sentenceId) => ({ sentenceId, emotion: 'neutral' as const })),
+      });
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    // The chapter split → analyzer was called more than once.
+    expect(runEmotion.mock.calls.length).toBeGreaterThan(1);
+
+    // Zero chapter-failed events (no truncation).
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+
+    // Union of emitted sentenceIds == chapter sentence ids, each exactly once.
+    const emittedIds = events
+      .filter((e) => e.kind === 'annotation')
+      .flatMap((e) => (e.annotations as Array<{ sentenceId: number }>).map((a) => a.sentenceId));
+    const expectedIds = chapterSentences.map((s) => s.id);
+    expect([...emittedIds].sort((a, b) => a - b)).toEqual(expectedIds);
+    expect(new Set(emittedIds).size).toBe(emittedIds.length); // no duplicates
+
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
   });
 });

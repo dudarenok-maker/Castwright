@@ -18,8 +18,8 @@
 
 import { useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
-import { manuscriptActions } from '../store/manuscript-slice';
-import { api, DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { runProsodyPasses } from '../store/prosody-thunk';
 import { IconSparkle, IconSpinner } from '../lib/icons';
 
 type Phase = 'idle' | 'confirm' | 'running';
@@ -43,34 +43,13 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      // Pass 1: emotion backfill — progress 0–50%
-      const emotionResult = await api.detectEmotions(bookId, {
+      const { totalAnnotations, totalChapters } = await runProsodyPasses(bookId, {
+        dispatch,
         signal: controller.signal,
-        onPhase: (e) => {
-          setProgress(e.progress * 0.5);
-          if (e.label) setStatus(e.label);
-        },
+        onProgress: (fraction) => setProgress(fraction),
+        onStatus: (label) => setStatus(label),
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
-        onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedEmotions(e)),
       });
-
-      // Pass 2: instruct/vocalization — progress 50–100%
-      setStatus('Adding natural reactions…');
-      const instructResult = await api.detectInstruct(bookId, {
-        signal: controller.signal,
-        onPhase: (e) => {
-          setProgress(0.5 + e.progress * 0.5);
-          if (e.label) setStatus(e.label);
-        },
-        onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
-        onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedInstruct(e)),
-      });
-
-      const totalAnnotations = emotionResult.totalAnnotations + instructResult.totalAnnotations;
-      const totalChapters = Math.max(
-        emotionResult.annotatedChapters,
-        instructResult.annotatedChapters,
-      );
       setStatus(
         `Tagged ${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'} across ` +
           `${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,

@@ -41,6 +41,7 @@ import { voicesActions } from '../store/voices-slice';
 import { castActions } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
+import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { distinctDriftChapterCount } from '../store/revisions-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -253,6 +254,19 @@ export function CastView({
      analyzer. One-shot per view mount — the user reads it once and the
      pill on the Generation view takes over as the authoritative state. */
   const [evictionBanner, setEvictionBanner] = useState<string | null>(null);
+  /* fs-65 Task 13b — prosody opt-out hint. Dismissible (local state only —
+     dismissing does NOT flip the prosodyEnabled flag). */
+  const [prosodyHintDismissed, setProsodyHintDismissed] = useState(false);
+  const prosodyEnabled = useAppSelector(selectProsodyEnabled(bookId));
+  /* True when at least one cast member is pinned to the 1.7B tier. Reads the
+     store's live ttsModelKey values (via storedTiers, already in scope) so the
+     hint reacts immediately to a bulk pin or reset without a prop cycle. */
+  const has1_7bMember = useMemo(
+    () => [...storedTiers.values()].some((mk) => mk === 'qwen3-tts-1.7b'),
+    [storedTiers],
+  );
+  const showProsodyHint =
+    !prosodyHintDismissed && prosodyEnabled === false && has1_7bMember;
   const setRow = (id: string, patch: { loading?: boolean; error?: string } | null) =>
     setRowState((prev) => {
       const next = { ...prev };
@@ -587,6 +601,14 @@ export function CastView({
     );
   }
 
+  /* fs-65 Task 13b — [Turn on] in the prosody opt-out hint. Flips the flag
+     in Redux and issues the durable PUT so the toggle stays off on reload. */
+  function handleTurnOnProsody() {
+    if (!bookId) return;
+    dispatch(bookMetaActions.setProsodyEnabled({ bookId, value: true }));
+    void api.putBookState(bookId, { slice: 'state', patch: { prosodyEnabled: true } });
+  }
+
   function handleDrop(charId: string) {
     if (!draggingVoiceId) return;
     const voice = findVoice(draggingVoiceId);
@@ -773,6 +795,37 @@ export function CastView({
               onClick={() => setEvictionBanner(null)}
               className="ml-auto text-[11px] text-emerald-700/60 hover:text-emerald-700 font-medium"
               aria-label="Dismiss notice"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* fs-65 Task 13b — prosody opt-out render-time hint. Surfaces when
+            the book has prosodyEnabled===false AND at least one cast member is
+            pinned to the 1.7B tier, so the silent "basic emotion phrases only"
+            fallback isn't invisible. [Turn on] flips the flag durably. */}
+        {showProsodyHint && (
+          <div
+            role="status"
+            data-testid="prosody-off-hint"
+            className="w-full mb-4 px-4 py-2.5 rounded-2xl border border-amber-200 bg-amber-50/70 flex items-center gap-3 text-xs text-amber-800"
+          >
+            <span className="flex-1 min-w-0">
+              Expressive directions are off for this book — using basic emotion phrases.
+            </span>
+            <button
+              type="button"
+              onClick={handleTurnOnProsody}
+              className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-semibold"
+            >
+              Turn on
+            </button>
+            <button
+              type="button"
+              onClick={() => setProsodyHintDismissed(true)}
+              className="shrink-0 text-[11px] text-amber-700/60 hover:text-amber-800 font-medium"
+              aria-label="Dismiss"
             >
               Dismiss
             </button>

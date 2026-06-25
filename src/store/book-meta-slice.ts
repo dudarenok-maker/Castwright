@@ -48,17 +48,18 @@ export interface BookMetaState {
   draft: Partial<EditableBookMeta> | null;
   /** Last-saved snapshot for each book the user has opened this session. */
   saved: Record<string, EditableBookMeta>;
-  /** fs-57 — per-book live-instruct flag keyed by bookId.
-      Default false for any book not yet hydrated. Persisted through
-      the server book-state slice; toggled by the UI (Task 16). Gates
-      the Qwen 1.7B live-instruct synth path (Task 8). */
-  liveInstruct: Record<string, boolean>;
+  /** fs-65 Phase 3 — per-book prosody annotation intent flag keyed by bookId.
+      Eager-default: absent (undefined) ⇒ ON; only an explicit `false` opts out.
+      The Task-13 trigger gate is `prosodyEnabled !== false`.
+      Persisted through the server book-state slice; toggled by the Task-12
+      analysis-form toggle. */
+  prosodyEnabled: Record<string, boolean | undefined>;
 }
 
 const initialState: BookMetaState = {
   draft: null,
   saved: {},
-  liveInstruct: {},
+  prosodyEnabled: {},
 };
 
 interface HydratePayload {
@@ -69,7 +70,7 @@ interface HydratePayload {
     publicationDate?: string | null;
     description?: string | null;
     notes?: string | null;
-    liveInstruct?: boolean;
+    prosodyEnabled?: boolean;
   };
 }
 
@@ -91,7 +92,7 @@ export const bookMetaSlice = createSlice({
         description: state.description ?? null,
         notes: state.notes ?? null,
       };
-      s.liveInstruct[bookId] = state.liveInstruct ?? false;
+      s.prosodyEnabled[bookId] = state.prosodyEnabled;
       s.draft = null;
     },
 
@@ -111,13 +112,12 @@ export const bookMetaSlice = createSlice({
       s.draft = null;
     },
 
-    /* fs-57 — toggle the live-instruct flag for the given book.
-       Dispatched by the UI toggle (Task 16); gates the Qwen 1.7B
-       live-instruct synth path (Task 8). The persistence-middleware
-       watches this action and PUTs `{ slice: 'state', patch: { liveInstruct } }`
-       to the server. */
-    setLiveInstruct: (s, a: PayloadAction<{ bookId: string; value: boolean }>) => {
-      s.liveInstruct[a.payload.bookId] = a.payload.value;
+    /* fs-65 Phase 3 — set the prosody annotation intent flag for the given book.
+       Dispatched by the Task-12 analysis-form toggle. The durable PUT to
+       `{ slice: 'state', patch: { prosodyEnabled } }` is issued by the toggle
+       component directly (no persistence-middleware watches this action). */
+    setProsodyEnabled: (s, a: PayloadAction<{ bookId: string; value: boolean }>) => {
+      s.prosodyEnabled[a.payload.bookId] = a.payload.value;
     },
 
     /* Fold the draft into `saved[bookId]` atomically. This is the action the
@@ -162,10 +162,14 @@ export const selectEffectiveMeta =
 export const selectIsDirty = (s: RootState): boolean =>
   s.bookMeta.draft != null && Object.keys(s.bookMeta.draft).length > 0;
 
-/** fs-57 — per-book live-instruct flag. Returns false for any book that
-    has not been hydrated yet. */
-export const selectLiveInstruct =
+/** fs-65 Phase 3 — per-book prosody annotation intent flag.
+    Returns undefined for any book that has not been hydrated yet or where
+    the flag was absent on disk. The Task-13 trigger gate is
+    `prosodyEnabled !== false` (absent ⇒ on).
+    Guards `s.bookMeta?.prosodyEnabled` so tests that omit the bookMeta
+    slice from their store don't throw (they get the safe undefined/on default). */
+export const selectProsodyEnabled =
   (bookId: string | null) =>
-  (s: RootState): boolean =>
-    bookId != null ? (s.bookMeta.liveInstruct[bookId] ?? false) : false;
+  (s: RootState): boolean | undefined =>
+    bookId != null ? (s.bookMeta?.prosodyEnabled ?? {})[bookId] : undefined;
 

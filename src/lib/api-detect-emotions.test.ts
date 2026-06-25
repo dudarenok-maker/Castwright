@@ -79,6 +79,64 @@ describe('api.detectEmotions', () => {
   });
 });
 
+describe('api.detectEmotions — chapter-failed is surfaced', () => {
+  it('calls onChapterFailed and still resolves on a chapter-failed-only stream', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        JSON.stringify({
+          kind: 'phase',
+          progress: 0,
+          label: 'Detecting emotions — chapter 3',
+          chapterId: 3,
+        }),
+        JSON.stringify({
+          kind: 'chapter-failed',
+          chapterId: 3,
+          message: 'Chapter 3 is too large — split it first.',
+        }),
+        JSON.stringify({ kind: 'result', annotatedChapters: 0, totalAnnotations: 0 }),
+      ]),
+    );
+    const failed: Array<{ chapterId: number; message: string }> = [];
+    const res = await api.detectEmotions('bk', { onChapterFailed: (e) => failed.push(e) });
+    expect(failed).toEqual([
+      { chapterId: 3, message: 'Chapter 3 is too large — split it first.' },
+    ]);
+    expect(res.totalAnnotations).toBe(0);
+    expect(res.annotatedChapters).toBe(0);
+  });
+});
+
+describe('api.detectInstruct — chapter-failed is surfaced', () => {
+  it('calls onChapterFailed and still resolves on a chapter-failed-only stream', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        JSON.stringify({
+          kind: 'phase',
+          progress: 0,
+          label: 'Detecting instruct — chapter 5',
+          chapterId: 5,
+        }),
+        JSON.stringify({
+          kind: 'chapter-failed',
+          chapterId: 5,
+          message: 'Chapter 5 failed instruct annotation.',
+        }),
+        JSON.stringify({ kind: 'result', annotatedChapters: 0, totalAnnotations: 0 }),
+      ]),
+    );
+    const failed: Array<{ chapterId: number; message: string }> = [];
+    const res = await api.detectInstruct('bk', { onChapterFailed: (e) => failed.push(e) });
+    expect(failed).toEqual([
+      { chapterId: 5, message: 'Chapter 5 failed instruct annotation.' },
+    ]);
+    expect(res.totalAnnotations).toBe(0);
+    expect(res.annotatedChapters).toBe(0);
+  });
+});
+
 describe('api.removeQwenVariant', () => {
   it('issues a DELETE to the emotion-variant route', async () => {
     const { api } = await import('./api');
