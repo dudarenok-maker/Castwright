@@ -8,7 +8,9 @@
    `en` and `ru` are seeded `supported:true`: ru shipped validated under
    fs-2, so it is grandfathered past the per-language gate.
    `es` flipped `supported:true` 2026-06-23 after canary validation + operator
-   acceptance (fs-41/fs-50 Spanish rollout). `fr` and `de` remain gated. */
+   acceptance (fs-41/fs-50 Spanish rollout). `fr` and `de` flipped `supported:true`
+   2026-06-25 after operator audio acceptance of designed FR/DE Coalfall samples
+   (plan 229). zh/ja stay out of the registry until fs-59. */
 
 export interface LanguageEntry {
   /** BCP-47 primary subtag, lower-cased (e.g. 'en', 'ru', 'es'). */
@@ -40,9 +42,8 @@ const ENTRIES: readonly LanguageEntry[] = [
       'об авторе', 'предисловие', 'послесловие', 'приложение', 'глоссарий', 'библиография', 'указатель',
       'примечания', 'выходные данные', 'эпиграф'],
   },
-  // es: canary-validated + operator-accepted (2026-06-23); fr/de remain gated.
-  // fr/de: detection identifies them, but they are not claimed until their
-  // rollout phase's operator gate flips `supported`.
+  // es/fr/de: canary-validated + operator-accepted (es 2026-06-23; fr/de 2026-06-25,
+  // audio acceptance of designed Coalfall samples, plan 229). All three are Latin Qwen.
   { code: 'es', sidecarName: 'Spanish', supported: true,  detect: { script: 'latin',    iso6393: 'spa' },
     headingLexicon: {
       keywords: ['capítulo', 'parte', 'día', 'libro', 'acto', 'escena', 'sección'],
@@ -55,7 +56,7 @@ const ENTRIES: readonly LanguageEntry[] = [
       'prefacio', 'apéndice', 'glosario', 'bibliografía', 'epígrafe', 'colofón', 'nota del autor',
       'nota del traductor'],
   },
-  { code: 'fr', sidecarName: 'French',  supported: false, detect: { script: 'latin',    iso6393: 'fra' },
+  { code: 'fr', sidecarName: 'French',  supported: true,  detect: { script: 'latin',    iso6393: 'fra' },
     headingLexicon: {
       keywords: ['chapitre', 'partie', 'jour', 'livre', 'acte', 'scène', 'section'],
       numberWords: ['un', 'une', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix',
@@ -66,7 +67,7 @@ const ENTRIES: readonly LanguageEntry[] = [
       'à propos de l\'auteur', 'préface', 'avant-propos', 'postface', 'annexe', 'glossaire', 'bibliographie',
       'note de l\'auteur', 'note du traducteur', 'colophon', 'épigraphe'],
   },
-  { code: 'de', sidecarName: 'German',  supported: false, detect: { script: 'latin',    iso6393: 'deu' },
+  { code: 'de', sidecarName: 'German',  supported: true,  detect: { script: 'latin',    iso6393: 'deu' },
     headingLexicon: {
       keywords: ['kapitel', 'teil', 'tag', 'buch', 'akt', 'szene', 'abschnitt'],
       numberWords: ['eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun', 'zehn',
