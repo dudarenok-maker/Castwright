@@ -65,6 +65,21 @@ the sentence. Supply:
 - `anchor` — verbatim substring to locate the sentence
 - `emotion` — one of: `neutral` | `whisper` | `angry` | `excited` | `sad`
 
+### `reattribute`
+
+Re-assign a dialogue line when the current attribution is clearly wrong. Supply
+`anchor` (verbatim) and EITHER `characterId` (an EXISTING cast id from the input —
+never invent a `characterId` not in the roster) OR `proposed` `{ name, gender?,
+ageRange? }` when the true speaker is demonstrably NOT in the cast. Only when
+clearly wrong — when in doubt, omit.
+
+### `flag_nonstory`
+
+Flag import residue that is NOT story content — page numbers, running
+headers/footers, ISBN lines, a bare chapter-number line that became its own
+sentence. Supply `anchor` (verbatim). NEVER flag story prose or dialogue. When in
+doubt, omit.
+
 ## Rules
 
 - Only flag sentences that clearly need correction. When in doubt, omit.

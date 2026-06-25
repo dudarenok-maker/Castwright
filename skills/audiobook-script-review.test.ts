@@ -65,3 +65,16 @@ describe('skills/audiobook-script-review.md — M5 vocalization-protection claus
     expect(text).toContain('"Mmm"');
   });
 });
+
+describe('skills/audiobook-script-review.md — fs-58 Unit B classes', () => {
+  it('documents reattribute with the characterId-XOR-proposed contract', () => {
+    const text = readFileSync(SKILL_PATH, 'utf8');
+    expect(text).toMatch(/reattribute/);
+    expect(text).toMatch(/never invent a `?characterId/i);
+  });
+  it('documents flag_nonstory and forbids flagging story prose', () => {
+    const text = readFileSync(SKILL_PATH, 'utf8');
+    expect(text).toMatch(/flag_nonstory/);
+    expect(text).toMatch(/never flag story/i);
+  });
+});
