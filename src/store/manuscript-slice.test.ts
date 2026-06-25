@@ -446,6 +446,62 @@ describe('manuscriptSlice — hydrateFromAnalysis merge', () => {
     expect(next.sentences[1]).toMatchObject({ id: 2, characterId: 'narrator' });
   });
 
+  it('preserves user-set emotion / instruct / vocalization on re-analysis (manual wins)', () => {
+    /* Regression for #1121: the merge spread `...inc` over everything but
+       characterId/text/excludeFromSynthesis, silently stomping the user's
+       hand-set delivery edits. emotion + instruct are user-authored ("manual
+       wins"); vocalization tracks the preserved `text`, so all three must
+       survive a re-analyse exactly like characterId/text already do. */
+    const start = {
+      ...baseState(
+        sentences([
+          // user hand-set delivery on id=1
+          {
+            id: 1,
+            text: 'old',
+            characterId: 'eliza',
+            emotion: 'angry',
+            instruct: 'in a hushed whisper',
+            vocalization: true,
+          },
+          // id=2 left with no delivery edits
+          { id: 2, text: 'old-2', characterId: 'narrator' },
+        ]),
+      ),
+      manuscriptId: 'mns_open',
+    };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.hydrateFromAnalysis(
+        analyse([
+          // analyzer re-guesses different delivery — must NOT overwrite the user's
+          { id: 1, text: 'fresh-1', characterId: 'narrator', emotion: 'sad' },
+          // fresh analyzer delivery on a matched-but-unedited sentence is discarded
+          // too (state wins on re-analysis, same as characterId/text)
+          {
+            id: 2,
+            text: 'fresh-2',
+            characterId: 'narrator',
+            emotion: 'excited',
+            instruct: 'loudly',
+            vocalization: true,
+          },
+        ]),
+      ),
+    );
+    // id=1: user's hand-set delivery survives the analyzer's fresh guesses
+    expect(next.sentences[0]).toMatchObject({
+      id: 1,
+      emotion: 'angry',
+      instruct: 'in a hushed whisper',
+      vocalization: true,
+    });
+    // id=2: user never set delivery → stays cleared; analyzer's fresh values don't leak in
+    expect(next.sentences[1].emotion).toBeUndefined();
+    expect(next.sentences[1].instruct).toBeUndefined();
+    expect(next.sentences[1].vocalization).toBeUndefined();
+  });
+
   it('keeps split-sentence offsprings whose ids the new analysis does not produce', () => {
     // Start state mirrors what splitSentence would have produced: original id=5 split → 5,42,43.
     const start = {

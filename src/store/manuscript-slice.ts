@@ -140,10 +140,23 @@ export const manuscriptSlice = createSlice({
         const inc = incomingByKey.get(key(x));
         if (inc) {
           /* Sentence still exists in the new analysis. Refresh fields from
-             incoming but preserve characterId (the user's reassignment) and
-             text (in case the sentence was split — splitSentence rewrites
-             text in place and the analyzer wouldn't know about it). */
-          merged.push({ ...inc, characterId: x.characterId, text: x.text, excludeFromSynthesis: x.excludeFromSynthesis });
+             incoming but preserve the user-authored ones: characterId (the
+             reassignment), text (in case the sentence was split —
+             splitSentence rewrites text in place and the analyzer wouldn't
+             know about it), excludeFromSynthesis (fs-58 import-residue
+             exclusion), and the per-quote delivery edits emotion / instruct
+             ("manual wins" — #1121). vocalization tracks the preserved text,
+             so it rides along too rather than picking up the fresh analyzer's
+             flag for text we're discarding. */
+          merged.push({
+            ...inc,
+            characterId: x.characterId,
+            text: x.text,
+            excludeFromSynthesis: x.excludeFromSynthesis,
+            emotion: x.emotion,
+            instruct: x.instruct,
+            vocalization: x.vocalization,
+          });
         } else {
           /* Either a split offspring (id assigned above analyzer max) or a
              sentence the new analysis dropped. Keep it — the GET-side merge
