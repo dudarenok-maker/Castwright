@@ -108,7 +108,7 @@ def test_design_route_posts_progress_when_token_present(monkeypatch):
         def __init__(self):
             pass  # skip the real heavy __init__; the route only calls design_voice
 
-        def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None, report_progress=None):
+        def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None, report_progress=None, mint_method=None, fallback_for=None):
             if report_progress:
                 report_progress("loading-model")
                 report_progress("designing")
