@@ -32,69 +32,60 @@
   `{ created: number; createdCharacters: { id: string; name: string }[]; aborted: boolean }`.
   `createdCharacters` lists `{id, name}` for every character minted this batch (in creation order; partial on abort; empty when all ops dedupe to existing roster members).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1a: Update the existing strict return assertion (it WILL break)**
 
-Add to `src/lib/apply-proposed.test.ts`:
+`apply-proposed.test.ts:25` uses a strict `toEqual` on the whole result object. Adding
+`createdCharacters` breaks it. Update that line:
 
 ```ts
-it('returns createdCharacters with {id,name} for each minted member', async () => {
-  let n = 0;
-  const result = await applyProposedReattributions(
-    [
-      { chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Mara' } } as never,
-      { chapterId: 1, id: 11, op: 'reattribute', proposed: { name: 'Mara' } } as never, // dup name
-      { chapterId: 2, id: 12, op: 'reattribute', proposed: { name: 'Tom' } } as never,
-    ],
-    {
-      rosterByName: new Map(),
-      createCharacter: async (p) => ({ id: `id-${++n}`, name: p.name }),
-      addCharacter: () => {},
-      setSentenceCharacter: () => {},
-      onBoundaryMove: () => {},
-      isSameBook: () => true,
-    },
-  );
-  expect(result.created).toBe(2);
-  expect(result.createdCharacters).toEqual([
-    { id: 'id-1', name: 'Mara' },
-    { id: 'id-2', name: 'Tom' },
+// BEFORE:
+//   expect(r).toEqual({ created: 1, aborted: false });
+// AFTER:
+expect(r).toEqual({ created: 1, createdCharacters: [{ id: 'ferra', name: 'Ferra' }], aborted: false });
+```
+
+(`createCharacter` in the file's `deps()` helper resolves `{ id: p.name.toLowerCase(), name: p.name }`,
+so the created id is `'ferra'`.) Leave the line-52 `expect(r.aborted).toBe(true)` partial assertion
+as-is.
+
+- [ ] **Step 1b: Write the failing tests for `createdCharacters`**
+
+Add to `src/lib/apply-proposed.test.ts`, reusing the file's existing `deps()` helper:
+
+```ts
+it('returns createdCharacters with {id,name} for each minted member (dedup within batch)', async () => {
+  const d = deps();
+  const r = await applyProposedReattributions([
+    { chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Mara' } },
+    { chapterId: 1, id: 11, op: 'reattribute', proposed: { name: 'mara ' } }, // dup name → one create
+    { chapterId: 2, id: 12, op: 'reattribute', proposed: { name: 'Tom' } },
+  ] as any, d);
+  expect(r.created).toBe(2);
+  expect(r.createdCharacters).toEqual([
+    { id: 'mara', name: 'Mara' },
+    { id: 'tom', name: 'Tom' },
   ]);
-  expect(result.aborted).toBe(false);
+  expect(r.aborted).toBe(false);
 });
 
 it('returns empty createdCharacters when every op dedupes to an existing roster member', async () => {
-  const result = await applyProposedReattributions(
-    [{ chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Hart' } } as never],
-    {
-      rosterByName: new Map([['hart', { id: 'hart-1' }]]),
-      createCharacter: async () => { throw new Error('should not create'); },
-      addCharacter: () => {},
-      setSentenceCharacter: () => {},
-      onBoundaryMove: () => {},
-      isSameBook: () => true,
-    },
-  );
-  expect(result.createdCharacters).toEqual([]);
+  const d = deps({ rosterByName: new Map([['hart', { id: 'hart-1' }]]) });
+  const r = await applyProposedReattributions(
+    [{ chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Hart' } }] as any, d);
+  expect(r.createdCharacters).toEqual([]);
 });
 
 it('carries partial createdCharacters when the batch aborts on a book switch', async () => {
-  let n = 0;
-  const result = await applyProposedReattributions(
-    [
-      { chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Mara' } } as never,
-      { chapterId: 2, id: 12, op: 'reattribute', proposed: { name: 'Tom' } } as never,
-    ],
-    {
-      rosterByName: new Map(),
-      createCharacter: async (p) => ({ id: `id-${++n}`, name: p.name }),
-      addCharacter: () => {},
-      setSentenceCharacter: () => {},
-      onBoundaryMove: () => {},
-      isSameBook: () => n < 1, // true before the first create's post-await check, false after
-    },
-  );
-  expect(result.aborted).toBe(true);
-  expect(result.createdCharacters).toEqual([{ id: 'id-1', name: 'Mara' }]);
+  // isSameBook is checked once right after each create: true for Mara (recorded),
+  // false for Tom (abort BEFORE Tom is recorded).
+  const isSameBook = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+  const d = deps({ isSameBook });
+  const r = await applyProposedReattributions([
+    { chapterId: 1, id: 10, op: 'reattribute', proposed: { name: 'Mara' } },
+    { chapterId: 2, id: 12, op: 'reattribute', proposed: { name: 'Tom' } },
+  ] as any, d);
+  expect(r.aborted).toBe(true);
+  expect(r.createdCharacters).toEqual([{ id: 'mara', name: 'Mara' }]);
 });
 ```
 
@@ -340,14 +331,25 @@ import { VoiceNudgeToast } from './voice-nudge-toast';
 import { notificationsSlice, type Toast } from '../store/notifications-slice';
 import { castDesignSlice } from '../store/cast-design-slice';
 
-const makeStore = (designRunning: boolean) =>
-  configureStore({
+// Recording middleware — the idiomatic way to assert designAllRequested fired
+// (its reducer is a no-op; real interception lives in middleware not installed here).
+const recorded: { type: string; payload: unknown }[] = [];
+const recorder = () => (next: (a: unknown) => unknown) => (a: unknown) => {
+  recorded.push(a as { type: string; payload: unknown });
+  return next(a);
+};
+
+const makeStore = (designRunning: boolean) => {
+  recorded.length = 0;
+  return configureStore({
     reducer: { notifications: notificationsSlice.reducer, castDesign: castDesignSlice.reducer },
     preloadedState: {
       notifications: { toasts: [] },
       castDesign: { active: designRunning ? ({ state: 'running', bookId: 'b1' } as never) : null },
     },
+    middleware: (gdm) => gdm().concat(recorder),
   });
+};
 
 const toast: Toast = {
   id: 't1', kind: 'info', message: 'New character «Mara» needs a voice', createdAt: 0,
@@ -358,25 +360,15 @@ const toast: Toast = {
 describe('VoiceNudgeToast', () => {
   it('idle: tapping the button dispatches designAllRequested and dismisses the toast', () => {
     const store = makeStore(false);
-    const spy: { type: string; payload: unknown }[] = [];
-    store.subscribe(() => {});
-    const origDispatch = store.dispatch;
-    (store as { dispatch: typeof origDispatch }).dispatch = ((a: never) => {
-      spy.push(a);
-      return origDispatch(a);
-    }) as never;
-    // seed the toast so dismiss has something to remove
-    origDispatch(notificationsSlice.actions.pushToast({ kind: 'info', message: 'x' }));
-
     render(<Provider store={store}><VoiceNudgeToast toast={toast} /></Provider>);
     fireEvent.click(screen.getByRole('button', { name: /design now/i }));
 
-    const design = spy.find((a) => a.type === 'castDesign/designAllRequested');
+    const design = recorded.find((a) => a.type === 'castDesign/designAllRequested');
     expect(design).toBeTruthy();
     expect((design!.payload as { characterIds: string[] }).characterIds).toEqual(['mara']);
     expect((design!.payload as { scope: string }).scope).toBe('bases');
     expect((design!.payload as { modelKey: string }).modelKey).toBe('qwen3-tts-0.6b');
-    expect(spy.some((a) => a.type === 'notifications/dismissToast')).toBe(true);
+    expect(recorded.some((a) => a.type === 'notifications/dismissToast')).toBe(true);
   });
 
   it('busy: button is disabled and the nudge is NOT dismissed', () => {
@@ -575,65 +567,89 @@ git commit -m "feat(frontend): ToastStack routes nudge toasts to VoiceNudgeToast
   `engineForModelKey(ttsModelKey) === 'qwen'`, dispatch `pushToast` with the nudge payload +
   `dedupeKey: \`off-roster-voice-nudge:${startBookId}\``.
 
+**Primary path: extract a pure helper, unit-test it directly.** Driving the full async confirm
+UI in jsdom is brittle, so factor the engine-gate + payload logic into a small exported helper and
+test THAT. The component just calls it.
+
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/components/script-review-diff.test.tsx` two cases (adapt to the file's existing
-render harness + mock of `api.createCharacter`). The key assertions:
+Create `src/components/script-review-voice-nudge.test.ts`:
 
-```tsx
-it('pushes a Design-now nudge after an off-roster create on a Qwen project', async () => {
-  // store seeded with ui.ttsModelKey = 'qwen3-tts-0.6b', an active off-roster review bucket,
-  // and api.createCharacter mocked to resolve { character: { id: 'mara', name: 'Mara' } }.
-  // …drive the confirm flow to completion (create "Mara")…
-  await waitFor(() => {
-    const t = store.getState().notifications.toasts.find((x) => x.nudge);
-    expect(t).toBeTruthy();
-    expect(t!.nudge!.characterIds).toEqual(['mara']);
-    expect(t!.nudge!.modelKey).toBe('qwen3-tts-0.6b');
-    expect(t!.dedupeKey).toMatch(/^off-roster-voice-nudge:/);
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { maybePushVoiceNudge } from './script-review-diff';
+
+describe('maybePushVoiceNudge', () => {
+  it('pushes a nudge on a qwen project with the right payload + dedupeKey', () => {
+    const dispatch = vi.fn();
+    maybePushVoiceNudge(dispatch, {
+      ttsModelKey: 'qwen3-tts-0.6b',
+      startBookId: 'b1',
+      createdCharacters: [{ id: 'mara', name: 'Mara' }],
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    const action = dispatch.mock.calls[0][0];
+    expect(action.type).toBe('notifications/pushToast');
+    expect(action.payload.dedupeKey).toBe('off-roster-voice-nudge:b1');
+    expect(action.payload.nudge).toEqual({
+      bookId: 'b1',
+      characterIds: ['mara'],
+      modelKey: 'qwen3-tts-0.6b',
+      names: ['Mara'],
+    });
   });
-});
 
-it('pushes NO nudge on a preset-engine (kokoro) project', async () => {
-  // same flow but ui.ttsModelKey = 'kokoro-v1'
-  await waitFor(() => { /* flow done */ });
-  expect(store.getState().notifications.toasts.some((x) => x.nudge)).toBe(false);
+  it('does nothing on a preset-engine (kokoro) project', () => {
+    const dispatch = vi.fn();
+    maybePushVoiceNudge(dispatch, {
+      ttsModelKey: 'kokoro-v1',
+      startBookId: 'b1',
+      createdCharacters: [{ id: 'mara', name: 'Mara' }],
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when no characters were created', () => {
+    const dispatch = vi.fn();
+    maybePushVoiceNudge(dispatch, {
+      ttsModelKey: 'qwen3-tts-0.6b', startBookId: 'b1', createdCharacters: [],
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });
 ```
 
-> If driving the full confirm UI is heavy in this suite, factor the push into a tiny exported
-> helper `maybePushVoiceNudge(dispatch, { ttsModelKey, startBookId, createdCharacters })` in
-> `script-review-diff.tsx` and unit-test THAT directly (engine gate + payload), keeping the
-> component test to a single happy-path render. Either satisfies the gate.
+> Confirm the exact valid `TtsModelKey` strings for qwen + kokoro from `src/lib/tts-models.ts`
+> (`QWEN_MODEL_KEY` / the kokoro key) and use those literals; the helper only branches on
+> `engineForModelKey`, so any valid qwen/kokoro key works.
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm run test -- src/components/script-review-diff.test.tsx`
-Expected: FAIL — no nudge toast pushed.
+Run: `npm run test -- src/components/script-review-voice-nudge.test.ts`
+Expected: FAIL — `maybePushVoiceNudge` is not exported.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add imports to `src/components/script-review-diff.tsx`:
+Add imports + the exported helper to `src/components/script-review-diff.tsx`:
 
 ```tsx
+import type { Dispatch } from '@reduxjs/toolkit';
 import { notificationsActions } from '../store/notifications-slice';
 import { engineForModelKey } from '../lib/tts-models';
 import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
-```
+import type { TtsModelKey } from '../lib/types'; // or wherever TtsModelKey is declared
 
-Read the model key at component scope (near the other `useAppSelector`s, ~line 143):
-
-```tsx
-const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
-```
-
-In `runProposed`, capture the result and push the nudge:
-
-```tsx
-const { createdCharacters } = await applyProposedReattributions(finalized, {
-  /* …existing deps unchanged… */
-});
-if (createdCharacters.length > 0 && engineForModelKey(ttsModelKey) === 'qwen') {
+/** fs-63 — push the off-roster "Design now" nudge, gated to a Qwen project.
+    Exported (and pure-ish: side effect is the single dispatch) so it's unit
+    testable without driving the confirm UI. No-op on preset engines or an
+    empty batch. */
+export function maybePushVoiceNudge(
+  dispatch: Dispatch,
+  args: { ttsModelKey: TtsModelKey; startBookId: string; createdCharacters: { id: string; name: string }[] },
+): void {
+  const { ttsModelKey, startBookId, createdCharacters } = args;
+  if (createdCharacters.length === 0) return;
+  if (engineForModelKey(ttsModelKey) !== 'qwen') return;
   dispatch(
     notificationsActions.pushToast({
       kind: 'info',
@@ -651,23 +667,39 @@ if (createdCharacters.length > 0 && engineForModelKey(ttsModelKey) === 'qwen') {
     }),
   );
 }
+```
+
+Read the model key at component scope (near the other `useAppSelector`s, ~line 143):
+
+```tsx
+const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+```
+
+In `runProposed`, capture the result and call the helper before clearing the review:
+
+```tsx
+const { createdCharacters } = await applyProposedReattributions(finalized, {
+  /* …existing deps unchanged… */
+});
+maybePushVoiceNudge(dispatch, { ttsModelKey, startBookId, createdCharacters });
 setConfirm(null);
 dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
 ```
 
-> The `message` here seeds the dedupe-display text; `VoiceNudgeToast` recomputes its own copy
-> from `nudge`, so the two stay consistent. `startBookId` (not the live `bookId`) keeps the
-> nudge bound to the book the characters were created in.
+> `VoiceNudgeToast` recomputes its own copy from `nudge`, so the seeded `message` and the rendered
+> copy stay consistent. `startBookId` (not the live `bookId`) keeps the nudge bound to the book the
+> characters were created in. Push happens even on an aborted batch (non-empty `createdCharacters`),
+> per spec §3.3.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm run test -- src/components/script-review-diff.test.tsx`
-Expected: PASS (Qwen pushes nudge; kokoro pushes none).
+Run: `npm run test -- src/components/script-review-voice-nudge.test.ts`
+Expected: PASS (Qwen pushes nudge; kokoro/empty push none).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/components/script-review-diff.tsx src/components/script-review-diff.test.tsx
+git add src/components/script-review-diff.tsx src/components/script-review-voice-nudge.test.ts
 git commit -m "feat(frontend): push off-roster voice nudge after apply (qwen-only)"
 ```
 
@@ -692,14 +724,17 @@ test('off-roster reattribute on a Qwen book surfaces a Design-now nudge that act
   //   confirm CreateCharacterForm with a new name…
   await expect(page.getByRole('button', { name: /design now/i })).toBeVisible();
   await page.getByRole('button', { name: /design now/i }).click();
-  // The DesignPill seeds synchronously via castDesign begin.
-  await expect(page.getByTestId('design-pill')).toBeVisible();
+  // The design pill seeds synchronously via castDesign `begin`; assert on its
+  // visible progress text ("Designing"/"Designed") rather than a guessed testid.
+  await expect(page.getByText(/design(ing|ed)/i)).toBeVisible();
 });
 ```
 
 > Reuse the spec's existing helpers for entering script review and the off-roster confirm path.
-> Confirm the real `data-testid` of the design pill from `src/components/layout.tsx` (search
-> `design-pill` / the `DesignPill` render) and match it; adjust the selector if it differs.
+> There is NO `data-testid="design-pill"` today — `layout.tsx` builds a `DesignPillData` and renders
+> the pill from it. Locate the pill's actual rendered text/component at implementation time and
+> match on its visible label (or add a minimal `data-testid` to the pill component if a text match
+> proves flaky). Do NOT hard-code an unverified testid.
 
 - [ ] **Step 2: Run test to verify it fails (or is RED before wiring)**
 
