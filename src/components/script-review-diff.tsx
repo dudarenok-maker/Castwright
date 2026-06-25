@@ -102,7 +102,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bucket = useAppSelector((s) => selectActiveReview(s as any, bookId));
   const sentences = useAppSelector((s) => s.manuscript.sentences);
-  const cast = useAppSelector((s) => s.cast.characters);
+  const cast = useAppSelector((s) => s.cast?.characters ?? []);
   // Live book id of the active `ready` stage — used by the book-switch guard.
   // Tracked through a ref so the async helper sees the CURRENT value, not the
   // one captured when handleApply was first invoked.
