@@ -230,4 +230,103 @@ describe('fs-58 — ScriptReviewDiff', () => {
     );
     expect(screen.queryByTestId('unappliable-notice')).toBeNull();
   });
+
+  it('renders a reattribute row (not a silent blank) (fs-58 Unit B)', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [
+            { id: 10, chapterId: 1, text: 'She said something.', characterId: 'narr' },
+          ] as never,
+        },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [
+          {
+            id: 10,
+            op: 'reattribute',
+            characterId: 'ferra',
+            rationale: 'wrong speaker',
+            chapterId: 1,
+          },
+        ],
+        unappliable: [],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    expect(screen.getByText(/ferra/i)).toBeInTheDocument();
+  });
+
+  it('renders a flag_nonstory row struck (fs-58 Unit B)', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [
+            { id: 42, chapterId: 1, text: 'p. 42', characterId: 'narr' },
+          ] as never,
+        },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [
+          {
+            id: 42,
+            op: 'flag_nonstory',
+            rationale: 'page number artifact',
+            chapterId: 1,
+          },
+        ],
+        unappliable: [],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    expect(screen.getByText('p. 42')).toHaveClass('line-through');
+  });
 });

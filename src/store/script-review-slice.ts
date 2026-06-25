@@ -49,9 +49,10 @@ export const scriptReviewSlice = createSlice({
       }>,
     ) => {
       const { bookId, ops, unappliable } = a.payload;
+      const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']); // fs-58 Unit B — higher-risk classes opt-in
       const selected: Record<string, boolean> = {};
       for (const o of ops) {
-        selected[opKey(o.chapterId, o.id, o.op)] = true;
+        selected[opKey(o.chapterId, o.id, o.op)] = !DEFAULT_OFF.has(o.op);
       }
       s.byBook[bookId] = { ops, unappliable, selected };
     },

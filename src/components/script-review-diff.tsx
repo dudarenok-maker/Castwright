@@ -22,6 +22,8 @@ const CLASS_LABELS: Record<string, string> = {
   extract_dialogue: 'Extract dialogue',
   merge: 'Merge sentences',
   fix_emotion: 'Fix emotion',
+  reattribute: 'Reattribute speaker',     // fs-58 Unit B
+  flag_nonstory: 'Exclude non-story',     // fs-58 Unit B
 };
 
 function classLabel(op: string): string {
@@ -63,6 +65,21 @@ function OpPreview({ op, before }: { op: ReviewOpWithChapter; before?: string })
     return (
       <span className="text-xs text-ink/70 min-w-0 truncate">
         split at: <span className="font-medium text-ink">{op.anchor}</span>
+      </span>
+    );
+  }
+  if (op.op === 'reattribute') {
+    const target = op.characterId ?? (op.proposed ? `+ new: «${op.proposed.name}»` : '?');
+    return (
+      <span className="text-xs text-ink/70 min-w-0 truncate">
+        reassign → <span className="font-semibold text-ink">{target}</span>
+      </span>
+    );
+  }
+  if (op.op === 'flag_nonstory') {
+    return (
+      <span className="text-xs text-ink/70 min-w-0 truncate">
+        exclude: {before !== undefined && <span className="line-through text-ink/45">{before}</span>}
       </span>
     );
   }
