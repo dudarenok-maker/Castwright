@@ -18,8 +18,7 @@ function renderControl(props: Partial<React.ComponentProps<typeof SentenceInstru
         chapterId={1}
         sentenceId={2}
         instruct={undefined}
-        character={{ id: 'wren', name: 'Wren', ttsEngine: 'qwen' } as unknown as Character}
-        liveInstruct={true}
+        character={{ id: 'wren', name: 'Wren', ttsModelKey: 'qwen3-tts-1.7b' } as unknown as Character}
         {...props}
       />
     </Provider>,
@@ -64,14 +63,17 @@ describe('fs-56 SentenceInstructControl', () => {
     );
   });
 
-  it('shows the inaudible caption (naming the 1.7B tier) when liveInstruct is off', () => {
-    renderControl({ instruct: 'x', liveInstruct: false });
+  it('shows the inaudible caption (naming the 1.7B tier) when the speaker is on the 0.6B default', () => {
+    renderControl({
+      instruct: 'x',
+      character: { id: 'n', name: 'N' } as Character,
+    });
     fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
-    expect(screen.getByText(/Qwen 1\.7B tier with Live expressive delivery on/i)).toBeInTheDocument();
+    expect(screen.getByText(/Qwen 1\.7B tier/i)).toBeInTheDocument();
   });
 
-  it('calls markStale with character id+name on Save when liveInstruct is true', () => {
-    renderControl({ instruct: 'whisper softly', liveInstruct: true });
+  it('calls markStale with character id+name on Save when speaker is on 1.7B', () => {
+    renderControl({ instruct: 'whisper softly', character: { id: 'wren', name: 'Wren', ttsModelKey: 'qwen3-tts-1.7b' } as unknown as Character });
     fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
     const ta = screen.getByRole('textbox');
     fireEvent.change(ta, { target: { value: 'shout it' } });
@@ -80,12 +82,33 @@ describe('fs-56 SentenceInstructControl', () => {
     expect(markStaleSpy).toHaveBeenCalledWith({ id: 'wren', name: 'Wren' });
   });
 
-  it('does NOT call markStale on Save when liveInstruct is false', () => {
-    renderControl({ instruct: 'whisper softly', liveInstruct: false });
+  it('does NOT call markStale on Save when speaker is on the 0.6B default', () => {
+    renderControl({ instruct: 'whisper softly', character: { id: 'n', name: 'N' } as Character });
     fireEvent.click(screen.getByRole('button', { name: /delivery direction/i }));
     const ta = screen.getByRole('textbox');
     fireEvent.change(ta, { target: { value: 'shout it' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
     expect(markStaleSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows the instruct as audible (not muted) when the speaker is on 1.7B', () => {
+    render(
+      <Provider store={configureStore({ reducer: { manuscript: manuscriptSlice.reducer } })}>
+        <SentenceInstructControl chapterId={1} sentenceId={1} instruct="a whisper"
+          character={{ id: 'n', name: 'N', ttsModelKey: 'qwen3-tts-1.7b' } as unknown as Character} />
+      </Provider>,
+    );
+    const chip = screen.getByTestId('instruct-chip');
+    expect(chip.className).not.toContain('opacity-50'); // audible
+  });
+
+  it('mutes the instruct when the speaker is on the 0.6B default', () => {
+    render(
+      <Provider store={configureStore({ reducer: { manuscript: manuscriptSlice.reducer } })}>
+        <SentenceInstructControl chapterId={1} sentenceId={1} instruct="a whisper"
+          character={{ id: 'n', name: 'N' } as Character} />
+      </Provider>,
+    );
+    expect(screen.getByTestId('instruct-chip').className).toContain('opacity-50');
   });
 });

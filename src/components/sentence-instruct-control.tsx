@@ -7,10 +7,12 @@
    authored OR Stage-3-proposed (one field; the control is the single edit
    surface). A hand-set value wins because applyDetectedInstruct is fill-only.
 
-   Audibility/staleness gate on the per-book `liveInstruct` flag ONLY (the
-   reliably-known half; the per-character 1.7B model key is a server detail we
-   can't see). liveInstruct off ⇒ definitely silent ⇒ muted + caption; on ⇒
-   may be audible ⇒ render normally + conservatively mark stale-if-rendered. */
+   Audibility/staleness gate on the per-speaker 1.7B model key:
+   `character?.ttsModelKey === 'qwen3-tts-1.7b'`. A line is audible iff its
+   speaker renders on the 1.7B tier. Note: a character with a stale 1.7B key
+   but a non-Qwen ttsEngine could be mis-classified as "audible" — PR4 only
+   ever writes this key to Qwen members, matching the hasLiveInstructMember
+   precedent (generation.tsx), so this is an accepted simplification. */
 
 import { useEffect, useRef, useState } from 'react';
 import { useAppDispatch } from '../store';
@@ -25,13 +27,11 @@ export function SentenceInstructControl({
   sentenceId,
   instruct,
   character,
-  liveInstruct,
 }: {
   chapterId: number;
   sentenceId: number;
   instruct?: string;
   character?: Character;
-  liveInstruct: boolean;
 }) {
   const dispatch = useAppDispatch();
   const markStale = useMarkCharacterStaleIfRendered();
@@ -59,11 +59,12 @@ export function SentenceInstructControl({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
+  // 1.7B implies prosody: a line is audible iff its speaker renders on the 1.7B tier.
+  const audible = character?.ttsModelKey === 'qwen3-tts-1.7b';
+
   const commit = (value: string) => {
     dispatch(manuscriptActions.setSentenceInstruct({ chapterId, sentenceId, instruct: value }));
-    // Conservative staleness: only when the book intends expressive delivery.
-    // Never reconstruct the per-character 1.7B key here (spec — silent-loss trap).
-    if (liveInstruct && character) markStale({ id: character.id, name: character.name });
+    if (audible && character) markStale({ id: character.id, name: character.name });
     setOpen(false);
     chipRef.current?.focus();
   };
@@ -74,7 +75,7 @@ export function SentenceInstructControl({
       ? current.slice(0, PREVIEW_MAX) + '…'
       : current
     : undefined;
-  const inaudible = !liveInstruct;
+  const inaudible = !audible;
 
   return (
     <span ref={ref} className="relative inline-block align-baseline select-none" contentEditable={false}>
@@ -118,7 +119,7 @@ export function SentenceInstructControl({
           />
           {inaudible && (
             <span className="text-[10px] text-ink/50">
-              Delivery directions play on the Qwen 1.7B tier with Live expressive delivery on.
+              Delivery directions play when this character is on the Qwen 1.7B tier.
             </span>
           )}
           <div className="flex justify-end gap-2">
