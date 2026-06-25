@@ -13,6 +13,7 @@ import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
 import { GenerationView, ChapterSegmentStrip } from './generation';
 import { api } from '../lib/api';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
@@ -179,6 +180,7 @@ function makeStore() {
       cast: castSlice.reducer,
       library: librarySlice.reducer,
       queue: queueSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
       /* Account slice powers the engines-in-use selector that determines
          which engine pill(s) render in the Generate header. Defaults to
          the same Coqui modelKey the view receives so the existing button-
@@ -304,6 +306,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([ch1Done, ch2Queued, ch3Excluded]));
@@ -359,6 +362,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([verifying, ch2Queued]));
@@ -409,6 +413,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([recovering, ch2Queued]));
@@ -458,6 +463,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([verifying, ch2Queued]));
@@ -516,6 +522,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -628,6 +635,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([liveChapter]));
@@ -723,6 +731,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([live]));
@@ -790,6 +799,7 @@ describe('GenerationView — activity sidebar', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -855,6 +865,7 @@ describe('GenerationView — header action once the run is complete', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([allDone1, allDone2]));
@@ -910,6 +921,7 @@ describe('GenerationView — header action once the run is complete', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
@@ -1093,6 +1105,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -1228,6 +1241,7 @@ describe('GenerationView — reassignment staleness caption (Bug 2)', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -1304,6 +1318,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     /* hydrateFromBookState is the only setter for renderedSpeakersByChapter. */
@@ -1378,6 +1393,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     /* Render map exactly matches current sentences → precise diff returns false. */
@@ -1441,6 +1457,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
@@ -1679,6 +1696,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
@@ -2029,6 +2047,7 @@ describe('GenerationView — stuck-queued escape hatch + generated-time (side: s
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
         account: accountSlice.reducer,
       },
     });
@@ -2138,6 +2157,7 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
         account: accountSlice.reducer,
       },
     });
@@ -2280,6 +2300,7 @@ describe('GenerationView — srv-27 advisory QA badge', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
         account: accountSlice.reducer,
       },
     });
@@ -2368,6 +2389,7 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
         cast: castSlice.reducer,
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
         account: accountSlice.reducer,
       },
     });
