@@ -514,6 +514,7 @@ export function ManuscriptView({
       const sentenceEl = el?.closest?.('[data-sentence-idx]') as HTMLElement | null;
       if (sentenceEl) {
         const idx = Number(sentenceEl.dataset.sentenceIdx);
+        if (sentences[idx]?.excludeFromSynthesis) return; // fs-58 Unit B — excluded line isn't a drop target
         setDrag((d) =>
           d && d.candidateSentenceIdx !== idx ? { ...d, candidateSentenceIdx: idx } : d,
         );
@@ -562,7 +563,7 @@ export function ManuscriptView({
     const sentence = sentences.find(
       (s) => s.chapterId === currentChapterId && s.id === selection.sentenceId,
     );
-    if (!sentence) return;
+    if (!sentence || sentence.excludeFromSynthesis) return;
     const len = sentence.text.length;
     /* Whole sentence selected → simple reassign. Otherwise split into
        three pieces with the middle reassigned. The reducer drops empty
@@ -1044,7 +1045,17 @@ export function ManuscriptView({
         {inspectorContent}
       </BottomSheet>
 
-      <SelectionPopover sel={selection} characters={characters} onAssign={assignSelectionTo} />
+      <SelectionPopover
+        sel={
+          selection &&
+          currentChapterId != null &&
+          isExcludedSentenceId(sentences, currentChapterId, selection.sentenceId)
+            ? null
+            : selection
+        }
+        characters={characters}
+        onAssign={assignSelectionTo}
+      />
     </div>
   );
 }
@@ -1551,8 +1562,7 @@ function SegmentRow({
                   {renderSentenceText(s.text)}
                 </span>
                 {/* fs-58 Unit B — excluded lines: re-include toggle outside the
-                    span so split offsets are unaffected; chips suppressed.
-                    follow-up: disable split/drag affordance on excluded lines. */}
+                    span so split offsets are unaffected; chips suppressed. */}
                 {s.excludeFromSynthesis ? (
                   <button
                     data-testid={`reinclude-toggle-${s.id}`}
@@ -1875,6 +1885,19 @@ function SegmentInspector({
 function renderSentenceText(text: string) {
   if (!text) return null;
   return <span data-text-offset={0}>{text}</span>;
+}
+
+/* fs-58 Unit B — a sentence excluded from synthesis offers no split/reassign
+   affordance (it won't be rendered either way). Scoped by chapter because
+   sentence ids restart per chapter. */
+export function isExcludedSentenceId(
+  sentences: ReadonlyArray<{ chapterId: number; id: number; excludeFromSynthesis?: boolean }>,
+  chapterId: number,
+  sentenceId: number,
+): boolean {
+  return Boolean(
+    sentences.find((s) => s.chapterId === chapterId && s.id === sentenceId)?.excludeFromSynthesis,
+  );
 }
 
 /* ── Selection-based split popover ─────────────────────────────────────── */

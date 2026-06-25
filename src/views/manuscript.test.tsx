@@ -25,7 +25,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { castSlice } from '../store/cast-slice';
 import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
-import { ManuscriptView } from './manuscript';
+import { ManuscriptView, isExcludedSentenceId } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
 /* fs-58 — api mock for reviewScript + createCharacter trigger tests. */
@@ -1531,5 +1531,25 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
     });
     // Form still open for retry.
     expect(screen.getByTestId('create-character-form')).toBeInTheDocument();
+  });
+});
+
+describe('isExcludedSentenceId', () => {
+  const rows = [
+    { chapterId: 1, id: 1, excludeFromSynthesis: true },
+    { chapterId: 1, id: 2 },
+    { chapterId: 2, id: 1 }, // same id, different chapter, NOT excluded
+  ];
+  it('is true for an excluded sentence', () => {
+    expect(isExcludedSentenceId(rows, 1, 1)).toBe(true);
+  });
+  it('is false for a non-excluded sentence', () => {
+    expect(isExcludedSentenceId(rows, 1, 2)).toBe(false);
+  });
+  it('is scoped by chapter (no cross-chapter id collision)', () => {
+    expect(isExcludedSentenceId(rows, 2, 1)).toBe(false);
+  });
+  it('is false when the sentence is not found', () => {
+    expect(isExcludedSentenceId(rows, 9, 9)).toBe(false);
   });
 });
