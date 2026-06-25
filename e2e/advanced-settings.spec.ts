@@ -19,6 +19,14 @@
 import { test, expect } from '@playwright/test';
 import { waitForRouteReady } from './helpers';
 
+/* Run this file's tests sequentially on a single worker. Each test does a cold
+ * `goto('/#/advanced')` that triggers a route-level React.lazy chunk load; with
+ * fullyParallel + 4 local workers these cold-loads pile onto the single Vite dev
+ * server and the visibility timeouts flake under peak battery contention (passes
+ * on retry in isolation, exhausts retries under full load). Serial mode caps this
+ * file at one concurrent cold-load — the same mitigation 10+ sibling specs use. */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('Advanced Settings — plan 199 golden path', () => {
   test('navigates to #/advanced and shows the heading', async ({ page }) => {
     await page.goto('/#/advanced');

@@ -39,8 +39,12 @@ export default defineConfig({
      once: N Chromium instances saturate CPU and each page's `load` stalls past
      budget. The `warmup` setup project warms the server transform cache; a
      moderate cap bounds the client-side cold-load herd. Together they keep the
-     parallel battery green. CI stays at 1 (no herd there). */
-  workers: process.env.CI ? 1 : 4,
+     parallel battery green. CI stays at 1 (no herd there). Local dropped 4→2
+     (2026-06-26): 4 Chromium+Vite instances thrashed memory on dev boxes and
+     the cold-load herd exhausted the 2 retries under peak battery load (the
+     advanced-settings flake). Two workers halves peak memory and tames the herd
+     while keeping the suite well under the navigation budget. */
+  workers: process.env.CI ? 1 : 2,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   /* Per-platform AND per-project visual-regression baselines. {platform}
      resolves to 'win32' | 'linux' | 'darwin' under Node's process.platform.
