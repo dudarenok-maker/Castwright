@@ -77,7 +77,7 @@ export function RegenerateModal({
     <>
       <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in" />
       <div className="fixed inset-0 z-50 grid place-items-center p-6 pointer-events-none">
-        <div className="bg-white rounded-3xl shadow-float w-full max-w-xl pointer-events-auto fade-in overflow-hidden">
+        <div className="bg-white rounded-3xl shadow-float w-full max-w-xl pointer-events-auto fade-in overflow-hidden max-h-[90vh] flex flex-col">
           <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
             <span className="w-9 h-9 rounded-full bg-peach/15 grid place-items-center text-magenta">
               <IconRefresh className="w-4 h-4" />
@@ -95,7 +95,7 @@ export function RegenerateModal({
             </button>
           </div>
 
-          <div className="p-6 space-y-6">
+          <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
             <section>
               <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
                 What changed?
