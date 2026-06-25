@@ -1484,4 +1484,52 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
     /* The form must be dismissed after a successful create. */
     await waitFor(() => expect(screen.queryByTestId('create-character-form')).toBeNull());
   });
+
+  it('on a failed create: shows an error toast and keeps the form open (#1122)', async () => {
+    const user = userEvent.setup();
+    createCharacter.mockReset();
+    createCharacter.mockRejectedValue(new Error('boom'));
+
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        cast: castSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: { kind: 'ready', bookId: 'bk-addchar', view: 'manuscript', currentChapterId: 1, openProfileId: null } as never,
+        },
+        cast: { characters: [{ id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' }], renderedFallbackByCharacter: {} },
+      },
+    });
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={[{ id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' }]}
+          chapters={[{ id: 1, title: 'Chapter One', duration: '10:00', state: 'done', progress: 1, characters: { narrator: 'done' } }]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /add character/i }));
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Ferra' } });
+    await user.click(screen.getByTestId('create-character-submit'));
+
+    // Error toast surfaced.
+    await waitFor(() => {
+      const toasts: Toast[] = store.getState().notifications.toasts;
+      expect(toasts.some((t) => t.kind === 'error' && /create character/i.test(t.message))).toBe(true);
+    });
+    // Form still open for retry.
+    expect(screen.getByTestId('create-character-form')).toBeInTheDocument();
+  });
 });

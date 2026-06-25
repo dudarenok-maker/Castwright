@@ -597,8 +597,19 @@ export function ManuscriptView({
   const handleCreateCharacter = useCallback(
     async (fields: { name: string; gender?: string; ageRange?: string }) => {
       if (!bookId) return;
-      const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
-      dispatch(castActions.addCharacter(result.character));
+      try {
+        const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
+        dispatch(castActions.addCharacter(result.character));
+      } catch (err) {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: "Couldn't create character",
+            dedupeKey: 'create-character',
+          }),
+        );
+        throw err;
+      }
     },
     [bookId, dispatch],
   );
@@ -1260,7 +1271,14 @@ function SidebarPanels({
             <div className="mt-3">
               <CreateCharacterForm
                 rosterByName={new Map(characters.map((c) => [c.name.trim().toLowerCase(), { id: c.id, name: c.name }]))}
-                onSubmit={async (f) => { await onCreateCharacter(f); setAddingChar(false); }}
+                onSubmit={async (f) => {
+                  try {
+                    await onCreateCharacter(f);
+                    setAddingChar(false);
+                  } catch {
+                    /* handler already surfaced a toast; keep the form open for retry */
+                  }
+                }}
                 onReattributeExisting={() => setAddingChar(false)}
                 onCancel={() => setAddingChar(false)}
               />
