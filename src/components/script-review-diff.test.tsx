@@ -7,6 +7,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { castSlice } from '../store/cast-slice';
 import { scriptReviewSlice, scriptReviewActions, opKey } from '../store/script-review-slice';
 import { changeLogSlice } from '../store/change-log-slice';
+import { notificationsSlice, type Toast } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { ScriptReviewDiff } from './script-review-diff';
 
@@ -406,6 +407,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
         cast: castSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
         changeLog: changeLogSlice.reducer,
+        notifications: notificationsSlice.reducer,
       },
       preloadedState: {
         ui: {
@@ -507,6 +509,33 @@ describe('fs-58 — ScriptReviewDiff', () => {
     const sentences = store.getState().manuscript.sentences;
     expect(sentences.find((s) => s.id === 5)?.characterId).toBe(newId);
     expect(sentences.find((s) => s.id === 7)?.characterId).toBe(newId);
+  });
+
+  it('a failed create surfaces a toast, closes the confirm dialog, and keeps the review for retry (#1122)', async () => {
+    createSpy.mockRejectedValueOnce(new Error('boom'));
+    const store = makeProposedStore(
+      [{ id: 5, chapterId: 1, proposed: { name: 'Ferra' } }],
+      [{ id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' }],
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('apply-button'));
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('create-character-submit'));
+
+    // Error toast surfaced.
+    await waitFor(() => {
+      const toasts: Toast[] = store.getState().notifications.toasts;
+      expect(toasts.some((t) => t.kind === 'error' && /create character/i.test(t.message))).toBe(true);
+    });
+    // Confirm dialog closed.
+    expect(screen.queryByTestId('confirm-reattribute')).toBeNull();
+    // Review bucket retained for retry (NOT cleared).
+    expect(store.getState().scriptReview.byBook['book-A']).toBeDefined();
   });
 
   it('cancelling mid-confirm creates NO not-yet-confirmed member and clears the review', async () => {

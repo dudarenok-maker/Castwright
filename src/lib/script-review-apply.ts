@@ -216,7 +216,6 @@ export function dispatchAcceptedOps(
   accepted: ReviewOp[],
   live: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>,
   { onBoundaryMove }: { onBoundaryMove: (chapterId: number) => void },
-  _roster: Set<string> = new Set(),
 ): void {
   const byId = new Map(live.map((s) => [s.id, s]));
   for (const op of accepted) {
