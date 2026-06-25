@@ -345,6 +345,29 @@ describe('sentenceSchema excludeFromSynthesis (fs-58 Unit B)', () => {
   });
 });
 
+describe('scriptReviewSchema reattribute + flag_nonstory (fs-58 Unit B)', () => {
+  const wrap = (op: object) => scriptReviewSchema.safeParse({ ops: [op] });
+
+  it('accepts on-roster reattribute (characterId only)', () => {
+    expect(wrap({ id: 3, op: 'reattribute', anchor: 'said Ferra', characterId: 'ferra', rationale: 'wrong speaker' }).success).toBe(true);
+  });
+  it('accepts off-roster reattribute (proposed only)', () => {
+    expect(wrap({ id: 3, op: 'reattribute', anchor: 'said Ferra', proposed: { name: 'Ferra', gender: 'female' }, rationale: 'uncast' }).success).toBe(true);
+  });
+  it('rejects reattribute with BOTH characterId and proposed', () => {
+    expect(wrap({ id: 3, op: 'reattribute', anchor: 'x', characterId: 'ferra', proposed: { name: 'Ferra' }, rationale: 'r' }).success).toBe(false);
+  });
+  it('rejects reattribute with NEITHER characterId nor proposed', () => {
+    expect(wrap({ id: 3, op: 'reattribute', anchor: 'x', rationale: 'r' }).success).toBe(false);
+  });
+  it('accepts flag_nonstory', () => {
+    expect(wrap({ id: 9, op: 'flag_nonstory', anchor: 'p. 42', rationale: 'page number' }).success).toBe(true);
+  });
+  it('still rejects an unknown op', () => {
+    expect(wrap({ id: 1, op: 'rewrite_everything', rationale: 'r' }).success).toBe(false);
+  });
+});
+
 describe('sentenceSchema fs-57 fields', () => {
   const base = { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' };
 

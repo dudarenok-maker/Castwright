@@ -42,13 +42,16 @@ export function rpdWarningFor(chapterCount: number, model: string | undefined): 
 
 export interface ReviewOp {
   id: number;
-  op: 'strip_tag' | 'split' | 'extract_dialogue' | 'merge' | 'fix_emotion';
+  op: 'strip_tag' | 'split' | 'extract_dialogue' | 'merge' | 'fix_emotion' | 'reattribute' | 'flag_nonstory';
   newText?: string;
   anchor?: string;
   anchorEnd?: string;
   pieceCharacterIds?: string[];
   mergeIds?: number[];
   emotion?: string;
+  // fs-58 Unit B — reattribute targets (exactly one is set):
+  characterId?: string;
+  proposed?: { name: string; gender?: string; ageRange?: string };
   rationale: string;
   confidence?: number;
 }
