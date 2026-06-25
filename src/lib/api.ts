@@ -2990,9 +2990,17 @@ async function mockReviewScript(
   onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 1 });
   onOps?.({
     chapterId: 1,
-    ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
+    ops: [
+      { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
+      {
+        id: 1,
+        op: 'validate_instruct',
+        newInstruct: 'a calm tone',
+        rationale: 'contradicts the line',
+      },
+    ],
   });
-  return { reviewedChapters: 1, totalOps: 1 };
+  return { reviewedChapters: 1, totalOps: 2 };
 }
 
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */

@@ -227,13 +227,23 @@ export const scriptReviewSchema = z
       z
         .object({
           id: z.number().int().positive(),
-          op: z.enum(['strip_tag', 'split', 'extract_dialogue', 'merge', 'fix_emotion']),
+          op: z.enum([
+            'strip_tag',
+            'split',
+            'extract_dialogue',
+            'merge',
+            'fix_emotion',
+            'validate_instruct',
+          ]),
           newText: z.string().optional(),
+          newInstruct: z.string().optional(),
+          newVocalizationText: z.string().optional(),
           anchor: z.string().optional(),
           anchorEnd: z.string().optional(),
           pieceCharacterIds: z.array(z.string()).optional(),
           mergeIds: z.array(z.number().int().positive()).optional(),
           emotion: z.enum(EMOTIONS).optional(),
+          vocalization: z.boolean().optional(),
           rationale: z.string(),
           confidence: z.number().min(0).max(1).optional(),
         })

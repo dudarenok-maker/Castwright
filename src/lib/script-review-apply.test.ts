@@ -309,3 +309,136 @@ describe('rpdWarningFor', () => {
     expect(rpdWarningFor(30, 'gemini-3-flash-preview')).not.toBeNull();
   });
 });
+
+const liveOne = (over: Partial<{ instruct: string; vocalization: boolean; text: string }> = {}) =>
+  [
+    {
+      id: 1,
+      chapterId: 1,
+      text: over.text ?? 'A calm line.',
+      characterId: 'mira',
+      instruct: over.instruct,
+      vocalization: over.vocalization,
+    },
+  ];
+
+describe('planApply — validate_instruct (fs-58)', () => {
+  it('keeps a repair when the sentence has a current instruct', () => {
+    const { appliable } = planApply(
+      [{ id: 1, op: 'validate_instruct', newInstruct: 'a calm, even tone', rationale: 'r' }] as never,
+      liveOne({ instruct: 'shouting' }),
+    );
+    expect(appliable).toHaveLength(1);
+    expect(appliable[0].newInstruct).toBe('a calm, even tone');
+  });
+
+  it('drops a repair (no current instruct) but keeps the vocalization half of a both-row', () => {
+    const { appliable } = planApply(
+      [
+        {
+          id: 1,
+          op: 'validate_instruct',
+          newInstruct: 'x',
+          newVocalizationText: 'Ah! line',
+          vocalization: true,
+          rationale: 'r',
+        },
+      ] as never,
+      liveOne({ vocalization: true }), // has vocalization, no instruct
+    );
+    expect(appliable).toHaveLength(1);
+    expect(appliable[0].newInstruct).toBeUndefined(); // repair half dropped
+    expect(appliable[0].newVocalizationText).toBe('Ah! line'); // vocalization half kept
+  });
+
+  it('treats a whitespace-only newInstruct as a strip (no current-instruct guard)', () => {
+    const { appliable } = planApply(
+      [{ id: 1, op: 'validate_instruct', newInstruct: '   ', rationale: 'r' }] as never,
+      liveOne(), // no instruct
+    );
+    // strip on an instruct-less sentence is a silent no-op: dropped from appliable, not unappliable
+    expect(appliable).toHaveLength(0);
+  });
+
+  it('rejects the vocalization edit when the sentence is not vocalization:true', () => {
+    const { appliable, unappliable } = planApply(
+      [{ id: 1, op: 'validate_instruct', newVocalizationText: 'Ah! x', vocalization: false, rationale: 'r' }] as never,
+      liveOne(), // not vocalization
+    );
+    expect(appliable).toHaveLength(0);
+    expect(unappliable).toHaveLength(1);
+  });
+
+  it('strip_tag wins a same-id text collision regardless of op order', () => {
+    const ops = [
+      { id: 1, op: 'validate_instruct', newVocalizationText: 'Ah! line', vocalization: true, rationale: 'r' },
+      { id: 1, op: 'strip_tag', anchor: 'A calm line.', newText: 'calm line', rationale: 'r' },
+    ];
+    const { appliable, unappliable } = planApply(ops as never, liveOne({ vocalization: true }));
+    expect(appliable.find((o) => o.op === 'strip_tag')).toBeTruthy();
+    expect(unappliable.find((u) => u.op.op === 'validate_instruct')).toBeTruthy();
+  });
+
+  it('rejects a validate_instruct edit whose id a structural op consumed', () => {
+    // §9: a merge consumes ids 1+2; a validate_instruct on id 1 must be un-appliable.
+    const live = [
+      { id: 1, chapterId: 1, text: 'a', characterId: 'mira', instruct: 'old' },
+      { id: 2, chapterId: 1, text: 'b', characterId: 'mira' },
+    ];
+    const { appliable, unappliable } = planApply(
+      [
+        { id: 1, op: 'merge', mergeIds: [1, 2], rationale: 'r' },
+        { id: 1, op: 'validate_instruct', newInstruct: 'new', rationale: 'r' },
+      ] as never,
+      live,
+    );
+    expect(appliable.find((o) => o.op === 'merge')).toBeTruthy();
+    expect(unappliable.find((u) => u.op.op === 'validate_instruct')).toBeTruthy();
+  });
+});
+
+describe('dispatchAcceptedOps — validate_instruct (fs-58)', () => {
+  const live = [{ id: 1, chapterId: 1, text: 'x', characterId: 'mira', instruct: 'old', vocalization: true }];
+
+  it('instruct-only edit dispatches setSentenceInstruct and does NOT bump boundary_move', () => {
+    const dispatched: any[] = []; const bumped: number[] = [];
+    dispatchAcceptedOps(
+      ((a: any) => dispatched.push(a)) as never,
+      [{ id: 1, op: 'validate_instruct', newInstruct: 'new', rationale: 'r' }],
+      live,
+      { onBoundaryMove: (c) => bumped.push(c) },
+    );
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceInstruct'))).toBe(true);
+    expect(bumped).toEqual([]); // engine-aware: instruct-only never time-stales
+  });
+
+  it('vocalization edit dispatches setSentenceText and DOES bump boundary_move', () => {
+    const dispatched: any[] = []; const bumped: number[] = [];
+    dispatchAcceptedOps(
+      ((a: any) => dispatched.push(a)) as never,
+      [{ id: 1, op: 'validate_instruct', newVocalizationText: 'Ah! x', vocalization: false, rationale: 'r' }],
+      live,
+      { onBoundaryMove: (c) => bumped.push(c) },
+    );
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceText'))).toBe(true);
+    expect(bumped).toEqual([1]);
+  });
+
+  // §9 round-2 hole: a "both" row whose vocalization half planApply DROPPED must reach
+  // dispatch as instruct-only → no setSentenceText, no boundary bump (no false-stale on
+  // Kokoro). planApply normalizes the dropped half away, so dispatch sees no newVocalizationText.
+  it('a both-row whose vocalization half was dropped does NOT bump boundary_move', () => {
+    const dispatched: any[] = []; const bumped: number[] = [];
+    // Feed planApply a both-row against a NON-vocalization sentence (vocal half drops),
+    // then dispatch the normalized appliable result — mirrors the modal's real flow.
+    const liveNoVocal = [{ id: 1, chapterId: 1, text: 'x', characterId: 'mira', instruct: 'old' }];
+    const { appliable } = planApply(
+      [{ id: 1, op: 'validate_instruct', newInstruct: 'new', newVocalizationText: 'Ah! x', vocalization: true, rationale: 'r' }] as never,
+      liveNoVocal,
+    );
+    dispatchAcceptedOps(((a: any) => dispatched.push(a)) as never, appliable, liveNoVocal, { onBoundaryMove: (c) => bumped.push(c) });
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceInstruct'))).toBe(true);
+    expect(dispatched.some((a) => a.type.endsWith('setSentenceText'))).toBe(false);
+    expect(bumped).toEqual([]); // instruct-only effect → no false-stale
+  });
+});

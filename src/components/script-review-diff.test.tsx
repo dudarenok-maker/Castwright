@@ -221,6 +221,58 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(notice.textContent).toContain("1 suggestion couldn't be applied");
   });
 
+  it('renders a validate_instruct row with the Instruct heading and before → after', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [
+            { id: 1, chapterId: 1, text: 'She spoke.', characterId: 'narr', instruct: 'shouting' },
+          ] as never,
+        },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [
+          {
+            id: 1,
+            op: 'validate_instruct',
+            newInstruct: 'a calm tone',
+            rationale: 'tone mismatch',
+            chapterId: 1,
+          },
+        ],
+        unappliable: [],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    expect(screen.getByText('Instruct', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(/shouting/)).toBeInTheDocument();
+    expect(screen.getByText(/a calm tone/)).toBeInTheDocument();
+  });
+
   it('does not render the unappliable notice when bucket.unappliable is empty', () => {
     const store = makeStore(); // makeStore seeds unappliable: []
     render(

@@ -68,6 +68,7 @@ import {
   isChapterStaleFromReassign,
   isChapterReassignedSinceRender,
   isChapterTextEditedSinceRender,
+  isChapterInstructEditedSinceRender,
 } from '../lib/stale-chapters';
 import {
   characterLinePositionsByChapter,
@@ -172,6 +173,12 @@ export function GenerationView({
      text-edit-staleness diff (the text sibling of the speaker-map diff). */
   const renderedTextByChapter = useAppSelector(
     (s) => s.chapters.renderedTextByChapter,
+  );
+  /* fs-58 — render-time sentence→instructHash map per chapter, for the PRECISE
+     instruct-edit-staleness diff (the instruct sibling of the text-map diff).
+     Only populated on the qwen-1.7b liveInstruct path. */
+  const renderedInstructByChapter = useAppSelector(
+    (s) => s.chapters.renderedInstructByChapter ?? {},
   );
   /* Drives the "View queue · N" pill in the header. Reflects real workspace
      queue entries when present, else the live generation run (the primary,
@@ -687,6 +694,28 @@ export function GenerationView({
     return set;
   }, [renderedTextByChapter, sentences]);
 
+  /* fs-58 — the set of chapters whose live sentence INSTRUCT differs from what was
+     rendered (precise instruct-edit staleness). Mirrors textEditedSinceRenderSet but
+     diffs instruct hashes, so an instruct edit flags the chapter stale on the
+     liveInstruct path even though text/characterIds are unchanged. Only chapters the
+     server stamped an instruct map for (qwen-1.7b liveInstruct renders) are considered. */
+  const instructEditedSinceRenderSet = useMemo(() => {
+    const byChapter = new Map<number, Array<{ id: number; instruct?: string }>>();
+    for (const s of sentences) {
+      let arr = byChapter.get(s.chapterId);
+      if (!arr) byChapter.set(s.chapterId, (arr = []));
+      arr.push({ id: s.id, instruct: s.instruct });
+    }
+    const set = new Set<number>();
+    for (const cidStr of Object.keys(renderedInstructByChapter)) {
+      const cid = Number(cidStr);
+      if (isChapterInstructEditedSinceRender(renderedInstructByChapter[cid], byChapter.get(cid) ?? [])) {
+        set.add(cid);
+      }
+    }
+    return set;
+  }, [renderedInstructByChapter, sentences]);
+
   /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
      stream survives navigating away from this view. The view is a pure
      renderer of slice state now. */
@@ -1188,6 +1217,7 @@ export function GenerationView({
                    clause, but the two precise diffs never false-positive on a revert. */
                 (renderedSpeakersByChapter[ch.id] ? reassignedSinceRenderSet.has(ch.id) : false) ||
                 (renderedTextByChapter[ch.id] ? textEditedSinceRenderSet.has(ch.id) : false) ||
+                (renderedInstructByChapter[ch.id] ? instructEditedSinceRenderSet.has(ch.id) : false) ||
                 isChapterStaleFromReassign(ch, activityEvents)
               }
               subsetProgress={subsetByChapter[ch.id] ?? null}

@@ -86,7 +86,10 @@ test.describe('fs-58 — script-review per-chapter accept flow', () => {
     /* The mock op is strip_tag: the class heading "Strip tag" should be visible. */
     await expect(page.getByText(/Strip tag/i)).toBeVisible();
 
-    /* The "Apply N selected" button — 1 op selected by default. */
+    /* The "Apply N selected" button — 1 op selected by default. The mock also
+       emits a validate_instruct REPAIR op (id:1), but this spec never seeds an
+       instruct on sentence id:1, so the apply guard drops that repair as a no-op,
+       leaving only the strip_tag op appliable. */
     const applyBtn = page.getByTestId('apply-button');
     await expect(applyBtn).toBeVisible();
     await expect(applyBtn).toContainText(/Apply 1 selected/i);

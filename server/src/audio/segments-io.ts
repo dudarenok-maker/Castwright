@@ -61,6 +61,12 @@ export interface SegmentsFile {
     sentenceIds?: number[];
     renderedFallbackEngine?: string | null;
     textHash?: string;
+    /* fs-58 (#1041) — djb2-base36 hash of the group's RAW explicit `instruct`,
+       stamped ONLY on the per-group qwen-1.7b liveInstruct path (the instruct
+       sibling of `textHash`). The frontend diffs it against the live manuscript
+       instruct to flag a chapter whose instruct was edited after it rendered.
+       Absent on every other engine/path and on pre-fs-58 renders. */
+    instructHash?: string;
   }>;
 }
 
@@ -175,6 +181,34 @@ export async function collectRenderedTextHashesByChapter(
       if (!s.textHash || !Array.isArray(s.sentenceIds)) continue;
       for (const sid of s.sentenceIds) {
         if (typeof sid === 'number') map[sid] = s.textHash;
+      }
+    }
+    if (Object.keys(map).length > 0) out[seg.chapterId] = map;
+  }
+  return out;
+}
+
+/* fs-58 — the render-time sentence→instructHash map per rendered chapter, recovered
+   from each segment's `instructHash` (stamped only on the per-group 1.7b liveInstruct
+   path). Shape: `{ [chapterId]: { [sentenceId]: instructHash } }`. The frontend diffs
+   it against the live manuscript `instruct` to flag a chapter whose instruct was edited
+   after it rendered — the instruct sibling of collectRenderedTextHashesByChapter.
+
+   Only chapters with at least one stamped instructHash appear; a chapter that rendered
+   on a non-liveInstruct engine (nothing stamped) is omitted so the client reads it as
+   "can't tell" rather than "every instruct edited". */
+export async function collectRenderedInstructHashesByChapter(
+  bookDir: string,
+  chapters: Array<{ id: number; slug: string }>,
+): Promise<Record<number, Record<number, string>>> {
+  const out: Record<number, Record<number, string>> = {};
+  const segs = await loadSegmentsFiles(bookDir, chapters);
+  for (const seg of segs) {
+    const map: Record<number, string> = {};
+    for (const s of seg.segments ?? []) {
+      if (!s.instructHash || !Array.isArray(s.sentenceIds)) continue;
+      for (const sid of s.sentenceIds) {
+        if (typeof sid === 'number') map[sid] = s.instructHash;
       }
     }
     if (Object.keys(map).length > 0) out[seg.chapterId] = map;

@@ -260,6 +260,38 @@ describe('book-state router — renderedTextByChapter (#1105)', () => {
   });
 });
 
+describe('book-state router — renderedInstructByChapter (#1041)', () => {
+  /* The GET ships a per-chapter sentence→instructHash map recovered from each
+     rendered chapter's segments file (stamped only on the 1.7b liveInstruct path),
+     so the Generate view can flag a chapter whose instruct was edited after render. */
+  it('returns {} when no chapter stamped an instructHash', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.renderedInstructByChapter).toEqual({});
+  });
+
+  it('maps rendered sentenceIds to their stamped instructHash per chapter', async () => {
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    /* Chapter 1 slug = 'chapter-one' (beforeAll). */
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [
+          { characterId: 'mira', sentenceIds: [5], instructHash: textHashForStale('a tired sigh') },
+        ],
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.renderedInstructByChapter).toEqual({
+      1: { 5: textHashForStale('a tired sigh') },
+    });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+  });
+});
+
 describe('book-state router — dropped-quotes endpoint', () => {
   it('GET dropped-quotes returns an empty envelope when the file does not exist', async () => {
     /* The book was created in beforeAll with no dropped-quotes.json on

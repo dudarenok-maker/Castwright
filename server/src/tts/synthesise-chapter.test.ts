@@ -25,6 +25,7 @@ import {
 } from './synthesise-chapter.js';
 import { pickVoiceForEngine } from './voice-mapping.js';
 import { normaliseForTts } from './text-normalize.js';
+import { textHashForStale } from '../audio/segments-io.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type {
   SynthesizeInput,
@@ -3063,5 +3064,108 @@ describe('fs-57 C1 — liveInstruct=false 1.7B byte-identical request shape', ()
 
     // (4) The 1.7B modelKey reaches the batch call — the tier override is wired.
     expect(batchCall.modelKey).toBe('qwen3-tts-1.7b');
+  });
+});
+
+/* fs-58 (#1041) — per-group instructHash stamp on the qwen-1.7b liveInstruct
+   path. The stamp lets the frontend flag a chapter whose per-line instruct was
+   edited after it rendered (the instruct sibling of #1105's textHash), but only
+   where the instruct actually shaped the audio: an explicit instruct rendered on
+   a 1.7b group with liveInstruct on. Everything else (gate off, emotion-only, or
+   a 1.7b group that fell back to Kokoro) is correctly un-stamped. */
+describe('synthesiseChapter — instructHash stamp (fs-58 #1041)', () => {
+  /* A 1.7b Qwen cast with a designed voice, so the only way to force a Kokoro
+     fallback (test iv) is qwenUnavailable, not a missing voice. */
+  const INSTRUCT_17B_CAST: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      ttsModelKey: 'qwen3-tts-1.7b',
+    },
+  ];
+
+  const instructLine = (id: number, text: string, instruct: string): SentenceOutput => ({
+    id,
+    chapterId: 1,
+    characterId: 'narrator',
+    text,
+    instruct,
+  });
+
+  const runInstruct = (opts: { liveInstruct: boolean; sentences: SentenceOutput[] }) =>
+    synthesiseChapter({
+      sentences: opts.sentences,
+      cast: INSTRUCT_17B_CAST,
+      provider: makeProvider(),
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      liveInstruct: opts.liveInstruct,
+    });
+
+  it('stamps instructHash for a 1.7b liveInstruct group with an explicit instruct', async () => {
+    const res = await runInstruct({
+      liveInstruct: true,
+      sentences: [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
+    });
+    expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBe(
+      textHashForStale('a tired sigh'),
+    );
+  });
+
+  it('omits instructHash when liveInstruct is off', async () => {
+    const res = await runInstruct({
+      liveInstruct: false,
+      sentences: [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
+    });
+    expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBeUndefined();
+  });
+
+  it('omits instructHash for an emotion-only group (no explicit instruct)', async () => {
+    const res = await runInstruct({
+      liveInstruct: true,
+      // emotion set, but NO explicit instruct → must not stamp (and must not crash
+      // on textHashForStale(undefined)).
+      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'x', emotion: 'sad' }],
+    });
+    expect(res.segments.find((s) => s.sentenceIds?.includes(1))?.instructHash).toBeUndefined();
+  });
+
+  /* The mixed-engine case (round-2): a Qwen-1.7b group that FELL BACK to Kokoro
+     must NOT be stamped — its audio ignored the instruct. The fallback is driven
+     by a real route rewrite (qwenUnavailable + resolveForEngine), NOT a throwing
+     provider, so resolveGroup().route.modelKey is the Kokoro key post-fallback. */
+  function multiEngine() {
+    const qwen = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-1.7b' as const };
+    return { qwen, kokoro, resolveForEngine };
+  }
+
+  it('omits instructHash for a 1.7b group that fell back to Kokoro', async () => {
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+    const res = await synthesiseChapter({
+      sentences: [instructLine(1, 'She closed her eyes.', 'a tired sigh')],
+      cast: INSTRUCT_17B_CAST,
+      provider: qwen,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      liveInstruct: true,
+      resolveForEngine,
+      qwenUnavailable: true, // forces the designed 1.7b voice to fall back to Kokoro
+    });
+
+    // Prove the fallback is REAL, not a vacuous pass: the Qwen provider was never
+    // asked, Kokoro rendered the line, and the segment is flagged as a fallback.
+    expect(qwen.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(1);
+    const seg = res.segments.find((s) => s.sentenceIds?.includes(1));
+    expect(seg?.renderedFallbackEngine).toBe('kokoro');
+    // post-fallback route.modelKey is kokoro-v1 ≠ 'qwen3-tts-1.7b' → un-stamped.
+    expect(seg?.instructHash).toBeUndefined();
   });
 });

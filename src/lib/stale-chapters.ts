@@ -111,6 +111,30 @@ export function isChapterTextEditedSinceRender(
   return false;
 }
 
+/* fs-58 — PRECISE instruct staleness, the instruct sibling of
+   isChapterTextEditedSinceRender. A rendered chapter whose sentence `instruct` was
+   edited after it rendered ON THE 1.7b liveInstruct path is stale (only that path's
+   audio depends on the instruct). Derived from the render-time instructHash map
+   (only populated for liveInstruct renders) vs the live `instruct`. Asymmetric —
+   iterate the stamped ids only; a chapter with no stamps reads not-stale (a
+   non-liveInstruct render never used the instruct). Hash the live instruct the same
+   way the server stamps it: textHashForStale of the raw (trimmed) string. */
+export function isChapterInstructEditedSinceRender(
+  renderedInstructHashes: Record<number, string> | undefined,
+  currentSentences: Array<{ id: number; instruct?: string }>,
+): boolean {
+  if (!renderedInstructHashes || Object.keys(renderedInstructHashes).length === 0) return false;
+  const current = new Map<number, string>();
+  // Trim to match the server stamp (setSentenceInstruct stores the trimmed value, §6.5).
+  for (const s of currentSentences) current.set(s.id, (s.instruct ?? '').trim());
+  for (const sidStr of Object.keys(renderedInstructHashes)) {
+    const sid = Number(sidStr);
+    const liveInstruct = current.get(sid) ?? '';
+    if (textHashForStale(liveInstruct) !== renderedInstructHashes[sid]) return true;
+  }
+  return false;
+}
+
 /** Returns a callback that marks a character's rendered audio stale (no-op when
     the character speaks in no `done` chapter). Reads chapters from the store. */
 export function useMarkCharacterStaleIfRendered(): (character: {
