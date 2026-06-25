@@ -293,6 +293,11 @@ export interface ChapterSegment {
       keyed on text → stale on every engine). Absent on the title beat (no manuscript
       sentence) and on pre-#1105 renders. See audio/segments-io.ts textHashForStale. */
   textHash?: string;
+  /** fs-58 (#1041) — djb2-base36 hash of this group's RAW explicit `instruct`,
+      stamped ONLY when the group rendered on the per-group qwen-1.7b liveInstruct
+      path (so an instruct edit can stale the chapter only where the instruct
+      shaped the audio). The instruct sibling of `textHash`. Absent otherwise. */
+  instructHash?: string;
   /** Discriminator for synthetic segments that aren't backed by a manuscript
       sentence. `'title'` marks the narrator-voiced chapter-title beat
       prepended to each chapter (see CHAPTER_LEAD_SILENCE_SEC below). Body
@@ -1661,11 +1666,23 @@ export async function synthesiseChapter(
     chunks.push(pcmForGroup);
     runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
+    /* fs-58 (#1041) — stamp the RAW EXPLICIT instruct hash iff this group rode
+       the per-group qwen-1.7b liveInstruct path. `resolveGroup(group).route` is
+       POST-fallback, so a 1.7b group that fell back to Kokoro has a Kokoro
+       modelKey and is correctly un-stamped (its audio ignored the instruct).
+       Emotion-derived instructs have `group.instruct == null` and are not
+       stamped (and hashing the resolved phrase would crash on undefined). */
+    const groupIs17b = resolveGroup(group).route.modelKey === 'qwen3-tts-1.7b';
+    const instructHash =
+      group.instruct != null && liveInstruct && groupIs17b
+        ? textHashForStale(group.instruct)
+        : undefined;
     segments.push({
       groupIndex: group.index,
       characterId: group.characterId,
       sentenceIds: group.sentenceIds.slice(),
       textHash: textHashForStale(group.text),
+      instructHash,
       startSec,
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
