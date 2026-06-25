@@ -67,12 +67,6 @@ _Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit (user / strategic):_ a non-English user gets a generate-able demo in their own language out of the box, not a dead English-voiced sample. Surfaced by the `fs-50` Spanish ship.
 _Full detail + acceptance:_ [#1027](https://github.com/dudarenok-maker/Castwright/issues/1027).
 
-#### `fs-63` — auto-voice a created off-roster character (fs-58 Unit B follow-up) ([#1119](https://github.com/dudarenok-maker/Castwright/issues/1119))
-
-- _What:_ An off-roster `reattribute` mints a new cast member (operator-confirmed `CreateCharacterForm` → `POST /cast/create`) that lands voice-unassigned and is silent until manually voiced in the Cast view. Auto-assign/design a voice for a character created through the reattribute confirm flow.
-- _Benefit (user):_ off-roster reattribute becomes audible in one pass, not two.
-_Full detail + acceptance:_ [#1119](https://github.com/dudarenok-maker/Castwright/issues/1119).
-
 #### `fs-64` — cross-chapter context for reattribute (fs-58 Unit B follow-up) ([#1120](https://github.com/dudarenok-maker/Castwright/issues/1120))
 
 - _What:_ `reattribute` runs per-chapter, so a chapter-opening tagless line whose speaker was set by the previous chapter's last turn can mis-resolve. Feed the prior chapter's tail into the review prompt so straddling turn-taking resolves. Weigh against RPD cost.

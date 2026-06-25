@@ -18,8 +18,9 @@ const norm = (s: string) => s.trim().toLowerCase();
 export async function applyProposedReattributions(
   proposed: ReviewOpWithChapter[],
   deps: ApplyProposedDeps,
-): Promise<{ created: number; aborted: boolean }> {
+): Promise<{ created: number; createdCharacters: { id: string; name: string }[]; aborted: boolean }> {
   const memo = new Map<string, string>(); // normName -> id created this batch
+  const createdCharacters: { id: string; name: string }[] = [];
   let created = 0;
   for (const op of proposed) {
     if (!op.proposed) continue;
@@ -27,14 +28,15 @@ export async function applyProposedReattributions(
     let id = deps.rosterByName.get(key)?.id ?? memo.get(key);
     if (!id) {
       const c = await deps.createCharacter(op.proposed);
-      if (!deps.isSameBook()) return { created, aborted: true };
+      if (!deps.isSameBook()) return { created, createdCharacters, aborted: true };
       deps.addCharacter(c);
       id = c.id;
       memo.set(key, id);
+      createdCharacters.push({ id: c.id, name: c.name });
       created += 1;
     }
     deps.setSentenceCharacter(op.chapterId, op.id, id);
     deps.onBoundaryMove(op.chapterId);
   }
-  return { created, aborted: false };
+  return { created, createdCharacters, aborted: false };
 }

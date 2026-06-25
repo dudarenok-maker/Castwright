@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/48-toast-surface.md
 
 import { describe, expect, it } from 'vitest';
-import { notificationsSlice, notificationsActions } from './notifications-slice';
+import { notificationsSlice, notificationsActions, type VoiceNudge } from './notifications-slice';
 
 const emptyState = () => ({ toasts: [] });
 
@@ -130,5 +130,42 @@ describe('notificationsSlice — dismiss', () => {
     const next = notificationsSlice.reducer(s2, notificationsActions.dismissByKey('export'));
     expect(next.toasts).toHaveLength(1);
     expect(next.toasts[0].message).toBe('two');
+  });
+});
+
+const reduce = (actions: ReturnType<typeof notificationsActions.pushToast>[]) =>
+  actions.reduce((s, a) => notificationsSlice.reducer(s, a), notificationsSlice.reducer(undefined, { type: '@@INIT' }));
+
+const nudge = (over: Partial<VoiceNudge>): VoiceNudge => ({
+  bookId: 'b1', modelKey: 'qwen3-tts-0.6b', characterIds: ['mara'], names: ['Mara'], ...over,
+});
+
+describe('notifications nudge merge-dedupe', () => {
+  it('unions characterIds/names into an existing same-key nudge instead of overwriting', () => {
+    const s = reduce([
+      notificationsActions.pushToast({ kind: 'info', message: '1 needs a voice', dedupeKey: 'k', nudge: nudge({}) }),
+      notificationsActions.pushToast({
+        kind: 'info', message: '1 needs a voice', dedupeKey: 'k',
+        nudge: nudge({ characterIds: ['tom'], names: ['Tom'] }),
+      }),
+    ]);
+    expect(s.toasts).toHaveLength(1);
+    expect(s.toasts[0].nudge?.characterIds).toEqual(['mara', 'tom']);
+    expect(s.toasts[0].nudge?.names).toEqual(['Mara', 'Tom']);
+  });
+
+  it('does not duplicate an id already present in the existing nudge', () => {
+    const s = reduce([
+      notificationsActions.pushToast({ kind: 'info', message: 'x', dedupeKey: 'k', nudge: nudge({}) }),
+      notificationsActions.pushToast({ kind: 'info', message: 'x', dedupeKey: 'k', nudge: nudge({}) }),
+    ]);
+    expect(s.toasts[0].nudge?.characterIds).toEqual(['mara']);
+  });
+
+  it('carries nudge on a fresh (non-dedupe) push', () => {
+    const s = reduce([
+      notificationsActions.pushToast({ kind: 'info', message: 'x', nudge: nudge({}) }),
+    ]);
+    expect(s.toasts[0].nudge?.characterIds).toEqual(['mara']);
   });
 });

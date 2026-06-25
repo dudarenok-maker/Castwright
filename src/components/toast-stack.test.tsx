@@ -7,7 +7,8 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { ToastStack } from './toast-stack';
-import { notificationsSlice, notificationsActions } from '../store/notifications-slice';
+import { notificationsSlice, notificationsActions, type Toast } from '../store/notifications-slice';
+import { castDesignSlice } from '../store/cast-design-slice';
 
 vi.mock('../store', async () => {
   const actual = await vi.importActual<typeof import('../store')>('../store');
@@ -23,7 +24,17 @@ let sharedStore: ReturnType<typeof makeStore>;
 
 function makeStore() {
   return configureStore({
-    reducer: { notifications: notificationsSlice.reducer },
+    reducer: { notifications: notificationsSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
+}
+
+function makeStoreWithToast(toast: Toast) {
+  return configureStore({
+    reducer: { notifications: notificationsSlice.reducer, castDesign: castDesignSlice.reducer },
+    preloadedState: {
+      notifications: { toasts: [toast] },
+      castDesign: { active: null },
+    },
   });
 }
 
@@ -127,5 +138,23 @@ describe('ToastStack — auto-dismiss timer', () => {
       vi.advanceTimersByTime(5999);
     });
     expect(sharedStore.getState().notifications.toasts).toHaveLength(1);
+  });
+});
+
+describe('ToastStack — nudge routing', () => {
+  it('renders a nudge toast via VoiceNudgeToast and does not auto-dismiss it', () => {
+    vi.useFakeTimers();
+    const store = makeStoreWithToast({
+      id: 'n1', kind: 'info', message: 'New character «Mara» needs a voice', createdAt: Date.now(),
+      nudge: { bookId: 'b1', characterIds: ['mara'], modelKey: 'qwen3-tts-0.6b', names: ['Mara'] },
+    });
+    // Override sharedStore so the mock's useAppSelector/useAppDispatch see the new store
+    sharedStore = store as ReturnType<typeof makeStore>;
+    render(<Provider store={store}><ToastStack /></Provider>);
+    expect(screen.getByRole('button', { name: /design now/i })).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(7000); });
+    // still present after the 6s window — nudge toasts are sticky
+    expect(screen.getByRole('button', { name: /design now/i })).toBeTruthy();
+    vi.useRealTimers();
   });
 });
