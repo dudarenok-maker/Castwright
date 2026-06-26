@@ -161,6 +161,74 @@ describe('deriveSeriesMemory', () => {
     expect(rows[0].aliases).toContain('Marrow');
   });
 
+  it('merges two UNLINKED components that share one bespoke engine voice (missed matchedFrom)', () => {
+    // Real-world (KOTC): Keefe is re-detected fresh in one book, so its
+    // matchedFrom never links it to the main Keefe — leaving a singleton
+    // [book 3] component beside the carried [1,2] one. Same engine voice name
+    // (`voiceName`) → same character; the second merge pass unifies them.
+    const books = baseBooks();
+    // Drop the matchedFrom on b3-marrow so it is NOT linked by the graph, and give
+    // it a fresh id + NULL reuse voiceId — exactly how a re-detection looks. Only
+    // the shared engine voice name can reunite it (Pass B).
+    const b3m = books[2].characters.find((c) => c.characterId === 'b3-marrow')!;
+    b3m.matchedFrom = null;
+    b3m.characterId = 'b3-marrow-refresh';
+    b3m.voiceId = null;
+    for (const b of books) {
+      const m = b.characters.find((c) => c.name === 'Marrow')!;
+      m.voiceName = 'qwen-marrow';
+    }
+    const d = deriveSeriesMemory(books)!;
+    const rows = d.carried.characters.filter((c) => c.character === 'Marrow');
+    expect(rows).toHaveLength(1); // not split into two
+    expect(rows[0].bookIndices).toEqual([1, 2, 3]); // book 3 reunited
+  });
+
+  it('merges alias/spelling-drift duplicates that share a bespoke voiceId', () => {
+    // "Wylie" (bk1) and "Wylie Endal" (bk2) — different name AND id, no
+    // matchedFrom between them, but the same designed voiceId. One carried row.
+    const books = baseBooks();
+    // Drop book-3 Marrow so the Wylie pair below is an isolated component.
+    books[2].characters = books[2].characters.filter((c) => c.characterId !== 'b3-marrow');
+    const a = books[0].characters.find((c) => c.characterId === 'b1-marrow')!;
+    const b = books[1].characters.find((c) => c.characterId === 'b2-marrow')!;
+    a.name = 'Wylie'; b.name = 'Wylie Endal';
+    a.matchedFrom = null; b.matchedFrom = null; // graph does NOT link them
+    a.voiceId = b.voiceId = 'v_q_wylie';
+    a.voiceName = b.voiceName = null;
+    const d = deriveSeriesMemory(books)!;
+    const rows = d.carried.characters.filter((c) => c.voiceId === 'v_q_wylie');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].bookIndices).toEqual([1, 2]);
+  });
+
+  it('does NOT merge two unlinked components that carry DIFFERENT bespoke voices', () => {
+    // "Councilor Emery" [1,2] and "Councillor Emery" [3,4] — same person, but the
+    // user designed two different voices. They must stay separate (the voice DID
+    // change); unifying them is the upstream matcher's job, and would correctly
+    // EXCLUDE — never a false "carried" row. Here: distinct designed voices →
+    // two independent carried characters, never collapsed by the voice merge.
+    const link = (bookId: string, characterId: string) => ({ bookId, characterId });
+    const books: SeriesBookInput[] = [1, 2, 3, 4].map((index) => ({
+      bookId: `b${index}`, index, title: `Book ${index}`,
+      characters: [
+        ch({ characterId: `b${index}-edda`, name: 'Edda', voiceId: 'v_q_edda',
+          matchedFrom: index > 1 ? link(`b${index - 1}`, `b${index - 1}-edda`) : null }),
+        ch({ characterId: `b${index}-vale`, name: 'Vale', voiceId: 'v_q_vale',
+          matchedFrom: index > 1 ? link(`b${index - 1}`, `b${index - 1}-vale`) : null }),
+      ],
+    }));
+    // Emery as TWO unlinked designed voices.
+    books[0].characters.push(ch({ characterId: 'b1-emery', name: 'Emery', voiceId: 'v_q_emery_a' }));
+    books[1].characters.push(ch({ characterId: 'b2-emery', name: 'Emery', voiceId: 'v_q_emery_a', matchedFrom: link('b1', 'b1-emery') }));
+    books[2].characters.push(ch({ characterId: 'b3-emery', name: 'Emery', voiceId: 'v_q_emery_b' }));
+    books[3].characters.push(ch({ characterId: 'b4-emery', name: 'Emery', voiceId: 'v_q_emery_b', matchedFrom: link('b3', 'b3-emery') }));
+    const d = deriveSeriesMemory(books)!;
+    const emeryRows = d.carried.characters.filter((c) => c.character === 'Emery');
+    expect(emeryRows).toHaveLength(2); // distinct voices → not merged
+    expect(emeryRows.map((r) => r.bookIndices).sort()).toEqual([[1, 2], [3, 4]]);
+  });
+
   it('chip N equals reveal row count (summarize.carriedCount === characters.length)', () => {
     const d = deriveSeriesMemory(baseBooks())!;
     expect(summarize(d).carriedCount).toBe(d.carried.characters.length);

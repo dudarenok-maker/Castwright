@@ -81,6 +81,40 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
     }
   }
 
+  // Second merge: appearances of ONE character that `matchedFrom` failed to link —
+  // a missed cross-book match (e.g. Keefe re-detected fresh in one book) or
+  // alias/spelling drift that gave the same person different ids ("Wylie"/"Wylie
+  // Endal", "Jurek"/"Neverseen Figure"). PRESET voices are shared across characters
+  // by design (two guards on one kokoro voice), so they're excluded throughout —
+  // preserving the "two characters, one preset voice → two carried rows" invariant.
+  //
+  // Pass A — union by the reuse `voiceId`: a per-character key, distinct per
+  // character, only null in a debut book. Unambiguous, so always safe to merge.
+  const repByVoiceId = new Map<string, string>();
+  for (const [key, { ch }] of byKey) {
+    if (ch.voiceKind === 'preset' || !ch.voiceId) continue;
+    const rep = repByVoiceId.get(ch.voiceId);
+    if (rep) union(key, rep);
+    else repByVoiceId.set(ch.voiceId, key);
+  }
+  // Pass B — union by the engine voice name, but ONLY when that name maps to a
+  // single character (all its non-null voiceIds agree). A voice name shared across
+  // DIFFERENT voiceIds means distinct characters reusing one voice (or a generic
+  // placeholder), which must NOT be merged. This is what links a fresh-detected
+  // fragment (null voiceId) back to its main character (e.g. Keefe).
+  const byVoiceName = new Map<string, { keys: string[]; ids: Set<string> }>();
+  for (const [key, { ch }] of byKey) {
+    if (ch.voiceKind === 'preset' || !ch.voiceName) continue;
+    let g = byVoiceName.get(ch.voiceName);
+    if (!g) byVoiceName.set(ch.voiceName, (g = { keys: [], ids: new Set() }));
+    g.keys.push(key);
+    if (ch.voiceId) g.ids.add(ch.voiceId);
+  }
+  for (const g of byVoiceName.values()) {
+    if (g.ids.size > 1) continue; // ambiguous voice name → leave components alone
+    for (let i = 1; i < g.keys.length; i++) union(g.keys[i], g.keys[0]);
+  }
+
   // Bucket appearances by component root — each component is one logical character.
   const components = new Map<string, Appearance[]>();
   for (const [key, app] of byKey) {
