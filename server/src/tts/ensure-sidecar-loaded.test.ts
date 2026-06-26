@@ -16,7 +16,7 @@ vi.mock('../gpu/gpu-load.js', () => ({
   GpuBusyError: class extends Error {},
 }));
 
-import { ensureSidecarEngineReady } from './ensure-sidecar-loaded.js';
+import { ensureSidecarEngineReady, reconcileResidentQwenTiers } from './ensure-sidecar-loaded.js';
 
 const realFetch = global.fetch;
 afterEach(() => {
@@ -24,7 +24,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const readyResp = { ok: true, json: async () => ({ status: 'ready' }) };
+/* A settled /health response: reachable, not recycling, engine installed. */
+const readyResp = { ok: true, json: async () => ({ qwen_package_installed: true }) };
 
 /* Small budgets keep the poll loop fast + deterministic in tests. */
 const FAST = { timeoutMs: 40, pollIntervalMs: 5 };
@@ -38,7 +39,7 @@ describe('ensureSidecarEngineReady', () => {
     expect(f).not.toHaveBeenCalled();
   });
 
-  it('POSTs /load with the engine and resolves once ready', async () => {
+  it('GETs /health (never /load — loads nothing) and resolves once reachable', async () => {
     const f = vi.fn().mockResolvedValue(readyResp);
     global.fetch = f as unknown as typeof fetch;
 
@@ -46,9 +47,19 @@ describe('ensureSidecarEngineReady', () => {
 
     expect(f).toHaveBeenCalledTimes(1);
     const [target, init] = f.mock.calls[0] as [string, RequestInit];
-    expect(target).toBe('http://localhost:9000/load');
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({ engine: 'qwen' });
+    expect(target).toBe('http://localhost:9000/health');
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined(); // pure readiness probe, no model load
+  });
+
+  it('waits while the engine package reports not installed, then resolves', async () => {
+    const f = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ qwen_package_installed: false }) })
+      .mockResolvedValue(readyResp);
+    global.fetch = f as unknown as typeof fetch;
+    await expect(ensureSidecarEngineReady('qwen', undefined, PATIENT)).resolves.toBeUndefined();
+    expect(f).toHaveBeenCalledTimes(2);
   });
 
   /* srv-17 core: a respawn window (sidecar unreachable) is RIDDEN OUT, not
@@ -65,10 +76,10 @@ describe('ensureSidecarEngineReady', () => {
     expect(f).toHaveBeenCalledTimes(3); // waited out two failures, then ready
   });
 
-  it('polls through a still-loading model then resolves once ready', async () => {
+  it('polls through a pending recycle (drain fence) then resolves once settled', async () => {
     const f = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'loading' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ recycle_pending: true }) })
       .mockResolvedValue(readyResp);
     global.fetch = f as unknown as typeof fetch;
 
@@ -76,10 +87,10 @@ describe('ensureSidecarEngineReady', () => {
     expect(f).toHaveBeenCalledTimes(2);
   });
 
-  /* The 2026-05-31 cascade fix: during a recycle DRAIN the sidecar /load now
-     answers the recycling 503 (drain fence) instead of an instant `ready`, so
-     the gate must POLL THROUGH the drain and only proceed once the respawned
-     sidecar is ready — otherwise a queued chapter marches into a 503 and fails. */
+  /* The 2026-05-31 cascade fix: during a recycle DRAIN the sidecar answers a
+     recycling 503 (drain fence), so the gate must POLL THROUGH the drain and
+     only proceed once the respawned sidecar is reachable — otherwise a queued
+     chapter marches into a 503 and fails. */
   it('polls through a recycle drain (recycling 503) then resolves once respawned', async () => {
     const recyclingResp = {
       ok: false,
@@ -137,6 +148,66 @@ describe('ensureSidecarEngineReady', () => {
   });
 });
 
+describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
+  /* Build a fetch mock: first GET /health returns `health`, every POST /unload
+     is recorded. Returns the recorded /unload bodies. */
+  function mockSidecar(health: Record<string, unknown>): {
+    fetch: ReturnType<typeof vi.fn>;
+    unloads: () => Array<Record<string, unknown>>;
+  } {
+    const unloads: Array<Record<string, unknown>> = [];
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => health };
+      if (url.endsWith('/unload')) {
+        unloads.push(JSON.parse((init?.body as string) ?? '{}'));
+        return { ok: true, json: async () => ({ status: 'idle' }) };
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    return { fetch: f, unloads: () => unloads };
+  }
+
+  it('evicts the 0.6B base for a pure-1.7B run, keeps the 1.7B base', async () => {
+    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await reconcileResidentQwenTiers({ keep06: false, keep17: true });
+    expect(m.unloads()).toEqual([{ engine: 'qwen' }]); // 0.6B only
+  });
+
+  it('evicts the 1.7B base for a pure-0.6B run, keeps the 0.6B base', async () => {
+    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await reconcileResidentQwenTiers({ keep06: true, keep17: false });
+    expect(m.unloads()).toEqual([{ engine: 'qwen', model: '1.7b' }]); // 1.7B only
+  });
+
+  it('evicts nothing for a mixed-tier run (both in use)', async () => {
+    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await reconcileResidentQwenTiers({ keep06: true, keep17: true });
+    expect(m.unloads()).toEqual([]);
+  });
+
+  it('no-ops when the unused tier is not resident', async () => {
+    const m = mockSidecar({ qwen_loaded: false, qwen_base17_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await reconcileResidentQwenTiers({ keep06: false, keep17: true }); // 0.6B not loaded → nothing to evict
+    expect(m.unloads()).toEqual([]);
+  });
+
+  it('skips (no evict) while a recycle is pending', async () => {
+    const m = mockSidecar({ qwen_loaded: true, recycle_pending: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await reconcileResidentQwenTiers({ keep06: false, keep17: true });
+    expect(m.unloads()).toEqual([]);
+  });
+
+  it('is best-effort: a down sidecar does not throw', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBeUndefined();
+  });
+});
+
 describe('ensureSidecarEngineReady — withGpuLoad gate', () => {
   /* Each test must: vi.resetModules() → vi.doMock() → dynamic import.
      This ensures the dynamic `await import('../gpu/gpu-load.js')` inside
@@ -147,7 +218,7 @@ describe('ensureSidecarEngineReady — withGpuLoad gate', () => {
     vi.resetModules();
   });
 
-  it('wraps the load in withGpuLoad (the gate runs before /load on a constrained card)', async () => {
+  it('wraps the readiness poll in withGpuLoad (surfaces GpuBusy on a constrained card)', async () => {
     const order: string[] = [];
     vi.resetModules();
     vi.doMock('../workspace/user-settings.js', () => ({

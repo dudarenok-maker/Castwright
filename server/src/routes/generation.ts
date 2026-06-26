@@ -77,7 +77,11 @@ import {
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
-import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar-loaded.js';
+import {
+  ensureSidecarEngineReady,
+  reconcileResidentQwenTiers,
+  SIDECAR_ENGINES,
+} from '../tts/ensure-sidecar-loaded.js';
 import {
   asrEnabled,
   resolveAsrRerecords,
@@ -760,6 +764,29 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     } catch (e) {
       console.warn('[generation] disk guard probe failed (continuing):', (e as Error).message);
     }
+  }
+
+  /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
+     use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
+     vice-versa. Fires ONCE here, before any chapter synth — never per chapter —
+     so the in-use tier stays warm across the book (load price paid on chapter 1
+     only). The needed tiers come from the cast's per-character ttsModelKey + the
+     run default (mirrors synthesise-chapter's routeFor), so a genuinely
+     mixed-tier book keeps both. Best-effort; a down / recycling sidecar skips. */
+  if (qwenInUse && targetChapters.length > 0) {
+    const usedQwenKeys = new Set<TtsModelKey>();
+    for (const c of cast.characters) {
+      if (resolveCharacterEngine(c, engine) !== 'qwen') continue;
+      usedQwenKeys.add(
+        c.ttsModelKey
+          ? canonicalModelKeyForEngine('qwen', c.ttsModelKey)
+          : resolveForEngine('qwen').modelKey,
+      );
+    }
+    await reconcileResidentQwenTiers({
+      keep06: usedQwenKeys.has('qwen3-tts-0.6b'),
+      keep17: usedQwenKeys.has('qwen3-tts-1.7b'),
+    }).catch((e) => console.warn('[generation] tier reconcile skipped:', (e as Error).message));
   }
 
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio

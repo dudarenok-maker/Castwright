@@ -373,9 +373,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'QWEN_BATCH_SIZE_17B',
     group: 'tts-batching',
     label: 'Qwen 1.7B batch size',
-    help: 'Hard width cap for the 1.7B Quality-tier specifically. The 1.7B-Base is ~3.4 GB resident, so a batch as wide as the 0.6B default blows past an 8 GB card during the batched forward → recycle storm. Kept small so 1.7B renders stay within VRAM (slower than 0.6B, but stable). Only affects 1.7B groups — 0.6B batches use the larger tts.batch.size.',
+    help: 'Hard width cap for the 1.7B Quality-tier specifically. Defaults to the same 32 as the 0.6B tier: once the 0.6B base is no longer co-resident (#1162 readiness-gate fix evicts the unused tier), a 1.7B render fits 32/3600 on an 8 GB card (measured peak ~5.7 GB, ~1.7 GB margin under the recycle line) at ~2× real-time. Lower this (and the budget below) on a smaller card if you hit a recycle storm. Only affects 1.7B groups.',
     type: 'integer', min: 1,
-    default: 8, // ← QWEN_BATCH_SIZE_17B default in tts/synthesise-chapter.ts
+    default: 32, // ← QWEN_BATCH_SIZE_17B default in tts/synthesise-chapter.ts (matches the 0.6B tier post-#1162)
     apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
   },
   {
@@ -383,9 +383,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'QWEN_BATCH_TOKEN_BUDGET_17B',
     group: 'tts-batching',
     label: 'Qwen 1.7B batch token budget',
-    help: 'Variable-width packing budget (normalised chars) for the 1.7B Quality tier only. Much smaller than the 0.6B tts.batch.tokenBudget so 1.7B batches stay within an 8 GB card during the batched forward (avoids the recycle-storm OOM). Set to 0 for exact fixed-width slicing on the 1.7B tier (tts.batch.size17b only).',
+    help: 'Variable-width packing budget (normalised chars) for the 1.7B Quality tier only. Defaults to the same 3600 as the 0.6B tier (safe on an 8 GB card post-#1162, since the unused 0.6B base no longer co-resides). Lower it on a smaller card if a 1.7B render trips the VRAM recycle. Set to 0 for exact fixed-width slicing on the 1.7B tier (tts.batch.size17b only).',
     type: 'integer', min: 0,
-    default: 1200, // ← DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B in tts/synthesise-chapter.ts
+    default: 3600, // ← DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B in tts/synthesise-chapter.ts
     apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
   },
   {
