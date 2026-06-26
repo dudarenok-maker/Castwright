@@ -90,15 +90,15 @@ export function resolveQwenTokenBudget(raw: string | undefined): number {
 }
 const QWEN_BATCH_TOKEN_BUDGET = configValue<number>('tts.batch.tokenBudget');
 
-/* 1.7B tier-aware batch width (8 GB OOM guard). The 1.7B-Base is ~3.4 GB
-   resident; a 1.7B batch as wide as the 0.6B default (size 32 / budget 3600)
-   blows past an 8 GB card's VRAM during the batched forward → supervisor
-   recycle storm (code 43) → RecycleStormError fails the chapter. The packer
-   applies these SMALLER caps to the 1.7B bucket ONLY; 0.6B batches keep the
-   defaults above (a mixed-tier chapter packs each tier to its own width). The
-   1.7B forward is inherently heavier, so narrower batches trade some throughput
-   for staying inside VRAM — the difference between "renders" and "thrashes". */
-export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B = 1200;
+/* 1.7B tier-aware batch width. The packer applies these caps to the 1.7B bucket
+   ONLY; 0.6B batches keep the defaults above (a mixed-tier chapter packs each
+   tier to its own width). Defaults now MATCH the 0.6B tier (32 / 3600): the
+   #1162 readiness-gate fix evicts the unused 0.6B base before a 1.7B run, so the
+   1.7B-Base (~3.4 GB) is no longer co-resident and 32/3600 fits an 8 GB card
+   (measured peak ~5.7 GB, ~1.7 GB margin under the recycle line) at ~2× RT.
+   These knobs remain the small-card safety valve — lower them if a 1.7B render
+   trips the VRAM recycle on a < 8 GB card. */
+export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B = 3600;
 const QWEN_BATCH_SIZE_17B = configValue<number>('tts.batch.size17b');
 const QWEN_BATCH_TOKEN_BUDGET_17B = configValue<number>('tts.batch.tokenBudget17b');
 
