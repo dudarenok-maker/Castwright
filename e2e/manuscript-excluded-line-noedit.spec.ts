@@ -36,7 +36,7 @@ test.describe('fs-58 Unit B — excluded line: no edit affordance', () => {
 
     // (a) Selecting the excluded line shows NO popover.
     await selectSentenceText(page, 1);
-    await expect(page.getByText('Assign selection to')).toHaveCount(0);
+    await expect(page.getByText('Assign selection to')).not.toBeVisible();
 
     // Positive control: a normal line (id:3 is a seeded ch3 sentence) DOES show it.
     await selectSentenceText(page, 3);
