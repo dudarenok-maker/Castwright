@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
+import { ipKeyGenerator } from 'express-rate-limit';
 import request from 'supertest';
+
+// supertest's loopback socket surfaces as the IPv4-mapped IPv6 address; the
+// redeemLimiter normalises that through ipKeyGenerator, so reset the SAME
+// normalised key (→ '127.0.0.1') or the per-IP bucket bleeds across cases.
+const LOOPBACK_KEY = ipKeyGenerator('::ffff:127.0.0.1');
 
 // A real self-signed cert (parses via node X509Certificate). Its SHA-256's
 // first 10 bytes Crockford-base32-encode to fpTag "5CEE77RAKV3EN9JX".
@@ -78,7 +84,7 @@ function appWith(router: express.Router) {
 describe('pairing routes', () => {
   beforeEach(() => {
     _resetPairingSessionsForTests();
-    redeemLimiter.resetKey('::ffff:127.0.0.1');
+    redeemLimiter.resetKey(LOOPBACK_KEY);
   });
 
   it('POST /session returns a qrPayload + code + fpTag', async () => {
@@ -199,7 +205,7 @@ function appWithPreGuardRouterFirst() {
 describe('pairing body-size cap — parser-order regression', () => {
   beforeEach(() => {
     _resetPairingSessionsForTests();
-    redeemLimiter.resetKey('::ffff:127.0.0.1');
+    redeemLimiter.resetKey(LOOPBACK_KEY);
   });
 
   // These two tests FAIL before the fix (global parser accepts the body, no 413)
