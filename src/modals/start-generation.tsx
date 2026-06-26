@@ -66,6 +66,7 @@ export function StartGenerationModal({ defaultTier, busy = false, onClose, onCon
                   key={t.id}
                   type="button"
                   onClick={() => setTier(t.id)}
+                  aria-pressed={tier === t.id}
                   data-testid={`start-gen-tier-${t.id}`}
                   className={`text-left p-3 rounded-2xl border transition-all min-h-[44px] ${tier === t.id ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
                 >
