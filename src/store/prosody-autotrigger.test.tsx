@@ -114,6 +114,7 @@ vi.mock('../routes/prefetch', () => ({
 
 import { Layout } from '../components/layout';
 import { uiActions } from './ui-slice';
+import { api } from '../lib/api';
 
 /* ── Store factory ─────────────────────────────────────────────────────── */
 
@@ -166,6 +167,14 @@ function makeBook(
     coverGradient: ['#000', '#fff'],
     tags: [],
   };
+}
+
+/* Wrap a flat list of books into a LibraryResponse so a test can dispatch
+   `librarySlice.actions.hydrate(...)` — the action that flips `loaded` to true.
+   The seed-on-mount baseline only runs once the library is actually loaded
+   (mirrors getLibrary() resolving in production). */
+function libResponse(books: LibraryBook[]) {
+  return { authors: [{ name: 'Test Author', series: [{ name: 'Standalones', books }] }] };
 }
 
 /* Minimal BookStateResponse-shaped payload for getBookState — not opting out
@@ -229,9 +238,9 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
   it('does NOT fire runProsodyPasses for a book that is already analysis-complete on first render (seed-on-mount)', async () => {
     const store = makeStore();
-    /* A book that already exists in the library as cast_pending BEFORE Layout
-       mounts should be seeded into `considered` without firing. */
-    store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    /* The library hydrates (loaded=true) with a book ALREADY complete — it is
+       seeded into `considered` as the baseline and must not fire. */
+    store.dispatch(librarySlice.actions.hydrate(libResponse([makeBook('b1', 'cast_pending')])));
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
 
     renderLayout(store);
@@ -239,6 +248,35 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     /* Wait enough time for any async effects to settle. */
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(runProsodyPassesMock).not.toHaveBeenCalled();
+  });
+
+  // ── Regression (boot seed-race): library hydrates AFTER mount ──
+  // Reproduces the production hang: getLibrary() resolves after Layout mounts,
+  // so the whole backlog of already-complete books arrives in ONE hydrate.
+  // Before the fix, the seed ran against the empty pre-hydrate library, so every
+  // book looked brand-new and fired runProsodyPasses at once (SSE/GPU/VRAM flood).
+
+  it('does NOT fire for pre-existing complete books that arrive via async library hydrate AFTER mount (boot seed-race)', async () => {
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    /* The real boot path: Layout mounts with an empty, unloaded library, then
+       its own getLibrary() effect resolves with the WHOLE backlog of already-
+       complete books in one hydrate. That first loaded snapshot is the seed
+       baseline — nothing should fire. (Before the fix the seed ran against the
+       empty pre-hydrate library, so all 15 books looked brand-new and fired at
+       once — the SSE/GPU/VRAM flood that hung the app on restart.) */
+    vi.mocked(api.getLibrary).mockResolvedValueOnce(
+      libResponse([makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')]) as never,
+    );
+
+    renderLayout(store);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
     });
 
     expect(runProsodyPassesMock).not.toHaveBeenCalled();
@@ -253,7 +291,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     renderLayout(store);
 
     /* Wait for the seed pass (first render with empty library). */
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -286,7 +327,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     renderLayout(store);
 
     /* Wait for the seeded first render. */
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -317,7 +361,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -345,7 +392,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -369,7 +419,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -396,7 +449,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -450,7 +506,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -476,7 +535,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -516,7 +578,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
@@ -538,7 +603,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     renderLayout(store);
 
+    /* getLibrary() resolves (empty) — flips loaded=true and runs the seed
+       baseline pass. Mirrors the real boot ordering. */
     await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
       await new Promise((r) => setTimeout(r, 20));
     });
 
