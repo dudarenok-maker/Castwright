@@ -17,7 +17,12 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
-import type { buildReviewSentencesInput as BuildReviewSentencesInput } from './script-review.js';
+import type {
+  buildReviewSentencesInput as BuildReviewSentencesInput,
+  priorChapterBoundaryExchange as PriorChapterBoundaryExchange,
+  buildScriptReviewChapterInbox as BuildScriptReviewChapterInbox,
+  priorChapterIdFor as PriorChapterIdFor,
+} from './script-review.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -28,6 +33,9 @@ let app: Express;
 let bookId: string;
 let manuscriptId: string;
 let buildReviewSentencesInput: typeof BuildReviewSentencesInput;
+let priorChapterBoundaryExchange: typeof PriorChapterBoundaryExchange;
+let buildScriptReviewChapterInbox: typeof BuildScriptReviewChapterInbox;
+let priorChapterIdFor: typeof PriorChapterIdFor;
 
 /* The fake analyzer's runScriptReviewChapter — each test swaps its implementation.
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
@@ -128,9 +136,12 @@ const CANNED_OPS: ScriptReviewOutput = {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-script-review-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ scriptReviewRouter, buildReviewSentencesInput: build }, { makeBookId }] =
+  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe, buildScriptReviewChapterInbox: bsrci, priorChapterIdFor: pcif }, { makeBookId }] =
     await Promise.all([import('./script-review.js'), import('../workspace/paths.js')]);
   buildReviewSentencesInput = build;
+  priorChapterBoundaryExchange = pcbe;
+  buildScriptReviewChapterInbox = bsrci;
+  priorChapterIdFor = pcif;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();
@@ -333,6 +344,104 @@ describe('POST /api/books/:bookId/script-review', () => {
 
     expect(events.some((e) => e.kind === 'result')).toBe(true);
   });
+
+  it('feeds the prior chapter exchange into the next chapter, first chunk only (fs-64)', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'wren', text: '"Where to?"' },
+      { id: 2, chapterId: 1, characterId: 'marlow', text: '"Somewhere safe."' },
+      { id: 1, chapterId: 2, characterId: 'wren', text: '"I know this place."' },
+    ], [
+      { id: 1, title: 'One', excluded: false },
+      { id: 2, title: 'Two', excluded: false },
+    ]);
+    const prompts: Record<number, string> = {};
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      prompts[c] = p;
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    expect(prompts[2]).toContain('Prior chapter');
+    // The seeded cast.json has only `wren`, so `marlow` resolves to its id via the
+    // off-roster fallback — assert the fallback form `marlow (id: marlow)`.
+    expect(prompts[2]).toContain('marlow (id: marlow): "Somewhere safe."');
+    expect(prompts[1] ?? '').not.toContain('Prior chapter'); // chapter 1 has no predecessor
+  });
+
+  it('attaches the block to the FIRST chunk only of a multi-chunk chapter (fs-64)', async () => {
+    // Force the local engine + small num_ctx so chapter 10 splits into >=2 chunks
+    // (mirrors the existing "chunks a large chapter" harness). Chapter 9 ends A/B,
+    // so chapter 10's FIRST chunk must carry the block and later chunks must not.
+    engineState.engine = 'local';
+    process.env.ANALYZER_NUM_CTX = '400'; // → budget 2000
+    const big = Array.from({ length: 12 }, (_, i) => ({
+      id: 100 + i, chapterId: 10, characterId: 'narrator', text: 'A'.repeat(800),
+    }));
+    writeBook([
+      { id: 1, chapterId: 9, characterId: 'wren', text: '"Where to?"' },
+      { id: 2, chapterId: 9, characterId: 'marlow', text: '"Somewhere safe."' },
+      ...big,
+    ], [{ id: 9, title: 'Nine', excluded: false }, { id: 10, title: 'Ten', excluded: false }]);
+
+    const calls: Array<{ chapterId: number; prompt: string }> = [];
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      calls.push({ chapterId: c, prompt: p });
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    const ch10 = calls.filter((c) => c.chapterId === 10).map((c) => c.prompt);
+    expect(ch10.length).toBeGreaterThan(1); // the chapter split
+    expect(ch10[0]).toContain('Prior chapter'); // first chunk carries it
+    expect(ch10.slice(1).every((p) => !p.includes('Prior chapter'))).toBe(true); // later chunks don't
+  });
+
+  it('emits NO block when the predecessor ends on narration — scene break (fs-64)', async () => {
+    // The headline regression guard: a non-exchange ending must not feed a
+    // misleading turn-taking signal into the next chapter.
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'wren', text: '"Anyone there?"' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'Silence answered.' },
+      { id: 1, chapterId: 2, characterId: 'wren', text: '"I knew it."' },
+    ], [{ id: 1, title: 'One', excluded: false }, { id: 2, title: 'Two', excluded: false }]);
+    const prompts: Record<number, string> = {};
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      prompts[c] = p;
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    expect(prompts[2] ?? '').not.toContain('Prior chapter'); // gate failed → no block
+  });
+
+  it('does NOT cascade past the immediately-preceding chapter (fs-64)', async () => {
+    // ch1 ends A/B, ch2 ends on narration (gate fails). ch3 must NOT pick up ch1's
+    // exchange — selection takes ch2 (immediate predecessor) and stops.
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'wren', text: '"Where to?"' },
+      { id: 2, chapterId: 1, characterId: 'marlow', text: '"Somewhere safe."' },
+      { id: 1, chapterId: 2, characterId: 'wren', text: '"Wait."' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'The door closed.' },
+      { id: 1, chapterId: 3, characterId: 'wren', text: '"Still here."' },
+    ], [
+      { id: 1, title: 'One', excluded: false },
+      { id: 2, title: 'Two', excluded: false },
+      { id: 3, title: 'Three', excluded: false },
+    ]);
+    const prompts: Record<number, string> = {};
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      prompts[c] = p;
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    expect(prompts[2] ?? '').toContain('Prior chapter');       // ch1 ended A/B → ch2 gets it
+    expect(prompts[3] ?? '').not.toContain('Prior chapter');   // ch2 ended narration → no cascade to ch1
+  });
 });
 
 describe('buildReviewSentencesInput (fs-58)', () => {
@@ -348,5 +457,172 @@ describe('buildReviewSentencesInput (fs-58)', () => {
       instruct: 'a tired sigh', vocalization: true,
     });
     expect(out[2]).toEqual({ sentenceId: 3, characterId: 'mira', text: 'No instruct.' });
+  });
+});
+
+describe('priorChapterBoundaryExchange (fs-64)', () => {
+  const roster = [
+    { id: 'wren', name: 'Wren' },
+    { id: 'marlow', name: 'Marlow' },
+  ];
+  const s = (id: number, characterId: string, text: string, excludeFromSynthesis?: boolean) =>
+    ({ id, characterId, text, ...(excludeFromSynthesis ? { excludeFromSynthesis } : {}) });
+
+  it('returns both turns when the chapter ends on an A/B exchange', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'narrator', 'It was late.'), s(2, 'wren', '"Where to?"'), s(3, 'marlow', '"Somewhere safe."')],
+      roster,
+    );
+    expect(out).toEqual({
+      turns: [
+        { speakerId: 'wren', speakerName: 'Wren', text: '"Where to?"' },
+        { speakerId: 'marlow', speakerName: 'Marlow', text: '"Somewhere safe."' },
+      ],
+    });
+  });
+
+  it('returns null when the chapter ends on narration (single speaker in window)', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'wren', '"Hello?"'), s(2, 'narrator', 'No answer came.'), s(3, 'narrator', 'The hall was empty.')],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('returns null on a single-speaker monologue ending', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'wren', 'One.'), s(2, 'wren', 'Two.'), s(3, 'wren', 'Three.')],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('returns null when two speakers both folded to one id (unknown-male)', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'unknown-male', '"Run!"'), s(2, 'unknown-male', '"This way!"')],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('returns null when the exchange is beyond the lookback window', () => {
+    const out = priorChapterBoundaryExchange(
+      [
+        s(1, 'wren', '"Where to?"'), s(2, 'marlow', '"Safe."'),
+        s(3, 'narrator', 'a'), s(4, 'narrator', 'b'), s(5, 'narrator', 'c'),
+        s(6, 'narrator', 'd'), s(7, 'narrator', 'e'), s(8, 'narrator', 'f'),
+      ],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('filters excludeFromSynthesis residue out of the turns', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'wren', '"Where to?"'), s(2, 'marlow', '"Safe."'), s(3, 'page-header', 'Chapter 4', true)],
+      roster,
+    );
+    expect(out).toEqual({
+      turns: [
+        { speakerId: 'wren', speakerName: 'Wren', text: '"Where to?"' },
+        { speakerId: 'marlow', speakerName: 'Marlow', text: '"Safe."' },
+      ],
+    });
+  });
+
+  it('truncates a long line to MAX_PRIOR_TURN_CHARS with an ellipsis', () => {
+    const long = '"' + 'x'.repeat(400) + '"';
+    const out = priorChapterBoundaryExchange([s(1, 'wren', 'short'), s(2, 'marlow', long)], roster);
+    expect(out!.turns[1].text.length).toBeLessThanOrEqual(240);
+    expect(out!.turns[1].text.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to the id when a speaker is off-roster', () => {
+    const out = priorChapterBoundaryExchange([s(1, 'wren', '"Hi."'), s(2, 'ghost', '"Boo."')], roster);
+    expect(out!.turns[1]).toEqual({ speakerId: 'ghost', speakerName: 'ghost', text: '"Boo."' });
+  });
+
+  it('returns null for an empty chapter', () => {
+    expect(priorChapterBoundaryExchange([], roster)).toBeNull();
+  });
+});
+
+describe('buildScriptReviewChapterInbox (fs-64 priorExchange)', () => {
+  const roster = [{ id: 'wren', name: 'Wren', role: 'protagonist' }];
+  const sentences = [{ id: 1, characterId: 'narrator', text: 'Hi.' }] as unknown as Parameters<
+    typeof buildScriptReviewChapterInbox
+  >[2];
+
+  it('is byte-identical to today when no priorExchange is given', () => {
+    const expected = `---
+manuscriptId: m1
+task: script-review
+chapterId: 2
+---
+
+## Cast roster (post-fold)
+
+\`\`\`json
+[
+  {
+    "id": "wren",
+    "name": "Wren",
+    "role": "protagonist"
+  }
+]
+\`\`\`
+
+## Sentences (already attributed)
+
+\`\`\`json
+[
+  {
+    "sentenceId": 1,
+    "characterId": "narrator",
+    "text": "Hi."
+  }
+]
+\`\`\`
+`;
+    expect(buildScriptReviewChapterInbox('m1', 2, sentences, roster)).toBe(expected);
+  });
+
+  it('renders the labelled block above the sentences, with no sentenceId', () => {
+    const out = buildScriptReviewChapterInbox('m1', 2, sentences, roster, {
+      turns: [
+        { speakerId: 'wren', speakerName: 'Wren', text: '"Where to?"' },
+        { speakerId: 'marlow', speakerName: 'Marlow', text: '"Somewhere safe."' },
+      ],
+    });
+    expect(out).toContain('Prior chapter');
+    expect(out).toContain('do NOT emit an op');
+    expect(out).toContain('Wren (id: wren): "Where to?"');
+    expect(out).toContain('Marlow (id: marlow): "Somewhere safe."');
+    // §4.6 read-only guard: the block region must surface NO sentenceId (so a
+    // block-targeted op is unconstructible). Scan ONLY the block, not the whole
+    // prompt — the legitimate sentence payload below DOES contain "sentenceId".
+    const block = out.slice(out.indexOf('Prior chapter'), out.indexOf('## Sentences'));
+    expect(block).not.toContain('sentenceId');
+    expect(block).not.toMatch(/"id"\s*:\s*\d/); // no numeric id leaks into the block
+    // block sits before the sentence list
+    expect(out.indexOf('Prior chapter')).toBeLessThan(out.indexOf('## Sentences'));
+  });
+});
+
+describe('priorChapterIdFor (fs-64)', () => {
+  it('returns the nearest lower chapter id', () => {
+    expect(priorChapterIdFor(3, [1, 2, 3, 4], new Set())).toBe(2);
+  });
+  it('skips excluded chapters', () => {
+    expect(priorChapterIdFor(3, [1, 2, 3], new Set([2]))).toBe(1);
+  });
+  it('returns null for the first chapter (no lower id)', () => {
+    expect(priorChapterIdFor(1, [1, 2, 3], new Set())).toBeNull();
+  });
+  it('returns null when every lower chapter is excluded', () => {
+    expect(priorChapterIdFor(3, [1, 2, 3], new Set([1, 2]))).toBeNull();
+  });
+  it('handles non-contiguous ids', () => {
+    expect(priorChapterIdFor(10, [2, 5, 10, 11], new Set())).toBe(5);
   });
 });

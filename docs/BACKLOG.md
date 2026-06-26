@@ -67,12 +67,6 @@ _Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit (user / strategic):_ a non-English user gets a generate-able demo in their own language out of the box, not a dead English-voiced sample. Surfaced by the `fs-50` Spanish ship.
 _Full detail + acceptance:_ [#1027](https://github.com/dudarenok-maker/Castwright/issues/1027).
 
-#### `fs-64` — cross-chapter context for reattribute (fs-58 Unit B follow-up) ([#1120](https://github.com/dudarenok-maker/Castwright/issues/1120))
-
-- _What:_ `reattribute` runs per-chapter, so a chapter-opening tagless line whose speaker was set by the previous chapter's last turn can mis-resolve. Feed the prior chapter's tail into the review prompt so straddling turn-taking resolves. Weigh against RPD cost.
-- _Benefit (technical):_ closes the per-chapter straddle limitation in the Unit B spec.
-_Full detail + acceptance:_ [#1120](https://github.com/dudarenok-maker/Castwright/issues/1120).
-
 #### `fs-52` — Caption/SRT export (.srt/.vtt; line/sentence/word) ([#975](https://github.com/dudarenok-maker/Castwright/issues/975))
 
 - _What:_ Emit `.srt`/`.vtt` (line + sentence + word modes) from the per-sentence alignment we already compute.

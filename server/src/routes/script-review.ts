@@ -47,6 +47,75 @@ interface CastFile {
   characters?: CastCharacterSlim[];
 }
 
+/* fs-64 — cross-chapter context for the script-review pass. The prior chapter's
+   final two-speaker exchange is fed (read-only) into a chapter's first chunk so
+   the model can resolve a tagless chapter-opening line via turn-taking. */
+const NARRATOR_ID = 'narrator'; // module-private convention (re-declared, never exported)
+export const PRIOR_TURN_LOOKBACK = 6; // sentences (positions) scanned back from the chapter end
+export const MAX_PRIOR_TURN_CHARS = 240; // hard cap per rendered line
+
+export interface BoundaryTurn {
+  speakerId: string;
+  speakerName: string;
+  text: string;
+}
+export interface PriorExchange {
+  turns: BoundaryTurn[]; // exactly two, [A, B] in reading order
+}
+
+function capLine(text: string): string {
+  return text.length > MAX_PRIOR_TURN_CHARS
+    ? text.slice(0, MAX_PRIOR_TURN_CHARS - 1).trimEnd() + '…'
+    : text;
+}
+
+/* The immediately-preceding non-excluded story chapter, or null. No cascade:
+   selection skips only excluded chapters; whether that predecessor yields an
+   exchange is a separate gate (priorChapterBoundaryExchange). */
+export function priorChapterIdFor(
+  chapterId: number,
+  allChapterIds: number[],
+  excludedIds: Set<number>,
+): number | null {
+  const lower = allChapterIds.filter((id) => id < chapterId && !excludedIds.has(id));
+  return lower.length ? lower[lower.length - 1] : null;
+}
+
+/* The prior chapter's final two-speaker exchange, or null when it does not end
+   in a live exchange. Narration and excludeFromSynthesis residue are filtered;
+   the remaining eligible sentences in the last PRIOR_TURN_LOOKBACK positions are
+   collapsed into contiguous same-speaker turns. Gate: >=2 turns (which, by the
+   collapse, guarantees the last two are different speakers). Two distinct people
+   folded to one id (e.g. unknown-male) collapse to one turn -> null. */
+export function priorChapterBoundaryExchange(
+  sentences: Array<{ id: number; characterId: string; text: string; excludeFromSynthesis?: boolean }>,
+  roster: Array<{ id: string; name: string }>,
+): PriorExchange | null {
+  const eligible = sentences
+    .slice(-PRIOR_TURN_LOOKBACK)
+    .filter((s) => s.characterId !== NARRATOR_ID && s.excludeFromSynthesis !== true);
+
+  const turns: Array<{ speakerId: string; lastText: string }> = [];
+  for (const sentence of eligible) {
+    const prev = turns[turns.length - 1];
+    if (prev && prev.speakerId === sentence.characterId) {
+      prev.lastText = sentence.text; // extend the run; keep its boundary-adjacent line
+    } else {
+      turns.push({ speakerId: sentence.characterId, lastText: sentence.text });
+    }
+  }
+  if (turns.length < 2) return null;
+
+  const nameOf = (id: string): string => roster.find((r) => r.id === id)?.name ?? id;
+  const toTurn = (t: { speakerId: string; lastText: string }): BoundaryTurn => ({
+    speakerId: t.speakerId,
+    speakerName: nameOf(t.speakerId),
+    text: capLine(t.lastText),
+  });
+  const [a, b] = turns.slice(-2);
+  return { turns: [toTurn(a), toTurn(b)] };
+}
+
 /* Build the per-chapter script-review prompt. We send the full chapter
    sentence sequence plus the post-fold cast roster (id/name/role) so the
    model can identify characters and propose attribution-level edits.
@@ -80,6 +149,7 @@ export function buildScriptReviewChapterInbox(
   chapterId: number,
   sentences: SentenceOutput[],
   roster: CastCharacterSlim[],
+  priorExchange: PriorExchange | null = null,
 ): string {
   const sentencePayload = buildReviewSentencesInput(sentences);
   const rosterPayload = roster.map((c) => ({
@@ -87,6 +157,11 @@ export function buildScriptReviewChapterInbox(
     name: c.name,
     ...(c.role ? { role: c.role } : {}),
   }));
+  const priorBlock = priorExchange
+    ? '## Prior chapter — final exchange (reference only — not reviewable lines; do NOT emit an op on them)\n\n' +
+      priorExchange.turns.map((t) => `${t.speakerName} (id: ${t.speakerId}): ${t.text}`).join('\n') +
+      '\n\n'
+    : '';
   return `---
 manuscriptId: ${manuscriptId}
 task: script-review
@@ -99,7 +174,7 @@ chapterId: ${chapterId}
 ${JSON.stringify(rosterPayload, null, 2)}
 \`\`\`
 
-## Sentences (already attributed)
+${priorBlock}## Sentences (already attributed)
 
 \`\`\`json
 ${JSON.stringify(sentencePayload, null, 2)}
@@ -127,18 +202,20 @@ scriptReviewRouter.post(
 
     const byChapter = await loadPostFoldSentencesByChapter(manuscriptId, located.bookDir);
 
-    /* When chapterId is supplied in the body, limit the pass to that one chapter. */
-    let chapterIds = [...byChapter.keys()].sort((a, b) => a - b);
+    const allChapterIds = [...byChapter.keys()].sort((a, b) => a - b);
+    /* Chapters the user excluded from narration (front/back-matter). Mirrors the
+       detect-emotions + generation filters, and gates fs-64 neighbour selection. */
+    const excludedChapterIds = new Set<number>(
+      located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
+    );
+
+    /* When chapterId is supplied in the body, limit the pass to that one chapter
+       (honoured even when excluded). Otherwise skip the excluded chapters. */
+    let chapterIds = allChapterIds;
     if (requestedChapterId !== undefined) {
-      chapterIds = chapterIds.filter((id) => id === requestedChapterId);
+      chapterIds = allChapterIds.filter((id) => id === requestedChapterId);
     } else {
-      /* Whole-book review skips chapters the user excluded from narration
-         (front/back-matter). Mirrors the detect-emotions + generation filters.
-         An explicit per-chapter request above is honoured even when excluded. */
-      const excludedChapterIds = new Set<number>(
-        located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
-      );
-      chapterIds = chapterIds.filter((id) => !excludedChapterIds.has(id));
+      chapterIds = allChapterIds.filter((id) => !excludedChapterIds.has(id));
     }
 
     /* Load the post-fold cast roster so the prompt carries character names+roles.
@@ -220,6 +297,13 @@ scriptReviewRouter.post(
           chapterId,
         });
 
+        /* fs-64 — the prior chapter's final exchange (read-only) resolves a
+           tagless chapter-opening line. Null unless the immediately-preceding
+           non-excluded chapter ends in a live A/B exchange. */
+        const priorId = priorChapterIdFor(chapterId, allChapterIds, excludedChapterIds);
+        const priorExchange =
+          priorId !== null ? priorChapterBoundaryExchange(byChapter.get(priorId) ?? [], roster) : null;
+
         /* Split the chapter's sentences into budgeted chunks (one call each).
            The owned-core rule keeps each sentence reviewed exactly once across
            the overlapping context windows. A cloud engine gets a huge budget so
@@ -230,13 +314,15 @@ scriptReviewRouter.post(
           serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
         });
 
-        for (const chunk of chunks) {
+        for (let index = 0; index < chunks.length; index += 1) {
+          const chunk = chunks[index];
           if (closed) break;
           const prompt = buildScriptReviewChapterInbox(
             manuscriptId,
             chapterId,
             chunkWithContext(chunk),
             roster,
+            index === 0 ? priorExchange : null,
           );
           try {
             const result = await selection.analyzer.runScriptReviewChapter(

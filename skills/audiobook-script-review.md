@@ -22,6 +22,12 @@ The input contains:
    `instruct` is an English delivery direction; `vocalization: true` marks a
    sentence whose `text` was given a machine-prepended non-verbal sound.
 2. The book's cast (id → name mapping) so you can reference character ids.
+3. OPTIONALLY, a `## Prior chapter — final exchange` block above the sentences.
+   It names the previous chapter's last two speakers and their closing lines —
+   read-only turn-taking context to help you attribute a tagless **opening**
+   line of THIS chapter. It carries **no `sentenceId`** and is **not reviewable**:
+   never emit an op targeting it; use only the named alternation to inform the
+   attribution of this chapter's own opening sentences.
 
 ## Op classes
 
