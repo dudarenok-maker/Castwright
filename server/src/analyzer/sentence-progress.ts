@@ -24,6 +24,21 @@ export function countStreamedSentences(buffer: string): number {
   return (buffer.match(/"characterId"\s*:/g) ?? []).length;
 }
 
+/** A live, per-attempt stream counter (in-flight sentence markers, received
+    output bytes) made monotonic across a transient retry. A retry — a Gemini
+    idle/5xx/429 inside `generateWithLimiter`, or a higher-level coverage retry
+    that re-runs the whole `runStage2Chapter` call — restarts the streamed
+    buffer (and per-attempt elapsed) from zero, so the raw counter collapses
+    mid-section and the displayed "Attributed ~N" / "N KB received" would visibly
+    regress. Taking the high-water mark against the prior value holds the line.
+    Resetting at a REAL boundary (a new section, chapter done) is the caller's
+    job — the coverage retry does NOT re-fire the section-start callback, so a
+    high-water mark held in section state survives a retry but never leaks across
+    a genuine section change. */
+export function monotonicHighWater(prev: number, current: number): number {
+  return Math.max(prev, current);
+}
+
 /** Combine committed (exact, per completed section) + in-flight (marker count
     for the current section) into the displayed numerator, and pair it with a
     self-calibrated denominator that never sits below the numerator. */

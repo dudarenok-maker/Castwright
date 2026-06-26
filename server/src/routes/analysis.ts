@@ -51,6 +51,7 @@ import {
 import {
   countSentencesHeuristic,
   countStreamedSentences,
+  monotonicHighWater,
   sentenceProgressForTick,
   projectChapterEstMsFromSentences,
   selectChapterEstMs,
@@ -3552,14 +3553,21 @@ export async function runMainAnalyzerJob(
         slot.lastGoodEstMs = next;
       };
 
-      const tickOverall = (elapsed: number) => {
+      const tickOverall = () => {
         const slot = inFlight.get(i);
         if (slot) {
-          slot.elapsedMs = elapsed;
+          /* Chapter-relative elapsed (wall-clock since this chapter started),
+             NOT the per-attempt elapsed onWaiting reports. A coverage/transient
+             retry restarts the per-attempt clock at 0, which would make the
+             displayed "M:SS of ~M:SS" snap backward mid-chapter; startedAt is
+             fixed at chapter dispatch, so this never regresses. Matches the
+             clock the onChunk heartbeat already feeds into refineEstMs below. */
+          const chapterElapsed = Date.now() - slot.startedAt;
+          slot.elapsedMs = chapterElapsed;
           /* Mid-chapter ETA refinement (issue 3): sentence-aware estimate band
              (selectChapterEstMs) prefers the sentence projection over bytes,
              never returns the stage value, never blanks to ~. */
-          refineEstMs(slot, elapsed);
+          refineEstMs(slot, chapterElapsed);
         }
         sendLiveTick();
         /* The per-chapter "Nm elapsed, still waiting on the model" wall-clock
@@ -3594,7 +3602,7 @@ export async function runMainAnalyzerJob(
       const stage2Call: StageCall = {
         signal: abortController.signal,
         language: bookLanguage,
-        onWaiting: (elapsed) => tickOverall(elapsed),
+        onWaiting: () => tickOverall(),
         /* Per-chunk heartbeat so the user sees evidence of model output
            on each chapter. Stage 2's existing wall-clock heartbeat log
            lines already cover the silence-watchdog purpose. */
@@ -3604,8 +3612,24 @@ export async function runMainAnalyzerJob(
              quiet during active streaming. */
           const liveSlot = inFlight.get(i);
           if (liveSlot) {
-            liveSlot.receivedBytes = info.receivedBytes;
-            liveSlot.inflightSentences = countStreamedSentences(info.receivedText);
+            /* High-water marks so the live readouts never regress when a
+               transient retry restarts the stream from empty (a gemini
+               idle/5xx/429, or a higher-level coverage retry that re-runs the
+               whole runStage2Chapter call). Without these, "N KB received" and
+               "Attributed ~N" snap backward mid-chapter, and the byte projection
+               below mistakes the reset for "barely started" and inflates the ETA.
+               receivedBytes is a CHAPTER-level mark (never reset within the
+               chapter, so a multi-section chapter's KB readout plateaus rather
+               than dropping to 0 at each section). inflightSentences is reset to
+               0 at section boundaries (section-start onChunk + onSectionDone
+               below) because completed sections are counted exactly in
+               committedSentences — so its mark survives a retry but never leaks
+               across a real section change. */
+            liveSlot.receivedBytes = monotonicHighWater(liveSlot.receivedBytes, info.receivedBytes);
+            liveSlot.inflightSentences = monotonicHighWater(
+              liveSlot.inflightSentences,
+              countStreamedSentences(info.receivedText),
+            );
             if (!liveSlot.inSentenceMode && liveSlot.inflightSentences >= SENTENCE_MODE_MIN_MARKERS) {
               liveSlot.inSentenceMode = true;
             }
@@ -3619,12 +3643,16 @@ export async function runMainAnalyzerJob(
             refineEstMs(liveSlot, now - liveSlot.startedAt);
             sendLiveTick();
           }
+          /* Display the high-water byte count (monotonic across a retry) but
+             derive chars/s from the LIVE attempt — chars/s is an instantaneous
+             throughput, not an accumulator, so it stays sensible on a retry
+             without needing to regress. */
           const charsPerSec =
             info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
           send({
             kind: 'heartbeat',
             phaseId: 1,
-            receivedBytes: info.receivedBytes,
+            receivedBytes: liveSlot?.receivedBytes ?? info.receivedBytes,
             charsPerSec,
             elapsedMs: info.elapsedMs,
             sinceLastChunkMs: info.sinceLastChunkMs,
