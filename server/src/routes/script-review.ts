@@ -69,6 +69,18 @@ function capLine(text: string): string {
     : text;
 }
 
+/* The immediately-preceding non-excluded story chapter, or null. No cascade:
+   selection skips only excluded chapters; whether that predecessor yields an
+   exchange is a separate gate (priorChapterBoundaryExchange). */
+export function priorChapterIdFor(
+  chapterId: number,
+  allChapterIds: number[],
+  excludedIds: Set<number>,
+): number | null {
+  const lower = allChapterIds.filter((id) => id < chapterId && !excludedIds.has(id));
+  return lower.length ? lower[lower.length - 1] : null;
+}
+
 /* The prior chapter's final two-speaker exchange, or null when it does not end
    in a live exchange. Narration and excludeFromSynthesis residue are filtered;
    the remaining eligible sentences in the last PRIOR_TURN_LOOKBACK positions are

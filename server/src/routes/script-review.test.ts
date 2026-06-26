@@ -21,6 +21,7 @@ import type {
   buildReviewSentencesInput as BuildReviewSentencesInput,
   priorChapterBoundaryExchange as PriorChapterBoundaryExchange,
   buildScriptReviewChapterInbox as BuildScriptReviewChapterInbox,
+  priorChapterIdFor as PriorChapterIdFor,
 } from './script-review.js';
 
 const AUTHOR = 'Test Author';
@@ -34,6 +35,7 @@ let manuscriptId: string;
 let buildReviewSentencesInput: typeof BuildReviewSentencesInput;
 let priorChapterBoundaryExchange: typeof PriorChapterBoundaryExchange;
 let buildScriptReviewChapterInbox: typeof BuildScriptReviewChapterInbox;
+let priorChapterIdFor: typeof PriorChapterIdFor;
 
 /* The fake analyzer's runScriptReviewChapter — each test swaps its implementation.
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
@@ -134,11 +136,12 @@ const CANNED_OPS: ScriptReviewOutput = {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-script-review-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe, buildScriptReviewChapterInbox: bsrci }, { makeBookId }] =
+  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe, buildScriptReviewChapterInbox: bsrci, priorChapterIdFor: pcif }, { makeBookId }] =
     await Promise.all([import('./script-review.js'), import('../workspace/paths.js')]);
   buildReviewSentencesInput = build;
   priorChapterBoundaryExchange = pcbe;
   buildScriptReviewChapterInbox = bsrci;
+  priorChapterIdFor = pcif;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();
@@ -505,5 +508,23 @@ chapterId: 2
     expect(block).not.toMatch(/"id"\s*:\s*\d/); // no numeric id leaks into the block
     // block sits before the sentence list
     expect(out.indexOf('Prior chapter')).toBeLessThan(out.indexOf('## Sentences'));
+  });
+});
+
+describe('priorChapterIdFor (fs-64)', () => {
+  it('returns the nearest lower chapter id', () => {
+    expect(priorChapterIdFor(3, [1, 2, 3, 4], new Set())).toBe(2);
+  });
+  it('skips excluded chapters', () => {
+    expect(priorChapterIdFor(3, [1, 2, 3], new Set([2]))).toBe(1);
+  });
+  it('returns null for the first chapter (no lower id)', () => {
+    expect(priorChapterIdFor(1, [1, 2, 3], new Set())).toBeNull();
+  });
+  it('returns null when every lower chapter is excluded', () => {
+    expect(priorChapterIdFor(3, [1, 2, 3], new Set([1, 2]))).toBeNull();
+  });
+  it('handles non-contiguous ids', () => {
+    expect(priorChapterIdFor(10, [2, 5, 10, 11], new Set())).toBe(5);
   });
 });
