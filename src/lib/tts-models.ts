@@ -58,12 +58,42 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
    visible. */
 export const TTS_MODEL_OPTIONS: TtsModelOption[] = TTS_ENGINES.flatMap((g) => g.models);
 
+/* Quality-tier model keys applied via per-character cast pinning (fs-56/fs-66),
+   NOT offered as a top-level picker option, so they're absent from
+   TTS_MODEL_OPTIONS. ttsModelLabel still needs a human label for them (the
+   generation header + the effective-tier label below). */
+const EXTRA_MODEL_LABELS: Partial<Record<TtsModelKey, string>> = {
+  'qwen3-tts-1.7b': 'Qwen3-TTS 1.7B',
+};
+
 /** Human-readable label for a model key. Falls back to the raw key when an
     unknown id appears (e.g. an older saved state pointing at a model we've
     since removed) so the UI shows *something* identifiable rather than
     blanking. */
 export function ttsModelLabel(key: TtsModelKey): string {
-  return TTS_MODEL_OPTIONS.find((m) => m.id === key)?.label ?? key;
+  return TTS_MODEL_OPTIONS.find((m) => m.id === key)?.label ?? EXTRA_MODEL_LABELS[key] ?? key;
+}
+
+/** The Qwen tier(s) a book's cast will ACTUALLY render in. Per-character
+    `ttsModelKey` overrides win over the run-default `modelKey` in synthesis
+    (`synthesise-chapter.ts` `routeFor`), so the generation header must reflect
+    the effective tier — not the global model picker (which is what made a
+    1.7B-pinned cast misleadingly read "0.6B"). Returns one label when the whole
+    cast resolves to a single tier, a "Mixed: A + B" label when tiers differ, and
+    the plain run-default label when nothing is pinned (byte-identical to the
+    pre-override header). */
+export function effectiveEngineLabel(
+  characters: ReadonlyArray<{ ttsModelKey?: string | null }>,
+  modelKey: TtsModelKey,
+): string {
+  const anyPinned = characters.some((c) => c.ttsModelKey);
+  if (!anyPinned) return ttsModelLabel(modelKey);
+  const effective = new Set<string>(characters.map((c) => c.ttsModelKey ?? modelKey));
+  if (effective.size === 1) return ttsModelLabel([...effective][0] as TtsModelKey);
+  return `Mixed: ${[...effective]
+    .map((k) => ttsModelLabel(k as TtsModelKey))
+    .sort()
+    .join(' + ')}`;
 }
 
 /* Short, engine-level labels (not model-level) for the mixed-engine chapter

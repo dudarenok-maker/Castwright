@@ -3,6 +3,7 @@ import {
   TTS_ENGINES,
   TTS_MODEL_OPTIONS,
   ttsModelLabel,
+  effectiveEngineLabel,
   engineForModelKey,
   engineGroupForModelKey,
   formatEngineBreakdown,
@@ -47,5 +48,35 @@ describe('tts-models catalog includes Qwen3-TTS (plan 108)', () => {
     expect(engineForModelKey('coqui-xtts-v2')).toBe('coqui');
     expect(engineForModelKey('gemini-2.5-flash')).toBe('gemini');
     expect(engineGroupForModelKey('gemini-2.5-flash')).toBe('gemini');
+  });
+
+  it('labels the 1.7B Quality tier (absent from the picker options)', () => {
+    /* 1.7B is applied via cast pinning, not the picker, so it is NOT in
+       TTS_MODEL_OPTIONS — ttsModelLabel must still render a human label. */
+    expect(TTS_MODEL_OPTIONS.map((m) => m.id)).not.toContain('qwen3-tts-1.7b');
+    expect(ttsModelLabel('qwen3-tts-1.7b')).toBe('Qwen3-TTS 1.7B');
+  });
+});
+
+describe('effectiveEngineLabel (truthful generation-header tier)', () => {
+  it('returns the run-default label when no character is pinned', () => {
+    const cast = [{ ttsModelKey: null }, { ttsModelKey: undefined }];
+    expect(effectiveEngineLabel(cast, 'qwen3-tts-0.6b')).toBe('Qwen3-TTS 0.6B');
+  });
+
+  it('reflects 1.7B when the whole cast is pinned to it (the reported bug)', () => {
+    const cast = [{ ttsModelKey: 'qwen3-tts-1.7b' as const }, { ttsModelKey: 'qwen3-tts-1.7b' as const }];
+    /* Run default is 0.6B (global picker) but every character renders at 1.7B. */
+    expect(effectiveEngineLabel(cast, 'qwen3-tts-0.6b')).toBe('Qwen3-TTS 1.7B');
+  });
+
+  it('shows a Mixed label when tiers differ across the cast', () => {
+    const cast = [{ ttsModelKey: 'qwen3-tts-1.7b' as const }, { ttsModelKey: null }];
+    expect(effectiveEngineLabel(cast, 'qwen3-tts-0.6b')).toBe('Mixed: Qwen3-TTS 0.6B + Qwen3-TTS 1.7B');
+  });
+
+  it('collapses to a single label when an un-pinned character matches the run default tier', () => {
+    const cast = [{ ttsModelKey: 'qwen3-tts-0.6b' as const }, { ttsModelKey: null }];
+    expect(effectiveEngineLabel(cast, 'qwen3-tts-0.6b')).toBe('Qwen3-TTS 0.6B');
   });
 });

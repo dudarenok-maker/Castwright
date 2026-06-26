@@ -2083,7 +2083,9 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       modelKey: 'qwen3-tts-1.7b',
       engine: 'qwen',
       qwenBatchSize: 8,
-      qwenBatchTokenBudget: budget,
+      /* 1.7B bucket reads the tier-specific budget (the generic one is the 0.6B
+         budget now), so drive that to exercise the 1.7B instruct-aware packing. */
+      qwenBatchTokenBudget17b: budget,
     });
     /* With instruct accounted (is17b=true), effective length per item = 40; 2×40=80 > 50, so
        every body group gets its own work item → no batch calls; only singles. */
@@ -2238,6 +2240,106 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     }
     /* At least one 1.7B batch must have been dispatched. */
     expect(batchModelKeys.some((mk) => mk === 'qwen3-tts-1.7b')).toBe(true);
+  });
+
+  /* ── 1.7B tier-aware batch width (8 GB OOM guard) ───────────────────────
+     The 1.7B-Base is ~3.4 GB resident; a batch as wide as the 0.6B default
+     (size 32 / budget 3600 chars) blows past an 8 GB card's VRAM during the
+     batched forward → supervisor recycle storm → RecycleStormError. The packer
+     must apply a SMALLER, tier-specific width to 1.7B batches while leaving
+     0.6B batches on the default. */
+  it('caps 1.7B batches at the smaller tier-specific batch size', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'q',
+        name: 'Q',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-q' } },
+        ttsModelKey: 'qwen3-tts-1.7b',
+      },
+    ];
+    const provider: TtsProvider & { batchSizes: number[] } = {
+      batchSizes: [],
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({ items }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        provider.batchSizes.push(items.length);
+        return { pcms: items.map((it) => Buffer.alloc(it.text.length * 2)), sampleRate: 24000 };
+      },
+    };
+    await synthesiseChapter({
+      sentences: [1, 2, 3, 4, 5, 6].map((i) => sentence(i, 'q', `Line ${i}.`)),
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+      qwenBatchSize: 8, // 0.6B-tier cap (large)
+      qwenBatchSize17b: 2, // 1.7B-tier cap (small)
+      qwenBatchTokenBudget: 0, // fixed-width slicing isolates the size cap
+      qwenBatchBucket: false,
+    });
+    expect(provider.batchSizes.length).toBeGreaterThan(0);
+    for (const n of provider.batchSizes) expect(n).toBeLessThanOrEqual(2);
+  });
+
+  it('applies the smaller 1.7B token budget to 1.7B batches only', async () => {
+    /* 0.6B narrator + 1.7B quality, all short uniform-length lines. With a tiny
+       1.7B budget but a generous 0.6B budget, the 1.7B groups pack narrow while
+       the 0.6B groups pack wide — proving the budget is tier-scoped. */
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-narrator' } } },
+      {
+        id: 'quality',
+        name: 'Quality',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-quality' } },
+        ttsModelKey: 'qwen3-tts-1.7b',
+      },
+    ];
+    const batches: { is17b: boolean; size: number }[] = [];
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({ items }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        batches.push({ is17b: items[0].voiceName === 'qwen-quality', size: items.length });
+        return { pcms: items.map((it) => Buffer.alloc(it.text.length * 2)), sampleRate: 24000 };
+      },
+    };
+    /* 4 of each speaker, each "Word." = 5 normalised chars. 0.6B budget 1000 →
+       packs all 4 (4×5=20 ≤ 1000). 1.7B budget 10 → each batch holds at most
+       2 (2×5=10 ≤ 10, 3×5=15 > 10). */
+    await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'Word.'),
+        sentence(2, 'narrator', 'Word.'),
+        sentence(3, 'narrator', 'Word.'),
+        sentence(4, 'narrator', 'Word.'),
+        sentence(5, 'quality', 'Word.'),
+        sentence(6, 'quality', 'Word.'),
+        sentence(7, 'quality', 'Word.'),
+        sentence(8, 'quality', 'Word.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: 1000, // 0.6B budget (wide)
+      qwenBatchTokenBudget17b: 10, // 1.7B budget (narrow)
+      qwenBatchBucket: false,
+    });
+    const seventeen = batches.filter((b) => b.is17b);
+    const six = batches.filter((b) => !b.is17b);
+    expect(seventeen.length).toBeGreaterThan(0);
+    for (const b of seventeen) expect(b.size).toBeLessThanOrEqual(2);
+    /* The 0.6B groups packed WIDER than the 1.7B cap — budget is tier-scoped.
+       (The first body group is the sample-rate anchor single, so the 4 narrator
+       sentences become anchor + a batch of 3; the 1.7B batches stay ≤ 2.) */
+    const maxSix = Math.max(...six.map((b) => b.size));
+    const maxSeventeen = Math.max(...seventeen.map((b) => b.size));
+    expect(maxSix).toBeGreaterThan(maxSeventeen);
   });
 
   it('dispatches a 1.7B batch with modelKey qwen3-tts-1.7b (not 0.6b)', async () => {

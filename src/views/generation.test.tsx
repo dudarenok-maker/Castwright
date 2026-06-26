@@ -2372,10 +2372,14 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
 
   const inProgressChapter2: Chapter = { ...chapter2, state: 'in_progress' };
 
-  it('renders and dispatches requestStartGeneration when there is queued work and nothing in flight', () => {
+  it('initiates the start-generation flow when there is queued work and nothing in flight', () => {
     /* chapter1 done, chapter2 queued → queued > 0, inProgress = 0, no error.
        Spy on dispatch BEFORE render so the view's useDispatch captures the
-       spy, not the original store method. */
+       spy, not the original store method. The resume button now routes through
+       the startGenerationFlow thunk (P3): a Qwen book opens the tier prompt, a
+       non-Qwen book dispatches requestStartGeneration directly — both branches
+       covered in start-generation-flow.test.ts. Here we only assert the button
+       is wired to that flow. */
     const store = makeResumeStore([chapter1, chapter2]);
     const dispatchSpy = vi.spyOn(store, 'dispatch');
     render(
@@ -2398,7 +2402,18 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
     expect(btn).toBeInTheDocument();
 
     fireEvent.click(btn);
-    expect(dispatchSpy).toHaveBeenCalledWith(uiSlice.actions.requestStartGeneration());
+    /* The thunk is dispatched as a function; whichever branch it takes, one of
+       these is true. */
+    const dispatched = dispatchSpy.mock.calls.map((c) => c[0]) as Array<
+      ((...a: unknown[]) => unknown) | { type?: string }
+    >;
+    const initiatedFlow = dispatched.some(
+      (a) =>
+        typeof a === 'function' ||
+        a?.type === uiSlice.actions.requestStartGeneration().type ||
+        a?.type === uiSlice.actions.openStartGenPrompt().type,
+    );
+    expect(initiatedFlow).toBe(true);
   });
 
   it('is hidden while a chapter is in progress (a run is live)', () => {
