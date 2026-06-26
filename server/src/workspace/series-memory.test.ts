@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { deriveSeriesMemory, summarize, type SeriesBookInput, type SeriesCharacterInput } from './series-memory.js';
 
 const ch = (o: Partial<SeriesCharacterInput> & { characterId: string }): SeriesCharacterInput => ({
-  name: o.name ?? o.characterId, aliases: [], voiceId: null, voiceLabel: 'Designed voice',
+  name: o.name ?? o.characterId, aliases: [], voiceId: null, voiceName: null, voiceLabel: 'Designed voice',
   engine: 'qwen', voiceKind: 'designed', isPrincipal: true, matchedFrom: null, ...o,
 });
 // A 3-book series: 3 designed principals carried 1->3; one preset principal carried; one late joiner.
@@ -58,6 +58,57 @@ describe('deriveSeriesMemory', () => {
     }));
     const d = deriveSeriesMemory(books)!;
     expect(d.carried.count).toBe(6); // Narrator AND Guard both count
+  });
+
+  it('carries a character whose originating book has a null reuse voiceId but a stable engine voice name', () => {
+    // Real-world (KOTC): the book where a character DEBUTS never gets the
+    // cross-book reuse `voiceId` stamped — only the per-engine voice name
+    // (overrideTtsVoices[engine].name → here `voiceName`). Later books carry
+    // BOTH. The voice never changed, so the character must count as carried.
+    // Regression: the old single-`voiceId` set saw {null, 'v_q_marrow'} and
+    // dropped the whole main cast that debuts in book 1.
+    const books = baseBooks();
+    for (const b of books) {
+      const m = b.characters.find((c) => c.characterId === `${b.bookId}-marrow`)!;
+      m.voiceName = 'qwen-marrow'; // engine voice name — identical in every book
+      if (b.bookId === 'b1') m.voiceId = null; // originating book: no reuse key yet
+    }
+    const d = deriveSeriesMemory(books)!;
+    const marrow = d.carried.characters.find((c) => c.character === 'Marrow')!;
+    expect(marrow).toBeDefined();
+    expect(marrow.bookIndices).toEqual([1, 2, 3]);
+    expect(marrow.carriedFullSpan).toBe(true);
+    expect(marrow.voiceId).toBe('v_q_marrow'); // canonical id from a voiced appearance
+  });
+
+  it('carries a character voiced consistently but name-dropped (no engine voice) in one book', () => {
+    // Real-world (KOTC Lord Cassius / Ro / Flori): a character speaks with one
+    // voice across books, but in one book is a bare mention with ttsEngine=null
+    // → no engine voice name. The reuse voiceId stays stable, so it's the same
+    // voice. A null facet in one appearance must NOT poison the whole component.
+    const books = baseBooks();
+    const cassius = (b: SeriesBookInput) => b.characters.find((c) => c.characterId === `${b.bookId}-marrow`)!;
+    for (const b of books) {
+      cassius(b).voiceName = 'qwen-marrow';
+      cassius(b).voiceId = 'v_q_marrow';
+    }
+    // Book 2: bare mention — engine + voiceName null, but reuse voiceId persists.
+    cassius(books[1]).voiceName = null;
+    cassius(books[1]).engine = null;
+    const d = deriveSeriesMemory(books)!;
+    const m = d.carried.characters.find((c) => c.character === 'Marrow')!;
+    expect(m).toBeDefined();
+    expect(m.bookIndices).toEqual([1, 2, 3]);
+  });
+
+  it('excludes a character re-cast mid-series (engine voice name changed even if reuse id stable)', () => {
+    // Both facets guard a voice change: flipping only the engine voice name
+    // (a genuine re-voicing) must still drop the character.
+    const books = baseBooks();
+    for (const b of books) b.characters.find((c) => c.characterId === `${b.bookId}-marrow`)!.voiceName = 'qwen-marrow';
+    books[2].characters.find((c) => c.characterId === 'b3-marrow')!.voiceName = 'qwen-marrow-RECAST';
+    const d = deriveSeriesMemory(books)!;
+    expect(d.carried.characters.find((c) => c.character === 'Marrow')).toBeUndefined();
   });
 
   it('excludes a character re-cast mid-series (voiceId changed)', () => {

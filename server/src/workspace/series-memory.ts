@@ -3,7 +3,14 @@ import type { VoiceKind } from './voice-kind.js';
 
 export interface SeriesCharacterInput {
   characterId: string; name: string; aliases: string[];
-  voiceId: string | null; voiceLabel: string; engine: string | null;
+  // Two facets of a character's voice identity, EITHER of which may be null in a
+  // given book: `voiceId` is the cross-book reuse-linkage key (null in the book
+  // where a character DEBUTS — only stamped once it's matched FROM a prior book);
+  // `voiceName` is the per-engine voice file (overrideTtsVoices[engine].name, null
+  // when the character is a bare mention with no assigned voice). Carried-voice
+  // consistency is judged across BOTH facets — see deriveSeriesMemory.
+  voiceId: string | null; voiceName: string | null;
+  voiceLabel: string; engine: string | null;
   voiceKind: VoiceKind; isPrincipal: boolean;
   matchedFrom: { bookId?: string; characterId?: string } | null;
 }
@@ -85,24 +92,38 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
 
   const carried: CarriedCharacter[] = [];
   for (const chain of components.values()) {
-    const voiceIds = new Set(chain.map((a) => a.ch.voiceId ?? ''));
-    if (voiceIds.size !== 1 || voiceIds.has('')) continue; // voice changed/missing → not carried
+    // Voice consistency across BOTH facets. Each facet is null in legitimate
+    // cases (debut book → null voiceId; bare mention → null voiceName), so a
+    // null in one appearance must NOT poison the component — only a CONFLICT
+    // (≥2 distinct non-null values) of either facet signals a real re-voicing.
+    // Keying on `voiceId` alone (the old rule) wrongly dropped every character
+    // that debuts in book 1, where the reuse voiceId is never stamped.
+    const ids = new Set(chain.map((a) => a.ch.voiceId).filter((v): v is string => !!v));
+    const names = new Set(chain.map((a) => a.ch.voiceName).filter((v): v is string => !!v));
+    if (ids.size > 1 || names.size > 1) continue; // voice changed → not carried
+    if (ids.size === 0 && names.size === 0) continue; // never voiced → not carried
     // Order explicitly by book index — earliest = first book, latest = canonical
-    // name/voice. Dedup indices: a component can hold >1 appearance in the same
+    // name. Dedup indices: a component can hold >1 appearance in the same
     // book (two characters reused from one shared source merge into one component).
     const byIndex = [...chain].sort((a, b) => a.book.index - b.book.index);
     const indices = [...new Set(byIndex.map((a) => a.book.index))];
     if (indices.length < 2) continue; // present in <2 distinct books → not carried
-    const earliest = byIndex[0], latest = byIndex[byIndex.length - 1].ch;
+    const earliest = byIndex[0], latest = byIndex[byIndex.length - 1];
+    // Voice metadata (id/label/engine/kind) from the LATEST appearance that
+    // actually carries a voice — the latest overall may be a bare unvoiced
+    // mention whose label/engine are blank. The display NAME still comes from
+    // the latest appearance overall (canonical-latest, e.g. an alias reveal).
+    const voiced = [...byIndex].reverse().find((a) => a.ch.voiceId || a.ch.voiceName) ?? latest;
+    const carriedVoiceId = (voiced.ch.voiceId ?? [...ids][0] ?? voiced.ch.voiceName ?? [...names][0]) as string;
     // carriedFullSpan: present in EVERY confirmed book 1..M (no gap). `ordered`
     // is the confirmed set by contract.
     const fullSpan = indices.length === ordered.length &&
       indices.every((v, i) => v === ordered[i].index);
     carried.push({
-      character: latest.name, aliases: latest.aliases,
-      voiceId: latest.voiceId as string, voiceLabel: latest.voiceLabel,
-      engine: latest.engine, voiceKind: latest.voiceKind,
-      firstBookId: earliest.book.bookId, lastBookId: byIndex[byIndex.length - 1].book.bookId,
+      character: latest.ch.name, aliases: latest.ch.aliases,
+      voiceId: carriedVoiceId, voiceLabel: voiced.ch.voiceLabel,
+      engine: voiced.ch.engine, voiceKind: voiced.ch.voiceKind,
+      firstBookId: earliest.book.bookId, lastBookId: latest.book.bookId,
       bookIndices: indices, carriedFullSpan: fullSpan,
     });
   }

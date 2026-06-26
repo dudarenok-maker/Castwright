@@ -446,6 +446,9 @@ export async function buildInputsFromBooks(books: LibraryBook[]): Promise<Series
           name: ch.name ?? ch.id,
           aliases: ch.aliases ?? [],
           voiceId: ch.voiceId ?? null,
+          // Per-engine voice file — the SECOND voice-identity facet. Stable in the
+          // debut book where `voiceId` (the reuse key) is still null. Empty → null.
+          voiceName: voiceName || null,
           voiceLabel: isTtsEngine(engine) ? describeVoice(engine, voiceName) : '',
           engine,
           voiceKind: voiceKindFor(isTtsEngine(engine) ? engine : null),
