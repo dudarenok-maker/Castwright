@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countSentencesHeuristic, countStreamedSentences, refineSentencesTotal, sentenceProgressForTick, projectChapterEstMsFromSentences, clampChapterEstMs, selectChapterEstMs } from './sentence-progress.js';
+import { countSentencesHeuristic, countStreamedSentences, monotonicHighWater, refineSentencesTotal, sentenceProgressForTick, projectChapterEstMsFromSentences, clampChapterEstMs, selectChapterEstMs } from './sentence-progress.js';
 
 describe('countSentencesHeuristic', () => {
   it('counts sentence-boundary splits', () => {
@@ -25,6 +25,30 @@ describe('countStreamedSentences', () => {
   });
   it('returns 0 for empty', () => {
     expect(countStreamedSentences('')).toBe(0);
+  });
+});
+
+describe('monotonicHighWater (anti-snap-back across a stream retry within a section)', () => {
+  it('rises with the live counter while it grows', () => {
+    expect(monotonicHighWater(40, 55)).toBe(55); // sentence markers
+    expect(monotonicHighWater(2_700, 13_000)).toBe(13_000); // received bytes
+  });
+  it('does NOT drop when a transient retry restarts the buffer mid-section', () => {
+    // The reported bug: a section streamed to ~250 markers / 13 KB, then a
+    // coverage/Gemini retry restarted the buffer, so the raw live counts
+    // collapsed (~250→30 markers, 13 KB→2.7 KB). The high-water mark holds, so
+    // "Attributed ~N" and "N KB received" never regress.
+    expect(monotonicHighWater(250, 30)).toBe(250);
+    expect(monotonicHighWater(13_000, 2_700)).toBe(13_000);
+  });
+  it('holds steady when the count is unchanged', () => {
+    expect(monotonicHighWater(100, 100)).toBe(100);
+  });
+  it('starts fresh from a boundary reset (prev = 0)', () => {
+    // The caller resets the slot to 0 at a real boundary (section start / done
+    // for sentences), so a new section legitimately begins counting from its
+    // own markers, not the prior section's mark.
+    expect(monotonicHighWater(0, 3)).toBe(3);
   });
 });
 
