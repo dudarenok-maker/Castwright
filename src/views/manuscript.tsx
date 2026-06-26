@@ -1875,11 +1875,6 @@ function SegmentInspector({
    carries `data-text-offset={0}` so the selection→split hook can reconstruct
    sentence-relative offsets. */
 
-function renderSentenceText(text: string) {
-  if (!text) return null;
-  return <span data-text-offset={0}>{text}</span>;
-}
-
 /* fs-58 Unit B — a sentence excluded from synthesis offers no split/reassign
    affordance (it won't be rendered either way). Scoped by chapter because
    sentence ids restart per chapter. */
@@ -1891,6 +1886,11 @@ export function isExcludedSentenceId(
   return Boolean(
     sentences.find((s) => s.chapterId === chapterId && s.id === sentenceId)?.excludeFromSynthesis,
   );
+}
+
+function renderSentenceText(text: string) {
+  if (!text) return null;
+  return <span data-text-offset={0}>{text}</span>;
 }
 
 /* ── Selection-based split popover ─────────────────────────────────────── */

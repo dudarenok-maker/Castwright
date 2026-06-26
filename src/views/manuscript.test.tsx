@@ -1527,7 +1527,9 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
     // Error toast surfaced.
     await waitFor(() => {
       const toasts: Toast[] = store.getState().notifications.toasts;
-      expect(toasts.some((t) => t.kind === 'error' && /create character/i.test(t.message))).toBe(true);
+      expect(toasts.some((t) => t.kind === 'error' && /couldn't create character/i.test(t.message))).toBe(
+        true,
+      );
     });
     // Form still open for retry.
     expect(screen.getByTestId('create-character-form')).toBeInTheDocument();
