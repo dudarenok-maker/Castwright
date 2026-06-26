@@ -1586,7 +1586,7 @@ class QwenEngine(Engine):
         try:
             self._ensure_base17_loaded()
         except Exception as e:  # noqa: BLE001 — classify then re-raise
-            msg = str(e).lower()
+            msg = str(e).lower()  # exc-text-safe: OOM-branch classification only, never returned
             if "out of memory" in msg or isinstance(
                 e, getattr(torch.cuda, "OutOfMemoryError", ())
             ):
