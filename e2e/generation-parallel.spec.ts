@@ -32,7 +32,7 @@
  * promotes min(K, queued.length) chapters in the same tick). */
 
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmTierPromptIfPresent } from './helpers';
 
 /* Plan 58 — file-level serial mode keeps long cold-boot walks in one
    worker so SSE phase transitions don't miss their event window when
@@ -121,6 +121,7 @@ test.describe('parallel chapter generation (BACKLOG #26, plan 87)', () => {
     const bookId = await getBookId(page);
     await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(new RegExp(`#/books/${bookId}/generate`), { timeout: 5_000 });
+    await confirmTierPromptIfPresent(page); // #1160 voice-model tier prompt
 
     /* Poll for the parallel-SSE proof: chapter 2's first in_progress
        transition lands BEFORE chapter 1 completes. We track the first

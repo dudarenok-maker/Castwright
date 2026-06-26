@@ -13,7 +13,7 @@
  * prove the queue is authoritative (chapters show up as real entries). */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmTierPromptIfPresent } from './helpers';
 
 interface QueueEntryShape {
   id: string;
@@ -198,6 +198,7 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
     await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
+    await confirmTierPromptIfPresent(page); // #1160 voice-model tier prompt
 
     /* Generation is live once a chapter-row "Generating" pill shows. */
     await expect(page.locator('span', { hasText: /^Generating$/ }).first()).toBeVisible({
@@ -248,6 +249,7 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
     await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
+    await confirmTierPromptIfPresent(page); // #1160 voice-model tier prompt
     await expect.poll(queueLen, { timeout: 10_000 }).toBeGreaterThan(0);
   });
 

@@ -16,7 +16,7 @@
  * jsdom can lie about for the hashchange / middleware timing). */
 
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmTierPromptIfPresent } from './helpers';
 
 /* Serial mode: the cold-boot analysis walk is long; keep it in one worker so
    the mock SSE phase transitions don't miss their window under contention
@@ -95,6 +95,9 @@ test.describe('Resume generation button (fe-17)', () => {
     /* Click it → requestStartGeneration → middleware enqueues the queued
        chapters → dispatcher claims them → at least one leaves 'queued'. */
     await resumeBtn.click();
+    /* #1160 — a Qwen book prompts for the voice-model tier before starting;
+       confirm it (keep the default) so the run actually kicks off. */
+    await confirmTierPromptIfPresent(page);
     await expect
       .poll(() => anyQueuedLeft(page, queuedBefore), {
         timeout: 15_000,
