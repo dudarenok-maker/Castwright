@@ -1010,9 +1010,19 @@ export function Layout() {
   );
   const completeKey = completeIds.join('|');
   useEffect(() => {
+    /* Wait for the library to actually hydrate before seeding. `library.books`
+       is [] until getLibrary() resolves (a separate, async effect). Seeding on
+       the first effect run — while the library is still empty — captured an
+       EMPTY baseline, so when the real library landed every pre-existing
+       complete book looked brand-new and the trigger fired runProsodyPasses for
+       the whole backlog at once (boot seed-race: floods SSE connections + the
+       GPU queue + VRAM, the app-wide hang on restart). Gating the seed on
+       `loaded` makes the FIRST loaded snapshot the baseline, so only genuine
+       post-load transitions fire. */
+    if (!library.loaded) return;
     if (!prosodySeeded.current) {
-      // First run: mark all currently-complete books as already considered
-      // (no backlog auto-spend; makes a remount self-healing).
+      // First loaded snapshot: mark all currently-complete books as already
+      // considered (no backlog auto-spend; makes a remount self-healing).
       completeIds.forEach((id) => prosodyConsidered.current.add(id));
       prosodySeeded.current = true;
       return;
@@ -1046,7 +1056,7 @@ export function Layout() {
       })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [completeKey]);
+  }, [completeKey, library.loaded]);
 
   if (ui.previewMode) {
     return (
