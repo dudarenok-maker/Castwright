@@ -104,6 +104,12 @@ export interface UiState {
       on the global Voices view pass the series' representative book (the
       one whose principal cast seeds the modal). Null when closed. */
   rebaselineBookId: string | null;
+  /** True while the "Choose voice model" prompt shown before a generation
+      run is open. Lets the user pick the Qwen tier (0.6B fast / 1.7B quality)
+      at the moment they start generating, defaulting to whatever the cast is
+      pinned to. The actual start (`requestStartGeneration`) is dispatched by
+      the modal's confirm, after the tier is applied to the cast. Transient. */
+  startGenPrompt: boolean;
 }
 
 const initialState: UiState = {
@@ -129,6 +135,7 @@ const initialState: UiState = {
   queueModalOpen: false,
   rebaselineModalOpen: false,
   rebaselineBookId: null,
+  startGenPrompt: false,
 };
 
 export const uiSlice = createSlice({
@@ -234,6 +241,13 @@ export const uiSlice = createSlice({
        and never on a passive open/hydrate/view-switch. See
        docs/features/archive/137-reopen-never-auto-enqueues.md. */
     requestStartGeneration: () => {},
+    /* Open / close the pre-generation "Choose voice model" prompt (P3). */
+    openStartGenPrompt: (s) => {
+      s.startGenPrompt = true;
+    },
+    closeStartGenPrompt: (s) => {
+      s.startGenPrompt = false;
+    },
     setCurrentChapterId: (s, a: PayloadAction<number>) => {
       if (s.stage.kind !== 'ready') return;
       s.stage.currentChapterId = a.payload;

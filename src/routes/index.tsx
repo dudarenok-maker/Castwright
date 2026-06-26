@@ -14,6 +14,7 @@ import {
 } from 'react-router-dom';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -768,7 +769,9 @@ function ReadyViewSwitch({
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
           onStartGenerating={() => {
             dispatch(uiActions.changeView('generate'));
-            dispatch(uiActions.requestStartGeneration());
+            /* P3 — Qwen books prompt for the voice-model tier before starting;
+               non-Qwen books start immediately. */
+            dispatch(startGenerationFlow());
           }}
           priorRoster={priorRoster}
           onAddFromSeriesRoster={async (entry) => {

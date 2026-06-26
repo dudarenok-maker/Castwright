@@ -111,3 +111,11 @@ migration + #1100 toggle removal, series-tier endpoint, cast bulk pin). Built vi
 (spec ×2 review rounds + plan ×2 review rounds + per-task reviews + opus whole-branch
 review). Full `npm run verify` green before merge. Follow-up: [#1135](https://github.com/dudarenok-maker/Castwright/issues/1135)
 (pre-existing clipped RegenerateModal footer, surfaced by the e2e).
+
+### Follow-ups (2026-06-26) — making the 1.7B tier usable + honest on an 8 GB box
+
+Three issues surfaced when a whole cast was pinned to 1.7B and generated on an 8 GB GPU:
+
+- **#1158 (bug) — 1.7B OOM-storm.** The batch packer (`server/src/tts/synthesise-chapter.ts`) used one width for both tiers (`QWEN_BATCH_SIZE=32` / `QWEN_BATCH_TOKEN_BUDGET=3600`, tuned for 0.6B). The ~3.4 GB-resident 1.7B-Base plus a 32-wide batch's activations blew past the supervisor's `vram_restart_mb: 8000` threshold → `recycle code 43` storm → `RecycleStormError`. Fixed with tier-aware caps applied to the 1.7B bucket only: `QWEN_BATCH_SIZE_17B` (default 8) + `QWEN_BATCH_TOKEN_BUDGET_17B` (default 1200), both in Advanced Settings → *Voice batching & throughput*.
+- **#1159 (bug) — misleading header.** The Generate header read the global model picker (0.6B), not the effective per-character tier, so a 1.7B-pinned cast looked like it rendered at 0.6B (it didn't — `qwen_base17_loaded: true`). Fixed with `effectiveEngineLabel` (`src/lib/tts-models.ts`).
+- **#1160 (feat) — tier prompt at generation start.** The first generate auto-started silently. A `StartGenerationModal` now prompts for the tier (default = the cast's pin state) and applies it to the whole cast via `setCastTier` before starting; non-Qwen books start directly.

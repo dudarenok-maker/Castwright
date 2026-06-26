@@ -46,6 +46,7 @@ import { ConfirmDialog } from '../modals/confirm-dialog';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import { useAppDispatch, useAppSelector } from '../store';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
+import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
@@ -57,7 +58,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { engineForModelId } from '../lib/models';
-import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
+import { ttsModelLabel, effectiveEngineLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { deriveIssues } from '../lib/chapter-issues';
@@ -820,7 +821,10 @@ export function GenerationView({
     .reduce((s, c) => s + parseDuration(c.duration), 0);
 
   const blocked = lastError != null;
-  const engineLabel = ttsModelLabel(modelKey);
+  /* Truthful effective-tier label (P2): per-character ttsModelKey overrides win
+     over the run-default in synthesis, so reflect what will actually render —
+     not the global picker. A 1.7B-pinned cast now reads "Qwen3-TTS 1.7B". */
+  const engineLabel = effectiveEngineLabel(characters, modelKey);
 
   /* "Stalled" = there's an in-progress chapter but the SSE has been silent
      for longer than STALL_THRESHOLD_MS. Reading `Date.now()` directly is fine
@@ -968,7 +972,7 @@ export function GenerationView({
           {queued > 0 && inProgressCnt === 0 && !lastError && (
             <button
               type="button"
-              onClick={() => dispatch(uiActions.requestStartGeneration())}
+              onClick={() => dispatch(startGenerationFlow())}
               data-testid="generation-view-resume"
               data-tour-id="generate-resume-btn"
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2"

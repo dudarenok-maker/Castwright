@@ -66,6 +66,7 @@ import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
 import { RegenerateModal } from '../modals/regenerate';
+import { StartGenerationModal } from '../modals/start-generation';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
@@ -648,6 +649,9 @@ export function Layout() {
      user sat on the cast or voices view stayed "Designed" until they navigated
      away and back. */
   const ttsEngine = useAppSelector((s) => engineForModelKey(s.ui.ttsModelKey));
+  /* P3 — true while the pre-generation tier prompt applies the chosen tier to
+     the cast (setCastTier) before starting the run. */
+  const [startGenBusy, setStartGenBusy] = useState(false);
   const genProgress = useAppSelector((s) =>
     Object.values(s.chapters.activeStreams).reduce((n, st) => n + st.done, 0),
   );
@@ -1562,6 +1566,48 @@ export function Layout() {
           onDecline={() => {
             if (ui.matchDetailFor) dispatch(castActions.declineMatch(ui.matchDetailFor));
             dispatch(uiActions.setMatchDetailFor(null));
+          }}
+        />
+      )}
+      {ui.startGenPrompt && (
+        <StartGenerationModal
+          defaultTier={
+            characters.some((c) => c.ttsModelKey === 'qwen3-tts-1.7b')
+              ? 'qwen3-tts-1.7b'
+              : 'qwen3-tts-0.6b'
+          }
+          busy={startGenBusy}
+          onClose={() => dispatch(uiActions.closeStartGenPrompt())}
+          onConfirm={async (tier) => {
+            /* Apply the chosen tier to the whole cast (authoritative over any
+               existing per-character pins), then start. 1.7B → pin; 0.6B →
+               clear (null). Qwen members only — the tier is ignored for other
+               engines (server `routeFor`). voiceId ?? id is the storage key the
+               cast/tier endpoint matches on (server matches `voiceId ?? id`),
+               so voiceId-less characters are covered too. */
+            const pin: 'qwen3-tts-1.7b' | null = tier === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null;
+            const qwenMembers = characters.filter((c) => (c.ttsEngine ?? ttsEngine) === 'qwen');
+            setStartGenBusy(true);
+            try {
+              if (bookId) {
+                const ids = [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
+                await Promise.all(ids.map((id) => api.setCastTier(bookId, id, pin)));
+              }
+              qwenMembers.forEach((c) =>
+                dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin })),
+              );
+              setStartGenBusy(false);
+              dispatch(uiActions.closeStartGenPrompt());
+              dispatch(uiActions.requestStartGeneration());
+            } catch {
+              setStartGenBusy(false);
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'error',
+                  message: "Couldn't apply the voice model. Please try again.",
+                }),
+              );
+            }
           }}
         />
       )}
