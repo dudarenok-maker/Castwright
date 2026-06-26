@@ -52,6 +52,9 @@ vi.mock('../tts/index.js', async (importOriginal) => {
    directly in ensure-sidecar-loaded.test.ts, not through this route suite. */
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
+  /* Run-start tier reconcile — no-op here (no sidecar at :9000); the real
+     eviction logic is covered in ensure-sidecar-loaded.test.ts. */
+  reconcileResidentQwenTiers: async () => undefined,
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
      consumer) is a no-op here — these tests don't exercise it and must not
      fire a real /health probe at a dev-box sidecar. */

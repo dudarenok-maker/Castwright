@@ -50,6 +50,7 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
     ensureReadyCalls += 1;
     return ensureReadyImpl();
   },
+  reconcileResidentQwenTiers: async () => undefined,
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
      consumer) is a no-op here — this suite drives a gemini run and asserts the
      srv-17c recovery, not the boundary recycle. */

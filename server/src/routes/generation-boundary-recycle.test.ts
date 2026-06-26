@@ -37,6 +37,7 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
      doesn't wait out its readiness budget. SIDECAR_ENGINES is the REAL set so
      the boundary check's engine guard is exercised honestly. */
   ensureSidecarEngineReady: async () => undefined,
+  reconcileResidentQwenTiers: async () => undefined,
   SIDECAR_ENGINES: new Set(['qwen', 'kokoro', 'coqui']),
 }));
 vi.mock('../tts/index.js', async (importOriginal) => {

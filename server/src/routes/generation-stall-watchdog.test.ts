@@ -40,6 +40,7 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
 });
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => {},
+  reconcileResidentQwenTiers: async () => undefined,
   SIDECAR_ENGINES: new Set(),
 }));
 vi.mock('../tts/index.js', async (importOriginal) => {

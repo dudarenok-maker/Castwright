@@ -48,6 +48,7 @@ vi.mock('../tts/index.js', async (importOriginal) => {
    doesn't try to reach :9000 for the Kokoro fallback warm. */
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
+  reconcileResidentQwenTiers: async () => undefined,
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
      consumer) is a no-op here. */
   SIDECAR_ENGINES: new Set(),
