@@ -47,6 +47,63 @@ interface CastFile {
   characters?: CastCharacterSlim[];
 }
 
+/* fs-64 — cross-chapter context for the script-review pass. The prior chapter's
+   final two-speaker exchange is fed (read-only) into a chapter's first chunk so
+   the model can resolve a tagless chapter-opening line via turn-taking. */
+const NARRATOR_ID = 'narrator'; // module-private convention (re-declared, never exported)
+export const PRIOR_TURN_LOOKBACK = 6; // sentences (positions) scanned back from the chapter end
+export const MAX_PRIOR_TURN_CHARS = 240; // hard cap per rendered line
+
+export interface BoundaryTurn {
+  speakerId: string;
+  speakerName: string;
+  text: string;
+}
+export interface PriorExchange {
+  turns: BoundaryTurn[]; // exactly two, [A, B] in reading order
+}
+
+function capLine(text: string): string {
+  return text.length > MAX_PRIOR_TURN_CHARS
+    ? text.slice(0, MAX_PRIOR_TURN_CHARS - 1).trimEnd() + '…'
+    : text;
+}
+
+/* The prior chapter's final two-speaker exchange, or null when it does not end
+   in a live exchange. Narration and excludeFromSynthesis residue are filtered;
+   the remaining eligible sentences in the last PRIOR_TURN_LOOKBACK positions are
+   collapsed into contiguous same-speaker turns. Gate: >=2 turns (which, by the
+   collapse, guarantees the last two are different speakers). Two distinct people
+   folded to one id (e.g. unknown-male) collapse to one turn -> null. */
+export function priorChapterBoundaryExchange(
+  sentences: Array<{ id: number; characterId: string; text: string; excludeFromSynthesis?: boolean }>,
+  roster: Array<{ id: string; name: string }>,
+): PriorExchange | null {
+  const eligible = sentences
+    .slice(-PRIOR_TURN_LOOKBACK)
+    .filter((s) => s.characterId !== NARRATOR_ID && s.excludeFromSynthesis !== true);
+
+  const turns: Array<{ speakerId: string; lastText: string }> = [];
+  for (const sentence of eligible) {
+    const prev = turns[turns.length - 1];
+    if (prev && prev.speakerId === sentence.characterId) {
+      prev.lastText = sentence.text; // extend the run; keep its boundary-adjacent line
+    } else {
+      turns.push({ speakerId: sentence.characterId, lastText: sentence.text });
+    }
+  }
+  if (turns.length < 2) return null;
+
+  const nameOf = (id: string): string => roster.find((r) => r.id === id)?.name ?? id;
+  const toTurn = (t: { speakerId: string; lastText: string }): BoundaryTurn => ({
+    speakerId: t.speakerId,
+    speakerName: nameOf(t.speakerId),
+    text: capLine(t.lastText),
+  });
+  const [a, b] = turns.slice(-2);
+  return { turns: [toTurn(a), toTurn(b)] };
+}
+
 /* Build the per-chapter script-review prompt. We send the full chapter
    sentence sequence plus the post-fold cast roster (id/name/role) so the
    model can identify characters and propose attribution-level edits.

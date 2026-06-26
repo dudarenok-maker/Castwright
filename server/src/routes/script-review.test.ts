@@ -17,7 +17,10 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
-import type { buildReviewSentencesInput as BuildReviewSentencesInput } from './script-review.js';
+import type {
+  buildReviewSentencesInput as BuildReviewSentencesInput,
+  priorChapterBoundaryExchange as PriorChapterBoundaryExchange,
+} from './script-review.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -28,6 +31,7 @@ let app: Express;
 let bookId: string;
 let manuscriptId: string;
 let buildReviewSentencesInput: typeof BuildReviewSentencesInput;
+let priorChapterBoundaryExchange: typeof PriorChapterBoundaryExchange;
 
 /* The fake analyzer's runScriptReviewChapter — each test swaps its implementation.
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
@@ -128,9 +132,10 @@ const CANNED_OPS: ScriptReviewOutput = {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-script-review-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ scriptReviewRouter, buildReviewSentencesInput: build }, { makeBookId }] =
+  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe }, { makeBookId }] =
     await Promise.all([import('./script-review.js'), import('../workspace/paths.js')]);
   buildReviewSentencesInput = build;
+  priorChapterBoundaryExchange = pcbe;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();
@@ -348,5 +353,92 @@ describe('buildReviewSentencesInput (fs-58)', () => {
       instruct: 'a tired sigh', vocalization: true,
     });
     expect(out[2]).toEqual({ sentenceId: 3, characterId: 'mira', text: 'No instruct.' });
+  });
+});
+
+describe('priorChapterBoundaryExchange (fs-64)', () => {
+  const roster = [
+    { id: 'wren', name: 'Wren' },
+    { id: 'marlow', name: 'Marlow' },
+  ];
+  const s = (id: number, characterId: string, text: string, excludeFromSynthesis?: boolean) =>
+    ({ id, characterId, text, ...(excludeFromSynthesis ? { excludeFromSynthesis } : {}) });
+
+  it('returns both turns when the chapter ends on an A/B exchange', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'narrator', 'It was late.'), s(2, 'wren', '"Where to?"'), s(3, 'marlow', '"Somewhere safe."')],
+      roster,
+    );
+    expect(out).toEqual({
+      turns: [
+        { speakerId: 'wren', speakerName: 'Wren', text: '"Where to?"' },
+        { speakerId: 'marlow', speakerName: 'Marlow', text: '"Somewhere safe."' },
+      ],
+    });
+  });
+
+  it('returns null when the chapter ends on narration (single speaker in window)', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'wren', '"Hello?"'), s(2, 'narrator', 'No answer came.'), s(3, 'narrator', 'The hall was empty.')],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('returns null on a single-speaker monologue ending', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'wren', 'One.'), s(2, 'wren', 'Two.'), s(3, 'wren', 'Three.')],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('returns null when two speakers both folded to one id (unknown-male)', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'unknown-male', '"Run!"'), s(2, 'unknown-male', '"This way!"')],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('returns null when the exchange is beyond the lookback window', () => {
+    const out = priorChapterBoundaryExchange(
+      [
+        s(1, 'wren', '"Where to?"'), s(2, 'marlow', '"Safe."'),
+        s(3, 'narrator', 'a'), s(4, 'narrator', 'b'), s(5, 'narrator', 'c'),
+        s(6, 'narrator', 'd'), s(7, 'narrator', 'e'), s(8, 'narrator', 'f'),
+      ],
+      roster,
+    );
+    expect(out).toBeNull();
+  });
+
+  it('filters excludeFromSynthesis residue out of the turns', () => {
+    const out = priorChapterBoundaryExchange(
+      [s(1, 'wren', '"Where to?"'), s(2, 'marlow', '"Safe."'), s(3, 'page-header', 'Chapter 4', true)],
+      roster,
+    );
+    expect(out).toEqual({
+      turns: [
+        { speakerId: 'wren', speakerName: 'Wren', text: '"Where to?"' },
+        { speakerId: 'marlow', speakerName: 'Marlow', text: '"Safe."' },
+      ],
+    });
+  });
+
+  it('truncates a long line to MAX_PRIOR_TURN_CHARS with an ellipsis', () => {
+    const long = '"' + 'x'.repeat(400) + '"';
+    const out = priorChapterBoundaryExchange([s(1, 'wren', 'short'), s(2, 'marlow', long)], roster);
+    expect(out!.turns[1].text.length).toBeLessThanOrEqual(240);
+    expect(out!.turns[1].text.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to the id when a speaker is off-roster', () => {
+    const out = priorChapterBoundaryExchange([s(1, 'wren', '"Hi."'), s(2, 'ghost', '"Boo."')], roster);
+    expect(out!.turns[1]).toEqual({ speakerId: 'ghost', speakerName: 'ghost', text: '"Boo."' });
+  });
+
+  it('returns null for an empty chapter', () => {
+    expect(priorChapterBoundaryExchange([], roster)).toBeNull();
   });
 });
