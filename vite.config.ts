@@ -119,13 +119,15 @@ export default defineConfig(({ mode }) => {
              of utility libs that don't reach into the react runtime.
 
              fe-19 (Vite 8 / Rolldown): the function-form `manualChunks`
-             this replaced is deprecated under Rolldown; migrated to
-             `advancedChunks.groups`. Groups are first-match-wins in order,
+             this replaced is deprecated under Rolldown. ops-19: migrated to
+             `codeSplitting.groups` — the `advancedChunks` key it briefly used
+             is itself now deprecated in favour of `codeSplitting`, which takes
+             the same `{ groups }` shape. Groups are first-match-wins in order,
              so the `react` group (matched on the same node_modules paths the
              old predicate used) must precede the `vendor` catch-all. The app
              code falls through both (neither matches a non-node_modules id)
              and keeps Rolldown's default per-entry/lazy chunking. */
-          advancedChunks: {
+          codeSplitting: {
             groups: [
               {
                 name: 'react',
