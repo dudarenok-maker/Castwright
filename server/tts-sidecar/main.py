@@ -2151,6 +2151,18 @@ class QwenEngine(Engine):
                 if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
                     log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
                     _kokoro_eng.unload()
+                # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
+                # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+                # interleaves variant mints (which leave _base17 resident) with
+                # base designs; evict the lingering 1.7B-Base before the
+                # VoiceDesign load — symmetric with the synth path's
+                # unload_design() (synthesize/synthesize_batch) and the Kokoro
+                # evict above. design_voice never uses _base17, so this is safe;
+                # the idle watchdog would reclaim it eventually, but not within
+                # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
+                if self._base17 is not None:
+                    log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                    self.unload_base17()
                 _phase("loading-model")
                 self._ensure_design_loaded()
                 self._ensure_base_loaded()
@@ -2316,6 +2328,16 @@ class QwenEngine(Engine):
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
+            # The 1.7B VoiceDesign model (used by design_voice) and this 1.7B-Base
+            # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+            # designs a base (leaving _design resident) then mints its variants
+            # here — evict the lingering VoiceDesign before the 1.7B-Base load,
+            # mirroring the synth path's unload_design(). mint_variant never uses
+            # _design, so this is safe. Without it the two heavy 1.7B models stack
+            # and trip the VRAM recycle ceiling once per voice (the OOM sawtooth).
+            if self._design is not None:
+                log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
+                self.unload_design()
             _phase("loading-model")
             self._ensure_base17_for_mint()
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
