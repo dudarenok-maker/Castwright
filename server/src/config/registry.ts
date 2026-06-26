@@ -369,6 +369,26 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
   },
   {
+    key: 'tts.batch.size17b',
+    env: 'QWEN_BATCH_SIZE_17B',
+    group: 'tts-batching',
+    label: 'Qwen 1.7B batch size',
+    help: 'Hard width cap for the 1.7B Quality-tier specifically. The 1.7B-Base is ~3.4 GB resident, so a batch as wide as the 0.6B default blows past an 8 GB card during the batched forward → recycle storm. Kept small so 1.7B renders stay within VRAM (slower than 0.6B, but stable). Only affects 1.7B groups — 0.6B batches use the larger tts.batch.size.',
+    type: 'integer', min: 1,
+    default: 8, // ← QWEN_BATCH_SIZE_17B default in tts/synthesise-chapter.ts
+    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+  },
+  {
+    key: 'tts.batch.tokenBudget17b',
+    env: 'QWEN_BATCH_TOKEN_BUDGET_17B',
+    group: 'tts-batching',
+    label: 'Qwen 1.7B batch token budget',
+    help: 'Variable-width packing budget (normalised chars) for the 1.7B Quality tier only. Much smaller than the 0.6B tts.batch.tokenBudget so 1.7B batches stay within an 8 GB card during the batched forward (avoids the recycle-storm OOM). Set to 0 for exact fixed-width slicing on the 1.7B tier (tts.batch.size17b only).',
+    type: 'integer', min: 0,
+    default: 1200, // ← DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B in tts/synthesise-chapter.ts
+    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+  },
+  {
     key: 'tts.batch.bucket',
     env: 'QWEN_BATCH_BUCKET',
     group: 'tts-batching',

@@ -90,6 +90,18 @@ export function resolveQwenTokenBudget(raw: string | undefined): number {
 }
 const QWEN_BATCH_TOKEN_BUDGET = configValue<number>('tts.batch.tokenBudget');
 
+/* 1.7B tier-aware batch width (8 GB OOM guard). The 1.7B-Base is ~3.4 GB
+   resident; a 1.7B batch as wide as the 0.6B default (size 32 / budget 3600)
+   blows past an 8 GB card's VRAM during the batched forward → supervisor
+   recycle storm (code 43) → RecycleStormError fails the chapter. The packer
+   applies these SMALLER caps to the 1.7B bucket ONLY; 0.6B batches keep the
+   defaults above (a mixed-tier chapter packs each tier to its own width). The
+   1.7B forward is inherently heavier, so narrower batches trade some throughput
+   for staying inside VRAM — the difference between "renders" and "thrashes". */
+export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B = 1200;
+const QWEN_BATCH_SIZE_17B = configValue<number>('tts.batch.size17b');
+const QWEN_BATCH_TOKEN_BUDGET_17B = configValue<number>('tts.batch.tokenBudget17b');
+
 /* Defensive per-call ceiling (plan 148). A single provider call that never
    returns — e.g. Qwen's open-ended decode running away on degenerate, non-prose
    input (a table-of-contents page, a copyright block) — would otherwise hang the
@@ -573,6 +585,18 @@ export interface SynthesiseChapterOpts {
       splitting without touching process env. Clamped to >= 1. Only Qwen
       sentences are ever batched — see the dispatch partition below. */
   qwenBatchSize?: number;
+  /** Hard width cap for the 1.7B Quality tier specifically (8 GB OOM guard).
+      The 1.7B-Base is ~3.4 GB resident, so a 1.7B batch as wide as the 0.6B
+      default OOMs an 8 GB card mid-forward → recycle storm. The packer applies
+      this to the 1.7B bucket only; 0.6B groups keep `qwenBatchSize`. Defaults to
+      the module-level `QWEN_BATCH_SIZE_17B` (env `QWEN_BATCH_SIZE_17B`, default
+      8). Clamped to >= 1. */
+  qwenBatchSize17b?: number;
+  /** Token-budget for the 1.7B tier only (env `QWEN_BATCH_TOKEN_BUDGET_17B`,
+      default 1200 — far below the 0.6B `qwenBatchTokenBudget`). Keeps 1.7B
+      batches within an 8 GB card; `0` = exact fixed-width slicing on the 1.7B
+      tier (`qwenBatchSize17b` only). 0.6B groups keep `qwenBatchTokenBudget`. */
+  qwenBatchTokenBudget17b?: number;
   /** Length-bucketing (plan 128): sort batchable Qwen groups by their
       normalised text length before slicing into batches, so similar-length
       sentences share a batch and the batched forward decodes to a tight
@@ -779,8 +803,10 @@ export async function synthesiseChapter(
     groupHeartbeatMs = 10_000,
     callTimeoutMs = SYNTH_CALL_TIMEOUT_MS,
     qwenBatchSize = QWEN_BATCH_SIZE,
+    qwenBatchSize17b = QWEN_BATCH_SIZE_17B,
     qwenBatchBucket = QWEN_BATCH_BUCKET,
     qwenBatchTokenBudget = QWEN_BATCH_TOKEN_BUDGET,
+    qwenBatchTokenBudget17b = QWEN_BATCH_TOKEN_BUDGET_17B,
     maxSegmentRerecords = 0,
     segmentQaThresholds,
     onSegmentRerecord,
@@ -1304,6 +1330,9 @@ export async function synthesiseChapter(
           group, so a long batched call keeps feeding the no-progress watchdog. */
   const batchSize = Math.max(1, Math.floor(qwenBatchSize));
   const tokenBudget = Math.floor(qwenBatchTokenBudget);
+  /* 1.7B tier-aware caps (8 GB OOM guard) — applied to the 1.7B bucket only. */
+  const batchSize17b = Math.max(1, Math.floor(qwenBatchSize17b));
+  const tokenBudget17b = Math.floor(qwenBatchTokenBudget17b);
   type WorkItem =
     | { kind: 'single'; group: SentenceGroup }
     | { kind: 'batch'; groups: SentenceGroup[] };
@@ -1351,21 +1380,26 @@ export async function synthesiseChapter(
       );
     };
     /* Process each per-modelKey bucket independently so a slice never crosses a
-       model-tier boundary. */
-    for (const batchable of batchableByModel.values()) {
+       model-tier boundary. The 1.7B bucket packs to its own SMALLER caps (8 GB
+       OOM guard) while 0.6B keeps the defaults — a mixed-tier chapter sizes each
+       tier's batches to that tier's VRAM cost. */
+    for (const [bucketModelKey, batchable] of batchableByModel.entries()) {
+      const is17bBucket = bucketModelKey === 'qwen3-tts-1.7b';
+      const effBatchSize = is17bBucket ? batchSize17b : batchSize;
+      const effTokenBudget = is17bBucket ? tokenBudget17b : tokenBudget;
       /* Length-bucketing (plan 128): order by model-side length, tie-break by
          `group.index`. Output-preserving: scatter-back is by `group.index`. */
       if (qwenBatchBucket && batchable.length > 1) {
         batchable.sort((a, b) => lenOf.get(a)! - lenOf.get(b)! || a.index - b.index);
       }
-      if (tokenBudget <= 0) {
+      if (effTokenBudget <= 0) {
         /* Fixed-width slicing (plans 113/128) — back-compat path + kill-switch. */
-        for (let i = 0; i < batchable.length; i += batchSize) {
-          pushBatch(batchable.slice(i, i + batchSize));
+        for (let i = 0; i < batchable.length; i += effBatchSize) {
+          pushBatch(batchable.slice(i, i + effBatchSize));
         }
       } else {
         /* Token-budget packing (plan 136): greedily fill while
-           `count × maxLenInBatch <= tokenBudget` AND `count <= batchSize`; a
+           `count × maxLenInBatch <= effTokenBudget` AND `count <= effBatchSize`; a
            single item that alone exceeds the budget forms its own batch. */
         let current: SentenceGroup[] = [];
         let currentMax = 0;
@@ -1373,7 +1407,7 @@ export async function synthesiseChapter(
           const candLen = lenOf.get(g)!;
           let candMax = Math.max(currentMax, candLen);
           const nextCount = current.length + 1;
-          if (current.length > 0 && (nextCount * candMax > tokenBudget || nextCount > batchSize)) {
+          if (current.length > 0 && (nextCount * candMax > effTokenBudget || nextCount > effBatchSize)) {
             pushBatch(current);
             current = [];
             currentMax = 0;
