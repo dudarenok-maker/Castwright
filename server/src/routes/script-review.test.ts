@@ -20,6 +20,7 @@ import type { ScriptReviewOutput } from '../handoff/schemas.js';
 import type {
   buildReviewSentencesInput as BuildReviewSentencesInput,
   priorChapterBoundaryExchange as PriorChapterBoundaryExchange,
+  buildScriptReviewChapterInbox as BuildScriptReviewChapterInbox,
 } from './script-review.js';
 
 const AUTHOR = 'Test Author';
@@ -32,6 +33,7 @@ let bookId: string;
 let manuscriptId: string;
 let buildReviewSentencesInput: typeof BuildReviewSentencesInput;
 let priorChapterBoundaryExchange: typeof PriorChapterBoundaryExchange;
+let buildScriptReviewChapterInbox: typeof BuildScriptReviewChapterInbox;
 
 /* The fake analyzer's runScriptReviewChapter — each test swaps its implementation.
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
@@ -132,10 +134,11 @@ const CANNED_OPS: ScriptReviewOutput = {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-script-review-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe }, { makeBookId }] =
+  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe, buildScriptReviewChapterInbox: bsrci }, { makeBookId }] =
     await Promise.all([import('./script-review.js'), import('../workspace/paths.js')]);
   buildReviewSentencesInput = build;
   priorChapterBoundaryExchange = pcbe;
+  buildScriptReviewChapterInbox = bsrci;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();
@@ -440,5 +443,67 @@ describe('priorChapterBoundaryExchange (fs-64)', () => {
 
   it('returns null for an empty chapter', () => {
     expect(priorChapterBoundaryExchange([], roster)).toBeNull();
+  });
+});
+
+describe('buildScriptReviewChapterInbox (fs-64 priorExchange)', () => {
+  const roster = [{ id: 'wren', name: 'Wren', role: 'protagonist' }];
+  const sentences = [{ id: 1, characterId: 'narrator', text: 'Hi.' }] as unknown as Parameters<
+    typeof buildScriptReviewChapterInbox
+  >[2];
+
+  it('is byte-identical to today when no priorExchange is given', () => {
+    const expected = `---
+manuscriptId: m1
+task: script-review
+chapterId: 2
+---
+
+## Cast roster (post-fold)
+
+\`\`\`json
+[
+  {
+    "id": "wren",
+    "name": "Wren",
+    "role": "protagonist"
+  }
+]
+\`\`\`
+
+## Sentences (already attributed)
+
+\`\`\`json
+[
+  {
+    "sentenceId": 1,
+    "characterId": "narrator",
+    "text": "Hi."
+  }
+]
+\`\`\`
+`;
+    expect(buildScriptReviewChapterInbox('m1', 2, sentences, roster)).toBe(expected);
+  });
+
+  it('renders the labelled block above the sentences, with no sentenceId', () => {
+    const out = buildScriptReviewChapterInbox('m1', 2, sentences, roster, {
+      turns: [
+        { speakerId: 'wren', speakerName: 'Wren', text: '"Where to?"' },
+        { speakerId: 'marlow', speakerName: 'Marlow', text: '"Somewhere safe."' },
+      ],
+    });
+    expect(out).toContain('Prior chapter');
+    expect(out).toContain('do NOT emit an op');
+    expect(out).toContain('Wren (id: wren): "Where to?"');
+    expect(out).toContain('Marlow (id: marlow): "Somewhere safe."');
+    // §4.6 read-only guard: the block region must surface NO sentenceId (so a
+    // block-targeted op is unconstructible). Scan ONLY the block, not the whole
+    // prompt — the legitimate sentence payload below DOES contain "sentenceId".
+    const block = out.slice(out.indexOf('Prior chapter'), out.indexOf('## Sentences'));
+    expect(block).not.toContain('sentenceId');
+    expect(block).not.toMatch(/"id"\s*:\s*\d/); // no numeric id leaks into the block
+    // block sits before the sentence list
+    expect(out.indexOf('Prior chapter')).toBeLessThan(out.indexOf('## Sentences'));
   });
 });

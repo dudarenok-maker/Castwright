@@ -137,6 +137,7 @@ export function buildScriptReviewChapterInbox(
   chapterId: number,
   sentences: SentenceOutput[],
   roster: CastCharacterSlim[],
+  priorExchange: PriorExchange | null = null,
 ): string {
   const sentencePayload = buildReviewSentencesInput(sentences);
   const rosterPayload = roster.map((c) => ({
@@ -144,6 +145,11 @@ export function buildScriptReviewChapterInbox(
     name: c.name,
     ...(c.role ? { role: c.role } : {}),
   }));
+  const priorBlock = priorExchange
+    ? '## Prior chapter — final exchange (reference only — not reviewable lines; do NOT emit an op on them)\n\n' +
+      priorExchange.turns.map((t) => `${t.speakerName} (id: ${t.speakerId}): ${t.text}`).join('\n') +
+      '\n\n'
+    : '';
   return `---
 manuscriptId: ${manuscriptId}
 task: script-review
@@ -156,7 +162,7 @@ chapterId: ${chapterId}
 ${JSON.stringify(rosterPayload, null, 2)}
 \`\`\`
 
-## Sentences (already attributed)
+${priorBlock}## Sentences (already attributed)
 
 \`\`\`json
 ${JSON.stringify(sentencePayload, null, 2)}
