@@ -13,13 +13,6 @@ it('disables submit on an empty name', () => {
   expect(screen.getByTestId('create-character-submit')).toBeDisabled();
 });
 
-it('offers reattribute-to-existing when the name matches a roster member', () => {
-  const onReattributeExisting = vi.fn();
-  render(<CreateCharacterForm initial={{ name: 'Halloran' }} rosterByName={new Map([['halloran', { id: 'halloran', name: 'Halloran' }]])} onSubmit={() => {}} onReattributeExisting={onReattributeExisting} onCancel={() => {}} />);
-  fireEvent.click(screen.getByTestId('create-character-submit'));
-  expect(onReattributeExisting).toHaveBeenCalledWith('halloran');
-});
-
 it('routes a roster-name match to onReattributeExisting and never onSubmit', () => {
   const onSubmit = vi.fn();
   const onReattributeExisting = vi.fn();

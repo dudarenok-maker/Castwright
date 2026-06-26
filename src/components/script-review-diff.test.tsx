@@ -527,10 +527,14 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('create-character-submit'));
 
-    // Error toast surfaced.
+    // Error toast surfaced. This is the ONLY assertion here that distinguishes
+    // fixed-vs-unfixed — the two below pass pre-fix too (the dialog closes on
+    // queue-exhaust regardless, and the throw already skips clearReview).
     await waitFor(() => {
       const toasts: Toast[] = store.getState().notifications.toasts;
-      expect(toasts.some((t) => t.kind === 'error' && /create character/i.test(t.message))).toBe(true);
+      expect(toasts.some((t) => t.kind === 'error' && /couldn't create character/i.test(t.message))).toBe(
+        true,
+      );
     });
     // Confirm dialog closed.
     expect(screen.queryByTestId('confirm-reattribute')).toBeNull();
