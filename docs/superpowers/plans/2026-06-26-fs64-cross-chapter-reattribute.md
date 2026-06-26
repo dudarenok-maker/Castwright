@@ -487,7 +487,7 @@ Compute the prior exchange once per chapter and pass it to the first chunk only;
 
 **Files:**
 - Modify: `server/src/routes/script-review.ts` (route handler, lines 128-142 and the chunk loop 233-291)
-- Test: `server/src/routes/script-review.test.ts` (one new `it` in the existing route `describe`)
+- Test: `server/src/routes/script-review.test.ts` (four new `it`s in the existing route `describe`: positive single-chunk, multi-chunk first-chunk-only, scene-break negative, no-cascade)
 
 **Interfaces:**
 - Consumes: `priorChapterIdFor`, `priorChapterBoundaryExchange` (Tasks 1, 3), `buildScriptReviewChapterInbox` 5th param (Task 2).
@@ -599,7 +599,7 @@ it('does NOT cascade past the immediately-preceding chapter (fs-64)', async () =
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd server && npm run test -- script-review`
-Expected: the four new fs-64 route tests FAIL — no prompt contains `Prior chapter` (route not wired yet). The two absence-asserting tests (`no block when predecessor ends on narration`, the `ch3` arm of `no cascade`) pass trivially pre-wiring; the positive arms (`first chunk only`, the `ch2 gets it` arm) are the genuine reds that Step 4 turns green.
+Expected: the **three positive arms** go RED — `feeds the prior chapter exchange…`, `attaches the block to the FIRST chunk only…`, and the `ch2`-gets-the-block arm of the no-cascade test (no prompt contains `Prior chapter` yet). The **two pure-absence tests** (`emits NO block when the predecessor ends on narration`, and the `ch3` arm of no-cascade) pass even pre-wiring — that is expected, they are regression guards. Step 4 turns the red arms green.
 
 - [ ] **Step 3: Lift the excluded set + compute the prior exchange**
 
@@ -764,7 +764,7 @@ Closes #1120
 
 ## Test plan
 - `npm run verify` — typecheck + all tests + e2e + build green.
-- New unit tests: the live-exchange gate (`priorChapterBoundaryExchange`), the prompt block render + byte-identical-when-absent, the neighbour selector (`priorChapterIdFor`), and a route integration test (block on chapter 2's first chunk, absent on chapter 1).
+- New unit tests: the live-exchange gate (`priorChapterBoundaryExchange`, 9 cases), the prompt block render + byte-identical-when-absent + block-region read-only guard, the neighbour selector (`priorChapterIdFor`), and four route tests (positive single-chunk, multi-chunk first-chunk-only, scene-break predecessor ⇒ no block, 3-chapter no-cascade).
 - `status: stable` for the spec still owes the on-box render acceptance (§9.5) — NOT included here.
 BODY
 )"
