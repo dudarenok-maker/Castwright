@@ -344,6 +344,104 @@ describe('POST /api/books/:bookId/script-review', () => {
 
     expect(events.some((e) => e.kind === 'result')).toBe(true);
   });
+
+  it('feeds the prior chapter exchange into the next chapter, first chunk only (fs-64)', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'wren', text: '"Where to?"' },
+      { id: 2, chapterId: 1, characterId: 'marlow', text: '"Somewhere safe."' },
+      { id: 1, chapterId: 2, characterId: 'wren', text: '"I know this place."' },
+    ], [
+      { id: 1, title: 'One', excluded: false },
+      { id: 2, title: 'Two', excluded: false },
+    ]);
+    const prompts: Record<number, string> = {};
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      prompts[c] = p;
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    expect(prompts[2]).toContain('Prior chapter');
+    // The seeded cast.json has only `wren`, so `marlow` resolves to its id via the
+    // off-roster fallback — assert the fallback form `marlow (id: marlow)`.
+    expect(prompts[2]).toContain('marlow (id: marlow): "Somewhere safe."');
+    expect(prompts[1] ?? '').not.toContain('Prior chapter'); // chapter 1 has no predecessor
+  });
+
+  it('attaches the block to the FIRST chunk only of a multi-chunk chapter (fs-64)', async () => {
+    // Force the local engine + small num_ctx so chapter 10 splits into >=2 chunks
+    // (mirrors the existing "chunks a large chapter" harness). Chapter 9 ends A/B,
+    // so chapter 10's FIRST chunk must carry the block and later chunks must not.
+    engineState.engine = 'local';
+    process.env.ANALYZER_NUM_CTX = '400'; // → budget 2000
+    const big = Array.from({ length: 12 }, (_, i) => ({
+      id: 100 + i, chapterId: 10, characterId: 'narrator', text: 'A'.repeat(800),
+    }));
+    writeBook([
+      { id: 1, chapterId: 9, characterId: 'wren', text: '"Where to?"' },
+      { id: 2, chapterId: 9, characterId: 'marlow', text: '"Somewhere safe."' },
+      ...big,
+    ], [{ id: 9, title: 'Nine', excluded: false }, { id: 10, title: 'Ten', excluded: false }]);
+
+    const calls: Array<{ chapterId: number; prompt: string }> = [];
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      calls.push({ chapterId: c, prompt: p });
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    const ch10 = calls.filter((c) => c.chapterId === 10).map((c) => c.prompt);
+    expect(ch10.length).toBeGreaterThan(1); // the chapter split
+    expect(ch10[0]).toContain('Prior chapter'); // first chunk carries it
+    expect(ch10.slice(1).every((p) => !p.includes('Prior chapter'))).toBe(true); // later chunks don't
+  });
+
+  it('emits NO block when the predecessor ends on narration — scene break (fs-64)', async () => {
+    // The headline regression guard: a non-exchange ending must not feed a
+    // misleading turn-taking signal into the next chapter.
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'wren', text: '"Anyone there?"' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'Silence answered.' },
+      { id: 1, chapterId: 2, characterId: 'wren', text: '"I knew it."' },
+    ], [{ id: 1, title: 'One', excluded: false }, { id: 2, title: 'Two', excluded: false }]);
+    const prompts: Record<number, string> = {};
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      prompts[c] = p;
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    expect(prompts[2] ?? '').not.toContain('Prior chapter'); // gate failed → no block
+  });
+
+  it('does NOT cascade past the immediately-preceding chapter (fs-64)', async () => {
+    // ch1 ends A/B, ch2 ends on narration (gate fails). ch3 must NOT pick up ch1's
+    // exchange — selection takes ch2 (immediate predecessor) and stops.
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'wren', text: '"Where to?"' },
+      { id: 2, chapterId: 1, characterId: 'marlow', text: '"Somewhere safe."' },
+      { id: 1, chapterId: 2, characterId: 'wren', text: '"Wait."' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'The door closed.' },
+      { id: 1, chapterId: 3, characterId: 'wren', text: '"Still here."' },
+    ], [
+      { id: 1, title: 'One', excluded: false },
+      { id: 2, title: 'Two', excluded: false },
+      { id: 3, title: 'Three', excluded: false },
+    ]);
+    const prompts: Record<number, string> = {};
+    runReview.mockImplementation((_m: string, c: number, p: string) => {
+      prompts[c] = p;
+      return Promise.resolve({ ops: [] });
+    });
+
+    await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+    expect(prompts[2] ?? '').toContain('Prior chapter');       // ch1 ended A/B → ch2 gets it
+    expect(prompts[3] ?? '').not.toContain('Prior chapter');   // ch2 ended narration → no cascade to ch1
+  });
 });
 
 describe('buildReviewSentencesInput (fs-58)', () => {
