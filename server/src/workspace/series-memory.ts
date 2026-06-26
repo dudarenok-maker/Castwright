@@ -3,7 +3,14 @@ import type { VoiceKind } from './voice-kind.js';
 
 export interface SeriesCharacterInput {
   characterId: string; name: string; aliases: string[];
-  voiceId: string | null; voiceLabel: string; engine: string | null;
+  // Two facets of a character's voice identity, EITHER of which may be null in a
+  // given book: `voiceId` is the cross-book reuse-linkage key (null in the book
+  // where a character DEBUTS — only stamped once it's matched FROM a prior book);
+  // `voiceName` is the per-engine voice file (overrideTtsVoices[engine].name, null
+  // when the character is a bare mention with no assigned voice). Carried-voice
+  // consistency is judged across BOTH facets — see deriveSeriesMemory.
+  voiceId: string | null; voiceName: string | null;
+  voiceLabel: string; engine: string | null;
   voiceKind: VoiceKind; isPrincipal: boolean;
   matchedFrom: { bookId?: string; characterId?: string } | null;
 }
@@ -74,6 +81,40 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
     }
   }
 
+  // Second merge: appearances of ONE character that `matchedFrom` failed to link —
+  // a missed cross-book match (e.g. Keefe re-detected fresh in one book) or
+  // alias/spelling drift that gave the same person different ids ("Wylie"/"Wylie
+  // Endal", "Jurek"/"Neverseen Figure"). PRESET voices are shared across characters
+  // by design (two guards on one kokoro voice), so they're excluded throughout —
+  // preserving the "two characters, one preset voice → two carried rows" invariant.
+  //
+  // Pass A — union by the reuse `voiceId`: a per-character key, distinct per
+  // character, only null in a debut book. Unambiguous, so always safe to merge.
+  const repByVoiceId = new Map<string, string>();
+  for (const [key, { ch }] of byKey) {
+    if (ch.voiceKind === 'preset' || !ch.voiceId) continue;
+    const rep = repByVoiceId.get(ch.voiceId);
+    if (rep) union(key, rep);
+    else repByVoiceId.set(ch.voiceId, key);
+  }
+  // Pass B — union by the engine voice name, but ONLY when that name maps to a
+  // single character (all its non-null voiceIds agree). A voice name shared across
+  // DIFFERENT voiceIds means distinct characters reusing one voice (or a generic
+  // placeholder), which must NOT be merged. This is what links a fresh-detected
+  // fragment (null voiceId) back to its main character (e.g. Keefe).
+  const byVoiceName = new Map<string, { keys: string[]; ids: Set<string> }>();
+  for (const [key, { ch }] of byKey) {
+    if (ch.voiceKind === 'preset' || !ch.voiceName) continue;
+    let g = byVoiceName.get(ch.voiceName);
+    if (!g) byVoiceName.set(ch.voiceName, (g = { keys: [], ids: new Set() }));
+    g.keys.push(key);
+    if (ch.voiceId) g.ids.add(ch.voiceId);
+  }
+  for (const g of byVoiceName.values()) {
+    if (g.ids.size > 1) continue; // ambiguous voice name → leave components alone
+    for (let i = 1; i < g.keys.length; i++) union(g.keys[i], g.keys[0]);
+  }
+
   // Bucket appearances by component root — each component is one logical character.
   const components = new Map<string, Appearance[]>();
   for (const [key, app] of byKey) {
@@ -85,24 +126,38 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
 
   const carried: CarriedCharacter[] = [];
   for (const chain of components.values()) {
-    const voiceIds = new Set(chain.map((a) => a.ch.voiceId ?? ''));
-    if (voiceIds.size !== 1 || voiceIds.has('')) continue; // voice changed/missing → not carried
+    // Voice consistency across BOTH facets. Each facet is null in legitimate
+    // cases (debut book → null voiceId; bare mention → null voiceName), so a
+    // null in one appearance must NOT poison the component — only a CONFLICT
+    // (≥2 distinct non-null values) of either facet signals a real re-voicing.
+    // Keying on `voiceId` alone (the old rule) wrongly dropped every character
+    // that debuts in book 1, where the reuse voiceId is never stamped.
+    const ids = new Set(chain.map((a) => a.ch.voiceId).filter((v): v is string => !!v));
+    const names = new Set(chain.map((a) => a.ch.voiceName).filter((v): v is string => !!v));
+    if (ids.size > 1 || names.size > 1) continue; // voice changed → not carried
+    if (ids.size === 0 && names.size === 0) continue; // never voiced → not carried
     // Order explicitly by book index — earliest = first book, latest = canonical
-    // name/voice. Dedup indices: a component can hold >1 appearance in the same
+    // name. Dedup indices: a component can hold >1 appearance in the same
     // book (two characters reused from one shared source merge into one component).
     const byIndex = [...chain].sort((a, b) => a.book.index - b.book.index);
     const indices = [...new Set(byIndex.map((a) => a.book.index))];
     if (indices.length < 2) continue; // present in <2 distinct books → not carried
-    const earliest = byIndex[0], latest = byIndex[byIndex.length - 1].ch;
+    const earliest = byIndex[0], latest = byIndex[byIndex.length - 1];
+    // Voice metadata (id/label/engine/kind) from the LATEST appearance that
+    // actually carries a voice — the latest overall may be a bare unvoiced
+    // mention whose label/engine are blank. The display NAME still comes from
+    // the latest appearance overall (canonical-latest, e.g. an alias reveal).
+    const voiced = [...byIndex].reverse().find((a) => a.ch.voiceId || a.ch.voiceName) ?? latest;
+    const carriedVoiceId = (voiced.ch.voiceId ?? [...ids][0] ?? voiced.ch.voiceName ?? [...names][0]) as string;
     // carriedFullSpan: present in EVERY confirmed book 1..M (no gap). `ordered`
     // is the confirmed set by contract.
     const fullSpan = indices.length === ordered.length &&
       indices.every((v, i) => v === ordered[i].index);
     carried.push({
-      character: latest.name, aliases: latest.aliases,
-      voiceId: latest.voiceId as string, voiceLabel: latest.voiceLabel,
-      engine: latest.engine, voiceKind: latest.voiceKind,
-      firstBookId: earliest.book.bookId, lastBookId: byIndex[byIndex.length - 1].book.bookId,
+      character: latest.ch.name, aliases: latest.ch.aliases,
+      voiceId: carriedVoiceId, voiceLabel: voiced.ch.voiceLabel,
+      engine: voiced.ch.engine, voiceKind: voiced.ch.voiceKind,
+      firstBookId: earliest.book.bookId, lastBookId: latest.book.bookId,
       bookIndices: indices, carriedFullSpan: fullSpan,
     });
   }
