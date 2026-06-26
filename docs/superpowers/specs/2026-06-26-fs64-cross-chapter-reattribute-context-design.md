@@ -1,6 +1,6 @@
 ---
 title: 'fs-64 — Cross-chapter context for `reattribute` (script-review)'
-status: deferred
+status: active
 date: 2026-06-26
 issue: '#1120'
 related:
@@ -20,11 +20,10 @@ related:
 > the prior chapter actually ends in a live dialogue exchange** (the common case is a scene break,
 > where the signal would be misleading). Strictly additive; **zero new LLM calls**.
 >
-> **Disposition (2026-06-26): design FINAL, build DEFERRED.** The design below is complete and
-> reviewer-cleared. Implementation is parked behind the fs-58 Unit B **on-box render acceptance**
-> (fs-64's own `status: stable` acceptance can't complete before it). That debt is nearly cleared —
-> Unit B is done and in `verify` on a separate worktree, not yet merged — so the deferral is short.
-> Pick this spec up for the implementation plan once Unit B merges. See §9.
+> **Disposition (2026-06-26): build ACTIVE.** fs-58 Unit B has landed, so the dependency is cleared
+> and implementation is in progress against the plan at
+> `docs/superpowers/plans/2026-06-26-fs64-cross-chapter-reattribute.md`. `status: stable` still waits
+> on the on-box render acceptance (§9 step 5).
 >
 > **Revised 2026-06-26 after TWO three-reviewer adversarial rounds** (code-grounding, design,
 > scope/test-adequacy each round). Round 1 corrected: a false read-only-guard premise (per-chapter
@@ -34,9 +33,10 @@ related:
 > upgraded the payload from one turn to the **final two-speaker exchange** (a single turn names the
 > wrong thing — it excludes one candidate but never names the predicted opener, failing the
 > same-gender two-hander, the one case turn-taking alone can resolve); de-ambiguated the gate clause;
-> moved the budget reserve to **chunk 0 only** (a whole-chapter budget cut re-chunks the chapter and
-> perturbs its *own* op emission — not "additive"); fixed a `NARRATOR_ID`-not-exported claim and an
-> `unknown-male` collapse edge; and tightened the §9 acceptance prerequisites.
+> fixed a `NARRATOR_ID`-not-exported claim and an `unknown-male` collapse edge; and tightened the §9
+> acceptance prerequisites. **At plan time** the budget handling simplified further: the bounded block
+> fits the chunk budget's existing ~30%-of-`num_ctx` scaffolding reserve, so the chapter chunks at
+> **full** budget (own ops byte-identical) and no per-chunk reserve is needed (§4.5).
 
 ## 1. Summary
 
@@ -76,9 +76,11 @@ runs"* — weighing the fix against RPD cost. That tradeoff only exists for one 
   iteration list only (`script-review.ts:131-133`), never on `byChapter`. So the prior chapter's
   sentences are **already in memory** on any request — free to fetch via `byChapter.get(priorId)`.
 - We add a **bounded** block (two single sentences, each hard-capped — §4.1) to a prompt we are
-  **already sending**. No extra call → **zero RPD impact**. The block's size is reserved from the
-  **first chunk's** budget (§4.5) so it cannot overflow a local model's context window, and the rest
-  of the chapter chunks at full budget so its own op emission is unperturbed.
+  **already sending**. No extra call → **zero RPD impact**. The block (≤ `2 × MAX_PRIOR_TURN_CHARS`
+  + header) fits inside the chunk budget's **existing ~30%-of-`num_ctx` scaffolding reserve**
+  (`stage1-chunk.ts:42-58` reserves it for "prompt header + roster + output"), so it cannot overflow
+  a local model's window, and the chapter chunks at **full** budget so its own op emission is
+  **byte-identical** to today (§4.5).
 
 ## 4. Components
 
@@ -154,19 +156,20 @@ block, when present, is **read-only** turn-taking context for resolving a tagles
 line. It carries **no `sentenceId`** and is **not reviewable** — never emit an op targeting it; use
 the named alternation only to inform the attribution of the chapter's own opening sentences.
 
-### 4.5 Route wiring — first chunk only, chunk-0 budget reserve
+### 4.5 Route wiring — first chunk only, full-budget chunking (no reserve)
 
 - Compute `priorExchange` **once per chapter** (§4.2 + §4.1) **before** the chunk loop.
 - Convert the inner `for (const chunk of chunks)` loop (`script-review.ts:233`) to an **indexed**
   form and pass `priorExchange` **only to the first chunk** (`index === 0`); later chunks get their
   in-chapter overlap context from the chunker, so prior-chapter context there is wasted budget.
-- **Budget: reserve against chunk 0 only.** Chunk the chapter at **full** `charBudget` (so the rest
-  of the chapter's seams — and thus its own op emission — are unchanged from today), then ensure
-  **chunk 0** + the rendered block fits the local context window: trim chunk 0's core to leave room
-  for `2 × MAX_PRIOR_TURN_CHARS` + the section's fixed header overhead, pushing the trimmed
-  sentence(s) into the overlap/next chunk. Do **not** lower the global budget (a whole-chapter
-  reduction greedily re-chunks the chapter and perturbs unrelated ops — rejected). Cloud engines
-  carry a `MAX_SAFE_INTEGER` budget, so the whole reserve is a no-op there.
+- **No budget change — chunk at full `charBudget`.** The chapter is chunked exactly as today, so its
+  own seams (and thus its own op emission) are **byte-identical**. The block is safe to attach to
+  chunk 0 without trimming because it is **bounded** (≤ `2 × MAX_PRIOR_TURN_CHARS` + the fixed header)
+  and the chunk budget already reserves **~30% of `num_ctx`** for prompt scaffolding — header +
+  roster + output (`stage1-chunk.ts:42-58`) — which the block draws from. (A whole-chapter budget
+  reduction would greedily re-chunk the chapter and perturb unrelated ops — rejected; per-chunk
+  budgets aren't supported by the single-budget chunker API, and aren't needed given the headroom.)
+  Cloud engines carry a `MAX_SAFE_INTEGER` budget, so the block is trivially within budget there.
 
 ### 4.6 Read-only enforcement (the original premise was false)
 
@@ -215,10 +218,10 @@ references the context character/text yields no op outside the chapter's own sen
   `sentenceId`**) when given `priorExchange`; **frozen full-string equality** to today's prompt when absent.
 - **Unit/route — read-only invariant (§4.6):** the rendered block contains no `sentenceId`; a model
   op referencing the context character/text produces no op outside the chapter's own sentences.
-- **Route — neighbor selection + budget:** picks the immediately-preceding non-excluded chapter;
-  skips excluded; no cascade when the predecessor returns `null`; chunk 0's core is trimmed to fit
-  the reserve while the rest of the chapter chunks at full budget (chapter's own ops unchanged);
-  only the first chunk receives the block.
+- **Route — neighbor selection + wiring:** picks the immediately-preceding non-excluded chapter;
+  skips excluded; no cascade when the predecessor returns `null`; **only the first chunk** receives
+  the block (a multi-chunk chapter's later chunks get the unchanged prompt); the chapter is chunked
+  at full budget (the `chunkSentencesByBudget` call's `charBudget` is unchanged from today).
 - **No e2e.** Server-side prompt assembly with no UI/router/redux/layout seam — Playwright would test
   nothing (the CLAUDE.md "SHOULD land an e2e" bar is keyed on UI-visible behaviour crossing those
   seams). Called out explicitly per the testing-discipline bar.
@@ -236,8 +239,8 @@ references the context character/text yields no op outside the chapter's own sen
 
 **New — server:** the `priorChapterBoundaryExchange` helper (+ `PRIOR_TURN_LOOKBACK`,
 `MAX_PRIOR_TURN_CHARS`, and a local `NARRATOR_ID` const) + the `priorExchange` param/section on
-`buildScriptReviewChapterInbox` + neighbor-selection + the indexed-loop / chunk-0 budget-reserve /
-first-chunk wiring in the route (`script-review.ts`); one paragraph in
+`buildScriptReviewChapterInbox` + neighbor-selection + the indexed-loop / first-chunk-only wiring in
+the route (`script-review.ts`, full-budget chunking unchanged); one paragraph in
 `skills/audiobook-script-review.md`. **No edit to `byline-author-guard.ts`** (the constant is
 re-declared locally per repo convention).
 
@@ -252,10 +255,10 @@ re-declared locally per repo convention).
   sentence capped at `MAX_PRIOR_TURN_CHARS`.
 - No new endpoint, op class, schema field, or frontend surface; no auto-voicing / cast changes.
 
-## 9. Ship checklist (when un-deferred)
+## 9. Ship checklist
 
-**Unblocks when fs-58 Unit B merges** (its on-box render acceptance is the prerequisite fs-64's own
-acceptance rides on). Then:
+fs-58 Unit B has landed, so this is active. Build proceeds against the plan
+(`docs/superpowers/plans/2026-06-26-fs64-cross-chapter-reattribute.md`):
 
 1. Cut branch `feat/server-fs64-cross-chapter-reattribute`; `feat(server): …` commits.
 2. Land the helper + gate + prompt change + route wiring + skill note with paired unit tests (§6).
