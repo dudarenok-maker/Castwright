@@ -17,6 +17,7 @@
 - **Commits:** `feat(server): …` (or `test(server):` / `docs(skill):` where apt). Branch `feat/server-fs64-cross-chapter-reattribute`.
 - **Constants:** `PRIOR_TURN_LOOKBACK = 6`, `MAX_PRIOR_TURN_CHARS = 240`.
 - **Run server tests with:** `cd server && npm run test -- script-review` (Vitest single-run, node env).
+- **Test-binding pattern:** Tasks 1-3 each add a dynamic-import binding to the **same** `beforeAll` destructuring (mirroring the existing `buildReviewSentencesInput` binding at `script-review.test.ts:20/30/131-133`). Execute the tasks in order; each task's "extend the destructuring" edit targets the block **as already modified by the previous task**, not the pristine file.
 
 ---
 
@@ -331,7 +332,12 @@ chapterId: 2
     expect(out).toContain('do NOT emit an op');
     expect(out).toContain('Wren (id: wren): "Where to?"');
     expect(out).toContain('Marlow (id: marlow): "Somewhere safe."');
-    expect(out).not.toContain('sentenceId": 1\n');
+    // §4.6 read-only guard: the block region must surface NO sentenceId (so a
+    // block-targeted op is unconstructible). Scan ONLY the block, not the whole
+    // prompt — the legitimate sentence payload below DOES contain "sentenceId".
+    const block = out.slice(out.indexOf('Prior chapter'), out.indexOf('## Sentences'));
+    expect(block).not.toContain('sentenceId');
+    expect(block).not.toMatch(/"id"\s*:\s*\d/); // no numeric id leaks into the block
     // block sits before the sentence list
     expect(out.indexOf('Prior chapter')).toBeLessThan(out.indexOf('## Sentences'));
   });
@@ -341,7 +347,7 @@ chapterId: 2
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd server && npm run test -- script-review`
-Expected: FAIL — the 5th-arg call is a type/arity error or the block is absent.
+Expected: the **`renders the labelled block`** test FAILS (the block is absent — the 5th arg isn't read yet). The **`byte-identical`** test is a *regression guard*, not a TDD red: it already passes against today's 4-arg output and must stay green after Step 3 (it pins "the new param adds zero characters when absent"). If the whole file errors instead of just failing that one case, the 5-arg call is a compile error — that's still a valid red; Step 3 resolves it.
 
 - [ ] **Step 3: Implement the param + block**
 
@@ -514,12 +520,86 @@ it('feeds the prior chapter exchange into the next chapter, first chunk only (fs
   expect(prompts[2]).toContain('marlow (id: marlow): "Somewhere safe."');
   expect(prompts[1] ?? '').not.toContain('Prior chapter'); // chapter 1 has no predecessor
 });
+
+it('attaches the block to the FIRST chunk only of a multi-chunk chapter (fs-64)', async () => {
+  // Force the local engine + small num_ctx so chapter 10 splits into >=2 chunks
+  // (mirrors the existing "chunks a large chapter" harness). Chapter 9 ends A/B,
+  // so chapter 10's FIRST chunk must carry the block and later chunks must not.
+  engineState.engine = 'local';
+  process.env.ANALYZER_NUM_CTX = '400'; // → budget 2000
+  const big = Array.from({ length: 12 }, (_, i) => ({
+    id: 100 + i, chapterId: 10, characterId: 'narrator', text: 'A'.repeat(800),
+  }));
+  writeBook([
+    { id: 1, chapterId: 9, characterId: 'wren', text: '"Where to?"' },
+    { id: 2, chapterId: 9, characterId: 'marlow', text: '"Somewhere safe."' },
+    ...big,
+  ], [{ id: 9, title: 'Nine', excluded: false }, { id: 10, title: 'Ten', excluded: false }]);
+
+  const calls: Array<{ chapterId: number; prompt: string }> = [];
+  runReview.mockImplementation((_m: string, c: number, p: string) => {
+    calls.push({ chapterId: c, prompt: p });
+    return Promise.resolve({ ops: [] });
+  });
+
+  await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+  const ch10 = calls.filter((c) => c.chapterId === 10).map((c) => c.prompt);
+  expect(ch10.length).toBeGreaterThan(1); // the chapter split
+  expect(ch10[0]).toContain('Prior chapter'); // first chunk carries it
+  expect(ch10.slice(1).every((p) => !p.includes('Prior chapter'))).toBe(true); // later chunks don't
+});
+
+it('emits NO block when the predecessor ends on narration — scene break (fs-64)', async () => {
+  // The headline regression guard: a non-exchange ending must not feed a
+  // misleading turn-taking signal into the next chapter.
+  writeBook([
+    { id: 1, chapterId: 1, characterId: 'wren', text: '"Anyone there?"' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Silence answered.' },
+    { id: 1, chapterId: 2, characterId: 'wren', text: '"I knew it."' },
+  ], [{ id: 1, title: 'One', excluded: false }, { id: 2, title: 'Two', excluded: false }]);
+  const prompts: Record<number, string> = {};
+  runReview.mockImplementation((_m: string, c: number, p: string) => {
+    prompts[c] = p;
+    return Promise.resolve({ ops: [] });
+  });
+
+  await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+  expect(prompts[2] ?? '').not.toContain('Prior chapter'); // gate failed → no block
+});
+
+it('does NOT cascade past the immediately-preceding chapter (fs-64)', async () => {
+  // ch1 ends A/B, ch2 ends on narration (gate fails). ch3 must NOT pick up ch1's
+  // exchange — selection takes ch2 (immediate predecessor) and stops.
+  writeBook([
+    { id: 1, chapterId: 1, characterId: 'wren', text: '"Where to?"' },
+    { id: 2, chapterId: 1, characterId: 'marlow', text: '"Somewhere safe."' },
+    { id: 1, chapterId: 2, characterId: 'wren', text: '"Wait."' },
+    { id: 2, chapterId: 2, characterId: 'narrator', text: 'The door closed.' },
+    { id: 1, chapterId: 3, characterId: 'wren', text: '"Still here."' },
+  ], [
+    { id: 1, title: 'One', excluded: false },
+    { id: 2, title: 'Two', excluded: false },
+    { id: 3, title: 'Three', excluded: false },
+  ]);
+  const prompts: Record<number, string> = {};
+  runReview.mockImplementation((_m: string, c: number, p: string) => {
+    prompts[c] = p;
+    return Promise.resolve({ ops: [] });
+  });
+
+  await request(app).post(`/api/books/${bookId}/script-review`).send({}).expect(200);
+
+  expect(prompts[2] ?? '').toContain('Prior chapter');       // ch1 ended A/B → ch2 gets it
+  expect(prompts[3] ?? '').not.toContain('Prior chapter');   // ch2 ended narration → no cascade to ch1
+});
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd server && npm run test -- script-review`
-Expected: FAIL — `prompts[2]` does not contain `Prior chapter` (route not wired yet).
+Expected: the four new fs-64 route tests FAIL — no prompt contains `Prior chapter` (route not wired yet). The two absence-asserting tests (`no block when predecessor ends on narration`, the `ch3` arm of `no cascade`) pass trivially pre-wiring; the positive arms (`first chunk only`, the `ch2 gets it` arm) are the genuine reds that Step 4 turns green.
 
 - [ ] **Step 3: Lift the excluded set + compute the prior exchange**
 
@@ -591,10 +671,10 @@ Then convert the inner chunk loop (currently `for (const chunk of chunks) {` at 
 
 (Leave the rest of the loop body — the `runScriptReviewChapter` call, the `owned` filter, the `catch` — unchanged.)
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd server && npm run test -- script-review`
-Expected: PASS — `prompts[2]` contains the block; `prompts[1]` does not; all prior tests stay green.
+Expected: PASS — all four fs-64 route tests green (block on the predecessor-has-exchange cases, absent on the scene-break and no-cascade cases, first-chunk-only on the multi-chunk case); all prior tests stay green.
 
 - [ ] **Step 6: Typecheck**
 
@@ -647,7 +727,7 @@ git commit -m "docs(skill): fs-64 document the read-only prior-chapter exchange 
 ### Task 6: Full verify + ship docs
 
 **Files:**
-- Modify: `docs/BACKLOG.md` (remove the `fs-64` row, lines 70-74)
+- Modify: `docs/BACKLOG.md` (remove the `fs-64` row, lines 70-**75** — include the trailing blank line so no double blank is left behind)
 - (PR body carries `Closes #1120`.)
 
 - [ ] **Step 1: Run the full pre-push battery**
@@ -657,10 +737,10 @@ Expected: typecheck + all tests + e2e + build green. If a pre-existing/unrelated
 
 - [ ] **Step 2: Remove the BACKLOG row**
 
-Delete the `fs-64` entry in `docs/BACKLOG.md` (the `#### `fs-64` — cross-chapter context …` heading through its `_Full detail + acceptance:_` line, lines 70-74).
+Delete the `fs-64` entry in `docs/BACKLOG.md` (the `#### `fs-64` — cross-chapter context …` heading through its `_Full detail + acceptance:_` line **plus the following blank line**, lines 70-75 — verify line numbers haven't drifted before deleting).
 
 Run: `grep -n "fs-64" docs/BACKLOG.md`
-Expected: no matches.
+Expected: no matches. Eyeball the diff for a stray double blank line between the neighbouring items.
 
 - [ ] **Step 3: Commit the backlog removal**
 
@@ -698,10 +778,10 @@ BODY
 - §4.1 helper + gate + constants + cap → **Task 1**.
 - §4.3 prompt block + byte-identical → **Task 2**.
 - §4.2 neighbor selection (no cascade) → **Task 3**.
-- §4.5 first-chunk-only wiring + lifted excluded set + full-budget chunking → **Task 4**.
+- §4.5 first-chunk-only wiring + lifted excluded set + full-budget chunking → **Task 4** (the multi-chunk route test pins first-chunk-only and, via the existing "exactly once" test, that the chapter's own ops are unperturbed).
 - §4.4 skill note → **Task 5**.
-- §4.6 read-only (no `sentenceId`) → enforced in Task 2's render + asserted in Tasks 2/4; documented in Task 5.
-- §6 tests → Tasks 1-4 land them; **Task 6** runs the full battery.
+- §4.6 read-only (no `sentenceId`) → enforced by Task 2's render (the block surfaces only character id + text) and **pinned by Task 2's block-region assertion** (`block` between `Prior chapter` and `## Sentences` contains no `sentenceId`/numeric id). NOTE: the §6 line "a model op referencing the context yields no out-of-chapter op" is NOT code-enforceable here (ops are emitted, not applied; `ownsOp` filters by colliding per-chapter ids), so "block carries no sentenceId" is the only handle — and Task 2 now actually pins it. Documented in Task 5.
+- §6 tests → Tasks 1-4 land them, including the route-level **scene-break negative** and **no-cascade** guards (Task 4) for the headline regression; **Task 6** runs the full battery.
 - §9 ship (Closes #1120, BACKLOG row, on-box deferred to acceptance) → **Task 6**.
 - §5 edge cases → all covered by Task 1's nine cases (narration, monologue, unknown-male, beyond-window, residue, off-roster, empty) + Task 3 (first chapter, excluded, non-contiguous) + Task 4 (first-chunk/no-predecessor).
 
