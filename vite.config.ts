@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import mkcert from 'vite-plugin-mkcert';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -75,7 +76,10 @@ export default defineConfig(({ mode }) => {
   // (no VITE_HTTPS) keeps http://…:8080. VITE_API_PORT/PORT still override.
   const apiPort = Number(env.VITE_API_PORT ?? env.PORT ?? (useHttps ? 8443 : 8080));
   const apiTarget = `${useHttps ? 'https' : 'http'}://localhost:${apiPort}`;
-  const plugins: PluginOption[] = [react()];
+  // ops-20: Tailwind v4 runs through its dedicated Vite plugin rather than the
+  // `@tailwindcss/postcss` PostCSS pass (which executed inside vite:css). The
+  // Vite plugin hooks the pipeline directly, so postcss.config.js is gone.
+  const plugins: PluginOption[] = [react(), tailwindcss()];
   if (useHttps) plugins.push(mkcert());
   return {
     plugins,
