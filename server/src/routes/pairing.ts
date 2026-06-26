@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { X509Certificate } from 'node:crypto';
 import { Router } from 'express';
 import express from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import type { Request, Response } from '../http.js';
 import { isLanHttpsEnabled, enumerateLanUrls } from './export-lan.js';
 import { resolveRootCaPath } from './cert-root.js';
@@ -75,7 +75,11 @@ export const redeemLimiter = rateLimit({
   limit: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.ip ?? 'unknown',
+  // express-rate-limit v8 rejects a custom keyGenerator that reads the IP
+  // without the ipKeyGenerator helper (ERR_ERL_KEY_GEN_IPV6) — it normalises
+  // IPv6 to a /56 subnet so v6 clients can't bypass the cap by rotating the
+  // host bits. Fall back to 'unknown' only when req.ip is genuinely absent.
+  keyGenerator: (req) => (req.ip ? ipKeyGenerator(req.ip) : 'unknown'),
 });
 
 pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), async (req: Request, res: Response) => {
