@@ -6,299 +6,360 @@ status: draft
 
 # Per-model GPU assignment (multi-GPU)
 
+> Revised twice after adversarial review. The first revision fixed the
+> engine-grammar / VRAM-allocator model; the second (this one) folds in a
+> five-lens parallel review that found the **config layer** and the **Node-side
+> orchestration layer** were under-modeled, split the work into **two sequential
+> plans**, cut auto-placement, and made the analyzer row implementable by
+> **owning the Ollama daemon**.
+
 ## Problem
 
-The TTS sidecar is single-GPU by design. Every model loads onto one device,
-and the device defaults (`auto` → `cuda:0`, plus `COQUI_DEVICE=cuda` /
-`ASR_DEVICE=cuda`) all resolve to the same card. On a box with two GPUs the
-second card sits idle, and three pieces of safety machinery are hardcoded to
-device 0:
+The TTS sidecar is single-GPU by design. Every model loads onto one device, and
+the defaults (`auto` → `cuda:0`, `COQUI_DEVICE=cuda`, `ASR_DEVICE=cuda`) resolve
+to the same card. On a 2-GPU box the second card sits idle, and **safety
+machinery on both sides of the process boundary is single-card-bound**:
 
-- the reserved-VRAM **recycle ceiling** (`_vram_recycle_soft_threshold_mb` /
-  `_vram_restart_threshold_mb` read `_cuda_vram_mb()`, which calls
-  `torch.cuda.get_device_properties(0)` and default-device `memory_reserved()`),
-- the `/health` **VRAM telemetry**,
-- the **co-residency eviction** logic (Kokoro ↔ Qwen-Base ↔ VoiceDesign ↔ ASR
-  ↔ SPK all assumed to compete on one card).
+- **Sidecar (Python):** the reserved-VRAM recycle ceiling, `/health` telemetry,
+  and co-residency eviction are hardcoded to device 0 (`main.py:3342`,
+  `_cuda_vram_mb`); the `_VdKokoroArbiter` (`main.py:457`) couples VoiceDesign↔Kokoro
+  unconditionally even across cards.
+- **Server (Node):** the weighted GPU semaphore is a **single global token pool**
+  (`gpu/semaphore.ts:36-152`) with one `gpu.vramBudget`; the analyzer↔TTS
+  co-eviction (`tts/gpu-load.ts`, `residency.ts`) keys on **one scalar total**.
+  Neither can express "card A free / card B free."
 
-Per-engine device knobs already exist (`QWEN_DEVICE`, `COQUI_DEVICE`,
-`ASR_DEVICE`, `SPK_DEVICE`), so a user *can* pin engines to different cards
-today — but the moment two engines live on different cards, the safety net is
-blind or wrong: the watchdog watches the wrong card, and eviction fires
-across cards that don't actually share VRAM.
+Per-engine device knobs let a user *pin* engines to cards today, but the moment
+two engines live on different cards the safety net is blind or wrong, and — per
+the review — shipping a naive picker would make a 2-card box **more** OOM-prone
+and **unable** to run the parallel analyze+synth workload that justifies the
+second card.
 
-This box (the reference hardware) has an **RTX 4070 Laptop 8 GB** (`cuda:0` by
-torch's default enumeration; **also drives the display**, so its *free* VRAM is
-well under 8 GB) and an **RTX 5070 Ti 16 GB** (`cuda:1`). A verified stop-gap
+Reference hardware: **RTX 4070 Laptop 8 GB** (drives the display → *free* VRAM
+well under 8 GB) and **RTX 5070 Ti 16 GB**. A verified stop-gap
 (`CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=1,0` in `server/.env`)
-remaps the 16 GB card to the visible `cuda:0` so the heavy synth path and the
-watchdog both land on it.
-
-**This feature owns device mapping.** When the picker ships, the
-`CUDA_VISIBLE_DEVICES` stop-gap is **removed**: the sidecar enumerates all
-physical cards in raw order, and the picker assigns by **GPU UUID** (see the
-`DeviceLedger` keystone below) directly to physical cards — one mechanism, no
-hidden remap layer. The stop-gap stays in place only until the picker lands.
+remaps the 16 GB card to the visible `cuda:0`. **This feature owns device
+mapping**; the stop-gap is retired by an explicit `.env` cutover when Plan B
+lands (see §B5).
 
 ## Goal
 
-Let the user choose, **per model**, which GPU (or CPU) it runs on, and make the
-sidecar runtime genuinely device-aware so that any assignment is honored
-**safely** — the recycle ceiling, `/health`, and eviction all reason per
-device, not against a hardcoded device 0. A bad assignment must **degrade
-loudly and recoverably**, never brick the sidecar.
+Let the user choose, **per model**, which GPU (or CPU) each runs on, with a
+runtime — sidecar **and** server — that's genuinely device-aware so any
+assignment is honored **safely**: per-card recycle, per-card VRAM budgeting,
+same-card-only coupling, and **observability of the card a model *actually*
+loaded onto** (not just the one requested). A bad assignment must **degrade
+loudly and recoverably**, never brick.
 
-Auto-placement (the app proposing a layout by available VRAM) is an **optional,
-default-off** layer on top of the manual picker.
+Auto-placement is **cut** (a 2-card box has one obvious layout, set once).
+
+### Delivery: two sequential plans
+
+The review converged on this split; it de-risks the hard config work.
+
+- **Plan A — Device-aware safety net.** Pure runtime (sidecar Python + Node
+  semaphore/eviction). Ships value alone by fixing the device-0 hardcodes and
+  the unconditional cross-card coupling. No UI. Testable as far as it ever will
+  be (stub-torch for shape; on-box for truth).
+- **Plan B — The picker + owned Ollama daemon.** Config-layer rework, device
+  discovery, Settings UI, and app-owned `ollama serve` so the analyzer is really
+  assignable. Built on a green Plan A.
 
 ### Assignable units (6)
 
-| Unit | Runtime | Device API | Existing knob | Notes |
+| Unit | Runtime | Device API | Knob status | Notes |
 |---|---|---|---|---|
-| **Qwen** (Base 0.6B + VoiceDesign 1.7B) | torch | `cuda:N` via `.to()` | `QWEN_DEVICE` | Base + VoiceDesign **share one assignment** — they co-reside during a design session. One picker row. |
-| **Coqui XTTS** | torch | `cuda:N` via `.to()` | `COQUI_DEVICE` | |
-| **ECAPA drift** (voice-consistency QA) | torch (speechbrain) | `cuda:N` via `.to()` | `SPK_DEVICE` | srv-47 already made `cuda` *safe*; CPU is today's default. |
-| **Kokoro** | **onnxruntime** | **ORT provider `device_id`** | _new_ `KOKORO_DEVICE` | eagerly-resident English fallback (~1 GB). **Separate allocator from torch** (`main.py:460`) — `cuda:N` is meaningless to it. |
-| **Whisper ASR** (content QA / WER) | **CTranslate2** | **`device="cuda"` + `device_index`** | `ASR_DEVICE` | already CPU-first-capable. **Separate allocator from torch**; does *not* accept `cuda:N`. |
-| **Analyzer (Ollama)** | Ollama daemon | **daemon `CUDA_VISIBLE_DEVICES`** | _new_ pref | separate process. Restart-to-apply via daemon env; `main_gpu` is *not* a reliable pin (it only chooses the primary GPU in split mode). Note: this box currently runs `ANALYZER=gemini` (cloud), so local placement is moot until `ANALYZER=local`. |
+| **Qwen** (Base 0.6B + VoiceDesign 1.7B) | torch | `cuda:N` via `.to()` | `QWEN_DEVICE` (string ✓) | Base + VoiceDesign **share one assignment**; co-reside during a design. Peak ~6.5 GB. |
+| **Coqui XTTS** | torch | `cuda:N` via `.to()` | `COQUI_DEVICE` (**enum → widen to string**) | rarely loaded (`PRELOAD_COQUI=0`). |
+| **ECAPA drift** (voice-consistency QA) | torch (speechbrain) | `cuda:N` via `.to()` | `SPK_DEVICE` (**enum → widen to string**) | promotable to spare card. |
+| **Kokoro** | **onnxruntime** | **ORT provider `device_id`** | _new_ `KOKORO_DEVICE` | eager at startup (~1 GB). Separate allocator from torch (`main.py:460`). |
+| **Whisper ASR** (content QA / WER) | **CTranslate2** | **`device="cuda"` + `device_index`** | **no knob today → add one** | separate allocator; read by a Node gate too (`transcribe-client.ts:59`). |
+| **Analyzer (Ollama)** | Ollama daemon (**now app-owned**) | daemon `CUDA_VISIBLE_DEVICES` | _new_ pref | app will spawn/supervise `ollama serve` (§B6) so env injection is real. Dormant on this box until `ANALYZER=local`. |
 
-**The five sidecar engines do not share a device grammar.** Three are torch
-(`cuda:N`), Kokoro is onnxruntime (provider `device_id`), Whisper is CTranslate2
-(`device` + `device_index`). The picker therefore stores a **canonical**
-assignment per unit (a GPU **UUID**, or `cpu`), and an **engine device-adapter**
-(see Components §3a) translates that canonical value into each engine's native
-device API at load. The knob env values (`QWEN_DEVICE` etc.) carry the resolved
-torch/native form the adapter produces.
+**No uniform device grammar.** Three engines are torch (`cuda:N`), Kokoro is ORT
+(`device_id`), Whisper is CTranslate2 (`device`+`device_index`). The picker
+stores a **canonical UUID** (or `cpu`); a Python-side **engine device-adapter**
+(§A7) translates it per engine. The adapter also accepts legacy forms
+(`cuda:N | cuda | cpu | auto`) so existing pins keep working.
 
 ### Apply semantics
 
-**Restart-to-apply.** Changing an assignment writes config; it takes effect on
-the next sidecar/Ollama restart (the one-click "restart sidecar" affordance
-already exists). This matches every existing device knob (`apply:
-'restart-sidecar'`) and means each model simply loads onto its assigned card at
-startup — no live cross-card migration in the eviction state machine.
+**Restart-to-apply** for every unit (sidecar restart for the 5 engines; daemon
+restart for the analyzer). Matches existing `apply:'restart-sidecar'` knobs; no
+live cross-card migration.
 
 ## Non-goals
 
-- **Multi-process sidecar.** The sidecar stays one process driving N cards.
-  Per-device accounting does **not** mean per-device processes.
-- **Live re-placement.** Out of scope (restart-to-apply only).
-- **Auto-placement as default behavior.** It ships off; the user opts in.
-- **Cross-engine load balancing / sharding a single model across cards.**
+- **Auto-placement** (cut).
+- **Multi-process sidecar.** One process drives N cards; per-device accounting ≠
+  per-device processes.
+- **Live re-placement.** Restart-to-apply only.
+- **Sharding one model across cards.**
 
-## Architecture
+---
 
-### Keystone: `DeviceLedger` (sidecar, new module)
+# Plan A — Device-aware safety net
 
-One small module that owns two facts and is the single source of truth that
-makes a one-process / N-card sidecar safe:
+## A1. `DeviceLedger` (sidecar, new module) — thread-safe, never caches an index
 
-1. **`engine → device`** — where each loadable engine (Qwen, Coqui, Kokoro,
-   ASR, SPK) is assigned, resolved once at startup from the canonical
-   UUID-keyed assignment via the engine device-adapter (§3a). Identity is the
-   **GPU UUID** (`torch.cuda.get_device_properties(idx).uuid`), not the bare
-   index — so the ledger maps `uuid → current torch index` and warns on drift.
-2. **Two distinct per-device quantities** (the v1 design conflated these — they
-   are not the same and must not be):
-   - **driver free / total** via `torch.cuda.mem_get_info(idx)` — the **driver
-     truth**, visible across *all* allocators (torch, ORT, CTranslate2). This is
-     what **capacity, footprint pre-warning, eviction, and OOM** reasoning use.
-   - **torch reserved** via `memory_reserved(idx)` — the **torch caching-allocator
-     pool only**. Valid *solely* for the fragmentation self-exit, and *solely*
-     on cards hosting torch engines. **Kokoro (ORT) and Whisper (CT2) VRAM is
-     invisible to `memory_reserved`** (`main.py:460`), so a card hosting only
-     those reads reserved ≈ 0 — its fragmentation ceiling is inert by design,
-     and its safety comes from the driver-free path above.
+Owns `engine → device` (by **GPU UUID**) and per-device VRAM samples. It is read
+from **three thread contexts** — the `_memory_watchdog` event loop, the sync
+`/health` + `/devices` Starlette threadpool threads, and `asyncio.to_thread`
+synth/load workers — so:
 
-Everything safety-critical reads **through** the ledger:
+- **One `threading.Lock`** guards the `uuid→index` map and any cached state.
+  Today's `_cuda_vram_mb` is stateless (safe by accident); the ledger is mutable
+  and must not rely on the GIL for multi-bytecode map updates.
+- **uuid→index is re-resolved and re-validated every sample, never cached.** A
+  vanished card makes torch renumber survivors *downward*, so a stale index
+  silently reads the **wrong healthy card** (no exception). Each read asserts
+  `get_device_properties(idx).uuid == expected_uuid`; mismatch ⇒ treat as
+  vanished (ceiling → 0). This is what actually makes the "vanished → None"
+  fail-safe true.
+- **Two distinct per-device quantities, never conflated:**
+  - **driver free/total** via `mem_get_info(idx)` — visible across *all*
+    allocators (torch, ORT, CTranslate2). Drives capacity/OOM/eviction reasoning.
+  - **torch reserved** via `memory_reserved(idx)` — torch caching-allocator pool
+    only; invisible to Kokoro(ORT)/Whisper(CT2). Drives *only* the
+    fragmentation self-exit, *only* on torch-hosting cards.
 
-- **Recycle / watchdog** — the **fragmentation** soft/hard thresholds are
-  computed per **torch-hosting** device (each card's fraction × that card's
-  total, on the torch `reserved` pool) and fire if **any** crosses. A hard cross
-  still triggers the existing **whole-process self-exit (code 43)**; the
-  supervisor respawns and all cards' contexts reload. The multi-card rule is an
-  **OR over in-use torch devices**. (Capacity/OOM for non-torch cards is the
-  driver-free path, not this ceiling.)
-- **`/health`** — reports a `devices[]` array (`uuid`, `idx`, `name`,
-  `free`, `total`, `torch_reserved`, resident engines). Existing scalar fields
-  stay for back-compat, derived from a **defined** card: Qwen's resolved device,
-  falling back to torch index 0 (M2).
-- **Eviction / co-residency** — **both** VRAM-coupling mechanisms gain the
-  predicate **`shares_device(a, b)`**: (1) the load-time "free VRAM before
-  loading X" evictions, **and** (2) the synth-time `_VdKokoroArbiter`
-  (`main.py:457`) forward-overlap lock between VoiceDesign and Kokoro. Models
-  couple only when assigned the **same physical card**; Qwen on one card +
-  Kokoro on another → no eviction *and* no forward serialization.
-  `shares_device` resolves `auto` to its concrete device first, and returns
-  **false** for any pair where either side is `cpu` (no VRAM contention) (M3).
+## A2. Per-device recycle / watchdog — and a real driver-free ceiling
 
-### Two control planes
+- **Fragmentation ceiling** (torch reserved): computed per torch-hosting device,
+  fires on **any** crossing (OR rule). Each card is evaluated on its own freshly
+  read value (no torn-snapshot risk).
+- **Driver-free ceiling (new):** a card hosting *only* ORT/CT2 engines reads
+  torch-reserved ≈ 0, so the fragmentation ceiling is inert — it has **no OOM
+  protection today**. Add a per-device watchdog branch that recycles/self-exits
+  on **driver-free** crossing, so ORT/CT2-only cards are actually guarded, not
+  just sampled for display.
+- **Blast-radius (documented limitation):** the hard self-exit (code 43) is
+  **whole-process** — `_restart_pending` + `_drain_then_restart` are process-wide
+  (`main.py:3485,3512`). So the 8 GB card crossing its ceiling drains and aborts
+  in-flight synth on the *healthy* 16 GB card. v1 accepts this (per-device drain
+  on a single `_inflight_synth` is non-trivial); it is stated, not buried, and
+  deferred as a known limitation.
+- **Crash-loop protection (new — closes a brick path):** a structurally-too-small
+  assignment loops `load→synth→cross→drain(≤180 s)→self-exit` forever, because
+  living >`QUICK_DEATH_MS` (30 s) **resets** `consecutiveFailures`
+  (`sidecar-supervisor.ts:40,263`) and `onChildExit` never inspects `code`. Add a
+  **code-43 streak detector** counting consecutive VRAM self-exits in a
+  wall-clock window *regardless of child uptime*; on cap-trip, hold TTS down,
+  **auto-revert the offending unit to its safe default**, and name the knob in a
+  FATAL line.
 
-- **Sidecar engines (5)** — the canonical UUID assignment flows through the
-  registry-knob → `buildSidecarEnv` path; the **engine device-adapter** (§3a)
-  resolves it to each engine's native form. Four knobs exist; we add
-  **`KOKORO_DEVICE`** (mapped to an ORT provider `device_id`). `ASR_DEVICE`
-  grows from `cpu|cuda` to also carry a device index that the adapter splits
-  into CTranslate2's `device` + `device_index`.
-- **Analyzer Ollama (1)** — a stored preference applied as **daemon-level
-  `CUDA_VISIBLE_DEVICES`** at `ollama serve` (restart-to-apply, consistent with
-  the rest of the feature). `main_gpu` is **not** a reliable pin — it only
-  selects the primary GPU in split mode — so it is at most a secondary hint, not
-  the mechanism. On this box the analyzer is `ANALYZER=gemini` today, so this
-  plane is dormant until `ANALYZER=local`.
+## A3. `shares_device` coupling — symmetric, resolved once
 
-## Components
+Both VRAM-coupling mechanisms gate on `shares_device(a, b)`:
 
-1. **Device discovery** — `GET /devices` on the sidecar enumerates CUDA devices
-   `[{uuid, idx, name, total_mb, free_mb}]` (+ a `cpu` pseudo-option) via
-   `torch.cuda.mem_get_info` / `get_device_properties`; a server proxy (copy the
-   `/health` proxy pattern) exposes it to the frontend. `free_mb` (driver truth)
-   is shown so the picker reflects the display-driven card's real headroom.
-   Depends on: torch.
-2. **Device-assignment config** — the 6 stored canonical assignments (GPU UUID
-   or `cpu`). Adds `KOKORO_DEVICE` (reuses `QWEN/COQUI/ASR/SPK_DEVICE`) + an
-   analyzer-GPU preference. `buildSidecarEnv` already injects non-default
-   `restart-sidecar` knobs, so Kokoro slots in; the analyzer value becomes the
-   daemon's `CUDA_VISIBLE_DEVICES`. Depends on: registry, env-builder,
-   `ollama.ts`.
-3. **`DeviceLedger`** — the keystone above (UUID identity; driver-free vs
-   torch-reserved split). Independently unit-testable with a stub torch (the
-   `_StubTorch` pattern in `test_device_probe.py`).
-   - **3a. Engine device-adapter** — translates one canonical assignment
-     (UUID / `cpu`) into each engine's native device API: torch `cuda:N`
-     (Qwen/Coqui/SPK), ORT provider `device_id` (Kokoro), CTranslate2
-     `device`+`device_index` (Whisper). Owns the `uuid → current torch index`
-     resolution and the stale/drift detection. The single place that knows each
-     engine's device dialect — so the ledger and picker stay dialect-agnostic.
-4. **Device-aware recycle / watchdog / `/health`** — refactor: replace
-   `get_device_properties(0)` / default-device `memory_reserved()` with ledger
-   lookups; per-device thresholds; fire on any-card cross; `/health` gains
-   `devices[]`. Highest-risk unit → heaviest test coverage.
-5. **Device-aware eviction + arbiter** — gate **both** VRAM-coupling
-   mechanisms on `ledger.shares_device(...)`: the load-time evict-to-free paths
-   **and** the synth-time `_VdKokoroArbiter` (`main.py:457`) VoiceDesign↔Kokoro
-   forward lock. Cross-card pairs neither evict nor serialize.
-6. **Settings picker UI** — a "GPU assignment" panel: one row per unit, a
-   dropdown of discovered devices (each showing its VRAM), the current value, a
-   stale-assignment indicator, and the existing "restart sidecar to apply"
-   affordance. Depends on: discovery endpoint + the config-write path Settings
-   already uses.
-7. **Auto-placement (optional, default-off)** — a toggle + "Suggest layout"
-   button that reads device VRAMs and proposes a placement (heavy synth →
-   largest card; QA models → spare) the user can accept into the knobs. Never
-   runs unless invoked; it only *fills in* the same knobs the manual picker
-   writes.
+1. load-time evict-to-free paths, **and**
+2. the synth-time `_VdKokoroArbiter` (`main.py:457`) VoiceDesign↔Kokoro forward lock.
 
-Clean seam: 1–2 plumbing, 3 the new abstraction, 4–5 consume it, 6–7 UI over it.
+Rules:
+- `auto` is resolved to a **concrete UUID at ledger init**, before any
+  `shares_device` evaluation (an unresolved `auto` drifts across boots once the
+  remap is gone).
+- `shares_device(cpu, *)` ⇒ **false** (no VRAM contention).
+- The VD↔Kokoro boolean is computed **once at startup into a single flag both
+  `design()` and `kokoro_synth()` read** — never recomputed per-call on either
+  side. A predicate only one party respects is no lock (asymmetric → the 8 GB
+  three-way spill returns).
 
-## Data flow
+## A4. Per-card load/evict mutex
 
-**Sidecar engine (happy path):** picker calls `GET /devices` → shows each card
-with VRAM → user picks a device per unit → write to registry config
-(`user-settings.json`) → user clicks "restart sidecar" → `buildSidecarEnv`
-injects the `*_DEVICE` knobs → sidecar boots → each engine loads onto its
-assigned card → `DeviceLedger` records `engine→device` → watchdog samples each
-in-use device per cycle → recycle fires per-card, `/health` reports `devices[]`.
+`_VD_KOKORO` only covers VoiceDesign↔Kokoro. Any *other* same-card pair the
+design now allows (e.g. Coqui + ASR on `cuda:0`) has a check-residency → evict →
+load TOCTOU with no covering lock (the `is not None` residency checks at
+`main.py:2147,2163` already race). Add a **per-physical-card load/evict mutex**
+in the ledger; the whole check-evict-load sequence on a card holds it.
 
-**Analyzer:** stored preference → written as the Ollama daemon's
-`CUDA_VISIBLE_DEVICES` and applied on daemon restart (restart-to-apply).
-`main_gpu` is not relied on as the pin.
+## A5. Node GPU semaphore → per-device
 
-## Error handling
+The single global pool (`semaphore.ts:36-152`, budget sized for one 8 GB card)
+gives **zero per-card protection** on two cards. Make the budget **per-device**,
+keyed by the resolved engine→card UUID; costs (`engine-vram-cost.ts`) charge the
+**target card's** pool. Consequences:
 
-The principle: **a bad assignment degrades loudly and recoverably; it never
-bricks the sidecar.**
+- The analyzer (cost 4 = whole budget, `engine-vram-cost.ts:23`) must **not**
+  charge the TTS card's pool when it resolves to a different card — otherwise it
+  serializes all TTS and forbids the parallel analyze+synth that justifies the
+  second card.
+- `costForEngine`'s unknown-key fallback of 1 (`engine-vram-cost.ts:57`) is
+  unsafe against a small per-card budget — make it conservative (refuse, or
+  charge a high cost) rather than 1.
 
-- **Stale / invalid assignment** (knob says `cuda:2`, or a card was removed) →
-  the device resolver clamps to a safe fallback (`cuda:0`, then `cpu`) with a
-  loud one-time WARN; `/health` + the picker flag the assignment as **stale**
-  rather than silently honoring a phantom. Extends `_resolve_torch_device`.
-- **Card vanishes mid-run** (driver reset) → `mem_get_info(idx)` throws → ledger
-  returns `None` for that device → its ceiling derives to **0 (disabled)**,
-  exactly today's unknown-VRAM fail-safe; the host-RAM watchdog governs. No
-  guessed ceiling that could false-fire.
-- **Heavy engine on a too-small card** → QA models (ASR, SPK) have CPU-degrade
-  paths → demote with a WARN. Synth engines (Qwen/Coqui) that can't sensibly
-  CPU-fall-back → load fails with a clear surfaced error ("Qwen needs ~X GB,
-  this card has Y GB free"). The picker pre-warns against the card's **free**
-  VRAM (driver truth — the display-driven card has well under its nominal
-  total), and for Qwen uses the **peak** footprint (**Base + VoiceDesign
-  co-resident**, ~6.5 GB during a design), not Base alone — so it catches a
-  Qwen-on-8 GB assignment that would only OOM when someone designs a voice (M1).
-- **Two co-resident models on the same small card** (e.g. Qwen Base +
-  VoiceDesign during a design) → the existing co-residency OOM guard still
-  applies, now correctly **scoped to that one card** via `shares_device`.
+## A6. Node co-eviction + the `/health` scalar that feeds it
 
-## Testing
+- `shouldEvictBeforeSidecarLoad` (`residency.ts:9`) must take **both** the
+  incoming sidecar engine's card and the analyzer's card and return **false when
+  they differ** — else it evicts the warm analyzer to "free" a card it isn't on.
+- **The scalar that feeds eviction must be the target *load* card's total**, not
+  Qwen's device (my earlier M2 choice was wrong: reporting 16 GB makes eviction
+  skip and loads XTTS onto the cramped 8 GB card → OOM).
 
-Mapped to the five tiers, weighted toward the risky units.
+## A7. Engine device-adapter (Python) + actual-card reporting
 
-**Sidecar pytest (heaviest):**
-- `DeviceLedger` with a stub torch (reuse `_StubTorch`/`_torch` from
-  `test_device_probe.py` / `test_qwen_device.py`): `uuid→index` resolution
-  (incl. drift warn), per-device **driver-free** vs **torch-reserved** sampling
-  kept distinct, `shares_device` truth table, stale-device → safe-fallback +
-  WARN.
-- Recycle thresholds computed **per device**, firing when *any* in-use card
-  crosses (the OR rule) — including the asymmetric case (16 GB fine, 8 GB over →
-  recycle fires).
-- Eviction: same-card pair evicts (today's behavior preserved) vs cross-card
-  pair does **not** evict (the new behavior / the bug being fixed).
-- `GET /devices` shape; `/health` `devices[]` shape + back-compat scalars.
+- One Python module translates a canonical assignment (UUID / `cpu` / legacy
+  `cuda:N|cuda|auto`) into each engine's native API: torch `cuda:N`
+  (Qwen/Coqui/SPK), ORT provider `device_id` (Kokoro), CT2 `device`+`device_index`
+  (Whisper). **All `*_DEVICE` env reads route through it** — including the Node
+  ASR gate (`transcribe-client.ts:59`), which must learn the `cuda:N` form or it
+  silently skips the GPU token.
+- **`/health` reports the card each engine *actually* loaded onto**, probed from
+  the live module / ORT session (`get_providers()` already exists,
+  `main.py:4010`) — not the requested assignment. This closes the recurring
+  "Kokoro silently on CPU" class (memory: `project_kokoro_cpu_onnxruntime_gpu_swap`)
+  instead of re-creating it at 2× surface. ORT/CT2 bad-`device_id` silently falls
+  back to CPU and the eager loader swallows it (`main.py:3716`), so read-back +
+  WARN + a structured stale flag is the only honest signal.
+- **`/health` field naming:** `/health` *already* exposes a `devices` map
+  (engine→family, `main.py:4109`). The new per-card array is **`gpus[]`**
+  (`{uuid, idx, name, free, total, torch_reserved, resident:[{engine, actual_card}]}`),
+  leaving `devices` untouched.
 
-**Server vitest:** `buildSidecarEnv` injects `KOKORO_DEVICE` (and the
-`ASR_DEVICE` index form) when non-default; the analyzer pref resolves to the
-daemon's `CUDA_VISIBLE_DEVICES`; `/devices` proxy; config write **validates
-against discovered devices by UUID** (reject an assignment whose UUID isn't
-present).
+## A8. Plan A testing
 
-**Frontend vitest:** picker renders one row per unit, dropdown populated from
-discovery, stale-assignment indicator, "restart to apply" affordance present.
+- **Honest framing:** stub-torch (`test_device_probe.py`'s `_StubTorch` has no
+  `mem_get_info`/`uuid`/`memory_reserved`) can only test **shape/arithmetic** of
+  a *new richer stub we hand-feed*. It cannot reproduce multi-allocator VRAM, ORT
+  `device_id`, CT2 `device_index`, or UUID drift. Mark these pytest cases
+  "shape-only."
+- **The gating validation is the on-box 2-GPU acceptance** (`test:sidecar` is
+  venv-gated → skips in CI). Budget it as a deliverable, not a footnote.
+- Pytest (shape): ledger lock present; uuid mismatch ⇒ vanished; per-card OR
+  fires on the 8 GB but not 16 GB; `shares_device` cpu/auto/same-uuid truth
+  table; adapter resolves each engine's dialect; code-43 streak detector trips on
+  a uptime-resetting loop.
+- Server vitest: per-device semaphore charges the right card; cross-card analyzer
+  doesn't block TTS; `shouldEvictBeforeSidecarLoad` false across cards; ASR Node
+  gate handles `cuda:N`.
 
-**E2E (Playwright, one spec):** Settings → GPU panel renders against mocked
-`/devices`, select a device for a unit, value persists across reload.
+---
 
-Add cases for the **engine device-adapter** (§3a): a UUID canonical assignment
-resolves to torch `cuda:N` for Qwen/Coqui/SPK, an ORT `device_id` for Kokoro,
-and CTranslate2 `device`+`device_index` for Whisper; an unknown UUID falls back
-loudly. And for `shares_device`: torch-vs-ORT engines on the same physical card
-*do* couple (same UUID), `cpu` pairs never couple.
+# Plan B — Picker + owned Ollama daemon
 
-**Regression plan:** a new `docs/features/<n>-multi-gpu-per-model.md` from
-`TEMPLATE.md` documenting the invariants (per-device recycle, same-card-only
-eviction *and* arbiter, loud-degrade-never-brick, UUID identity) and a manual
-**2-GPU on-box acceptance** walkthrough — the automated tiers run on stub torch
-/ single-GPU CI, so the real 2-card behavior needs an on-box pass. The
-walkthrough must note that **`/health` `free`/`total` (driver) is the VRAM
-truth; `torch_reserved` is torch-pool-only and will under-report** any card
-hosting Kokoro (ORT) or Whisper (CT2) — an expected gap, not a bug (L1).
+## B1. Config schema — the foundation the picker needs
+
+The "reuse the four knobs + store UUID" premise was wrong on three counts:
+
+- **Widen the device knobs from `enum` to `string`** — `COQUI_DEVICE`/`SPK_DEVICE`
+  are `enum[auto/cpu/cuda]` (`registry.ts:424,281`) and `coerceAndValidate`
+  rejects anything else (`resolver.ts:73`); they cannot hold a UUID. Validate
+  against discovered `/devices` UUIDs instead of a fixed list.
+- **Add an `ASR_DEVICE` registry knob** (`apply:'restart-sidecar'`) — there is
+  none today (`registry.ts`), so the injection loop (`spawn-sidecar.ts:464`) has
+  nothing to write. "Reuse `ASR_DEVICE`" was a false premise.
+- **Env carries the UUID; Python resolves it.** Node can't run torch, so
+  `buildSidecarEnv` injects the UUID verbatim and the adapter (§A7) resolves
+  UUID→index at load. Delete the "Node produces the resolved torch form" claim;
+  rewrite `_resolve_torch_device` to map UUID→index (today it passes a non-`auto`
+  value straight into `torch.to(...)` → crash on a UUID).
+
+## B2. `.env` shadow cutover
+
+`resolveKnob` checks `process.env` **first** and returns `locked` before reading
+config overrides (`resolver.ts:15-30`). The user's `.env` sets `COQUI_DEVICE`,
+`ASR_DEVICE` — so a picker write to those is a **silent no-op**. Therefore:
+
+- The picker **detects a locked env knob** and surfaces "shadowed by
+  server/.env" rather than pretending the write took.
+- The cutover step strips `COQUI_DEVICE`/`ASR_DEVICE`/`SPK_DEVICE` **and**
+  `CUDA_VISIBLE_DEVICES`/`CUDA_DEVICE_ORDER` from `.env` (these live only in the
+  user's gitignored `.env`; **no code edits a user's `.env`** — the spec's
+  earlier "removed in spawn-sidecar.ts" was fiction). The sidecar **WARNs** if
+  `CUDA_VISIBLE_DEVICES` is still set while the picker owns mapping.
+
+## B3. Device discovery
+
+`GET /devices` (sidecar) → server proxy → frontend:
+`[{uuid, idx, name, total_mb, free_mb}]` + a `cpu` option. `free_mb` (driver
+truth) is shown so the picker reflects the display card's real headroom.
+
+## B4. Settings picker UI
+
+One row per unit; a dropdown of discovered cards (each showing **free** VRAM);
+**the stale badge compares assigned-vs-*actual*** (from §A7), not
+assigned-vs-discovered — so a silent CPU fallback is visible. A structured
+`/health` field **and a visible picker banner** carry the "fell back / shadowed /
+stale" signal — not a log WARN the user must grep (memory:
+`feedback_self_service_observability`). The existing "restart sidecar to apply"
+affordance applies.
+
+## B5. Failure handling at the picker boundary
+
+- **Stale/invalid heavy engine (Qwen/Coqui) clamps to `cpu` or hard-fails** with
+  the surfaced "needs ~X GB, card has Y GB free" error — **not** `cuda:0`, which
+  on this box is the 8 GB display card (clamping there just relocates the OOM and
+  arms the A2 crash-loop). Only CPU-degradable QA engines (ASR/SPK) may clamp to
+  CPU silently-but-flagged.
+- **Vanished card mid-run** escalates to the existing **poison self-exit (code
+  42)** path (`main.py:4689`) + supervised respawn — the real recovery the spec
+  must name; disabling the ceiling alone only blinds the watchdog.
+- **Footprint pre-warn uses driver *free* and Qwen *peak*** (Base+VoiceDesign
+  co-resident ~6.5 GB), re-checked **at load time** in the sidecar (the WDDM
+  display card's free swings between pick-time and load-time), not only at pick
+  time in the UI.
+
+## B6. Own the Ollama daemon (makes the analyzer row real)
+
+Today the app only *connects* to a user-managed daemon (`ollama.ts:78`); it never
+spawns `ollama serve`, so it **cannot** inject `CUDA_VISIBLE_DEVICES`. Per the
+chosen direction, the app **takes over the daemon lifecycle**, mirroring the
+sidecar supervisor (`sidecar-owner.ts` / `spawn-sidecar.ts`):
+
+- spawn/supervise `ollama serve` with the analyzer card's `CUDA_VISIBLE_DEVICES`
+  in its env; an `autoStartOllama` preference (default following existing
+  behavior); `taskkill /T /F` teardown on Windows.
+- **Adopt-don't-fight** an externally-running daemon (as the sidecar owner does)
+  so we don't kill a user's existing `ollama serve`; only an app-owned daemon
+  carries the pinned env. Restart-to-apply.
+- Gated behind `ANALYZER=local` (dormant on this box under `ANALYZER=gemini`).
+
+## B7. Portability + legacy pins
+
+`user-settings.json` lives in `~/.castwright` and is shared across checkouts /
+copyable (`user-settings.ts:24`). A stored UUID is **box-specific** — reconcile
+every stored UUID against `/devices` **on read** (mark stale in `/health` +
+picker), and have the adapter accept `{uuid | cuda:N | cuda | cpu | auto}` so a
+pre-existing `QWEN_DEVICE=cuda:1` keeps working. `device-total.ts`'s first-GPU-only
+nvidia-smi parse (`device-total.ts:15`) must become per-GPU (`--id=<uuid>`) before
+the analyzer plane consumes it for keep-alive sizing.
+
+## B8. Plan B testing
+
+Frontend vitest (rows, discovery-populated dropdown, assigned-vs-actual stale
+badge, banner); server vitest (knob widening accepts UUID + rejects unknown;
+ASR knob injection; env-shadow detection; owned-daemon env injection); one
+Playwright e2e (Settings GPU panel against mocked `/devices`, select, persists);
+**on-box 2-GPU acceptance** is the gating sign-off, with the note that `/health`
+`free/total` (driver) is the VRAM truth while `torch_reserved` under-reports any
+ORT/CT2 card by design.
+
+---
 
 ## Key files
 
-- `server/tts-sidecar/main.py` — `_cuda_vram_mb`, `_vram_recycle_*`,
-  `_resolve_torch_device`, `_normalize_device_family`, the engine classes
-  (`QwenEngine`, `CoquiEngine`, `KokoroEngine`, `WhisperEngine`, the ECAPA/SPK
-  class), the eviction call-sites, **`_VdKokoroArbiter`** (`main.py:457`),
-  `/health`. New: `DeviceLedger` module, the **engine device-adapter**, and
-  `GET /devices`.
-- `server/src/tts/spawn-sidecar.ts` — `buildSidecarEnv` (`KOKORO_DEVICE`;
-  `ASR_DEVICE` index form). The `CUDA_VISIBLE_DEVICES` stop-gap is **removed**
-  here once the feature owns mapping.
-- `server/src/config/registry.ts` — the device knobs (`KOKORO_DEVICE` knob +
-  analyzer-GPU pref) carrying canonical UUID values.
-- `server/src/analyzer/ollama.ts` — analyzer GPU pref → daemon
-  `CUDA_VISIBLE_DEVICES` (not `main_gpu`).
-- `server/src/routes/sidecar-health.ts` (+ a new devices route) — proxy.
-- Frontend Settings view + a new GPU-assignment panel component.
-- `server/.env.example` — document `KOKORO_DEVICE`, the analyzer GPU pref, and
-  note the `CUDA_VISIBLE_DEVICES` / `CUDA_DEVICE_ORDER` stop-gap as superseded
-  by the picker.
+**Plan A** — `server/tts-sidecar/main.py` (`_cuda_vram_mb`, `_vram_recycle_*`,
+`_memory_watchdog`, `_VdKokoroArbiter` 457, eviction call-sites, `/health`;
+new `DeviceLedger` + adapter + driver-free ceiling + actual-card probe);
+`server/src/gpu/semaphore.ts` + `server/src/tts/engine-vram-cost.ts` (per-device
+budget); `server/src/tts/gpu-load.ts` + `residency.ts` + `vram-state.ts`
+(cross-card eviction + target-card scalar); `server/src/tts/transcribe-client.ts`
+(ASR `cuda:N` gate); `server/src/tts/sidecar-supervisor.ts` (code-43 streak).
+
+**Plan B** — `server/src/config/registry.ts` (widen enums → string, add
+`ASR_DEVICE`); `server/src/config/resolver.ts` (env-shadow surfacing);
+`server/src/tts/spawn-sidecar.ts` (`KOKORO_DEVICE`/`ASR_DEVICE` injection);
+new `GET /devices` + server proxy; `server/src/analyzer/ollama.ts` + a new
+ollama-owner (spawn/supervise daemon); Settings view + GPU-assignment panel;
+`server/src/tts/device-total.ts` (per-GPU); `.env.example` (document knobs +
+cutover); `~/.castwright/user-settings.json` reconcile-on-read.
 
 ## Open questions / deferred
 
-- **Auto-placement heuristic** — v1 ships the toggle + a simple "largest card
-  gets synth, spare gets QA" suggestion. A smarter footprint-aware solver is a
-  follow-up.
-- **Per-card recycle granularity** — v1 self-exits the whole process on any
-  card's hard cross (simplest, correct). A future refinement could reload only
-  the offending card's engines if the self-exit cost becomes a problem.
+- **Per-card recycle drain** — v1 self-exits the whole process on any card's hard
+  cross (documented limitation A2). A future refinement could drain/reload only
+  the offending card's engines.
+- **Owned-daemon migration** — taking over `ollama serve` for users who run it as
+  a system service needs a graceful adopt/handover story (sketched in B6, to be
+  detailed in Plan B's implementation plan).
