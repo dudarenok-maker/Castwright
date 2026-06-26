@@ -156,6 +156,19 @@ export async function bootFreshBookIntoAnalysing(page: Page): Promise<void> {
   });
 }
 
+/* Start-generation tier prompt (#1160). For a Qwen book, clicking "Approve cast
+   & start generating" / "Resume generation" now opens the StartGenerationModal
+   so the user picks the voice-model tier before the run begins. Confirm it (keep
+   the pre-selected default) so generation actually starts. No-op when the prompt
+   isn't shown (a non-Qwen book starts directly). Call right after the start CTA. */
+export async function confirmTierPromptIfPresent(page: Page): Promise<void> {
+  const heading = page.getByRole('heading', { name: /Choose the voice model/i });
+  if (await heading.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'Start generating', exact: true }).click();
+    await expect(heading).toBeHidden({ timeout: 5_000 });
+  }
+}
+
 export async function stubAccountModelProbes(page: Page): Promise<void> {
   const json = (body: unknown) => ({
     status: 200,
