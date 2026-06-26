@@ -24,6 +24,18 @@ describe('chunkSentencesByBudget', () => {
     expect(chunks[0].core.map((s) => s.id)).toEqual([1]);
     expect(chunks.flatMap((c) => c.core.map((s) => s.id))).toEqual([1, 2]);
   });
+  it('chunkWithContext preserves document order when ids are non-monotonic (split offspring)', () => {
+    // Document order [25, 5, 20, 30]: a split offspring (high id 25) sits at the
+    // front, and the second core's ids (20, 30) bracket it numerically. The old
+    // `s.id`-comparison split mis-orders/drops such context sentences from the
+    // prompt; structural ordering (contextBefore ++ core ++ contextAfter) must
+    // keep every sentence, in document order, with none dropped.
+    const docOrder = [25, 5, 20, 30];
+    const sents = docOrder.map((id) => S(id, 30));
+    const chunks = chunkSentencesByBudget(sents, { charBudget: 60, overlap: 2, serialize: (s) => s.text });
+    // second chunk: core = [20, 30], context-before = [25, 5], context-after = []
+    expect(chunkWithContext(chunks[1]).map((s) => s.id)).toEqual([25, 5, 20, 30]);
+  });
 });
 
 describe('ownership', () => {

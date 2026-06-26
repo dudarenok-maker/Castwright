@@ -21,7 +21,8 @@ import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
 
 export interface SentenceChunk<S> {
   core: S[];
-  context: S[];
+  contextBefore: S[];
+  contextAfter: S[];
   coreIds: Set<number>;
 }
 
@@ -59,22 +60,20 @@ export function chunkSentencesByBudget<S extends { id: number; text: string }>(
     const after = sentences.slice(end, Math.min(sentences.length, end + overlap));
     return {
       core,
-      context: [...before, ...after],
+      contextBefore: before,
+      contextAfter: after,
       coreIds: new Set(core.map((s) => s.id)),
     };
   });
 }
 
-/* context-before ++ core ++ context-after, in original sentence order. The
-   context split point is the core's first id: everything in `context` ordered
-   before the core stays before, the rest after. */
-export function chunkWithContext<S extends { id: number }>(chunk: SentenceChunk<S>): S[] {
-  if (chunk.core.length === 0) return [...chunk.context];
-  const firstCoreId = chunk.core[0].id;
-  const lastCoreId = chunk.core[chunk.core.length - 1].id;
-  const before = chunk.context.filter((s) => s.id < firstCoreId);
-  const after = chunk.context.filter((s) => s.id > lastCoreId);
-  return [...before, ...chunk.core, ...after];
+/* context-before ++ core ++ context-after, in original document order. The
+   split is carried structurally from `chunkSentencesByBudget` (which slices the
+   context windows by index), so this never relies on ids increasing with
+   position — post-fold split offspring (high id, mid-array) are ordered
+   correctly and never dropped. */
+export function chunkWithContext<S>(chunk: SentenceChunk<S>): S[] {
+  return [...chunk.contextBefore, ...chunk.core, ...chunk.contextAfter];
 }
 
 export function ownsOp(coreIds: Set<number>, primaryId: number): boolean {
