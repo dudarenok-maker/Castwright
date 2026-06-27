@@ -20,3 +20,28 @@ def test_whisper_compute_type_honours_indexed_cuda(monkeypatch):
     monkeypatch.delenv("ASR_COMPUTE_TYPE", raising=False)
     monkeypatch.setenv("ASR_DEVICE", "cuda:1")
     assert main.WhisperEngine()._compute_type() == "int8_float16"
+
+def test_spk_run_device():
+    assert main._spk_run_device("cuda:1") == "cuda:1"
+    assert main._spk_run_device("cuda") == "cuda"
+    assert main._spk_run_device("cpu") == "cpu"
+
+def test_spk_indexed_cuda_degrades_when_no_gpu(monkeypatch):
+    """SPK_DEVICE=cuda:1 with no CUDA must degrade to cpu, not crash on the
+    `== "cuda"` mismatch (the bug)."""
+    monkeypatch.setenv("SPK_DEVICE", "cuda:1")
+    spk = main.SpeakerEngine()
+    assert main._parse_device(spk.device)[0] == "cuda"
+    # stub torch so cuda is 'unavailable' and the present-check runs the degrade
+    import types
+    fake = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    # exercise only the present-check branch (no real speechbrain load)
+    import asyncio
+    async def run():
+        try:
+            await spk.ensure_loaded()
+        except Exception:
+            pass  # speechbrain import may fail in CI; we only assert the device decision
+    asyncio.run(run())
+    assert spk.device == "cpu"

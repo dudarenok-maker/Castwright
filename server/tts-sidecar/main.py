@@ -1179,6 +1179,16 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     return (p, None)
 
 
+def _spk_run_device(value: Optional[str]) -> str:
+    """speechbrain run_opts device. speechbrain accepts the full 'cuda:N' form
+    (unlike CT2), so 'cuda:1' stays 'cuda:1'; 'cuda' stays 'cuda'; anything
+    else → 'cpu'."""
+    family, index = _parse_device(value)
+    if family == "cuda":
+        return f"cuda:{index}" if index is not None else "cuda"
+    return "cpu" if family in ("cpu", "auto") else family
+
+
 def _ct2_kwargs(device: str, compute_type: str) -> dict:
     """CTranslate2 WhisperModel kwargs. CT2 wants device='cuda' + a separate
     device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'."""
@@ -2960,6 +2970,7 @@ class SpeakerEngine:
         # Monotonic timestamp of the last embed — drives the idle watchdog.
         self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
+        self._requested_device = self.device  # preserved before any cpu-demotion
 
     def _load_on(self, device: str):
         """Synchronous ECAPA load on a concrete device. Run via to_thread."""
@@ -2976,8 +2987,9 @@ class SpeakerEngine:
             if self._model is not None:
                 return
             # srv-47: a requested cuda device that isn't actually present
-            # degrades to cpu rather than crashing.
-            if self.device == "cuda":
+            # degrades to cpu rather than crashing.  Use _parse_device so an
+            # indexed pin (cuda:1) is treated the same as plain 'cuda'.
+            if _parse_device(self.device)[0] == "cuda":
                 try:
                     import torch  # type: ignore
                     if not torch.cuda.is_available():
@@ -2986,16 +2998,16 @@ class SpeakerEngine:
                 except Exception:
                     self.device = "cpu"
             try:
-                self._model = await asyncio.to_thread(self._load_on, self.device)
+                self._model = await asyncio.to_thread(self._load_on, _spk_run_device(self.device))
             except Exception as e:
                 # A poison-class load failure corrupts the shared CUDA context —
                 # re-raise so the /embed fence marks poison + recycles. Any other
                 # cuda failure (cuDNN/driver mismatch on a "present" GPU) demotes
                 # to cpu once and reloads.
-                if self.device == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
+                if _parse_device(self.device)[0] == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
                     log.warning("ECAPA cuda load failed (%s) — demoting to cpu.", e)
                     self.device = "cpu"
-                    self._model = await asyncio.to_thread(self._load_on, self.device)
+                    self._model = await asyncio.to_thread(self._load_on, _spk_run_device(self.device))
                 else:
                     raise
 
