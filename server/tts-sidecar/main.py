@@ -1164,6 +1164,32 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
     return (n / sample_rate * 1000.0) if sample_rate > 0 else 0.0
 
 
+def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
+    """Split a device knob value into (family, index). The single place that
+    understands the cuda:N grammar — every engine routes through it so an indexed
+    pin can't silently degrade. Malformed index ('cuda:x') keeps family, drops index."""
+    p = (value or "auto").strip().lower()
+    if p in ("", "auto"):
+        return ("auto", None)
+    if p in ("cpu", "mps"):
+        return (p, None)
+    if p.startswith("cuda"):
+        _, _, idx = p.partition(":")
+        return ("cuda", int(idx) if idx.isdigit() else None)
+    return (p, None)
+
+
+def _ct2_kwargs(device: str, compute_type: str) -> dict:
+    """CTranslate2 WhisperModel kwargs. CT2 wants device='cuda' + a separate
+    device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'."""
+    family, index = _parse_device(device)
+    dev = "cuda" if family == "cuda" else ("cpu" if family in ("cpu", "auto") else family)
+    kw: dict = {"device": dev, "compute_type": compute_type}
+    if family == "cuda" and index is not None:
+        kw["device_index"] = index
+    return kw
+
+
 def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     """Resolve a QWEN_DEVICE preference to a concrete torch device string.
 
@@ -2816,12 +2842,14 @@ class WhisperEngine:
         # Monotonic timestamp of the last transcribe — drives the idle watchdog.
         self._last_used: float = 0.0
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
+        self._requested_device = self._device  # preserved for /health fell_back detection
         self._model_name = (os.environ.get("ASR_MODEL", "base").strip() or "base")
 
     def _compute_type(self) -> str:
         """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
         Override via ASR_COMPUTE_TYPE for a roomier card."""
-        default = "int8_float16" if self._device == "cuda" else "int8"
+        family, _ = _parse_device(self._device)
+        default = "int8_float16" if family == "cuda" else "int8"
         return (os.environ.get("ASR_COMPUTE_TYPE", default).strip() or default)
 
     def _ensure_loaded(self) -> None:
@@ -2839,9 +2867,7 @@ class WhisperEngine:
             "Loading Whisper ASR model=%s device=%s compute=%s ...",
             self._model_name, self._device, self._compute_type(),
         )
-        self._model = WhisperModel(
-            self._model_name, device=self._device, compute_type=self._compute_type()
-        )
+        self._model = WhisperModel(self._model_name, **_ct2_kwargs(self._device, self._compute_type()))
         log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, self._device)
 
     @staticmethod
