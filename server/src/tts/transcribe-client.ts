@@ -56,7 +56,7 @@ const TRANSCRIBE_DISPATCHER = new Agent({
     the SAME `ASR_DEVICE` env the sidecar process reads (they share the env under
     `npm start`), so this stays in lockstep with where Whisper actually runs. */
 export function asrRunsOnGpu(): boolean {
-  return (process.env.ASR_DEVICE ?? 'cpu').trim().toLowerCase() === 'cuda';
+  return (process.env.ASR_DEVICE ?? 'cpu').trim().toLowerCase().startsWith('cuda');
 }
 
 export async function transcribeSegment(

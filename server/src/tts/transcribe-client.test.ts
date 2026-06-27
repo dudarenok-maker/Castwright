@@ -117,3 +117,13 @@ describe('transcribeSegment', () => {
     );
   });
 });
+
+describe('asrRunsOnGpu — indexed cuda', () => {
+  const prev = process.env.ASR_DEVICE;
+  afterEach(() => { if (prev === undefined) delete process.env.ASR_DEVICE; else process.env.ASR_DEVICE = prev; });
+  it('is true for cuda:1 / CUDA:0, false for cpu', () => {
+    process.env.ASR_DEVICE = 'cuda:1'; expect(asrRunsOnGpu()).toBe(true);
+    process.env.ASR_DEVICE = 'CUDA:0'; expect(asrRunsOnGpu()).toBe(true);
+    process.env.ASR_DEVICE = 'cpu'; expect(asrRunsOnGpu()).toBe(false);
+  });
+});
