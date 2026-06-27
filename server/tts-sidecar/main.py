@@ -545,7 +545,8 @@ class CoquiEngine(Engine):
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
-        self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda
+        self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda | cuda:N
+        self._requested_device = self._device  # preserved before any auto-resolution
         # fp16 and DeepSpeed-inference are CUDA-only XTTS speedups. Each ~1.5–2×
         # on top of CUDA itself, no audible quality loss. Defaults flip ON when
         # device resolves to cuda and OFF on cpu — env-var "1"/"0" overrides.
@@ -577,11 +578,15 @@ class CoquiEngine(Engine):
         device = self._device
         if device == "auto":
             device = "cuda" if torch_module.cuda.is_available() else "cpu"
-        # On CUDA, default both extras ON (the whole point of the GPU path).
-        # On CPU, force them OFF: torch raises on fp16 ops on CPU, and
-        # deepspeed-inference is a CUDA-only runtime. Env override only
-        # applies when device is cuda — there's no useful "fp16 on CPU" mode.
-        if device == "cuda":
+        # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
+        # (the whole point of the GPU path). On CPU, force them OFF: torch raises
+        # on fp16 ops on CPU, and deepspeed-inference is a CUDA-only runtime.
+        # Env override only applies when device resolves to the cuda family —
+        # there's no useful "fp16 on CPU" mode. Route through _parse_device so
+        # an indexed pin (cuda:1) is recognised as CUDA family, not treated as
+        # an unknown device that silently degrades to fp32 / no DeepSpeed.
+        family, _ = _parse_device(device)
+        if family == "cuda":
             half = _parse_bool(self._half_env, default=True)
             deepspeed = _parse_bool(self._deepspeed_env, default=True)
         else:
@@ -668,7 +673,7 @@ class CoquiEngine(Engine):
         self._tts = tts
         self._torch = torch
         self._resolved_device = device
-        self._use_half = bool(want_half and device == "cuda")
+        self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
         if self._use_half:
             log.info("fp16 autocast enabled for /synthesize.")
 
