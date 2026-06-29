@@ -38,15 +38,16 @@ function engineFamilyForKey(key: string): EngineFamily {
 import { createSelector } from '@reduxjs/toolkit';
 
 export const selectEnginesInUse = createSelector(
-  [(s: RootState) => s.account?.defaultTtsModelKey, (s: RootState) => s.cast?.characters],
-  (modelKey, characters): Set<EngineFamily> => {
+  [
+    (s: RootState) => s.account?.defaultTtsModelKey,
+    (s: RootState) => Boolean(s.cast?.characters?.some((c) => c.ttsEngine === 'qwen' || c.overrideTtsVoices?.qwen)),
+  ],
+  (modelKey, hasQwenPinned): Set<EngineFamily> => {
     const result = new Set<EngineFamily>();
     if (modelKey) {
       result.add(engineFamilyForKey(modelKey));
     }
-    if (characters?.some((c) => c.ttsEngine === 'qwen' || c.overrideTtsVoices?.qwen)) {
-      result.add('qwen');
-    }
+    if (hasQwenPinned) result.add('qwen');
     return result;
   },
 );
