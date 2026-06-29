@@ -24,6 +24,7 @@ import { LanAccessCard } from '../components/lan-access-card';
 import { formatDuration } from '../lib/time';
 import { useAppDispatch } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { ttsModelLabel } from '../lib/tts-models';
 
 /* Diagnostics poll cadence. The probes spawn processes + do disk I/O, and
    health isn't fast-moving, so 30 s (matching the sidecar/ollama health polls)
@@ -81,7 +82,7 @@ const TREND_STYLE: Record<Trend, { cls: string; glyph: string; label: string }> 
 const THROUGHPUT_COLS =
   'grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_7rem_auto] md:grid-cols-[1fr_7rem_3.5rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
 const TRENDS_COLS =
-  'grid grid-cols-[1fr_3rem_auto] sm:grid-cols-[1fr_3rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
+  'grid grid-cols-[1fr_3rem_3rem_auto] sm:grid-cols-[1fr_7rem_3rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
 
 export function AdminView() {
   const [stats, setStats] = useState<GenerationStatsResponse | null>(null);
@@ -533,6 +534,7 @@ function ResourceTrends() {
               className={`sticky top-0 z-20 bg-white ${TRENDS_COLS} px-4 py-2 text-[11px] uppercase tracking-wide text-ink/40 border-b border-ink/5`}
             >
               <span>Chapter</span>
+              <span className="text-right hidden sm:block">Engine</span>
               <span className="text-right">RTF</span>
               <span className="text-right hidden sm:block">Wall</span>
               <span className="text-right">VRAM</span>
@@ -556,6 +558,9 @@ function ResourceTrends() {
                       <span className="min-w-0 truncate text-ink">
                         <span className="text-ink/40 font-mono mr-2">#{r.chapterId}</span>
                         {r.title ?? <span className="text-ink/40">(untitled)</span>}
+                      </span>
+                      <span className="text-right text-xs text-ink/50 font-mono hidden sm:block">
+                        {r.modelKey ? ttsModelLabel(r.modelKey as any) : '–'}
                       </span>
                       <span className="text-right font-mono tabular-nums text-ink/80">
                         {fmtRtf(r.rtf)}
