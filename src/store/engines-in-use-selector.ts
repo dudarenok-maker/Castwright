@@ -35,23 +35,21 @@ function engineFamilyForKey(key: string): EngineFamily {
   return 'coqui';
 }
 
-export function selectEnginesInUse(state: RootState): Set<EngineFamily> {
-  const result = new Set<EngineFamily>();
-  const modelKey = state.account?.defaultTtsModelKey;
-  if (modelKey) {
-    result.add(engineFamilyForKey(modelKey));
-  }
-  /* Per-character engine overrides (plan 108): Qwen is bespoke-per-character,
-     so it's almost never the book default — a single character pinned to
-     Qwen must still surface the Qwen pill. Detect either an explicit
-     `ttsEngine: 'qwen'` or a designed `overrideTtsVoices.qwen` slot on any
-     cast member of the currently-loaded book. */
-  const characters = state.cast?.characters;
-  if (characters?.some((c) => c.ttsEngine === 'qwen' || c.overrideTtsVoices?.qwen)) {
-    result.add('qwen');
-  }
-  return result;
-}
+import { createSelector } from '@reduxjs/toolkit';
+
+export const selectEnginesInUse = createSelector(
+  [(s: RootState) => s.account?.defaultTtsModelKey, (s: RootState) => s.cast?.characters],
+  (modelKey, characters): Set<EngineFamily> => {
+    const result = new Set<EngineFamily>();
+    if (modelKey) {
+      result.add(engineFamilyForKey(modelKey));
+    }
+    if (characters?.some((c) => c.ttsEngine === 'qwen' || c.overrideTtsVoices?.qwen)) {
+      result.add('qwen');
+    }
+    return result;
+  },
+);
 
 /* selectDefaultTtsEngine — the user-wide default/primary engine derived from
    `account.defaultTtsModelKey`, independent of any loaded book or its cast.
