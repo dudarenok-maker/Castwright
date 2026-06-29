@@ -355,7 +355,7 @@ describe('AdminView — table scroll regions + header alignment', () => {
      the data rows instead of drifting on the scrollbar gutter + independent
      `auto` columns. */
   const THROUGHPUT_COLS = 'md:grid-cols-[1fr_7rem_3.5rem_3.5rem_auto]';
-  const TRENDS_COLS = 'sm:grid-cols-[1fr_3rem_3.5rem_auto]';
+  const TRENDS_COLS = 'sm:grid-cols-[1fr_7rem_3rem_3.5rem_auto]';
 
   it('scrolls the generation-throughput rows in the inset thin-scrollbar region', async () => {
     mockStats.mockResolvedValue({
