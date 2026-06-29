@@ -1584,16 +1584,80 @@ export function Layout() {
                clear (null). Qwen members only — the tier is ignored for other
                engines (server `routeFor`). voiceId ?? id is the storage key the
                cast/tier endpoint matches on (server matches `voiceId ?? id`),
-               so voiceId-less characters are covered too. */
+               so voiceId-less characters are covered too.
+
+               Three sinks must converge so a single pick can't leave the session
+               reading one tier while the cast (or the queue dispatcher fallback
+               at queue-dispatcher-middleware:243) reads another:
+
+                 1. `ui.ttsModelKey` — session default; mirrors in the engine
+                    badge / Fix-audio header / drift-report / profile-drawer /
+                    rebaseline-modal / script-review / confirm-cast / voices
+                    picker. `setTtsModelKey` flips `ttsModelKeyExplicit=true`
+                    so settings-hydration can't silently rewind an in-flight
+                    pick (Finding 5 in the adversarial review: an explicit 0.6B
+                    pick is now the "no auto-upgrade" signal — the
+                    resetSelectedModelToDefault affordance on the override
+                    badge remains the recovery path).
+                 2. Cast pins via `api.setCastTier` (server-side cast.json
+                    write, series-scoped) and the redux mirror via
+                    `updateCharacter` — these win on the server for
+                    explicitly-pinned characters.
+                 3. `requestStartGeneration` reads `ui.ttsModelKey` via the
+                    queue dispatcher's `e.modelKey ?? ui.ttsModelKey` fallback,
+                    so any chapter enqueued without a per-entry `modelKey`
+                    override (narrator lines, new chapters, queued entries)
+                    automatically tracks the picked tier once (1) lands.
+
+               Guard rail: picking 1.7B when no Qwen character has a designed
+               voice would seed a session default that nothing can fulfil
+               (characters would silently fall back to Kokoro at synth time,
+               which is the original failure mode in disguise). Refuse the
+               pick with a warning toast instead. The "busy" setter is held
+               back until past the guard so a refused pick can't leave the
+               modal in `busy=true` on re-open (Finding 1). */
             const pin: 'qwen3-tts-1.7b' | null = tier === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null;
             const qwenMembers = characters.filter((c) => (c.ttsEngine ?? ttsEngine) === 'qwen');
+            /* "Has a designed voice" mirrors `voice-status.ts`'s
+               resolveLifecyclePill (line ~107): the character's own Qwen
+               override OR a matched library Voice that actually carries a
+               non-empty name. Undesigned characters would have no audio on
+               1.7B — the guard rail below nudges the user toward designing
+               voices first. */
+            const hasDesignedVoice = (c: Character): boolean => {
+              if (c.overrideTtsVoices?.qwen?.name) return true;
+              const voice = voices.find((v) => v.id === c.voiceId);
+              return !!(voice?.ttsVoice?.provider === 'qwen' && voice.ttsVoice.name);
+            };
+            const eligibleQwenMembers = qwenMembers.filter(hasDesignedVoice);
+            if (tier === 'qwen3-tts-1.7b' && eligibleQwenMembers.length === 0) {
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: 'No Qwen voice has been designed yet — design voices first or pick 0.6B to fall back to Kokoro.',
+                }),
+              );
+              return;
+            }
             setStartGenBusy(true);
             try {
+              /* Sink 1 — session default. Must land before requestStartGeneration
+                 so the queue dispatcher reads the picked tier on enqueue. */
+              dispatch(uiActions.setTtsModelKey(tier));
+              /* Sink 2 — cast pins (server-side + redux mirror). Scoped to
+                 eligible members only: an undesigned 1.7B pick is refused by
+                 the guard above, but for a 0.6B pick the existing pin-clearing
+                 still has to touch every Qwen member regardless of design
+                 state so an old 1.7B pin from a prior session is cleared. */
               if (bookId) {
-                const ids = [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
-                await Promise.all(ids.map((id) => api.setCastTier(bookId, id, pin)));
+                const targetIds =
+                  tier === 'qwen3-tts-1.7b'
+                    ? [...new Set(eligibleQwenMembers.map((c) => c.voiceId ?? c.id))]
+                    : [...new Set(qwenMembers.map((c) => c.voiceId ?? c.id))];
+                await Promise.all(targetIds.map((id) => api.setCastTier(bookId, id, pin)));
               }
-              qwenMembers.forEach((c) =>
+              const targetChars = tier === 'qwen3-tts-1.7b' ? eligibleQwenMembers : qwenMembers;
+              targetChars.forEach((c) =>
                 dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin })),
               );
               setStartGenBusy(false);
