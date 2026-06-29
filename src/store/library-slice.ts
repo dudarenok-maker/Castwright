@@ -124,7 +124,7 @@ export function languageLabel(code: string): string {
  *  'en'. The orchestrator renders the language filter pills only when this
  *  returns more than one entry (a single-language library shows no pills). */
 export const selectPresentLanguages = createSelector(
-  [(books: LibraryBook[]) => books],
+  [(s: { library: LibraryState }) => s.library.books],
   (books): string[] => {
     const set = new Set<string>();
     for (const b of books) set.add(b.language ?? 'en');
@@ -144,10 +144,10 @@ export const selectPresentLanguages = createSelector(
  *  library-slice.test.ts and reused from the orchestrator. */
 export const filterBooks = createSelector(
   [
-    (books: LibraryBook[]) => books,
-    (_books: LibraryBook[], search: string) => search,
-    (_books: LibraryBook[], _search: string, activeTags: string[]) => activeTags,
-    (_books: LibraryBook[], _search: string, _activeTags: string[], activeLanguages: string[]) =>
+    (s: { library: LibraryState }) => s.library.books,
+    (_s: { library: LibraryState }, search: string) => search,
+    (_s: { library: LibraryState }, _search: string, activeTags: string[]) => activeTags,
+    (_s: { library: LibraryState }, _search: string, _activeTags: string[], activeLanguages: string[]) =>
       activeLanguages,
   ],
   (books, search, activeTags, activeLanguages = []) => {
