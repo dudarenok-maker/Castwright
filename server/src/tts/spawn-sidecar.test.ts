@@ -732,6 +732,82 @@ describe('spawnSidecar', () => {
     expect(options.env.PRELOAD_KOKORO).toBe('0');
   });
 
+  it('hot-preloads Qwen 1.7B Base and keeps Kokoro lazy when the default is qwen3-tts-1.7b', async () => {
+    /* Qwen-1.7B default + eagerLoadQwen=true: PRELOAD_QWEN_BASE17=1 (hot at
+       boot) + PRELOAD_QWEN=0 (we only warm the chosen tier) +
+       PRELOAD_KOKORO=0 even though eagerLoadKokoro=true — Kokoro is the
+       on-demand fallback engine. Fixes the silent-Kokoro-fallback bug:
+       a 1.7B default previously fell through to PRELOAD_KOKORO=1 because
+       the old isQwenDefault check was hard-coded to modelKey === '0.6b'. */
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'qwen3-tts-1.7b',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_QWEN_BASE17).toBe('1');
+    expect(options.env.PRELOAD_QWEN).toBe('0');
+    expect(options.env.PRELOAD_KOKORO).toBe('0');
+    expect(options.env.PRELOAD_COQUI).toBe('0');
+  });
+
+  it('keeps Qwen 1.7B lazy when the default is qwen3-tts-1.7b but eagerLoadQwen is false', async () => {
+    /* Qwen-1.7B default + eagerLoadQwen=false: both Qwen env vars stay '0'
+       so the 1.7B model warms on demand on first synth. Kokoro stays the
+       forced-lazy fallback regardless (a 1.7B user has no use for Kokoro
+       preloaded). */
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'qwen3-tts-1.7b',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: false,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_QWEN_BASE17).toBe('0');
+    expect(options.env.PRELOAD_QWEN).toBe('0');
+    expect(options.env.PRELOAD_KOKORO).toBe('0');
+  });
+
+  it('routes 0.6B and 1.7B tier preloads through the same modelKey dispatcher (mutual exclusivity)', async () => {
+    /* Whatever Qwen tier the user picks must NOT also trigger the other
+       tier's env var — the sidecar would load both bases, doubling VRAM.
+       Run twice with both tiers and assert the PRELOAD_QWEN* variables
+       are mutually exclusive in both directions. */
+    for (const modelKey of ['qwen3-tts-0.6b', 'qwen3-tts-1.7b'] as const) {
+      spawnFn.mockClear();
+      await spawnSidecar({
+        autoStart: true,
+        modelKey,
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+      });
+      const [, , options] = spawnFn.mock.calls[0];
+      const qwensOn =
+        Number(options.env.PRELOAD_QWEN) + Number(options.env.PRELOAD_QWEN_BASE17);
+      expect(qwensOn, `for modelKey=${modelKey}`).toBe(1);
+    }
+  });
+
   it('ignores eagerLoadQwen when the default engine is not Qwen', async () => {
     /* eagerLoadQwen only governs PRELOAD_QWEN under a Qwen default — a
        Kokoro default leaves Qwen off and honours eagerLoadKokoro for Kokoro. */

@@ -71,6 +71,7 @@ export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const TTS_MODEL_KEY_VALUES = [
   'kokoro-v1',
   'qwen3-tts-0.6b',
+  'qwen3-tts-1.7b',
   'coqui-xtts-v2',
   'gemini-2.5-flash',
   'gemini-3.1-flash',
@@ -173,11 +174,15 @@ export const userSettingsSchema = z.object({
      `eagerLoadQwen` takes over. */
   eagerLoadKokoro: z.boolean().optional(),
   /* When true (default) AND Qwen3-TTS is the resolved default engine, the
-     spawned sidecar gets PRELOAD_QWEN=1 so Qwen's Base synth model eager-
-     loads at startup. When false, PRELOAD_QWEN=0 and Qwen warms on demand
-     on first synth. No effect unless Qwen is the default engine. Changing
-     it re-spawns env on the next sidecar restart. Optional with a `true`
-     default so legacy user-settings.json files load unchanged. */
+     spawned sidecar gets PRELOAD_QWEN=1 (0.6B tier) or PRELOAD_QWEN_BASE17=1
+     (1.7B Quality tier) so the chosen Qwen Base synth model eager-loads at
+     startup. The tier is selected by `defaultTtsModelKey` (one knob, two env
+     vars) — the build-side dispatcher in server/src/tts/spawn-sidecar.ts
+     `buildSidecarEnv` picks the matching env var from the resolved modelKey.
+     When false, both env vars are `'0'` and the chosen Qwen tier warms on
+     demand on first synth. No effect unless a Qwen tier is the default
+     engine. Changing it re-spawns env on the next sidecar restart. Optional
+     with a `true` default so legacy user-settings.json files load unchanged. */
   eagerLoadQwen: z.boolean().optional(),
   /* Plan 111 — number of chapters the generation queue synthesises
      concurrently (queue-worker concurrency). Default 2. Queue/synthesis

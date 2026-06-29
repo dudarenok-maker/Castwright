@@ -424,9 +424,17 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
 
   /* The default engine honours its own eager-load toggle; the non-default
      engine always stays LAZY as the on-demand fallback.
-     Qwen default → PRELOAD_QWEN follows eagerLoadQwen, Kokoro forced off.
-     Kokoro/Coqui default → PRELOAD_QWEN off, Kokoro follows eagerLoadKokoro. */
-  const isQwenDefault = modelKey === 'qwen3-tts-0.6b';
+     Qwen default (any tier) → the matching PRELOAD_QWEN* var follows
+        eagerLoadQwen, Kokoro forced off. Tier is selected by modelKey so the
+        sidecar warm-loads the exact base the user picked (0.6B or 1.7B).
+     Kokoro/Coqui default → all Qwen preloads off, Kokoro follows eagerLoadKokoro.
+     The tier dispatcher mirrors the frontend's engineForModelKey prefix-routing
+     so the build-side never falls back to Kokoro just because the user picked
+     the 1.7B Quality tier. */
+  const qwenTier: '0.6b' | '1.7b' | null =
+    modelKey === 'qwen3-tts-1.7b' ? '1.7b' :
+    modelKey === 'qwen3-tts-0.6b' ? '0.6b' : null;
+  const isQwenDefault = qwenTier !== null;
   /* The `...process.env` spread carries the parent's full environment —
      including KOKORO_MODEL_PATH / KOKORO_VOICES_PATH for fs-1 shared weights.
      Keep that spread: replacing it with an allowlist would orphan the weights
@@ -434,7 +442,8 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
-    PRELOAD_QWEN: isQwenDefault ? (eagerLoadQwen ? '1' : '0') : '0',
+    PRELOAD_QWEN: isQwenDefault && qwenTier === '0.6b' ? (eagerLoadQwen ? '1' : '0') : '0',
+    PRELOAD_QWEN_BASE17: isQwenDefault && qwenTier === '1.7b' ? (eagerLoadQwen ? '1' : '0') : '0',
     PRELOAD_KOKORO: isQwenDefault ? '0' : eagerLoadKokoro ? '1' : '0',
     /* Park the Qwen designed-voice embedding cache in the per-workspace
        tree (sibling to voices.json), not the sidecar's __file__-relative

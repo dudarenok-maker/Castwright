@@ -66,6 +66,50 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     expect(env.PRELOAD_QWEN).toBe('1');
   });
 
+  it('PRELOAD_QWEN_BASE17 from existing logic wins when no registry override exists (qwen 1.7B)', () => {
+    /* Qwen-1.7B default + eagerLoadQwen=true → PRELOAD_QWEN_BASE17=1.
+       PRELOAD_QWEN must stay '0' (mutual exclusivity — we only warm the
+       chosen tier) and PRELOAD_KOKORO must be '0' (Kokoro is the on-demand
+       fallback for Qwen defaults). */
+    const env = buildSidecarEnv({
+      modelKey: 'qwen3-tts-1.7b',
+      eagerLoadKokoro: false,
+      eagerLoadQwen: true,
+      repoRoot: process.cwd(),
+    });
+    expect(env.PRELOAD_QWEN_BASE17).toBe('1');
+    expect(env.PRELOAD_QWEN).toBe('0');
+    expect(env.PRELOAD_KOKORO).toBe('0');
+  });
+
+  it('PRELOAD_QWEN_BASE17 stays 0 when eagerLoadQwen is false (qwen 1.7B lazy)', () => {
+    const env = buildSidecarEnv({
+      modelKey: 'qwen3-tts-1.7b',
+      eagerLoadKokoro: false,
+      eagerLoadQwen: false,
+      repoRoot: process.cwd(),
+    });
+    expect(env.PRELOAD_QWEN_BASE17).toBe('0');
+    expect(env.PRELOAD_QWEN).toBe('0');
+    expect(env.PRELOAD_KOKORO).toBe('0');
+  });
+
+  it('registry override for PRELOAD_QWEN_BASE17 wins over derived 1.7B tier logic', () => {
+    /* A power user pinning tts.preload.qwenBase17=0 must override the
+       derived '1' from the 1.7B tier dispatcher (mirrors the existing
+       PRELOAD_QWEN precedence test above). */
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'tts.preload.qwenBase17': false,
+    });
+    const env = buildSidecarEnv({
+      modelKey: 'qwen3-tts-1.7b',
+      eagerLoadKokoro: false,
+      eagerLoadQwen: true,
+      repoRoot: process.cwd(),
+    });
+    expect(env.PRELOAD_QWEN_BASE17).toBe('0');
+  });
+
   it('registry override for PRELOAD_QWEN wins over derived modelKey/eagerLoad logic', () => {
     // registry override forces PRELOAD_QWEN=0 even for a Qwen default + eagerLoadQwen=true
     (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
