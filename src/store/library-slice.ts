@@ -123,14 +123,11 @@ export function languageLabel(code: string): string {
  *  with English first then alphabetically. A missing `language` counts as
  *  'en'. The orchestrator renders the language filter pills only when this
  *  returns more than one entry (a single-language library shows no pills). */
-export const selectPresentLanguages = createSelector(
-  [(s: { library: LibraryState }) => s.library.books],
-  (books): string[] => {
-    const set = new Set<string>();
-    for (const b of books) set.add(b.language ?? 'en');
-    return [...set].sort((a, c) => (a === 'en' ? -1 : c === 'en' ? 1 : a.localeCompare(c)));
-  },
-);
+export function selectPresentLanguages(books: LibraryBook[]): string[] {
+  const set = new Set<string>();
+  for (const b of books) set.add(b.language ?? 'en');
+  return [...set].sort((a, c) => (a === 'en' ? -1 : c === 'en' ? 1 : a.localeCompare(c)));
+}
 
 /** Plan 73 — applies the search + active-tag filters to the library's
  *  flat book list. `search` matches case-insensitively against title
@@ -142,34 +139,30 @@ export const selectPresentLanguages = createSelector(
  *
  *  Lives as a pure helper so it can be exercised in isolation by
  *  library-slice.test.ts and reused from the orchestrator. */
-export const filterBooks = createSelector(
-  [
-    (s: { library: LibraryState }) => s.library.books,
-    (_s: { library: LibraryState }, search: string) => search,
-    (_s: { library: LibraryState }, _search: string, activeTags: string[]) => activeTags,
-    (_s: { library: LibraryState }, _search: string, _activeTags: string[], activeLanguages: string[]) =>
-      activeLanguages,
-  ],
-  (books, search, activeTags, activeLanguages = []) => {
-    const q = search.trim().toLowerCase();
-    return books.filter((b) => {
-      if (q) {
-        const hay = `${b.title} ${b.author}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+export function filterBooks(
+  books: LibraryBook[],
+  search: string,
+  activeTags: string[],
+  activeLanguages: string[] = [],
+): LibraryBook[] {
+  const q = search.trim().toLowerCase();
+  return books.filter((b) => {
+    if (q) {
+      const hay = `${b.title} ${b.author}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (activeTags.length > 0) {
+      const bookTags = b.tags ?? [];
+      for (const t of activeTags) {
+        if (!bookTags.includes(t)) return false;
       }
-      if (activeTags.length > 0) {
-        const bookTags = b.tags ?? [];
-        for (const t of activeTags) {
-          if (!bookTags.includes(t)) return false;
-        }
-      }
-      if (activeLanguages.length > 0 && !activeLanguages.includes(b.language ?? 'en')) {
-        return false;
-      }
-      return true;
-    });
-  },
-);
+    }
+    if (activeLanguages.length > 0 && !activeLanguages.includes(b.language ?? 'en')) {
+      return false;
+    }
+    return true;
+  });
+}
 
 /* srv-2 — flat list of every book in the library, for the Account view's
    backup-restore book picker. Defensive read covers a test-harness path

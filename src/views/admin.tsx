@@ -24,7 +24,7 @@ import { LanAccessCard } from '../components/lan-access-card';
 import { formatDuration } from '../lib/time';
 import { useAppDispatch } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { ttsModelLabel } from '../lib/tts-models';
+import { ttsModelLabel, type TtsModelKey } from '../lib/tts-models';
 
 /* Diagnostics poll cadence. The probes spawn processes + do disk I/O, and
    health isn't fast-moving, so 30 s (matching the sidecar/ollama health polls)
@@ -560,7 +560,7 @@ function ResourceTrends() {
                         {r.title ?? <span className="text-ink/40">(untitled)</span>}
                       </span>
                       <span className="text-right text-xs text-ink/50 font-mono hidden sm:block">
-                        {r.modelKey ? ttsModelLabel(r.modelKey as any) : '–'}
+                        {r.modelKey ? ttsModelLabel(r.modelKey as TtsModelKey) : '–'}
                       </span>
                       <span className="text-right font-mono tabular-nums text-ink/80">
                         {fmtRtf(r.rtf)}

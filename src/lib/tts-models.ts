@@ -8,6 +8,7 @@
 
 import type { TtsModelKey } from './types';
 
+export type { TtsModelKey };
 export type TtsEngineId = 'local' | 'gemini';
 
 export interface TtsModelOption {
