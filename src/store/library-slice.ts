@@ -93,13 +93,18 @@ export function selectPausedSnapshotForBook(
  *  Drives the library-chrome tag-chip filter row. Stable insertion
  *  order via `localeCompare` so the chip row doesn't shuffle as
  *  books mutate. */
-export function selectAllTags(state: { library: LibraryState }): string[] {
-  const set = new Set<string>();
-  for (const b of state.library.books) {
-    for (const t of b.tags ?? []) set.add(t);
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
+import { createSelector } from '@reduxjs/toolkit';
+
+export const selectAllTags = createSelector(
+  [(s: { library: LibraryState }) => s.library.books],
+  (books): string[] => {
+    const set = new Set<string>();
+    for (const b of books) {
+      for (const t of b.tags ?? []) set.add(t);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  },
+);
 
 /* fe-16 — display labels for the library language filter pills. A book's
    `language` is a BCP-47 code (server pads missing to 'en'); the pill renders
@@ -118,11 +123,14 @@ export function languageLabel(code: string): string {
  *  with English first then alphabetically. A missing `language` counts as
  *  'en'. The orchestrator renders the language filter pills only when this
  *  returns more than one entry (a single-language library shows no pills). */
-export function selectPresentLanguages(books: LibraryBook[]): string[] {
-  const set = new Set<string>();
-  for (const b of books) set.add(b.language ?? 'en');
-  return [...set].sort((a, c) => (a === 'en' ? -1 : c === 'en' ? 1 : a.localeCompare(c)));
-}
+export const selectPresentLanguages = createSelector(
+  [(books: LibraryBook[]) => books],
+  (books): string[] => {
+    const set = new Set<string>();
+    for (const b of books) set.add(b.language ?? 'en');
+    return [...set].sort((a, c) => (a === 'en' ? -1 : c === 'en' ? 1 : a.localeCompare(c)));
+  },
+);
 
 /** Plan 73 — applies the search + active-tag filters to the library's
  *  flat book list. `search` matches case-insensitively against title
@@ -134,37 +142,42 @@ export function selectPresentLanguages(books: LibraryBook[]): string[] {
  *
  *  Lives as a pure helper so it can be exercised in isolation by
  *  library-slice.test.ts and reused from the orchestrator. */
-export function filterBooks(
-  books: LibraryBook[],
-  search: string,
-  activeTags: string[],
-  activeLanguages: string[] = [],
-): LibraryBook[] {
-  const q = search.trim().toLowerCase();
-  return books.filter((b) => {
-    if (q) {
-      const hay = `${b.title} ${b.author}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    if (activeTags.length > 0) {
-      const bookTags = b.tags ?? [];
-      for (const t of activeTags) {
-        if (!bookTags.includes(t)) return false;
+export const filterBooks = createSelector(
+  [
+    (books: LibraryBook[]) => books,
+    (_books: LibraryBook[], search: string) => search,
+    (_books: LibraryBook[], _search: string, activeTags: string[]) => activeTags,
+    (_books: LibraryBook[], _search: string, _activeTags: string[], activeLanguages: string[]) =>
+      activeLanguages,
+  ],
+  (books, search, activeTags, activeLanguages = []) => {
+    const q = search.trim().toLowerCase();
+    return books.filter((b) => {
+      if (q) {
+        const hay = `${b.title} ${b.author}`.toLowerCase();
+        if (!hay.includes(q)) return false;
       }
-    }
-    if (activeLanguages.length > 0 && !activeLanguages.includes(b.language ?? 'en')) {
-      return false;
-    }
-    return true;
-  });
-}
+      if (activeTags.length > 0) {
+        const bookTags = b.tags ?? [];
+        for (const t of activeTags) {
+          if (!bookTags.includes(t)) return false;
+        }
+      }
+      if (activeLanguages.length > 0 && !activeLanguages.includes(b.language ?? 'en')) {
+        return false;
+      }
+      return true;
+    });
+  },
+);
 
 /* srv-2 — flat list of every book in the library, for the Account view's
    backup-restore book picker. Defensive read covers a test-harness path
    where `preloadedState.library` is constructed without all initial
    fields (a real production store always has it via `initialState`). */
-export function selectLibraryBooks(state: { library?: LibraryState }): LibraryBook[] {
-  return state.library?.books ?? [];
-}
+export const selectLibraryBooks = createSelector(
+  [(s: { library?: LibraryState }) => s.library?.books ?? []],
+  (books): LibraryBook[] => books,
+);
 
 export const libraryActions = librarySlice.actions;
