@@ -36,6 +36,11 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
         hint: 'Bespoke per-character voices · designed from a persona',
       },
       {
+        id: 'qwen3-tts-1.7b',
+        label: 'Qwen3-TTS 1.7B',
+        hint: 'Higher quality · better prosody & emotional control · slower',
+      },
+      {
         id: 'coqui-xtts-v2',
         label: 'Coqui XTTS v2',
         hint: 'Alternate · 30 baked voices · zero-shot cloning',
@@ -58,13 +63,14 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
    visible. */
 export const TTS_MODEL_OPTIONS: TtsModelOption[] = TTS_ENGINES.flatMap((g) => g.models);
 
-/* Quality-tier model keys applied via per-character cast pinning (fs-56/fs-66),
-   NOT offered as a top-level picker option, so they're absent from
-   TTS_MODEL_OPTIONS. ttsModelLabel still needs a human label for them (the
-   generation header + the effective-tier label below). */
-const EXTRA_MODEL_LABELS: Partial<Record<TtsModelKey, string>> = {
-  'qwen3-tts-1.7b': 'Qwen3-TTS 1.7B',
-};
+/* Defensive label fallback for model keys that may appear in persisted state
+   but are NOT in TTS_MODEL_OPTIONS. Currently empty (1.7B is now exposed in
+   TTS_ENGINES alongside 0.6B) — kept as an escape hatch for any future
+   quality-tier-only key we'd deliberately exclude from the picker, plus
+   stale-state resilience when an older saved default points at a model
+   we've since removed. ttsModelLabel still resolves these via the lookup
+   below. */
+const EXTRA_MODEL_LABELS: Partial<Record<TtsModelKey, string>> = {};
 
 /** Human-readable label for a model key. Falls back to the raw key when an
     unknown id appears (e.g. an older saved state pointing at a model we've

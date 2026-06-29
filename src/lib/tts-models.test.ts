@@ -33,6 +33,14 @@ describe('tts-models catalog includes Qwen3-TTS (plan 108)', () => {
     expect(ids).toContain('kokoro-v1'); // unchanged
   });
 
+  it('lists qwen3-tts-1.7b alongside 0.6b under the Local engine group (picker exposes both Qwen tiers)', () => {
+    const local = TTS_ENGINES.find((g) => g.id === 'local');
+    expect(local, 'local engine group exists').toBeTruthy();
+    const ids = local!.models.map((m) => m.id);
+    expect(ids).toContain('qwen3-tts-0.6b');
+    expect(ids).toContain('qwen3-tts-1.7b');
+  });
+
   it('exposes qwen in the flat option list with a label', () => {
     expect(TTS_MODEL_OPTIONS.map((m) => m.id)).toContain('qwen3-tts-0.6b');
     expect(ttsModelLabel('qwen3-tts-0.6b')).toBe('Qwen3-TTS 0.6B');
@@ -43,6 +51,11 @@ describe('tts-models catalog includes Qwen3-TTS (plan 108)', () => {
     expect(engineGroupForModelKey('qwen3-tts-0.6b')).toBe('local');
   });
 
+  it('routes the qwen 1.7B tier to the qwen engine + the local group', () => {
+    expect(engineForModelKey('qwen3-tts-1.7b')).toBe('qwen');
+    expect(engineGroupForModelKey('qwen3-tts-1.7b')).toBe('local');
+  });
+
   it('keeps the existing engine routing intact', () => {
     expect(engineForModelKey('kokoro-v1')).toBe('kokoro');
     expect(engineForModelKey('coqui-xtts-v2')).toBe('coqui');
@@ -50,10 +63,10 @@ describe('tts-models catalog includes Qwen3-TTS (plan 108)', () => {
     expect(engineGroupForModelKey('gemini-2.5-flash')).toBe('gemini');
   });
 
-  it('labels the 1.7B Quality tier (absent from the picker options)', () => {
-    /* 1.7B is applied via cast pinning, not the picker, so it is NOT in
-       TTS_MODEL_OPTIONS — ttsModelLabel must still render a human label. */
-    expect(TTS_MODEL_OPTIONS.map((m) => m.id)).not.toContain('qwen3-tts-1.7b');
+  it('labels the 1.7B Quality tier (now exposed in the picker)', () => {
+    /* 1.7B is now in TTS_MODEL_OPTIONS (the picker exposes both Qwen tiers);
+       ttsModelLabel resolves it via TTS_MODEL_OPTIONS first. */
+    expect(TTS_MODEL_OPTIONS.map((m) => m.id)).toContain('qwen3-tts-1.7b');
     expect(ttsModelLabel('qwen3-tts-1.7b')).toBe('Qwen3-TTS 1.7B');
   });
 });

@@ -16,7 +16,7 @@ import {
   type SectionNavItem,
 } from './settings/settings-accordion';
 import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
-import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
+import { TTS_ENGINES, engineForModelKey, type TtsEngineId } from '../lib/tts-models';
 import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
@@ -181,8 +181,12 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const eagerLoadKokoroDirty = eagerLoadKokoro !== persistedEagerLoadKokoro;
   const persistedEagerLoadQwen = account.eagerLoadQwen ?? true;
   const eagerLoadQwenDirty = eagerLoadQwen !== persistedEagerLoadQwen;
-  /* The eager-load toggle governs the DEFAULT engine only. */
-  const eagerEngineIsQwen = defaultTtsModelKey === 'qwen3-tts-0.6b';
+  /* The eager-load toggle governs the DEFAULT engine only — any Qwen tier
+     (0.6B or 1.7B) routes through engineForModelKey's prefix check, so we
+     light up the eager-load Qwen chip for both. Build-side tier dispatch
+     (PRELOAD_QWEN vs PRELOAD_QWEN_BASE17) happens in buildSidecarEnv based
+     on the saved defaultTtsModelKey. */
+  const eagerEngineIsQwen = engineForModelKey(defaultTtsModelKey) === 'qwen';
 
   /* srv-21 — block Save on a sidecar URL that isn't an http(s) private/loopback
      host (prevents pointing the server's outbound fetches at an arbitrary
