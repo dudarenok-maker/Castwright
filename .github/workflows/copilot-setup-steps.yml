@@ -1,0 +1,53 @@
+﻿name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install ffmpeg (system dependency)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Create venv and install sidecar test deps
+        run: |
+          python -m venv server/tts-sidecar/.venv
+          server/tts-sidecar/.venv/bin/python -m pip install --upgrade pip
+          server/tts-sidecar/.venv/bin/python -m pip install -r server/tts-sidecar/requirements-dev.txt
+
+      - name: Install Playwright (browsers + deps)
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify Playwright and Python
+        run: |
+          npx playwright --version
+          python --version
