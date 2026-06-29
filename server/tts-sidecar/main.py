@@ -843,6 +843,9 @@ class KokoroEngine(Engine):
         # 'directml' when the one-time synth proved DML runs the model, or
         # 'fallback-cpu' when it failed and we rebuilt on the CPU EP.
         self._dml_status: Optional[str] = None
+        # KOKORO_DEVICE=cuda:N — captured here so the sess-replacement in
+        # _ensure_loaded can pin the ORT InferenceSession to the indexed GPU.
+        self._requested_device: str = os.environ.get("KOKORO_DEVICE", "auto")
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -999,6 +1002,29 @@ class KokoroEngine(Engine):
             kokoro = self._directml_selftest_or_fallback(Kokoro, kokoro)
 
         self._kokoro = kokoro
+
+        # Indexed CUDA pin (KOKORO_DEVICE=cuda:1). The installed kokoro-onnx
+        # version's Kokoro.__init__ has no provider_options= kwarg; we reach
+        # device_id by rebuilding the InferenceSession on the final kept
+        # instance (post-DML-selftest). Only fires for an indexed pin — cpu /
+        # auto / plain cuda leave the session unchanged (helper returns None).
+        po = _kokoro_provider_options(self._requested_device, providers)
+        if po is not None:
+            try:
+                import onnxruntime as rt  # type: ignore
+                provs, opts = po if isinstance(po, tuple) else (providers, po)
+                self._kokoro.sess = rt.InferenceSession(
+                    self._model_path, providers=provs, provider_options=opts
+                )
+                log.info(
+                    "Kokoro pinned to %s via provider device_id (sess rebuilt).",
+                    self._requested_device,
+                )
+            except Exception as e:
+                log.warning(
+                    "Kokoro device_id pin failed (%s) — ORT session unchanged.", e
+                )
+
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
             len(self._voices), len(all_voices),
@@ -1182,6 +1208,26 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
         _, _, idx = p.partition(":")
         return ("cuda", int(idx) if idx.isdigit() else None)
     return (p, None)
+
+
+def _kokoro_provider_options(device: Optional[str], providers: list[str]):
+    """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
+
+    Returns None when there is no index to pin (cpu / auto / plain cuda) so the
+    existing no-pin path stays exactly as-is. When ``providers`` is empty (the
+    NVIDIA default — KOKORO_ORT_PROVIDERS unset so kokoro-onnx auto-selects),
+    SYNTHESIZE a ``["CUDAExecutionProvider","CPUExecutionProvider"]`` list and
+    return ``(providers, options)`` as a tuple so the device_id has somewhere to
+    attach. When ``providers`` is already populated, return a ``list[dict]``
+    aligned to it so the caller can pass it directly as ``provider_options``."""
+    family, index = _parse_device(device)
+    if family != "cuda" or index is None:
+        return None
+    if not providers:
+        synth = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        opts = [{"device_id": index}, {}]
+        return (synth, opts)
+    return [{"device_id": index} if p == "CUDAExecutionProvider" else {} for p in providers]
 
 
 def _spk_run_device(value: Optional[str]) -> str:
