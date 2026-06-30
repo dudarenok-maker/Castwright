@@ -153,4 +153,22 @@ the ceiling on the user-facing gain before we build anything.
 
 ## Ship notes
 
-_(unfilled — spike not yet executed.)_
+### Phase 0 — measured 2026-07-01, GO
+
+**M1 (decode-path verification).** Confirmed by reading the installed `qwen_tts` package directly (`qwen3_tts_model.py:620`, inside `Qwen3TTSModel.generate_voice_clone`): `wavs_all, fs = self.model.speech_tokenizer.decode([{"audio_codes": c} for c in codes_for_decode])`. `self` is the `Qwen3TTSModel` wrapper, so this is exactly `model.model.speech_tokenizer.decode` — the call site `_resolve_speech_tokenizer`/`_install_codec_timing` wrap. One `decode` call per batched forward (the whole batch's codes are decoded in a single call), so `calls == 1` per bench run is the expected, valid signal — not an M1 red flag.
+
+**Measurement.** 8 GB box (RTX 4070 Laptop), `CUDA_VISIBLE_DEVICES` pinned so only that card was visible to the sidecar (the box also has a 16 GB 5070 Ti — Phase 0 and the VRAM gate (Task 6) must run on the 8 GB card specifically). `QWEN_CODEC_TIMING=1`, `QWEN_BATCH_SIZE=32`, `QWEN_BATCH_TOKEN_BUDGET=3600`, voice `rv1` (0.6B-Base designed voice), `bench-tts.py --engine qwen --voice rv1 --code2wav-share --batch 32`.
+
+Run 1 (cold load — model load time inflates `gen_ms`, discarded per plan): 66.4% (decode 77133 ms / forward 116228 ms).
+
+Three post-warmup runs (model already resident):
+
+| Run | Share | decode ms | forward (gen_ms) |
+|---|---|---|---|
+| 2 | 63.3% | 67879 | 107187 |
+| 3 | 74.6% | 74179 | 99424 |
+| 4 | 67.3% | 77288 | 114810 |
+
+**Median: 67.3%.**
+
+**Decision: GO Phase 1.** 67.3% is well above the `>~25–30%` build threshold — Code2Wav decode is the *majority* of batched 0.6B forward-compute time on this box, not a minor tail. Proceeding to Task 4 (locate the decoder submodule + device + confirm live-lookup) and Task 5 (the compile + per-batch swap).
