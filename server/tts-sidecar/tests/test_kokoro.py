@@ -759,3 +759,35 @@ def test_load_unknown_engine_defaults_to_coqui(kokoro_unloaded_client) -> None:
         assert kokoro_engine._kokoro is None
     finally:
         coqui._tts = saved_tts
+
+
+# ── _kokoro_provider_options pure-helper tests ───────────────────────────
+#
+# These are PURE unit tests on the module-level helper — no model weights,
+# no kokoro-onnx package needed.  They pin the three branches:
+#   1. indexed cuda + explicit providers → list[dict] aligned to providers
+#   2. indexed cuda + empty providers   → (synthesized_providers, options) tuple
+#   3. no index (cpu / cuda / auto)     → None
+
+def test_kokoro_provider_options_indexed_cuda() -> None:
+    """An indexed CUDA pin with an explicit providers list returns a parallel
+    list[dict] with device_id on the CUDA entry and {} on the CPU entry."""
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert main._kokoro_provider_options("cuda:1", providers) == [{"device_id": 1}, {}]
+
+
+def test_kokoro_provider_options_synthesizes_when_providers_empty() -> None:
+    """On an NVIDIA box where KOKORO_ORT_PROVIDERS is unset, providers=[] is
+    the default (kokoro-onnx auto-detects CUDA).  The pin must SYNTHESIZE a
+    CUDA+CPU list and return (providers, options) so device_id has a home."""
+    assert main._kokoro_provider_options("cuda:1", []) == (
+        ["CUDAExecutionProvider", "CPUExecutionProvider"], [{"device_id": 1}, {}]
+    )
+
+
+def test_kokoro_provider_options_none_when_not_indexed() -> None:
+    """cpu / plain-cuda / auto — no index, no pin needed: return None so the
+    existing ORT session is left completely untouched."""
+    assert main._kokoro_provider_options("cpu", ["CPUExecutionProvider"]) is None
+    assert main._kokoro_provider_options("cuda", []) is None
+    assert main._kokoro_provider_options("auto", []) is None

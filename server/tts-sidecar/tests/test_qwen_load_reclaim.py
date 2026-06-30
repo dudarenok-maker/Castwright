@@ -62,7 +62,7 @@ def qwen_load_failure_runtime(monkeypatch):
     fake_torch.bfloat16 = "bfloat16"  # type: ignore[attr-defined]
     fake_torch.device = lambda d: d  # type: ignore[attr-defined]
     fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
-        is_available=lambda: True, empty_cache=lambda: None
+        is_available=lambda: True, empty_cache=lambda: None, device_count=lambda: 1
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 

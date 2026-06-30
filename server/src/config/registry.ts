@@ -278,11 +278,20 @@ export const KNOBS: ConfigKnob[] = [
         + 'GPU_VRAM_BUDGET >= 2 (at the default budget of 1 it serialises '
         + 'behind synth and is likely slower than cpu). Changing the device '
         + 'restarts the sidecar.',
-    type: 'enum',
-    options: ['cpu', 'cuda'],
+    type: 'string',
     default: 'cpu',
     apply: 'restart-sidecar',
     risk: 'medium',
+  },
+  {
+    key: 'qa.asr.device',
+    env: 'ASR_DEVICE',
+    group: 'qa-gates',
+    label: 'Content-QA (Whisper) device',
+    help: '"cpu" (default) uses zero VRAM. "cuda" runs Whisper on the GPU; pin a card with "cuda:1". Changing the device restarts the sidecar.',
+    type: 'string',
+    default: 'cpu',
+    apply: 'restart-sidecar', risk: 'medium',
   },
   {
     key: 'qa.speaker.autoRepair',
@@ -426,8 +435,18 @@ export const KNOBS: ConfigKnob[] = [
     group: 'tts-engine',
     label: 'Coqui device',
     help: 'Device for Coqui XTTS v2. "auto" lets the sidecar pick based on CUDA availability. Changing this requires a sidecar restart.',
-    type: 'enum', options: ['auto', 'cpu', 'cuda'],
-    default: 'auto', // ← COQUI_DEVICE default in tts-sidecar/main.py (line 415)
+    type: 'string',
+    default: 'auto',
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
+    key: 'tts.kokoro.device',
+    env: 'KOKORO_DEVICE',
+    group: 'tts-engine',
+    label: 'Kokoro device',
+    help: 'Device for Kokoro (onnxruntime). "auto" lets the sidecar pick; pin a card with "cuda:1" or force "cpu". Changing this requires a sidecar restart.',
+    type: 'string',
+    default: 'auto',
     apply: 'restart-sidecar', risk: 'high',
   },
   {

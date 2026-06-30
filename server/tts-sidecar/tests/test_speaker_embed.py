@@ -149,6 +149,19 @@ def test_maybe_free_idle_frees_on_cuda_after_ttl(monkeypatch: pytest.MonkeyPatch
     assert eng._model is None
 
 
+def test_maybe_free_idle_frees_on_indexed_cuda(monkeypatch: pytest.MonkeyPatch):
+    """SPK_DEVICE=cuda:1 keeps self.device == 'cuda:1'; the idle-evict guard must
+    treat that as the cuda family (via _parse_device), or ECAPA never frees and
+    SPK_IDLE_TTL is defeated on a pinned card."""
+    _stub_torch_cuda(monkeypatch, available=True)
+    eng = main.SpeakerEngine()
+    eng.device = "cuda:1"
+    eng._model = _FakeModel()
+    eng._last_used = time.monotonic() - 10_000
+    assert eng.maybe_free_idle(120.0) is True
+    assert eng._model is None
+
+
 def test_maybe_free_idle_keeps_recent_model(monkeypatch: pytest.MonkeyPatch):
     _stub_torch_cuda(monkeypatch, available=True)
     eng = main.SpeakerEngine()

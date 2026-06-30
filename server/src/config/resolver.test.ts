@@ -57,9 +57,9 @@ describe('resolver precedence', () => {
   });
 
   it('validates enum options', () => {
-    const knob = getKnob('tts.coqui.device')!; // enum ['auto','cpu','cuda']
-    expect(coerceAndValidate(knob, 'cuda')).toEqual({ ok: true, value: 'cuda' });
-    expect(coerceAndValidate(knob, 'tpu').ok).toBe(false);
+    // tts.accelerator stays an enum exemplar (tts.coqui.device widened to string in Wave 1)
+    expect(coerceAndValidate(getKnob('tts.accelerator')!, 'nvidia')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(getKnob('tts.accelerator')!, 'tpu').ok).toBe(false);
   });
 
   it('configValue throws on an unknown key', () => {

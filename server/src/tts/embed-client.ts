@@ -38,7 +38,7 @@ const EMBED_DISPATCHER = new Agent({
     SAME `SPK_DEVICE` env the sidecar reads (shared env under `npm start`), so it
     stays in lockstep with where ECAPA actually runs. */
 export function spkRunsOnGpu(): boolean {
-  return (process.env.SPK_DEVICE ?? 'cpu').trim().toLowerCase() === 'cuda';
+  return (process.env.SPK_DEVICE ?? 'cpu').trim().toLowerCase().startsWith('cuda');
 }
 
 /* R2-A guard: at the default budget of 1, an spk token consumes the whole

@@ -545,7 +545,8 @@ class CoquiEngine(Engine):
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
-        self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda
+        self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda | cuda:N
+        self._requested_device = self._device  # preserved before any auto-resolution
         # fp16 and DeepSpeed-inference are CUDA-only XTTS speedups. Each ~1.5–2×
         # on top of CUDA itself, no audible quality loss. Defaults flip ON when
         # device resolves to cuda and OFF on cpu — env-var "1"/"0" overrides.
@@ -577,11 +578,15 @@ class CoquiEngine(Engine):
         device = self._device
         if device == "auto":
             device = "cuda" if torch_module.cuda.is_available() else "cpu"
-        # On CUDA, default both extras ON (the whole point of the GPU path).
-        # On CPU, force them OFF: torch raises on fp16 ops on CPU, and
-        # deepspeed-inference is a CUDA-only runtime. Env override only
-        # applies when device is cuda — there's no useful "fp16 on CPU" mode.
-        if device == "cuda":
+        # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
+        # (the whole point of the GPU path). On CPU, force them OFF: torch raises
+        # on fp16 ops on CPU, and deepspeed-inference is a CUDA-only runtime.
+        # Env override only applies when device resolves to the cuda family —
+        # there's no useful "fp16 on CPU" mode. Route through _parse_device so
+        # an indexed pin (cuda:1) is recognised as CUDA family, not treated as
+        # an unknown device that silently degrades to fp32 / no DeepSpeed.
+        family, _ = _parse_device(device)
+        if family == "cuda":
             half = _parse_bool(self._half_env, default=True)
             deepspeed = _parse_bool(self._deepspeed_env, default=True)
         else:
@@ -625,6 +630,7 @@ class CoquiEngine(Engine):
 
         opts = self._resolve_runtime_options(torch)
         device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
+        _validate_cuda_index(device, torch)
         # Single startup log line — `npm run tts:sidecar` users can grep
         # logs/tts.log for this to confirm GPU mode is actually on. If you
         # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
@@ -668,7 +674,7 @@ class CoquiEngine(Engine):
         self._tts = tts
         self._torch = torch
         self._resolved_device = device
-        self._use_half = bool(want_half and device == "cuda")
+        self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
         if self._use_half:
             log.info("fp16 autocast enabled for /synthesize.")
 
@@ -838,6 +844,9 @@ class KokoroEngine(Engine):
         # 'directml' when the one-time synth proved DML runs the model, or
         # 'fallback-cpu' when it failed and we rebuilt on the CPU EP.
         self._dml_status: Optional[str] = None
+        # KOKORO_DEVICE=cuda:N — captured here so the sess-replacement in
+        # _ensure_loaded can pin the ORT InferenceSession to the indexed GPU.
+        self._requested_device: str = os.environ.get("KOKORO_DEVICE", "auto")
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -994,6 +1003,29 @@ class KokoroEngine(Engine):
             kokoro = self._directml_selftest_or_fallback(Kokoro, kokoro)
 
         self._kokoro = kokoro
+
+        # Indexed CUDA pin (KOKORO_DEVICE=cuda:1). The installed kokoro-onnx
+        # version's Kokoro.__init__ has no provider_options= kwarg; we reach
+        # device_id by rebuilding the InferenceSession on the final kept
+        # instance (post-DML-selftest). Only fires for an indexed pin — cpu /
+        # auto / plain cuda leave the session unchanged (helper returns None).
+        po = _kokoro_provider_options(self._requested_device, providers)
+        if po is not None:
+            try:
+                import onnxruntime as rt  # type: ignore
+                provs, opts = po if isinstance(po, tuple) else (providers, po)
+                self._kokoro.sess = rt.InferenceSession(
+                    self._model_path, providers=provs, provider_options=opts
+                )
+                log.info(
+                    "Kokoro pinned to %s via provider device_id (sess rebuilt).",
+                    self._requested_device,
+                )
+            except Exception as e:
+                log.warning(
+                    "Kokoro device_id pin failed (%s) — ORT session unchanged.", e
+                )
+
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
             len(self._voices), len(all_voices),
@@ -1162,6 +1194,75 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
     arr = np.asarray(audio)
     n = arr.shape[0] if arr.ndim >= 1 else 0
     return (n / sample_rate * 1000.0) if sample_rate > 0 else 0.0
+
+
+def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
+    """Split a device knob value into (family, index). The single place that
+    understands the cuda:N grammar — every engine routes through it so an indexed
+    pin can't silently degrade. Malformed index ('cuda:x') keeps family, drops index."""
+    p = (value or "auto").strip().lower()
+    if p in ("", "auto"):
+        return ("auto", None)
+    if p in ("cpu", "mps"):
+        return (p, None)
+    if p.startswith("cuda"):
+        _, _, idx = p.partition(":")
+        return ("cuda", int(idx) if idx.isdigit() else None)
+    return (p, None)
+
+
+def _kokoro_provider_options(device: Optional[str], providers: list[str]):
+    """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
+
+    Returns None when there is no index to pin (cpu / auto / plain cuda) so the
+    existing no-pin path stays exactly as-is. When ``providers`` is empty (the
+    NVIDIA default — KOKORO_ORT_PROVIDERS unset so kokoro-onnx auto-selects),
+    SYNTHESIZE a ``["CUDAExecutionProvider","CPUExecutionProvider"]`` list and
+    return ``(providers, options)`` as a tuple so the device_id has somewhere to
+    attach. When ``providers`` is already populated, return a ``list[dict]``
+    aligned to it so the caller can pass it directly as ``provider_options``."""
+    family, index = _parse_device(device)
+    if family != "cuda" or index is None:
+        return None
+    if not providers:
+        synth = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        opts = [{"device_id": index}, {}]
+        return (synth, opts)
+    return [{"device_id": index} if p == "CUDAExecutionProvider" else {} for p in providers]
+
+
+def _spk_run_device(value: Optional[str]) -> str:
+    """speechbrain run_opts device. speechbrain accepts the full 'cuda:N' form
+    (unlike CT2), so 'cuda:1' stays 'cuda:1'; 'cuda' stays 'cuda'; anything
+    else → 'cpu'."""
+    family, index = _parse_device(value)
+    if family == "cuda":
+        return f"cuda:{index}" if index is not None else "cuda"
+    return "cpu" if family in ("cpu", "auto") else family
+
+
+def _ct2_kwargs(device: str, compute_type: str) -> dict:
+    """CTranslate2 WhisperModel kwargs. CT2 wants device='cuda' + a separate
+    device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'."""
+    family, index = _parse_device(device)
+    dev = "cuda" if family == "cuda" else ("cpu" if family in ("cpu", "auto") else family)
+    kw: dict = {"device": dev, "compute_type": compute_type}
+    if family == "cuda" and index is not None:
+        kw["device_index"] = index
+    return kw
+
+
+def _validate_cuda_index(device: str, torch_module: Any) -> None:
+    """Raise ValueError when a cuda:N pin references a non-existent card.
+
+    Surfaces a clear load error instead of a raw CUDA crash that the sidecar
+    supervisor would crash-loop. No-op for cpu/auto/mps/plain-cuda (no index)
+    and when CUDA is unavailable (let the normal cpu-fallback path handle it)."""
+    family, index = _parse_device(device)
+    if family == "cuda" and index is not None and torch_module.cuda.is_available():
+        n = torch_module.cuda.device_count()
+        if index >= n:
+            raise ValueError(f"{device} out of range; only {n} CUDA device(s) visible")
 
 
 def _resolve_torch_device(pref: str, torch_module: Any) -> str:
@@ -1473,6 +1574,7 @@ class QwenEngine(Engine):
                 "server/tts-sidecar."
             ) from e
         _apply_torch_perf_flags(torch)
+        _validate_cuda_index(self._device, torch)
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
@@ -2816,12 +2918,14 @@ class WhisperEngine:
         # Monotonic timestamp of the last transcribe — drives the idle watchdog.
         self._last_used: float = 0.0
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
+        self._requested_device = self._device  # preserved for /health fell_back detection
         self._model_name = (os.environ.get("ASR_MODEL", "base").strip() or "base")
 
     def _compute_type(self) -> str:
         """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
         Override via ASR_COMPUTE_TYPE for a roomier card."""
-        default = "int8_float16" if self._device == "cuda" else "int8"
+        family, _ = _parse_device(self._device)
+        default = "int8_float16" if family == "cuda" else "int8"
         return (os.environ.get("ASR_COMPUTE_TYPE", default).strip() or default)
 
     def _ensure_loaded(self) -> None:
@@ -2839,9 +2943,7 @@ class WhisperEngine:
             "Loading Whisper ASR model=%s device=%s compute=%s ...",
             self._model_name, self._device, self._compute_type(),
         )
-        self._model = WhisperModel(
-            self._model_name, device=self._device, compute_type=self._compute_type()
-        )
+        self._model = WhisperModel(self._model_name, **_ct2_kwargs(self._device, self._compute_type()))
         log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, self._device)
 
     @staticmethod
@@ -2934,6 +3036,7 @@ class SpeakerEngine:
         # Monotonic timestamp of the last embed — drives the idle watchdog.
         self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
+        self._requested_device = self.device  # preserved before any cpu-demotion
 
     def _load_on(self, device: str):
         """Synchronous ECAPA load on a concrete device. Run via to_thread."""
@@ -2950,8 +3053,9 @@ class SpeakerEngine:
             if self._model is not None:
                 return
             # srv-47: a requested cuda device that isn't actually present
-            # degrades to cpu rather than crashing.
-            if self.device == "cuda":
+            # degrades to cpu rather than crashing.  Use _parse_device so an
+            # indexed pin (cuda:1) is treated the same as plain 'cuda'.
+            if _parse_device(self.device)[0] == "cuda":
                 try:
                     import torch  # type: ignore
                     if not torch.cuda.is_available():
@@ -2960,16 +3064,16 @@ class SpeakerEngine:
                 except Exception:
                     self.device = "cpu"
             try:
-                self._model = await asyncio.to_thread(self._load_on, self.device)
+                self._model = await asyncio.to_thread(self._load_on, _spk_run_device(self.device))
             except Exception as e:
                 # A poison-class load failure corrupts the shared CUDA context —
                 # re-raise so the /embed fence marks poison + recycles. Any other
                 # cuda failure (cuDNN/driver mismatch on a "present" GPU) demotes
                 # to cpu once and reloads.
-                if self.device == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
+                if _parse_device(self.device)[0] == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
                     log.warning("ECAPA cuda load failed (%s) — demoting to cpu.", e)
                     self.device = "cpu"
-                    self._model = await asyncio.to_thread(self._load_on, self.device)
+                    self._model = await asyncio.to_thread(self._load_on, _spk_run_device(self.device))
                 else:
                     raise
 
@@ -3003,7 +3107,7 @@ class SpeakerEngine:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
         the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
         freeing ~80–200 MB of host RAM. No-op while recently used."""
-        if self.device != "cuda" or self._model is None:
+        if _parse_device(self.device)[0] != "cuda" or self._model is None:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
@@ -3343,6 +3447,33 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
         return (allocated, reserved, total)
     except Exception:
         return (None, None, None)
+
+
+def _sample_card(idx: int, torch_module: Any) -> dict:
+    """One card's discovery row (driver truth via mem_get_info — sees ALL
+    allocators). The reusable primitive Wave 2's ledger wraps per-sample."""
+    props = torch_module.cuda.get_device_properties(idx)
+    free, total = torch_module.cuda.mem_get_info(idx)
+    return {
+        "uuid": str(getattr(props, "uuid", "")) or f"idx-{idx}",
+        "idx": idx,
+        "name": props.name,
+        "total_mb": round(total / 1_000_000),
+        "free_mb": round(free / 1_000_000),
+    }
+
+
+def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
+    """[{uuid,idx,name,total_mb,free_mb}] per visible CUDA device, [] when CUDA is
+    unavailable. torch_module is injectable for tests (default → local import)."""
+    try:
+        if torch_module is None:
+            import torch as torch_module  # type: ignore
+        if not torch_module.cuda.is_available():
+            return []
+        return [_sample_card(i, torch_module) for i in range(torch_module.cuda.device_count())]
+    except Exception:
+        return []
 
 
 # Reserved-VRAM recycle fractions of device total (defaults; absolute MB env
@@ -4013,6 +4144,92 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
         return None
 
 
+def _engine_actual_card(engine: Any) -> Optional[dict]:
+    """(family, index, fell_back) for a LOADED engine, else None. index is the
+    real torch ordinal for torch engines; None for ORT/CT2 (family only).
+    fell_back = requested cuda but resolved cpu (the silent-CPU signal)."""
+    model = (
+        getattr(engine, "_model", None)
+        or getattr(engine, "_kokoro", None)
+        or getattr(engine, "_base", None)
+        or getattr(engine, "_tts", None)  # CoquiEngine keeps its model here
+    )
+    if model is None:
+        return None
+    requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    # actual device: prefer the loaded torch module's real device; fall back to the string attr
+    family = index = None
+    try:
+        params = getattr(model, "parameters", None)
+        if callable(params):
+            dev = next(params()).device
+            family, index = ("cuda" if dev.type == "cuda" else dev.type), dev.index
+    except Exception:
+        pass
+    if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
+        # Prefer the RESOLVED device (Coqui keeps the actual in _resolved_device and
+        # the pref in _device) so a cpu fallback isn't masked by the cuda pref; then
+        # `device` (SPK, demoted to cpu on failure) and `_device` (Whisper).
+        family, _ = _parse_device(
+            getattr(engine, "_resolved_device", None)
+            or getattr(engine, "device", None)
+            or getattr(engine, "_device", None)
+        )
+    if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
+        ks = _kokoro_session_device(engine)
+        if ks:
+            family = ks
+    if family in (None, "auto"):
+        family = "unknown"
+    fell_back = (requested_fam == "cuda" and family == "cpu")
+    return {"family": family, "index": index, "fell_back": fell_back}
+
+
+def _resident_engines_by_card(cards: list[dict]) -> dict:
+    """{card_idx: [{engine, actual_card, stale_reason?}]} over the loaded engines.
+    Engines live in ENGINES (coqui/kokoro/qwen) + the ASR/SPK singletons — NOT as
+    bare COQUI/QWEN globals."""
+    named = list(ENGINES.items()) + [("asr", ASR), ("spk", SPK)]
+    out: dict = {}
+    for name, eng in named:
+        card = _engine_actual_card(eng)
+        if card is None:
+            continue
+        idx = card["index"] if card["index"] is not None else -1  # -1 bucket = unindexed/cpu
+        entry = {"engine": name, "actual_card": card["index"]}
+        if card["fell_back"]:
+            entry["stale_reason"] = "cpu_fallback"
+        out.setdefault(idx, []).append(entry)
+    return out
+
+
+def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
+    cards = _enumerate_cuda_devices(torch_module)
+    resident = _resident_engines_by_card(cards)
+    try:
+        if torch_module is None:
+            import torch as torch_module  # type: ignore
+        for c in cards:
+            c["torch_reserved_mb"] = round(torch_module.cuda.memory_reserved(c["idx"]) / 1_000_000)
+    except Exception:
+        for c in cards:
+            c["torch_reserved_mb"] = 0
+    for c in cards:
+        c["resident"] = resident.get(c["idx"], [])
+    # ORT/CT2 engines (Kokoro/Whisper) and any cpu-fallen engine carry index=None
+    # → the -1 bucket, which no real card claims. Surface it as a synthetic
+    # entry so a cpu_fallback (stale_reason) is visible in gpus[] rather than
+    # silently dropped. Only emitted when the bucket is non-empty, so a fully
+    # indexed box sees no change.
+    unindexed = resident.get(-1, [])
+    if unindexed:
+        cards.append({
+            "uuid": None, "idx": -1, "name": "unindexed (cpu / ORT / CT2)",
+            "total_mb": 0, "free_mb": 0, "torch_reserved_mb": 0, "resident": unindexed,
+        })
+    return cards
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
@@ -4107,6 +4324,7 @@ def health() -> dict[str, Any]:
         "spk_loaded": SPK._model is not None,
         "spk_device": SPK.device,
         "devices": devices,
+        "gpus": _build_gpus_payload(),
         "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
@@ -4133,6 +4351,11 @@ def health() -> dict[str, Any]:
         "mem_restart_mb": (_mem_restart_threshold_mb() or None),
         "vram_restart_mb": (_vram_restart_threshold_mb(_vram_total) or None),
     }
+
+
+@app.get("/devices")
+def devices() -> dict:
+    return {"devices": _enumerate_cuda_devices(), "cpu": True}
 
 
 @app.get("/debug/memory")

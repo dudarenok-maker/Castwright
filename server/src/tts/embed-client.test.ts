@@ -137,3 +137,13 @@ describe('embedSegment', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe('spkRunsOnGpu — indexed cuda', () => {
+  const prev = process.env.SPK_DEVICE;
+  afterEach(() => { if (prev === undefined) delete process.env.SPK_DEVICE; else process.env.SPK_DEVICE = prev; });
+  it('is true for cuda:1 / CUDA:0, false for cpu', () => {
+    process.env.SPK_DEVICE = 'cuda:1'; expect(spkRunsOnGpu()).toBe(true);
+    process.env.SPK_DEVICE = 'CUDA:0'; expect(spkRunsOnGpu()).toBe(true);
+    process.env.SPK_DEVICE = 'cpu'; expect(spkRunsOnGpu()).toBe(false);
+  });
+});
