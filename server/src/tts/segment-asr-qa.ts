@@ -59,6 +59,12 @@ export interface AsrThresholds {
   /** Sentences shorter than this (trimmed chars) are not scored (one wrong word
       swamps a short sentence's WER) → inconclusive. */
   minChars: number;
+  /** References in the WORD-count band [2, minRefWords] (after normalization)
+      where the only error is substitution(s) are routed to `inconclusive` instead
+      of `drift`: a single ASR substitution swamps WER on a 2-word line yet is weak
+      evidence. 1-word refs are EXCLUDED (a full sub there is strong evidence);
+      deletions/insertions are exempt (they stay drift). 0 disables the backstop. */
+  minRefWords: number;
   /** compression_ratio above this → drift (Whisper's loop/repeat hallucination
       tell), regardless of WER. */
   maxCompressionRatio: number;
@@ -72,6 +78,7 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxWer: 0.4,
   maxDeletionRun: 4,
   minChars: 12,
+  minRefWords: 2,
   maxCompressionRatio: 2.4,
   minAvgLogprob: -1.0,
   maxNoSpeechProb: 0.6,
@@ -104,6 +111,7 @@ export function resolveAsrThresholds(
     maxWer: perLanguageMaxWer(language) ?? configValue<number>('qa.asr.maxWer'),
     maxDeletionRun: configValue<number>('qa.asr.maxDeletionRun'),
     minChars: configValue<number>('qa.asr.minChars'),
+    minRefWords: configValue<number>('qa.asr.minRefWords'),
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
     minAvgLogprob: configValue<number>('qa.asr.minAvgLogprob'),
     maxNoSpeechProb: configValue<number>('qa.asr.maxNoSpeech'),
@@ -532,6 +540,27 @@ export function classifyTranscript(
       `Truncation/drop — ${longestDeletionRun} consecutive words missing (> ${t.maxDeletionRun}).`,
     );
     return base('drift', metrics);
+  }
+  // Short-reference substitution backstop (A2b). On a 2-word reference a single
+  // ASR substitution (homophone, misheard name) drives WER over the cap yet is
+  // weak evidence — route to inconclusive (flag, do NOT re-record). 1-word refs
+  // are excluded (length >= 2): a full sub there is strong evidence. A deletion
+  // (negation flip "did not"→"did", a dropped word) or insertion still flags.
+  if (
+    t.minRefWords > 0 &&
+    expectedTokens.length >= 2 &&
+    expectedTokens.length <= t.minRefWords &&
+    del === 0 &&
+    ins === 0 &&
+    longestDeletionRun === 0 &&
+    sub <= 1 &&
+    wer > t.maxWer
+  ) {
+    reasons.push(
+      `Short reference (${expectedTokens.length} words) with a single substitution; ` +
+        `WER ${wer.toFixed(2)} is weak evidence — not scoring.`,
+    );
+    return base('inconclusive', metrics);
   }
   if (wer > t.maxWer) {
     reasons.push(

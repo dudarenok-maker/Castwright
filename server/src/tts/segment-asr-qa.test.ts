@@ -409,6 +409,62 @@ describe('classifyTranscript — A2a word-split tolerance', () => {
   });
 });
 
+describe('classifyTranscript — A2b short-reference substitution backstop', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_MIN_REF_WORDS;
+  });
+
+  it('A2b: a single substitution on a 2-word reference is inconclusive, not drift (RED→GREEN)', () => {
+    // "Valkyrie Cain." (14 chars, 2 words) heard "Volkery Cain": 1 sub / 2 words =
+    // WER 0.5 > 0.4, but one homophone on a 2-word line is weak evidence.
+    const c = classifyTranscript('Valkyrie Cain.', 'Volkery Cain.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.del).toBe(0);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2b: a single substitution on a 1-WORD reference still flags drift (strong evidence)', () => {
+    // [rev R1-#1] "Extraordinarily." → 1 token, 16 chars. A full substitution is
+    // wer 1.0 — the whole word is wrong. The >= 2 lower bound must keep this drift.
+    const c = classifyTranscript('Extraordinarily.', 'Coincidentally.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2b: a DELETION on a short reference still flags drift (truncation/negation preserved)', () => {
+    const c = classifyTranscript('Detective Inspector', 'Inspector', CLEAN);
+    expect(c.del).toBe(1);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2b: TWO substitutions on a 2-word reference still flags drift (whole line wrong)', () => {
+    const c = classifyTranscript('Crimson Sparrow', 'Velvet Hammer', CLEAN);
+    expect(c.sub).toBe(2);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2b: a single-substitution meaning-flip on a 2-word ref is inconclusive (disclosed tradeoff)', () => {
+    // [rev R1-#2] Documents the accepted tradeoff: a directional flip expressible
+    // as ONE substitution on a 2-word ref is weak ASR evidence → inconclusive
+    // (recorded, not re-recorded). Deletion-shaped flips stay drift (case above).
+    const c = classifyTranscript('Going forward.', 'Going backward.', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2b: the backstop does not touch a long reference', () => {
+    const c = classifyTranscript(EXPECTED, EXPECTED.replace('observatory', 'laboratory'), CLEAN);
+    expect(c.verdict).toBe('ok');
+  });
+
+  it('A2b: minRefWords=0 disables the backstop (post-impl wiring check)', () => {
+    // NOTE [rev]: green before AND after the impl. Pre-A2b there is no backstop so
+    // this is drift anyway; post-impl it proves the disable knob is wired.
+    process.env.SEG_ASR_MIN_REF_WORDS = '0';
+    const c = classifyTranscript('Valkyrie Cain.', 'Volkery Cain.', CLEAN);
+    expect(c.verdict).toBe('drift');
+  });
+});
+
 /* Integration test: vocalizationAllowlist forwarded through verifySegmentTranscript (fs-57)
    These tests exercise the PRODUCTION entry point (verifySegmentTranscript), not classifyTranscript.
    The critical test (first one) FAILS before Fix 1 (when vocalizationAllowlist was dropped on

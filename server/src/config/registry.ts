@@ -336,6 +336,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'low',
   },
   {
+    key: 'qa.asr.minRefWords',
+    env: 'SEG_ASR_MIN_REF_WORDS',
+    group: 'qa-gates',
+    label: 'ASR min reference words',
+    help: 'On 2-word references a single ASR substitution is routed to inconclusive instead of drift — one homophone on a two-word line is weak evidence. 1-word refs and deletions/insertions still flag. 0 disables.',
+    type: 'integer', min: 0, max: 10,
+    default: 2, // ← DEFAULT_ASR_THRESHOLDS.minRefWords in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
     key: 'qa.asr.maxCompression',
     env: 'SEG_ASR_MAX_COMPRESSION',
     group: 'qa-gates',
