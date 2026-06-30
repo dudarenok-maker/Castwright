@@ -16,20 +16,20 @@
  * through the exposed store (seedQwenDesigns / clearQwenDesigns) instead of driving
  * the brittle cast-design UI. See docs/testing/flaky-register.md's rewrite playbook.
  *
- * The four cases (A/B/C/D) below lock down the "all three sinks converge" fix
- * described in the implementation plan:
+ * The three cases (A/B/C) below lock down the "all three sinks converge" fix
+ * described in the implementation plan (the former case B — "the enqueued queue
+ * entry persists modelKey=1.7B" — was removed graduating #1178: that invariant
+ * doesn't exist, and the dispatcher's `e.modelKey ?? ui.ttsModelKey` resolution
+ * is covered by queue-dispatcher-middleware.test.ts + queue-generation-
+ * integration.test.ts; see the comment where it lived):
  *   A. 1.7B pick → session default + cast pins both flip to 1.7B AND
  *      ttsModelKeyExplicit is true (so settings-hydration can't silently
  *      rewind an in-flight pick).
- *   B. The enqueued queue entry's persisted `modelKey` field is 1.7B. The
- *      queue dispatcher reads ui.ttsModelKey at dispatch time; the persisted
- *      field is what proves the session default moved BEFORE the enqueue
- *      landed — otherwise Chapter 1's queue entry would carry 0.6B.
- *   C. 0.6B pick → every Qwen member's ttsModelKey is null AND
+ *   B. 0.6B pick → every Qwen member's ttsModelKey is null AND
  *      ttsModelKeyExplicit is now true (explicit 0.6B is the new "no
  *      auto-upgrade" signal documented in plan 229; the existing
  *      `resetSelectedModelToDefault` reducer is the recovery path).
- *   D. Guard rail: a freshly-analysed book with NO designed voices → 1.7B
+ *   C. Guard rail: a freshly-analysed book with NO designed voices → 1.7B
  *      pick surfaces a warn toast and generation does NOT start; 0.6B does
  *      start (baseline behaviour). Picking 0.6B in the still-open modal after
  *      the refused 1.7B also proves the "Start generating" button isn't stuck
@@ -67,7 +67,7 @@ async function waitForQwenCastHydrated(page: Page): Promise<void> {
 }
 
 /* Drive from analysing-ready into the Generate view's StartGen modal. Shared
-   by all four cases so the cold-start flakiness stays in one place. Each
+   by every case so the cold-start flakiness stays in one place. Each
    internal route hop waits for its lazy chunk to mount (waitForRouteReady)
    and the approve click is gated on the cast slice being hydrated
    (waitForQwenCastHydrated) so the modal opens deterministically. */
@@ -82,7 +82,7 @@ async function goToStartGenModal(page: Page): Promise<void> {
   await waitForRouteReady(page);
 }
 
-/* Establish case D's precondition deterministically: an analysed cast with ZERO
+/* Establish case C's precondition deterministically: an analysed cast with ZERO
    designed Qwen voices. The mock analysis fixture ALWAYS pre-designs Eliza
    (`overrideTtsVoices.qwen.name = 'qwen-eliza'` in src/data/characters.ts), so
    without this the 1.7B guard rail sees an eligible member and starts the run
@@ -125,7 +125,7 @@ async function clearQwenDesigns(page: Page): Promise<void> {
     .toBe(false);
 }
 
-/* Establish cases A/B's precondition: every Qwen member carries a designed
+/* Establish case A's precondition: every Qwen member carries a designed
    voice (`overrideTtsVoices.qwen.name`) so the modal's 1.7B guard rail accepts
    the pick and pins ALL of them. The inverse of clearQwenDesigns, via the same
    store seam — production reaches this state through the cast-view "Design full
@@ -172,7 +172,7 @@ async function seedQwenDesigns(page: Page): Promise<void> {
 }
 
 /* Drive into the Generate view's StartGen modal WITH a fully-designed Qwen cast
-   (cases A/B). Open the modal first (post-route-hydration), THEN seed the
+   (case A). Open the modal first (post-route-hydration), THEN seed the
    designs so a generate-route re-hydration can't wipe them. */
 async function goToStartGenModalWithDesignedCast(page: Page): Promise<void> {
   await goToStartGenModal(page);
@@ -228,9 +228,9 @@ test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm st
 
   /* Confirm the default 0.6B pick → the prompt closes and generation starts.
      (Picking 1.7B on an undesigned mock cast trips the new "design voices
-     first" guard rail — covered by case D. The production path reaches this
+     first" guard rail — covered by case C. The production path reaches this
      point with voices already designed via the cast-view "Design full cast"
-     button; cases A and B drive that path explicitly.) */
+     button; case A drives that path explicitly.) */
   await page.getByRole('button', { name: 'Start generating', exact: true }).click();
   await expect(heading).toBeHidden({ timeout: 5_000 });
   /* Generation is live once a chapter-row "Generating" pill shows. */
@@ -264,45 +264,19 @@ test.describe('StartGenerationModal: three-sink sync', () => {
     });
   });
 
-  test('B. 1.7B pick → enqueued chapters resolve to modelKey=qwen3-tts-1.7b', async ({
-    page,
-  }) => {
-    /* A fresh "start generating" enqueues auto-work entries with NO per-entry
-       modelKey — generation-stream-middleware builds {id,bookId,chapterId,scope},
-       and the dispatcher resolves the tier as `e.modelKey ?? ui.ttsModelKey` at
-       stream-open (queue-dispatcher-middleware:243; only a per-chapter regenerate
-       stamps an explicit entry modelKey). So the invariant proving the 1.7B pick
-       reached the queue is: chapters were enqueued AND each resolves to 1.7B via
-       the session default the modal synced before requestStartGeneration
-       dispatched — had the modal left ui.ttsModelKey on 0.6B, they'd resolve to
-       0.6B and mismatch the cast pins (case A). */
-    await goToStartGenModalWithDesignedCast(page);
-    await page.getByTestId('start-gen-tier-qwen3-tts-1.7b').click();
-    await page.getByRole('button', { name: 'Start generating', exact: true }).click();
-    await expect(
-      page.getByRole('heading', { name: /Choose the voice model/i }),
-    ).toBeHidden({ timeout: 5_000 });
+  /* (Former case B — "the enqueued queue entry carries modelKey=1.7B" — was
+     removed graduating #1178. It asserted a non-existent invariant: a fresh
+     start-generation enqueues auto-work entries with NO per-entry modelKey
+     (generation-stream-middleware builds {id,bookId,chapterId,scope}); the tier
+     is resolved as `e.modelKey ?? ui.ttsModelKey` at stream-open, and the
+     entries drain to 0 as chapters complete — a transient window that can't be
+     observed reliably in e2e. Its real coverage lives in the lower tiers:
+     queue-dispatcher-middleware.test.ts (the `e.modelKey ?? ui.ttsModelKey`
+     resolution) + queue-generation-integration.test.ts (requestStartGeneration
+     enqueues the viewed book), and case A proves ui.ttsModelKey/cast both flip
+     to 1.7B end-to-end. */
 
-    await expect
-      .poll(
-        () =>
-          page.evaluate(() => {
-            const store = (window as unknown as { __store__: { getState(): unknown } }).__store__;
-            const state = store.getState() as {
-              queue: { snapshot?: { entries?: Array<{ modelKey?: string }> } };
-              ui: { ttsModelKey?: string };
-            };
-            const entries = state.queue?.snapshot?.entries ?? [];
-            if (entries.length === 0) return null; // not enqueued yet — keep polling
-            const uiKey = state.ui?.ttsModelKey ?? null;
-            return entries.every((e) => (e.modelKey ?? uiKey) === 'qwen3-tts-1.7b');
-          }),
-        { timeout: 20_000 },
-      )
-      .toBe(true);
-  });
-
-  test('C. 0.6B pick clears pins AND flips ttsModelKeyExplicit (the new "no auto-upgrade" signal)', async ({
+  test('B. 0.6B pick clears pins AND flips ttsModelKeyExplicit (the new "no auto-upgrade" signal)', async ({
     page,
   }) => {
     await goToStartGenModal(page);
@@ -327,7 +301,7 @@ test.describe('StartGenerationModal: three-sink sync', () => {
     for (const c of qwenMembers) expect(c.ttsModelKey ?? null).toBeNull();
   });
 
-  test('D. Guard rail: 1.7B on an undesigned cast warns + does not start; 0.6B does start', async ({
+  test('C. Guard rail: 1.7B on an undesigned cast warns + does not start; 0.6B does start', async ({
     page,
   }) => {
     /* The mock analysis fixture pre-designs Eliza on Qwen, so strip every
@@ -355,9 +329,9 @@ test.describe('StartGenerationModal: three-sink sync', () => {
           page.evaluate(() => {
             const store = (window as unknown as { __store__: { getState(): unknown } }).__store__;
             const state = store.getState() as {
-              queue: { snapshot?: { entries?: unknown[] } };
+              queue: { entries?: unknown[] };
             };
-            return (state.queue?.snapshot?.entries ?? []).length;
+            return (state.queue?.entries ?? []).length;
           }),
         { timeout: 2_000 },
       )
