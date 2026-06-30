@@ -153,9 +153,9 @@ export function StatusPopover({
       onFocusCapture={onFocusCapture}
       onBlurCapture={onBlurCapture}
     >
-      <Section title="TTS engines" testid="status-popover-tts">
+      <Section title="Voice engines" testid="status-popover-tts">
         {ttsControls ?? (
-          <p className="text-sm text-ink/60">TTS controls appear once a manuscript is open.</p>
+          <p className="text-sm text-ink/60">Voice engine controls appear once a manuscript is open.</p>
         )}
       </Section>
       <Section title="Analysis" testid="status-popover-analysis">
