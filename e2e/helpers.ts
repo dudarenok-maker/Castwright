@@ -46,8 +46,13 @@ export async function goToAnalysing(page: Page): Promise<void> {
   await page.getByRole('button', { name: /Save book and start analysis/i }).click();
 
   await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
+  /* Cold first-compile: the analysing route's React.lazy chunk can outlast the
+     5 s button budget (the URL flips to /analysing before the view mounts).
+     Wait for the suspense fallback to detach so the Start button check below is
+     gated on an explicit ready signal, not implicit cold-load timing. */
+  await waitForRouteReady(page);
   await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
-    timeout: 5_000,
+    timeout: 10_000,
   });
 }
 
@@ -58,9 +63,10 @@ export async function goToConfirm(page: Page): Promise<void> {
   await goToAnalysing(page);
   await page.getByRole('button', { name: /Start analysis/i }).click();
   await expect(page).toHaveURL(/#\/books\/.+\/confirm$/, { timeout: 15_000 });
+  await waitForRouteReady(page);
   await expect(
     page.getByRole('button', { name: /Confirm cast and review manuscript/i }),
-  ).toBeVisible({ timeout: 5_000 });
+  ).toBeVisible({ timeout: 10_000 });
 }
 
 /* Plan 89 C5 — DelayedSpinner paints at +150 ms while a React.lazy chunk
