@@ -41,9 +41,10 @@ import { DetectEmotionsButton } from '../components/detect-emotions-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
-import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
+import { selectActiveReview } from '../store/script-review-slice';
 import { notificationsActions } from '../store/notifications-slice';
-import { rpdWarningFor, planApply } from '../lib/script-review-apply';
+import { rpdWarningFor } from '../lib/script-review-apply';
+import { runReviewScript } from '../store/script-review-thunk';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -697,61 +698,26 @@ export function ManuscriptView({
   async function handleReviewScript(wholeBook: boolean) {
     if (!bookId || reviewLoading) return;
     if (!wholeBook && currentChapterId == null) return;
-    const allOps: ReviewOpWithChapter[] = [];
-    const failed: Array<{ chapterId: number; message: string }> = [];
     setReviewLoading(true);
     setReviewMenuOpen(false);
     try {
-      await api.reviewScript(bookId, {
-        /* Omitting chapterId reviews every (non-excluded) chapter server-side. */
-        ...(wholeBook ? {} : { chapterId: currentChapterId ?? undefined }),
+      await runReviewScript(bookId, {
+        dispatch,
+        wholeBook,
+        chapterId: wholeBook ? undefined : currentChapterId ?? undefined,
         model: reviewModel,
-        onOps: ({ chapterId: chId, ops }) => {
-          for (const op of ops) allOps.push({ ...op, chapterId: chId });
-        },
-        onChapterFailed: (e) => failed.push(e),
+        /* sentencesRef.current gives the latest Redux value even after the
+           await, without depending on the stale-closure capture. */
+        sentences: sentencesRef.current.map((s) => ({
+          id: s.id,
+          chapterId: s.chapterId,
+          text: s.text,
+          characterId: s.characterId,
+          instruct: s.instruct,
+          vocalization: s.vocalization,
+        })),
+        characterIds: new Set(characters.map((c) => c.id)),
       });
-      /* fs-58 Task 11 — run planApply at seed time so ops that can't be
-         resolved against the LIVE sentences (stale ids, missing anchors,
-         invalid merges) land in `unappliable` rather than appearing as
-         selectable no-ops in the diff modal. The Apply-time planApply in
-         the modal stays — it's the TOCTOU re-validation for any edits
-         that arrived between stream-complete and the user clicking Accept.
-         sentencesRef.current gives the latest Redux value even after the
-         await, without depending on the stale-closure capture. */
-      const live = sentencesRef.current.map((s) => ({
-        id: s.id,
-        chapterId: s.chapterId,
-        text: s.text,
-        characterId: s.characterId,
-        instruct: s.instruct,
-        vocalization: s.vocalization,
-      }));
-      /* planApply filters from allOps whose entries are ReviewOpWithChapter —
-         the chapterId is preserved on each returned object at runtime, so
-         casting back to the wider type is safe here. */
-      const { appliable, unappliable } = planApply(allOps, live, new Set(characters.map((c) => c.id))) as {
-        appliable: ReviewOpWithChapter[];
-        unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-      };
-      if (appliable.length === 0 && unappliable.length === 0 && failed.length > 0) {
-        dispatch(notificationsActions.pushToast({
-          kind: 'warn',
-          message: failed.length === 1 ? failed[0].message : `${failed.length} chapters couldn't be reviewed (too large or failed).`,
-        }));
-      } else {
-        if (failed.length > 0) {
-          dispatch(notificationsActions.pushToast({ kind: 'warn', message: `${failed.length} chapter(s) skipped; showing the rest.` }));
-        }
-        dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
-      }
-    } catch (err) {
-      dispatch(
-        notificationsActions.pushToast({
-          kind: 'error',
-          message: err instanceof Error ? err.message : 'Script review failed.',
-        }),
-      );
     } finally {
       setReviewLoading(false);
     }
