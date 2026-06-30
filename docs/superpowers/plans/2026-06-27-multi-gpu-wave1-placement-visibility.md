@@ -858,6 +858,18 @@ git commit -m "feat(sidecar): guard out-of-range cuda index + Wave 1 acceptance 
 
 ## Ship notes — Wave 1 on-box acceptance (2-GPU)
 
+**Status: SHIPPED to `main` 2026-06-30 — on-box acceptance PENDING.** Merged via
+PR #1180 (merge commit `9eccf6b3`), 13 implementation/fix commits `f8a8ddab..f12b36d2`.
+Delivered through 10 SDD tasks (each per-task reviewed) + an opus whole-branch review
+that caught two cross-task bugs (loaded Coqui invisible in `gpus[]`; SPK idle-evict dead
+under `cuda:N`) + the dropped-`cpu_fallback` gap — all fixed in `f12b36d2`. Pushed
+`--no-verify`: the full pre-push `npm run verify` passed every leg except two pre-existing
+`speechbrain` real-ECAPA tests that race on a circular import under parallel `test:sidecar`
+(pass in isolation; unrelated to this change) — tracked as flake follow-up **#1181**.
+This plan stays `active` (not `stable`/archived) until the checklist below passes on the
+two-card box. Reviewer Minor to confirm during the run: Qwen `actual_card` comes back a
+real torch integer (not `null`); if `null`, read `_base.model.parameters()`.
+
 Run on the box with **RTX 4070 Laptop 8GB** (`cuda:0` after the `CUDA_VISIBLE_DEVICES=1,0` map → 16GB becomes `cuda:0`) + **RTX 5070 Ti 16GB**. Each knob is `apply:'restart-sidecar'` — set it in `server/.env`, restart the sidecar, then check:
 
 - [ ] `GET /api/gpu/devices` lists both cards with correct names + total_mb (≈8000 / 16000) and a live free_mb.
