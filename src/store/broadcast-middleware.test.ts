@@ -610,3 +610,55 @@ describe('broadcastMiddleware — graceful degradation', () => {
     warn.mockRestore();
   });
 });
+
+// ---- Task 9: sync:substage cross-tab broadcast ----
+
+import { prosodySlice, prosodyActions } from './prosody-slice';
+import { scriptReviewSlice } from './script-review-slice';
+
+function harness(instanceId = 'self') {
+  const posted: BroadcastMessage[] = [];
+  const channel = {
+    postMessage: (m: BroadcastMessage) => posted.push(m),
+    onmessage: null as null | ((e: { data: BroadcastMessage }) => void),
+    close: () => {},
+  } as unknown as BroadcastChannel;
+  const store = configureStore({
+    reducer: { prosody: prosodySlice.reducer, scriptReview: scriptReviewSlice.reducer },
+    middleware: (gdm) => gdm({ serializableCheck: false }).concat(createBroadcastMiddleware({ channel, instanceId })),
+  });
+  const inbound = (m: BroadcastMessage) => channel.onmessage!({ data: m } as MessageEvent);
+  return { store, posted, inbound };
+}
+
+describe('broadcast-middleware sync:substage', () => {
+  it('posts set on setActive and clear on clear (book taken from payload)', () => {
+    const { store, posted } = harness();
+    store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0.4, label: 'Detecting emotions' }));
+    expect(posted.at(-1)).toMatchObject({ kind: 'sync:substage', stream: 'prosody', bookId: 'b1', mode: 'set', entry: { progress: 40, label: 'Detecting emotions' } });
+    store.dispatch(prosodyActions.clear({ bookId: 'b1' }));
+    expect(posted.at(-1)).toMatchObject({ kind: 'sync:substage', stream: 'prosody', bookId: 'b1', mode: 'clear' });
+  });
+
+  it('applies a foreign inbound set and does NOT re-broadcast', () => {
+    const { store, posted, inbound } = harness('self');
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'bX', mode: 'set', entry: { progress: 22, label: 'Detecting emotions' } });
+    expect(store.getState().prosody.activeStreams.bX).toEqual({ progress: 22, label: 'Detecting emotions' });
+    expect(posted).toHaveLength(0); // applyExternalSet is not in the outbound match set
+  });
+
+  it('drops self-echo by instanceId', () => {
+    const { store, inbound } = harness('self');
+    inbound({ kind: 'sync:substage', instanceId: 'self', stream: 'prosody', bookId: 'bSelf', mode: 'set', entry: { progress: 5, label: 'x' } });
+    expect(store.getState().prosody.activeStreams.bSelf).toBeUndefined();
+  });
+
+  it('a clear on book X leaves book Y intact (finding-2 regression)', () => {
+    const { store, inbound } = harness('self');
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b1', mode: 'set', entry: { progress: 1, label: 'x' } });
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b2', mode: 'set', entry: { progress: 2, label: 'y' } });
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b1', mode: 'clear' });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    expect(store.getState().prosody.activeStreams.b2).toEqual({ progress: 2, label: 'y' });
+  });
+});

@@ -70,6 +70,9 @@
 import type { Middleware, AnyAction } from '@reduxjs/toolkit';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { chaptersActions, type ActiveStreamSnapshot } from './chapters-slice';
+import { prosodyActions } from './prosody-slice';
+import { scriptReviewActions } from './script-review-slice';
+import type { SubstageEntry } from './prosody-slice';
 
 /** Shared channel name. Hard-coded — there is exactly one. */
 export const BROADCAST_CHANNEL_NAME = 'audiobook-state';
@@ -140,6 +143,21 @@ export type BroadcastMessage =
       bookId: string | null;
       mode: 'clear';
       snapshot: null;
+    }
+  | {
+      kind: 'sync:substage';
+      instanceId: string;
+      stream: 'prosody' | 'review';
+      bookId: string;
+      mode: 'set';
+      entry: SubstageEntry;
+    }
+  | {
+      kind: 'sync:substage';
+      instanceId: string;
+      stream: 'prosody' | 'review';
+      bookId: string;
+      mode: 'clear';
     };
 
 /** Action types that mutate the analysis slice's activeStream. The
@@ -156,6 +174,13 @@ const ANALYSIS_BROADCAST_ACTIONS: ReadonlySet<string> = new Set([
   'analysis/clearActiveStream',
   'analysis/hydrateColdBoot',
   'analysis/setSeriesPrior',
+]);
+
+/** Substage progress actions for prosody and script-review slices. The
+    `applyExternal*` reducers are deliberately absent (echo layer 2). */
+const SUBSTAGE_BROADCAST_ACTIONS: ReadonlySet<string> = new Set([
+  'prosody/setActive', 'prosody/updateProgress', 'prosody/clear',
+  'scriptReview/setActive', 'scriptReview/updateProgress', 'scriptReview/clear',
 ]);
 
 /** Same intent for the chapters slice — anything that touches
@@ -175,6 +200,8 @@ const CHAPTERS_BROADCAST_ACTIONS: ReadonlySet<string> = new Set([
 interface BroadcastableRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
   chapters: { activeStreams: Record<string, ActiveStreamSnapshot> };
+  prosody: { activeStreams: Record<string, SubstageEntry> };
+  scriptReview: { activeStreams: Record<string, SubstageEntry> };
 }
 
 /** Random 16-char hex id. Crypto-grade not required — collision risk
@@ -327,6 +354,15 @@ export function createBroadcastMiddleware(opts?: {
           }
           return;
         }
+        if (msg.kind === 'sync:substage') {
+          const actions = msg.stream === 'prosody' ? prosodyActions : scriptReviewActions;
+          if (msg.mode === 'clear') {
+            store.dispatch(actions.applyExternalClear({ bookId: msg.bookId }));
+          } else {
+            store.dispatch(actions.applyExternalSet({ bookId: msg.bookId, entry: msg.entry }));
+          }
+          return;
+        }
       };
     }
 
@@ -462,6 +498,22 @@ export function createBroadcastMiddleware(opts?: {
         if (send({ kind: 'sync:chapters', instanceId, bookId, mode: 'diff', diff })) {
           lastChaptersSent = { bookId, snapshot };
           lastChaptersSendAt = now;
+        }
+        return result;
+      }
+
+      if (SUBSTAGE_BROADCAST_ACTIONS.has(type)) {
+        const [sliceName] = type.split('/');
+        const stream: 'prosody' | 'review' = sliceName === 'prosody' ? 'prosody' : 'review';
+        const bookId = (a.payload as { bookId?: string })?.bookId;
+        if (!bookId) return result;
+        const state = store.getState() as BroadcastableRootState;
+        const map = stream === 'prosody' ? state.prosody.activeStreams : state.scriptReview.activeStreams;
+        const entry = map[bookId]; // present for set/updateProgress; absent after clear
+        if (entry) {
+          send({ kind: 'sync:substage', instanceId, stream, bookId, mode: 'set', entry });
+        } else {
+          send({ kind: 'sync:substage', instanceId, stream, bookId, mode: 'clear' });
         }
         return result;
       }
