@@ -57,6 +57,10 @@ export interface SegmentQaThresholds {
   minDurationRatio: number;
   /** durationSec / expectedSec above this is "runaway". */
   maxDurationRatio: number;
+  /** A "runaway" is only flagged when the rendered audio is also at least this
+      many seconds long, in ABSOLUTE terms. A ratio over a sub-second expectedSec
+      (a one-word line) is meaningless; every real runaway is ≫ this floor. */
+  minRunawaySec: number;
 }
 
 export const DEFAULT_SEGMENT_QA_THRESHOLDS: SegmentQaThresholds = {
@@ -65,6 +69,7 @@ export const DEFAULT_SEGMENT_QA_THRESHOLDS: SegmentQaThresholds = {
   maxInternalSilenceSec: 1.5,
   minDurationRatio: 0.4,
   maxDurationRatio: 2.5,
+  minRunawaySec: 3.0,
 };
 
 /* Resolve thresholds: explicit arg wins, else registry (env var / app override /
@@ -78,6 +83,7 @@ function resolveThresholds(override?: SegmentQaThresholds): SegmentQaThresholds 
     maxInternalSilenceSec: configValue<number>('qa.seg.maxInternalSilenceSec'),
     minDurationRatio: configValue<number>('qa.seg.minRatio'),
     maxDurationRatio: configValue<number>('qa.seg.maxRatio'),
+    minRunawaySec: configValue<number>('qa.seg.minRunawaySec'),
   };
 }
 
@@ -149,7 +155,7 @@ export function evaluateSegmentPcm(
           1,
         )}s expected (possible truncation).`,
       );
-    } else if (ratio > t.maxDurationRatio) {
+    } else if (ratio > t.maxDurationRatio && durationSec >= t.minRunawaySec) {
       reasons.push(
         `Suspiciously long — ${durationSec.toFixed(1)}s rendered vs ~${expectedSec.toFixed(
           1,

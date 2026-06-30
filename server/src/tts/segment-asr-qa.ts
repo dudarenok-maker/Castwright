@@ -59,6 +59,12 @@ export interface AsrThresholds {
   /** Sentences shorter than this (trimmed chars) are not scored (one wrong word
       swamps a short sentence's WER) → inconclusive. */
   minChars: number;
+  /** References in the WORD-count band [2, minRefWords] (after normalization)
+      where the only error is substitution(s) are routed to `inconclusive` instead
+      of `drift`: a single ASR substitution swamps WER on a 2-word line yet is weak
+      evidence. 1-word refs are EXCLUDED (a full sub there is strong evidence);
+      deletions/insertions are exempt (they stay drift). 0 disables the backstop. */
+  minRefWords: number;
   /** compression_ratio above this → drift (Whisper's loop/repeat hallucination
       tell), regardless of WER. */
   maxCompressionRatio: number;
@@ -72,6 +78,7 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxWer: 0.4,
   maxDeletionRun: 4,
   minChars: 12,
+  minRefWords: 2,
   maxCompressionRatio: 2.4,
   minAvgLogprob: -1.0,
   maxNoSpeechProb: 0.6,
@@ -104,6 +111,7 @@ export function resolveAsrThresholds(
     maxWer: perLanguageMaxWer(language) ?? configValue<number>('qa.asr.maxWer'),
     maxDeletionRun: configValue<number>('qa.asr.maxDeletionRun'),
     minChars: configValue<number>('qa.asr.minChars'),
+    minRefWords: configValue<number>('qa.asr.minRefWords'),
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
     minAvgLogprob: configValue<number>('qa.asr.minAvgLogprob'),
     maxNoSpeechProb: configValue<number>('qa.asr.maxNoSpeech'),
@@ -277,6 +285,22 @@ export function looksLikeHallucination(transcript: string): boolean {
   return s.length > 0 && HALLUCINATION_PATTERNS.some((re) => re.test(s));
 }
 
+/** True when `a` and `b` are within Levenshtein distance 1 (equal, one
+    substitution, or one insertion/deletion). Bounded short-circuit — no full DP
+    matrix. Used by bridgeCompounds to tolerate the one-character drift Whisper
+    introduces re-segmenting a compound ("skulduggery" → "skull duggery"). */
+export function editDistanceAtMost1(a: string, b: string): boolean {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0;
+  while (i < la && i < lb && a[i] === b[i]) i += 1;
+  if (la === lb) return a.slice(i + 1) === b.slice(i + 1); // one substitution
+  if (la > lb) return a.slice(i + 1) === b.slice(i); // one deletion from a
+  return a.slice(i) === b.slice(i + 1); // one insertion into a
+}
+
 /* Reconcile solid↔split compound forms between the expected and actual token
    streams. Whisper routinely splits a closed compound the manuscript writes
    solid ("curvebuster" → "curve buster") or joins an open one the manuscript
@@ -288,21 +312,29 @@ export function looksLikeHallucination(transcript: string): boolean {
    token, so this can never mask real drift. Pairs only (2↔1); 3+ token
    compounds are rare and out of scope. */
 export function bridgeCompounds(expected: string[], actual: string[]): [string[], string[]] {
-  const collapse = (tokens: string[], other: ReadonlySet<string>): string[] => {
+  // Collapse an adjacent pair when its concatenation matches a token in the OTHER
+  // stream — EXACT match preferred (byte-identical to the legacy Set behaviour),
+  // else within edit-distance 1 — and emit that matched token so the two streams
+  // align as a `match` rather than a residual substitution. A genuinely wrong pair
+  // won't concatenate near an other-stream token, so this can't mask real drift.
+  // Pairs only (2↔1); 3+ token compounds out of scope.
+  const collapse = (tokens: string[], other: readonly string[]): string[] => {
     const out: string[] = [];
     for (let i = 0; i < tokens.length; i += 1) {
-      if (i + 1 < tokens.length && other.has(tokens[i] + tokens[i + 1])) {
-        out.push(tokens[i] + tokens[i + 1]);
-        i += 1; // consumed the pair
-      } else {
-        out.push(tokens[i]);
+      if (i + 1 < tokens.length) {
+        const concat = tokens[i] + tokens[i + 1];
+        const match = other.find((o) => o === concat) ?? other.find((o) => editDistanceAtMost1(concat, o));
+        if (match !== undefined) {
+          out.push(match);
+          i += 1; // consumed the pair
+          continue;
+        }
       }
+      out.push(tokens[i]);
     }
     return out;
   };
-  const expSet = new Set(expected);
-  const actSet = new Set(actual);
-  return [collapse(expected, actSet), collapse(actual, expSet)];
+  return [collapse(expected, actual), collapse(actual, expected)];
 }
 
 /* --- Word-level alignment (Levenshtein with backtrace) --- */
@@ -408,8 +440,19 @@ export function classifyTranscript(
     ...extra,
   });
 
-  // Too short to score reliably — don't act on it.
+  // Too short to WER-score reliably — don't act on it. EXCEPT a loop/repeat (high
+  // compression) is intrinsic to the transcript and needs no minimum reference
+  // length, so catch it even on a short line (A2c): A1's duration floor no longer
+  // covers a sub-3s short-line loop, and this is the only gate that can.
   if ((expectedText ?? '').trim().length < t.minChars) {
+    if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
+      reasons.push(
+        `Loop/repeat — compression ratio ${signals.compressionRatio.toFixed(2)} exceeds the ${
+          t.maxCompressionRatio
+        } cap (likely repeated/garbled synthesis).`,
+      );
+      return base('drift');
+    }
     reasons.push(`Not scored — sentence under the ${t.minChars}-char ASR floor.`);
     return base('inconclusive');
   }
@@ -508,6 +551,27 @@ export function classifyTranscript(
       `Truncation/drop — ${longestDeletionRun} consecutive words missing (> ${t.maxDeletionRun}).`,
     );
     return base('drift', metrics);
+  }
+  // Short-reference substitution backstop (A2b). On a 2-word reference a single
+  // ASR substitution (homophone, misheard name) drives WER over the cap yet is
+  // weak evidence — route to inconclusive (flag, do NOT re-record). 1-word refs
+  // are excluded (length >= 2): a full sub there is strong evidence. A deletion
+  // (negation flip "did not"→"did", a dropped word) or insertion still flags.
+  if (
+    t.minRefWords > 0 &&
+    expectedTokens.length >= 2 &&
+    expectedTokens.length <= t.minRefWords &&
+    del === 0 &&
+    ins === 0 &&
+    longestDeletionRun === 0 &&
+    sub <= 1 &&
+    wer > t.maxWer
+  ) {
+    reasons.push(
+      `Short reference (${expectedTokens.length} words) with a single substitution; ` +
+        `WER ${wer.toFixed(2)} is weak evidence — not scoring.`,
+    );
+    return base('inconclusive', metrics);
   }
   if (wer > t.maxWer) {
     reasons.push(

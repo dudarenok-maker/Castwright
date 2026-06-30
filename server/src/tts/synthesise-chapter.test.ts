@@ -2691,6 +2691,7 @@ describe('synthesiseChapter pre-assembly QA gate', () => {
     maxInternalSilenceSec: 999,
     minDurationRatio: 0,
     maxDurationRatio: Number.POSITIVE_INFINITY,
+    minRunawaySec: 0,
   };
   const gateCast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator' }];
 

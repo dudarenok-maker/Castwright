@@ -18,6 +18,8 @@ import {
   resolveAsrThresholds,
   verifySegmentTranscript,
   leadingVocalizationTokens,
+  bridgeCompounds,
+  editDistanceAtMost1,
   type AsrSignals,
 } from './segment-asr-qa.js';
 
@@ -360,6 +362,121 @@ describe('classifyTranscript vocalizationAllowlist (fs-57)', () => {
       { vocalizationAllowlist: ['ah'] },
     );
     expect(c.verdict).toBe('drift');
+  });
+});
+
+describe('editDistanceAtMost1', () => {
+  it('is true for equal / single-sub / single-indel, false otherwise', () => {
+    expect(editDistanceAtMost1('skulduggery', 'skulduggery')).toBe(true); // equal
+    expect(editDistanceAtMost1('skullduggery', 'skulduggery')).toBe(true); // 1 deletion (extra l)
+    expect(editDistanceAtMost1('notted', 'nodded')).toBe(false); // 2 subs
+    expect(editDistanceAtMost1('goodby', 'goodbye')).toBe(true); // 1 insertion
+    expect(editDistanceAtMost1('cat', 'dog')).toBe(false); // 3 subs
+  });
+});
+
+describe('bridgeCompounds (fuzzy)', () => {
+  it('A2a: bridges a Whisper word-split 1 edit from the manuscript token', () => {
+    const [exp, act] = bridgeCompounds(['skulduggery', 'froze'], ['skull', 'duggery', 'froze']);
+    expect(exp).toEqual(['skulduggery', 'froze']);
+    expect(act).toEqual(['skulduggery', 'froze']); // canonicalised to the manuscript form
+  });
+
+  it('A2a: still bridges an EXACT split (unchanged legacy behaviour)', () => {
+    const [exp, act] = bridgeCompounds(['curvebuster'], ['curve', 'buster']);
+    expect(exp).toEqual(['curvebuster']);
+    expect(act).toEqual(['curvebuster']);
+  });
+
+  it('A2a: prefers an EXACT other-stream token over a 1-edit neighbour', () => {
+    // other has both a 1-edit neighbour ('too') and the exact concat ('tos');
+    // exact must win so legacy output is preserved regardless of array order.
+    const [, act] = bridgeCompounds(['tos'], ['to', 's']);
+    expect(act).toEqual(['tos']); // not 'too'
+  });
+
+  it('A2a: does NOT bridge a genuinely wrong pair (concat far from any token)', () => {
+    const [exp, act] = bridgeCompounds(['hello', 'there'], ['banana', 'split']);
+    expect(exp).toEqual(['hello', 'there']);
+    expect(act).toEqual(['banana', 'split']);
+  });
+});
+
+describe('classifyTranscript — A2a word-split tolerance', () => {
+  it('A2a: a 1-edit word-split on a short line is ok, not drift (RED→GREEN)', () => {
+    const c = classifyTranscript('Skulduggery frowned at her.', 'Skull Duggery frowned at her.', CLEAN);
+    expect(c.verdict).toBe('ok');
+  });
+});
+
+describe('classifyTranscript — A2b short-reference substitution backstop', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_MIN_REF_WORDS;
+  });
+
+  it('A2b: a single substitution on a 2-word reference is inconclusive, not drift (RED→GREEN)', () => {
+    // "Valkyrie Cain." (14 chars, 2 words) heard "Volkery Cain": 1 sub / 2 words =
+    // WER 0.5 > 0.4, but one homophone on a 2-word line is weak evidence.
+    const c = classifyTranscript('Valkyrie Cain.', 'Volkery Cain.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.del).toBe(0);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2b: a single substitution on a 1-WORD reference still flags drift (strong evidence)', () => {
+    // [rev R1-#1] "Extraordinarily." → 1 token, 16 chars. A full substitution is
+    // wer 1.0 — the whole word is wrong. The >= 2 lower bound must keep this drift.
+    const c = classifyTranscript('Extraordinarily.', 'Coincidentally.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2b: a DELETION on a short reference still flags drift (truncation/negation preserved)', () => {
+    const c = classifyTranscript('Detective Inspector', 'Inspector', CLEAN);
+    expect(c.del).toBe(1);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2b: TWO substitutions on a 2-word reference still flags drift (whole line wrong)', () => {
+    const c = classifyTranscript('Crimson Sparrow', 'Velvet Hammer', CLEAN);
+    expect(c.sub).toBe(2);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2b: a single-substitution meaning-flip on a 2-word ref is inconclusive (disclosed tradeoff)', () => {
+    // [rev R1-#2] Documents the accepted tradeoff: a directional flip expressible
+    // as ONE substitution on a 2-word ref is weak ASR evidence → inconclusive
+    // (recorded, not re-recorded). Deletion-shaped flips stay drift (case above).
+    const c = classifyTranscript('Going forward.', 'Going backward.', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2b: the backstop does not touch a long reference', () => {
+    const c = classifyTranscript(EXPECTED, EXPECTED.replace('observatory', 'laboratory'), CLEAN);
+    expect(c.verdict).toBe('ok');
+  });
+
+  it('A2b: minRefWords=0 disables the backstop (post-impl wiring check)', () => {
+    // NOTE [rev]: green before AND after the impl. Pre-A2b there is no backstop so
+    // this is drift anyway; post-impl it proves the disable knob is wired.
+    process.env.SEG_ASR_MIN_REF_WORDS = '0';
+    const c = classifyTranscript('Valkyrie Cain.', 'Volkery Cain.', CLEAN);
+    expect(c.verdict).toBe('drift');
+  });
+});
+
+describe('classifyTranscript — A2c short-line loop detection', () => {
+  it('A2c: a looped short line flags drift even under the minChars floor (RED→GREEN)', () => {
+    // "No." (3 chars, < minChars 12) looped → high compression. Before A2c the
+    // minChars floor returns inconclusive first; after, the loop tell wins.
+    const looped: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 3.0 };
+    const c = classifyTranscript('No.', 'no no no no no no', looped);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2c: a normal short line is still inconclusive (not over-flagged)', () => {
+    const c = classifyTranscript('Oh.', 'Oh.', CLEAN); // compression 1.3 < 2.4
+    expect(c.verdict).toBe('inconclusive');
   });
 });
 

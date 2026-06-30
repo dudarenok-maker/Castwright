@@ -191,6 +191,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'low',
   },
   {
+    key: 'qa.seg.minRunawaySec',
+    env: 'SEG_QA_MIN_RUNAWAY_SEC',
+    group: 'qa-gates',
+    label: 'Runaway absolute floor (s)',
+    help: 'A segment is only flagged "runaway" when its rendered audio is at least this many seconds long. Stops one-word lines (sub-second expected duration) from false-flagging. 0 disables the floor.',
+    type: 'number', min: 0, max: 30, step: 0.5,
+    default: 3.0, // ← DEFAULT_SEGMENT_QA_THRESHOLDS.minRunawaySec in tts/segment-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
     key: 'qa.asr.enabled',
     env: 'SEG_ASR_ENABLED',
     group: 'qa-gates',
@@ -323,6 +333,16 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Sentences shorter than this (trimmed chars) are not scored — too short for reliable WER.',
     type: 'integer',
     default: 12, // ← DEFAULT_ASR_THRESHOLDS.minChars in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
+    key: 'qa.asr.minRefWords',
+    env: 'SEG_ASR_MIN_REF_WORDS',
+    group: 'qa-gates',
+    label: 'ASR min reference words',
+    help: 'On 2-word references a single ASR substitution is routed to inconclusive instead of drift — one homophone on a two-word line is weak evidence. 1-word refs and deletions/insertions still flag. 0 disables.',
+    type: 'integer', min: 0, max: 10,
+    default: 2, // ← DEFAULT_ASR_THRESHOLDS.minRefWords in tts/segment-asr-qa.ts
     apply: 'live', risk: 'low',
   },
   {
