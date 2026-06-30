@@ -69,6 +69,12 @@ export interface AsrThresholds {
       other-stream token (A2d). 3 catches a name Whisper splits into three
       ("Scapegrace" → "scape a grace"); 2 restores pair-only bridging. */
   maxBridgeRun: number;
+  /** A2e: a 1-word reference whose only error is a single substitution within
+      edit-distance 1 of what was heard ("Uneventfully" → "Unaventfully") is a
+      spelling variant, not a content defect → inconclusive. false disables it
+      (a 1-word full sub stays drift). Short single words never reach here — the
+      minChars floor already returns above. */
+  homophone1Word: boolean;
   /** compression_ratio above this → drift (Whisper's loop/repeat hallucination
       tell), regardless of WER. */
   maxCompressionRatio: number;
@@ -84,6 +90,7 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   minChars: 12,
   minRefWords: 2,
   maxBridgeRun: 3,
+  homophone1Word: true,
   maxCompressionRatio: 2.4,
   minAvgLogprob: -1.0,
   maxNoSpeechProb: 0.6,
@@ -118,6 +125,7 @@ export function resolveAsrThresholds(
     minChars: configValue<number>('qa.asr.minChars'),
     minRefWords: configValue<number>('qa.asr.minRefWords'),
     maxBridgeRun: configValue<number>('qa.asr.maxBridgeRun'),
+    homophone1Word: configValue<boolean>('qa.asr.homophone1Word'),
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
     minAvgLogprob: configValue<number>('qa.asr.minAvgLogprob'),
     maxNoSpeechProb: configValue<number>('qa.asr.maxNoSpeech'),
@@ -593,6 +601,29 @@ export function classifyTranscript(
     reasons.push(
       `Short reference (${expectedTokens.length} words) with a single substitution; ` +
         `WER ${wer.toFixed(2)} is weak evidence — not scoring.`,
+    );
+    return base('inconclusive', metrics);
+  }
+  // 1-word near-homophone backstop (A2e). A single-token reference whose only
+  // error is a substitution within edit-distance 1 of what was heard
+  // ("Uneventfully" → "Unaventfully") is a spelling/schwa variant of one whole
+  // word — the audio said the right phonemes, Whisper misspelled. Weak evidence
+  // → inconclusive (flag, don't re-record). A far-apart substitution
+  // ("Extraordinarily" → "Coincidentally") fails the edit-1 guard and stays
+  // drift. Short single words never reach here — the minChars floor returned above.
+  if (
+    t.homophone1Word &&
+    expectedTokens.length === 1 &&
+    actualTokens.length === 1 &&
+    sub === 1 &&
+    del === 0 &&
+    ins === 0 &&
+    wer > t.maxWer &&
+    editDistanceAtMost1(expectedTokens[0], actualTokens[0])
+  ) {
+    reasons.push(
+      `Single-word reference misheard within one edit ("${expectedTokens[0]}" vs ` +
+        `"${actualTokens[0]}"); likely a spelling variant — not scoring.`,
     );
     return base('inconclusive', metrics);
   }

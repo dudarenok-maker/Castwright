@@ -356,6 +356,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'low',
   },
   {
+    key: 'qa.asr.homophone1Word',
+    env: 'SEG_ASR_HOMOPHONE_1WORD',
+    group: 'qa-gates',
+    label: 'ASR 1-word homophone tolerance',
+    help: 'On a single-word reference, a lone substitution within one edit of what was heard ("Uneventfully" → "Unaventfully") is treated as a spelling variant (inconclusive) rather than drift. Disable to flag every 1-word mismatch. Far-apart substitutions still drift.',
+    type: 'boolean',
+    default: true, // ← DEFAULT_ASR_THRESHOLDS.homophone1Word in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
     key: 'qa.asr.maxCompression',
     env: 'SEG_ASR_MAX_COMPRESSION',
     group: 'qa-gates',

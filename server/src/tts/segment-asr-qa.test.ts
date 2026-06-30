@@ -514,6 +514,42 @@ describe('classifyTranscript — A2b short-reference substitution backstop', () 
   });
 });
 
+describe('classifyTranscript — A2e 1-word near-homophone backstop', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_HOMOPHONE_1WORD;
+  });
+
+  it('A2e: a long single word misheard by ≤1 edit is inconclusive, not drift (RED→GREEN)', () => {
+    // "Uneventfully." (13 chars ≥ minChars 12, so it IS scored) heard
+    // "Unaventfully." — 1 sub (e→a) → WER 1.0 > 0.4. One edit on a whole long
+    // word is a spelling/schwa variant; the audio said the right phonemes.
+    const c = classifyTranscript('Uneventfully.', 'Unaventfully.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2e: a far-apart single-word substitution still flags drift (strong evidence)', () => {
+    // "Extraordinarily."→"Coincidentally." is a whole different word (edit
+    // distance ≫ 1), not a mishearing → stays drift.
+    const c = classifyTranscript('Extraordinarily.', 'Coincidentally.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2e: a short single word (< minChars) is unaffected — still inconclusive via the floor', () => {
+    // "Uneventful." (11 chars) never reaches scoring; the minChars floor already
+    // routes it to inconclusive. A2e must not change that path.
+    const c = classifyTranscript('Uneventful.', 'Unaventful.', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2e: SEG_ASR_HOMOPHONE_1WORD=false restores the pre-PR drift (disable knob wired)', () => {
+    process.env.SEG_ASR_HOMOPHONE_1WORD = 'false';
+    const c = classifyTranscript('Uneventfully.', 'Unaventfully.', CLEAN);
+    expect(c.verdict).toBe('drift');
+  });
+});
+
 describe('classifyTranscript — A2c short-line loop detection', () => {
   it('A2c: a looped short line flags drift even under the minChars floor (RED→GREEN)', () => {
     // "No." (3 chars, < minChars 12) looped → high compression. Before A2c the
