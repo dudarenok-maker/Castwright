@@ -20,11 +20,14 @@ import main
 
 def _make_stub_model(decode_sleep_s: float = 0.0) -> Any:
     """A WRAPPER-shaped stub: the speech_tokenizer hangs off `.model`, exactly
-    like the real Qwen3TTSModel."""
+    like the real Qwen3TTSModel. `decode`'s return value is derived from its
+    input (echoes `items` back alongside a fixed sample rate) so a wrapped
+    call's result can be checked for passthrough against a known-expected
+    value rather than just asserting call counts."""
     def decode(items):
         if decode_sleep_s:
             time.sleep(decode_sleep_s)
-        return ([object()], 24000)
+        return (items, 24000)
     st = types.SimpleNamespace(decode=decode)
     inner = types.SimpleNamespace(speech_tokenizer=st)
     return types.SimpleNamespace(model=inner)
@@ -55,12 +58,15 @@ def test_codec_timing_accumulates_when_enabled(monkeypatch):
     main._codec_timing_reset()
     model = _make_stub_model(decode_sleep_s=0.01)
     main._install_codec_timing(model)
-    model.model.speech_tokenizer.decode([{"audio_codes": object()}])
+    items = [{"audio_codes": object()}]
+    result = model.model.speech_tokenizer.decode(items)
     model.model.speech_tokenizer.decode([{"audio_codes": object()}])
     snap = main._codec_timing_snapshot()
     assert snap["calls"] == 2
     assert snap["total_ms"] >= 18.0  # two ~10ms sleeps, generous lower bound
     assert snap["enabled"] is True
+    # The wrapper must pass the original decode's return value through unmodified.
+    assert result == (items, 24000)
 
 
 def test_codec_timing_reset_zeroes(monkeypatch):

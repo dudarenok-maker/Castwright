@@ -312,13 +312,14 @@ def run_mem_sample(args, model: str) -> int:
 
 def run_code2wav_share(args, model: str) -> int:
     """side-19 Phase 0 mode: measure the Code2Wav codec decode share of batch
-    forward-compute time. Drives a 32-item batch of high-variance sentences
-    (cycled from HIGH_VARIANCE_SENTENCES) and reports the codec share + count."""
+    forward-compute time. Drives a `--batch`-sized batch (default 32) of
+    high-variance sentences (cycled from HIGH_VARIANCE_SENTENCES) and reports
+    the codec share + count."""
     if args.engine != "qwen":
         print("--code2wav-share is Qwen-only (it drives the /synthesize-batch path).")
         return 2
 
-    batch_size = 32
+    batch_size = args.batch if args.batch >= 1 else 32
     batch_url = args.url.replace("/synthesize", "/synthesize-batch")
     server_base = args.url.rsplit("/", 1)[0]
 
@@ -364,12 +365,23 @@ def run_code2wav_share(args, model: str) -> int:
 
     decode_ms = snap.get("total_ms", 0.0)
     calls = snap.get("calls", 0)
+    enabled = snap.get("enabled", False)
     share = codec_share(decode_ms, gen_ms)
 
     # Print the result
     print(f"code2wav share: {share:.1%}  (decode {decode_ms:.0f} ms / forward {gen_ms:.0f} ms, {calls} decode calls)")
-    if calls == 0:
+    if not enabled:
+        print(
+            "INVALID: QWEN_CODEC_TIMING is not enabled in the sidecar — set it "
+            "and restart the sidecar before running this bench."
+        )
+    elif calls == 0:
         print("INVALID: 0 decode calls captured — see Task 3 M1.")
+    elif share > 1.0:
+        print(
+            "WARNING: share > 100% — decode_ms exceeds forward gen_ms; check the "
+            "clock-domain assumption (see Task 3)."
+        )
 
     return 0
 
@@ -425,8 +437,8 @@ def main(argv: list[str]) -> int:
         "--code2wav-share", action="store_true",
         help="side-19 Phase 0 mode: measure the Code2Wav codec decode share of batch "
         "forward-compute time. Requires QWEN_CODEC_TIMING=1 in the sidecar env. "
-        "Drives a --batch 32 batch of high-variance sentences and reports the codec "
-        "share + decode-call count.",
+        "Drives a --batch-sized batch (default 32 if --batch unset) of high-variance "
+        "sentences and reports the codec share + decode-call count.",
     )
     p.add_argument(
         "--batches", type=int, default=200,
