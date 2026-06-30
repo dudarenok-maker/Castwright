@@ -171,6 +171,50 @@ describe('setQueuePaused', () => {
   });
 });
 
+describe('enqueueQueueEntries — analysis gate', () => {
+  /* Reuses the file's top-level fetchMock (set up in beforeEach / torn down in
+     afterEach). Per-describe beforeEach captures the POST body so we can assert
+     which entries were actually sent to the server. */
+  const posted: unknown[] = [];
+
+  beforeEach(() => {
+    posted.length = 0;
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { entries: unknown[] };
+      posted.push(...body.entries);
+      return {
+        ok: true,
+        json: async () => ({ entries: body.entries, paused: false, recycling: false }),
+      };
+    });
+  });
+
+  it('enqueues only un-gated entries and toasts the gated pass', async () => {
+    const dispatch = vi.fn();
+    /* b1 has prosody running → gated. b2 has no active streams → allowed. */
+    const getState = () =>
+      ({
+        prosody: { activeStreams: { b1: { progress: 0, label: 'Detecting emotions' } } },
+        scriptReview: { activeStreams: {} },
+        queue: { entries: [], paused: false, recycling: false, loaded: false },
+      }) as never;
+
+    await enqueueQueueEntries([
+      { id: 'e1', bookId: 'b1', chapterId: 1, scope: 'this' },
+      { id: 'e2', bookId: 'b2', chapterId: 1, scope: 'this' },
+    ])(dispatch as never, getState as never);
+
+    /* Only the un-gated b2 entry was POSTed to the server: */
+    expect(posted).toEqual([{ id: 'e2', bookId: 'b2', chapterId: 1, scope: 'this' }]);
+
+    /* A warn toast with the per-pass (prosody) copy fired: */
+    const toasts = dispatch.mock.calls
+      .map((c) => c[0] as { type?: string; payload?: { message?: string } })
+      .filter((a) => a.type?.includes('pushToast'));
+    expect(toasts.some((t) => t.payload?.message === 'Wait — emotions are still being detected')).toBe(true);
+  });
+});
+
 describe('startQueueEntry', () => {
   it('POSTs /start and dispatches the snapshot (entry now in_progress)', async () => {
     fetchMock.mockResolvedValue(

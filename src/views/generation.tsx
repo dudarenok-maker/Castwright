@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useStore } from 'react-redux';
 import { useOutletContext } from 'react-router-dom';
 import { helpHrefForFailureCode } from '../lib/router';
 import { MANIFESTO } from '../lib/brand';
@@ -45,6 +46,9 @@ const INERT_TTS_LIFECYCLE: TtsLifecycle = {
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import { useAppDispatch, useAppSelector } from '../store';
+import type { RootState } from '../store';
+import { notificationsActions } from '../store/notifications-slice';
+import { selectAnalysisBusyForBook, analysisBusyMessage } from '../store/analysis-substage-selectors';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
@@ -159,6 +163,10 @@ export function GenerationView({
   onPreview,
 }: Props) {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
+  const analysisBusy = useAppSelector((s) =>
+    bookId ? selectAnalysisBusyForBook(s, bookId) : false,
+  );
   const lastError = useAppSelector((s) => s.chapters.lastError);
   const generationStartedAt = useAppSelector((s) => s.chapters.generationStartedAt);
   const lastTickAt = useAppSelector((s) => s.chapters.lastTickAt);
@@ -602,6 +610,13 @@ export function GenerationView({
      skip the reason-prompt RegenerateModal that `onRegenerate` opens because a
      never-rendered chapter has no prior render to "regenerate". */
   function handleGenerateChapter(ch: Chapter): void {
+    if (analysisBusy) {
+      const msg =
+        analysisBusyMessage(store.getState(), bookId) ??
+        'Wait — analysis is still running on this book.';
+      dispatch(notificationsActions.pushToast({ kind: 'warn', message: msg, dedupeKey: 'gen-gated-by-analysis' }));
+      return;
+    }
     /* Re-adding a "Not queued" (held) chapter clears the hold so the row leaves
        the "Not queued" state and the auto-work resume stops skipping it. Clear
        optimistically in the slice + persist; the enqueue below is what actually
@@ -983,7 +998,8 @@ export function GenerationView({
           {allComplete && (
             <button
               onClick={onRegenerateBook}
-              className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+              disabled={analysisBusy}
+              className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
             >
               <IconRefresh className="w-4 h-4" /> Regenerate
             </button>
@@ -1045,7 +1061,8 @@ export function GenerationView({
           <button
             type="button"
             onClick={() => setBulkRegenOpen(true)}
-            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors"
+            disabled={analysisBusy}
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Regenerate all
           </button>

@@ -21,6 +21,7 @@ import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
 import { mockQueueRequest } from '../mocks/mock-queue';
 import { api } from '../lib/api';
+import { selectAnalysisBusyForBook, analysisBusyMessage } from './analysis-substage-selectors';
 
 /* Plan 111 — the persisted queue drives generation, so mock mode (dev app +
    e2e) needs a working queue with no backend. Route through the in-memory
@@ -66,6 +67,17 @@ async function readSnapshot(res: Response): Promise<QueueSnapshotResponse> {
   return res.json() as Promise<QueueSnapshotResponse>;
 }
 
+/** Build a QueueSnapshotResponse from the live queue slice — used when all
+    entries are gated so we can early-return without a network call.
+    The server rejects an empty entries[] with 400, so we MUST NOT post it. */
+function snapshotFromState(state: RootState): QueueSnapshotResponse {
+  return {
+    entries: state.queue.entries,
+    paused: state.queue.paused,
+    recycling: state.queue.recycling,
+  };
+}
+
 /** GET /api/queue — cold-boot hydrate. Mount-time effect in Layout should
     call this once on app start so the modal renders the persisted queue
     even across hard reload / server bounce. */
@@ -83,11 +95,29 @@ export function loadQueue() {
     suppress the toast — the auto-enqueue of a resumed/first run is not a
     user-initiated "Added to queue" action. */
 export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: boolean } = {}) {
-  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+  return async (dispatch: AppDispatch, getState: () => RootState): Promise<QueueSnapshotResponse> => {
+    const state = getState();
+    const allowed = entries.filter((e) => !selectAnalysisBusyForBook(state, e.bookId));
+    const gated = entries.filter((e) => selectAnalysisBusyForBook(state, e.bookId));
+    if (gated.length > 0) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message:
+            analysisBusyMessage(state, gated[0].bookId) ??
+            'Wait — analysis is still running on this book.',
+          dedupeKey: 'gen-gated-by-analysis',
+        }),
+      );
+    }
+    /* The server rejects entries:[] with 400 ("entries[] required and non-empty"),
+       so when every entry is gated we early-return the current snapshot without
+       a network call rather than posting an empty array. */
+    if (allowed.length === 0) return snapshotFromState(getState());
     const res = await queueRequest('/api/queue/enqueue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries }),
+      body: JSON.stringify({ entries: allowed }),
     });
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
