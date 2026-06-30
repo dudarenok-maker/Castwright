@@ -177,6 +177,68 @@ def _apply_torch_perf_flags(torch: Any) -> None:
         log.warning("Could not apply torch perf flags (%s) — continuing.", e)
 
 
+_CODEC_TIMING: dict = {"total_ms": 0.0, "calls": 0}
+
+
+def _resolve_speech_tokenizer(model: Any) -> Any:
+    """The codec lives on the INNER nn.Module: Qwen3TTSModel is a thin wrapper
+    holding the real module at `.model` (see _load_qwen_model docstring; the
+    authoritative call site is `self._base17.model.speech_tokenizer.decode`).
+    Resolve `model.model.speech_tokenizer`, tolerating a model that already IS
+    the inner module, and return None when absent so callers no-op rather than
+    raise — a perf hook must never break a load."""
+    inner = getattr(model, "model", model)
+    return getattr(inner, "speech_tokenizer", None)
+
+
+def _codec_timing_enabled() -> bool:
+    """side-19 Phase-0 gate instrument. When QWEN_CODEC_TIMING is truthy,
+    `_install_codec_timing` wraps the codec's decode to accumulate Code2Wav
+    wall-time. Default OFF — zero overhead in production; a measurement knob,
+    not a shipping path."""
+    import os as _os  # noqa: PLC0415
+    return _os.environ.get("QWEN_CODEC_TIMING", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _codec_timing_reset() -> None:
+    _CODEC_TIMING["total_ms"] = 0.0
+    _CODEC_TIMING["calls"] = 0
+
+
+def _codec_timing_snapshot() -> dict:
+    return {
+        "total_ms": _CODEC_TIMING["total_ms"],
+        "calls": _CODEC_TIMING["calls"],
+        "enabled": _codec_timing_enabled(),
+    }
+
+
+def _install_codec_timing(model: Any) -> None:
+    """Wrap the resolved speech_tokenizer.decode with a wall-ms accumulator,
+    once. Idempotent (`_codec_timed` marker survives reloads). No-op when
+    disabled or when the codec can't be resolved."""
+    if not _codec_timing_enabled():
+        return
+    try:
+        st = _resolve_speech_tokenizer(model)
+        if st is None or getattr(st, "_codec_timed", False):
+            return
+        original = st.decode
+
+        def _timed_decode(*args, **kwargs):
+            t0 = time.perf_counter()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                _CODEC_TIMING["total_ms"] += (time.perf_counter() - t0) * 1000.0
+                _CODEC_TIMING["calls"] += 1
+
+        st.decode = _timed_decode
+        st._codec_timed = True
+    except Exception as e:  # pragma: no cover - defensive, never kill a load
+        log.warning("Could not install codec timing (%s) — continuing.", e)
+
+
 app = FastAPI(title="audiobook-generator local TTS sidecar")
 
 
@@ -1656,6 +1718,7 @@ class QwenEngine(Engine):
                 self._ensure_device_resolved()
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
+                _install_codec_timing(self._base)
                 log.info("Qwen Base loaded.")
 
     def _ensure_base17_loaded(self) -> None:
@@ -4414,6 +4477,17 @@ def debug_memory() -> dict[str, Any]:
         pass
     out["cuda"] = cuda
     return out
+
+
+@app.get("/debug/codec-timing")
+async def debug_codec_timing() -> dict:
+    return _codec_timing_snapshot()
+
+
+@app.post("/debug/codec-timing/reset")
+async def debug_codec_timing_reset() -> dict:
+    _codec_timing_reset()
+    return {"ok": True}
 
 
 @app.post("/load")
