@@ -40,6 +40,11 @@ export interface ChapterThroughputRecord {
   bookId: string | null;
   modelKey: string | null;
   rtf: number | null;
+  /** B1 — QA-driven re-record wall ÷ audio (the cost the gate fixes move).
+      null when not split (generationWorkers > 1) or no audio. */
+  rerecordRtf: number | null;
+  /** B1 — always-on verify floor (transcribe + embed) ÷ audio. null as above. */
+  verifyRtf: number | null;
   audioSec: number;
   synthSec: number;
   at: string;
@@ -182,6 +187,9 @@ export function recordChapterThroughput(
     title?: string | null;
     bookId?: string | null;
     modelKey?: string | null;
+    rerecordMs?: number | null;
+    transcribeMs?: number | null;
+    embedMs?: number | null;
   },
   now: number = Date.now(),
 ): GenerationStats {
@@ -197,12 +205,23 @@ export function recordChapterThroughput(
   /* History ring — push BEFORE the window-reset branch so it always records,
      independent of the RESET_MS idle reset. Newest-first, capped. `rtf` is
      null (not 0) on no-audio so the view renders a dash and skips the tint. */
+  const hasAudio = input.audioSec > 0;
+  const rerecordRtf =
+    hasAudio && input.rerecordMs != null ? input.rerecordMs / 1000 / input.audioSec : null;
+  const verifyMs =
+    input.transcribeMs != null || input.embedMs != null
+      ? (input.transcribeMs ?? 0) + (input.embedMs ?? 0)
+      : null;
+  const verifyRtf = hasAudio && verifyMs != null ? verifyMs / 1000 / input.audioSec : null;
+
   history.unshift({
     chapterId: input.chapterId,
     title: input.title ?? null,
     bookId: input.bookId ?? null,
     modelKey: input.modelKey ?? null,
     rtf: input.audioSec > 0 ? synthSec / input.audioSec : null,
+    rerecordRtf,
+    verifyRtf,
     audioSec: input.audioSec,
     synthSec,
     at: new Date(now).toISOString(),
