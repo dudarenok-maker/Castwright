@@ -3434,6 +3434,33 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
         return (None, None, None)
 
 
+def _sample_card(idx: int, torch_module: Any) -> dict:
+    """One card's discovery row (driver truth via mem_get_info — sees ALL
+    allocators). The reusable primitive Wave 2's ledger wraps per-sample."""
+    props = torch_module.cuda.get_device_properties(idx)
+    free, total = torch_module.cuda.mem_get_info(idx)
+    return {
+        "uuid": str(getattr(props, "uuid", "")) or f"idx-{idx}",
+        "idx": idx,
+        "name": props.name,
+        "total_mb": round(total / 1_000_000),
+        "free_mb": round(free / 1_000_000),
+    }
+
+
+def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
+    """[{uuid,idx,name,total_mb,free_mb}] per visible CUDA device, [] when CUDA is
+    unavailable. torch_module is injectable for tests (default → local import)."""
+    try:
+        if torch_module is None:
+            import torch as torch_module  # type: ignore
+        if not torch_module.cuda.is_available():
+            return []
+        return [_sample_card(i, torch_module) for i in range(torch_module.cuda.device_count())]
+    except Exception:
+        return []
+
+
 # Reserved-VRAM recycle fractions of device total (defaults; absolute MB env
 # overrides below). Soft flags a clean boundary recycle; hard self-exits. Both
 # key on RESERVED crossing the card — the spill trigger on Windows.
@@ -4222,6 +4249,11 @@ def health() -> dict[str, Any]:
         "mem_restart_mb": (_mem_restart_threshold_mb() or None),
         "vram_restart_mb": (_vram_restart_threshold_mb(_vram_total) or None),
     }
+
+
+@app.get("/devices")
+def devices() -> dict:
+    return {"devices": _enumerate_cuda_devices(), "cpu": True}
 
 
 @app.get("/debug/memory")
