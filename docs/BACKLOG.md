@@ -461,6 +461,12 @@ _Full detail + acceptance:_ [#1043](https://github.com/dudarenok-maker/Castwrigh
 
 - _What:_ Full-page re-blessed baselines + a contiguity gate to catch branding-scale changes outside the top-bar. Follow-up to #925; build only if a real non-top-bar regression is seen.
 
+#### `fe-44` — App-wide user-facing "TTS" → "Voice engines" copy rename ([#1182](https://github.com/dudarenok-maker/Castwright/issues/1182))
+
+- _What:_ Rename every user-visible "TTS" string to "Voice engines" across the app — eviction banners ("TTS / Analyzer unloaded to free VRAM" in `analysing.tsx` / `cast.tsx` / `profile-drawer`), the admin-page "local TTS / analyzer / ASR" label in `admin.tsx:145`, and any other operator-visible surface. Engine proper nouns (Coqui XTTS, Qwen3-TTS) and code identifiers (`ttsLifecycle`, `TTS_MODEL_OPTIONS`) stay as-is. Plan 234 ships the in-scope Status-popover "TTS engines" → "Voice engines" rename; this item covers the remaining app-wide copy. Each rename site carries a test assertion (e.g. `analysing.test.tsx:582` asserts eviction banner text) — the cohesive change + its test updates form one PR.
+- _Benefit (user):_ consistent, jargon-free language across the whole UI; "Voice engines" is what operators and users call the model controls, not the internal acronym "TTS." Chore-scale (copy only, no logic change).
+_Full detail + acceptance:_ [#1182](https://github.com/dudarenok-maker/Castwright/issues/1182).
+
 #### `ops-14` — eslint 9→10 (+@eslint/js): deferred, upstream-blocked ([#711](https://github.com/dudarenok-maker/AudioBook-Generator/issues/711))
 
 - _What:_ The one item deps round 3 (plan 202) could not ship. `eslint ^9→^10` is blocked because the latest `eslint-plugin-react` (7.37.5) and `eslint-plugin-jsx-a11y` (6.10.2) still cap their eslint peer at `^9`, and eslint 10 removes deprecated context APIs those plugins use. **Re-confirmed 2026-06-18 (deps round 4):** still capped (only `eslint-plugin-react-hooks` added `^10`); eslint 9 is now in the `maintenance` dist-tag. Unblock when both plugins ship eslint-10 peer ranges; then bump eslint + @eslint/js + the two plugins together.
