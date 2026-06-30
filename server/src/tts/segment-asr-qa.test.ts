@@ -18,6 +18,8 @@ import {
   resolveAsrThresholds,
   verifySegmentTranscript,
   leadingVocalizationTokens,
+  bridgeCompounds,
+  editDistanceAtMost1,
   type AsrSignals,
 } from './segment-asr-qa.js';
 
@@ -360,6 +362,50 @@ describe('classifyTranscript vocalizationAllowlist (fs-57)', () => {
       { vocalizationAllowlist: ['ah'] },
     );
     expect(c.verdict).toBe('drift');
+  });
+});
+
+describe('editDistanceAtMost1', () => {
+  it('is true for equal / single-sub / single-indel, false otherwise', () => {
+    expect(editDistanceAtMost1('skulduggery', 'skulduggery')).toBe(true); // equal
+    expect(editDistanceAtMost1('skullduggery', 'skulduggery')).toBe(true); // 1 deletion (extra l)
+    expect(editDistanceAtMost1('notted', 'nodded')).toBe(false); // 2 subs
+    expect(editDistanceAtMost1('goodby', 'goodbye')).toBe(true); // 1 insertion
+    expect(editDistanceAtMost1('cat', 'dog')).toBe(false); // 3 subs
+  });
+});
+
+describe('bridgeCompounds (fuzzy)', () => {
+  it('A2a: bridges a Whisper word-split 1 edit from the manuscript token', () => {
+    const [exp, act] = bridgeCompounds(['skulduggery', 'froze'], ['skull', 'duggery', 'froze']);
+    expect(exp).toEqual(['skulduggery', 'froze']);
+    expect(act).toEqual(['skulduggery', 'froze']); // canonicalised to the manuscript form
+  });
+
+  it('A2a: still bridges an EXACT split (unchanged legacy behaviour)', () => {
+    const [exp, act] = bridgeCompounds(['curvebuster'], ['curve', 'buster']);
+    expect(exp).toEqual(['curvebuster']);
+    expect(act).toEqual(['curvebuster']);
+  });
+
+  it('A2a: prefers an EXACT other-stream token over a 1-edit neighbour', () => {
+    // other has both a 1-edit neighbour ('too') and the exact concat ('tos');
+    // exact must win so legacy output is preserved regardless of array order.
+    const [, act] = bridgeCompounds(['tos'], ['to', 's']);
+    expect(act).toEqual(['tos']); // not 'too'
+  });
+
+  it('A2a: does NOT bridge a genuinely wrong pair (concat far from any token)', () => {
+    const [exp, act] = bridgeCompounds(['hello', 'there'], ['banana', 'split']);
+    expect(exp).toEqual(['hello', 'there']);
+    expect(act).toEqual(['banana', 'split']);
+  });
+});
+
+describe('classifyTranscript — A2a word-split tolerance', () => {
+  it('A2a: a 1-edit word-split on a short line is ok, not drift (RED→GREEN)', () => {
+    const c = classifyTranscript('Skulduggery frowned at her.', 'Skull Duggery frowned at her.', CLEAN);
+    expect(c.verdict).toBe('ok');
   });
 });
 

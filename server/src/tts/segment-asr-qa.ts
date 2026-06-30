@@ -277,6 +277,22 @@ export function looksLikeHallucination(transcript: string): boolean {
   return s.length > 0 && HALLUCINATION_PATTERNS.some((re) => re.test(s));
 }
 
+/** True when `a` and `b` are within Levenshtein distance 1 (equal, one
+    substitution, or one insertion/deletion). Bounded short-circuit — no full DP
+    matrix. Used by bridgeCompounds to tolerate the one-character drift Whisper
+    introduces re-segmenting a compound ("skulduggery" → "skull duggery"). */
+export function editDistanceAtMost1(a: string, b: string): boolean {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0;
+  while (i < la && i < lb && a[i] === b[i]) i += 1;
+  if (la === lb) return a.slice(i + 1) === b.slice(i + 1); // one substitution
+  if (la > lb) return a.slice(i + 1) === b.slice(i); // one deletion from a
+  return a.slice(i) === b.slice(i + 1); // one insertion into a
+}
+
 /* Reconcile solid↔split compound forms between the expected and actual token
    streams. Whisper routinely splits a closed compound the manuscript writes
    solid ("curvebuster" → "curve buster") or joins an open one the manuscript
@@ -288,21 +304,29 @@ export function looksLikeHallucination(transcript: string): boolean {
    token, so this can never mask real drift. Pairs only (2↔1); 3+ token
    compounds are rare and out of scope. */
 export function bridgeCompounds(expected: string[], actual: string[]): [string[], string[]] {
-  const collapse = (tokens: string[], other: ReadonlySet<string>): string[] => {
+  // Collapse an adjacent pair when its concatenation matches a token in the OTHER
+  // stream — EXACT match preferred (byte-identical to the legacy Set behaviour),
+  // else within edit-distance 1 — and emit that matched token so the two streams
+  // align as a `match` rather than a residual substitution. A genuinely wrong pair
+  // won't concatenate near an other-stream token, so this can't mask real drift.
+  // Pairs only (2↔1); 3+ token compounds out of scope.
+  const collapse = (tokens: string[], other: readonly string[]): string[] => {
     const out: string[] = [];
     for (let i = 0; i < tokens.length; i += 1) {
-      if (i + 1 < tokens.length && other.has(tokens[i] + tokens[i + 1])) {
-        out.push(tokens[i] + tokens[i + 1]);
-        i += 1; // consumed the pair
-      } else {
-        out.push(tokens[i]);
+      if (i + 1 < tokens.length) {
+        const concat = tokens[i] + tokens[i + 1];
+        const match = other.find((o) => o === concat) ?? other.find((o) => editDistanceAtMost1(concat, o));
+        if (match !== undefined) {
+          out.push(match);
+          i += 1; // consumed the pair
+          continue;
+        }
       }
+      out.push(tokens[i]);
     }
     return out;
   };
-  const expSet = new Set(expected);
-  const actSet = new Set(actual);
-  return [collapse(expected, actSet), collapse(actual, expSet)];
+  return [collapse(expected, actual), collapse(actual, expected)];
 }
 
 /* --- Word-level alignment (Levenshtein with backtrace) --- */
