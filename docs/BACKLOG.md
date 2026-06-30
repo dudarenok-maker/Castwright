@@ -299,6 +299,12 @@ _Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
 
+#### `fe-44` — App-wide user-facing "TTS" → "Voice engines" copy rename ([#1182](https://github.com/dudarenok-maker/Castwright/issues/1182))
+
+- _What:_ Rename the user-facing term "TTS" → "Voice engines" across UI copy (eviction banners "TTS unloaded to free VRAM", admin "local TTS / analyzer / ASR", etc.) for terminology consistency with the brand voice language. Copy-only — engine proper nouns (Coqui XTTS, Qwen3-TTS, Kokoro) and code identifiers (`ttsLifecycle`, `TTS_MODEL_OPTIONS`, the `status-popover-tts` testid) stay as-is. The manuscript-analysis-pill feature renamed only the in-scope Status-popover label; this is the broad follow-up.
+- _Benefit (user / brand):_ jargon-free terminology — listeners see "Voice engines", not the engineering acronym, matching the rest of the Castwright voice language. Low-cost copy polish.
+_Full detail + acceptance:_ [#1182](https://github.com/dudarenok-maker/Castwright/issues/1182).
+
 ### Ingest & languages
 
 #### `srv-46` — OCR ingest for scanned / image-only PDFs ([#977](https://github.com/dudarenok-maker/Castwright/issues/977))
