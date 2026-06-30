@@ -4152,6 +4152,8 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         ks = _kokoro_session_device(engine)
         if ks:
             family = ks
+    if family in (None, "auto"):
+        family = "unknown"
     fell_back = (requested_fam == "cuda" and family == "cpu")
     return {"family": family, "index": index, "fell_back": fell_back}
 

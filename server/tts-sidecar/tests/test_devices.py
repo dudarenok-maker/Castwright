@@ -31,3 +31,12 @@ def test_engine_actual_card_detects_cpu_fallback():
 def test_engine_actual_card_none_when_unloaded():
     eng = types.SimpleNamespace(_requested_device="cuda:1", device="cpu", _model=None)
     assert main._engine_actual_card(eng) is None
+
+def test_engine_actual_card_unknown_family_when_all_probes_fail():
+    # model is a plain object(): no parameters(), no device/kokoro attrs on engine
+    eng = types.SimpleNamespace(_requested_device="cuda:1", _model=object())
+    card = main._engine_actual_card(eng)
+    assert card is not None
+    assert card["family"] == "unknown"
+    assert card["index"] is None
+    assert card["fell_back"] is False
