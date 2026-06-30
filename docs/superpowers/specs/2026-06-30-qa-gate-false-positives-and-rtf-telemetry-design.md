@@ -317,5 +317,14 @@ Reconciliation of the PR-1 residual against PR-1.1:
 - `"Is it Fernanabop Caprukey?"` and the deletion-bearing / repetition lines — **genuine
   defects, intentionally still `drift`** (not in roster, multi-error, or a real repeat).
 
+**Disclosed tradeoff (A2e, from the adversarial review):** because the guard is a
+character edit-distance, a genuinely different word that sits one edit from what was
+heard on a *single-word* line (`"Resignation."`→`"Designation."`, `"Immortality."`→
+`"Immorality."`) is routed to `inconclusive`, not `drift`. On a 1-word line the audio
+and the ASR are equally plausible as the source of a 1-char difference, so it is weak
+evidence — flagged, never auto-re-recorded — exactly the A2b philosophy. The input
+class is narrow (≥12-char single-word sentences) and pinned by a regression test; set
+`qa.asr.homophone1Word`=false to flag these as `drift` instead.
+
 **Owed on-box (unchanged):** the definitive per-chapter re-record count + RTF on a
 re-rendered chapter (needs sidecar/GPU) — covers PR-1 and PR-1.1 together.

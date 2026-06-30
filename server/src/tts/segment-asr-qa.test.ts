@@ -425,6 +425,14 @@ describe('bridgeCompounds (fuzzy)', () => {
     const [, act] = bridgeCompounds(['scapegrace', 'appeared'], ['scape', 'a', 'grace', 'appeared'], 2);
     expect(act).toEqual(['scape', 'a', 'grace', 'appeared']); // unchanged — 3-run skipped
   });
+
+  it('A2d: also collapses the expected→actual direction (manuscript-split name)', () => {
+    // The reverse split: the manuscript wrote three tokens, Whisper joined them.
+    // collapse(expected, actual) must rejoin the expected run to the actual token.
+    const [exp, act] = bridgeCompounds(['scape', 'a', 'grace', 'appeared'], ['scapegrace', 'appeared']);
+    expect(exp).toEqual(['scapegrace', 'appeared']);
+    expect(act).toEqual(['scapegrace', 'appeared']);
+  });
 });
 
 describe('classifyTranscript — A2a word-split tolerance', () => {
@@ -534,6 +542,19 @@ describe('classifyTranscript — A2e 1-word near-homophone backstop', () => {
     const c = classifyTranscript('Extraordinarily.', 'Coincidentally.', CLEAN);
     expect(c.sub).toBe(1);
     expect(c.verdict).toBe('drift');
+  });
+
+  it('A2e: a real edit-1 word swap on a 1-word line is inconclusive (DISCLOSED tradeoff)', () => {
+    // [review I-1/I-2] Documents the accepted tradeoff at the decision boundary:
+    // a genuinely different word that happens to sit at CHARACTER edit-distance 1
+    // ("Resignation."→"Designation.", r→d) is routed to inconclusive, not drift —
+    // on a single-word line the audio and ASR are equally likely to be the source,
+    // so it is weak evidence (flagged, never auto-re-recorded). Same philosophy as
+    // the A2b "Going forward"→"Going backward" backstop. Set SEG_ASR_HOMOPHONE_1WORD
+    // =false (test above) to flag these as drift instead.
+    const c = classifyTranscript('Resignation.', 'Designation.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('inconclusive');
   });
 
   it('A2e: a short single word (< minChars) is unaffected — still inconclusive via the floor', () => {
