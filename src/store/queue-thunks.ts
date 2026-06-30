@@ -99,7 +99,10 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
     const state = getState();
     const allowed = entries.filter((e) => !selectAnalysisBusyForBook(state, e.bookId));
     const gated = entries.filter((e) => selectAnalysisBusyForBook(state, e.bookId));
-    if (gated.length > 0) {
+    /* `silent` callers are background work (plan 111 enqueue-on-work auto-resume),
+       not a user click — gate their entries the same way, but don't pop a warn
+       toast for an action the user didn't initiate (mirrors the info toast below). */
+    if (gated.length > 0 && !opts.silent) {
       dispatch(
         notificationsActions.pushToast({
           kind: 'warn',

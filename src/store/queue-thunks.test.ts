@@ -213,6 +213,30 @@ describe('enqueueQueueEntries — analysis gate', () => {
       .filter((a) => a.type?.includes('pushToast'));
     expect(toasts.some((t) => t.payload?.message === 'Wait — emotions are still being detected')).toBe(true);
   });
+
+  it('still gates a silent (background auto-resume) enqueue but suppresses the warn toast', async () => {
+    const dispatch = vi.fn();
+    /* b1 gated; the only entry is for b1, so nothing is enqueued. */
+    const getState = () =>
+      ({
+        prosody: { activeStreams: { b1: { progress: 0, label: 'Detecting emotions' } } },
+        scriptReview: { activeStreams: {} },
+        queue: { entries: [], paused: false, recycling: false, loaded: false },
+      }) as never;
+
+    await enqueueQueueEntries([{ id: 'e1', bookId: 'b1', chapterId: 1, scope: 'this' }], {
+      silent: true,
+    })(dispatch as never, getState as never);
+
+    /* Nothing was POSTed (the single entry was gated): */
+    expect(posted).toEqual([]);
+
+    /* No warn toast fired — a silent caller is background work, not a user click: */
+    const toasts = dispatch.mock.calls
+      .map((c) => c[0] as { type?: string; payload?: { message?: string } })
+      .filter((a) => a.type?.includes('pushToast'));
+    expect(toasts).toHaveLength(0);
+  });
 });
 
 describe('startQueueEntry', () => {
