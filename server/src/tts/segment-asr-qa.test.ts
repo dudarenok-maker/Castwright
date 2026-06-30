@@ -400,12 +400,69 @@ describe('bridgeCompounds (fuzzy)', () => {
     expect(exp).toEqual(['hello', 'there']);
     expect(act).toEqual(['banana', 'split']);
   });
+
+  it('A2d: bridges a 1→3 name split within 1 edit of the manuscript token', () => {
+    // "Scapegrace" heard as "scape a grace" — concat "scapeagrace" is 1 deletion
+    // from "scapegrace". The pair-only bridge missed this; the 3-run bridge joins it.
+    const [exp, act] = bridgeCompounds(['scapegrace', 'appeared'], ['scape', 'a', 'grace', 'appeared']);
+    expect(exp).toEqual(['scapegrace', 'appeared']);
+    expect(act).toEqual(['scapegrace', 'appeared']);
+  });
+
+  it('A2d: prefers the shortest run that joins (a 2-run wins over a 3-run)', () => {
+    // 'good'+'bye' = 'goodbye' joins at run 2 — must not greedily swallow 'now'.
+    const [, act] = bridgeCompounds(['goodbye', 'now'], ['good', 'bye', 'now']);
+    expect(act).toEqual(['goodbye', 'now']);
+  });
+
+  it('A2d: does NOT bridge three genuinely wrong tokens (concat far from any token)', () => {
+    const [exp, act] = bridgeCompounds(['hello', 'there'], ['banana', 'apple', 'split']);
+    expect(exp).toEqual(['hello', 'there']);
+    expect(act).toEqual(['banana', 'apple', 'split']);
+  });
+
+  it('A2d: maxRun=2 restores pair-only bridging (3-run no longer joins)', () => {
+    const [, act] = bridgeCompounds(['scapegrace', 'appeared'], ['scape', 'a', 'grace', 'appeared'], 2);
+    expect(act).toEqual(['scape', 'a', 'grace', 'appeared']); // unchanged — 3-run skipped
+  });
+
+  it('A2d: also collapses the expected→actual direction (manuscript-split name)', () => {
+    // The reverse split: the manuscript wrote three tokens, Whisper joined them.
+    // collapse(expected, actual) must rejoin the expected run to the actual token.
+    const [exp, act] = bridgeCompounds(['scape', 'a', 'grace', 'appeared'], ['scapegrace', 'appeared']);
+    expect(exp).toEqual(['scapegrace', 'appeared']);
+    expect(act).toEqual(['scapegrace', 'appeared']);
+  });
 });
 
 describe('classifyTranscript — A2a word-split tolerance', () => {
   it('A2a: a 1-edit word-split on a short line is ok, not drift (RED→GREEN)', () => {
     const c = classifyTranscript('Skulduggery frowned at her.', 'Skull Duggery frowned at her.', CLEAN);
     expect(c.verdict).toBe('ok');
+  });
+});
+
+describe('classifyTranscript — A2d 1→N name-split tolerance', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_MAX_BRIDGE_RUN;
+  });
+
+  it('A2d: a name split into 3 transcript tokens is ok, not drift (RED→GREEN)', () => {
+    // "Scapegrace appeared." heard "Scape a grace appeared." — 1 sub + 2 ins on a
+    // tiny denominator drove WER 1.5 > 0.4. The 3-run bridge rejoins it → ok.
+    const c = classifyTranscript('Scapegrace appeared.', 'Scape a grace appeared.', CLEAN);
+    expect(c.verdict).toBe('ok');
+  });
+
+  it('A2d: maxBridgeRun=2 restores the pre-PR drift (disable knob wired)', () => {
+    process.env.SEG_ASR_MAX_BRIDGE_RUN = '2';
+    const c = classifyTranscript('Scapegrace appeared.', 'Scape a grace appeared.', CLEAN);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2d: a genuinely garbled 3-word run still drifts (no false bridge)', () => {
+    const c = classifyTranscript('The hammer fell hard.', 'The banana apple split hard.', CLEAN);
+    expect(c.verdict).toBe('drift');
   });
 });
 
@@ -461,6 +518,55 @@ describe('classifyTranscript — A2b short-reference substitution backstop', () 
     // this is drift anyway; post-impl it proves the disable knob is wired.
     process.env.SEG_ASR_MIN_REF_WORDS = '0';
     const c = classifyTranscript('Valkyrie Cain.', 'Volkery Cain.', CLEAN);
+    expect(c.verdict).toBe('drift');
+  });
+});
+
+describe('classifyTranscript — A2e 1-word near-homophone backstop', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_HOMOPHONE_1WORD;
+  });
+
+  it('A2e: a long single word misheard by ≤1 edit is inconclusive, not drift (RED→GREEN)', () => {
+    // "Uneventfully." (13 chars ≥ minChars 12, so it IS scored) heard
+    // "Unaventfully." — 1 sub (e→a) → WER 1.0 > 0.4. One edit on a whole long
+    // word is a spelling/schwa variant; the audio said the right phonemes.
+    const c = classifyTranscript('Uneventfully.', 'Unaventfully.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2e: a far-apart single-word substitution still flags drift (strong evidence)', () => {
+    // "Extraordinarily."→"Coincidentally." is a whole different word (edit
+    // distance ≫ 1), not a mishearing → stays drift.
+    const c = classifyTranscript('Extraordinarily.', 'Coincidentally.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2e: a real edit-1 word swap on a 1-word line is inconclusive (DISCLOSED tradeoff)', () => {
+    // [review I-1/I-2] Documents the accepted tradeoff at the decision boundary:
+    // a genuinely different word that happens to sit at CHARACTER edit-distance 1
+    // ("Resignation."→"Designation.", r→d) is routed to inconclusive, not drift —
+    // on a single-word line the audio and ASR are equally likely to be the source,
+    // so it is weak evidence (flagged, never auto-re-recorded). Same philosophy as
+    // the A2b "Going forward"→"Going backward" backstop. Set SEG_ASR_HOMOPHONE_1WORD
+    // =false (test above) to flag these as drift instead.
+    const c = classifyTranscript('Resignation.', 'Designation.', CLEAN);
+    expect(c.sub).toBe(1);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2e: a short single word (< minChars) is unaffected — still inconclusive via the floor', () => {
+    // "Uneventful." (11 chars) never reaches scoring; the minChars floor already
+    // routes it to inconclusive. A2e must not change that path.
+    const c = classifyTranscript('Uneventful.', 'Unaventful.', CLEAN);
+    expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('A2e: SEG_ASR_HOMOPHONE_1WORD=false restores the pre-PR drift (disable knob wired)', () => {
+    process.env.SEG_ASR_HOMOPHONE_1WORD = 'false';
+    const c = classifyTranscript('Uneventfully.', 'Unaventfully.', CLEAN);
     expect(c.verdict).toBe('drift');
   });
 });

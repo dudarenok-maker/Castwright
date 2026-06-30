@@ -346,6 +346,26 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'low',
   },
   {
+    key: 'qa.asr.maxBridgeRun',
+    env: 'SEG_ASR_MAX_BRIDGE_RUN',
+    group: 'qa-gates',
+    label: 'ASR max compound-bridge run',
+    help: 'Longest adjacent token run rejoined to a single manuscript token when Whisper splits an invented name (e.g. "Scapegrace" → "scape a grace"). 3 catches three-token splits; set to 2 to restore pair-only bridging.',
+    type: 'integer', min: 2, max: 4,
+    default: 3, // ← DEFAULT_ASR_THRESHOLDS.maxBridgeRun in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
+    key: 'qa.asr.homophone1Word',
+    env: 'SEG_ASR_HOMOPHONE_1WORD',
+    group: 'qa-gates',
+    label: 'ASR 1-word homophone tolerance',
+    help: 'On a single-word reference, a lone substitution within one edit of what was heard ("Uneventfully" → "Unaventfully") is treated as a spelling variant (inconclusive) rather than drift. Disable to flag every 1-word mismatch. Far-apart substitutions still drift.',
+    type: 'boolean',
+    default: true, // ← DEFAULT_ASR_THRESHOLDS.homophone1Word in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
     key: 'qa.asr.maxCompression',
     env: 'SEG_ASR_MAX_COMPRESSION',
     group: 'qa-gates',

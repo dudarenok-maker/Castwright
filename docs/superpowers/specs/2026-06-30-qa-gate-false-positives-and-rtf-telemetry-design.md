@@ -245,8 +245,18 @@ A1/A2 logic fixes remove the thrash, not a config rollback.
 2. A2 residual: do A2a+A2b alone clear enough, or add the `qa.asr.minRefWords`
    backstop (single *substitution* on ≤2-word ref → `inconclusive`, deletions exempt)?
    Decide after a corpus dry-run of A2a/A2b.
-3. Name matching: metaphone/phonetic vs length-relative edit-distance for A2b — pick
-   the lightest that clears the Valkyrie/Scapegrace family without a new dependency.
+3. _[resolved — PR-1.1]_ Name matching: **edit-distance, not metaphone.** The corpus
+   data showed metaphone's one unique strength (matching `Valkyrie`→`Volkery` across
+   ~4 edits) is **redundant** — that both-words-misheard case is already cleared by the
+   cast allowlist, whose tolerance keys on the manuscript token, so any mishearing of an
+   in-roster name is tolerated regardless of what Whisper wrote (the Scepter corpus showed
+   it as residual only because that render predated the ASR allowlist being forwarded).
+   The two genuine code gaps are both within edit-distance 1 of an existing token, so
+   PR-1.1 reuses `editDistanceAtMost1` — no new algorithm or dependency: **A2d** extends
+   `bridgeCompounds` to 1→N name-splits (`"Scapegrace"`→`"scape a grace"`, concat 1
+   deletion from the name); **A2e** routes a 1-word reference misheard by ≤1 edit
+   (`"Uneventfully"`→`"Unaventfully"`) to `inconclusive` (short single words were already
+   covered by the minChars floor).
 4. The 3 near-silent flags (0.32 s, RMS 0): intentional pads (exempt sub-0.5 s from
    the near-silent check) or a real defect to investigate? Out of PR-1 scope; confirm.
 5. Per-language _[M4]_: `qa.asr.maxWer` already has per-language overrides; should
@@ -288,6 +298,33 @@ regression. No real-defect class is masked.
 static pass predicts ~110/124 re-records removed; confirm the per-chapter RTF
 drops from the bimodal 2+ toward the ~0.8 batched baseline.
 
-**Follow-up filed:** PR-1.1 — metaphone/phonetic name-allowlist tolerance for the
-1→3 name splits (`"Scapegrace"`→`"scape a grace"`) and both-words-misheard name
-subs (`"Volkery Kane"`) that the `minRefWords` substitution backstop can't reach.
+**PR-1.1 (name-split + 1-word homophone tolerance) — implemented 2026-07-01**, branch
+`fix/server-qa-asr-name-split-tolerance` (issue #1191). Commits: A2d `1b83ab5f`
+(1→N split bridge), A2e `86981ce8` (1-word near-homophone backstop). Resolves Open
+Question 3 as **edit-distance, not metaphone** (see OQ3 above for the data: metaphone's
+unique capability is allowlist-redundant). Both changes reuse `editDistanceAtMost1`,
+each behind a disable knob (`qa.asr.maxBridgeRun`=2 / `qa.asr.homophone1Word`=false
+restore the pre-PR behaviour exactly). Paired regression tests; ASR-QA suite 66/66 green.
+
+Reconciliation of the PR-1 residual against PR-1.1:
+- `"Volkery Kane"` / `"So, Volkarycane A"` (both name words misheard) — **already
+  cleared on a fresh render** by the cast allowlist (the PR-1 corpus predated the ASR
+  allowlist being forwarded); no new code needed. Not a residual on current `main`.
+- `"Scapegrace"`→`"scape a grace"` (1→3 split) — **A2d**.
+- `"Unaventful"` (`"Uneventful."`, 11 chars) — **already `inconclusive`** via the minChars
+  floor (< 12). A2e covers the adjacent slice the floor misses: long single words
+  (≥ 12 chars) misheard by one edit.
+- `"Is it Fernanabop Caprukey?"` and the deletion-bearing / repetition lines — **genuine
+  defects, intentionally still `drift`** (not in roster, multi-error, or a real repeat).
+
+**Disclosed tradeoff (A2e, from the adversarial review):** because the guard is a
+character edit-distance, a genuinely different word that sits one edit from what was
+heard on a *single-word* line (`"Resignation."`→`"Designation."`, `"Immortality."`→
+`"Immorality."`) is routed to `inconclusive`, not `drift`. On a 1-word line the audio
+and the ASR are equally plausible as the source of a 1-char difference, so it is weak
+evidence — flagged, never auto-re-recorded — exactly the A2b philosophy. The input
+class is narrow (≥12-char single-word sentences) and pinned by a regression test; set
+`qa.asr.homophone1Word`=false to flag these as `drift` instead.
+
+**Owed on-box (unchanged):** the definitive per-chapter re-record count + RTF on a
+re-rendered chapter (needs sidecar/GPU) — covers PR-1 and PR-1.1 together.
