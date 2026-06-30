@@ -4129,6 +4129,33 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
         return None
 
 
+def _engine_actual_card(engine: Any) -> Optional[dict]:
+    """(family, index, fell_back) for a LOADED engine, else None. index is the
+    real torch ordinal for torch engines; None for ORT/CT2 (family only).
+    fell_back = requested cuda but resolved cpu (the silent-CPU signal)."""
+    model = getattr(engine, "_model", None) or getattr(engine, "_kokoro", None) or getattr(engine, "_base", None)
+    if model is None:
+        return None
+    requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    # actual device: prefer the loaded torch module's real device; fall back to the string attr
+    family = index = None
+    try:
+        params = getattr(model, "parameters", None)
+        if callable(params):
+            dev = next(params()).device
+            family, index = ("cuda" if dev.type == "cuda" else dev.type), dev.index
+    except Exception:
+        pass
+    if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
+        family, _ = _parse_device(getattr(engine, "device", None) or getattr(engine, "_device", None))
+    if family is None:  # Kokoro: reconcile via ORT providers (the only ground truth)
+        ks = _kokoro_session_device(engine)
+        if ks:
+            family = ks
+    fell_back = (requested_fam == "cuda" and family == "cpu")
+    return {"family": family, "index": index, "fell_back": fell_back}
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let

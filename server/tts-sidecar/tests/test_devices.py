@@ -20,3 +20,14 @@ def test_enumerate_cards():
 def test_enumerate_empty_without_cuda():
     fake = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
     assert main._enumerate_cuda_devices(fake) == []
+
+def test_engine_actual_card_detects_cpu_fallback():
+    # a fake engine that REQUESTED cuda:1 but actually resolved to cpu
+    eng = types.SimpleNamespace(_requested_device="cuda:1", device="cpu", _model=object())
+    card = main._engine_actual_card(eng)
+    assert card["family"] == "cpu"
+    assert card["fell_back"] is True
+
+def test_engine_actual_card_none_when_unloaded():
+    eng = types.SimpleNamespace(_requested_device="cuda:1", device="cpu", _model=None)
+    assert main._engine_actual_card(eng) is None
