@@ -40,3 +40,37 @@ def test_engine_actual_card_unknown_family_when_all_probes_fail():
     assert card["family"] == "unknown"
     assert card["index"] is None
     assert card["fell_back"] is False
+
+
+# --- Kokoro ORT provider reconcile ---
+
+def _fake_kokoro_cpu_session():
+    """Kokoro engine: requested cuda:1 but ORT resolved to CPU-only providers."""
+    sess = types.SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
+    kok = types.SimpleNamespace(sess=sess)
+    # No device/_device/_model attrs — mirrors a real KokoroEngine
+    return types.SimpleNamespace(_requested_device="cuda:1", _kokoro=kok)
+
+
+def _fake_kokoro_cuda_session():
+    """Kokoro engine: requested cuda:0, ORT kept the CUDA EP."""
+    sess = types.SimpleNamespace(get_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"])
+    kok = types.SimpleNamespace(sess=sess)
+    return types.SimpleNamespace(_requested_device="cuda:0", _kokoro=kok)
+
+
+def test_engine_actual_card_kokoro_cuda_to_cpu_provider_drop_flags_fell_back():
+    # Regression: tier-2 _parse_device(None) returns "auto", not None, so the
+    # tier-3 guard `if family is None:` was False and the Kokoro reconcile was
+    # unreachable. Fix: guard must be `if family in (None, "auto"):`.
+    card = main._engine_actual_card(_fake_kokoro_cpu_session())
+    assert card["family"] == "cpu"
+    assert card["index"] is None
+    assert card["fell_back"] is True
+
+
+def test_engine_actual_card_kokoro_cuda_resident_no_fallback():
+    card = main._engine_actual_card(_fake_kokoro_cuda_session())
+    assert card["family"] == "cuda"
+    assert card["index"] is None
+    assert card["fell_back"] is False

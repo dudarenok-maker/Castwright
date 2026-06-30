@@ -4148,7 +4148,7 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         pass
     if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
         family, _ = _parse_device(getattr(engine, "device", None) or getattr(engine, "_device", None))
-    if family is None:  # Kokoro: reconcile via ORT providers (the only ground truth)
+    if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
             family = ks
