@@ -8,4 +8,4 @@ Empty register = done. See the rewrite playbook in
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| _(none)_ | | | | | |
+| StartGenerationModal voice-model prompt + three-sink sync (all 6 cases) | `e2e/start-generation-tier-prompt.spec.ts` | cold-load race | `goToConfirm`/`goToStartGenModal` cold-load race exhausts Playwright retries under battery/cold-webServer load; the `Choose the voice model` heading never appears → gate red. Fails 1/6 in the full battery, 5/6 in isolation. | [#1178](https://github.com/dudarenok-maker/Castwright/issues/1178) | 2026-06-30 |

@@ -1,5 +1,14 @@
 /* Dedicated e2e for the pre-generation voice-model prompt (#1160 StartGenerationModal).
  *
+ * QUARANTINED (#1178, 2026-06-30): every case is tagged `@quarantine` so the
+ * gating `test:e2e` grep-inverts it out. The shared `goToConfirm`/
+ * `goToStartGenModal` cold-load race exhausts Playwright's retries under
+ * battery / cold-webServer load (fails 1/6 in the full battery, 5/6 in
+ * isolation), reddening the gate on unrelated pushes. Run on demand via
+ * `npm run test:e2e:quarantine`. De-quarantine once `goToStartGenModal` waits
+ * on an explicit ready signal instead of implicit cold-load timing; see the
+ * flaky-register rewrite playbook.
+ *
  * The other generation specs only DISMISS the prompt (confirmTierPromptIfPresent);
  * this spec asserts the prompt's OWN behaviour: for a Qwen book it appears before
  * the run starts, offers both Qwen tiers with the cast-pin-aware default
@@ -98,7 +107,7 @@ async function readCastFromStore(
   });
 }
 
-test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm starts (#1160)', async ({
+test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm starts (#1160) @quarantine', async ({
   page,
 }) => {
   await goToStartGenModal(page);
@@ -131,7 +140,7 @@ test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm st
   });
 });
 
-test.describe('StartGenerationModal: three-sink sync', () => {
+test.describe('StartGenerationModal: three-sink sync @quarantine', () => {
   test('A. 1.7B pick flips session default + every Qwen member pin', async ({ page }) => {
     await goToStartGenModalWithDesignedCast(page);
     const heading = page.getByRole('heading', { name: /Choose the voice model/i });
