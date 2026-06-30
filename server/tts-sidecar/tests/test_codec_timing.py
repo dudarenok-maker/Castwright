@@ -92,3 +92,17 @@ def test_codec_timing_install_tolerates_unresolvable(monkeypatch):
     # A model whose codec can't be resolved must not raise — a perf hook never
     # kills a load.
     main._install_codec_timing(types.SimpleNamespace())
+
+
+def test_codec_share_math():
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "bench_tts", pathlib.Path(__file__).parent.parent / "scripts" / "bench-tts.py"
+    )
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)  # safe: the CLI entry is behind `if __name__`
+    assert bench.codec_share(300.0, 1000.0) == 0.3
+    assert bench.codec_share(0.0, 0.0) == 0.0  # no divide-by-zero
+    assert bench.codec_share(50.0, 0.0) == 0.0

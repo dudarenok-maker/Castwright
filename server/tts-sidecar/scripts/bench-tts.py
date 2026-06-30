@@ -40,6 +40,11 @@ sidecar. Run it by hand against a live sidecar:
   #   PASS iff the ON committed slope is ≈ flat (within ±2 MB/batch) vs a clearly
   #   steeper OFF slope. The seeded corpus makes the two runs byte-identical.
 
+  # side-19 Phase 0 — Code2Wav share of batch wall-time (set QWEN_CODEC_TIMING=1
+  # in the sidecar env first, restart it, ensure Qwen 0.6B Base is loaded):
+  python scripts/bench-tts.py --engine qwen --voice <designedVoiceId> \
+      --code2wav-share --batch 32
+
 Stdlib only (urllib + concurrent.futures) so it runs in any venv. Writes nothing
 unless --out <csv> is passed.
 """
@@ -148,6 +153,15 @@ def _slope_mb_per_batch(xs: list[int], ys: list[float]) -> float:
         return 0.0
     num = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
     return num / denom
+
+
+def codec_share(decode_ms: float, gen_ms: float) -> float:
+    """Code2Wav decode-ms as a fraction of the sidecar's batch forward-compute
+    ms — the single number side-19 Phase 0's decision table reads. The
+    denominator is the header `genMs` (same sidecar clock domain as decode_ms),
+    NOT the HTTP round-trip (R2-A). 0.0 when the batch produced no compute time
+    (degenerate / error)."""
+    return decode_ms / gen_ms if gen_ms > 0 else 0.0
 
 
 def sample_memory(server_base: str) -> dict:
@@ -296,6 +310,70 @@ def run_mem_sample(args, model: str) -> int:
     return 0
 
 
+def run_code2wav_share(args, model: str) -> int:
+    """side-19 Phase 0 mode: measure the Code2Wav codec decode share of batch
+    forward-compute time. Drives a 32-item batch of high-variance sentences
+    (cycled from HIGH_VARIANCE_SENTENCES) and reports the codec share + count."""
+    if args.engine != "qwen":
+        print("--code2wav-share is Qwen-only (it drives the /synthesize-batch path).")
+        return 2
+
+    batch_size = 32
+    batch_url = args.url.replace("/synthesize", "/synthesize-batch")
+    server_base = args.url.rsplit("/", 1)[0]
+
+    # Reset the codec timing counters
+    try:
+        reset_req = urllib.request.Request(
+            f"{server_base}/debug/codec-timing/reset",
+            data=b"",
+            headers={"Content-Type": "application/json"},
+        )
+        reset_req.get_method = lambda: "POST"
+        with urllib.request.urlopen(reset_req) as resp:
+            resp.read()
+    except urllib.error.URLError as e:
+        print(f"Failed to reset codec timing: {e}. Is the sidecar at {server_base}?")
+        return 1
+
+    # Build a batch of 32 items by cycling HIGH_VARIANCE_SENTENCES
+    batch_items = [
+        {"voice": args.voice, "text": HIGH_VARIANCE_SENTENCES[i % len(HIGH_VARIANCE_SENTENCES)]}
+        for i in range(batch_size)
+    ]
+
+    # Run the batch
+    print(f"code2wav-share: engine={args.engine} model={model} voice={args.voice} "
+          f"batch={batch_size} url={batch_url}")
+    try:
+        wall_s, audio_s, rtf, gen_ms, audio_ms = synth_batch_once(batch_url, args.engine, model, batch_items)
+    except urllib.error.HTTPError as e:
+        print(f"  HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
+        return 1
+    except urllib.error.URLError as e:
+        print(f"  connection failed: {e}. Is the sidecar running at {batch_url}?")
+        return 1
+
+    # Read the codec timing snapshot
+    try:
+        with urllib.request.urlopen(f"{server_base}/debug/codec-timing") as resp:
+            snap = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        print(f"Failed to read codec timing: {e}")
+        return 1
+
+    decode_ms = snap.get("total_ms", 0.0)
+    calls = snap.get("calls", 0)
+    share = codec_share(decode_ms, gen_ms)
+
+    # Print the result
+    print(f"code2wav share: {share:.1%}  (decode {decode_ms:.0f} ms / forward {gen_ms:.0f} ms, {calls} decode calls)")
+    if calls == 0:
+        print("INVALID: 0 decode calls captured — see Task 3 M1.")
+
+    return 0
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--engine", required=True, choices=sorted(DEFAULT_MODELS))
@@ -344,6 +422,13 @@ def main(argv: list[str]) -> int:
         "SIDECAR_DISABLE_MKLDNN off then on to A/B a candidate fix.",
     )
     p.add_argument(
+        "--code2wav-share", action="store_true",
+        help="side-19 Phase 0 mode: measure the Code2Wav codec decode share of batch "
+        "forward-compute time. Requires QWEN_CODEC_TIMING=1 in the sidecar env. "
+        "Drives a --batch 32 batch of high-variance sentences and reports the codec "
+        "share + decode-call count.",
+    )
+    p.add_argument(
         "--batches", type=int, default=200,
         help="--mem-sample mode: number of batched calls to drive (default 200 "
         "≈ 3200 synths at --batch 16, matching the original leak experiment).",
@@ -363,6 +448,10 @@ def main(argv: list[str]) -> int:
     args = p.parse_args(argv)
 
     model = args.model or DEFAULT_MODELS[args.engine]
+
+    # ── side-19 Phase 0 Code2Wav share mode ────────────────────────────────
+    if args.code2wav_share:
+        return run_code2wav_share(args, model)
 
     # ── side-11 leak-slope mode: many variable-shape batches, sample memory ──
     if args.mem_sample:
