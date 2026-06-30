@@ -465,6 +465,21 @@ describe('classifyTranscript — A2b short-reference substitution backstop', () 
   });
 });
 
+describe('classifyTranscript — A2c short-line loop detection', () => {
+  it('A2c: a looped short line flags drift even under the minChars floor (RED→GREEN)', () => {
+    // "No." (3 chars, < minChars 12) looped → high compression. Before A2c the
+    // minChars floor returns inconclusive first; after, the loop tell wins.
+    const looped: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 3.0 };
+    const c = classifyTranscript('No.', 'no no no no no no', looped);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2c: a normal short line is still inconclusive (not over-flagged)', () => {
+    const c = classifyTranscript('Oh.', 'Oh.', CLEAN); // compression 1.3 < 2.4
+    expect(c.verdict).toBe('inconclusive');
+  });
+});
+
 /* Integration test: vocalizationAllowlist forwarded through verifySegmentTranscript (fs-57)
    These tests exercise the PRODUCTION entry point (verifySegmentTranscript), not classifyTranscript.
    The critical test (first one) FAILS before Fix 1 (when vocalizationAllowlist was dropped on

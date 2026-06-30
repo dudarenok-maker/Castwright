@@ -440,8 +440,19 @@ export function classifyTranscript(
     ...extra,
   });
 
-  // Too short to score reliably — don't act on it.
+  // Too short to WER-score reliably — don't act on it. EXCEPT a loop/repeat (high
+  // compression) is intrinsic to the transcript and needs no minimum reference
+  // length, so catch it even on a short line (A2c): A1's duration floor no longer
+  // covers a sub-3s short-line loop, and this is the only gate that can.
   if ((expectedText ?? '').trim().length < t.minChars) {
+    if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
+      reasons.push(
+        `Loop/repeat — compression ratio ${signals.compressionRatio.toFixed(2)} exceeds the ${
+          t.maxCompressionRatio
+        } cap (likely repeated/garbled synthesis).`,
+      );
+      return base('drift');
+    }
     reasons.push(`Not scored — sentence under the ${t.minChars}-char ASR floor.`);
     return base('inconclusive');
   }
