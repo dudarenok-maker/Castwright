@@ -20,6 +20,7 @@ import { useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
 import { runProsodyPasses } from '../store/prosody-thunk';
+import { prosodyActions } from '../store/prosody-slice';
 import { IconSparkle, IconSpinner } from '../lib/icons';
 
 type Phase = 'idle' | 'confirm' | 'running';
@@ -36,17 +37,22 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   if (!bookId) return null;
 
   const run = async () => {
+    if (!bookId) return;
     setPhase('running');
     setProgress(0);
     setError(null);
     setStatus('Starting…');
     const controller = new AbortController();
     abortRef.current = controller;
+    dispatch(prosodyActions.setActive({ bookId, progress: 0, label: 'Detecting emotions' }));
     try {
       const { totalAnnotations, totalChapters } = await runProsodyPasses(bookId, {
         dispatch,
         signal: controller.signal,
-        onProgress: (fraction) => setProgress(fraction),
+        onProgress: (fraction) => {
+          setProgress(fraction);
+          dispatch(prosodyActions.updateProgress({ bookId, progress: fraction }));
+        },
         onStatus: (label) => setStatus(label),
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
       });
@@ -59,17 +65,18 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       if ((e as Error).name === 'AbortError') {
         setStatus(null);
         setPhase('idle');
-        return;
-      }
-      if (e instanceof DetectEmotionsError && e.code === 'no_attribution') {
+      } else if (e instanceof DetectEmotionsError && e.code === 'no_attribution') {
         setError('Run analysis first — there are no attributed lines to tag.');
+        setPhase('idle');
       } else if (e instanceof DetectInstructError) {
         setError(e.message);
+        setPhase('idle');
       } else {
         setError((e as Error).message);
+        setPhase('idle');
       }
-      setPhase('idle');
     } finally {
+      dispatch(prosodyActions.clear({ bookId }));
       abortRef.current = null;
     }
   };
