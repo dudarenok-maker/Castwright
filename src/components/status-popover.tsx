@@ -53,6 +53,9 @@ interface StatusPopoverProps {
       GPU-busy badge. null when no book is in scope. */
   ttsControls: ReactNode;
   analysis: AnalysisPillData | null;
+  /** The active analysis sub-stage (prosody/review) label + progress. Rendered
+      as a secondary row in the Analysis section when set. */
+  analysisSubstage?: { label: string; percent: number } | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
   pendingRevisionsCount: number;
@@ -91,6 +94,7 @@ export function StatusPopover({
   onBlurCapture,
   ttsControls,
   analysis,
+  analysisSubstage,
   generation,
   design,
   pendingRevisionsCount,
@@ -153,9 +157,9 @@ export function StatusPopover({
       onFocusCapture={onFocusCapture}
       onBlurCapture={onBlurCapture}
     >
-      <Section title="TTS engines" testid="status-popover-tts">
+      <Section title="Voice engines" testid="status-popover-tts">
         {ttsControls ?? (
-          <p className="text-sm text-ink/60">TTS controls appear once a manuscript is open.</p>
+          <p className="text-sm text-ink/60">Voice engine controls appear once a manuscript is open.</p>
         )}
       </Section>
       <Section title="Analysis" testid="status-popover-analysis">
@@ -173,9 +177,24 @@ export function StatusPopover({
                 </span>
               </span>
             )}
+            {analysisSubstage && (
+              <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
+                <span>{analysisSubstage.label}</span>
+                <span className="tabular-nums">{analysisSubstage.percent}%</span>
+              </div>
+            )}
           </div>
         ) : (
-          <p className="text-sm text-ink/60">No analysis running.</p>
+          <>
+            {analysisSubstage ? (
+              <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
+                <span>{analysisSubstage.label}</span>
+                <span className="tabular-nums">{analysisSubstage.percent}%</span>
+              </div>
+            ) : (
+              <p className="text-sm text-ink/60">No analysis running.</p>
+            )}
+          </>
         )}
       </Section>
       <Section title="Design" testid="status-popover-design">

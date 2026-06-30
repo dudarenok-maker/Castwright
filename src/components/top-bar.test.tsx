@@ -404,6 +404,28 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       }),
     ).toMatchObject({ label: 'Stalled', tone: 'amber' });
   });
+
+  it('shows an Analysing rung for an active analysis sub-stage', () => {
+    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    expect(summarizeStatus({ ...base, analysisSubstage: { kind: 'prosody', percent: 40 } })).toMatchObject({
+      label: 'Analysing', detail: '40%', icon: 'spinner',
+    });
+  });
+
+  it('voice-engine states (Generating, Loading model) outrank Analysis and the sub-stage', () => {
+    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    // Generating is the heaviest — always wins:
+    expect(summarizeStatus({ ...base, generation: { state: 'running', percent: 10 } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
+      .toMatchObject({ label: 'Generating' });
+    // Loading model now outranks a real analysis pass AND a sub-stage (regrouped ladder):
+    expect(summarizeStatus({ ...base, anyModelLoading: true, analysis: { state: 'running', percent: 12, kind: 'full' } as never }))
+      .toMatchObject({ label: 'Loading model' });
+    expect(summarizeStatus({ ...base, anyModelLoading: true, analysisSubstage: { kind: 'review', percent: 90 } }))
+      .toMatchObject({ label: 'Loading model' });
+    // Real analysis still outranks its own sub-stage:
+    expect(summarizeStatus({ ...base, analysis: { state: 'running', percent: 12, kind: 'full' } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
+      .toMatchObject({ detail: '12%' });
+  });
 });
 
 describe('DesignPill', () => {
