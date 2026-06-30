@@ -36,6 +36,7 @@ afterEach(() => {
   delete process.env.SEG_QA_MAX_INTERNAL_SILENCE_SEC;
   delete process.env.SEG_QA_MIN_RATIO;
   delete process.env.SEG_QA_MAX_RATIO;
+  delete process.env.SEG_QA_MIN_RUNAWAY_SEC;
 });
 
 describe('evaluateSegmentPcm', () => {
@@ -101,5 +102,36 @@ describe('evaluateSegmentPcm', () => {
       maxDurationRatio: 20,
     });
     expect(v.status).toBe('ok'); // ratio ~10 now under the 20 cap
+  });
+
+  it('A1: does NOT flag a 1.0s render of a one-word line as runaway (RED→GREEN)', () => {
+    // "Oh." → 3 chars → expectedSec ≈ 0.21s → ratio ≈ 4.7 > 2.5, but 1.0s is a
+    // normal short utterance under the 3s absolute floor. FAILS before A1 (flagged
+    // "runaway"), passes after. All 51 real FPs in the Scepter corpus were < 2.5s.
+    const v = evaluateSegmentPcm(tone(1.0), SR, 'Oh.');
+    expect(v.status).toBe('ok');
+    expect(v.reasons).toHaveLength(0);
+  });
+
+  it('A1: still flags a genuine runaway — long absolute duration (invariant guard)', () => {
+    // 6s of audio for "Oh." is over the ratio cap AND the 3s floor. Green before & after.
+    const v = evaluateSegmentPcm(tone(6), SR, 'Oh.');
+    expect(v.status).toBe('suspect');
+    expect(v.reasons.some((r) => /runaway/i.test(r))).toBe(true);
+  });
+
+  it('A1: truncation branch is unmoved — a fast short line stays ok (invariant guard)', () => {
+    // 0.25s "Oh." → ratio ≈ 1.17, between minRatio(0.4) and maxRatio(2.5): ok before & after.
+    const v = evaluateSegmentPcm(tone(0.25), SR, 'Oh.');
+    expect(v.status).toBe('ok');
+  });
+
+  it('A1: minRunawaySec knob lowers the floor (post-impl wiring check)', () => {
+    // NOTE [rev]: green BOTH before and after the impl (pre-A1 there is no floor, so
+    // the line flags regardless). It is NOT the regression guard — it only proves the
+    // knob is wired once the floor exists. Keep it as a wiring check.
+    process.env.SEG_QA_MIN_RUNAWAY_SEC = '0.5';
+    const v = evaluateSegmentPcm(tone(1.0), SR, 'Oh.');
+    expect(v.reasons.some((r) => /runaway/i.test(r))).toBe(true);
   });
 });
