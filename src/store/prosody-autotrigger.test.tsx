@@ -42,7 +42,7 @@ import { listenProgressSlice } from './listen-progress-slice';
 import { settingsSlice } from './settings-slice';
 import { continueListeningSlice } from './continue-listening-slice';
 import { notificationsSlice } from './notifications-slice';
-import { prosodySlice } from './prosody-slice';
+import { prosodySlice, prosodyActions } from './prosody-slice';
 import { scriptReviewSlice } from './script-review-slice';
 import type { LibraryBook } from '../lib/types';
 
@@ -570,6 +570,34 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     await waitFor(() => {
       expect(runProsodyPassesMock).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // ── Task 7: double-fire guard — active stream skips runProsodyPasses ──
+
+  it('does NOT fire runProsodyPasses when prosody.activeStreams already has the book (double-fire guard)', async () => {
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    renderLayout(store);
+
+    /* Seed the library first (flips loaded=true). */
+    await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    /* Pre-seed an active prosody stream for b1 BEFORE the transition fires.
+       Simulates another tab (or a manual trigger) already running the pass. */
+    store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0, label: 'Detecting emotions' }));
+
+    /* Trigger the completion transition. */
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    /* Guard fired: shouldAutoTriggerProsody returned false → no double-fire. */
+    expect(runProsodyPassesMock).not.toHaveBeenCalled();
   });
 
   // ── Test: 'not_analysed' / 'analysing' / 'unreadable' / 'orphaned' are not considered complete ──

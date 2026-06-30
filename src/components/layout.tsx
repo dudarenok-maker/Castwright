@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from 'react';
+import { useStore } from 'react-redux';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { DelayedSpinner } from './delayed-spinner';
 import { BuildStamp } from './build-stamp';
-import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
+import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings } from '../store/account-slice';
@@ -89,6 +90,7 @@ import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { runProsodyPasses } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
 import { selectAnalysisSubstage } from '../store/analysis-substage-selectors';
+import { shouldAutoTriggerProsody } from '../store/should-auto-trigger-prosody';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
@@ -144,6 +146,7 @@ export interface LayoutContext {
 
 export function Layout() {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const stage = useAppSelector((s) => s.ui.stage);
   const ui = useAppSelector((s) => s.ui);
   const userDisplayName = useAppSelector((s) => s.account.displayName);
@@ -1037,6 +1040,7 @@ export function Layout() {
       prosodyConsidered.current.add(id);
       void (async () => {
         // Detached: not tied to effect cleanup — survives a book-switch.
+        if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
         let pillActive = false;
         try {
           const st = await api.getBookState(id);
@@ -1048,15 +1052,15 @@ export function Layout() {
             dispatch,
             onProgress: (f) => dispatch(prosodyActions.updateProgress({ bookId: id, progress: f })),
           });
-          dispatch(prosodyActions.clear({ bookId: id }));
           if (failed === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
           } else {
             prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
           }
         } catch {
-          if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
           prosodyConsidered.current.delete(id); // transient error → retry on next transition
+        } finally {
+          if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
         }
       })();
     }
