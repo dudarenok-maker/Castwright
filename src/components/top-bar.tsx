@@ -98,22 +98,26 @@ export interface StatusInput {
   /** True when any in-use TTS engine pill is mid-load (Layout derives this
       from the per-engine ttsLifecycle state). */
   anyModelLoading: boolean;
+  /** The active analysis sub-stage (prosody/review) progress, or null/absent.
+      Folds into the "Analysing" rung below the primary analysis pass. */
+  analysisSubstage?: { kind: 'prosody' | 'review'; percent: number } | null;
 }
 
 /* Priority ladder (highest wins → the dominant state shown on the pill):
-   halted > stalled > generation-running > analysis-running > design-running >
-   model-loading > analysis-paused > revisions-pending > idle. Generation
-   outranks analysis which outranks design because generation is the user's
-   terminal goal and design is the furthest-upstream prep step. Halted / stalled
-   stay on top because they're attention states the user must see without
-   opening the modal. The terminal design 'done' summary has no dominant rung —
-   it surfaces in the popover only. Pure + exported for unit testing. */
+   halted > stalled > generating > model-loading > analysing > analysis-substage >
+   designing > analysis-paused > revisions-pending > idle. Voice-engine states
+   (Generating, Loading model) are grouped at the top of the active rungs:
+   generation is the user's terminal goal; model-loading blocks all generation.
+   Analysis outranks design (upstream prep step). The terminal design 'done'
+   summary has no dominant rung — it surfaces in the popover only.
+   Pure + exported for unit testing. */
 export function summarizeStatus({
   analysis,
   generation,
   design,
   pendingRevisionsCount,
   anyModelLoading,
+  analysisSubstage = null,
 }: StatusInput): StatusSummary {
   if (analysis?.state === 'halted' || generation?.state === 'halted' || design?.state === 'halted')
     return { label: 'Halted', tone: 'rose', icon: 'warning' };
@@ -125,6 +129,7 @@ export function summarizeStatus({
     return { label: 'Stalled', tone: 'amber', icon: 'clock' };
   if (generation?.state === 'running')
     return { label: 'Generating', tone: 'peach', icon: 'spinner', detail: `${generation.percent}%` };
+  if (anyModelLoading) return { label: 'Loading model', tone: 'amber', icon: 'spinner' };
   if (analysis?.state === 'running')
     return {
       label: analysis.kind === 'subset' ? 'Retrying' : 'Analysing',
@@ -132,9 +137,10 @@ export function summarizeStatus({
       icon: 'spinner',
       detail: `${analysis.percent}%`,
     };
+  if (analysisSubstage)
+    return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
   if (design?.state === 'running')
     return { label: 'Designing', tone: 'peach', icon: 'spinner', detail: `${design.percent}%` };
-  if (anyModelLoading) return { label: 'Loading model', tone: 'amber', icon: 'spinner' };
   if (analysis?.state === 'paused') return { label: 'Paused', tone: 'neutral', icon: 'clock' };
   if (pendingRevisionsCount > 0)
     return {
@@ -159,6 +165,9 @@ export interface StatusDetail {
   onGoToAnalysing: () => void;
   onGoToGeneration: () => void;
   onGoToDesign: () => void;
+  /** The active analysis sub-stage (prosody/review) label + progress, or null/absent.
+      Rendered as a secondary row inside the Analysis section of the popover. */
+  analysisSubstage?: { label: string; percent: number } | null;
 }
 
 interface TopBarProps {
@@ -817,6 +826,7 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         generation={detail.generation}
         design={detail.design}
         pendingRevisionsCount={detail.pendingRevisionsCount}
+        analysisSubstage={detail.analysisSubstage}
         onOpenRevisions={() => {
           detail.onOpenRevisions();
           closeAll();

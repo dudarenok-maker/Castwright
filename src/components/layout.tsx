@@ -88,11 +88,12 @@ import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { runProsodyPasses } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
+import { selectAnalysisSubstage } from '../store/analysis-substage-selectors';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
-import { IconRefresh, IconSpinner, IconWarning } from '../lib/icons';
+import { IconRefresh, IconWarning } from '../lib/icons';
 
 /* Lifted from App.tsx's resultDialog state. Routes that need to surface a
    styled post-action dialog (e.g. BooksRoute after delete/reparse) pull
@@ -160,7 +161,7 @@ export function Layout() {
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
-  const prosodyStreams = useAppSelectorShallow((s) => s.prosody.activeStreams);
+  const analysisSubstage = useAppSelector(selectAnalysisSubstage);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
@@ -1353,13 +1354,6 @@ export function Layout() {
     };
   })();
 
-  /* Phase 3 prosody-progress pill — first active per-book entry. Retired in a
-     later task once the Status-pill rung lands; kept working here so this task
-     leaves the tree green. */
-  const prosodyPill: { label: string; percent: number } | null = (() => {
-    const first = Object.values(prosodyStreams)[0];
-    return first ? { label: first.label, percent: first.progress } : null;
-  })();
 
   /* Third status pill — the in-flight "Design full cast" bulk job. Mirrors the
      analysis/generation pill IIFEs: anchored to the cross-book `castDesign`
@@ -1412,6 +1406,7 @@ export function Layout() {
     analysisPill !== null ||
     generationPill !== null ||
     designPill !== null ||
+    analysisSubstage !== null ||
     pending.length > 0;
   const statusSummary = showStatus
     ? summarizeStatus({
@@ -1420,6 +1415,7 @@ export function Layout() {
         design: designPill,
         pendingRevisionsCount: pending.length,
         anyModelLoading,
+        analysisSubstage: analysisSubstage ? { kind: analysisSubstage.kind, percent: analysisSubstage.percent } : null,
       })
     : null;
   /* The detail rendered in the Status pill's hover/tap popover (the same data
@@ -1436,6 +1432,7 @@ export function Layout() {
     onGoToAnalysing: () => analysisPill?.onClick(),
     onGoToGeneration: () => generationPill?.onClick(),
     onGoToDesign: () => designPill?.onClick(),
+    analysisSubstage: analysisSubstage ? { label: analysisSubstage.label, percent: analysisSubstage.percent } : null,
   };
 
   /* fs-21 — boot-splash. Gates the first paint until the readiness probe
@@ -1508,21 +1505,6 @@ export function Layout() {
       <BuildStamp />
 
       <ToastStack />
-
-      {/* Phase 3 prosody-progress pill (Task 14, fs-65). Fixed bottom-left,
-          above the mini-player reserved gap. Absent when no prosody pass is
-          running. Uses design tokens only — no hex literals. */}
-      {prosodyPill && (
-        <div
-          data-testid="prosody-pill"
-          className="fixed bottom-24 left-6 z-60 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-peach/15 text-magenta shadow-card"
-        >
-          <IconSpinner className="w-3.5 h-3.5" />
-          <span className="tabular-nums">
-            {prosodyPill.label} · {prosodyPill.percent}%
-          </span>
-        </div>
-      )}
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer

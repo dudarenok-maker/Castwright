@@ -43,6 +43,7 @@ import { settingsSlice } from './settings-slice';
 import { continueListeningSlice } from './continue-listening-slice';
 import { notificationsSlice } from './notifications-slice';
 import { prosodySlice } from './prosody-slice';
+import { scriptReviewSlice } from './script-review-slice';
 import type { LibraryBook } from '../lib/types';
 
 /* ── Module mocks ──────────────────────────────────────────────────────── */
@@ -141,6 +142,7 @@ function makeStore() {
       continueListening: continueListeningSlice.reducer,
       notifications: notificationsSlice.reducer,
       prosody: prosodySlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
     },
   });
 }

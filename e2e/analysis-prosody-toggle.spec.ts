@@ -7,8 +7,8 @@
  *   2. Unchecking the toggle works (checkbox toggles to unchecked).
  *
  * The transient background "Phase 3 — Detecting prosody" pill is timing-
- * sensitive in mocks and is covered by unit tests (layout-prosody-pill.test.tsx
- * + prosody-autotrigger.test.tsx); it is intentionally excluded here.
+ * sensitive in mocks and is covered by unit tests (prosody-autotrigger.test.tsx);
+ * it is intentionally excluded here.
  *
  * Uses `bootFreshBookIntoAnalysing` from helpers.ts to reach the analysing
  * route with the "Start analysis" button visible (before the stream fires),
