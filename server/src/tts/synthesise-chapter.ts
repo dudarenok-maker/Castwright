@@ -1664,8 +1664,8 @@ export async function synthesiseChapter(
   let spkEmbeddings: EmbeddingRow[] | undefined;
   if (configValue<boolean>('qa.speaker.enabled')) {
     const groupByIndex = new Map(groups.map((g) => [g.index, g]));
+    const embT0 = Date.now();
     try {
-      const embT0 = Date.now();
       spkEmbeddings = await collectGroupEmbeddings(
         groups,
         results,
@@ -1673,9 +1673,10 @@ export async function synthesiseChapter(
         embedSegment,
         onEmbedProgress,
       );
-      embedMs += Date.now() - embT0;
     } catch (err) {
       console.warn(`[synthesiseChapter] render-integrity embed pass failed: ${String(err)}`);
+    } finally {
+      embedMs += Date.now() - embT0;
     }
   }
 
