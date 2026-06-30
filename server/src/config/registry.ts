@@ -346,6 +346,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'low',
   },
   {
+    key: 'qa.asr.maxBridgeRun',
+    env: 'SEG_ASR_MAX_BRIDGE_RUN',
+    group: 'qa-gates',
+    label: 'ASR max compound-bridge run',
+    help: 'Longest adjacent token run rejoined to a single manuscript token when Whisper splits an invented name (e.g. "Scapegrace" → "scape a grace"). 3 catches three-token splits; set to 2 to restore pair-only bridging.',
+    type: 'integer', min: 2, max: 4,
+    default: 3, // ← DEFAULT_ASR_THRESHOLDS.maxBridgeRun in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
+  {
     key: 'qa.asr.maxCompression',
     env: 'SEG_ASR_MAX_COMPRESSION',
     group: 'qa-gates',

@@ -65,6 +65,10 @@ export interface AsrThresholds {
       evidence. 1-word refs are EXCLUDED (a full sub there is strong evidence);
       deletions/insertions are exempt (they stay drift). 0 disables the backstop. */
   minRefWords: number;
+  /** Longest adjacent token run `bridgeCompounds` rejoins to a single
+      other-stream token (A2d). 3 catches a name Whisper splits into three
+      ("Scapegrace" → "scape a grace"); 2 restores pair-only bridging. */
+  maxBridgeRun: number;
   /** compression_ratio above this → drift (Whisper's loop/repeat hallucination
       tell), regardless of WER. */
   maxCompressionRatio: number;
@@ -79,6 +83,7 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxDeletionRun: 4,
   minChars: 12,
   minRefWords: 2,
+  maxBridgeRun: 3,
   maxCompressionRatio: 2.4,
   minAvgLogprob: -1.0,
   maxNoSpeechProb: 0.6,
@@ -112,6 +117,7 @@ export function resolveAsrThresholds(
     maxDeletionRun: configValue<number>('qa.asr.maxDeletionRun'),
     minChars: configValue<number>('qa.asr.minChars'),
     minRefWords: configValue<number>('qa.asr.minRefWords'),
+    maxBridgeRun: configValue<number>('qa.asr.maxBridgeRun'),
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
     minAvgLogprob: configValue<number>('qa.asr.minAvgLogprob'),
     maxNoSpeechProb: configValue<number>('qa.asr.maxNoSpeech'),
@@ -307,30 +313,46 @@ export function editDistanceAtMost1(a: string, b: string): boolean {
    writes apart ("good bye" → "goodbye"); on a short sentence that single
    re-tokenisation is 1 sub + 1 ins on a tiny denominator → WER over the cap → a
    false 'drift' on audio that says exactly the right words. We collapse an
-   adjacent PAIR only when its concatenation appears as a single token in the
+   adjacent RUN only when its concatenation appears as a single token in the
    OTHER stream — a genuinely wrong word won't concatenate to the expected
-   token, so this can never mask real drift. Pairs only (2↔1); 3+ token
-   compounds are rare and out of scope. */
-export function bridgeCompounds(expected: string[], actual: string[]): [string[], string[]] {
-  // Collapse an adjacent pair when its concatenation matches a token in the OTHER
+   token, so this can never mask real drift.
+
+   A2d (PR-1.1): the run was originally pairs only (2↔1), which missed an
+   invented name Whisper splits into THREE tokens ("Scapegrace" → "scape a
+   grace", whose concat "scapeagrace" is 1 deletion from "scapegrace"). We now
+   try runs of length 2..`maxRun` (default 3), preferring the SHORTEST run that
+   joins so a 2-token compound is never greedily swallowed into a 3-run. Set
+   `maxRun` to 2 (env SEG_ASR_MAX_BRIDGE_RUN) to restore the pair-only
+   behaviour exactly. */
+export function bridgeCompounds(
+  expected: string[],
+  actual: string[],
+  maxRun = 3,
+): [string[], string[]] {
+  // Collapse an adjacent run when its concatenation matches a token in the OTHER
   // stream — EXACT match preferred (byte-identical to the legacy Set behaviour),
   // else within edit-distance 1 — and emit that matched token so the two streams
-  // align as a `match` rather than a residual substitution. A genuinely wrong pair
+  // align as a `match` rather than a residual substitution. A genuinely wrong run
   // won't concatenate near an other-stream token, so this can't mask real drift.
-  // Pairs only (2↔1); 3+ token compounds out of scope.
   const collapse = (tokens: string[], other: readonly string[]): string[] => {
     const out: string[] = [];
-    for (let i = 0; i < tokens.length; i += 1) {
-      if (i + 1 < tokens.length) {
-        const concat = tokens[i] + tokens[i + 1];
+    for (let i = 0; i < tokens.length; ) {
+      let joined = false;
+      // Shortest run first (2 before 3) so a 2-compound isn't swallowed into a 3-run.
+      for (let run = 2; run <= maxRun && i + run <= tokens.length; run += 1) {
+        const concat = tokens.slice(i, i + run).join('');
         const match = other.find((o) => o === concat) ?? other.find((o) => editDistanceAtMost1(concat, o));
         if (match !== undefined) {
           out.push(match);
-          i += 1; // consumed the pair
-          continue;
+          i += run; // consumed the whole run
+          joined = true;
+          break;
         }
       }
-      out.push(tokens[i]);
+      if (!joined) {
+        out.push(tokens[i]);
+        i += 1;
+      }
     }
     return out;
   };
@@ -497,6 +519,7 @@ export function classifyTranscript(
   const [expectedTokens, actualTokens] = bridgeCompounds(
     normalizeForWer(expectedText, opts.language),
     normalizeForWer(transcript, opts.language),
+    t.maxBridgeRun,
   );
   if (expectedTokens.length === 0) {
     reasons.push('Not scored — expected text normalised to empty.');

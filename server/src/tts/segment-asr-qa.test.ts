@@ -400,12 +400,61 @@ describe('bridgeCompounds (fuzzy)', () => {
     expect(exp).toEqual(['hello', 'there']);
     expect(act).toEqual(['banana', 'split']);
   });
+
+  it('A2d: bridges a 1→3 name split within 1 edit of the manuscript token', () => {
+    // "Scapegrace" heard as "scape a grace" — concat "scapeagrace" is 1 deletion
+    // from "scapegrace". The pair-only bridge missed this; the 3-run bridge joins it.
+    const [exp, act] = bridgeCompounds(['scapegrace', 'appeared'], ['scape', 'a', 'grace', 'appeared']);
+    expect(exp).toEqual(['scapegrace', 'appeared']);
+    expect(act).toEqual(['scapegrace', 'appeared']);
+  });
+
+  it('A2d: prefers the shortest run that joins (a 2-run wins over a 3-run)', () => {
+    // 'good'+'bye' = 'goodbye' joins at run 2 — must not greedily swallow 'now'.
+    const [, act] = bridgeCompounds(['goodbye', 'now'], ['good', 'bye', 'now']);
+    expect(act).toEqual(['goodbye', 'now']);
+  });
+
+  it('A2d: does NOT bridge three genuinely wrong tokens (concat far from any token)', () => {
+    const [exp, act] = bridgeCompounds(['hello', 'there'], ['banana', 'apple', 'split']);
+    expect(exp).toEqual(['hello', 'there']);
+    expect(act).toEqual(['banana', 'apple', 'split']);
+  });
+
+  it('A2d: maxRun=2 restores pair-only bridging (3-run no longer joins)', () => {
+    const [, act] = bridgeCompounds(['scapegrace', 'appeared'], ['scape', 'a', 'grace', 'appeared'], 2);
+    expect(act).toEqual(['scape', 'a', 'grace', 'appeared']); // unchanged — 3-run skipped
+  });
 });
 
 describe('classifyTranscript — A2a word-split tolerance', () => {
   it('A2a: a 1-edit word-split on a short line is ok, not drift (RED→GREEN)', () => {
     const c = classifyTranscript('Skulduggery frowned at her.', 'Skull Duggery frowned at her.', CLEAN);
     expect(c.verdict).toBe('ok');
+  });
+});
+
+describe('classifyTranscript — A2d 1→N name-split tolerance', () => {
+  afterEach(() => {
+    delete process.env.SEG_ASR_MAX_BRIDGE_RUN;
+  });
+
+  it('A2d: a name split into 3 transcript tokens is ok, not drift (RED→GREEN)', () => {
+    // "Scapegrace appeared." heard "Scape a grace appeared." — 1 sub + 2 ins on a
+    // tiny denominator drove WER 1.5 > 0.4. The 3-run bridge rejoins it → ok.
+    const c = classifyTranscript('Scapegrace appeared.', 'Scape a grace appeared.', CLEAN);
+    expect(c.verdict).toBe('ok');
+  });
+
+  it('A2d: maxBridgeRun=2 restores the pre-PR drift (disable knob wired)', () => {
+    process.env.SEG_ASR_MAX_BRIDGE_RUN = '2';
+    const c = classifyTranscript('Scapegrace appeared.', 'Scape a grace appeared.', CLEAN);
+    expect(c.verdict).toBe('drift');
+  });
+
+  it('A2d: a genuinely garbled 3-word run still drifts (no false bridge)', () => {
+    const c = classifyTranscript('The hammer fell hard.', 'The banana apple split hard.', CLEAN);
+    expect(c.verdict).toBe('drift');
   });
 });
 
