@@ -5,6 +5,8 @@ import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
 import { chaptersSlice } from '../store/chapters-slice';
+import { prosodySlice } from '../store/prosody-slice';
+import { scriptReviewSlice, scriptReviewActions } from '../store/script-review-slice';
 import { DetectEmotionsButton } from './detect-emotions-button';
 
 const { detectEmotions, detectInstruct } = vi.hoisted(() => ({
@@ -22,6 +24,8 @@ function makeStore() {
       manuscript: manuscriptSlice.reducer,
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
+      prosody: prosodySlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
     },
     preloadedState: {
       manuscript: {
@@ -148,5 +152,39 @@ describe('fs-33 — DetectEmotionsButton', () => {
       </Provider>,
     );
     expect((screen.getByTestId('detect-emotions-button') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('disables Detect emotions while a review runs on the same book', () => {
+    const store = makeStore(); // ui.stage.bookId === 'b1'
+    store.dispatch(scriptReviewActions.setActive({ bookId: 'b1', progress: 0.05, label: 'Reviewing' }));
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+    expect(screen.getByTestId('detect-emotions-button')).toBeDisabled();
+  });
+
+  it('clears the prosody stream in finally even when a pass throws', async () => {
+    let streamWhileRunning: unknown;
+    detectEmotions.mockImplementation((_id: string, opts?: any) => {
+      /* tinyspy may probe with no args; the real call always passes opts. */
+      if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+      streamWhileRunning = store.getState().prosody.activeStreams['b1']; // setActive ran before the thunk awaited the API
+      return Promise.reject(new Error('boom'));
+    });
+    detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 }); // safe if the thunk continues to pass 2
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('detect-emotions-button'));
+    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
+    // cleared in finally despite the throw:
+    await waitFor(() => expect(store.getState().prosody.activeStreams['b1']).toBeUndefined());
+    // and it was set while running:
+    expect(streamWhileRunning).toMatchObject({ label: 'Detecting emotions' });
   });
 });

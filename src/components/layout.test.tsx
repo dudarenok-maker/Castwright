@@ -38,6 +38,7 @@ import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
+import { scriptReviewSlice } from '../store/script-review-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -172,6 +173,7 @@ function makeStore() {
       continueListening: continueListeningSlice.reducer,
       notifications: notificationsSlice.reducer,
       prosody: prosodySlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
     },
   });
 }

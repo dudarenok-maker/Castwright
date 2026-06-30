@@ -101,6 +101,16 @@ A second graphics card stops sitting idle. Every TTS-sidecar engine is now *plac
 
 ---
 
+### ⏳ Analysis progress on the Status pill, with a Generate hold (new) — fe-45
+The two manuscript-analysis passes — Detect emotions and Review Script — now report live on the top-bar Status pill, and Generate waits until they finish so you never queue work over a half-analysed book.
+
+- **A live "Analysing" rung** — while Detect-emotions or Review Script runs, the Status pill shows an "Analysing" sub-stage with a percent ticker, visible from every view (not just Manuscript). The old standalone prosody pill is retired — the Status pill is now the single place to watch analysis (#1187).
+- **Generate held per book** — the Generate button is disabled for a book while its analysis runs, with a plain-language reason ("Wait — emotions are still being detected" / "Wait — script review is in progress"); the two analysis passes are also mutually exclusive per book since they share the analyzer. The hold is enforced at the queue layer too, so a background auto-resume can't slip past it (#1187).
+- **Holds across tabs** — analysis progress is synced over `BroadcastChannel`, so the pill and the Generate hold stay consistent in every open tab; the eager emotion-detection auto-trigger is guarded against double-firing (#1187).
+- **"Voice engines"** — the Status-popover model-control section is relabelled from "TTS engines" to "Voice engines" (the broader app-wide copy rename is tracked as fe-44) (#1187).
+
+---
+
 ## ✨ Smaller features & UX
 
 - **Manuscript-analysis pill + Generate-gate (new)** — the two manuscript-analysis sub-stages (Detect emotions / Review Script) now report live progress on the Status pill, and **Generate is hard-disabled per-book while either pass runs** (with a per-pass toast explaining why), so you can't render over a half-finished analysis. The two passes are mutually exclusive per book, the fs-65 auto-trigger is guarded against a double-fire, and the whole thing syncs cross-tab via a new `sync:substage` broadcast — progress lives in per-book `activeStreams` maps on the prosody and script-review slices, folded into the existing top-bar status summary (the standalone prosody pill is retired). The pill ladder is regrouped to **Generating › Loading model › Analysing › analysis-substage › Designing**, and the Status popover's "TTS engines" label reads **Voice engines** (the app-wide copy rename is tracked separately as fe-44).

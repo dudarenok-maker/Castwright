@@ -2789,8 +2789,13 @@ async function mockDetectEmotions(
   { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   await wait(60);
+  onPhase?.({ progress: 0.25, label: 'Detecting emotions — chapter 1', chapterId: 1 });
+  await wait(500);
   onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 1', chapterId: 1 });
   onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'excited' }] });
+  await wait(500);
+  onPhase?.({ progress: 0.85, label: 'Detecting emotions — chapter 2', chapterId: 2 });
+  await wait(500);
   onPhase?.({ progress: 1, label: 'Done' });
   return { annotatedChapters: 1, totalAnnotations: 1 };
 }
@@ -2924,10 +2929,12 @@ async function mockDetectInstruct(
 ): Promise<DetectInstructResult> {
   await wait(60);
   onPhase?.({ progress: 0.5, label: 'Detecting instruct — chapter 1', chapterId: 1 });
+  await wait(500);
   onAnnotation?.({
     chapterId: 1,
     annotations: [{ sentenceId: 1, text: '[laughs]', instruct: 'warm, amused', vocalization: true }],
   });
+  await wait(400);
   onPhase?.({ progress: 1, label: 'Done' });
   return { annotatedChapters: 1, totalAnnotations: 1 };
 }
@@ -3052,7 +3059,12 @@ async function mockReviewScript(
   { onOps, onPhase, onChapterFailed: _onChapterFailed }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
+  onPhase?.({ progress: 0.25, label: 'Reviewing…', chapterId: 1 });
+  await wait(500);
   onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 3 });
+  await wait(500);
+  onPhase?.({ progress: 0.85, label: 'Reviewing…', chapterId: 3 });
+  await wait(400);
   /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
   onOps?.({
     chapterId: 3,

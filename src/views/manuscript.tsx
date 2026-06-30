@@ -41,9 +41,11 @@ import { DetectEmotionsButton } from '../components/detect-emotions-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
-import { scriptReviewActions, selectActiveReview, type ReviewOpWithChapter } from '../store/script-review-slice';
+import { selectActiveReview } from '../store/script-review-slice';
+import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { notificationsActions } from '../store/notifications-slice';
-import { rpdWarningFor, planApply } from '../lib/script-review-apply';
+import { rpdWarningFor } from '../lib/script-review-apply';
+import { runReviewScript } from '../store/script-review-thunk';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -123,6 +125,7 @@ export function ManuscriptView({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
@@ -697,61 +700,26 @@ export function ManuscriptView({
   async function handleReviewScript(wholeBook: boolean) {
     if (!bookId || reviewLoading) return;
     if (!wholeBook && currentChapterId == null) return;
-    const allOps: ReviewOpWithChapter[] = [];
-    const failed: Array<{ chapterId: number; message: string }> = [];
     setReviewLoading(true);
     setReviewMenuOpen(false);
     try {
-      await api.reviewScript(bookId, {
-        /* Omitting chapterId reviews every (non-excluded) chapter server-side. */
-        ...(wholeBook ? {} : { chapterId: currentChapterId ?? undefined }),
+      await runReviewScript(bookId, {
+        dispatch,
+        wholeBook,
+        chapterId: wholeBook ? undefined : currentChapterId ?? undefined,
         model: reviewModel,
-        onOps: ({ chapterId: chId, ops }) => {
-          for (const op of ops) allOps.push({ ...op, chapterId: chId });
-        },
-        onChapterFailed: (e) => failed.push(e),
+        /* sentencesRef.current gives the latest Redux value even after the
+           await, without depending on the stale-closure capture. */
+        sentences: sentencesRef.current.map((s) => ({
+          id: s.id,
+          chapterId: s.chapterId,
+          text: s.text,
+          characterId: s.characterId,
+          instruct: s.instruct,
+          vocalization: s.vocalization,
+        })),
+        characterIds: new Set(characters.map((c) => c.id)),
       });
-      /* fs-58 Task 11 — run planApply at seed time so ops that can't be
-         resolved against the LIVE sentences (stale ids, missing anchors,
-         invalid merges) land in `unappliable` rather than appearing as
-         selectable no-ops in the diff modal. The Apply-time planApply in
-         the modal stays — it's the TOCTOU re-validation for any edits
-         that arrived between stream-complete and the user clicking Accept.
-         sentencesRef.current gives the latest Redux value even after the
-         await, without depending on the stale-closure capture. */
-      const live = sentencesRef.current.map((s) => ({
-        id: s.id,
-        chapterId: s.chapterId,
-        text: s.text,
-        characterId: s.characterId,
-        instruct: s.instruct,
-        vocalization: s.vocalization,
-      }));
-      /* planApply filters from allOps whose entries are ReviewOpWithChapter —
-         the chapterId is preserved on each returned object at runtime, so
-         casting back to the wider type is safe here. */
-      const { appliable, unappliable } = planApply(allOps, live, new Set(characters.map((c) => c.id))) as {
-        appliable: ReviewOpWithChapter[];
-        unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-      };
-      if (appliable.length === 0 && unappliable.length === 0 && failed.length > 0) {
-        dispatch(notificationsActions.pushToast({
-          kind: 'warn',
-          message: failed.length === 1 ? failed[0].message : `${failed.length} chapters couldn't be reviewed (too large or failed).`,
-        }));
-      } else {
-        if (failed.length > 0) {
-          dispatch(notificationsActions.pushToast({ kind: 'warn', message: `${failed.length} chapter(s) skipped; showing the rest.` }));
-        }
-        dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable }));
-      }
-    } catch (err) {
-      dispatch(
-        notificationsActions.pushToast({
-          kind: 'error',
-          message: err instanceof Error ? err.message : 'Script review failed.',
-        }),
-      );
     } finally {
       setReviewLoading(false);
     }
@@ -824,7 +792,7 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-chapter"
                   onClick={() => void handleReviewScript(false)}
-                  disabled={reviewLoading || !bookId}
+                  disabled={reviewLoading || !bookId || analysisBusy}
                   className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
                 >
                   {reviewLoading ? 'Reviewing…' : 'Review Script'}
@@ -832,7 +800,7 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-menu-toggle"
                   onClick={() => setReviewMenuOpen((o) => !o)}
-                  disabled={reviewLoading || !bookId}
+                  disabled={reviewLoading || !bookId || analysisBusy}
                   aria-label="Script review options"
                   aria-expanded={reviewMenuOpen}
                   className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
@@ -847,7 +815,7 @@ export function ManuscriptView({
                     <button
                       data-testid="review-script-wholebook"
                       onClick={() => void handleReviewScript(true)}
-                      disabled={reviewLoading || !bookId}
+                      disabled={reviewLoading || !bookId || analysisBusy}
                       className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
                     >
                       Review whole book
