@@ -42,6 +42,7 @@ import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
 import { selectActiveReview } from '../store/script-review-slice';
+import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor } from '../lib/script-review-apply';
 import { runReviewScript } from '../store/script-review-thunk';
@@ -124,6 +125,7 @@ export function ManuscriptView({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
@@ -790,7 +792,7 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-chapter"
                   onClick={() => void handleReviewScript(false)}
-                  disabled={reviewLoading || !bookId}
+                  disabled={reviewLoading || !bookId || analysisBusy}
                   className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
                 >
                   {reviewLoading ? 'Reviewing…' : 'Review Script'}
@@ -798,7 +800,7 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-menu-toggle"
                   onClick={() => setReviewMenuOpen((o) => !o)}
-                  disabled={reviewLoading || !bookId}
+                  disabled={reviewLoading || !bookId || analysisBusy}
                   aria-label="Script review options"
                   aria-expanded={reviewMenuOpen}
                   className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
@@ -813,7 +815,7 @@ export function ManuscriptView({
                     <button
                       data-testid="review-script-wholebook"
                       onClick={() => void handleReviewScript(true)}
-                      disabled={reviewLoading || !bookId}
+                      disabled={reviewLoading || !bookId || analysisBusy}
                       className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
                     >
                       Review whole book

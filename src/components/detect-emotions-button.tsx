@@ -21,6 +21,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
 import { runProsodyPasses } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
+import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { IconSparkle, IconSpinner } from '../lib/icons';
 
 type Phase = 'idle' | 'confirm' | 'running';
@@ -33,6 +34,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const busy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
 
   if (!bookId) return null;
 
@@ -106,7 +108,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       <button
         type="button"
         data-testid="detect-emotions-button"
-        disabled={disabled}
+        disabled={disabled || busy}
         onClick={() => setPhase((p) => (p === 'confirm' ? 'idle' : 'confirm'))}
         title={
           disabled

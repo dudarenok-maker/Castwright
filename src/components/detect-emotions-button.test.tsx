@@ -6,7 +6,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { prosodySlice } from '../store/prosody-slice';
-import { scriptReviewSlice } from '../store/script-review-slice';
+import { scriptReviewSlice, scriptReviewActions } from '../store/script-review-slice';
 import { DetectEmotionsButton } from './detect-emotions-button';
 
 const { detectEmotions, detectInstruct } = vi.hoisted(() => ({
@@ -152,6 +152,17 @@ describe('fs-33 — DetectEmotionsButton', () => {
       </Provider>,
     );
     expect((screen.getByTestId('detect-emotions-button') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('disables Detect emotions while a review runs on the same book', () => {
+    const store = makeStore(); // ui.stage.bookId === 'b1'
+    store.dispatch(scriptReviewActions.setActive({ bookId: 'b1', progress: 0.05, label: 'Reviewing' }));
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+    expect(screen.getByTestId('detect-emotions-button')).toBeDisabled();
   });
 
   it('clears the prosody stream in finally even when a pass throws', async () => {

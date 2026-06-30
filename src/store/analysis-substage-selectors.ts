@@ -3,10 +3,10 @@ import type { RootState } from './index';
 import type { SubstageEntry } from './prosody-slice';
 
 export const selectProsodyRunningForBook = (state: RootState, bookId: string): boolean =>
-  bookId in state.prosody.activeStreams;
+  !!state.prosody?.activeStreams && bookId in state.prosody.activeStreams;
 
 export const selectReviewRunningForBook = (state: RootState, bookId: string): boolean =>
-  bookId in state.scriptReview.activeStreams;
+  !!state.scriptReview?.activeStreams && bookId in state.scriptReview.activeStreams;
 
 export const selectAnalysisBusyForBook = (state: RootState, bookId: string): boolean =>
   selectProsodyRunningForBook(state, bookId) || selectReviewRunningForBook(state, bookId);
