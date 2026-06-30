@@ -80,7 +80,7 @@ const TREND_STYLE: Record<Trend, { cls: string; glyph: string; label: string }> 
    (scrollbar-gutter: stable from .scrollbar-thin) — otherwise the header would
    run a gutter-width past the rows. */
 const THROUGHPUT_COLS =
-  'grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_7rem_auto] md:grid-cols-[1fr_7rem_3.5rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
+  'grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_7rem_auto] md:grid-cols-[1fr_7rem_3.5rem_3.5rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
 const TRENDS_COLS =
   'grid grid-cols-[1fr_3rem_3rem_auto] sm:grid-cols-[1fr_7rem_3rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
 
@@ -432,6 +432,7 @@ function GenerationThroughput({ stats }: { stats: GenerationStatsResponse | null
               <span className="text-right hidden sm:block">Engine</span>
               <span className="text-right hidden md:block">Audio</span>
               <span className="text-right hidden md:block">Synth</span>
+              <span className="text-right hidden md:block">QA</span>
               <span className="text-right">RTF</span>
             </div>
             <div className="divide-y divide-ink/5">
@@ -662,6 +663,9 @@ function ThroughputRow({ chapter, olderRtf }: { chapter: RecentChapter; olderRtf
       </span>
       <span className="text-right text-xs text-ink/50 font-mono tabular-nums hidden md:block">
         {formatDuration(chapter.synthSec)}
+      </span>
+      <span className="text-right text-xs text-ink/50 font-mono tabular-nums hidden md:block">
+        {fmtRtf(chapter.rerecordRtf)}
       </span>
       <span
         className={`text-right font-mono font-medium tabular-nums ${style.cls}`}
