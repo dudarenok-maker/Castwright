@@ -109,3 +109,53 @@ def test_health_gpus_field_additive(monkeypatch):
     assert "devices" in body
     assert "asr_device" in body
     assert "spk_device" in body
+
+
+# ── final-review fixes: loaded Coqui visibility + unindexed cpu_fallback ──
+
+def test_engine_actual_card_detects_loaded_coqui_via_tts():
+    """A loaded Coqui keeps its model in `_tts` (not _model/_kokoro/_base) and its
+    ACTUAL device in `_resolved_device` (the pref lives in `_device`). A Coqui that
+    requested cuda but resolved cpu must be visible (not None) and flagged fell_back."""
+    coqui = types.SimpleNamespace(
+        _requested_device="cuda:1", _tts=object(), _resolved_device="cpu", _device="cuda:1"
+    )
+    card = main._engine_actual_card(coqui)
+    assert card is not None  # was None before the _tts lookup fix
+    assert card["family"] == "cpu"  # resolved device, not the cuda pref
+    assert card["fell_back"] is True
+
+
+def test_engine_actual_card_loaded_coqui_on_cuda_no_fallback():
+    coqui = types.SimpleNamespace(
+        _requested_device="cuda:1", _tts=object(), _resolved_device="cuda:1", _device="cuda:1"
+    )
+    card = main._engine_actual_card(coqui)
+    assert card is not None
+    assert card["family"] == "cuda"
+    assert card["fell_back"] is False
+
+
+def test_build_gpus_payload_surfaces_unindexed_cpu_fallback(monkeypatch):
+    """An ORT/CT2 (or cpu-fallen) engine has index=None → the -1 bucket, which no
+    real card claims. _build_gpus_payload must surface it as a synthetic entry so the
+    cpu_fallback is visible in gpus[] rather than silently dropped."""
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {
+        1: [{"engine": "qwen", "actual_card": 1}],
+        -1: [{"engine": "kokoro", "actual_card": None, "stale_reason": "cpu_fallback"}],
+    })
+    out = main._build_gpus_payload(_fake_torch())
+    unindexed = [c for c in out if c["idx"] == -1]
+    assert len(unindexed) == 1
+    assert {"engine": "kokoro", "actual_card": None, "stale_reason": "cpu_fallback"} in unindexed[0]["resident"]
+
+
+def test_build_gpus_payload_no_unindexed_entry_when_bucket_empty(monkeypatch):
+    """A fully-indexed box (no -1 bucket) sees no synthetic entry — additive only."""
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {1: [{"engine": "qwen", "actual_card": 1}]})
+    out = main._build_gpus_payload(_fake_torch())
+    assert [c for c in out if c["idx"] == -1] == []

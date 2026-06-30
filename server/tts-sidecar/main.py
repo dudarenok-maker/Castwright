@@ -3107,7 +3107,7 @@ class SpeakerEngine:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
         the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
         freeing ~80–200 MB of host RAM. No-op while recently used."""
-        if self.device != "cuda" or self._model is None:
+        if _parse_device(self.device)[0] != "cuda" or self._model is None:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
@@ -4148,7 +4148,12 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     """(family, index, fell_back) for a LOADED engine, else None. index is the
     real torch ordinal for torch engines; None for ORT/CT2 (family only).
     fell_back = requested cuda but resolved cpu (the silent-CPU signal)."""
-    model = getattr(engine, "_model", None) or getattr(engine, "_kokoro", None) or getattr(engine, "_base", None)
+    model = (
+        getattr(engine, "_model", None)
+        or getattr(engine, "_kokoro", None)
+        or getattr(engine, "_base", None)
+        or getattr(engine, "_tts", None)  # CoquiEngine keeps its model here
+    )
     if model is None:
         return None
     requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
@@ -4162,7 +4167,14 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     except Exception:
         pass
     if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
-        family, _ = _parse_device(getattr(engine, "device", None) or getattr(engine, "_device", None))
+        # Prefer the RESOLVED device (Coqui keeps the actual in _resolved_device and
+        # the pref in _device) so a cpu fallback isn't masked by the cuda pref; then
+        # `device` (SPK, demoted to cpu on failure) and `_device` (Whisper).
+        family, _ = _parse_device(
+            getattr(engine, "_resolved_device", None)
+            or getattr(engine, "device", None)
+            or getattr(engine, "_device", None)
+        )
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
@@ -4204,6 +4216,17 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
             c["torch_reserved_mb"] = 0
     for c in cards:
         c["resident"] = resident.get(c["idx"], [])
+    # ORT/CT2 engines (Kokoro/Whisper) and any cpu-fallen engine carry index=None
+    # → the -1 bucket, which no real card claims. Surface it as a synthetic
+    # entry so a cpu_fallback (stale_reason) is visible in gpus[] rather than
+    # silently dropped. Only emitted when the bucket is non-empty, so a fully
+    # indexed box sees no change.
+    unindexed = resident.get(-1, [])
+    if unindexed:
+        cards.append({
+            "uuid": None, "idx": -1, "name": "unindexed (cpu / ORT / CT2)",
+            "total_mb": 0, "free_mb": 0, "torch_reserved_mb": 0, "resident": unindexed,
+        })
     return cards
 
 
