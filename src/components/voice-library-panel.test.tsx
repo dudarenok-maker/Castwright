@@ -199,6 +199,16 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(onSelect).toHaveBeenCalledTimes(3);
   });
 
+  it('labels the prebuilt-voice sub-line "Voice ·" (fe-44 TTS→Voice rename)', () => {
+    /* The sub-line that names the underlying prebuilt speaker reads
+       "Voice · <name>" — the old "TTS ·" jargon is gone everywhere a user
+       can see it. */
+    const voice = makeVoice('v_marlow', 'Marlow'); // fixture ttsVoice.name = 'Claribel Dervla'
+    render(<VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />);
+    expect(screen.getByText(/Voice · Claribel Dervla/)).toBeInTheDocument();
+    expect(screen.queryByText(/TTS · Claribel Dervla/)).toBeNull();
+  });
+
   it('renders the multi-select checkbox only when both `selected` and `onToggleSelect` are passed (plan 22a)', () => {
     /* With only the legacy props the card MUST stay drag-only with no
        checkbox surface — otherwise the Cast-view drawer would show a stray

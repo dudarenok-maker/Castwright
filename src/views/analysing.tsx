@@ -1004,7 +1004,7 @@ export function AnalysingView({
     } catch {}
     try {
       await api.unloadSidecar();
-      if (sidecarHadModel) setAnalyzerEvictionNotice('TTS unloaded to free VRAM for the analyzer.');
+      if (sidecarHadModel) setAnalyzerEvictionNotice('Voice engine unloaded to free VRAM for the analyzer.');
     } catch {}
     /* loadAnalyzer's HTTP-level failures land in the result body
        (status:'error') with a 5xx — only fetch-itself failures throw.

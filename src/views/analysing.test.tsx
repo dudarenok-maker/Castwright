@@ -579,7 +579,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     expect(loadAnalyzerSpy).toHaveBeenCalledTimes(1);
     /* Auto-evict banner — the user must see that loading the analyzer
        freed VRAM from TTS, otherwise the swap is silent and confusing. */
-    expect(await screen.findByText(/TTS unloaded to free VRAM/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Voice engine unloaded to free VRAM/i)).toBeInTheDocument();
   });
 
   it('does not surface the eviction banner when TTS had no model loaded to begin with', async () => {
@@ -607,7 +607,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     });
 
     await waitFor(() => expect(loadAnalyzerSpy).toHaveBeenCalled());
-    expect(screen.queryByText(/TTS unloaded to free VRAM/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Voice engine unloaded to free VRAM/i)).not.toBeInTheDocument();
   });
 
   /* Regression (#3/#4): the view judged residency on `modelResident` — the

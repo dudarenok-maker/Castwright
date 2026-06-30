@@ -544,7 +544,7 @@ export function CastView({
            helper confirms the analyzer was actually unloaded. */
         onStatus: (_status, { analyzerEvicted }) => {
           if (analyzerEvicted && !evictionBanner) {
-            setEvictionBanner('Analyzer unloaded to free VRAM for TTS.');
+            setEvictionBanner('Analyzer unloaded to free VRAM for the voice engine.');
           }
         },
       });

@@ -132,7 +132,7 @@ function previewLoadingLabel(status: SampleStatus | 'idle'): string {
     case 'evicting':
       return 'Freeing memory…';
     case 'loading-tts':
-      return 'Loading TTS…';
+      return 'Loading voice engine…';
     case 'synthesizing':
     case 'idle':
     default:

@@ -349,7 +349,7 @@ export function VoiceCard({
             title={`Prebuilt ${voice.ttsVoice.provider} voice — ${voice.ttsVoice.description}`}
             className="text-[11px] mt-0.5 truncate"
           >
-            <span className="font-semibold text-ink/70">TTS · {voice.ttsVoice.name}</span>
+            <span className="font-semibold text-ink/70">Voice · {voice.ttsVoice.name}</span>
             <span className="text-ink/40"> · {voice.ttsVoice.description}</span>
           </p>
         )}

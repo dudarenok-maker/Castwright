@@ -221,7 +221,7 @@ export function useTtsLifecycle(): TtsLifecycle {
       try {
         await api.unloadAnalyzer();
         if (analyzerWasLoaded) {
-          setEvictionNotice('Analyzer unloaded to free VRAM for TTS.');
+          setEvictionNotice('Analyzer unloaded to free VRAM for the voice engine.');
         }
       } catch {
         /* Ollama down or no model loaded — proceed with TTS load anyway. */
@@ -259,7 +259,7 @@ export function useTtsLifecycle(): TtsLifecycle {
           : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
       const result = await api.unloadSidecar(stopOpts);
       if (result.status === 'error') {
-        setLoadErrorNotice(result.error || 'TTS model failed to unload.');
+        setLoadErrorNotice(result.error || 'Voice engine failed to unload.');
         setPending(engine, null);
       }
     } catch (e) {
