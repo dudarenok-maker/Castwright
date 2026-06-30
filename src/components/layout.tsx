@@ -160,7 +160,7 @@ export function Layout() {
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
-  const prosodyStream = useAppSelector((s) => s.prosody.activeStream);
+  const prosodyStreams = useAppSelectorShallow((s) => s.prosody.activeStreams);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
@@ -1041,20 +1041,20 @@ export function Layout() {
           const st = await api.getBookState(id);
           if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
           if (st.state.prosodyAnnotated) return;               // watermark → no-op
-          dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Phase 3 — Detecting prosody' }));
+          dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Detecting emotions' }));
           pillActive = true;
           const { failed } = await runProsodyPasses(id, {
             dispatch,
             onProgress: (f) => dispatch(prosodyActions.updateProgress({ bookId: id, progress: f })),
           });
-          dispatch(prosodyActions.clear());
+          dispatch(prosodyActions.clear({ bookId: id }));
           if (failed === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
           } else {
             prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
           }
         } catch {
-          if (pillActive) dispatch(prosodyActions.clear());
+          if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
           prosodyConsidered.current.delete(id); // transient error → retry on next transition
         }
       })();
@@ -1353,13 +1353,13 @@ export function Layout() {
     };
   })();
 
-  /* Phase 3 prosody-progress pill — anchored to the transient `prosody.activeStream`
-     slice (Task 14). Absent when no prosody pass is running; shows label + percent
-     while the two-pass annotation runs. No navigation: the pass runs silently in
-     the background. */
-  const prosodyPill: { label: string; percent: number } | null = prosodyStream
-    ? { label: prosodyStream.label, percent: prosodyStream.progress }
-    : null;
+  /* Phase 3 prosody-progress pill — first active per-book entry. Retired in a
+     later task once the Status-pill rung lands; kept working here so this task
+     leaves the tree green. */
+  const prosodyPill: { label: string; percent: number } | null = (() => {
+    const first = Object.values(prosodyStreams)[0];
+    return first ? { label: first.label, percent: first.progress } : null;
+  })();
 
   /* Third status pill — the in-flight "Design full cast" bulk job. Mirrors the
      analysis/generation pill IIFEs: anchored to the cross-book `castDesign`

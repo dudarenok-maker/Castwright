@@ -1,8 +1,11 @@
 /* Task 14 (fs-65 Phase 3) — prosody progress pill rendering tests.
+   Migrated to per-book activeStreams map shape (Task 1 of analysis-pill-gate).
+   Task 3 will delete this file when the pill is retired and replaced by the
+   Status-pill rung.
 
    TDD contracts:
-   1. The pill renders with label + percent when prosody.activeStream is set.
-   2. The pill is absent when prosody.activeStream is null. */
+   1. The pill renders with label + percent when prosody.activeStreams has an entry.
+   2. The pill is absent when prosody.activeStreams is empty. */
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
@@ -82,7 +85,7 @@ vi.mock('../routes/prefetch', () => ({
 
 /* ── Store factory ─────────────────────────────────────────────────────── */
 
-function makeStore(prosodyState?: Partial<typeof prosodySlice.getInitialState>) {
+function makeStore(prosodyState?: Partial<ReturnType<typeof prosodySlice.getInitialState>>) {
   return configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -125,21 +128,21 @@ function renderLayout(store: ReturnType<typeof makeStore>) {
 /* ── Tests ─────────────────────────────────────────────────────────────── */
 
 describe('Layout — prosody progress pill (Task 14 / fs-65 Phase 3)', () => {
-  it('renders the prosody pill with label and percent when activeStream is set', async () => {
+  it('renders the prosody pill with label and percent when activeStreams has an entry', async () => {
     const store = makeStore({
-      activeStream: { bookId: 'b1', progress: 42, label: 'Phase 3 — Detecting prosody' },
+      activeStreams: { b1: { progress: 42, label: 'Detecting emotions' } },
     });
 
     renderLayout(store);
 
     const pill = await screen.findByTestId('prosody-pill');
     expect(pill).toBeTruthy();
-    expect(pill.textContent).toContain('Phase 3 — Detecting prosody');
+    expect(pill.textContent).toContain('Detecting emotions');
     expect(pill.textContent).toContain('42%');
   });
 
-  it('does NOT render the prosody pill when activeStream is null', async () => {
-    const store = makeStore({ activeStream: null });
+  it('does NOT render the prosody pill when activeStreams is empty', async () => {
+    const store = makeStore({ activeStreams: {} });
 
     renderLayout(store);
 
@@ -150,7 +153,7 @@ describe('Layout — prosody progress pill (Task 14 / fs-65 Phase 3)', () => {
   });
 
   it('prosody pill updates when store state changes', async () => {
-    const store = makeStore({ activeStream: null });
+    const store = makeStore({ activeStreams: {} });
 
     renderLayout(store);
 
@@ -160,7 +163,7 @@ describe('Layout — prosody progress pill (Task 14 / fs-65 Phase 3)', () => {
 
     /* Dispatch setActive → pill should appear. */
     await act(async () => {
-      store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0, label: 'Phase 3 — Detecting prosody' }));
+      store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0, label: 'Detecting emotions' }));
     });
     const pill = await screen.findByTestId('prosody-pill');
     expect(pill.textContent).toContain('0%');
@@ -173,7 +176,7 @@ describe('Layout — prosody progress pill (Task 14 / fs-65 Phase 3)', () => {
 
     /* Dispatch clear → pill disappears. */
     await act(async () => {
-      store.dispatch(prosodyActions.clear());
+      store.dispatch(prosodyActions.clear({ bookId: 'b1' }));
     });
     expect(screen.queryByTestId('prosody-pill')).toBeNull();
   });
