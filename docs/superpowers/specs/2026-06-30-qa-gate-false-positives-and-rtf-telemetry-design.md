@@ -255,5 +255,39 @@ A1/A2 logic fixes remove the thrash, not a config rollback.
 
 ## Ship notes
 
-_(to fill on ship: dates, SHAs, before/after per-chapter re-record counts + RTF on a
-re-rendered chapter — per-chapter, not book-total, per L3.)_
+**PR-1 (gate-logic fixes) — implemented 2026-06-30**, branch
+`fix/server-qa-gate-false-positives`. Commits: A1 `636e83e`, A2a `9407698`,
+A2b `c902f558`, A2c `0ad7ae39` (+ dry-run script). All four gate changes shipped
+with paired regression tests; full server suite green.
+
+**Static dry-run** (`server/scripts/qa-gate-dryrun.ts`, re-derived from the
+Scepter of the Ancients corpus — 7,452 segments, the box's own
+`*.segments.json`; the rendered segments store the OLD-gate `qa`/`asr` verdicts
+but NOT the manuscript text or Whisper signals, so A1 + the A2b sub-only class are
+re-derived EXACTLY from stored fields and A2a is indicative pending the on-box
+re-render):
+
+| Class | Before | After PR-1 |
+|---|---|---|
+| A1 duration "runaway" | **54** | **0** (all < 2.5 s; 3 s floor clears every one) |
+| A2 ASR drift (total) | **124** | 14 residual |
+| — A2b single-sub on 2-word ref → `inconclusive` | — | 14 cleared |
+| — A2a word-split candidate (e.g. `"Skull Duggery"`) | — | 96 cleared |
+| — residual drift (inspected) | — | **14** |
+
+**Real defects survive (verified in the residual):** the repetition
+`"Please be alright. Please be alright."` (sub 2 / del 2) stays `drift`;
+multi-error garbles (`"Is it Fernanabop Caprukey?"`, deletion-bearing lines) stay
+`drift`. The ~3 residual that are arguably FPs — `"Volkery Kane"` (both name
+words misheard, sub 2 → above the single-sub backstop), `"Unaventful"` (1-word
+ref, full sub) — are exactly the **disclosed PR-1.1 metaphone tail**, not a
+regression. No real-defect class is masked.
+
+**Owed on-box (the definitive measurement, per L3):** per-chapter re-record count
++ RTF on a re-rendered chapter on the 16 GB box (needs the sidecar/GPU) — the
+static pass predicts ~110/124 re-records removed; confirm the per-chapter RTF
+drops from the bimodal 2+ toward the ~0.8 batched baseline.
+
+**Follow-up filed:** PR-1.1 — metaphone/phonetic name-allowlist tolerance for the
+1→3 name splits (`"Scapegrace"`→`"scape a grace"`) and both-words-misheard name
+subs (`"Volkery Kane"`) that the `minRefWords` substitution backstop can't reach.
