@@ -1288,7 +1288,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               <span
                 role="status"
                 className="px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-100 text-[11px] font-semibold"
-                title="Both selected voices resolve to the same base TTS speaker — the highest-signal compare case"
+                title="Both selected voices resolve to the same base voice — the highest-signal compare case"
               >
                 same base voice ✓
               </span>
@@ -1297,7 +1297,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               <span
                 role="status"
                 className="px-2 py-0.5 rounded-full bg-amber-400/35 text-amber-50 text-[11px] font-semibold"
-                title="The selected voices route to different base TTS speakers — comparing across families is allowed; same-voice characters are the core tuning case"
+                title="The selected voices route to different base voices — comparing across families is allowed; same-voice characters are the core tuning case"
               >
                 different base voices
               </span>

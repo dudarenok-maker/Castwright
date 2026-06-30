@@ -36,7 +36,7 @@ test.describe('Qwen status sections on #/voices', () => {
     await expect(designed).toBeVisible();
 
     /* Undesigned voice buckets under "Needs a voice". exact:true avoids the
-       TTS sub-line (e.g. "TTS · qwen-thistle") substring-matching the name. */
+       voice sub-line (e.g. "Voice · qwen-thistle") substring-matching the name. */
     await expect(needs.getByText('Bramble', { exact: true })).toBeVisible();
 
     /* Designed voices bucket together, each carrying a Designed / Sampled /

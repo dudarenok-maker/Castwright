@@ -152,7 +152,9 @@ describe('useTtsLifecycle', () => {
     expect(mocks.unloadAnalyzer).toHaveBeenCalledOnce();
     expect(mocks.loadSidecar).toHaveBeenCalledOnce();
     expect(mocks.loadSidecar).toHaveBeenCalledWith({ engine: 'coqui' });
-    expect(result.current.evictionNotice).toBe('Analyzer unloaded to free VRAM for TTS.');
+    expect(result.current.evictionNotice).toBe(
+      'Analyzer unloaded to free VRAM for the voice engine.',
+    );
   });
 
   it('Coqui onLoad does NOT surface the eviction banner when analyzer was already unloaded', async () => {

@@ -660,7 +660,7 @@ export function ProfileDrawer({
         onStatus: (status, { analyzerEvicted }) => {
           setSampleStatus(status);
           if (analyzerEvicted && !evictionBanner) {
-            setEvictionBanner('Analyzer unloaded to free VRAM for TTS.');
+            setEvictionBanner('Analyzer unloaded to free VRAM for the voice engine.');
           }
         },
       });

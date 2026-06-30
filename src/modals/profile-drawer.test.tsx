@@ -571,7 +571,9 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
       </Provider>,
     );
     fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
-    expect(await screen.findByText(/Analyzer unloaded to free VRAM for TTS\./)).toBeTruthy();
+    expect(
+      await screen.findByText(/Analyzer unloaded to free VRAM for the voice engine\./),
+    ).toBeTruthy();
   });
 
   it('renders the helper error in the drawer when prep or synth fails', async () => {

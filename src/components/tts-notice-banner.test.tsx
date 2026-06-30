@@ -19,7 +19,7 @@ describe('TtsNoticeBanner', () => {
   it('renders the eviction notice as an info line', () => {
     render(
       <TtsNoticeBanner
-        evictionNotice="Analyzer unloaded to free VRAM for TTS."
+        evictionNotice="Analyzer unloaded to free VRAM for the voice engine."
         loadErrorNotice={null}
         onDismiss={vi.fn()}
       />,
@@ -47,7 +47,7 @@ describe('TtsNoticeBanner', () => {
   it('renders both notices together when both are set', () => {
     render(
       <TtsNoticeBanner
-        evictionNotice="Analyzer unloaded to free VRAM for TTS."
+        evictionNotice="Analyzer unloaded to free VRAM for the voice engine."
         loadErrorNotice="Voice engine failed to load. Check the voice engine logs."
         onDismiss={vi.fn()}
       />,

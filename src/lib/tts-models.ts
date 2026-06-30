@@ -28,7 +28,7 @@ export const TTS_ENGINES: TtsEngineGroup[] = [
   {
     id: 'local',
     label: 'Local (free)',
-    hint: 'Runs on your machine via the TTS sidecar — no rate limits',
+    hint: 'Runs on your machine via the voice-engine sidecar — no rate limits',
     models: [
       { id: 'kokoro-v1', label: 'Kokoro v1', hint: 'Default · 28 English voices · quality-tuned' },
       {

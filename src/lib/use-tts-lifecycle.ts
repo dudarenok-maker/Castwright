@@ -221,7 +221,7 @@ export function useTtsLifecycle(): TtsLifecycle {
       try {
         await api.unloadAnalyzer();
         if (analyzerWasLoaded) {
-          setEvictionNotice('Analyzer unloaded to free VRAM for voice engines.');
+          setEvictionNotice('Analyzer unloaded to free VRAM for the voice engine.');
         }
       } catch {
         /* Ollama down or no model loaded — proceed with TTS load anyway. */

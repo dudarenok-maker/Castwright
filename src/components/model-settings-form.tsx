@@ -63,7 +63,7 @@ const GROUP_SERVER_CONFIG: ConfigGroup = {
 const GROUP_MODELS_INSTALL: ConfigGroup = {
   id: 'model-install',
   label: 'Install / update analyzer (Ollama)',
-  help: 'Install the Ollama daemon and pull analyzer model weights without dropping to a terminal. The TTS / ASR models (Kokoro, Qwen, Coqui, Whisper) install from their rows in the inventory above.',
+  help: 'Install the Ollama daemon and pull analyzer model weights without dropping to a terminal. The voice-engine / ASR models (Kokoro, Qwen, Coqui, Whisper) install from their rows in the inventory above.',
   risk: 'low',
   collapsedByDefault: false,
 };

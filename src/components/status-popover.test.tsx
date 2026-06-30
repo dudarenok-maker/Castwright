@@ -80,7 +80,9 @@ describe('StatusPopover', () => {
         })}
       />,
     );
-    expect(screen.getByText(/TTS controls appear once a manuscript is open/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Voice engine controls appear once a manuscript is open/),
+    ).toBeInTheDocument();
     expect(screen.getByText('No analysis running.')).toBeInTheDocument();
     expect(screen.getByText('Nothing generating.')).toBeInTheDocument();
     expect(screen.getByText('No pending revisions.')).toBeInTheDocument();
