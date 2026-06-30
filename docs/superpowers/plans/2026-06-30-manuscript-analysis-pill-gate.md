@@ -28,7 +28,9 @@
 **Files:**
 - Modify: `src/store/prosody-slice.ts` (full rewrite of the slice body)
 - Modify: `src/components/layout.tsx:163` (the `prosodyStream` selector read), `layout.tsx:1044/1048/1050/1057` (auto-trigger dispatches), `layout.tsx:1356-1362` (the `prosodyPill` derivation)
-- Test: `src/store/prosody-slice.test.ts` (rewrite for the map shape)
+- Test: `src/store/prosody-slice.test.ts` (rewrite for the map shape), `src/components/layout-prosody-pill.test.tsx` (migrate to the map shape so this commit stays green — Task 3 deletes it when the pill is retired)
+
+> **Green-between-commits note:** `layout-prosody-pill.test.tsx` preloads the singular `{ activeStream }` and calls `prosodyActions.clear()` with no argument. After this migration both break (`clear()` is a typecheck error; the preload no longer renders the pill), and the pre-commit gate runs the frontend suite for a frontend change — so this test MUST be migrated in the same commit (Step 5 below), not deferred to Task 3. (`prosody-autotrigger.test.tsx` mocks `runProsodyPasses` and never reads `activeStream`/`clear()`, so it is unaffected.)
 
 **Interfaces:**
 - Produces:
@@ -185,15 +187,44 @@ if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));  // catch path (
 
 (`useAppSelectorShallow` is already imported in `layout.tsx` — see line 161.)
 
-- [ ] **Step 5: Run the slice test + typecheck**
+- [ ] **Step 5: Migrate `layout-prosody-pill.test.tsx` to the map shape (keeps the commit green)**
 
-Run: `npm run test -- src/store/prosody-slice.test.ts && npm run typecheck`
-Expected: slice test PASS; typecheck PASS.
+In `src/components/layout-prosody-pill.test.tsx`, change the store factory's preloaded state from the singular `activeStream` to the `activeStreams` map, and every `prosodyActions.clear()` call to `prosodyActions.clear({ bookId: 'b1' })`:
 
-- [ ] **Step 6: Commit**
+```ts
+// store factory: preload the map, not the singular field
+function makeStore(prosodyState?: Partial<ReturnType<typeof prosodySlice.getInitialState>>) {
+  // ...reducer map unchanged...
+  return configureStore({
+    reducer: { /* ...unchanged... */ prosody: prosodySlice.reducer },
+    preloadedState: prosodyState ? { prosody: prosodyState as ReturnType<typeof prosodySlice.getInitialState> } : undefined,
+  });
+}
+
+// test 1 — pill renders:
+const store = makeStore({ activeStreams: { b1: { progress: 42, label: 'Detecting emotions' } } });
+// assert pill text contains 'Detecting emotions' and '42%'
+
+// test 2 — absent when empty:
+const store = makeStore({ activeStreams: {} });
+
+// test 3 — updates with store changes:
+store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0, label: 'Detecting emotions' }));
+store.dispatch(prosodyActions.updateProgress({ bookId: 'b1', progress: 0.77 }));
+store.dispatch(prosodyActions.clear({ bookId: 'b1' }));   // was clear()
+```
+
+(The pill text assertion changes from `'Phase 3 — Detecting prosody'` to `'Detecting emotions'` because the labels are now user-facing.)
+
+- [ ] **Step 6: Run the slice test + the pill test + typecheck**
+
+Run: `npm run test -- src/store/prosody-slice.test.ts src/components/layout-prosody-pill.test.tsx && npm run typecheck`
+Expected: both tests PASS; typecheck PASS.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/store/prosody-slice.ts src/store/prosody-slice.test.ts src/components/layout.tsx
+git add src/store/prosody-slice.ts src/store/prosody-slice.test.ts src/components/layout.tsx src/components/layout-prosody-pill.test.tsx
 git commit -m "refactor(frontend): migrate prosody-slice to per-book activeStreams map"
 ```
 
@@ -326,8 +357,9 @@ git commit -m "feat(frontend): add per-book activeStreams progress map to script
   - `selectProsodyRunningForBook(state, bookId): boolean`
   - `selectReviewRunningForBook(state, bookId): boolean`
   - `selectAnalysisBusyForBook(state, bookId): boolean`
+  - `analysisBusyMessage(state, bookId): string | null` (per-pass "Generate blocked" copy)
   - `selectAnalysisSubstage(state): { kind: 'prosody' | 'review'; label: string; percent: number } | null` (memoized)
-  - `StatusInput` gains `analysisSubstage: { kind: 'prosody' | 'review'; percent: number } | null`.
+  - `StatusInput` gains optional `analysisSubstage?: { kind: 'prosody' | 'review'; percent: number } | null`; `StatusDetail` gains optional `analysisSubstage?: { label: string; percent: number } | null`.
 
 - [ ] **Step 1: Write the selector test**
 
@@ -404,6 +436,14 @@ export const selectReviewRunningForBook = (state: RootState, bookId: string): bo
 export const selectAnalysisBusyForBook = (state: RootState, bookId: string): boolean =>
   selectProsodyRunningForBook(state, bookId) || selectReviewRunningForBook(state, bookId);
 
+/** User-facing "why is Generate blocked" copy for a busy book — per-pass
+    wording (spec copy). Returns null when the book isn't busy. */
+export const analysisBusyMessage = (state: RootState, bookId: string): string | null => {
+  if (selectProsodyRunningForBook(state, bookId)) return 'Wait — emotions are still being detected';
+  if (selectReviewRunningForBook(state, bookId)) return 'Wait — script review is in progress';
+  return null;
+};
+
 const firstByLowestBookId = (m: Record<string, SubstageEntry>): { bookId: string; entry: SubstageEntry } | null => {
   const ids = Object.keys(m).sort();
   return ids.length ? { bookId: ids[0], entry: m[ids[0]] } : null;
@@ -452,7 +492,7 @@ it('shows an Analysing rung for an active analysis sub-stage (below real analysi
 });
 ```
 
-(If existing `summarizeStatus` calls in this file omit `analysisSubstage`, add `analysisSubstage: null` to their input objects — TypeScript will flag the missing field.)
+(No need to touch the other `summarizeStatus` calls in this file — the field is optional.)
 
 - [ ] **Step 6: Run to verify it fails**
 
@@ -461,25 +501,25 @@ Expected: FAIL — `analysisSubstage` not a valid `StatusInput` field.
 
 - [ ] **Step 7: Implement the rung**
 
-In `src/components/top-bar.tsx`, add to the `StatusInput` interface (after `anyModelLoading`):
+In `src/components/top-bar.tsx`, add to the `StatusInput` interface (after `anyModelLoading`). **Declare it optional** (`?`) so the dozens of existing `summarizeStatus` calls in `top-bar.test.tsx` don't all need a new field — the `if (analysisSubstage)` guard treats `undefined` and `null` identically:
 
 ```ts
-  /** The active analysis sub-stage (prosody/review) progress, or null. Folds
-      into the "Analysing" rung below the primary analysis pass. */
-  analysisSubstage: { kind: 'prosody' | 'review'; percent: number } | null;
+  /** The active analysis sub-stage (prosody/review) progress, or null/absent.
+      Folds into the "Analysing" rung below the primary analysis pass. */
+  analysisSubstage?: { kind: 'prosody' | 'review'; percent: number } | null;
 ```
 
-Add `analysisSubstage` to the destructured params of `summarizeStatus`, and insert the rung **directly after** the `analysis?.state === 'running'` block (and before `design?.state === 'running'`):
+Add `analysisSubstage` to the destructured params of `summarizeStatus` (`analysisSubstage = null` as the default), and insert the rung **directly after** the `analysis?.state === 'running'` block (and before `design?.state === 'running'`):
 
 ```ts
   if (analysisSubstage)
     return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
 ```
 
-Add `analysisSubstage` to the `StatusDetail` interface too:
+Add `analysisSubstage` to the `StatusDetail` interface too — **carrying the `label`** (the popover renders it, so the selector's `label` field is not dead):
 
 ```ts
-  analysisSubstage: { kind: 'prosody' | 'review'; percent: number } | null;
+  analysisSubstage?: { label: string; percent: number } | null;
 ```
 
 - [ ] **Step 8: Wire Layout, render the popover row, and retire the standalone pill**
@@ -509,7 +549,7 @@ Pass it into both `summarizeStatus` and `statusDetail`:
     : null;
 ```
 
-Add `analysisSubstage: analysisSubstage ? { kind: analysisSubstage.kind, percent: analysisSubstage.percent } : null,` to the `statusDetail` object literal (line 1429+).
+Add `analysisSubstage: analysisSubstage ? { label: analysisSubstage.label, percent: analysisSubstage.percent } : null,` to the `statusDetail` object literal (line 1429+).
 
 Also update `showStatus` so the pill appears when a sub-stage is the only activity:
 
@@ -530,13 +570,13 @@ In `src/components/status-popover.tsx`, render a sub-stage row inside the analys
 ```tsx
 {detail.analysisSubstage && (
   <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
-    <span>{detail.analysisSubstage.kind === 'prosody' ? 'Detecting emotions' : 'Reviewing'}</span>
+    <span>{detail.analysisSubstage.label}</span>
     <span className="tabular-nums">{detail.analysisSubstage.percent}%</span>
   </div>
 )}
 ```
 
-(Place it adjacent to the existing `AnalysisPill` render in the analysis section.)
+(Place it adjacent to the existing `AnalysisPill` render in the analysis section. The `label` is the user-facing phase text the dispatch sites set — "Detecting emotions" / "Reviewing".)
 
 - [ ] **Step 9: Delete the standalone-pill unit test and re-point the e2e**
 
@@ -570,29 +610,44 @@ git commit -m "feat(frontend): fold analysis sub-stage progress into the Status 
 
 - [ ] **Step 1: Add a failing test**
 
-In `src/components/detect-emotions-button.test.tsx`, add a test that the button drives the slice and clears on error. Use the store + a mocked `runProsodyPasses`:
+In `src/components/detect-emotions-button.test.tsx`, the existing `makeStore()` only wires `manuscript`/`ui`/`chapters`. **Add the `prosody` and `scriptReview` reducers to it** (needed here and by Task 6), and add this test. The component clicks `detect-emotions-button` → `detect-emotions-confirm` → `run()` (testids confirmed in the component at lines 101/146).
+
+Extend `makeStore()`:
 
 ```ts
-import { vi } from 'vitest';
-vi.mock('../store/prosody-thunk', () => ({
-  runProsodyPasses: vi.fn(async (_bookId, opts) => {
-    opts.onProgress?.(0.5);
-    throw new Error('boom'); // exercise the error path
-  }),
-}));
+import { prosodySlice } from '../store/prosody-slice';
+import { scriptReviewSlice } from '../store/script-review-slice';
+// in configureStore.reducer add:  prosody: prosodySlice.reducer, scriptReview: scriptReviewSlice.reducer,
 ```
 
+Add a mock for the thunk and the test (place the mock near the existing `../lib/api` mock):
+
 ```ts
-it('sets and clears the prosody stream around a (failing) run', async () => {
-  // render with a store whose ui.stage.bookId === 'b1', click the confirm button…
-  // (follow the existing render helper in this file)
-  // after the run rejects:
-  const state = store.getState();
-  expect(state.prosody.activeStreams.b1).toBeUndefined(); // cleared in finally despite the throw
+import { runProsodyPasses } from '../store/prosody-thunk';
+vi.mock('../store/prosody-thunk', () => ({ runProsodyPasses: vi.fn() }));
+
+it('sets the prosody stream during a run and clears it in finally even on throw', async () => {
+  let streamWhileRunning: unknown;
+  (runProsodyPasses as unknown as vi.Mock).mockImplementation(async (bookId: string, opts: { onProgress?: (f: number) => void }) => {
+    opts.onProgress?.(0.5);
+    streamWhileRunning = store.getState().prosody.activeStreams[bookId]; // captured mid-run
+    throw new Error('boom'); // exercise the error path
+  });
+  const store = makeStore();
+  render(
+    <Provider store={store}>
+      <DetectEmotionsButton />
+    </Provider>,
+  );
+  fireEvent.click(screen.getByTestId('detect-emotions-button'));
+  fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
+  await waitFor(() => expect(runProsodyPasses).toHaveBeenCalled());
+  // set while running:
+  expect(streamWhileRunning).toMatchObject({ label: 'Detecting emotions' });
+  // cleared in finally despite the throw:
+  await waitFor(() => expect(store.getState().prosody.activeStreams.b1).toBeUndefined());
 });
 ```
-
-(Model the render + confirm-click on the existing tests in this file. The key assertion is that `prosody.activeStreams[bookId]` is set while running and **absent after** even though `runProsodyPasses` threw.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -675,7 +730,7 @@ git commit -m "feat(frontend): drive the prosody pill from DetectEmotionsButton,
 
 **Interfaces:**
 - Consumes: `scriptReviewActions.setActive/updateProgress/clear/setReview`, `api.reviewScript`, `planApply`, `notificationsActions`.
-- Produces: `runReviewScript(bookId, { wholeBook, chapterId?, model, sentences, characterIds }): Promise<void>` — a plain async function (matches `runProsodyPasses`' shape: takes `dispatch` in its options bag, not a thunk-creator).
+- Produces: `runReviewScript(bookId, { dispatch, wholeBook, chapterId?, model, sentences, characterIds, totalChapters }): Promise<void>` — a plain async function (matches `runProsodyPasses`' shape: takes `dispatch` in its options bag, not a thunk-creator). **`api.reviewScript` has no `onProgress`** (verified in `api.ts` — its callbacks are `onOps`/`onPhase`/`onThrottle`/`onChapterFailed`), so progress is derived from `onOps`, which fires once per chapter: the thunk dispatches `updateProgress({ bookId, progress: chaptersDone / totalChapters })` on each `onOps`. `totalChapters` = `reviewableChapterCount` for whole-book, `1` for a single chapter.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -696,19 +751,26 @@ import { scriptReviewActions } from './script-review-slice';
 describe('runReviewScript', () => {
   beforeEach(() => reviewScript.mockReset());
 
-  it('sets active, then clears in finally on success', async () => {
-    reviewScript.mockResolvedValue(undefined);
+  it('sets active, advances progress per chapter via onOps, then clears in finally on success', async () => {
+    reviewScript.mockImplementation(async (_bookId: string, opts: { onOps?: (e: { chapterId: number; ops: unknown[] }) => void }) => {
+      opts.onOps?.({ chapterId: 1, ops: [] });
+      opts.onOps?.({ chapterId: 2, ops: [] });
+    });
     const dispatch = vi.fn();
-    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>() });
+    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>(), totalChapters: 2 });
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types).toContain(scriptReviewActions.setActive.type);
+    expect(types).toContain(scriptReviewActions.updateProgress.type); // fired from onOps
+    // last updateProgress payload reached 2/2 → 1.0
+    const lastProg = dispatch.mock.calls.map((c) => c[0]).filter((a) => a.type === scriptReviewActions.updateProgress.type).pop();
+    expect(lastProg.payload).toEqual({ bookId: 'b1', progress: 1 });
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
 
   it('clears in finally even when the API throws', async () => {
     reviewScript.mockRejectedValue(new Error('boom'));
     const dispatch = vi.fn();
-    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>() });
+    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>(), totalChapters: 1 });
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
@@ -748,12 +810,16 @@ export interface RunReviewScriptOpts {
   /** Live sentences for index-mapped planApply (caller passes sentencesRef.current). */
   sentences: ReviewLiveSentence[];
   characterIds: Set<number>;
+  /** Reviewable chapter count for the progress denominator (1 for a single chapter). */
+  totalChapters: number;
 }
 
 export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts): Promise<void> {
-  const { dispatch, wholeBook, chapterId, model, sentences, characterIds } = opts;
+  const { dispatch, wholeBook, chapterId, model, sentences, characterIds, totalChapters } = opts;
   const allOps: ReviewOpWithChapter[] = [];
   const failed: Array<{ chapterId: number; message: string }> = [];
+  const total = Math.max(1, totalChapters);
+  let chaptersDone = 0;
   dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing' }));
   try {
     await api.reviewScript(bookId, {
@@ -761,6 +827,8 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
       model,
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId: chId });
+        chaptersDone += 1; // onOps fires once per reviewed chapter
+        dispatch(scriptReviewActions.updateProgress({ bookId, progress: Math.min(1, chaptersDone / total) }));
       },
       onChapterFailed: (e: { chapterId: number; message: string }) => failed.push(e),
     });
@@ -794,7 +862,7 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
 }
 ```
 
-(If `api.reviewScript` has no progress callback today, `updateProgress` isn't dispatched yet — the pill shows an indeterminate "Reviewing · 0%". Step 4 of Task 9 extends `mockReviewScript` to emit progress; if the real `api.reviewScript` gains an `onProgress`, wire it the same way as `runProsodyPasses`.)
+(Progress is chapter-granular — `onOps` fires once per reviewed chapter, so the pill steps 1/N, 2/N … N/N. For a single-chapter review `totalChapters` is 1, so the pill jumps 0% → 100% on completion, which is correct for one unit of work.)
 
 - [ ] **Step 4: Delegate from `manuscript.tsx`**
 
@@ -821,12 +889,15 @@ Replace the body of `handleReviewScript` (`manuscript.tsx:697-758`) with a thin 
           vocalization: s.vocalization,
         })),
         characterIds: new Set(characters.map((c) => c.id)),
+        totalChapters: wholeBook ? reviewableChapterCount : 1,
       });
     } finally {
       setReviewLoading(false);
     }
   }
 ```
+
+(`reviewableChapterCount` already exists in `manuscript.tsx` — it feeds the whole-book menu label and the RPD warning.)
 
 Add the import: `import { runReviewScript } from '../store/script-review-thunk';`. Remove now-unused imports in `manuscript.tsx` that the lifted code orphaned (e.g. `planApply` if nothing else uses it — verify with a grep before deleting).
 
@@ -856,15 +927,24 @@ git commit -m "feat(frontend): extract runReviewScript thunk that drives the rev
 
 - [ ] **Step 1: Write the failing tests**
 
-In `detect-emotions-button.test.tsx`, add: when `scriptReview.activeStreams[bookId]` is set (a review running), the Detect-emotions trigger button is `disabled`. In a manuscript test, add: when `prosody.activeStreams[bookId]` is set, `getByTestId('review-script-chapter')` is `disabled`, and a different book's button is not.
+In `detect-emotions-button.test.tsx`, add a concrete test using the `makeStore()` (now wired with `scriptReview` from Task 4). Set a review active for `b1`, then assert the Detect-emotions trigger is disabled:
 
 ```ts
+import { scriptReviewActions } from '../store/script-review-slice';
+
 it('disables Detect emotions while a review runs on the same book', () => {
-  // store with scriptReview.activeStreams = { b1: { progress: 5, label: 'Reviewing' } }, ui.stage.bookId = 'b1'
-  // render <DetectEmotionsButton />
-  expect(screen.getByRole('button', { name: /detect emotions/i })).toBeDisabled();
+  const store = makeStore(); // ui.stage.bookId === 'b1'
+  store.dispatch(scriptReviewActions.setActive({ bookId: 'b1', progress: 0.05, label: 'Reviewing' }));
+  render(
+    <Provider store={store}>
+      <DetectEmotionsButton />
+    </Provider>,
+  );
+  expect(screen.getByTestId('detect-emotions-button')).toBeDisabled();
 });
 ```
+
+The symmetric direction — the three Review buttons disabled while a prosody pass runs — is covered by the e2e in Task 10 (`generate-disabled-while-analysing.spec.ts` extends to assert `review-script-chapter` is disabled mid-prosody), because a focused unit render of the full `manuscript.tsx` view is disproportionately heavy for this one-line `disabled` wiring.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1027,19 +1107,41 @@ git commit -m "feat(frontend): guard the prosody auto-trigger against double-fir
 
 In `src/store/queue-thunks.test.ts` (create if absent), add: `enqueueQueueEntries` drops entries whose book is busy and toasts, enqueuing only the rest.
 
+Mock the network seam this file already uses (check the top of `queue-thunks.ts` for whether `queueRequest`/`readSnapshot` are module-locals or imported; if locals, mock `fetch`). Concrete test capturing the POST body:
+
 ```ts
-it('filters out entries whose book has an active analysis sub-stage', async () => {
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { enqueueQueueEntries } from './queue-thunks';
+import { scriptReviewActions } from './script-review-slice';
+
+const posted: unknown[] = [];
+beforeEach(() => { posted.length = 0; });
+// Stub global fetch to capture the enqueue body and return a snapshot echoing it.
+vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
+  const body = JSON.parse(init.body) as { entries: unknown[] };
+  posted.push(...body.entries);
+  return { ok: true, json: async () => ({ entries: body.entries, paused: false, recycling: false, loaded: true }) } as Response;
+}));
+
+it('enqueues only un-gated entries and toasts the gated pass', async () => {
   const dispatch = vi.fn();
-  const getState = () =>
-    ({ prosody: { activeStreams: { b1: { progress: 0, label: 'x' } } }, scriptReview: { activeStreams: {} } }) as never;
-  // mock queueRequest/readSnapshot to echo back the posted entries…
+  const getState = () => ({
+    prosody: { activeStreams: { b1: { progress: 0, label: 'Detecting emotions' } } },
+    scriptReview: { activeStreams: {} },
+  }) as never;
   await enqueueQueueEntries([
     { id: 'e1', bookId: 'b1', chapterId: 1, scope: 'this' },
     { id: 'e2', bookId: 'b2', chapterId: 1, scope: 'this' },
-  ])(dispatch as never, getState as never, undefined as never);
-  // assert only the b2 entry was POSTed, and a warn toast naming b1 fired.
+  ])(dispatch as never, getState as never);
+  // Only the un-gated b2 entry was POSTed:
+  expect(posted).toEqual([{ id: 'e2', bookId: 'b2', chapterId: 1, scope: 'this' }]);
+  // A warn toast with the per-pass (prosody) copy fired:
+  const toasts = dispatch.mock.calls.map((c) => c[0]).filter((a) => a.type?.includes('pushToast'));
+  expect(toasts.some((t) => t.payload.message === 'Wait — emotions are still being detected')).toBe(true);
 });
 ```
+
+(If `queue-thunks.ts` wraps `fetch` in a `queueRequest` helper that sets a base URL/headers, the global-`fetch` stub still intercepts it; adjust the returned shape to match `readSnapshot`'s expectations — read those two helpers first.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1051,25 +1153,26 @@ Expected: FAIL — guard not present / `getState` unused.
 In `src/store/queue-thunks.ts`, give `enqueueQueueEntries` access to `getState` and filter:
 
 ```ts
-import { selectAnalysisBusyForBook } from './analysis-substage-selectors';
+import type { RootState } from './index';
+import { selectAnalysisBusyForBook, analysisBusyMessage } from './analysis-substage-selectors';
 
 export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: boolean } = {}) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<QueueSnapshotResponse> => {
     const state = getState();
-    const gated = entries.filter((e) => selectAnalysisBusyForBook(state, e.bookId));
     const allowed = entries.filter((e) => !selectAnalysisBusyForBook(state, e.bookId));
+    const gated = entries.filter((e) => selectAnalysisBusyForBook(state, e.bookId));
     if (gated.length > 0) {
       dispatch(
         notificationsActions.pushToast({
           kind: 'warn',
-          message: 'Wait — analysis is still running on this book.',
+          message: analysisBusyMessage(state, gated[0].bookId) ?? 'Wait — analysis is still running on this book.',
           dedupeKey: 'gen-gated-by-analysis',
         }),
       );
     }
-    if (allowed.length === 0) {
-      return getState().queue as unknown as QueueSnapshotResponse; // nothing to enqueue
-    }
+    /* Always POST `allowed` (even []), so the return is a real snapshot — no
+       unsafe cast of QueueState. An empty enqueue is a server-side no-op that
+       returns the current snapshot. */
     const res = await queueRequest('/api/queue/enqueue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1077,12 +1180,11 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
     });
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
-    if (!opts.silent) {
-      const count = snapshot.entries.length;
+    if (!opts.silent && allowed.length > 0) {
       dispatch(
         notificationsActions.pushToast({
           kind: 'info',
-          message: `Added to queue · ${count} ${count === 1 ? 'entry' : 'entries'} pending.`,
+          message: `Added to queue · ${allowed.length} ${allowed.length === 1 ? 'entry' : 'entries'} pending.`,
           dedupeKey: 'queue-enqueue',
         }),
       );
@@ -1092,7 +1194,7 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
 }
 ```
 
-(Import `RootState` from `./index` if not already. The `allowed.length === 0` early-return shape: return the current queue snapshot so callers awaiting a `QueueSnapshotResponse` don't break — adjust to whatever the existing `QueueState`→response shape is; if simpler, return `{ entries: getState().queue.entries, ... }`.)
+(Import `RootState` from `./index`. No early-return cast: `allowed` is always POSTed, so the typed `QueueSnapshotResponse` always comes from `readSnapshot`. The info toast counts `allowed.length`, not the whole snapshot, so a partially-gated batch reports the right number.)
 
 - [ ] **Step 4: Disable the Generate UI**
 
@@ -1107,14 +1209,17 @@ Guard `handleGenerateChapter` and disable the primary Generate / bulk-regenerate
 ```ts
   function handleGenerateChapter(ch: Chapter): void {
     if (analysisBusy) {
-      dispatch(notificationsActions.pushToast({ kind: 'warn', message: 'Wait — analysis is still running on this book.', dedupeKey: 'gen-gated-by-analysis' }));
+      const msg = analysisBusyMessage(store.getState(), bookId) ?? 'Wait — analysis is still running on this book.';
+      dispatch(notificationsActions.pushToast({ kind: 'warn', message: msg, dedupeKey: 'gen-gated-by-analysis' }));
       return;
     }
     // …existing body…
   }
 ```
 
-And add `disabled={analysisBusy || …}` to the rendered Generate / "Generate all" / RegenerateModal-confirm buttons (grep `enqueueQueueEntries`/`onRegenerate`/`Generate` within `generation.tsx` for the button sites). Import `selectAnalysisBusyForBook` + `notificationsActions`.
+(`analysisBusyMessage` needs the live state; read it via the `useStore()` hook (`const store = useStore<RootState>()`) so the message reflects which pass is running. The enqueue thunk guard (Step 3) is the real backstop — this UI early-return is just immediate feedback.)
+
+And add `disabled={analysisBusy || …}` to the rendered Generate / "Generate all" / RegenerateModal-confirm buttons (grep `enqueueQueueEntries`/`onRegenerate`/`Generate` within `generation.tsx` for the button sites). Import `selectAnalysisBusyForBook` + `analysisBusyMessage` + `notificationsActions`.
 
 - [ ] **Step 5: Run to verify**
 
@@ -1141,30 +1246,64 @@ git commit -m "feat(frontend): gate Generate while a book's analysis sub-stage r
 
 - [ ] **Step 1: Write the failing test**
 
-In `src/store/broadcast-middleware.test.ts`, add cases using `createBroadcastMiddleware({ channel })` with a mock channel (mirror the existing analysis/chapters tests in this file):
+In `src/store/broadcast-middleware.test.ts`, add a self-contained harness that injects a fake channel into `createBroadcastMiddleware` (the factory sets `channel.onmessage` to the inbound handler, so the test can both read `posted` and fire inbound messages):
 
 ```ts
-it('broadcasts sync:substage set on prosody/setActive and clear on prosody/clear', () => {
-  // build middleware with a mock channel that records postMessage payloads
-  // dispatch prosodyActions.setActive({ bookId: 'b1', progress: 0.4, label: 'Detecting emotions' })
-  // expect a posted { kind: 'sync:substage', stream: 'prosody', bookId: 'b1', mode: 'set', entry: { progress: 40, label: 'Detecting emotions' } }
-  // dispatch prosodyActions.clear({ bookId: 'b1' })
-  // expect a posted { kind: 'sync:substage', stream: 'prosody', bookId: 'b1', mode: 'clear' }
-});
+import { describe, it, expect } from 'vitest';
+import { configureStore } from '@reduxjs/toolkit';
+import { createBroadcastMiddleware, type BroadcastMessage } from './broadcast-middleware';
+import { prosodySlice, prosodyActions } from './prosody-slice';
+import { scriptReviewSlice } from './script-review-slice';
 
-it('inbound sync:substage applies via applyExternalSet/Clear and does NOT re-broadcast', () => {
-  // fire channel.onmessage with a foreign instanceId set message
-  // expect store.dispatch(prosodyActions.applyExternalSet(...)) and NO new postMessage
-});
+function harness(instanceId = 'self') {
+  const posted: BroadcastMessage[] = [];
+  const channel = {
+    postMessage: (m: BroadcastMessage) => posted.push(m),
+    onmessage: null as null | ((e: { data: BroadcastMessage }) => void),
+    close: () => {},
+  } as unknown as BroadcastChannel;
+  const store = configureStore({
+    reducer: { prosody: prosodySlice.reducer, scriptReview: scriptReviewSlice.reducer },
+    middleware: (gdm) => gdm({ serializableCheck: false }).concat(createBroadcastMiddleware({ channel, instanceId })),
+  });
+  const inbound = (m: BroadcastMessage) => channel.onmessage!({ data: m });
+  return { store, posted, inbound };
+}
 
-it('drops self-echo by instanceId', () => {
-  // onmessage with msg.instanceId === self → no dispatch
-});
+describe('broadcast-middleware sync:substage', () => {
+  it('posts set on setActive and clear on clear (book taken from payload)', () => {
+    const { store, posted } = harness();
+    store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0.4, label: 'Detecting emotions' }));
+    expect(posted.at(-1)).toMatchObject({ kind: 'sync:substage', stream: 'prosody', bookId: 'b1', mode: 'set', entry: { progress: 40, label: 'Detecting emotions' } });
+    store.dispatch(prosodyActions.clear({ bookId: 'b1' }));
+    expect(posted.at(-1)).toMatchObject({ kind: 'sync:substage', stream: 'prosody', bookId: 'b1', mode: 'clear' });
+  });
 
-it('a clear on book X leaves book Y intact across tabs (finding-2 regression)', () => {
-  // receiver has b1+b2; inbound clear for b1 → b2 entry remains
+  it('applies a foreign inbound set and does NOT re-broadcast', () => {
+    const { store, posted, inbound } = harness('self');
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'bX', mode: 'set', entry: { progress: 22, label: 'Detecting emotions' } });
+    expect(store.getState().prosody.activeStreams.bX).toEqual({ progress: 22, label: 'Detecting emotions' });
+    expect(posted).toHaveLength(0); // applyExternalSet is not in the outbound match set
+  });
+
+  it('drops self-echo by instanceId', () => {
+    const { store, inbound } = harness('self');
+    inbound({ kind: 'sync:substage', instanceId: 'self', stream: 'prosody', bookId: 'bSelf', mode: 'set', entry: { progress: 5, label: 'x' } });
+    expect(store.getState().prosody.activeStreams.bSelf).toBeUndefined();
+  });
+
+  it('a clear on book X leaves book Y intact (finding-2 regression)', () => {
+    const { store, inbound } = harness('self');
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b1', mode: 'set', entry: { progress: 1, label: 'x' } });
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b2', mode: 'set', entry: { progress: 2, label: 'y' } });
+    inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b1', mode: 'clear' });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    expect(store.getState().prosody.activeStreams.b2).toEqual({ progress: 2, label: 'y' });
+  });
 });
 ```
+
+(`scriptReviewSlice` is imported so the minimal store has both reducers the middleware's substage branch reads; the analysis/chapters branches aren't exercised here, so those slices can be omitted.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1249,7 +1388,9 @@ In the outbound middleware return (after the `CHAPTERS_BROADCAST_ACTIONS` block,
       }
 ```
 
-(Note: the cleared book is taken from `action.payload.bookId`, not post-state — finding 9. A simple per-`(stream,bookId)` debounce for `updateProgress` can be added mirroring the analysis path; v1 may ship without it since prosody progress ticks are coarse — confirm tick rate before deciding.)
+(Note: the cleared book is taken from `action.payload.bookId`, not post-state — finding 9.)
+
+**Debounce decision (finding 7):** v1 ships **without** a progress-tick debounce on `sync:substage`. Rationale: prosody `onProgress` is chapter-granular (emotions 0–50%, instruct 50–100% over the chapter list) and review progress is one tick per chapter — both far coarser than the analyzer phase ticks the existing `PROGRESS_DEBOUNCE_MS` path was built for (which fire ~10×/sec). A handful of cross-tab messages per book-pass is negligible. **Log this in the regression plan** (Task 11) as a deliberate omission, not an oversight; if a future engine emits sub-second prosody ticks, add a `(stream, bookId)`-keyed debounce mirroring the analysis block.
 
 Update the `BroadcastableRootState` interface to include the two substage maps if the outbound block reads them through it.
 
@@ -1277,7 +1418,7 @@ git commit -m "feat(frontend): sync analysis sub-stage progress cross-tab via sy
 
 - [ ] **Step 1: Extend the review mock cadence**
 
-Find the mock backing `api.reviewScript` (grep `reviewScript` under `src/mocks/`). Make it emit ops over a few `await delay()` ticks so the "Reviewing" pill is observable in e2e, then resolve. Keep it deterministic (fixed delays, no randomness).
+Find the mock backing `api.reviewScript` (it's `mockReviewScript` — `api.ts:7469`). Make it call `onOps({ chapterId, ops })` **once per chapter** with a fixed `await delay(...)` between chapters, then resolve — so `runReviewScript` steps the pill 1/N, 2/N … (the progress is derived from `onOps` count, per Task 5). Deterministic delays only (no randomness — see the project's e2e-flake notes).
 
 - [ ] **Step 2: Write `e2e/detect-emotions-pill-progress.spec.ts`**
 
@@ -1302,7 +1443,7 @@ Pre-seed/drive an active prosody stream for a book, then trigger the auto-trigge
 
 - [ ] **Step 5: Write `e2e/generate-disabled-while-analysing.spec.ts`**
 
-While a sub-stage runs on book X, the Generate control on book X is `disabled` with the warning copy; a different book's Generate stays enabled.
+While a sub-stage runs on book X: (a) the Generate control on the Generate view is `disabled`; (b) on the Manuscript view the `review-script-chapter` button is `disabled` too (the pass mutual-exclusion from Task 6 — this is the e2e that covers the Manuscript-side wiring, per Task 6 Step 1); (c) clicking a still-enabled Generate path surfaces the warn toast with the per-pass copy. Reuse the book-open/nav helper from `e2e/script-review.spec.ts`; drive the sub-stage by clicking `detect-emotions-button` → `detect-emotions-confirm` (the mock keeps it running long enough to assert).
 
 - [ ] **Step 6: Run the new e2e specs**
 
@@ -1350,5 +1491,6 @@ PR body: enumerate every user/operator/dev-visible delta (pill rung, retired pro
 ## Self-Review
 
 - **Spec coverage:** §1 state model → Tasks 1, 2, 3 (selectors), 9 (broadcast); §2 progress wiring + pill → Tasks 3, 4, 5; pass mutual-exclusion → Task 6; §3 Generate-gate → Task 8; §4 auto-trigger guard → Task 7; toasts → Tasks 4/5/8; tests → every task + Task 10; shipping → Task 11. All 14 adversarial findings map to code: 8/9 → Task 9; 2 → Tasks 1/2 + Task 9 regression test; 3 → Tasks 4/5/7 (`finally`); 4 → Task 3 (e2e re-point + delete); 10 → Task 6; 11 → Task 3 (`createSelector`); 12 → Task 7; 13 → Task 9 (echo layer 1); 14 → Task 1.
-- **Type consistency:** `SubstageEntry` defined in Task 1, imported by Tasks 2/3/9; `selectAnalysisBusyForBook` defined in Task 3, consumed by Tasks 6/7/8; `runReviewScript` signature fixed in Task 5; `analysisSubstage` field shape (`{ kind, percent }` on `StatusInput`/`StatusDetail`, `{ kind, label, percent }` from the selector) consistent between Tasks 3 and its consumers.
+- **Type consistency:** `SubstageEntry` defined in Task 1, imported by Tasks 2/3/9; `selectAnalysisBusyForBook` + `analysisBusyMessage` defined in Task 3, consumed by Tasks 6/7/8; `runReviewScript` signature (incl. `totalChapters`) fixed in Task 5 and matched by the Task 5 delegate; `analysisSubstage` shapes are intentionally distinct per consumer and consistent with what Layout passes — `StatusInput` gets `{ kind, percent }` (rung needs only percent), `StatusDetail` gets `{ label, percent }` (popover renders the label), and the selector returns `{ kind, label, percent }` (superset).
+- **Round-2 fixes folded:** P1 (Task 1 migrates `layout-prosody-pill.test.tsx` in-commit), P2 (review progress derived from `onOps`/`totalChapters`), P3 (concrete test code in Tasks 4/6/8/9; e2e reference the real nav helpers + testids), P4 (`analysisSubstage` optional), P5 (no unsafe cast — always POST `allowed`), P6 (per-pass copy via `analysisBusyMessage`), P7 (debounce omission is a logged decision), P8 (popover uses the selector's `label`).
 - **Known residual ambiguities** (flagged inline, not placeholders): exact button sites in `generation.tsx` (grep-located in Task 8); whether `api.reviewScript` exposes an `onProgress` (Task 5 ships indeterminate "Reviewing · 0%" until the mock/real API emits ticks — Task 10 mock adds cadence); `enqueueQueueEntries` early-return response shape (Task 8 returns the current queue snapshot).
