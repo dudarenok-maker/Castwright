@@ -11,7 +11,7 @@
    the hint plumbing. They use a fake provider (no real synthesis) and assert
    on the voiceName argument the picker resolves for each speaker. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildSentenceGroups,
   synthesiseChapter,
