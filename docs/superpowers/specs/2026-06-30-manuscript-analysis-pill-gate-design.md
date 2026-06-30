@@ -21,11 +21,11 @@ Both passes already push their _results_ into Redux correctly. The work here is 
 
 ## Decisions
 
-These three were resolved interactively during brainstorming; they supersede the corresponding lines in the originating plan.
+These were resolved interactively during brainstorming and hardened by an adversarial review of the spec (see "Adversarial review outcomes" below); they supersede the corresponding lines in the originating plan.
 
 1. **Pill architecture — fold into the analysing section.** Prosody and script-review are sub-stages of _book analysis_, so their progress belongs **inside the `summarizeStatus` "Analysing" rung**, not in a separate floating pill. The standalone `prosody-pill` is **retired**.
-2. **Review progress storage — extend `script-review-slice.ts`.** Add a transient `activeStream` to the existing slice rather than creating a new `review-slice.ts`. The slice is already transient and non-broadcast and already owns review state.
-3. **Cross-tab — broadcast the progress.** Add the prosody + scriptReview _progress_ actions to `broadcast-middleware.ts` so the Generate-gate and auto-trigger guard hold across tabs. (The originating plan assumed this worked "for free"; it did not — the slices were never broadcast.)
+2. **Progress storage — bookId-keyed maps, twin slices.** Review progress extends the existing `script-review-slice.ts` (not a new `review-slice.ts`). **Both** prosody and review progress are stored as a **`Record<bookId, …>` map**, not a singular slot — so concurrent multi-book passes (a first-class invariant) and cross-tab broadcast can't clobber each other. **`prosody-slice` therefore migrates from its current singular `activeStream` to the map shape** (its auto-trigger call sites in `layout.tsx` and `prosody-slice.test.ts` migrate with it).
+3. **Cross-tab — broadcast done properly.** Progress syncs across tabs via a **new dedicated message kind** in `broadcast-middleware.ts` (`sync:substage`) with **external-apply reducers** that don't re-broadcast — _not_ by adding the existing progress actions to an allow-set (which would infinite-loop; see finding 1). The keyed-map shape (Decision 2) makes the broadcast collision-free, so the gate holds across tabs without one book's `clear()` releasing another's.
 
 Corrections folded in silently (stale claims in the originating plan): file paths (`summarizeStatus` is in `components/top-bar.tsx`, the auto-trigger is in `components/layout.tsx`, there is no `src/store/layout.tsx`); `prosody-slice.activeStream` is fully built, not "half-built"; the Generate-gate target is `generation.tsx`, not `ModelControlPill`.
 
@@ -33,35 +33,39 @@ Corrections folded in silently (stale claims in the originating plan): file path
 
 ### 1. State model
 
-**`script-review-slice.ts` (extend).** Add a transient field, a structural twin of `prosody-slice`:
+**Shared entry shape.** Both slices key their progress by `bookId` (mirrors `chapters.activeStreams`), so concurrent books never collide:
 
 ```ts
-export interface ReviewActiveStream { bookId: string; progress: number /* 0..100 int */; label: string; }
-// in ScriptReviewState:  activeStream: ReviewActiveStream | null
-// reducers:              setActive, updateProgress, clear   (mirror prosody-slice)
+export interface SubstageEntry { progress: number /* 0..100 int */; label: string; }
+// state field on each slice:  activeStreams: Record<string /* bookId */, SubstageEntry>
+// reducers on each slice:     setActive({bookId,progress,label})
+//                             updateProgress({bookId,progress})
+//                             clear({bookId})            // per-book, not global
+//                             applyExternalStreams(Record<bookId,SubstageEntry>)  // inbound from broadcast; NOT broadcast itself
 ```
 
-`byBook` (results) is unchanged.
+- **`prosody-slice.ts` (migrate).** Replace the singular `activeStream: … | null` with `activeStreams: Record<bookId, SubstageEntry>`. `clear()` gains a `{bookId}` payload. Update the two auto-trigger call sites in `layout.tsx` (~1050/1057) and `prosody-slice.test.ts`.
+- **`script-review-slice.ts` (extend).** Add the same `activeStreams` map + the four reducers. `byBook` (results) is unchanged.
 
-**Broadcast.** In `broadcast-middleware.ts`, add **only the progress actions** to the broadcast allow-set:
+**Broadcast (proper protocol — see findings 1 & 2).** The middleware is **not** a generic action allow-set; it's a bespoke per-slice snapshot protocol with a closed message union and separate inbound reducers (echo-suppression layer 2). So:
 
-- `prosody/setActive`, `prosody/updateProgress`, `prosody/clear`
-- `scriptReview/setActive`, `scriptReview/updateProgress`, `scriptReview/clear`
+- Add a **new message kind** `sync:substage` carrying `{ stream: 'prosody' | 'review'; bookId; mode: 'set' | 'clear'; entry? }`.
+- The **outbound** watcher matches `prosody/setActive|updateProgress|clear` and `scriptReview/setActive|updateProgress|clear`, re-derives the changed book's entry from `getState()`, and sends a per-book `set`/`clear`. `updateProgress`-only ticks reuse the existing `PROGRESS_DEBOUNCE_MS` debounce, keyed by `(stream, bookId)`.
+- The **inbound** handler dispatches `prosodyActions.applyExternalStreams` / `scriptReviewActions.applyExternalStreams` — which are **deliberately absent** from the outbound match set, so they can't re-broadcast (same pattern as `applyExternalAnalysisSnapshot`).
+- **Result** actions (`scriptReview/setReview`, `toggleOp`, `toggleClass`, `clearReview`) stay **tab-local** — a passive tab must not pop the review diff modal. Prosody results land in the manuscript slice (separately handled), so prosody-slice has no result action.
 
-The **result** actions (`scriptReview/setReview`, `toggleOp`, `toggleClass`, `clearReview`) stay **tab-local** — a passive tab must not have the review diff modal pop open. Prosody results already land in the (separately-handled) manuscript slice, so prosody-slice has no result action to worry about.
+Update both slice header comments: replace the "do NOT broadcast" note with "progress map broadcast cross-tab via `sync:substage`; results stay tab-local."
 
-Update both slice header comments: replace the "do NOT broadcast" note with "progress actions broadcast for cross-tab gating; results stay tab-local."
+**Selectors (bookId-aware).** The keyed map makes per-book gating exact:
 
-**Selectors (new, bookId-aware).** Because `activeStream` is _singular_ (one active pass at a time) and concurrent multi-book is a first-class invariant, the gate is **per-book**:
-
-- `selectProsodyRunningForBook(state, bookId): boolean`
-- `selectReviewRunningForBook(state, bookId): boolean`
-- `selectAnalysisSubstage(state): { kind: 'prosody' | 'review'; label: string; percent: number } | null` — whichever stream is active; feeds the pill.
+- `selectProsodyRunningForBook(state, bookId): boolean` → `bookId in state.prosody.activeStreams`
+- `selectReviewRunningForBook(state, bookId): boolean` → `bookId in state.scriptReview.activeStreams`
+- `selectAnalysisSubstage(state): { kind: 'prosody' | 'review'; label: string; percent: number } | null` — feeds the (singular) pill; when multiple books run it surfaces one deterministically (prosody before review, then lowest bookId) and the popover can list the rest.
 
 ### 2. Progress wiring & the pill
 
-- **Manual `DetectEmotionsButton`** dispatches `prosodyActions.setActive` on start, `updateProgress` via the existing `runProsodyPasses` `onProgress` callback, and `clear` on completion/cancel. The inline badge re-sources from the slice so it survives navigation. (The auto-trigger already does exactly this; the manual path simply joins it.)
-- **Review** gains a thunk `runReviewScript(bookId, { wholeBook })` in `src/store/script-review-thunk.ts` that dispatches `scriptReviewActions.setActive/updateProgress/clear` around the pass and `setReview` on completion. `handleReviewScript` in `manuscript.tsx` delegates to it. Whole-book RPD gating stays where it is.
+- **Manual `DetectEmotionsButton`** dispatches `prosodyActions.setActive({bookId})` on start and `updateProgress({bookId})` via the existing `runProsodyPasses` `onProgress` callback. **`clear({bookId})` MUST be in a `finally`** — covering success, error, _and_ abort — so a failed/aborted pass can never leave a stuck stream (which, broadcast cross-tab, would disable Generate in every tab). The button's current `run()` clears `phase` per-branch but has no pill `clear` in `finally` (`detect-emotions-button.tsx:58–74`); the migration adds it. The inline badge re-sources from the slice so it survives navigation.
+- **Review** gains a thunk `runReviewScript(bookId, { wholeBook })` in `src/store/script-review-thunk.ts` that dispatches `scriptReviewActions.setActive/updateProgress` around the pass and `setReview` on completion. `handleReviewScript` (`manuscript.tsx:697`) already has a `try/finally` (resets `reviewLoading`); the thunk's `clear({bookId})` lands in that same `finally`. Whole-book RPD gating stays where it is.
 - **`summarizeStatus`** gains `analysisSubstage` on `StatusInput`. A new rung sits **directly below `analysis?.state === 'running'`**:
 
   ```ts
@@ -69,21 +73,21 @@ Update both slice header comments: replace the "do NOT broadcast" note with "pro
     return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
   ```
 
-  Real analysis still outranks it — the sub-stages run _after_ the main analysis pass completes, so in practice they don't overlap; the ordering only matters for the degenerate manual-trigger-during-analysis case, where the primary pass correctly wins.
+  Real analysis still outranks it — the sub-stages run _after_ the main analysis pass completes, so in practice they don't overlap; the ordering only matters for the degenerate manual-trigger-during-analysis case, where the primary pass correctly wins. **Known UX wart (finding 6, accepted):** when the main analysis finishes at "Analysing · 100%" and prosody starts at "Analysing · 0%", the pill's percent resets under the same label — it reads briefly like a regression. Accepted for v1 because it _is_ a genuine new phase; the popover names the active sub-stage, which disambiguates.
 - **Popover** (`status-popover.tsx` / `StatusDetail`): the analysis section renders the active sub-stage row with user-facing wording — "Detecting emotions · NN%" / "Reviewing · NN%" (never the word "prosody" in UI copy).
-- **Retire** the standalone prosody pill block in `layout.tsx` (~1512) and delete `layout-prosody-pill.test.tsx` (replaced by the summarizeStatus rung test).
+- **Retire** the standalone prosody pill block in `layout.tsx` (~1512). **Blast radius (finding 4):** `data-testid="prosody-pill"` is referenced by `layout.tsx`, `layout-prosody-pill.test.tsx`, **and `e2e/analysis-prosody-toggle.spec.ts`** — delete the unit test and **re-point the e2e spec** at the new analysis-rung pill, don't just drop the unit test.
 
 ### 3. Generate-gate (per-book, defense-in-depth)
 
 - **UI.** In `generation.tsx`, disable the Generate / regenerate triggers for **the current book** when `selectProsodyRunningForBook(state, bookId) || selectReviewRunningForBook(state, bookId)`. Other books' Generate stays live (concurrent multi-book invariant).
-- **Thunk guard.** `enqueueQueueEntries` early-returns and fires a toast when a sub-stage targets the entry's book — the authoritative backstop that also covers the cross-tab case and any stale-state click.
+- **Thunk guard.** `enqueueQueueEntries` is the authoritative backstop (covers cross-tab and stale-state clicks). For a batch it **filters out** entries whose book has an active sub-stage and enqueues the rest (rather than dropping the whole batch), then fires one toast naming the gated book(s). In practice enqueue is per-book, but the filter keeps a mixed-book batch correct.
 - **Copy.** "Wait — emotions are still being detected" / "Wait — script review is in progress."
 
 ### 4. Auto-trigger double-fire guard
 
 - Extract a pure `shouldAutoTriggerProsody(state, bookId): boolean` returning `false` when `selectProsodyRunningForBook || selectReviewRunningForBook`. The `layout.tsx` auto-trigger effect calls it as the single in-memory source of truth.
 - The existing **disk** `prosodyAnnotated` watermark stays the separate "already done" gate — it reads `api.getBookState`, so it is _not_ part of the pure Redux function and is not folded in. (This is narrower than the originating plan's "four cases idle/prosody-active/review-active/already-annotated" — the already-annotated case remains a disk-state async check, by design.)
-- **Cross-tab:** now genuinely covered — tab B sees tab A's broadcast `activeStream`, so its auto-trigger early-returns and its Generate disables.
+- **Cross-tab (finding 5 — reduces, doesn't eliminate):** once tab A's `setActive` has broadcast, tab B's auto-trigger early-returns and its Generate disables. But `BroadcastChannel` is asynchronous, so two tabs that detect analysis-complete in the same tick can both pass `shouldAutoTriggerProsody` _before_ either's `setActive` arrives → a residual double-run TOCTOU window. The disk `prosodyAnnotated` watermark dedups the eventual _write_, not the concurrent _run_. This is a narrow single-user-two-tabs edge; documented, not closed in v1.
 
 ### Toasts
 
@@ -95,27 +99,41 @@ Start toasts read as a live process, never as a queued item: "Detecting emotions
 - **Popover Cancel.** Cancel stays inline-only on the originating button; a Cancel control in the popover would require storing the `AbortController` on the slice — deferred.
 - **No queue-slice reuse.** `queue-slice.ts` / its dispatcher assume TTS-shaped per-chapter `QueueEntry` rows; analysis passes are not modelled as queue entries. Widening `QueueEntry.scope` for future analysis jobs is explicitly out of scope.
 
+## Adversarial review outcomes
+
+The spec was attacked against the live code after the first draft. Dispositions:
+
+1. **Broadcast is not a generic allow-set (Critical → fixed).** `broadcast-middleware.ts` is a bespoke per-slice snapshot protocol with separate inbound reducers; naively adding progress actions would infinite-loop. Resolved by Decision 3's dedicated `sync:substage` kind + `applyExternal*` reducers.
+2. **Singular gate-bearing stream clobbers cross-tab (High → fixed).** A `clear()` from book X would release book Y's gate in another tab. Resolved by Decision 2's bookId-keyed map; locked by a `broadcast-middleware.test.ts` case.
+3. **Missing `clear()` on the error path jams the gate globally (High → fixed).** Both thunks now `clear({bookId})` in `finally`.
+4. **`prosody-pill` retirement under-scoped (Medium → fixed).** `e2e/analysis-prosody-toggle.spec.ts` is re-pointed, not just the unit test.
+5. **Cross-tab auto-trigger guard is a TOCTOU (Medium → documented).** Reduces double-fire, doesn't eliminate the same-tick race; accepted for v1.
+6. **Pill "Analysing %" discontinuity (Low → accepted).** Percent resets between phases; popover disambiguates.
+7. **Enqueue guard, mixed-book batch (Low → fixed).** Filters gated entries, enqueues the rest.
+
 ## Test plan
 
 **Unit (Vitest):**
-- `script-review-slice.test.ts` — new `activeStream` reducers.
-- `script-review-thunk.test.ts` — `runReviewScript` dispatch sequence (setActive → updateProgress → setReview → clear; cancel path).
-- `prosody-thunk.test.ts` (update) + `prosody-autotrigger.test.tsx` — manual button now drives the slice; auto-trigger unchanged.
-- `shouldAutoTriggerProsody.test.ts` — idle → true; prosody-active → false; review-active → false.
+- `prosody-slice.test.ts` (migrate) — singular → `activeStreams` map; `clear({bookId})` removes only that book; concurrent books coexist.
+- `script-review-slice.test.ts` — new `activeStreams` map reducers + `applyExternalStreams`.
+- `script-review-thunk.test.ts` — `runReviewScript` dispatch sequence (setActive → updateProgress → setReview, with `clear({bookId})` in `finally` on the success AND error paths).
+- `prosody-thunk.test.ts` (update) + `prosody-autotrigger.test.tsx` — manual button now drives the slice and clears in `finally`; auto-trigger uses keyed actions.
+- `shouldAutoTriggerProsody.test.ts` — idle → true; prosody-active(book) → false; review-active(book) → false; active-on-_other_-book → true.
 - `top-bar.test.tsx` — new `analysisSubstage` rung at the correct priority.
-- selector tests — per-book `selectProsodyRunningForBook` / `selectReviewRunningForBook` / `selectAnalysisSubstage`.
-- broadcast-middleware test — the six progress actions broadcast; the result actions do not.
+- selector tests — per-book `selectProsodyRunningForBook` / `selectReviewRunningForBook` / `selectAnalysisSubstage` (incl. multi-book tie-break determinism).
+- `broadcast-middleware.test.ts` — `sync:substage` round-trips `set`/`clear` per book; inbound `applyExternalStreams` does **not** re-broadcast (echo layer 2); `updateProgress` debounces per `(stream, bookId)`; a `clear` on book X leaves book Y's entry intact (the finding-2 regression).
 
 **E2E (Playwright, mock mode):**
 - `detect-emotions-pill-progress.spec.ts` — manual prosody → analysis-substage pill updates → navigate away → still updating → completion toast.
 - `script-review-pill-progress.spec.ts` — whole-book review → pill updates → navigate away → toast + diff modal.
 - `prosody-auto-trigger-guard.spec.ts` — auto-trigger skips `runProsodyPasses` while a stream is active for the same book.
 - `generate-disabled-while-analysing.spec.ts` — Generate disabled with the warning copy while a sub-stage runs; other books unaffected.
+- **Re-point `e2e/analysis-prosody-toggle.spec.ts`** off the retired `prosody-pill` testid onto the new analysis-rung pill (finding 4).
 - extend `mockReviewScript` for a predictable progress cadence.
 
 **Verification commands:**
 - `npm run typecheck`
-- `npm run test -- top-bar.test.tsx prosody-thunk.test.ts src/store/script-review-slice.test.ts src/store/script-review-thunk.test.ts src/store/shouldAutoTriggerProsody.test.ts`
+- `npm run test -- top-bar.test.tsx prosody-slice.test.ts prosody-thunk.test.ts src/store/script-review-slice.test.ts src/store/script-review-thunk.test.ts src/store/shouldAutoTriggerProsody.test.ts src/store/broadcast-middleware.test.ts`
 - `npm test` (full unit)
 - `npm run test:e2e -- e2e/detect-emotions-pill-progress.spec.ts e2e/script-review-pill-progress.spec.ts e2e/prosody-auto-trigger-guard.spec.ts e2e/generate-disabled-while-analysing.spec.ts`
 - `npm run verify` (full battery)
