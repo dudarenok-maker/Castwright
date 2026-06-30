@@ -264,13 +264,18 @@ test.describe('StartGenerationModal: three-sink sync', () => {
     });
   });
 
-  test('B. 1.7B pick → enqueued queue entry carries modelKey=qwen3-tts-1.7b', async ({
+  test('B. 1.7B pick → enqueued chapters resolve to modelKey=qwen3-tts-1.7b', async ({
     page,
   }) => {
-    /* If the modal left ui.ttsModelKey on 0.6B, the persisted queue entry
-       would carry 0.6B and the model would mismatch the cast pins. Reading
-       the queue slice directly proves the session default was synced BEFORE
-       requestStartGeneration dispatched. */
+    /* A fresh "start generating" enqueues auto-work entries with NO per-entry
+       modelKey — generation-stream-middleware builds {id,bookId,chapterId,scope},
+       and the dispatcher resolves the tier as `e.modelKey ?? ui.ttsModelKey` at
+       stream-open (queue-dispatcher-middleware:243; only a per-chapter regenerate
+       stamps an explicit entry modelKey). So the invariant proving the 1.7B pick
+       reached the queue is: chapters were enqueued AND each resolves to 1.7B via
+       the session default the modal synced before requestStartGeneration
+       dispatched — had the modal left ui.ttsModelKey on 0.6B, they'd resolve to
+       0.6B and mismatch the cast pins (case A). */
     await goToStartGenModalWithDesignedCast(page);
     await page.getByTestId('start-gen-tier-qwen3-tts-1.7b').click();
     await page.getByRole('button', { name: 'Start generating', exact: true }).click();
@@ -285,13 +290,16 @@ test.describe('StartGenerationModal: three-sink sync', () => {
             const store = (window as unknown as { __store__: { getState(): unknown } }).__store__;
             const state = store.getState() as {
               queue: { snapshot?: { entries?: Array<{ modelKey?: string }> } };
+              ui: { ttsModelKey?: string };
             };
             const entries = state.queue?.snapshot?.entries ?? [];
-            return entries.map((e) => e.modelKey ?? null);
+            if (entries.length === 0) return null; // not enqueued yet — keep polling
+            const uiKey = state.ui?.ttsModelKey ?? null;
+            return entries.every((e) => (e.modelKey ?? uiKey) === 'qwen3-tts-1.7b');
           }),
         { timeout: 20_000 },
       )
-      .toContain('qwen3-tts-1.7b');
+      .toBe(true);
   });
 
   test('C. 0.6B pick clears pins AND flips ttsModelKeyExplicit (the new "no auto-upgrade" signal)', async ({
