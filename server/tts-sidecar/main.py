@@ -4158,6 +4158,40 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     return {"family": family, "index": index, "fell_back": fell_back}
 
 
+def _resident_engines_by_card(cards: list[dict]) -> dict:
+    """{card_idx: [{engine, actual_card, stale_reason?}]} over the loaded engines.
+    Engines live in ENGINES (coqui/kokoro/qwen) + the ASR/SPK singletons — NOT as
+    bare COQUI/QWEN globals."""
+    named = list(ENGINES.items()) + [("asr", ASR), ("spk", SPK)]
+    out: dict = {}
+    for name, eng in named:
+        card = _engine_actual_card(eng)
+        if card is None:
+            continue
+        idx = card["index"] if card["index"] is not None else -1  # -1 bucket = unindexed/cpu
+        entry = {"engine": name, "actual_card": card["index"]}
+        if card["fell_back"]:
+            entry["stale_reason"] = "cpu_fallback"
+        out.setdefault(idx, []).append(entry)
+    return out
+
+
+def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
+    cards = _enumerate_cuda_devices(torch_module)
+    resident = _resident_engines_by_card(cards)
+    try:
+        if torch_module is None:
+            import torch as torch_module  # type: ignore
+        for c in cards:
+            c["torch_reserved_mb"] = round(torch_module.cuda.memory_reserved(c["idx"]) / 1_000_000)
+    except Exception:
+        for c in cards:
+            c["torch_reserved_mb"] = 0
+    for c in cards:
+        c["resident"] = resident.get(c["idx"], [])
+    return cards
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
@@ -4252,6 +4286,7 @@ def health() -> dict[str, Any]:
         "spk_loaded": SPK._model is not None,
         "spk_device": SPK.device,
         "devices": devices,
+        "gpus": _build_gpus_payload(),
         "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,

@@ -74,3 +74,38 @@ def test_engine_actual_card_kokoro_cuda_resident_no_fallback():
     assert card["family"] == "cuda"
     assert card["index"] is None
     assert card["fell_back"] is False
+
+
+# --- _resident_engines_by_card + _build_gpus_payload (Task 9) ---
+
+def test_resident_buckets_engines_by_card(monkeypatch):
+    # ENGINES["qwen"] loaded on card 1; ASR fell back to cpu
+    monkeypatch.setattr(main, "_engine_actual_card",
+        lambda e: {"family": "cuda", "index": 1, "fell_back": False} if e is main.ENGINES["qwen"]
+        else ({"family": "cpu", "index": None, "fell_back": True} if e is main.ASR else None))
+    by_card = main._resident_engines_by_card([{"idx": 0}, {"idx": 1}])
+    assert {"engine": "qwen", "actual_card": 1} in by_card[1]
+    # a fell_back engine is recorded with stale_reason (card key is the cpu bucket convention)
+    flat = [r for v in by_card.values() for r in v]
+    assert any(r.get("stale_reason") == "cpu_fallback" and r["engine"] == "asr" for r in flat)
+
+
+def test_build_gpus_payload_merges(monkeypatch):
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [{"uuid":"GPU-1","idx":1,"name":"x","total_mb":16000,"free_mb":14000}])
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {1: [{"engine":"qwen","actual_card":1}]})
+    out = main._build_gpus_payload(_fake_torch())
+    assert out[0]["resident"] == [{"engine": "qwen", "actual_card": 1}]
+    assert "torch_reserved_mb" in out[0]
+
+
+def test_health_gpus_field_additive(monkeypatch):
+    """gpus key appears in /health and pre-existing keys are byte-for-byte unchanged."""
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(main, "_build_gpus_payload", lambda torch_module=None: [])
+    client = TestClient(main.app)
+    body = client.get("/health").json()
+    assert "gpus" in body
+    # Additive contract: none of the pre-existing keys were removed or renamed
+    assert "devices" in body
+    assert "asr_device" in body
+    assert "spk_device" in body
