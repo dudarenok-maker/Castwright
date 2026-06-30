@@ -1,22 +1,20 @@
 /* Dedicated e2e for the pre-generation voice-model prompt (#1160 StartGenerationModal).
  *
- * QUARANTINED (#1178, 2026-06-30): every case is tagged `@quarantine` so the
- * gating `test:e2e` grep-inverts it out. The shared `goToConfirm`/
- * `goToStartGenModal` cold-load race exhausts Playwright's retries under
- * battery / cold-webServer load (fails 1/6 in the full battery, 5/6 in
- * isolation), reddening the gate on unrelated pushes. Run on demand via
- * `npm run test:e2e:quarantine`. De-quarantine once `goToStartGenModal` waits
- * on an explicit ready signal instead of implicit cold-load timing; see the
- * flaky-register rewrite playbook.
- *
  * The other generation specs only DISMISS the prompt (confirmTierPromptIfPresent);
  * this spec asserts the prompt's OWN behaviour: for a Qwen book it appears before
  * the run starts, offers both Qwen tiers with the cast-pin-aware default
  * pre-selected, and confirming a chosen tier starts generation. The mock
  * upload-flow cast renders on Qwen, so clicking the start CTA opens the prompt
  * (a non-Qwen book starts directly — covered by the start-generation-flow thunk
- * unit test). One test = one (cold-start-flaky) upload setup; Playwright's
- * configured retries ride out the shared goToConfirm helper's cold-load race.
+ * unit test).
+ *
+ * Determinism (was #1178, de-quarantined 2026-06-30): every flow waits on an
+ * explicit ready signal rather than implicit cold-load timing. waitForQwenCastHydrated
+ * gates the cast-renders-on-Qwen predicate the start thunk reads (an empty cast
+ * slice would start the run directly with no modal); waitForRouteReady gates each
+ * lazy-chunk mount; and the designed / undesigned cast preconditions are seeded
+ * through the exposed store (seedQwenDesigns / clearQwenDesigns) instead of driving
+ * the brittle cast-design UI. See docs/testing/flaky-register.md's rewrite playbook.
  *
  * The four cases (A/B/C/D) below lock down the "all three sinks converge" fix
  * described in the implementation plan:
@@ -33,8 +31,9 @@
  *      `resetSelectedModelToDefault` reducer is the recovery path).
  *   D. Guard rail: a freshly-analysed book with NO designed voices → 1.7B
  *      pick surfaces a warn toast and generation does NOT start; 0.6B does
- *      start (baseline behaviour). The re-open path also proves the modal's
- *      "Start generating" button isn't stuck in busy=true (Finding 1).
+ *      start (baseline behaviour). Picking 0.6B in the still-open modal after
+ *      the refused 1.7B also proves the "Start generating" button isn't stuck
+ *      in busy=true (Finding 1).
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -207,7 +206,7 @@ async function readCastFromStore(
   });
 }
 
-test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm starts (#1160) @quarantine', async ({
+test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm starts (#1160)', async ({
   page,
 }) => {
   await goToStartGenModal(page);
@@ -240,7 +239,7 @@ test('voice-model prompt before a Qwen run: both tiers, 0.6B default, confirm st
   });
 });
 
-test.describe('StartGenerationModal: three-sink sync @quarantine', () => {
+test.describe('StartGenerationModal: three-sink sync', () => {
   test('A. 1.7B pick flips session default + every Qwen member pin', async ({ page }) => {
     await goToStartGenModalWithDesignedCast(page);
     const heading = page.getByRole('heading', { name: /Choose the voice model/i });

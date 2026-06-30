@@ -8,4 +8,13 @@ Empty register = done. See the rewrite playbook in
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| StartGenerationModal voice-model prompt + three-sink sync (all 6 cases) | `e2e/start-generation-tier-prompt.spec.ts` | cold-load race | `goToConfirm`/`goToStartGenModal` cold-load race exhausts Playwright retries under battery/cold-webServer load; the `Choose the voice model` heading never appears → gate red. Fails 1/6 in the full battery, 5/6 in isolation. | [#1178](https://github.com/dudarenok-maker/Castwright/issues/1178) | 2026-06-30 |
+
+_Empty — no tests are currently quarantined._
+
+<!-- Graduated 2026-06-30: `e2e/start-generation-tier-prompt.spec.ts` (#1178). The
+"cold-load race" was three spec-local defects masked by implicit timing — the
+"Approve cast" click firing before the cast slice hydrated (no modal), the case-D
+guard premise broken by the fixture's pre-designed Eliza, and cases A/B driving a
+brittle cast-design UI — plus a shared `goToAnalysing` lazy-chunk wait. Replaced
+with explicit ready signals (`waitForQwenCastHydrated` / `waitForRouteReady`) and
+store-seeded preconditions. See the commit for the full root-cause writeup. -->
