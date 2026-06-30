@@ -63,6 +63,8 @@ const chapter = (over: Partial<RecentChapter>): RecentChapter => ({
   bookId: 'book-a',
   modelKey: 'qwen3-tts',
   rtf: 1,
+  rerecordRtf: null,
+  verifyRtf: 0.1,
   audioSec: 600,
   synthSec: 600,
   at: '2026-06-01T09:00:00Z',
