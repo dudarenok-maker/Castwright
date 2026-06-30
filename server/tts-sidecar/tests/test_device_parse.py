@@ -45,3 +45,21 @@ def test_spk_indexed_cuda_degrades_when_no_gpu(monkeypatch):
             pass  # speechbrain import may fail in CI; we only assert the device decision
     asyncio.run(run())
     assert spk.device == "cpu"
+
+
+import types as _types
+import pytest
+
+def test_validate_cuda_index_rejects_out_of_range():
+    fake = _types.SimpleNamespace(
+        cuda=_types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 2)
+    )
+    with pytest.raises(ValueError):
+        main._validate_cuda_index("cuda:9", fake)
+
+
+def test_validate_cuda_index_passes_in_range():
+    fake = _types.SimpleNamespace(
+        cuda=_types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 2)
+    )
+    main._validate_cuda_index("cuda:1", fake)  # must not raise

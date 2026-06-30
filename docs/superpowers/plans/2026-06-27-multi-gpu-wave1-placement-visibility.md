@@ -853,3 +853,19 @@ git commit -m "feat(sidecar): guard out-of-range cuda index + Wave 1 acceptance 
 **Type consistency:** `_parse_device → (family, index)` consumed identically in Tasks 4–10. `_engine_actual_card → {family,index,fell_back}` (Task 8) consumed by `_resident_engines_by_card` (Task 9). `_enumerate_cuda_devices`/`_sample_card` dict shape (Task 7) extended additively in Task 9. `_kokoro_provider_options` may return `list | (providers, options) tuple | None` — handled explicitly at the Task 6 call site.
 
 **Remaining execution-time reads (flagged, not hidden):** Task 5 must match `_resolve_runtime_options`'s real return/attr shape; Task 6 Step 1 spike decides the Kokoro kwarg; Task 8's Kokoro `_kokoro_session_device` reconciliation and Task 9's health-handler invocation follow the existing `test_runtime_wiring.py` pattern — the implementer reads those before writing.
+
+---
+
+## Ship notes — Wave 1 on-box acceptance (2-GPU)
+
+Run on the box with **RTX 4070 Laptop 8GB** (`cuda:0` after the `CUDA_VISIBLE_DEVICES=1,0` map → 16GB becomes `cuda:0`) + **RTX 5070 Ti 16GB**. Each knob is `apply:'restart-sidecar'` — set it in `server/.env`, restart the sidecar, then check:
+
+- [ ] `GET /api/gpu/devices` lists both cards with correct names + total_mb (≈8000 / 16000) and a live free_mb.
+- [ ] `QWEN_DEVICE=cuda:1` + restart → `/health` gpus[] shows qwen resident actual_card=1 (real torch index).
+- [ ] `COQUI_DEVICE=cuda:1` + a Coqui synth → logs show half=True deepspeed=True (no perf regression).
+- [ ] `ASR_DEVICE=cuda:1` + transcribe → no CTranslate2 error; semaphore token taken.
+- [ ] `SPK_DEVICE=cuda:1` + embed → ECAPA on cuda:1 (no degrade warning).
+- [ ] `KOKORO_DEVICE=cuda:1` + synth → nvidia-smi shows VRAM on card 1; gpus[] kokoro NOT flagged cpu_fallback.
+- [ ] `KOKORO_DEVICE=cuda:9` (no such card) → gpus[] flags kokoro stale_reason=cpu_fallback; serves from CPU; no crash.
+- [ ] `QWEN_DEVICE=cuda:9` → load surfaces a clear "out of range" error; sidecar does NOT crash-loop.
+- [ ] Diff `/health` against a pre-Wave-1 capture: every prior field unchanged; only `gpus` added.

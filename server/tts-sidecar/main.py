@@ -630,6 +630,7 @@ class CoquiEngine(Engine):
 
         opts = self._resolve_runtime_options(torch)
         device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
+        _validate_cuda_index(device, torch)
         # Single startup log line — `npm run tts:sidecar` users can grep
         # logs/tts.log for this to confirm GPU mode is actually on. If you
         # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
@@ -1251,6 +1252,19 @@ def _ct2_kwargs(device: str, compute_type: str) -> dict:
     return kw
 
 
+def _validate_cuda_index(device: str, torch_module: Any) -> None:
+    """Raise ValueError when a cuda:N pin references a non-existent card.
+
+    Surfaces a clear load error instead of a raw CUDA crash that the sidecar
+    supervisor would crash-loop. No-op for cpu/auto/mps/plain-cuda (no index)
+    and when CUDA is unavailable (let the normal cpu-fallback path handle it)."""
+    family, index = _parse_device(device)
+    if family == "cuda" and index is not None and torch_module.cuda.is_available():
+        n = torch_module.cuda.device_count()
+        if index >= n:
+            raise ValueError(f"{device} out of range; only {n} CUDA device(s) visible")
+
+
 def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     """Resolve a QWEN_DEVICE preference to a concrete torch device string.
 
@@ -1560,6 +1574,7 @@ class QwenEngine(Engine):
                 "server/tts-sidecar."
             ) from e
         _apply_torch_perf_flags(torch)
+        _validate_cuda_index(self._device, torch)
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
