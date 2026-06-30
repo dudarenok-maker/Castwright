@@ -52,11 +52,29 @@ let a2aSplitCandidate = 0; // WER-drift with an insertion (word-split shape) —
 let residualDrift = 0; // still drift after A1/A2a/A2b — should be real defects
 const residualSamples: string[] = [];
 
-const reasonsOf = (s: any): string => ((s.asr?.reasons ?? []) as string[]).join(' ').toLowerCase();
+/* Minimal shape of a stored segment record (only the fields this measurement
+   reads). NOTE: `asr.wer` is the raw float `(sub+del+ins)/length`, so the
+   `expectedLen = round((sub+del+ins)/wer)` recovery below is exact; if it were
+   ever serialized rounded, the recovered length could be off by one. */
+interface SegRecord {
+  qa?: { durationSec?: number; expectedSec?: number };
+  asr?: {
+    verdict?: string;
+    wer?: number;
+    sub?: number;
+    del?: number;
+    ins?: number;
+    longestDeletionRun?: number;
+    transcript?: string;
+    reasons?: string[];
+  };
+}
+
+const reasonsOf = (s: SegRecord): string => (s.asr?.reasons ?? []).join(' ').toLowerCase();
 
 for (const f of readdirSync(dir).filter((n) => n.endsWith('.segments.json'))) {
-  const j = JSON.parse(readFileSync(join(dir, f), 'utf8'));
-  const segs: any[] = Array.isArray(j) ? j : (j.segments ?? []);
+  const j = JSON.parse(readFileSync(join(dir, f), 'utf8')) as SegRecord[] | { segments?: SegRecord[] };
+  const segs: SegRecord[] = Array.isArray(j) ? j : (j.segments ?? []);
   for (const s of segs) {
     total += 1;
 
