@@ -82,6 +82,8 @@ let workspaceRoot: string;
 let bookDir: string;
 let app: Express;
 let bookId: string;
+let getGenerationStats: typeof import('../tts/generation-stats.js').getGenerationStats;
+let resetGenerationStats: typeof import('../tts/generation-stats.js').__resetGenerationStatsForTest;
 
 interface ParsedTick {
   type: string;
@@ -107,11 +109,14 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ generationRouter }, { makeBookId }, cacheModule] = await Promise.all([
+  const [{ generationRouter }, { makeBookId }, cacheModule, statsModule] = await Promise.all([
     import('./generation.js'),
     import('../workspace/paths.js'),
     import('../store/analysis-cache.js'),
+    import('../tts/generation-stats.js'),
   ]);
+  getGenerationStats = statsModule.getGenerationStats;
+  resetGenerationStats = statsModule.__resetGenerationStatsForTest;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -1381,5 +1386,88 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
     const ch1 = (await readState()).chapters.find((c) => c.id === 1)!;
     expect(ch1.generationState).toBeUndefined();
     expect(ch1.generationError).toBeUndefined();
+  });
+});
+
+/* B1 (PR-2 QA-cost telemetry) — the route narrows synthMs to the pre-encode
+   wall and forwards synthesiseChapter's rerecordMs/transcribeMs/embedMs QA
+   sub-costs into recordChapterThroughput, but ONLY for a single-worker run
+   (generationWorkers === 1): under multi-worker interleaving, summing each
+   block's own wall is physically meaningless, so the route passes `null`
+   instead. getGenerationStats() reads the same in-process accumulator the
+   route feeds, and `recentChapters` is newest-first, so the freshest entry
+   always reflects the chapter this test just drove through the route. */
+describe('POST /api/books/:bookId/generation — B1 QA-cost telemetry passthrough', () => {
+  afterEach(() => {
+    delete process.env.GEN_WORKERS;
+  });
+
+  it('single-worker render reports non-null rerecordRtf/verifyRtf on the stats accumulator', async () => {
+    resetGenerationStats();
+    process.env.GEN_WORKERS = '1';
+    synthesiseImpl = async () => ({
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 10,
+      segments: [
+        {
+          characterId: 'narrator',
+          voiceName: 'Zephyr',
+          sampleStart: 0,
+          sampleEnd: 1,
+          sentenceIds: [1],
+        },
+      ],
+      rerecordMs: 2000,
+      transcribeMs: 500,
+      embedMs: 300,
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+
+    const stats = getGenerationStats();
+    const latest = stats.recentChapters[0];
+    expect(latest.chapterId).toBe(1);
+    expect(latest.rerecordRtf).not.toBeNull();
+    expect(latest.rerecordRtf).toBeCloseTo(2000 / 1000 / 10, 5);
+    expect(latest.verifyRtf).not.toBeNull();
+    expect(latest.verifyRtf).toBeCloseTo((500 + 300) / 1000 / 10, 5);
+  });
+
+  it('multi-worker render leaves rerecordRtf/verifyRtf null (summed wall is meaningless under interleaving)', async () => {
+    resetGenerationStats();
+    process.env.GEN_WORKERS = '2';
+    synthesiseImpl = async () => ({
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 10,
+      segments: [
+        {
+          characterId: 'narrator',
+          voiceName: 'Zephyr',
+          sampleStart: 0,
+          sampleEnd: 1,
+          sentenceIds: [1],
+        },
+      ],
+      rerecordMs: 2000,
+      transcribeMs: 500,
+      embedMs: 300,
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+
+    const stats = getGenerationStats();
+    const latest = stats.recentChapters[0];
+    expect(latest.chapterId).toBe(1);
+    expect(latest.rerecordRtf).toBeNull();
+    expect(latest.verifyRtf).toBeNull();
+    /* The plain rtf (whole-chapter synth ÷ audio) is unaffected by the gate —
+       only the QA sub-cost split is suppressed under multi-worker. */
+    expect(latest.rtf).not.toBeNull();
   });
 });

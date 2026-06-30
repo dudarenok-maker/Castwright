@@ -28,7 +28,12 @@
    faster-than-realtime. `xRealtime` is the inverse (audio / wall). The chapter
    window groups one run; a gap > RESET_MS starts fresh so yesterday's stat
    never dilutes today's. The batch window is independent — it reports while the
-   FIRST chapter is still rendering (when the chapter window is still empty). */
+   FIRST chapter is still rendering (when the chapter window is still empty).
+
+   QA-cost fields (`rerecordRtf`/`verifyRtf`) are populated only for single-
+   worker runs (`generationWorkers === 1`); under multi-worker interleaving
+   the summed per-block wall over-counts, so the route passes them as `null`
+   (rendered n/a). */
 
 /** One finished chapter's own throughput, for the history ring. `rtf` is
     `synthSec / audioSec` (< 1 = faster than realtime) or `null` when the

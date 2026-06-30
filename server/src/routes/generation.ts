@@ -64,6 +64,7 @@ import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-lang
 import {
   getCachedUserSettings,
   getLastKnownQwenInstallState,
+  getResolvedGenerationWorkers,
   getResolvedSidecarUrl,
 } from '../workspace/user-settings.js';
 import { appendTelemetry } from '../tts/resource-telemetry.js';
@@ -1440,6 +1441,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         },
       });
 
+      /* B1/H1 — synth-only wall, captured BEFORE the loudnorm encode + disk
+         write so the RTF rollup measures TTS, not encode. (The old post-
+         finalize capture below wrongly folded encode into synthMs.) */
+      const synthOnlyMs = Date.now() - synthStartMs;
+
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
@@ -1537,17 +1543,27 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* RTF rollup. The sidecar logs per-batch compute rtf; this is the
          end-to-end pipeline figure (synth wall ÷ audio) the operator watches
          while a book renders, plus a rolling run average that also feeds the
-         dev top-bar throughput pill (GET /api/generation/stats). */
-      const synthSec = (Date.now() - synthStartMs) / 1000;
+         dev top-bar throughput pill (GET /api/generation/stats). Uses
+         synthOnlyMs (pre-encode) so the logged/recorded RTF match. */
+      const synthSec = synthOnlyMs / 1000;
       const audioSec = result.durationSec;
       const chapterRtf = audioSec > 0 ? synthSec / audioSec : 0;
+      /* B1 — the QA sub-cost split (rerecord/transcribe/embed) is only
+         meaningful as a per-chapter wall when one worker renders at a time;
+         under multi-worker interleaving the summed per-block wall over-counts
+         (concurrent chapters' QA work overlaps in real time), so pass null
+         and let the stats view render n/a rather than a misleading number. */
+      const oneWorker = getResolvedGenerationWorkers() === 1;
       const roll = recordChapterThroughput({
         chapterId: chapter.id,
         audioSec,
-        synthMs: Date.now() - synthStartMs,
+        synthMs: synthOnlyMs,
         title: chapter.title ?? null,
         bookId: job.bookId,
         modelKey,
+        rerecordMs: oneWorker ? result.rerecordMs : null,
+        transcribeMs: oneWorker ? result.transcribeMs : null,
+        embedMs: oneWorker ? result.embedMs : null,
       });
       console.info(
         `[generation] chapter ${chapter.id} "${chapter.title ?? ''}" rendered: ` +
