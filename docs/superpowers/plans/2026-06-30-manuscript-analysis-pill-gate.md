@@ -348,9 +348,9 @@ git commit -m "feat(frontend): add per-book activeStreams progress map to script
 - Create: `src/store/analysis-substage-selectors.ts`
 - Modify: `src/components/top-bar.tsx` (`StatusInput`, `summarizeStatus`, `StatusDetail`)
 - Modify: `src/components/layout.tsx` (compute `analysisSubstage`, pass to `summarizeStatus` + `statusDetail`; delete the `prosodyPill` derivation + its JSX block)
-- Modify: `src/components/status-popover.tsx` (render the sub-stage row)
+- Modify: `src/components/status-popover.tsx` (render the sub-stage row; rename the "TTS engines" section → "Voice engines")
 - Delete: `src/components/layout-prosody-pill.test.tsx`
-- Modify: `e2e/analysis-prosody-toggle.spec.ts` (re-point off `prosody-pill`)
+- Modify: `e2e/analysis-prosody-toggle.spec.ts` (clean the stale `prosody-pill` *comment* at line 10 — it has no assertion to re-point; finding H2)
 - Test: `src/store/analysis-substage-selectors.test.ts`, `src/components/top-bar.test.tsx`
 
 **Interfaces:**
@@ -473,28 +473,33 @@ Expected: PASS.
 
 - [ ] **Step 5: Add the `summarizeStatus` rung test**
 
-In `src/components/top-bar.test.tsx`, inside the existing `summarizeStatus` describe block, add:
+In `src/components/top-bar.test.tsx`, inside the existing `summarizeStatus` describe block, add the rung + the regrouped-ladder ordering:
 
 ```ts
-it('shows an Analysing rung for an active analysis sub-stage (below real analysis)', () => {
+it('shows an Analysing rung for an active analysis sub-stage', () => {
   const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
   expect(summarizeStatus({ ...base, analysisSubstage: { kind: 'prosody', percent: 40 } })).toMatchObject({
-    label: 'Analysing',
-    detail: '40%',
-    icon: 'spinner',
+    label: 'Analysing', detail: '40%', icon: 'spinner',
   });
-  // Real analysis still outranks a sub-stage.
-  expect(
-    summarizeStatus({
-      ...base,
-      analysis: { state: 'running', percent: 12, kind: 'full' } as never,
-      analysisSubstage: { kind: 'review', percent: 90 },
-    }),
-  ).toMatchObject({ detail: '12%' });
+});
+
+it('voice-engine states (Generating, Loading model) outrank Analysis and the sub-stage', () => {
+  const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+  // Generating is the heaviest — always wins:
+  expect(summarizeStatus({ ...base, generation: { state: 'running', percent: 10 } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
+    .toMatchObject({ label: 'Generating' });
+  // Loading model now outranks a real analysis pass AND a sub-stage (regrouped ladder):
+  expect(summarizeStatus({ ...base, anyModelLoading: true, analysis: { state: 'running', percent: 12, kind: 'full' } as never }))
+    .toMatchObject({ label: 'Loading model' });
+  expect(summarizeStatus({ ...base, anyModelLoading: true, analysisSubstage: { kind: 'review', percent: 90 } }))
+    .toMatchObject({ label: 'Loading model' });
+  // Real analysis still outranks its own sub-stage:
+  expect(summarizeStatus({ ...base, analysis: { state: 'running', percent: 12, kind: 'full' } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
+    .toMatchObject({ detail: '12%' });
 });
 ```
 
-(No need to touch the other `summarizeStatus` calls in this file — the field is optional.)
+**Also update the existing ladder tests in this file:** the regroup moves `Loading model` above `Analysing`/`Designing` (it was below `Designing`), so any existing case asserting "analysis/design wins over model-loading" must flip. Grep the describe block for `anyModelLoading` / `Loading model` and adjust. (No need to touch `summarizeStatus` calls that omit `analysisSubstage` — the field is optional.)
 
 - [ ] **Step 6: Run to verify it fails**
 
@@ -511,12 +516,17 @@ In `src/components/top-bar.tsx`, add to the `StatusInput` interface (after `anyM
   analysisSubstage?: { kind: 'prosody' | 'review'; percent: number } | null;
 ```
 
-Add `analysisSubstage` to the destructured params of `summarizeStatus` (`analysisSubstage = null` as the default), and insert the rung **directly after** the `analysis?.state === 'running'` block (and before `design?.state === 'running'`):
+Add `analysisSubstage` to the destructured params of `summarizeStatus` (`analysisSubstage = null` as the default). Then **regroup the ladder to Voice-engine → Analysis → Design** (operator decision):
+
+1. **Move the existing `if (anyModelLoading) return { label: 'Loading model', … }` block UP** — to immediately after the `generation?.state === 'running'` block and **before** `analysis?.state === 'running'`. (Today it sits after `design?.state === 'running'`.) This groups both voice-engine states — `Generating` then `Loading model` — at the top of the active rungs. Update the ladder comment above the function to match.
+2. **Insert the sub-stage rung directly after `analysis?.state === 'running'`** (and before `design?.state === 'running'`):
 
 ```ts
   if (analysisSubstage)
     return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
 ```
+
+Resulting order: `Halted > Stalled > Generating > Loading model > Analysing > analysis-substage > Designing > Paused > Revisions > idle`. `Generating` stays the dominant active rung (heaviest process, shown on the chip without opening the popover).
 
 Add `analysisSubstage` to the `StatusDetail` interface too — **carrying the `label`** (the popover renders it, so the selector's `label` field is not dead):
 
@@ -580,11 +590,13 @@ In `src/components/status-popover.tsx`, render a sub-stage row inside the analys
 
 (Place it adjacent to the existing `AnalysisPill` render in the analysis section. The `label` is the user-facing phase text the dispatch sites set — "Detecting emotions" / "Reviewing".)
 
-- [ ] **Step 9: Delete the standalone-pill unit test and re-point the e2e**
+**In-scope copy rename:** while in `status-popover.tsx`, rename the visible voice-engine label — `<Section title="TTS engines" …>` (line 156) → `title="Voice engines"`, and the hint "TTS controls appear once a manuscript is open." → "Voice engine controls appear once a manuscript is open." (Do NOT rename code identifiers like `ttsControls`/`status-popover-tts` testid — copy only. The app-wide "TTS"→"Voice engines" rename in banners/admin/etc. is a separate change, see Task 11 note.)
+
+- [ ] **Step 9: Delete the standalone-pill unit test; clean the stale e2e comment (H2)**
 
 Delete `src/components/layout-prosody-pill.test.tsx`.
 
-In `e2e/analysis-prosody-toggle.spec.ts`, replace any `getByTestId('prosody-pill')` assertion with the Status-pill path. Read the spec first; the substage now surfaces on the top-bar Status pill (`getByTestId('status-pill')`, label "Analysing") and its popover row (`getByTestId('substage-row')`). If the spec only asserted the toggle (enable/disable prosody) and used the pill as a progress proxy, assert on `substage-row` after opening the Status popover instead.
+`e2e/analysis-prosody-toggle.spec.ts` does **not** assert on `prosody-pill` — verified, its only reference is a code _comment_ at line 10 naming the (now-deleted) unit test. Just update/remove that stale comment; there is no assertion to re-point and the spec keeps passing untouched.
 
 - [ ] **Step 10: Run the affected tests + typecheck**
 
@@ -622,19 +634,18 @@ import { scriptReviewSlice } from '../store/script-review-slice';
 // in configureStore.reducer add:  prosody: prosodySlice.reducer, scriptReview: scriptReviewSlice.reducer,
 ```
 
-Add a mock for the thunk and the test (place the mock near the existing `../lib/api` mock):
+**Do NOT module-mock `runProsodyPasses`** (finding H1) — `vi.mock` is hoisted file-wide, so a bare `vi.fn()` would replace the real thunk for the existing tests too (`detect-emotions-button.test.tsx:48-130` depend on the real thunk applying annotations / showing "done" / forwarding the abort signal) and turn the whole file red at the commit gate. Instead drive the new test through the **existing `../lib/api` mock** (`detectEmotions`/`detectInstruct`, already wired via `vi.hoisted` at the top of the file). Make `detectEmotions` capture mid-run state, then reject — the real thunk propagates the error, the component's `catch` runs, and `finally` must clear:
 
 ```ts
-import { runProsodyPasses } from '../store/prosody-thunk';
-vi.mock('../store/prosody-thunk', () => ({ runProsodyPasses: vi.fn() }));
-
-it('sets the prosody stream during a run and clears it in finally even on throw', async () => {
+it('clears the prosody stream in finally even when a pass throws', async () => {
   let streamWhileRunning: unknown;
-  vi.mocked(runProsodyPasses).mockImplementation(async (bookId: string, opts: { onProgress?: (f: number) => void }) => {
-    opts.onProgress?.(0.5);
-    streamWhileRunning = store.getState().prosody.activeStreams[bookId]; // captured mid-run
-    throw new Error('boom'); // exercise the error path
+  detectEmotions.mockImplementation((_id: string, opts?: any) => {
+    /* tinyspy may probe with no args; the real call always passes opts. */
+    if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+    streamWhileRunning = store.getState().prosody.activeStreams['b1']; // setActive ran before the thunk awaited the API
+    return Promise.reject(new Error('boom'));
   });
+  detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 }); // safe if the thunk continues to pass 2
   const store = makeStore();
   render(
     <Provider store={store}>
@@ -643,13 +654,14 @@ it('sets the prosody stream during a run and clears it in finally even on throw'
   );
   fireEvent.click(screen.getByTestId('detect-emotions-button'));
   fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
-  await waitFor(() => expect(runProsodyPasses).toHaveBeenCalled());
-  // set while running:
-  expect(streamWhileRunning).toMatchObject({ label: 'Detecting emotions' });
   // cleared in finally despite the throw:
-  await waitFor(() => expect(store.getState().prosody.activeStreams.b1).toBeUndefined());
+  await waitFor(() => expect(store.getState().prosody.activeStreams['b1']).toBeUndefined());
+  // and it was set while running:
+  expect(streamWhileRunning).toMatchObject({ label: 'Detecting emotions' });
 });
 ```
+
+(This leaves the real `runProsodyPasses` intact, so the three existing tests stay green. The assertion holds whether the thunk propagates the error or absorbs it into its `failed` count — either way the component's `finally` clears the stream.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1099,9 +1111,7 @@ git commit -m "feat(frontend): guard the prosody auto-trigger against double-fir
 
 - [ ] **Step 1: Write the failing thunk test**
 
-In `src/store/queue-thunks.test.ts` (create if absent), add: `enqueueQueueEntries` drops entries whose book is busy and toasts, enqueuing only the rest.
-
-Mock the network seam this file already uses (check the top of `queue-thunks.ts` for whether `queueRequest`/`readSnapshot` are module-locals or imported; if locals, mock `fetch`). Concrete test capturing the POST body:
+`src/store/queue-thunks.test.ts` **already exists** (finding H4) and already stubs the network via `vi.stubGlobal('fetch', …)` — `USE_MOCKS` is false in the vitest env so `queueRequest` hits real `fetch`. **Append** this test (don't recreate the file), reusing the file's existing fetch-stub style:
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -1114,7 +1124,7 @@ beforeEach(() => { posted.length = 0; });
 vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
   const body = JSON.parse(init.body) as { entries: unknown[] };
   posted.push(...body.entries);
-  return { ok: true, json: async () => ({ entries: body.entries, paused: false, recycling: false, loaded: true }) } as Response;
+  return { ok: true, json: async () => ({ entries: body.entries, paused: false, recycling: false }) } as Response; // QueueSnapshotResponse: {entries,paused,recycling?} — no `loaded`
 }));
 
 it('enqueues only un-gated entries and toasts the gated pass', async () => {
@@ -1189,7 +1199,7 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
 ```
 
 > **VERIFY before implementing (finding R2):** the original code never POSTed an empty `entries` array, so don't assume `/api/queue/enqueue` treats `[]` as a no-op — read `server/.../queue` route handler first. Two correct shapes, pick by what the route does:
-> 1. **All-gated early-return (shown above, preferred):** when `allowed.length === 0`, return the current snapshot *without* a network call. Implement `snapshotFromState` by mapping the `queue` slice to the `QueueSnapshotResponse` shape (read `readSnapshot`'s return type + the `queue-slice` `QueueState` to confirm the fields line up — they're the same `entries/paused/recycling/loaded` shape today, so it's a structural copy, **not** an `as unknown as` cast). If the shapes have diverged, instead narrow this function's return type to `Promise<QueueSnapshotResponse | null>` and `return null` (all current callers `void` the result — grep to confirm before relying on this).
+> 1. **All-gated early-return (shown above, preferred):** when `allowed.length === 0`, return the current snapshot *without* a network call. Implement `snapshotFromState` by mapping the `queue` slice to the `QueueSnapshotResponse` shape — which is `{ entries; paused; recycling? }` (`queue-thunks.ts:55`); note `loaded` lives on the slice's `QueueState` but is **not** part of the response type, so map only the three real fields (a structural copy, **not** an `as unknown as` cast). If the shapes have diverged, instead narrow this function's return type to `Promise<QueueSnapshotResponse | null>` and `return null` (all current callers `void` the result — grep to confirm before relying on this).
 > 2. **Only if the route is confirmed to no-op on `[]`:** delete the early-return and always POST `allowed`; the typed snapshot then always comes from `readSnapshot`.
 
 (Import `RootState` from `./index`.)
@@ -1463,6 +1473,7 @@ git commit -m "test(frontend): e2e for analysis pill progress + Generate-gate"
 - Create: `docs/features/<id>-manuscript-analysis-pill-gate.md` (from `docs/features/TEMPLATE.md`) OR extend the fs-65 plan
 - Modify: `docs/features/INDEX.md`
 - File a Backlog-item GitHub issue and add its thin row to `docs/BACKLOG.md`
+- **Separate follow-up (do NOT fold into this branch):** file a small Backlog issue for the app-wide user-facing **"TTS" → "Voice engines"** copy rename (eviction banners like "TTS unloaded to free VRAM" in `analysing.tsx:1007`/`cast.tsx`/`profile-drawer`, the admin page "local TTS / analyzer / ASR" at `admin.tsx:145`, etc.). This feature only renames the in-scope Status-popover label (Task 3 Step 8); the broad rename is its own cohesive change with its own tests (e.g. `analysing.test.tsx:582` asserts the banner text) and must not pollute this branch's diff. Engine *proper nouns* (Coqui XTTS, Qwen3-TTS) and code identifiers (`ttsLifecycle`, `TTS_MODEL_OPTIONS`) stay as-is.
 
 - [ ] **Step 1: Write the regression plan** documenting the invariants: per-book maps; Generate-gate + pass mutual-exclusion via `selectAnalysisBusyForBook`; auto-trigger guard via `shouldAutoTriggerProsody` (+ disk watermark); cross-tab `sync:substage`; the accepted limitations (mid-run tab open, TOCTOU, %-discontinuity). Link the spec.
 
@@ -1488,8 +1499,10 @@ PR body: enumerate every user/operator/dev-visible delta (pill rung, retired pro
 
 ## Self-Review
 
-- **Spec coverage:** §1 state model → Tasks 1, 2, 3 (selectors), 9 (broadcast); §2 progress wiring + pill → Tasks 3, 4, 5; pass mutual-exclusion → Task 6; §3 Generate-gate → Task 8; §4 auto-trigger guard → Task 7; toasts → Tasks 4/5/8; tests → every task + Task 10; shipping → Task 11. All 14 adversarial findings map to code: 8/9 → Task 9; 2 → Tasks 1/2 + Task 9 regression test; 3 → Tasks 4/5/7 (`finally`); 4 → Task 3 (e2e re-point + delete); 10 → Task 6; 11 → Task 3 (`createSelector`); 12 → Task 7; 13 → Task 9 (echo layer 1); 14 → Task 1.
-- **Type consistency:** `SubstageEntry` defined in Task 1, imported by Tasks 2/3/9; `selectAnalysisBusyForBook` + `analysisBusyMessage` defined in Task 3, consumed by Tasks 6/7/8; `runReviewScript` signature (incl. `totalChapters`) fixed in Task 5 and matched by the Task 5 delegate; `analysisSubstage` shapes are intentionally distinct per consumer and consistent with what Layout passes — `StatusInput` gets `{ kind, percent }` (rung needs only percent), `StatusDetail` gets `{ label, percent }` (popover renders the label), and the selector returns `{ kind, label, percent }` (superset).
+- **Spec coverage:** §1 state model → Tasks 1, 2, 3 (selectors), 9 (broadcast); §2 progress wiring + pill → Tasks 3, 4, 5; pass mutual-exclusion → Task 6; §3 Generate-gate → Task 8; §4 auto-trigger guard → Task 7; toasts → Tasks 4/5/8; tests → every task + Task 10; shipping → Task 11. All 14 adversarial findings map to code: 8/9 → Task 9; 2 → Tasks 1/2 + Task 9 regression test; 3 → Tasks 4/5/7 (`finally`); 4 → Task 3 (delete unit test + clean stale e2e comment, per H2); 10 → Task 6; 11 → Task 3 (`createSelector`); 12 → Task 7; 13 → Task 9 (echo layer 1); 14 → Task 1.
+- **Type consistency:** `SubstageEntry` defined in Task 1, imported by Tasks 2/3/9; `selectAnalysisBusyForBook` + `analysisBusyMessage` defined in Task 3, consumed by Tasks 6/7/8; `runReviewScript` (no `totalChapters` — progress is `onPhase`-driven) defined in Task 5 and matched by the Task 5 delegate; `analysisSubstage` shapes are intentionally distinct per consumer and consistent with what Layout passes — `StatusInput` gets `{ kind, percent }` (rung needs only percent), `StatusDetail` gets `{ label, percent }` (popover renders the label), and the selector returns `{ kind, label, percent }` (superset).
 - **Round-2 fixes folded:** P1 (Task 1 migrates `layout-prosody-pill.test.tsx` in-commit), P2 (review progress wired from a real callback), P3 (concrete test code in Tasks 4/6/8/9; e2e reference the real nav helpers + testids), P4 (`analysisSubstage` optional), P5 (no unsafe cast), P6 (per-pass copy via `analysisBusyMessage`), P7 (debounce omission is a logged decision), P8 (popover uses the selector's `label`).
-- **Round-3 fixes folded:** R1 (review progress comes from `onPhase`'s real 0..1 value, **not** an `onOps` count that would stall on empty chapters — `totalChapters` removed), R2 (the all-gated path early-returns a typed snapshot, with a VERIFY note on the queue route instead of an unverified empty-POST), R3 (`vi.mocked` not `as unknown as vi.Mock`), R4 (migrate-then-delete of the pill test is a logged deliberate choice), R5 (grep `getInitialState` assertion before widening `script-review-slice` state).
-- **Known residual ambiguities** (flagged inline, not placeholders): exact button sites in `generation.tsx` (grep-located in Task 8); whether `api.reviewScript` exposes an `onProgress` (Task 5 ships indeterminate "Reviewing · 0%" until the mock/real API emits ticks — Task 10 mock adds cadence); `enqueueQueueEntries` early-return response shape (Task 8 returns the current queue snapshot).
+- **Round-3 fixes folded:** R1 (review progress comes from `onPhase`'s real 0..1 value, **not** an `onOps` count that would stall on empty chapters — `totalChapters` removed), R2 (the all-gated path early-returns a typed snapshot, with a VERIFY note on the queue route instead of an unverified empty-POST), R4 (migrate-then-delete of the pill test is a logged deliberate choice), R5 (grep `getInitialState` assertion before widening `script-review-slice` state). _(Round-3 R3 — `vi.mocked` — is superseded by round-4 H1, which drops the thunk mock entirely.)_
+- **Round-4 fixes folded (independent reviewer):** H1 (Task 4 drives the new test through the existing `../lib/api` mock, **not** a hoisted `vi.mock` of `runProsodyPasses` that would red the file's other three tests at the commit gate), H2 (`e2e/analysis-prosody-toggle.spec.ts` has no `prosody-pill` assertion — only a stale comment to clean), H3 (operator regroup of the pill ladder to **Voice-engine → Analysis → Design**, which also resolves the substage-vs-model-load tie), H4 (`queue-thunks.test.ts` already exists — append, not create; `QueueSnapshotResponse` has no `loaded` field).
+- **Operator changes folded (2026-06-30):** pill ladder regrouped (Generating stays the dominant chip; `Loading model` moves above Analysis); in-scope Status-popover "TTS engines" → "Voice engines" rename (Task 3); the app-wide "TTS"→"Voice engines" copy rename filed as a **separate** Backlog item (Task 11), not in this branch.
+- **Known residual ambiguities** (flagged inline, not placeholders): exact Generate/regenerate button sites in `generation.tsx` (grep-located in Task 8); the queue route's empty-`entries` contract (Task 8 VERIFY note — early-return without a network call by default).

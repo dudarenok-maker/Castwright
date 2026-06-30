@@ -70,17 +70,29 @@ Update both slice header comments: replace the "do NOT broadcast" note with "pro
 
 - **Manual `DetectEmotionsButton`** dispatches `prosodyActions.setActive({bookId})` on start and `updateProgress({bookId})` via the existing `runProsodyPasses` `onProgress` callback. **`clear({bookId})` MUST be in a `finally`** — covering success, error, _and_ abort — so a failed/aborted pass can never leave a stuck stream (which, broadcast cross-tab, would disable Generate in every tab). The button's current `run()` clears `phase` per-branch but has no pill `clear` in `finally` (`detect-emotions-button.tsx:58–74`); the migration adds it. The inline badge re-sources from the slice so it survives navigation.
 - **Review** gains a thunk `runReviewScript(bookId, { wholeBook })` in `src/store/script-review-thunk.ts` that dispatches `scriptReviewActions.setActive/updateProgress` around the pass and `setReview` on completion. `handleReviewScript` (`manuscript.tsx:697`) already has a `try/finally` (resets `reviewLoading`); the thunk's `clear({bookId})` lands in that same `finally`. Whole-book RPD gating stays where it is.
-- **`summarizeStatus`** gains `analysisSubstage` on `StatusInput`. A new rung sits **directly below `analysis?.state === 'running'`**:
+- **`summarizeStatus`** gains `analysisSubstage` on `StatusInput`, AND its priority ladder is regrouped into **Voice-engine → Analysis → Design** order (operator decision, 2026-06-30). Today the ladder is `Halted > Stalled > Generating > Analysing > Designing > Loading model > Paused > Revisions`; "Loading model" is a voice-engine state stranded below Design. The new ladder groups the voice-engine states together at the top of the active rungs:
+
+  ```
+  Halted > Stalled                       (attention — unchanged)
+    > Generating                         (Voice engines — heaviest; always wins the chip, no popover needed)
+    > Loading model                      (Voice engines — MOVED UP from below Design)
+    > Analysing                          (Analysis)
+    > Analysing-substage                 (Analysis — NEW rung)
+    > Designing                          (Design)
+    > Paused > Revisions > idle
+  ```
+
+  Implementation: move the `anyModelLoading` check **above** the `analysis?.state === 'running'` block, then add the substage rung **directly below** `analysis-running`:
 
   ```ts
   if (analysisSubstage)
     return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
   ```
 
-  Real analysis still outranks it — the sub-stages run _after_ the main analysis pass completes, so in practice they don't overlap; the ordering only matters for the degenerate manual-trigger-during-analysis case, where the primary pass correctly wins. **Known UX wart (finding 6, accepted):** when the main analysis finishes at "Analysing · 100%" and prosody starts at "Analysing · 0%", the pill's percent resets under the same label — it reads briefly like a regression. Accepted for v1 because it _is_ a genuine new phase; the popover names the active sub-stage, which disambiguates.
+  Consequences of the regroup: (a) **Generating** stays the top active rung — the heaviest process dominates the chip without opening the popover; (b) a voice-engine **model-load now outranks both an active analysis pass and an analysis sub-stage** (so the H3 substage-vs-model-load tie resolves in model-load's favour for free) — acceptable because the analyzer (Ollama) and a TTS model-load evict each other on one GPU and rarely coexist, and the analysis % stays visible in the popover. **Known UX wart (finding 6, accepted):** main analysis ends at "Analysing · 100%", then a sub-stage starts at "Analysing · 0%" — the percent resets under the same label. Accepted for v1 (it _is_ a genuine new phase); the popover names the active sub-stage.
 - **Pass mutual-exclusion (finding 10).** The two analysis passes share the analyzer (Ollama/Gemini), so they must not run together on one book. Both `DetectEmotionsButton` and the Review Script buttons (`manuscript.tsx:827/835/850`) gain `disabled={… || selectAnalysisBusyForBook(state, bookId)}` — so while _either_ pass runs on a book, _both_ buttons disable for that book. (Each button keeps its existing local `phase`/`reviewLoading` flag too, for instant feedback before the slice settles.) Other books are unaffected.
-- **Popover** (`status-popover.tsx` / `StatusDetail`): the analysis section renders the active sub-stage row with user-facing wording — "Detecting emotions · NN%" / "Reviewing · NN%" (never the word "prosody" in UI copy).
-- **Retire** the standalone prosody pill block in `layout.tsx` (~1512). **Blast radius (finding 4):** `data-testid="prosody-pill"` is referenced by `layout.tsx`, `layout-prosody-pill.test.tsx`, **and `e2e/analysis-prosody-toggle.spec.ts`** — delete the unit test and **re-point the e2e spec** at the new analysis-rung pill, don't just drop the unit test.
+- **Popover** (`status-popover.tsx` / `StatusDetail`): the analysis section renders the active sub-stage row with user-facing wording — "Detecting emotions · NN%" / "Reviewing · NN%" (never the word "prosody" in UI copy). **In-scope copy rename (operator, 2026-06-30):** the popover's `Section title="TTS engines"` (`status-popover.tsx:156`) and its "TTS controls appear…" hint become **"Voice engines"** / "Voice engine controls appear…". (The broader app-wide "TTS" → "Voice engines" rename — eviction banners, admin page, etc. — is tracked as a SEPARATE change; it is not folded into this feature branch.)
+- **Retire** the standalone prosody pill block in `layout.tsx` (~1512). **Blast radius (finding 4, corrected by H2):** `data-testid="prosody-pill"` is only in `layout.tsx` (the JSX) and `layout-prosody-pill.test.tsx` (deleted). `e2e/analysis-prosody-toggle.spec.ts` does **not** assert on it — it only has a stale code _comment_ mentioning the unit test (line 10); clean that comment when deleting the test, no e2e re-point needed.
 
 ### 3. Generate-gate (per-book, defense-in-depth)
 
@@ -112,7 +124,7 @@ The spec was attacked against the live code after the first draft. Dispositions:
 1. **Broadcast is not a generic allow-set (Critical → fixed).** `broadcast-middleware.ts` is a bespoke per-slice snapshot protocol with separate inbound reducers; naively adding progress actions would infinite-loop. Resolved by Decision 3's dedicated `sync:substage` kind + `applyExternal*` reducers.
 2. **Singular gate-bearing stream clobbers cross-tab (High → fixed).** A `clear()` from book X would release book Y's gate in another tab. Resolved by Decision 2's bookId-keyed map; locked by a `broadcast-middleware.test.ts` case.
 3. **Missing `clear()` on the error path jams the gate globally (High → fixed).** Both thunks now `clear({bookId})` in `finally`.
-4. **`prosody-pill` retirement under-scoped (Medium → fixed).** `e2e/analysis-prosody-toggle.spec.ts` is re-pointed, not just the unit test.
+4. **`prosody-pill` retirement scope (Medium → corrected in round 4/H2).** Originally thought `e2e/analysis-prosody-toggle.spec.ts` needed re-pointing; an independent pass found it only has a stale _comment_ (no assertion). Blast radius is just `layout.tsx` JSX + the deleted `layout-prosody-pill.test.tsx`; clean the comment.
 5. **Cross-tab auto-trigger guard is a TOCTOU (Medium → documented).** Reduces double-fire, doesn't eliminate the same-tick race; accepted for v1.
 6. **Pill "Analysing %" discontinuity (Low → accepted).** Percent resets between phases; popover disambiguates.
 7. **Enqueue guard, mixed-book batch (Low → fixed).** Filters gated entries, enqueues the rest.
@@ -145,7 +157,7 @@ The spec was attacked against the live code after the first draft. Dispositions:
 - `script-review-pill-progress.spec.ts` — whole-book review → pill updates → navigate away → toast + diff modal.
 - `prosody-auto-trigger-guard.spec.ts` — auto-trigger skips `runProsodyPasses` while a stream is active for the same book.
 - `generate-disabled-while-analysing.spec.ts` — Generate disabled with the warning copy while a sub-stage runs; other books unaffected.
-- **Re-point `e2e/analysis-prosody-toggle.spec.ts`** off the retired `prosody-pill` testid onto the new analysis-rung pill (finding 4).
+- **Clean the stale `prosody-pill` comment** in `e2e/analysis-prosody-toggle.spec.ts` (line 10) when deleting the unit test — the spec has no `prosody-pill` assertion to re-point (finding 4 / H2).
 - extend `mockReviewScript` for a predictable progress cadence.
 
 **Verification commands:**
