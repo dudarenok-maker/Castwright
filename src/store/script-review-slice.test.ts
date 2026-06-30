@@ -7,6 +7,7 @@ import {
   opKey,
   type ReviewOpWithChapter,
 } from './script-review-slice';
+import type { SubstageEntry } from './prosody-slice';
 
 // ---------------------------------------------------------------------------
 // Minimal test store — includes only scriptReview so tests don't depend on
@@ -242,7 +243,7 @@ describe('scriptReviewSlice', () => {
       { chapterId: 1, id: 3, op: 'flag_nonstory', rationale: 'r' },
     ] as any;
     const s = scriptReviewSlice.reducer(
-      { byBook: {} },
+      { byBook: {}, activeStreams: {} },
       scriptReviewActions.setReview({ bookId: 'b1', ops, unappliable: [] }),
     );
     const b = s.byBook['b1']!;
@@ -318,5 +319,28 @@ describe('scriptReviewSlice', () => {
     const afterToggle = selectReview(store.getState(), 'book-a')!;
     expect('nonexistent:99:strip_tag' in afterToggle.selected).toBe(false);
     expect(afterToggle.selected).toEqual(selectedBefore);
+  });
+});
+
+describe('script-review-slice activeStreams', () => {
+  const reduceR = (actions: { type: string; payload?: unknown }[]) =>
+    actions.reduce((s, a) => scriptReviewSlice.reducer(s, a), scriptReviewSlice.getInitialState());
+
+  it('setActive/updateProgress/clear are per-book', () => {
+    const s = reduceR([
+      scriptReviewActions.setActive({ bookId: 'b1', progress: 0, label: 'Reviewing' }),
+      scriptReviewActions.setActive({ bookId: 'b2', progress: 0, label: 'Reviewing' }),
+      scriptReviewActions.updateProgress({ bookId: 'b1', progress: 0.6 }),
+      scriptReviewActions.clear({ bookId: 'b2' }),
+    ]);
+    expect(s.activeStreams.b1).toEqual<SubstageEntry>({ progress: 60, label: 'Reviewing' });
+    expect(s.activeStreams.b2).toBeUndefined();
+  });
+
+  it('applyExternalSet/applyExternalClear touch only the named key', () => {
+    const s1 = reduceR([scriptReviewActions.applyExternalSet({ bookId: 'bX', entry: { progress: 10, label: 'Reviewing' } })]);
+    expect(s1.activeStreams.bX).toEqual({ progress: 10, label: 'Reviewing' });
+    const s2 = scriptReviewSlice.reducer(s1, scriptReviewActions.applyExternalClear({ bookId: 'bX' }));
+    expect(s2.activeStreams.bX).toBeUndefined();
   });
 });

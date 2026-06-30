@@ -6,11 +6,15 @@
    Op key shape: `${chapterId}:${id}:${op}` — chapterId is not on the base
    ReviewOp (it lives on the SSE envelope), so we define ReviewOpWithChapter
    which extends ReviewOp with the chapter context. setReview expects
-   `ops: ReviewOpWithChapter[]` already tagged by the SSE consumer. */
+   `ops: ReviewOpWithChapter[]` already tagged by the SSE consumer.
+
+   The activeStreams progress map IS broadcast cross-tab via sync:substage;
+   byBook results stay tab-local. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { ReviewOp } from '../lib/script-review-apply';
 import type { RootState } from './index';
+import type { SubstageEntry } from './prosody-slice';
 
 /** ReviewOp extended with the chapterId from the SSE `ops` event envelope. */
 export type ReviewOpWithChapter = ReviewOp & { chapterId: number };
@@ -29,10 +33,12 @@ export interface ScriptReviewBucket {
 
 export interface ScriptReviewState {
   byBook: Record<string, ScriptReviewBucket | undefined>;
+  activeStreams: Record<string, SubstageEntry>;
 }
 
 const initialState: ScriptReviewState = {
   byBook: {},
+  activeStreams: {},
 };
 
 export const scriptReviewSlice = createSlice({
@@ -83,6 +89,31 @@ export const scriptReviewSlice = createSlice({
     /** Remove one book's bucket entirely (e.g. on modal close / dismiss). */
     clearReview: (s, a: PayloadAction<{ bookId: string }>) => {
       delete s.byBook[a.payload.bookId];
+    },
+
+    /** Start or restart a review-progress stream for one book. progress is 0..1. */
+    setActive: (s, a: PayloadAction<{ bookId: string; progress: number; label: string }>) => {
+      s.activeStreams[a.payload.bookId] = {
+        progress: Math.round(a.payload.progress * 100),
+        label: a.payload.label,
+      };
+    },
+    /** Update the progress fraction (0..1) for an in-flight stream. No-op if not active. */
+    updateProgress: (s, a: PayloadAction<{ bookId: string; progress: number }>) => {
+      const e = s.activeStreams[a.payload.bookId];
+      if (e) e.progress = Math.round(a.payload.progress * 100);
+    },
+    /** Remove the active stream entry for one book (stream done or cancelled). */
+    clear: (s, a: PayloadAction<{ bookId: string }>) => {
+      delete s.activeStreams[a.payload.bookId];
+    },
+    /** Cross-tab: apply an already-serialised SubstageEntry from another tab. */
+    applyExternalSet: (s, a: PayloadAction<{ bookId: string; entry: SubstageEntry }>) => {
+      s.activeStreams[a.payload.bookId] = a.payload.entry;
+    },
+    /** Cross-tab: clear the stream for a book as broadcast from another tab. */
+    applyExternalClear: (s, a: PayloadAction<{ bookId: string }>) => {
+      delete s.activeStreams[a.payload.bookId];
     },
   },
 });
