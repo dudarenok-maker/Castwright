@@ -30,7 +30,7 @@
 - Modify: `src/components/layout.tsx:163` (the `prosodyStream` selector read), `layout.tsx:1044/1048/1050/1057` (auto-trigger dispatches), `layout.tsx:1356-1362` (the `prosodyPill` derivation)
 - Test: `src/store/prosody-slice.test.ts` (rewrite for the map shape), `src/components/layout-prosody-pill.test.tsx` (migrate to the map shape so this commit stays green — Task 3 deletes it when the pill is retired)
 
-> **Green-between-commits note:** `layout-prosody-pill.test.tsx` preloads the singular `{ activeStream }` and calls `prosodyActions.clear()` with no argument. After this migration both break (`clear()` is a typecheck error; the preload no longer renders the pill), and the pre-commit gate runs the frontend suite for a frontend change — so this test MUST be migrated in the same commit (Step 5 below), not deferred to Task 3. (`prosody-autotrigger.test.tsx` mocks `runProsodyPasses` and never reads `activeStream`/`clear()`, so it is unaffected.)
+> **Green-between-commits note:** `layout-prosody-pill.test.tsx` preloads the singular `{ activeStream }` and calls `prosodyActions.clear()` with no argument. After this migration both break (`clear()` is a typecheck error; the preload no longer renders the pill), and the pre-commit gate runs the frontend suite for a frontend change — so this test MUST be migrated in the same commit (Step 5 below), not deferred to Task 3. (`prosody-autotrigger.test.tsx` mocks `runProsodyPasses` and never reads `activeStream`/`clear()`, so it is unaffected.) Task 3 deletes this test when the pill is retired — the brief migrate-then-delete (finding R4) is deliberate: it keeps every commit green and avoids any window where prosody progress goes invisible.
 
 **Interfaces:**
 - Produces:
@@ -325,6 +325,8 @@ Add these reducers inside the existing `reducers: { ... }` object (alongside `se
 ```
 
 Update the slice header comment's "non-broadcast" note to: "the activeStreams progress map IS broadcast cross-tab via sync:substage; byBook results stay tab-local."
+
+(Finding R5: if any existing test asserts `scriptReviewSlice.getInitialState()` deep-equals `{ byBook: {} }`, widen it to include `activeStreams: {}` — grep `getInitialState` in `script-review-slice.test.ts` before running.)
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -628,7 +630,7 @@ vi.mock('../store/prosody-thunk', () => ({ runProsodyPasses: vi.fn() }));
 
 it('sets the prosody stream during a run and clears it in finally even on throw', async () => {
   let streamWhileRunning: unknown;
-  (runProsodyPasses as unknown as vi.Mock).mockImplementation(async (bookId: string, opts: { onProgress?: (f: number) => void }) => {
+  vi.mocked(runProsodyPasses).mockImplementation(async (bookId: string, opts: { onProgress?: (f: number) => void }) => {
     opts.onProgress?.(0.5);
     streamWhileRunning = store.getState().prosody.activeStreams[bookId]; // captured mid-run
     throw new Error('boom'); // exercise the error path
@@ -730,7 +732,7 @@ git commit -m "feat(frontend): drive the prosody pill from DetectEmotionsButton,
 
 **Interfaces:**
 - Consumes: `scriptReviewActions.setActive/updateProgress/clear/setReview`, `api.reviewScript`, `planApply`, `notificationsActions`.
-- Produces: `runReviewScript(bookId, { dispatch, wholeBook, chapterId?, model, sentences, characterIds, totalChapters }): Promise<void>` — a plain async function (matches `runProsodyPasses`' shape: takes `dispatch` in its options bag, not a thunk-creator). **`api.reviewScript` has no `onProgress`** (verified in `api.ts` — its callbacks are `onOps`/`onPhase`/`onThrottle`/`onChapterFailed`), so progress is derived from `onOps`, which fires once per chapter: the thunk dispatches `updateProgress({ bookId, progress: chaptersDone / totalChapters })` on each `onOps`. `totalChapters` = `reviewableChapterCount` for whole-book, `1` for a single chapter.
+- Produces: `runReviewScript(bookId, { dispatch, wholeBook, chapterId?, model, sentences, characterIds }): Promise<void>` — a plain async function (matches `runProsodyPasses`' shape: takes `dispatch` in its options bag, not a thunk-creator). **Progress comes from `api.reviewScript`'s `onPhase` callback** (verified `api.ts:2942` — `onPhase?: (e: { progress: number; label?; chapterId? }) => void`; the server streams real 0..1 progress via `phase` events). Do **not** count `onOps` for progress — `onOps` fires only for chapters that *have* ops, so a book with empty chapters would stall the pill below 100%.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -751,17 +753,16 @@ import { scriptReviewActions } from './script-review-slice';
 describe('runReviewScript', () => {
   beforeEach(() => reviewScript.mockReset());
 
-  it('sets active, advances progress per chapter via onOps, then clears in finally on success', async () => {
-    reviewScript.mockImplementation(async (_bookId: string, opts: { onOps?: (e: { chapterId: number; ops: unknown[] }) => void }) => {
-      opts.onOps?.({ chapterId: 1, ops: [] });
-      opts.onOps?.({ chapterId: 2, ops: [] });
+  it('sets active, forwards onPhase progress, then clears in finally on success', async () => {
+    reviewScript.mockImplementation(async (_bookId: string, opts: { onPhase?: (e: { progress: number }) => void }) => {
+      opts.onPhase?.({ progress: 0.5 });
+      opts.onPhase?.({ progress: 1 });
     });
     const dispatch = vi.fn();
-    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>(), totalChapters: 2 });
+    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>() });
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types).toContain(scriptReviewActions.setActive.type);
-    expect(types).toContain(scriptReviewActions.updateProgress.type); // fired from onOps
-    // last updateProgress payload reached 2/2 → 1.0
+    expect(types).toContain(scriptReviewActions.updateProgress.type); // fired from onPhase
     const lastProg = dispatch.mock.calls.map((c) => c[0]).filter((a) => a.type === scriptReviewActions.updateProgress.type).pop();
     expect(lastProg.payload).toEqual({ bookId: 'b1', progress: 1 });
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
@@ -770,7 +771,7 @@ describe('runReviewScript', () => {
   it('clears in finally even when the API throws', async () => {
     reviewScript.mockRejectedValue(new Error('boom'));
     const dispatch = vi.fn();
-    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>(), totalChapters: 1 });
+    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<number>() });
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
@@ -810,25 +811,21 @@ export interface RunReviewScriptOpts {
   /** Live sentences for index-mapped planApply (caller passes sentencesRef.current). */
   sentences: ReviewLiveSentence[];
   characterIds: Set<number>;
-  /** Reviewable chapter count for the progress denominator (1 for a single chapter). */
-  totalChapters: number;
 }
 
 export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts): Promise<void> {
-  const { dispatch, wholeBook, chapterId, model, sentences, characterIds, totalChapters } = opts;
+  const { dispatch, wholeBook, chapterId, model, sentences, characterIds } = opts;
   const allOps: ReviewOpWithChapter[] = [];
   const failed: Array<{ chapterId: number; message: string }> = [];
-  const total = Math.max(1, totalChapters);
-  let chaptersDone = 0;
   dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing' }));
   try {
     await api.reviewScript(bookId, {
       ...(wholeBook ? {} : { chapterId }),
       model,
+      onPhase: ({ progress }: { progress: number }) =>
+        dispatch(scriptReviewActions.updateProgress({ bookId, progress })),
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId: chId });
-        chaptersDone += 1; // onOps fires once per reviewed chapter
-        dispatch(scriptReviewActions.updateProgress({ bookId, progress: Math.min(1, chaptersDone / total) }));
       },
       onChapterFailed: (e: { chapterId: number; message: string }) => failed.push(e),
     });
@@ -862,7 +859,7 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
 }
 ```
 
-(Progress is chapter-granular — `onOps` fires once per reviewed chapter, so the pill steps 1/N, 2/N … N/N. For a single-chapter review `totalChapters` is 1, so the pill jumps 0% → 100% on completion, which is correct for one unit of work.)
+(Progress is the server's own 0..1 `onPhase` value — monotonic and reaching ~1.0 before the stream's terminal `result` event, so the pill doesn't stall mid-bar. `setReview` is dispatched from the collected `allOps` after the stream ends, unchanged.)
 
 - [ ] **Step 4: Delegate from `manuscript.tsx`**
 
@@ -889,15 +886,12 @@ Replace the body of `handleReviewScript` (`manuscript.tsx:697-758`) with a thin 
           vocalization: s.vocalization,
         })),
         characterIds: new Set(characters.map((c) => c.id)),
-        totalChapters: wholeBook ? reviewableChapterCount : 1,
       });
     } finally {
       setReviewLoading(false);
     }
   }
 ```
-
-(`reviewableChapterCount` already exists in `manuscript.tsx` — it feeds the whole-book menu label and the RPD warning.)
 
 Add the import: `import { runReviewScript } from '../store/script-review-thunk';`. Remove now-unused imports in `manuscript.tsx` that the lifted code orphaned (e.g. `planApply` if nothing else uses it — verify with a grep before deleting).
 
@@ -1170,9 +1164,9 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
         }),
       );
     }
-    /* Always POST `allowed` (even []), so the return is a real snapshot — no
-       unsafe cast of QueueState. An empty enqueue is a server-side no-op that
-       returns the current snapshot. */
+    /* If every entry was gated, return without a network call — see the
+       VERIFY note below for why we don't POST an empty array. */
+    if (allowed.length === 0) return snapshotFromState(getState());
     const res = await queueRequest('/api/queue/enqueue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1180,7 +1174,7 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
     });
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
-    if (!opts.silent && allowed.length > 0) {
+    if (!opts.silent) {
       dispatch(
         notificationsActions.pushToast({
           kind: 'info',
@@ -1194,7 +1188,11 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
 }
 ```
 
-(Import `RootState` from `./index`. No early-return cast: `allowed` is always POSTed, so the typed `QueueSnapshotResponse` always comes from `readSnapshot`. The info toast counts `allowed.length`, not the whole snapshot, so a partially-gated batch reports the right number.)
+> **VERIFY before implementing (finding R2):** the original code never POSTed an empty `entries` array, so don't assume `/api/queue/enqueue` treats `[]` as a no-op — read `server/.../queue` route handler first. Two correct shapes, pick by what the route does:
+> 1. **All-gated early-return (shown above, preferred):** when `allowed.length === 0`, return the current snapshot *without* a network call. Implement `snapshotFromState` by mapping the `queue` slice to the `QueueSnapshotResponse` shape (read `readSnapshot`'s return type + the `queue-slice` `QueueState` to confirm the fields line up — they're the same `entries/paused/recycling/loaded` shape today, so it's a structural copy, **not** an `as unknown as` cast). If the shapes have diverged, instead narrow this function's return type to `Promise<QueueSnapshotResponse | null>` and `return null` (all current callers `void` the result — grep to confirm before relying on this).
+> 2. **Only if the route is confirmed to no-op on `[]`:** delete the early-return and always POST `allowed`; the typed snapshot then always comes from `readSnapshot`.
+
+(Import `RootState` from `./index`.)
 
 - [ ] **Step 4: Disable the Generate UI**
 
@@ -1418,7 +1416,7 @@ git commit -m "feat(frontend): sync analysis sub-stage progress cross-tab via sy
 
 - [ ] **Step 1: Extend the review mock cadence**
 
-Find the mock backing `api.reviewScript` (it's `mockReviewScript` — `api.ts:7469`). Make it call `onOps({ chapterId, ops })` **once per chapter** with a fixed `await delay(...)` between chapters, then resolve — so `runReviewScript` steps the pill 1/N, 2/N … (the progress is derived from `onOps` count, per Task 5). Deterministic delays only (no randomness — see the project's e2e-flake notes).
+Find the mock backing `api.reviewScript` (it's `mockReviewScript` — `api.ts:3050`). It already emits one `onPhase({ progress: 0.5, ... })`; add a couple more `onPhase` ticks (e.g. `0.25`, `0.5`, `0.85`) with a fixed `await wait(...)` between them before the existing `onOps` calls, so the "Reviewing" pill is observably mid-progress in e2e (progress is read from `onPhase`, per Task 5). Deterministic delays only (no randomness — see the project's e2e-flake notes).
 
 - [ ] **Step 2: Write `e2e/detect-emotions-pill-progress.spec.ts`**
 
@@ -1492,5 +1490,6 @@ PR body: enumerate every user/operator/dev-visible delta (pill rung, retired pro
 
 - **Spec coverage:** §1 state model → Tasks 1, 2, 3 (selectors), 9 (broadcast); §2 progress wiring + pill → Tasks 3, 4, 5; pass mutual-exclusion → Task 6; §3 Generate-gate → Task 8; §4 auto-trigger guard → Task 7; toasts → Tasks 4/5/8; tests → every task + Task 10; shipping → Task 11. All 14 adversarial findings map to code: 8/9 → Task 9; 2 → Tasks 1/2 + Task 9 regression test; 3 → Tasks 4/5/7 (`finally`); 4 → Task 3 (e2e re-point + delete); 10 → Task 6; 11 → Task 3 (`createSelector`); 12 → Task 7; 13 → Task 9 (echo layer 1); 14 → Task 1.
 - **Type consistency:** `SubstageEntry` defined in Task 1, imported by Tasks 2/3/9; `selectAnalysisBusyForBook` + `analysisBusyMessage` defined in Task 3, consumed by Tasks 6/7/8; `runReviewScript` signature (incl. `totalChapters`) fixed in Task 5 and matched by the Task 5 delegate; `analysisSubstage` shapes are intentionally distinct per consumer and consistent with what Layout passes — `StatusInput` gets `{ kind, percent }` (rung needs only percent), `StatusDetail` gets `{ label, percent }` (popover renders the label), and the selector returns `{ kind, label, percent }` (superset).
-- **Round-2 fixes folded:** P1 (Task 1 migrates `layout-prosody-pill.test.tsx` in-commit), P2 (review progress derived from `onOps`/`totalChapters`), P3 (concrete test code in Tasks 4/6/8/9; e2e reference the real nav helpers + testids), P4 (`analysisSubstage` optional), P5 (no unsafe cast — always POST `allowed`), P6 (per-pass copy via `analysisBusyMessage`), P7 (debounce omission is a logged decision), P8 (popover uses the selector's `label`).
+- **Round-2 fixes folded:** P1 (Task 1 migrates `layout-prosody-pill.test.tsx` in-commit), P2 (review progress wired from a real callback), P3 (concrete test code in Tasks 4/6/8/9; e2e reference the real nav helpers + testids), P4 (`analysisSubstage` optional), P5 (no unsafe cast), P6 (per-pass copy via `analysisBusyMessage`), P7 (debounce omission is a logged decision), P8 (popover uses the selector's `label`).
+- **Round-3 fixes folded:** R1 (review progress comes from `onPhase`'s real 0..1 value, **not** an `onOps` count that would stall on empty chapters — `totalChapters` removed), R2 (the all-gated path early-returns a typed snapshot, with a VERIFY note on the queue route instead of an unverified empty-POST), R3 (`vi.mocked` not `as unknown as vi.Mock`), R4 (migrate-then-delete of the pill test is a logged deliberate choice), R5 (grep `getInitialState` assertion before widening `script-review-slice` state).
 - **Known residual ambiguities** (flagged inline, not placeholders): exact button sites in `generation.tsx` (grep-located in Task 8); whether `api.reviewScript` exposes an `onProgress` (Task 5 ships indeterminate "Reviewing · 0%" until the mock/real API emits ticks — Task 10 mock adds cadence); `enqueueQueueEntries` early-return response shape (Task 8 returns the current queue snapshot).
