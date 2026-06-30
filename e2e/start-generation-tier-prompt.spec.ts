@@ -38,46 +38,146 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, waitForRouteReady } from './helpers';
+
+/* Deterministic ready-signal for the "Approve cast & start generating" click.
+   The CTA routes through the `startGenerationFlow` thunk, which reads
+   `cast.characters` at click time: if the cast slice hasn't hydrated yet
+   (`characters` still empty on a cold route mount), `castRendersOnQwen([])`
+   is false and the thunk dispatches `requestStartGeneration()` directly —
+   NO modal, so the `Choose the voice model` heading never appears and every
+   case below fails. The mock cast (ANALYSIS_NORTHERN_STAR → initialCharacters)
+   always carries Eliza with `ttsEngine: 'qwen'`, so once the slice has ANY
+   character this predicate is satisfiable; poll on it instead of racing the
+   implicit cold-load timing. This is the explicit ready signal the
+   flaky-register rewrite playbook calls for. */
+async function waitForQwenCastHydrated(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const store = (window as unknown as { __store__?: { getState(): unknown } }).__store__;
+          if (!store) return false;
+          const cast = (store.getState() as { cast: { characters: Array<{ ttsEngine?: string }> } })
+            .cast;
+          return (cast.characters ?? []).some((c) => c.ttsEngine === 'qwen');
+        }),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+}
 
 /* Drive from analysing-ready into the Generate view's StartGen modal. Shared
-   by all four cases so the cold-start flakiness stays in one place. */
+   by all four cases so the cold-start flakiness stays in one place. Each
+   internal route hop waits for its lazy chunk to mount (waitForRouteReady)
+   and the approve click is gated on the cast slice being hydrated
+   (waitForQwenCastHydrated) so the modal opens deterministically. */
 async function goToStartGenModal(page: Page): Promise<void> {
   await goToConfirm(page);
   await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
   await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+  await waitForRouteReady(page);
+  await waitForQwenCastHydrated(page);
   await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
   await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
+  await waitForRouteReady(page);
 }
 
-/* Drive from analysing-ready into the Generate view's StartGen modal WITH a
-   fully-designed Qwen cast (every Qwen member has `overrideTtsVoices.qwen.name`
-   set). Used by cases A/B so the modal's "1.7B" guard rail doesn't refuse the
-   pick for an undesigned cast — the guard rail is correct behaviour (see case
-   D) and the production user hits this state after clicking "Design full cast"
-   on the cast view before pressing "Approve cast & start generating".
+/* Establish case D's precondition deterministically: an analysed cast with ZERO
+   designed Qwen voices. The mock analysis fixture ALWAYS pre-designs Eliza
+   (`overrideTtsVoices.qwen.name = 'qwen-eliza'` in src/data/characters.ts), so
+   without this the 1.7B guard rail sees an eligible member and starts the run
+   instead of warning. Strip every Qwen override (and any matched voiceId) via
+   the exposed store so the guard's "no Qwen voice has been designed" branch is
+   reachable. `cast/setCharacters` replaces the slice wholesale; the poll
+   confirms the precondition landed (and fails loudly if the action type ever
+   drifts) before the assertions run. Qwen members stay Qwen members (ttsEngine
+   is preserved) — they're just undesigned. */
+async function clearQwenDesigns(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = (
+      window as unknown as { __store__: { getState(): unknown; dispatch(a: unknown): void } }
+    ).__store__;
+    const chars = (store.getState() as { cast: { characters: unknown[] } }).cast.characters as Array<
+      Record<string, unknown>
+    >;
+    const stripped = chars.map((c) => {
+      const next: Record<string, unknown> = { ...c, voiceId: undefined, ttsModelKey: null };
+      const otv = next.overrideTtsVoices as Record<string, unknown> | undefined;
+      if (otv?.qwen) {
+        const copy = { ...otv };
+        delete copy.qwen;
+        next.overrideTtsVoices = copy;
+      }
+      return next;
+    });
+    store.dispatch({ type: 'cast/setCharacters', payload: stripped });
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const store = (window as unknown as { __store__: { getState(): unknown } }).__store__;
+        const chars = (store.getState() as {
+          cast: { characters: Array<{ overrideTtsVoices?: { qwen?: { name?: string } } }> };
+        }).cast.characters;
+        return chars.some((c) => c.overrideTtsVoices?.qwen?.name);
+      }),
+    )
+    .toBe(false);
+}
 
-   The mock `startCastDesign` emits one `character_designed` per needs-voice
-   character; after the run every base voice is designed and the picker
-   dispatches a toast summarising "Designed N." */
+/* Establish cases A/B's precondition: every Qwen member carries a designed
+   voice (`overrideTtsVoices.qwen.name`) so the modal's 1.7B guard rail accepts
+   the pick and pins ALL of them. The inverse of clearQwenDesigns, via the same
+   store seam — production reaches this state through the cast-view "Design full
+   cast" flow, but driving that UI here is brittle (the scope-picker's "bases"
+   option disables once the fixture's pre-designed members leave nothing to
+   design, and the streaming design has its own timing), and that flow is
+   covered by its own spec. Seeding the state directly keeps these cases focused
+   on the modal's three-sink sync logic — the actual subject under test. */
+async function seedQwenDesigns(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = (
+      window as unknown as {
+        __store__: { getState(): unknown; dispatch(a: unknown): void };
+      }
+    ).__store__;
+    const state = store.getState() as {
+      cast: { characters: Array<Record<string, unknown>> };
+      ui: { ttsModelKey?: string };
+    };
+    const runEngine = (state.ui.ttsModelKey ?? '').startsWith('qwen') ? 'qwen' : 'other';
+    const designed = state.cast.characters.map((c) => {
+      const rendersOnQwen = ((c.ttsEngine as string | undefined) ?? runEngine) === 'qwen';
+      if (!rendersOnQwen) return c;
+      const otv = { ...((c.overrideTtsVoices as Record<string, unknown>) ?? {}) };
+      const qwen = (otv.qwen as { name?: string } | undefined) ?? {};
+      otv.qwen = { ...qwen, name: qwen.name || `qwen-${c.id as string}` };
+      return { ...c, ttsEngine: 'qwen', overrideTtsVoices: otv };
+    });
+    store.dispatch({ type: 'cast/setCharacters', payload: designed });
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const state = (
+          window as unknown as { __store__: { getState(): unknown } }
+        ).__store__.getState() as {
+          cast: { characters: Array<{ ttsEngine?: string; overrideTtsVoices?: { qwen?: { name?: string } } }> };
+        };
+        const qwen = state.cast.characters.filter((c) => c.ttsEngine === 'qwen');
+        return qwen.length > 0 && qwen.every((c) => c.overrideTtsVoices?.qwen?.name);
+      }),
+    )
+    .toBe(true);
+}
+
+/* Drive into the Generate view's StartGen modal WITH a fully-designed Qwen cast
+   (cases A/B). Open the modal first (post-route-hydration), THEN seed the
+   designs so a generate-route re-hydration can't wipe them. */
 async function goToStartGenModalWithDesignedCast(page: Page): Promise<void> {
   await goToStartGenModal(page);
-  const bookId = page.url().match(/#\/books\/([^/]+)\//)?.[1];
-  expect(bookId).toBeTruthy();
-  await page.goto(`/#/books/${bookId}/cast`);
-  await expect(page.getByTestId('design-full-cast')).toBeVisible({ timeout: 10_000 });
-  await page.getByTestId('design-full-cast').click();
-  await expect(page.getByTestId('design-scope-picker')).toBeVisible({ timeout: 5_000 });
-  await page.getByTestId('scope-bases').click();
-  /* The mock designs every base voice within ~15 s. The (N) suffix drops off
-     the button once all needs-voice characters have a voice. */
-  await expect(page.getByTestId('design-full-cast')).not.toContainText(/\(\d+\)/, {
-    timeout: 15_000,
-  });
-  await page.goto(`/#/books/${bookId}/generate`);
-  await expect(page.getByRole('heading', { name: /Choose the voice model/i })).toBeVisible({
-    timeout: 10_000,
-  });
+  await seedQwenDesigns(page);
 }
 
 async function readSessionTtsModelKey(page: Page): Promise<{
@@ -223,12 +323,14 @@ test.describe('StartGenerationModal: three-sink sync @quarantine', () => {
   test('D. Guard rail: 1.7B on an undesigned cast warns + does not start; 0.6B does start', async ({
     page,
   }) => {
-    /* Fresh book lands with zero designed Qwen voices. Skip the design
-       step entirely so no character carries overrideTtsVoices.qwen.name —
-       the exact state the guard rail should refuse 1.7B on. */
+    /* The mock analysis fixture pre-designs Eliza on Qwen, so strip every
+       Qwen override first to reach the "zero designed Qwen voices" state the
+       guard rail should refuse 1.7B on. (Skipping the cast-view design step
+       alone is NOT enough — the fixture ships one designed member.) */
     await goToStartGenModal(page);
     const heading = page.getByRole('heading', { name: /Choose the voice model/i });
     await expect(heading).toBeVisible({ timeout: 5_000 });
+    await clearQwenDesigns(page);
 
     /* Pick 1.7B and confirm → modal stays open, warn toast appears, no enqueue. */
     await page.getByTestId('start-gen-tier-qwen3-tts-1.7b').click();
@@ -254,21 +356,19 @@ test.describe('StartGenerationModal: three-sink sync @quarantine', () => {
       )
       .toBe(0);
 
-    /* Modal's CTA isn't stuck in busy=true (Finding 1). Cancel + open again
-       and verify the button is enabled. */
-    await page.getByRole('button', { name: 'Cancel' }).click();
-    await expect(heading).toBeHidden({ timeout: 5_000 });
+    /* Finding 1: the refused 1.7B pick must NOT leave the modal stuck in
+       busy=true. The guard returns BEFORE the busy setter (layout.tsx), so the
+       modal stays open and fully interactive — verify the confirm button is
+       still enabled rather than cancelling and re-opening (the generate view's
+       start CTA has an analysis-dependent label, so a conditional re-open is
+       an unreliable precondition for the 0.6B pick below). */
+    await expect(heading).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Start generating', exact: true }),
+    ).toBeEnabled();
 
-    /* The Generate view's start CTA re-opens the modal if the user re-clicks. */
-    const startCta = page.getByRole('button', { name: /Start generating/i }).first();
-    if (await startCta.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      await startCta.click();
-      await expect(heading).toBeVisible({ timeout: 5_000 });
-      await expect(page.getByRole('button', { name: 'Start generating', exact: true })).toBeEnabled();
-    }
-
-    /* Pick 0.6B now → generation DOES start (baseline behaviour for a
-       no-design cast). */
+    /* Switch the pick to 0.6B in the SAME open modal → generation DOES start
+       (baseline behaviour for a no-design cast). */
     await page.getByTestId('start-gen-tier-qwen3-tts-0.6b').click();
     await page.getByRole('button', { name: 'Start generating', exact: true }).click();
     await expect(heading).toBeHidden({ timeout: 5_000 });
