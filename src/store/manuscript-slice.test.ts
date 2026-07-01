@@ -962,6 +962,37 @@ describe('mergeSentences', () => {
   });
 });
 
+describe('promoteSentenceToTitle', () => {
+  it('removes the sentence and tombstones it', () => {
+    const s = start([
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 'PUPPY TRAINING.' },
+      { id: 2, chapterId: 3, characterId: 'narrator', text: 'You brought home a puppy.' },
+    ]);
+    const next = reducer(s, manuscriptActions.promoteSentenceToTitle({ chapterId: 3, sentenceId: 1 }));
+    const ch3 = next.sentences.filter((x) => x.chapterId === 3);
+    expect(ch3.map((x) => x.id)).toEqual([2]);
+    expect(next.mergedAwayKeys).toContain('3:1');
+  });
+
+  it('is a no-op when the sentence id does not exist in that chapter', () => {
+    const s = start([{ id: 1, chapterId: 3, characterId: 'narrator', text: 'A.' }]);
+    const next = reducer(s, manuscriptActions.promoteSentenceToTitle({ chapterId: 3, sentenceId: 99 }));
+    expect(next.sentences).toHaveLength(1);
+    expect(next.mergedAwayKeys).toEqual([]);
+  });
+
+  it('does not touch a same-id sentence in a different chapter', () => {
+    const s = start([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter 1 heading.' },
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Chapter 2 heading.' },
+    ]);
+    const next = reducer(s, manuscriptActions.promoteSentenceToTitle({ chapterId: 2, sentenceId: 1 }));
+    expect(next.sentences.filter((x) => x.chapterId === 1)).toHaveLength(1);
+    expect(next.sentences.filter((x) => x.chapterId === 2)).toHaveLength(0);
+    expect(next.mergedAwayKeys).toEqual(['2:1']);
+  });
+});
+
 describe('hydrateFromBookState — merge tombstone persistence (task-2b)', () => {
   it('rehydrates and book-scopes the merge tombstone', () => {
     const a = reducer(undefined, manuscriptActions.hydrateFromBookState({
