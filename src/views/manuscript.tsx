@@ -333,15 +333,26 @@ export function ManuscriptView({
      empty the chapter's narration entirely) is derived from the SAME
      `inChapter` filter this memo already computes, not a second `.filter()`
      call — PR-gate review round 2 caught that the sibling-memo version ran
-     the filter twice per render for no reason. */
+     the filter twice per render for no reason.
+
+     PR-gate review round 3 — also reuses `chapterSentences` above instead of
+     re-filtering `sentences` from scratch, in the common case where it's
+     already scoped to `currentChapter.id` (i.e. `currentChapterId` is set
+     and matches). Only falls back to a fresh filter in the rare case they
+     diverge — `currentChapterId` is null/stale but `currentChapter` still
+     resolved via the `|| chapters[0]` fallback below, where `chapterSentences`
+     would incorrectly be the whole book. */
   const { firstSentence, isOnlySentence } = useMemo(() => {
-    const inChapter = sentences.filter((s) => s.chapterId === currentChapter?.id);
+    const inChapter =
+      currentChapterId === currentChapter?.id
+        ? chapterSentences
+        : sentences.filter((s) => s.chapterId === currentChapter?.id);
     if (inChapter.length === 0) return { firstSentence: null, isOnlySentence: false };
     return {
       firstSentence: inChapter.reduce((min, s) => (s.id < min.id ? s : min)),
       isOnlySentence: inChapter.length === 1,
     };
-  }, [sentences, currentChapter?.id]);
+  }, [sentences, chapterSentences, currentChapterId, currentChapter?.id]);
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 

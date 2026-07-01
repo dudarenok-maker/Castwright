@@ -158,6 +158,45 @@ describe('PromoteFirstSentenceButton', () => {
     expect(store.getState().chapters.chapters[0].title).toBe('Chapter 3');
   });
 
+  it('disables Confirm (not just the trigger) if firstSentence becomes invalid while the popover is open (PR-gate round 3)', () => {
+    /* Regression: the popover doesn't reopen/remount on a sentence-content
+       change (only a chapter switch remounts it, via the `key` in
+       manuscript.tsx), so `cleaned`/`disabled` are recomputed live from
+       whatever `firstSentence` prop is current. A concurrent edit (e.g. a
+       script-review apply) could rewrite the same sentence to empty text
+       while the popover is already open — Confirm must re-validate, not
+       just check `busy`. */
+    const store = makeStore();
+    const { rerender } = render(
+      <Provider store={store}>
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={firstSentence}
+          isOnlySentence={false}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByTestId('promote-first-sentence-confirm')).toBeEnabled();
+
+    // Simulate a concurrent edit emptying the sentence's text.
+    rerender(
+      <Provider store={store}>
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={{ ...firstSentence, text: '   ' }}
+          isOnlySentence={false}
+        />
+      </Provider>,
+    );
+
+    expect(screen.getByTestId('promote-first-sentence-confirm')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('promote-first-sentence-confirm'));
+    expect(renameChapter).not.toHaveBeenCalled();
+  });
+
   it('shows the normal confirm copy (no "only sentence" warning) when isOnlySentence is false', () => {
     render(
       <Provider store={makeStore()}>

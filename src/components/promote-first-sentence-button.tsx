@@ -49,7 +49,7 @@ export function PromoteFirstSentenceButton({
   const disabled = !bookId || !firstSentence || cleaned.length === 0 || cleaned.length > MAX_TITLE_LEN;
 
   async function handleConfirm() {
-    if (!bookId || !firstSentence) return;
+    if (disabled || !bookId || !firstSentence) return;
     setPhase('busy');
     try {
       await api.renameChapter(bookId, chapterId, cleaned);
@@ -120,7 +120,13 @@ export function PromoteFirstSentenceButton({
             <button
               type="button"
               data-testid="promote-first-sentence-confirm"
-              disabled={phase === 'busy'}
+              /* PR-gate review round 3 — must re-check the same validity
+                 condition as the trigger button, not just `busy`: a
+                 concurrent edit to this exact sentence (e.g. a script-review
+                 apply) while the popover is open can make `cleaned` empty or
+                 over-length between open and click, since it's recomputed
+                 live from the current `firstSentence` prop every render. */
+              disabled={phase === 'busy' || disabled}
               onClick={() => void handleConfirm()}
               className="px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink/90 disabled:opacity-50"
             >
