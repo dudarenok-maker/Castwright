@@ -594,12 +594,16 @@ item 4 lands an entry in each alongside the code that shipped it, while the
 PR's own context is fresh. "Releasing" step 2 above (`$EDITOR
 docs/release-notes-next.md`) is then a final pass over an already-populated
 draft — proofread, reorder into the anatomy below, set the version marker —
-not first-time authoring from git history. The first PR to land right after a
-cut has no draft section at the top of `RELEASE_NOTES.md` yet (the top section
-there is still the version that just shipped) — that PR opens a new one, headed
-with whatever version `docs/release-notes-next.md`'s
-`release-notes-next-version:` marker currently declares, before appending its
-own line.
+not first-time authoring from git history. `bump-version.mjs` never resets
+either file after tagging, so right after a cut both are still "closed":
+`docs/release-notes-next.md`'s marker equals the version that just shipped,
+and `RELEASE_NOTES.md`'s top section is headed with that same shipped version.
+**The first PR to land after a cut is the one that reopens both** — bump the
+marker forward (increment minor, this project's usual cadence, unless the
+release was a patch) and clear `docs/release-notes-next.md`'s stale body from
+the last release, then head a fresh top section in `RELEASE_NOTES.md` with
+that same new version — before appending its own entry to each. Any later PR
+in the same release cycle finds both drafts already open and just appends.
 
 A release describes what shipped, diffed against the **previous public
 release**, and is organised as a **headline block + emoji-themed sections**
