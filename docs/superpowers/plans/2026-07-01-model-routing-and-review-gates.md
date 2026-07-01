@@ -10,17 +10,21 @@ real mechanical enforcement hook — so they hold by default instead of
 requiring a repeated ask.
 
 **Architecture:** Pure documentation + one small Node validator + one GitHub
-Actions workflow. No application code, no new dependencies. `CLAUDE.md` gets
-four targeted edits (new "Model routing" section, before-shipping-checklist +
-"Opening the PR" amendments, new "Task tracking & checkpoint flagging"
-section). A new project skill (`.claude/skills/model-routing/SKILL.md`) holds
-the full routing table + review-gate mechanics, following the existing
-`.claude/skills/run-app/SKILL.md` pattern. Decision 11's mechanical check
-(`pr-issue-link.yml`) mirrors the existing `pr-title-lint.yml` shape exactly:
-a tiny pure-function validator (`scripts/validate-pr-issue-link.mjs`, tested
-under `scripts/tests/`, following `scripts/validate-commit-msg.mjs`) called
-from a workflow that writes the PR body to a temp file and invokes the
-validator via `node`.
+Actions workflow + one regression-plan entry. No application code, no new
+dependencies. `CLAUDE.md` gets four targeted edits (new "Model routing"
+section, before-shipping-checklist + "Opening the PR" amendments, new "Task
+tracking & checkpoint flagging" section). A new project skill
+(`.claude/skills/model-routing/SKILL.md`) holds the full routing table +
+review-gate mechanics, following the existing `.claude/skills/run-app/SKILL.md`
+pattern. Decision 11's mechanical check (`pr-issue-link.yml`) mirrors the
+existing `pr-title-lint.yml` shape exactly: a tiny pure-function validator
+(`scripts/validate-pr-issue-link.mjs`, tested under `scripts/tests/`,
+following `scripts/validate-commit-msg.mjs`) called from a workflow that
+writes the PR body to a temp file and invokes the validator via `node`. The
+workflow alone is advisory (a failing check doesn't block a merge); making it
+actually block merges needs a required-status-check ruleset on `main`, which
+is a repo security-setting change — Task 7 documents the exact command but
+does **not** execute it; it's a one-time step you run yourself.
 
 **Tech Stack:** Markdown (CLAUDE.md, skill file), Node.js ESM (`node:test`,
 no extra deps — matches `scripts/validate-commit-msg.mjs`), GitHub Actions
@@ -35,30 +39,41 @@ YAML (matches `.github/workflows/pr-title-lint.yml`).
   already exists in this repo: `scripts/validate-commit-msg.mjs` is the
   template for the new validator, `.github/workflows/pr-title-lint.yml` is
   the template for the new workflow, `.claude/skills/run-app/SKILL.md` is the
-  template for the new skill's frontmatter shape.
+  template for the new skill's frontmatter shape, `docs/features/163-protected-push-guard.md`
+  and `docs/features/166-github-issues-backlog-integration.md` (both filed
+  under INDEX.md's "K. Cross-cutting invariants") are the template for the
+  regression-plan entry — this is a tooling/CI-gate change of exactly their
+  shape, not a product feature, so `docs/features/TEMPLATE.md`'s
+  product-specific fields (URL surface, OpenAPI ops) are marked `n/a` rather
+  than force-fit.
 - Commit convention: `<type>(<scope>): <subject>` — types/scopes come from
   `CONTRIBUTING.md` (already read this session): scopes used in this plan are
   `docs`, `scripts`, `ci`. `chore` is the only no-scope type.
 - `brainstorming` and `writing-plans` are global plugin skills and are **not**
   edited by this plan — only project-level `CLAUDE.md` / `.claude/skills/`
   content changes (spec "Embedding" § Mechanism note).
-- No `docs/features/` regression-plan entry for this change: the template
-  (`docs/features/TEMPLATE.md`) is shaped for product features (URL surface,
-  OpenAPI ops, manual UI walkthrough) and every existing plan in
-  `docs/features/INDEX.md` is a product-area entry — none fit a pure
-  process/governance change. Per `CLAUDE.md`'s own before-shipping checklist
-  item 1 ("Small/localized items skip the plan doc — the issue body + paired
-  test is the spec"), the design spec + this plan + the filed GitHub issue
-  serve that role instead. Stated explicitly here rather than silently
-  skipped, per this repo's own "say so explicitly" convention.
+- **A `docs/features/` regression-plan entry IS required for this change**
+  (Task 7): `CONTRIBUTING.md:337` — "Substantial / cross-cutting issues still
+  get a numbered `docs/features/NN-*.md` regression plan" — and rewriting
+  CLAUDE.md's core instructions plus adding an always-on CI gate affecting
+  every future PR is cross-cutting, not small/localized. (An earlier draft of
+  this plan misclassified it as small/localized to justify skipping the plan
+  doc — caught by this plan's own mandatory adversarial review; see the
+  design spec's sibling correction on Decision 11 for the parallel case.)
+- **The required-status-check ruleset wiring is a manual, user-run step, not
+  a plan task an implementing agent executes.** Per this harness's own
+  action-care rules, "modifying system or security settings" is never
+  auto-performed, even with prior authorization for the general approach —
+  Task 7 documents the exact command; you run it yourself, after the PR
+  merges.
 - This work is itself subject to the PR-gate issue-verification rule it
   implements (Decision 9): the PR that ships this plan needs a linked GitHub
   issue (`Closes #NN`), filed with `area:ops` + `type:feature` (new,
   user/agent-facing process behavior — not a `chore`-shaped tidy-up) per the
-  labeling rule this plan itself documents. Filing that issue and opening the
-  PR happens once all tasks below are complete and verified — it is not one
-  of the numbered tasks (matches how every other plan in this repo scopes
-  tasks to implementation, not to shipping mechanics).
+  labeling rule this plan itself documents. Task 7 files it and opens the PR
+  once Tasks 1–6 are complete and verified — matching the shape of this
+  repo's own prior "final task ships" plans (e.g. the manuscript-analysis
+  pill-gate plan's Task 11).
 
 ---
 
@@ -362,7 +377,7 @@ old_string:
 7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 
 new_string:
-4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask (see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` backstops the check on every PR.
+4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask (see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR and is wired as a required status check on `main`, so a missing link blocks merge, not just fails a visible check.
 5. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
 6. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
@@ -403,9 +418,12 @@ verified at creation time, not assumed. If none exists yet, one is
 auto-filed and linked without pausing to ask, labeled per `CONTRIBUTING.md`'s
 two-shape convention (bug-shaped work → standalone `bug` label; backlog-
 shaped work → `type:feature`/`type:chore` + `area:<prefix>`, `moscow:` left
-for you to set). `.github/workflows/pr-issue-link.yml` mechanically enforces
-the link's presence on every PR, mirroring `pr-title-lint.yml`. Full
-mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
+for you to set). `.github/workflows/pr-issue-link.yml` surfaces a failing
+check on every PR that skips this, mirroring `pr-title-lint.yml`, and is
+wired into `main`'s required status checks so a missing link actually blocks
+merge (a one-time ruleset setup — see
+[docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md)).
+Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
 
 **Requesting a CI run on a PR (plan 215).** CI is opt-in (see "Commit gate"
 ```
@@ -745,6 +763,15 @@ jobs:
         run: node scripts/validate-pr-issue-link.mjs "$RUNNER_TEMP/pr-body.txt"
 ```
 
+**Note on the job's `name:` field**: `Verify PR body links a GitHub issue` is
+not just a label — Task 7's required-status-check ruleset references this
+exact string as the check's context. Do not rename it without also updating
+Task 7's ruleset command. (Whether this workflow's own introducing PR shows
+the check at all is a harmless either-way ambiguity — GitHub Actions
+workflows added in a PR do run for that PR's own `pull_request` events, so it
+should appear; if it doesn't, that's cosmetic for this one PR and irrelevant
+to every PR after it, since the check exists on `main` once merged.)
+
 - [ ] **Step 2: Validate the YAML syntax locally**
 
 ```bash
@@ -765,6 +792,234 @@ git commit -m "feat(ci): enforce PR issue-linkage via pr-issue-link.yml"
 
 ---
 
+### Task 7: Regression plan, INDEX entry, ship
+
+**Files:**
+- Create: `docs/features/235-model-routing-review-gates.md` (from
+  `docs/features/TEMPLATE.md`, product-specific fields marked `n/a` — see
+  Global Constraints)
+- Modify: `docs/features/INDEX.md` (new entry under "K. Cross-cutting
+  invariants", matching plans 163/166's shape)
+
+**Interfaces:** none — terminal task.
+
+- [ ] **Step 1: Write the regression plan**
+
+Create `docs/features/235-model-routing-review-gates.md`:
+
+```markdown
+---
+status: active
+shipped: null
+owner: null
+---
+
+# Model routing & review gates
+
+> Status: active — mechanized gate (issue-linkage) is tested + CI-enforced;
+> the other five gates are self-enforced prose, not locked by automated
+> tests, so `stable` (which this repo's INDEX.md lifecycle defines as
+> "behavior locked by automated tests") does not yet apply.
+> Key files: `CLAUDE.md`, `.claude/skills/model-routing/SKILL.md`,
+> `scripts/validate-pr-issue-link.mjs`, `.github/workflows/pr-issue-link.yml`
+> URL surface: n/a — process/tooling change, no application UI
+> OpenAPI ops: none
+
+## Benefit / Rationale
+
+- **User:** n/a — this repo has one operator (the user); "user" and
+  "developer" are the same person for this change.
+- **Technical:** subagent/session model choice stops defaulting to habit;
+  spec/plan and PR review gates run by default instead of only when asked;
+  a PR without a linked GitHub issue is mechanically caught, not just
+  conventionally expected.
+- **Architectural:** locks in a durable place for routing + review-gate
+  rules (`.claude/skills/model-routing/SKILL.md`) that future sessions read
+  without re-deriving; opens the precedent (Decision 11) of mechanizing a
+  self-enforced convention when it's cheap enough to be worth it.
+
+## Architectural impact
+
+- **New seams**: a new project skill directory (`.claude/skills/model-routing/`);
+  a new validator module shape (`scripts/validate-*.mjs` + CLI mode) alongside
+  the existing `validate-commit-msg.mjs`; a second always-on `pull_request`
+  workflow alongside `pr-title-lint.yml`.
+- **Invariants preserved**: no application code, test suite, or product
+  surface changes (spec "Out of scope"); `brainstorming`/`writing-plans`
+  (global plugin skills) are not edited, only project-level `CLAUDE.md` /
+  `.claude/skills/` content, which the standing instruction-precedence rule
+  already gives priority over skill defaults.
+- **Migration story**: none — no stored data shape changes.
+- **Reversibility**: every CLAUDE.md edit and the skill file are plain
+  markdown, revertible with a single `git revert`. The workflow is inert
+  until wired into a required-status-check ruleset (Task 7 Step 6 below); if
+  that step is reverted, the check becomes advisory-only again, not broken.
+
+## Invariants to preserve
+
+1. The four-tier routing table (`CLAUDE.md` "Model routing" section, and the
+   full copy in `.claude/skills/model-routing/SKILL.md`) never routes a fork
+   — forks always inherit the dispatching session's model (`Agent` tool
+   schema; see Decision 1 in the design spec).
+2. `scripts/validate-pr-issue-link.mjs`'s `hasIssueLink()` strips fenced +
+   inline code spans before testing for `Closes #NN` / `Refs #NN` — a
+   backtick-wrapped keyword must not satisfy the check (it doesn't actually
+   auto-close on GitHub either).
+3. `.github/workflows/pr-issue-link.yml`'s job `name:` field
+   ("Verify PR body links a GitHub issue") is the exact string referenced by
+   the required-status-check ruleset (Task 7 Step 6) — renaming the job
+   without updating the ruleset silently breaks the required-check binding.
+
+## Test plan
+
+### Automated coverage
+
+- `node:test` (`scripts/tests/validate-pr-issue-link.test.mjs`) — asserts
+  `hasIssueLink()` accepts `Closes #NN`/`Refs #NN` (case-insensitive, amid
+  other text), and rejects missing links, near-miss words ("Closed",
+  "Closesnt", "encloses"), and backtick/fenced-code-wrapped occurrences.
+  Auto-discovered by `npm run test:hooks` via
+  `scripts/run-hooks-tests.mjs`'s `scripts/tests/*.test.mjs` glob.
+- **Explicitly untested** (self-enforced prose, per the design spec's "Out
+  of scope" honesty note): the routing table's tier selection, the
+  escalation ladder, session-drift flagging, both review-gate loops'
+  triggers/caps, task-tracking granularity, and `/compact` checkpoint
+  flagging. None of these are checkable by an automated test — they're
+  judged by the dispatching session in the moment. Only Decision 11's
+  issue-linkage slice is mechanized.
+
+### Manual acceptance walkthrough (process walkthrough, not a UI click-through)
+
+1. Open a PR against `main` with a body that does **not** contain `Closes`
+   or `Refs` → expect the `Verify PR body links a GitHub issue` check to
+   fail (red ✗) on the PR.
+2. Edit the PR body to add `Closes #<some real issue number>` (plain, not
+   inside backticks) → expect the check to re-run (the `edited` trigger)
+   and turn green.
+3. Confirm `pr-title-lint.yml` (`.github/workflows/pr-title-lint.yml`) is
+   unaffected — both workflows run independently on the same PR events.
+4. After Task 7 Step 6's manual ruleset step is applied: repeat step 1 and
+   confirm the PR's merge button is now disabled/blocked by GitHub until the
+   check passes (not just red).
+
+## Out of scope
+
+Everything the design spec's own "Out of scope" section names: application
+code, the `assumption-checker`/`code-review` skill implementations
+themselves, and full mechanization of the other five gates. See
+[docs/superpowers/specs/2026-07-01-model-routing-and-review-gates-design.md](../superpowers/specs/2026-07-01-model-routing-and-review-gates-design.md).
+
+## Ship notes
+
+(Filled in once merged: shipped date, commit SHA.)
+```
+
+- [ ] **Step 2: Add the INDEX.md entry**
+
+Add one line under the `### K. Cross-cutting invariants` heading in
+`docs/features/INDEX.md` (matching the style of the existing 163/166
+entries — link text, status, one dense paragraph, `Closes #NN` at the end,
+filled in once the issue number is known in Step 4 below).
+
+- [ ] **Step 3: Run the full battery**
+
+```bash
+npm run verify
+```
+
+Expected: typecheck + all tests (including the new `test:hooks` cases from
+Task 5) + e2e + build all green.
+
+- [ ] **Step 4: File the GitHub issue**
+
+```bash
+gh issue create \
+  --title "Model routing & review gates: embed governance spec into CLAUDE.md" \
+  --label "type:feature" --label "area:ops" \
+  --body "Implements docs/superpowers/specs/2026-07-01-model-routing-and-review-gates-design.md — see the linked PR for the full diff."
+```
+
+Note the returned issue number (`#NN`) — fill it into the INDEX.md entry
+from Step 2 and the PR body in Step 6.
+
+- [ ] **Step 5: Commit the regression plan + INDEX entry**
+
+```bash
+git add docs/features/235-model-routing-review-gates.md docs/features/INDEX.md
+git commit -m "docs(docs): add regression plan for model routing & review gates"
+```
+
+- [ ] **Step 6: Push and open the PR**
+
+```bash
+git push -u origin docs/docs-model-routing-review-gates
+gh pr create \
+  --title "docs(docs): model routing & review gates governance" \
+  --body "Closes #NN
+
+## Summary
+- Embeds the 11-decision governance spec into CLAUDE.md: model-routing table, mandatory spec/plan + PR review gates, task-tracking/checkpoint rules.
+- New .claude/skills/model-routing/SKILL.md holds the full routing table + review-gate mechanics.
+- New scripts/validate-pr-issue-link.mjs (node:test covered) + .github/workflows/pr-issue-link.yml mechanically check every PR body links an issue.
+- Regression plan: docs/features/235-model-routing-review-gates.md.
+
+## Test plan
+- [x] npm run verify green
+- [x] node --test scripts/tests/validate-pr-issue-link.test.mjs green
+- [ ] Manual: open a throwaway PR without a Closes/Refs link, confirm pr-issue-link.yml fails; add the link, confirm it passes"
+```
+
+(Replace `#NN` with the real issue number from Step 4.)
+
+- [ ] **Step 7: Run the mandatory independent PR review**
+
+Per the before-shipping checklist item 8 this same PR just added — once
+pushed, run the `code-review` skill at `high` effort, without `--fix`, and
+triage the findings by hand (see
+[`.claude/skills/model-routing/SKILL.md`](../../.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs)).
+This is the first real dogfood of that gate; do not skip it because "this PR
+already went through unusually heavy review" — the checklist item doesn't
+carve out an exception for that.
+
+> **Step 6 above wires `pr-issue-link.yml` into `main`'s branch protection as
+> a required status check — a repo security-setting change. Per this
+> harness's action-care rules, that is never auto-performed, regardless of
+> prior approval for the general approach. Do not run the command below as
+> part of automated task execution. Present it to the user and let them run
+> it themselves, after this PR merges.**
+>
+> ```bash
+> gh api repos/dudarenok-maker/Castwright/rulesets -X POST --input - <<'JSON'
+> {
+>   "name": "main — require PR issue link",
+>   "target": "branch",
+>   "enforcement": "active",
+>   "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+>   "rules": [
+>     {
+>       "type": "required_status_checks",
+>       "parameters": {
+>         "required_status_checks": [
+>           { "context": "Verify PR body links a GitHub issue" }
+>         ],
+>         "strict_required_status_checks_policy": false
+>       }
+>     }
+>   ]
+> }
+> JSON
+> ```
+>
+> Safer alternative to the raw API call: GitHub web UI → repo Settings →
+> Rules → Rulesets → this ruleset (or New branch ruleset) → Require status
+> checks to pass → search/add "Verify PR body links a GitHub issue". The UI
+> autocompletes from checks that have actually run, so it can't silently
+> no-op on a typo'd context string the way the API call can. Run this only
+> after the PR from Step 6 has merged, so the check has run at least once on
+> `main`.
+
+---
+
 ## Self-Review
 
 - **Spec coverage**: Decision 1/Design §1 → Task 1 + Task 2. Decision 2/3
@@ -772,9 +1027,10 @@ git commit -m "feat(ci): enforce PR issue-linkage via pr-issue-link.yml"
   Task 2. Decision 6/7/Design §3 (PR review) → Task 2 + Task 3 Step 1 item 8.
   Decision 8/Design §4 (task tracking) → Task 4. Decision 9/Design §5 (issue
   verification) → Task 2 + Task 3. Decision 10/Design §6 (checkpoints) →
-  Task 4. Decision 11/Design §7 (mechanical enforcement) → Task 5 + Task 6.
-  Design "Embedding" → all six file targets accounted for across Tasks 1–4
-  and 5–6. No spec section is without a task.
+  Task 4. Decision 11/Design §7 (mechanical enforcement) → Task 5 + Task 6 +
+  Task 7 (required-check wiring, post-review addition — see below). Design
+  "Embedding" → all six file targets accounted for across Tasks 1–4 and 5–6.
+  No spec section is without a task.
 - **Two forward-references are intentional, not placeholders**: Task 1 links
   to `.claude/skills/model-routing/SKILL.md` before Task 2 creates it, and
   Task 3 links to `.github/workflows/pr-issue-link.yml` before Task 6 creates
@@ -784,4 +1040,61 @@ git commit -m "feat(ci): enforce PR issue-linkage via pr-issue-link.yml"
   as a runtime check** — it's a standing behavioral instruction (Task 2's
   skill content), same as every other self-enforced gate in the spec. No
   code makes this happen; the spec is explicit that only Decision 11 gets a
-  real mechanical check (Task 5/6).
+  real mechanical check (Task 5/6/7).
+
+### Round-1 adversarial-review findings folded (this plan's own mandatory review, per Decision 5)
+
+An Opus-tier subagent ran a real `assumption-checker` pass against this plan
+(session was Sonnet-tier, so per Decision 4 the mechanism was subagent
+dispatch, not in-session). It tripped the re-review threshold: 1
+`Critical`+`Contradicted`, 1 `Significant`+`Contradicted` (both counted;
+several `Minor`/informational notes did not trip the threshold on their own).
+
+- **Critical, Contradicted — "unavoidable" enforcement overclaim.** The
+  original Task 6 called `pr-issue-link.yml` "real, external, unavoidable"
+  enforcement, but a failing GitHub Actions check does not block a merge
+  unless wired into a required-status-check ruleset — confirmed via `gh api
+  repos/.../rulesets` (only force-push/deletion protection exists) and
+  `docs/features/215-ci-label-gated-verify.md`, which deliberately excludes
+  required checks so opt-in PRs can't deadlock. Surfaced to the user
+  (branch-protection wiring is a repo security-setting judgment call, not
+  something to silently patch either direction) rather than auto-resolved;
+  user chose to wire it as a required check, scoped to `pr-issue-link.yml`
+  only. Folded as: the design spec's Decision 11/Design §7 correction note,
+  this plan's Task 6 note + Global Constraints, and the new Task 7 Step 6
+  manual instructions (not an automated task step — a repo security-setting
+  change is never auto-performed by an implementing agent, per the harness's
+  own action-care rules, regardless of prior approval for the general
+  approach).
+- **Significant, Contradicted — docs/features regression-plan skip
+  misclassified.** The original Global Constraints justified skipping a
+  `docs/features/` plan entry as "small/localized." `CONTRIBUTING.md:337`
+  says cross-cutting work "still gets" one, and this change (rewriting
+  CLAUDE.md's core instructions, adding an always-on CI gate) is
+  cross-cutting, not small. It also missed real precedent — INDEX.md's "K.
+  Cross-cutting invariants" section already holds tooling/CI-gate plans of
+  exactly this shape (163, 166). Fixed by adding Task 7, which writes
+  `docs/features/235-model-routing-review-gates.md` (product-specific
+  TEMPLATE.md fields marked `n/a` rather than force-fit) and an INDEX.md
+  entry under "K."
+- **Caught false positive (not folded)**: the review flagged `node -e
+  "...require(...)"` in Task 2 Step 2 as possibly broken under this
+  package's `"type": "module"`. Verified directly — `node -e` always
+  defaults to CommonJS regardless of `package.json`'s `type` field
+  (confirmed empirically: `node -e "console.log(typeof require)"` →
+  `function` in this repo's root). No change made.
+- **Minor/informational notes, addressed lightly**: the review flagged a
+  possible sequence-order mismatch between the skill's stated PR-review
+  sequence and the before-shipping checklist's item numbering — checklist
+  item 8's existing "once every item above is done" phrasing already makes
+  its terminal position explicit, so no further edit was needed. It also
+  flagged that adding a second always-on `pull_request` workflow widens this
+  repo's "always-bills" CI surface — real, but negligible (5-min cap,
+  seconds of runtime, same precedent `pr-title-lint.yml` already sets) and
+  not worth a dedicated constraint beyond this note. It also flagged whether
+  `pr-issue-link.yml` reports a check on the very PR that introduces it —
+  addressed as a harmless-either-way note in Task 6.
+- **Loop status**: 1 round run, threshold tripped, findings fixed above. Per
+  Decision 5's cap (initial + up to 2 re-review rounds), one more round is
+  permitted if a second review still trips the threshold; if this round
+  comes back clean, the loop ends here.
