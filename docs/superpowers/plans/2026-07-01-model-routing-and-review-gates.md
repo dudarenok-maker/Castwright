@@ -852,8 +852,9 @@ owner: null
 - **Migration story**: none — no stored data shape changes.
 - **Reversibility**: every CLAUDE.md edit and the skill file are plain
   markdown, revertible with a single `git revert`. The workflow is inert
-  until wired into a required-status-check ruleset (Task 7 Step 6 below); if
-  that step is reverted, the check becomes advisory-only again, not broken.
+  until wired into a required-status-check ruleset (Task 7 Step 8, the
+  manual step — see the implementation plan); if that step is reverted, the
+  check becomes advisory-only again, not broken.
 
 ## Invariants to preserve
 
@@ -867,7 +868,7 @@ owner: null
    auto-close on GitHub either).
 3. `.github/workflows/pr-issue-link.yml`'s job `name:` field
    ("Verify PR body links a GitHub issue") is the exact string referenced by
-   the required-status-check ruleset (Task 7 Step 6) — renaming the job
+   the required-status-check ruleset (Task 7 Step 8, the manual step) — renaming the job
    without updating the ruleset silently breaks the required-check binding.
 
 ## Test plan
@@ -898,9 +899,9 @@ owner: null
    and turn green.
 3. Confirm `pr-title-lint.yml` (`.github/workflows/pr-title-lint.yml`) is
    unaffected — both workflows run independently on the same PR events.
-4. After Task 7 Step 6's manual ruleset step is applied: repeat step 1 and
-   confirm the PR's merge button is now disabled/blocked by GitHub until the
-   check passes (not just red).
+4. After Task 7 Step 8 (the manual ruleset step) is applied: repeat step 1
+   and confirm the PR's merge button is now disabled/blocked by GitHub until
+   the check passes (not just red).
 
 ## Out of scope
 
@@ -917,9 +918,13 @@ themselves, and full mechanization of the other five gates. See
 - [ ] **Step 2: Add the INDEX.md entry**
 
 Add one line under the `### K. Cross-cutting invariants` heading in
-`docs/features/INDEX.md` (matching the style of the existing 163/166
-entries — link text, status, one dense paragraph, `Closes #NN` at the end,
-filled in once the issue number is known in Step 4 below).
+`docs/features/INDEX.md`, matching the real shape of the existing 163/166
+entries: `- [235 — Model routing & review gates](235-model-routing-review-gates.md) — `active`. <one dense paragraph>.`
+Neither 163 nor 166 ends with a trailing `Closes #NN` (163 ends "…node:test
+coverage under `npm run test:hooks`.", 166 ends "…run as PRs 2–3."), so
+don't add one either — cite the filed issue naturally inside the paragraph
+instead, once the issue number is known from Step 4 below (e.g. "… Filed as
+#NN.").
 
 - [ ] **Step 3: Run the full battery**
 
@@ -981,12 +986,20 @@ This is the first real dogfood of that gate; do not skip it because "this PR
 already went through unusually heavy review" — the checklist item doesn't
 carve out an exception for that.
 
-> **Step 6 above wires `pr-issue-link.yml` into `main`'s branch protection as
-> a required status check — a repo security-setting change. Per this
-> harness's action-care rules, that is never auto-performed, regardless of
-> prior approval for the general approach. Do not run the command below as
-> part of automated task execution. Present it to the user and let them run
-> it themselves, after this PR merges.**
+> **Step 8 (MANUAL — not a checkbox task; the implementing agent does NOT run
+> this): wire the required status check.** This is a distinct step from
+> Step 6 above (which only pushes and opens the PR). It wires
+> `pr-issue-link.yml` into `main`'s branch protection as a required status
+> check — a repo security-setting change. Per this harness's action-care
+> rules, that is never auto-performed, regardless of prior approval for the
+> general approach. Do not run the command below as part of automated task
+> execution. Present it to the user and let them run it themselves, after
+> this PR (Step 6) merges.
+>
+> `main` already carries one ruleset (id `17654264`, "main — block
+> force-push & deletion" — see `docs/features/163-protected-push-guard.md`).
+> This adds a **second**, independent ruleset rather than editing that one;
+> rulesets are additive, so both apply simultaneously with no conflict.
 >
 > ```bash
 > gh api repos/dudarenok-maker/Castwright/rulesets -X POST --input - <<'JSON'
@@ -1010,13 +1023,19 @@ carve out an exception for that.
 > JSON
 > ```
 >
+> (The repo slug `dudarenok-maker/Castwright` was confirmed live this session
+> via `gh api repos/dudarenok-maker/Castwright/rulesets` — it returned real
+> ruleset data, including the id `17654264` cited above. `163`'s own doc
+> still shows the pre-rename slug `dudarenok-maker/AudioBook-Generator`,
+> which is stale — that file is an archival regression plan, not something
+> this plan updates; don't copy its slug.)
+>
 > Safer alternative to the raw API call: GitHub web UI → repo Settings →
-> Rules → Rulesets → this ruleset (or New branch ruleset) → Require status
-> checks to pass → search/add "Verify PR body links a GitHub issue". The UI
-> autocompletes from checks that have actually run, so it can't silently
-> no-op on a typo'd context string the way the API call can. Run this only
-> after the PR from Step 6 has merged, so the check has run at least once on
-> `main`.
+> Rules → Rulesets → New branch ruleset → Require status checks to pass →
+> search/add "Verify PR body links a GitHub issue". The UI autocompletes
+> from checks that have actually run, so it can't silently no-op on a
+> typo'd context string the way the API call can. Run this only after the
+> PR from Step 6 has merged, so the check has run at least once on `main`.
 
 ---
 
@@ -1061,8 +1080,10 @@ several `Minor`/informational notes did not trip the threshold on their own).
   something to silently patch either direction) rather than auto-resolved;
   user chose to wire it as a required check, scoped to `pr-issue-link.yml`
   only. Folded as: the design spec's Decision 11/Design §7 correction note,
-  this plan's Task 6 note + Global Constraints, and the new Task 7 Step 6
-  manual instructions (not an automated task step — a repo security-setting
+  this plan's Task 6 note + Global Constraints, and the new Task 7 Step 8
+  manual instructions (originally mis-numbered "Step 6" in four places —
+  round 2 of this plan's own review caught and fixed that; see the round-2
+  summary below) (not an automated task step — a repo security-setting
   change is never auto-performed by an implementing agent, per the harness's
   own action-care rules, regardless of prior approval for the general
   approach).
@@ -1094,7 +1115,53 @@ several `Minor`/informational notes did not trip the threshold on their own).
   not worth a dedicated constraint beyond this note. It also flagged whether
   `pr-issue-link.yml` reports a check on the very PR that introduces it —
   addressed as a harmless-either-way note in Task 6.
-- **Loop status**: 1 round run, threshold tripped, findings fixed above. Per
-  Decision 5's cap (initial + up to 2 re-review rounds), one more round is
-  permitted if a second review still trips the threshold; if this round
-  comes back clean, the loop ends here.
+- **Loop status**: round 1 tripped the threshold, findings fixed above, which
+  mandated round 2 (see below).
+
+### Round-2 adversarial-review findings folded
+
+A second Opus-tier subagent pass (same mechanism) re-reviewed the
+round-1-corrected plan. It tripped the threshold again: 1
+`Critical`+`Contradicted`, 1 `Significant`+`Contradicted` — both defects
+introduced *by* round 1's own fix (the new Task 7), so round 1 could not
+have caught them.
+
+- **Critical, Contradicted — the ruleset step was mis-numbered everywhere it
+  was cited.** Round 1's fix added the required-status-check command as an
+  unnumbered trailing blockquote after Task 7's checkbox Step 7, but four
+  separate places (Global Constraints/Architecture, the 235 doc's invariant
+  #3, its manual walkthrough item 4, and the blockquote's own opening
+  sentence) called it "Task 7 Step 6" — which is actually the "Push and open
+  the PR" step, unrelated to branch protection. The blockquote's own first
+  sentence ("Step 6 above wires...") was factually wrong about the step it
+  was describing. Fixed: the blockquote is now explicitly labeled "Step 8
+  (MANUAL — not a checkbox task...)", and all four cross-references were
+  corrected to say "Step 8."
+- **Significant, Contradicted — Task 7 Step 2 claimed 163/166 end their
+  INDEX.md entries with `Closes #NN`; they don't** (163 ends "…node:test
+  coverage under `npm run test:hooks`.", 166 ends "…run as PRs 2–3."). Fixed:
+  Step 2 no longer claims that shape; it now cites the real 163/166 pattern
+  (link text, status, one dense paragraph) and asks for the issue number to
+  be cited naturally inside the paragraph instead of appended.
+- **Additional fixes folded (Minor/informational, not threshold-tripping on
+  their own)**: `main` already carries a ruleset (id `17654264`,
+  force-push/deletion) that the plan's world-model had omitted — Step 8 now
+  names it and clarifies the new ruleset is additive, not a replacement. The
+  repo slug `dudarenok-maker/Castwright` used in the ruleset command was
+  flagged against `163`'s doc, which still shows the pre-rename slug
+  `dudarenok-maker/AudioBook-Generator` — resolved by noting the current
+  slug was independently confirmed live this session (the `gh api` call
+  that surfaced ruleset `17654264` used it successfully), and that `163`'s
+  doc is simply stale, not a discrepancy to reconcile in this plan.
+- **Not changed**: the review confirmed the `n/a`/`none` TEMPLATE.md field
+  markers, the free plan number `235`, the `test:hooks` auto-discovery
+  claim, and the ruleset JSON's field shape are all sound. It also flagged
+  the `gh pr create` heredoc's literal `Closes #NN` placeholder as a
+  "benign" failure mode (the step's own text already says to replace it with
+  the real number before running; if run unedited, the validator correctly
+  rejects it rather than silently passing) — no change needed.
+- **Loop status**: round 2 tripped the threshold, findings fixed above,
+  which mandates round 3 — the last round permitted under Decision 5's cap
+  (initial + up to 2 re-review rounds = 3 total). If round 3 still trips the
+  threshold, the loop stops there and any remaining finding is handed to the
+  user rather than looped again.
