@@ -151,7 +151,9 @@ describe('PromoteFirstSentenceButton', () => {
     fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
     fireEvent.click(screen.getByTestId('promote-first-sentence-confirm'));
     await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
-    expect(store.getState().notifications.toasts[0].message).toBe('network down');
+    expect(store.getState().notifications.toasts[0].message).toBe(
+      'Could not rename chapter 3: network down',
+    );
     expect(store.getState().manuscript.sentences).toHaveLength(2);
     expect(store.getState().chapters.chapters[0].title).toBe('Chapter 3');
   });

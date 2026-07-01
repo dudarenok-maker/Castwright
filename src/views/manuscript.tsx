@@ -329,21 +329,19 @@ export function ManuscriptView({
      throwing, consistent with the existing `if (!currentChapter) return null`
      guard further down. Also guarded to null on an empty chapter's sentence
      list — an unguarded `.reduce()` throws on `[]`. */
-  const firstSentence = useMemo(() => {
+  /* `isOnlySentence` (PR-gate review finding 2 — true when promoting would
+     empty the chapter's narration entirely) is derived from the SAME
+     `inChapter` filter this memo already computes, not a second `.filter()`
+     call — PR-gate review round 2 caught that the sibling-memo version ran
+     the filter twice per render for no reason. */
+  const { firstSentence, isOnlySentence } = useMemo(() => {
     const inChapter = sentences.filter((s) => s.chapterId === currentChapter?.id);
-    if (inChapter.length === 0) return null;
-    return inChapter.reduce((min, s) => (s.id < min.id ? s : min));
+    if (inChapter.length === 0) return { firstSentence: null, isOnlySentence: false };
+    return {
+      firstSentence: inChapter.reduce((min, s) => (s.id < min.id ? s : min)),
+      isOnlySentence: inChapter.length === 1,
+    };
   }, [sentences, currentChapter?.id]);
-
-  /* PR-gate review finding 2 — whether `firstSentence` is the chapter's ONLY
-     sentence, so PromoteFirstSentenceButton can warn that promoting it empties
-     the chapter's narration entirely. Sibling memo over the SAME filtered
-     array the memo above builds (rather than recomputing a second, possibly
-     divergent sentence count). */
-  const isOnlySentence = useMemo(
-    () => sentences.filter((s) => s.chapterId === currentChapter?.id).length === 1,
-    [sentences, currentChapter?.id],
-  );
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 

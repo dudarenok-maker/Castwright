@@ -57,10 +57,17 @@ export function PromoteFirstSentenceButton({
       dispatch(manuscriptActions.promoteSentenceToTitle({ chapterId, sentenceId: firstSentence.id }));
       setPhase('idle');
     } catch (err) {
+      /* PR-gate review round 2 — a fired-off promise isn't cancelled by the
+         `key`-driven remount (finding 1's fix): if the user switches chapters
+         before this settles, the toast must still say WHICH chapter failed,
+         since the user may already be looking at a different one. */
+      const detail = (err as Error).message;
       dispatch(
         notificationsActions.pushToast({
           kind: 'error',
-          message: (err as Error).message || 'Could not rename the chapter.',
+          message: detail
+            ? `Could not rename chapter ${chapterId}: ${detail}`
+            : `Could not rename chapter ${chapterId}.`,
           dedupeKey: `chapter-rename-${chapterId}`,
         }),
       );
