@@ -492,6 +492,12 @@ the 10–15 min full battery. Since plan 215 CI is opt-in for _every_ PR, this
 Rationale and the exact glob list:
 [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
 
+The same file-set test also skips the **local** pre-push `npm run verify`
+battery (`scripts/is-docs-only-push.mjs`, wired into `.husky/pre-push`) — a
+docs-only push has no runtime surface for tests/build/e2e to exercise, so the
+~15-min battery would otherwise run twice (locally, then again in CI) for zero
+signal. See [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate).
+
 ## When you ship a change
 
 The full checklist lives in [CLAUDE.md → "Before-shipping checklist"](CLAUDE.md#before-shipping-checklist).

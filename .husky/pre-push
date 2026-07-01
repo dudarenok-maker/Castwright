@@ -1,12 +1,19 @@
 # Pre-push guards run before the ~15-min verify. git pipes the pushed-ref list
-# on stdin; capture it ONCE and feed both guards (stdin can only be read once).
-# Bypass intentionally with `git push --no-verify`.
+# on stdin; capture it ONCE and feed all three checks (stdin can only be read
+# once). Bypass intentionally with `git push --no-verify`.
 #   1. guard-protected-push  — refuse force-push / deletion of main (#163).
 #   2. guard-commit-subjects — reject any pushed commit whose subject violates
 #      the Conventional-Commits rule, even if commit-msg was bypassed
 #      (--no-verify / worktree hook couldn't spawn). Backstops the @-leak that
 #      shipped on #856.
+#   3. is-docs-only-push     — skip the verify battery entirely when every
+#      changed file is docs (same test as CONTRIBUTING.md's CI doc-only
+#      fast-path) — a docs-only diff has no runtime surface for tests/build/e2e
+#      to exercise, so running the full battery locally just burns time/CPU.
 PUSH_REFS=$(cat)
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-protected-push.mjs "$@" || exit 1
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-commit-subjects.mjs "$@" || exit 1
+if printf '%s\n' "$PUSH_REFS" | node scripts/is-docs-only-push.mjs "$@"; then
+  exit 0
+fi
 npm run verify
