@@ -1184,7 +1184,15 @@ At the TOP of `onChildExit` (258), before the existing `handle = null;` line, ad
     const lived = nowFn() - lastSpawnAt;
     // ... rest of the existing function body, UNCHANGED from here down ...
 ```
-Add `tripEvent()` to the returned object (289-307):
+**`clearTripAndRespawn()` — the missing recovery primitive (a round-3 adversarial review finding).** `tripEvent()` alone only lets a caller READ the trip; nothing in the original draft let anything CLEAR it and bring a sidecar back. Confirmed the gap is real by reading the EXISTING `POST /api/sidecar/restart` route (`server/src/routes/sidecar-health.ts:425-468`, untouched by this plan): it kills `supervisor.current()` and relies on `onChildExit` to respawn — but once tripped, `handle` is already `null` (the process self-exited) and the trip branch returns before ever reaching the normal respawn path, so that EXISTING manual-restart route ALSO 409s ("No sidecar child is currently running") on a tripped supervisor. There was no way back from a trip at all, automatic or manual, before this fix:
+```ts
+  function clearTripAndRespawn(): Promise<void> {
+    restart43Trip = null;
+    restart43Timestamps = [];
+    return spawnOnce();
+  }
+```
+Add `tripEvent()` AND `clearTripAndRespawn()` to the returned object (289-307):
 ```ts
   return {
     async start() { /* unchanged */ },
@@ -1194,6 +1202,7 @@ Add `tripEvent()` to the returned object (289-307):
     tripEvent() {
       return restart43Trip;
     },
+    clearTripAndRespawn,
   };
 ```
 And to the `SidecarSupervisor` interface (85-100):
@@ -1201,9 +1210,49 @@ And to the `SidecarSupervisor` interface (85-100):
   /** Non-null once 3+ code-43 self-exits happened within RESTART43_STREAK_
       WINDOW_MS — the assignment looks structurally too small. The supervisor
       stops respawning once this trips (TTS held down); Plan 2's auto-revert
-      route (Task 16) reads this to rewrite the offending knob and restart. */
+      route (Task 16) reads this to rewrite the offending knob, then calls
+      clearTripAndRespawn() to actually bring TTS back. */
   tripEvent: () => { card: unknown; residentEngines: string[] } | null;
+  /** Clear a tripped streak and spawn a fresh sidecar child. The ONLY way
+      back from a trip — neither the existing POST /api/sidecar/restart route
+      (it requires a currently-running child to kill; a tripped supervisor
+      has none) nor a fresh code-43 exit (nothing is running to exit) can
+      recover otherwise. Safe to call when not tripped (resets an empty
+      streak, respawns as normal — matches an ordinary manual restart). */
+  clearTripAndRespawn: () => Promise<void>;
 ```
+
+- [ ] **Step 4.5: Append the failing recovery test**
+
+Append to `sidecar-supervisor.test.ts`, inside or after the code-43 streak `describe` block from Step 4:
+```ts
+it('clearTripAndRespawn resets the streak and spawns a fresh child after a trip', async () => {
+  let now = 0;
+  const spawn = makeSpawn();
+  const respawnCount = () => spawn.fn.mock.calls.length;
+  vi.spyOn(breadcrumbModule, 'readRestartBreadcrumb').mockReturnValue({
+    card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'],
+  });
+  const supervisor = createSidecarSupervisor({
+    buildOpts: async () => ({}) as any,
+    spawnFn: spawn.fn, nowFn: () => now, delayFn: async () => {}, log: vi.fn(), warn: vi.fn(),
+  });
+  await supervisor.start();
+  for (let i = 0; i < 3; i++) { now += 35_000; spawn.exit(43); await Promise.resolve(); }
+  expect(supervisor.tripEvent()).not.toBeNull();
+  const beforeRecovery = respawnCount();
+
+  await supervisor.clearTripAndRespawn();
+
+  expect(supervisor.tripEvent()).toBeNull(); // trip cleared
+  expect(respawnCount()).toBeGreaterThan(beforeRecovery); // a fresh child was spawned
+  // A subsequent code-43 streak can trip again (the timestamp window was reset, not left poisoned):
+  for (let i = 0; i < 3; i++) { now += 35_000; spawn.exit(43); await Promise.resolve(); }
+  expect(supervisor.tripEvent()).not.toBeNull();
+});
+```
+
+Run: `cd server && npx vitest run src/tts/sidecar-supervisor.test.ts -t "clearTripAndRespawn"` → FAIL, then implement per the block above → PASS.
 
 - [ ] **Step 5: Run green**
 
@@ -1348,7 +1397,22 @@ export function getLastKnownAnalyzerDevice(): AnalyzerDevice {
 ```
 Run: `cd server && npx vitest run src/gpu/analyzer-device-state.test.ts` → PASS.
 
-Wire the cache: `grep -rn "detectOllamaDevice()" server/src` confirms exactly ONE real (non-test) call site, `server/src/routes/analysis.ts` (~line 2243). Append a failing test to `analysis.test.ts` asserting `setLastKnownAnalyzerDevice` is called with `detectOllamaDevice()`'s result (mock both), then at that call site add `setLastKnownAnalyzerDevice(await detectOllamaDevice())` immediately after the existing call (read the surrounding code first — do not change what the existing call's result is used for, only ADD the cache-set as a side effect on the same line/block). **This file/site is easy to omit from the Files list and commit if you're skimming — it was missed in an earlier draft of this plan; double-check `server/src/routes/analysis.ts` is in your `git add` before Step 8.**
+Wire the cache: `grep -rn "detectOllamaDevice()" server/src` confirms exactly ONE real (non-test) call site, `server/src/routes/analysis.ts` (~line 2241-2244). **Read the exact shape before writing the edit — a round-3 adversarial review found the call is NOT a bare statement you can append after; it's the RHS of a conditional assigned to a `const`:**
+```ts
+const analyzerDevice: 'cuda' | 'cpu' | 'unknown' =
+  selection.engine === 'local' || phase1Selection.engine === 'local'
+    ? await detectOllamaDevice()
+    : 'unknown';
+```
+A literal "append after the call" edit would need a second, unconditional `await detectOllamaDevice()` — which both double-probes Ollama needlessly AND pollutes the cache with a live GPU/CPU reading even when the analysis actually ran on a CLOUD engine (where `analyzerDevice` is correctly `'unknown'`). **The correct edit uses the already-resolved variable, not a second probe:**
+```ts
+const analyzerDevice: 'cuda' | 'cpu' | 'unknown' =
+  selection.engine === 'local' || phase1Selection.engine === 'local'
+    ? await detectOllamaDevice()
+    : 'unknown';
+setLastKnownAnalyzerDevice(analyzerDevice);
+```
+Append a failing test to `analysis.test.ts` asserting `setLastKnownAnalyzerDevice` is called with `analyzerDevice`'s CONDITIONAL value — include a case where the engine is a cloud engine (e.g. `gemini`) and assert `setLastKnownAnalyzerDevice` is called with `'unknown'` **without** `detectOllamaDevice` having been called at all (not "called with whatever `detectOllamaDevice()` returns" — that phrasing describes the wrong, unconditional edit). **This file/site is easy to omit from the Files list and commit if you're skimming — it was missed in an earlier draft of this plan; double-check `server/src/routes/analysis.ts` is in your `git add` before Step 8.**
 
 - [ ] **Step 3: `costForEngine('analyzer')` consults the cache — append the failing test, then implement**
 
@@ -1451,7 +1515,7 @@ export async function withGpuLoad<T>(loadFn: () => Promise<T>, engineOnGpu = tru
   });
 }
 ```
-(The `!engineOnGpu ||` short-circuit is redundant with `shouldEvictBeforeSidecarLoad`'s own new `!engineOnGpu` check, but keep it — it makes `withGpuLoad`'s fast path readable without following into `residency.ts` to know why, and costs nothing.)
+(The `!engineOnGpu ||` short-circuit is NOT merely stylistic — a round-3 adversarial review caught the original "redundant, costs nothing" framing as wrong: it's what makes the paired test's `expect(mockShouldEvict).not.toHaveBeenCalled()` assertion (Step 5's test above) actually pass, by short-circuiting BEFORE `shouldEvictBeforeSidecarLoad` is ever called. Keep it for that reason, not just readability.)
 
 `ensure-sidecar-loaded.ts` (~126, `const { withGpuLoad } = await import(...)`) and the call at ~136:
 ```ts
@@ -2375,10 +2439,10 @@ git commit -m "feat(frontend,server): analyzer read-only device row (Plan 2 §2.
 ### Task 16: Auto-revert — consumes Wave 2's trip event (§2.3)
 
 **Files:**
-- Create: `server/src/routes/gpu-auto-revert.ts` (or fold into an existing sidecar-admin route — check first) — `POST /api/gpu/auto-revert` (or a background check) reads `supervisor.tripEvent()`, picks a DIFFERENT safe card (or CPU) for the offending engine(s), writes the override, triggers a restart.
+- Create: `server/src/routes/gpu-auto-revert.ts` (or fold into an existing sidecar-admin route — check first) — `POST /api/gpu/auto-revert` (or a background check) reads `supervisor.tripEvent()`, picks a DIFFERENT safe card (or CPU) for the offending engine(s), writes the override, and calls `supervisor.clearTripAndRespawn()` (Task 7) to actually bring TTS back — **a round-3 review finding: an earlier draft wrote the override and stopped there, never restarting anything, while claiming "triggers a restart" — that was false; this is now real.**
 - Modify (APPEND): a new test file for the revert-selection logic.
 
-**Selection rule (spec §2.3, verified against Task 7's `tripEvent()` shape):** revert the engine(s) on the tripped card to a DIFFERENT safe card or CPU — explicitly NOT the knob default `auto`→cuda:0, which could re-land on the same undersized card.
+**Selection rule (spec §2.3, verified against Task 7's `tripEvent()` shape):** revert the engine(s) on the tripped card to a DIFFERENT safe card or CPU — explicitly NOT the knob default `auto`→cuda:0, which could re-land on the same undersized card. Recovery is only complete once `clearTripAndRespawn()` (Task 7) actually spawns a fresh sidecar — the config rewrite alone does nothing until a new process reads it.
 
 - [ ] **Step 1: Write the failing test for the pure selection function**
 
@@ -2455,7 +2519,7 @@ Expected: PASS.
 
 **Status is a state machine, not a boolean** (a round-2 adversarial review found the original boolean `revertible` design leaves `lastAutoRevertOutcome` — Task 16.5 — durably wrong forever if `runAutoRevert` throws mid-loop, since nothing ever assigns past that point): `'pending' -> 'reverted' | 'unrevertable' | 'failed'`. `'pending'` is the value BOTH before any trip has ever happened AND for the brief window between a trip being detected and `runAutoRevert` resolving — so a `/trip-status` poll landing in that window reports "still working on it," never a wrong terminal state.
 
-Write a failing test for the wiring in a new `gpu-auto-revert.test.ts` (route-level, mocking `getActiveSupervisor().tripEvent()`, `getGpuDevices()`, `writeConfigOverride`, and `restartSidecar` the same way `advanced.test.tsx`/`config.test.ts` already mock their respective collaborators — include cases for `tripEvent()` returning `{card: null, residentEngines: []}` (asserts `status: 'unrevertable'`, `reverted: []`, and a distinct error-level log) AND a case where `writeConfigOverride` is mocked to reject (asserts `status: 'failed'`, not an uncaught throw)), then implement `server/src/routes/gpu-auto-revert.ts`:
+Write a failing test for the wiring in a new `gpu-auto-revert.test.ts` (route-level, mocking `getActiveSupervisor()` — its `tripEvent()` AND its `clearTripAndRespawn()` (a `vi.fn()` resolving `undefined`; **NOT** `restartSidecar` — no such symbol exists anywhere in the codebase, an earlier draft of this plan named a collaborator that was never real), `getGpuDevices()`, and `writeConfigOverride`, the same way `advanced.test.tsx`/`config.test.ts` already mock their respective collaborators — include cases for: `tripEvent()` returning `{card: null, residentEngines: []}` (asserts `status: 'unrevertable'`, `reverted: []`, a distinct error-level log, AND that `clearTripAndRespawn` is NOT called — there's nothing to recover into); `writeConfigOverride` mocked to reject (asserts `status: 'failed'`, not an uncaught throw, and `clearTripAndRespawn` NOT called since the loop never completed); AND a successful revert (asserts `status: 'reverted'` AND `clearTripAndRespawn` WAS called exactly once)), then implement `server/src/routes/gpu-auto-revert.ts`:
 ```ts
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -2540,9 +2604,23 @@ export async function runAutoRevert(
       await writeConfigOverride(knobKey, target);
       reverted.push(`${engine} -> ${target}`);
     }
+    // A round-3 adversarial review finding: without this call, 'reverted' was
+    // a LIE — the config override was written but nothing ever cleared the
+    // supervisor's trip latch or spawned a fresh child, so TTS stayed dead
+    // even on the "successful" path. clearTripAndRespawn() (Task 7) is the
+    // ONLY way back from a trip — the pre-existing POST /api/sidecar/restart
+    // route requires a currently-running child to kill, and a tripped
+    // supervisor has none.
+    await getActiveSupervisor()?.clearTripAndRespawn();
     lastAutoRevertOutcome = { status: 'reverted', reverted };
     return lastAutoRevertOutcome;
   } catch (err) {
+    // Catches a writeConfigOverride rejection AND a clearTripAndRespawn()
+    // failure alike — either way, the operator needs to know TTS did NOT
+    // come back cleanly and must investigate manually. (If overrides were
+    // written but the respawn itself failed, the rewritten config still
+    // takes effect on the NEXT successful restart — not lost, just not
+    // applied automatically this time.)
     console.error(
       '[gpu] auto-revert: threw while attempting to revert a tripped, card-attributable device ' +
         'assignment (%s) — TTS remains held down. This requires MANUAL investigation.',
@@ -2603,7 +2681,8 @@ git commit -m "feat(server): auto-revert a tripped device assignment to a safe c
 **Files:**
 - Modify: `server/src/routes/gpu-auto-revert.ts` (add `GET /api/gpu/trip-status`, persist the LAST `runAutoRevert` outcome so the status route can report it)
 - Modify: `server/src/tts/sidecar-supervisor.ts` (expose the trip on `SidecarSupervisor` in a form Step 1 below can query — `tripEvent()` already exists from Task 7; this task adds nothing new to the interface, only a consumer)
-- Modify: `src/lib/api.ts` (`getGpuTripStatus()` client)
+- Modify: `src/lib/types.ts` (declare `export type AutoRevertStatus = 'pending' | 'reverted' | 'unrevertable' | 'failed';` and a `GpuTripStatus` interface matching the route's JSON shape — the frontend can't import the server's type, it needs its own mirror. **Explicit here because a round-3 review found this file listed but the instruction to actually add the type was never spelled out in Step 2's prose.**)
+- Modify: `src/lib/api.ts` (`getGpuTripStatus()` client, returning `GpuTripStatus`)
 - Modify: `src/views/advanced.tsx` (poll trip status; push a toast via the existing `notifications` slice when tripped — matches this codebase's established pattern, per `src/store/notifications-slice.ts`'s own header comment: "Closes the 'did anything happen?' gap when an analysis-stream / generation-stream / export error fires")
 - Modify (APPEND): `server/src/routes/gpu-auto-revert.test.ts`, `src/views/advanced.test.tsx`
 
@@ -2741,7 +2820,11 @@ Add `getGpuTripStatus()` to `src/lib/api.ts` (mirrors `getGpuDevices`'s mock/rea
         const status = await api.getGpuTripStatus();
         if (cancelled || !status.tripped || status.status === 'pending') return;
         const messageByStatus: Record<'reverted' | 'unrevertable' | 'failed', string> = {
-          reverted: `TTS was held down after repeated crashes; auto-reverted: ${status.reverted.join(', ')}. A sidecar restart is pending.`,
+          // Accurate as of the round-3 fix: runAutoRevert now actually calls
+          // clearTripAndRespawn() before setting status:'reverted' (Task
+          // 16), so "restarting" here describes something real, not an
+          // aspiration — an earlier draft said "pending" while nothing was.
+          reverted: `TTS was held down after repeated crashes; auto-reverted: ${status.reverted.join(', ')}. The sidecar is restarting now.`,
           unrevertable: 'TTS has been held down after repeated crashes not tied to a specific GPU card. This needs manual investigation — check the server logs, then restart the server.',
           failed: 'TTS is held down after repeated crashes, and the automatic revert attempt itself failed. This needs manual investigation — check the server logs, then restart the server.',
         };
@@ -2971,9 +3054,18 @@ git commit -m "docs(docs): Plan 2 on-box acceptance checklist"
 
 Round 2 also confirmed, as NOT bugs (verified, not just asserted): `_read_device_env` returning `None` for an unset env var degrades safely through both `_parse_device` and `shares_device` (both already guard with `or "auto"`); the `qwen-voice.ts` change composes cleanly with `withDesignLock` (orthogonal locks, no shared state); and "two trips racing" is a non-issue since `restart43Trip === null` gates the trip branch to fire at most once per supervisor lifetime.
 
+**Adversarial review, round 3 (Opus-tier `assumption-checker` pass, 2026-07-02, FINAL — loop cap: initial + 2 re-reviews) — one Critical finding plus two secondary implementer snags, all fixed:**
+1. *Most dangerous assumption, confirmed — the deepest finding across all three rounds:* the `'reverted'` status never actually restored TTS. `runAutoRevert` wrote config overrides and stopped — no restart call existed anywhere, and NO restart primitive existed to call (`grep` for `restartSidecar` across `server/src/tts/*` found nothing). Worse, the EXISTING pre-plan `POST /api/sidecar/restart` route (`sidecar-health.ts:425-468`, untouched by this plan) *also* couldn't recover a tripped supervisor — it kills `supervisor.current()` and lets `onChildExit` respawn, but a tripped supervisor already has `handle = null` (the process self-exited) and the trip branch returns before the respawn path, so that route 409s too. There was no way back from a trip AT ALL, automatic or manual, across two prior review rounds that both hardened *visibility* without ever checking whether the happy path worked. **Fixed:** Task 7 gains `clearTripAndRespawn()` — the actual missing primitive (resets the trip latch + streak window, calls `spawnOnce()`) — with its own regression test proving a subsequent streak can trip again (the window isn't left poisoned). Task 16's `runAutoRevert` now calls it before returning `status:'reverted'`; a failure there is caught by the same try/catch and correctly demoted to `status:'failed'` rather than a false `'reverted'`. Task 16.5's toast wording corrected from "a sidecar restart is pending" (aspirational, false) to "the sidecar is restarting now" (true as of this fix).
+2. *Confirmed via read:* Task 16's own test-writing instruction told the implementer to mock a `restartSidecar` collaborator that doesn't exist anywhere in the codebase — a dead end that would have stalled implementation (or worse, been "fixed" by inventing an ad hoc symbol the plan never scoped). **Fixed:** corrected to mock `getActiveSupervisor().clearTripAndRespawn()`, with explicit test cases proving it's called on success and NOT called on either failure path.
+3. *Confirmed via read:* Task 8's `analysis.ts` wiring instruction ("append `setLastKnownAnalyzerDevice(await detectOllamaDevice())` on the same line") was impossible as worded — the real call sits inside a ternary assigned to `const analyzerDevice`, not a bare statement. A literal reading would have doubled the Ollama probe AND poisoned the cache with a GPU/CPU reading even when the analysis ran on a cloud engine. **Fixed:** the instruction now shows the exact surrounding code and the correct edit (`setLastKnownAnalyzerDevice(analyzerDevice)`, using the already-resolved conditional value), with the paired test reworded to assert the conditional behavior instead of "whatever `detectOllamaDevice()` returns."
+
+Round 3 also confirmed, as NOT bugs: `export let lastAutoRevertOutcome`'s live ESM binding is safe (route and mutator share one module, no cross-module hazard); `messageByStatus`'s narrow `Record<'reverted'|'unrevertable'|'failed', string>` type is a compile-time exhaustiveness backstop, not a hazard, if `AutoRevertStatus` ever grows a value; and round 2's `qwen-voice.test.ts` mock-widening and `analysis.ts`-in-commit fixes both still hold against current code. Two documentation-only corrections also landed: `src/lib/types.ts`'s `AutoRevertStatus`/`GpuTripStatus` declaration is now explicitly instructed in Task 16.5 (it was listed in Files but never actually told-to-add in prose), and Task 8's "`!engineOnGpu ||` is redundant, costs nothing" comment was corrected — it's load-bearing for the paired test's `not.toHaveBeenCalled()` assertion, not decoration.
+
+**No further review rounds** — this was round 3 of the loop cap (initial pass + 2 re-reviews = 3 total, per the model-routing skill). A finding this round was still Critical+Contradicted, which would ordinarily re-trigger review, but the cap stops automatic looping here and hands the decision to the user.
+
 **Placeholder scan:** every code step shows complete, real code grounded in files read during plan authoring — no "add appropriate handling" phrasing. Remaining spots explicitly flagged as "verify against current code before writing" (Task 7 Step 1's breadcrumb-path anchor, Task 17 Step 6's route-path check) rather than asserted as certain — this mirrors Wave 1's own plan, which had an equivalent "remaining execution-time reads" list, not a defect.
 
-**Type/interface consistency:** `DeviceLedger.sample()`/`sample_all()`/`card_lock()` (Task 1) are consumed identically in Tasks 2, 5, 6. `_check_per_card_ceilings`'s `{"uuid","idx","reason"}` shape (Task 2) matches what Task 6's breadcrumb writer expects. `_schedule_restart_exit(..., card=)` (Task 2) is the same signature Task 6 extends with the breadcrumb write. `shares_device()` (Task 4) is consumed by `_compute_vd_kokoro_shares_device`, which Task 10.5 updates to feed it RESOLVED values, not raw env — the function's own signature is untouched. `_qwen_configured_card_idx()` (Task 5) is likewise untouched in signature by Task 10.5, only its body. `SidecarSupervisor.tripEvent()` (Task 7) returns exactly the shape Task 16's `runAutoRevert` consumes (`{card, residentEngines} | null`). `readRestartBreadcrumb()`'s return shape (Task 7) matches what Task 6's Python side writes field-for-field. `engineDeviceIsGpu()` (Task 8) is reused by `ensure-sidecar-loaded.ts`, `persona-gpu-plan.ts`, AND `routes/qwen-voice.ts` with the same signature. `staleReason`/`StaleReason` (Tasks 10-13) flow: sidecar → `resolveKnob` (Task 10) → `KnobValueState.staleReason` → frontend `KnobValue.staleReason` (Task 12). `selectRevertTarget()`'s `RevertCandidate{idx,freeMb}` (Task 16) is fed from `getLastKnownGpuDevices()`, whose shape-widen (from Task 10's `{uuid,idx}` to add `freeMb`) is explicitly flagged in Task 16 Step 4. `AutoRevertResult{status,reverted}` (Task 16, revised round 2 from a boolean `revertible` to a 4-state machine) is the exact shape Task 16.5's `/api/gpu/trip-status` route AND its frontend `messageByStatus` lookup both key on — three distinct toast messages for `'reverted'|'unrevertable'|'failed'`, none for `'pending'`.
+**Type/interface consistency:** `DeviceLedger.sample()`/`sample_all()`/`card_lock()` (Task 1) are consumed identically in Tasks 2, 5, 6. `_check_per_card_ceilings`'s `{"uuid","idx","reason"}` shape (Task 2) matches what Task 6's breadcrumb writer expects. `_schedule_restart_exit(..., card=)` (Task 2) is the same signature Task 6 extends with the breadcrumb write. `shares_device()` (Task 4) is consumed by `_compute_vd_kokoro_shares_device`, which Task 10.5 updates to feed it RESOLVED values, not raw env — the function's own signature is untouched. `_qwen_configured_card_idx()` (Task 5) is likewise untouched in signature by Task 10.5, only its body. `SidecarSupervisor.tripEvent()` (Task 7) returns exactly the shape Task 16's `runAutoRevert` consumes (`{card, residentEngines} | null`). `readRestartBreadcrumb()`'s return shape (Task 7) matches what Task 6's Python side writes field-for-field. `engineDeviceIsGpu()` (Task 8) is reused by `ensure-sidecar-loaded.ts`, `persona-gpu-plan.ts`, AND `routes/qwen-voice.ts` with the same signature. `staleReason`/`StaleReason` (Tasks 10-13) flow: sidecar → `resolveKnob` (Task 10) → `KnobValueState.staleReason` → frontend `KnobValue.staleReason` (Task 12). `selectRevertTarget()`'s `RevertCandidate{idx,freeMb}` (Task 16) is fed from `getLastKnownGpuDevices()`, whose shape-widen (from Task 10's `{uuid,idx}` to add `freeMb`) is explicitly flagged in Task 16 Step 4. `AutoRevertResult{status,reverted}` (Task 16, revised round 2 from a boolean `revertible` to a 4-state machine) is the exact shape Task 16.5's `/api/gpu/trip-status` route AND its frontend `messageByStatus` lookup both key on — three distinct toast messages for `'reverted'|'unrevertable'|'failed'`, none for `'pending'`. `SidecarSupervisor.clearTripAndRespawn()` (added Task 7, round 3) returns `Promise<void>` and is called from exactly one place — Task 16's `runAutoRevert` success path — with no other consumer in this plan; its own test (Task 7 Step 4.5) proves the trip window is genuinely reset, not just the visible `tripEvent()` flag, by driving a second streak through to a second trip afterward.
 
 **Known scoped gaps (deliberate, not oversights):**
 - Per-card mutex (Task 5) wired at ONE call site (Qwen design-load), not every theoretically-possible same-card engine pair — YAGNI per Round 5's simplicity-first framing; flagged inline in Task 5.
