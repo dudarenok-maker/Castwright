@@ -831,7 +831,22 @@ def test_card_lock_serialises_two_threads_on_same_idx():
 Run: `.\.venv\Scripts\python.exe -m pytest tests/test_device_ledger.py -k card_lock -v`
 Expected: PASS already for the basic per-idx-identity test from Task 1 — this NEW test specifically proves serialisation ordering, which `card_lock`'s Task-1 implementation already provides (it returns a real `threading.Lock`). Confirm it passes as-is; if it doesn't, `card_lock` from Task 1 has a bug — fix there, not here.
 
-- [ ] **Step 3: Wire the mutex at the QwenEngine design-load call site**
+- [ ] **Step 3: Add a testable `_qwen_configured_card_idx()` helper and wire it at the QwenEngine design-load call site**
+
+Extracted as its own function (rather than an inline expression) specifically so Task 10.5 can update ONE well-defined place once Plan 2's UUID resolver exists, instead of hunting for an inline snippet buried in a `with` statement:
+```python
+def _qwen_configured_card_idx() -> int:
+    """Best-effort resolved card index for QWEN_DEVICE, used to pick the
+    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Wave 2
+    reads the raw env directly — Plan 2's UUID resolver (_read_device_env)
+    doesn't exist yet at this point in the build order. Task 10.5 upgrades
+    this function to route through _read_device_env once it does; DO NOT
+    read raw env at any OTHER new call site without checking Task 10.5's
+    note first."""
+    fam, idx = _parse_device(os.environ.get("QWEN_DEVICE", "auto"))
+    return idx or 0
+```
+Place it near `_resolve_torch_device`/`shares_device` (Task 4's location, ~1412+the new `shares_device` block).
 
 `grep -n "_base17_activity(), _VD_KOKORO.design()"` main.py` to confirm the current exact line (was ~2565 at research time). Change:
 ```python
@@ -839,16 +854,8 @@ Expected: PASS already for the basic per-idx-identity test from Task 1 — this 
 ```
 to:
 ```python
-        qwen_device = _read_device_env("QWEN_DEVICE") if "_read_device_env" in dir() else os.environ.get("QWEN_DEVICE", "auto")
-        _qfam, _qidx = _parse_device(qwen_device)
-        with _DEVICE_LEDGER.card_lock(_qidx or 0), self._base17_activity(), _VD_KOKORO.design():
+        with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()), self._base17_activity(), _VD_KOKORO.design():
 ```
-> Note: `_read_device_env` doesn't exist yet at this point in the plan — it's added by Task 10 (Plan 2, UUID resolution). Since Wave 2 ships BEFORE Plan 2, use the plain `os.environ.get("QWEN_DEVICE", "auto")` form for now:
-```python
-        _qfam, _qidx = _parse_device(os.environ.get("QWEN_DEVICE", "auto"))
-        with _DEVICE_LEDGER.card_lock(_qidx or 0), self._base17_activity(), _VD_KOKORO.design():
-```
-(When Task 10 lands later, this site should be revisited to read through `_read_device_env` instead — not required for Wave 2 to be correct today, since `_parse_device` already treats an unresolved/`auto` value as index 0/`None` safely.)
 
 - [ ] **Step 4: Run the full design-exclusion + ledger suites green**
 
@@ -1206,9 +1213,10 @@ git commit -m "feat(server): code-43 streak guard — hold TTS down after 3 self
 - Create: `server/src/gpu/engine-device.ts` (`engineDeviceIsGpu(engine)` helper)
 - Modify: `server/src/gpu/residency.ts` (`shouldEvictBeforeSidecarLoad` signature)
 - Modify: `server/src/gpu/gpu-load.ts` (`withGpuLoad` threads `engineOnGpu` through)
-- Modify: `server/src/tts/ensure-sidecar-loaded.ts` (the one real caller that has an `engine: TtsEngine` in scope — passes `engineDeviceIsGpu(engine)`)
+- Modify: `server/src/tts/ensure-sidecar-loaded.ts` (has an `engine: TtsEngine` in scope — passes `engineDeviceIsGpu(engine)`)
 - Modify: `server/src/tts/persona-gpu-plan.ts` (`resolvePersonaGpuPlan` — Qwen-specific, pass `engineDeviceIsGpu('qwen')`)
-- Modify (APPEND): `server/src/gpu/residency.test.ts`, `server/src/gpu/gpu-load.test.ts`, `server/src/tts/engine-vram-cost.test.ts`
+- Modify: `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter`'s `withGpuLoad` call, ~line 326 — a Qwen voice-design flow, confirmed by the `gpuSemaphore.acquire(costForEngine('qwen'))` immediately inside it; pass `engineDeviceIsGpu('qwen')`. **Adversarial review caught this call site missing from the original draft** — `grep -rn "withGpuLoad(" server/src` surfaces exactly TWO real (non-test) callers, `ensure-sidecar-loaded.ts:136` and this one; the original plan only wired the first)
+- Modify (APPEND): `server/src/gpu/residency.test.ts`, `server/src/gpu/gpu-load.test.ts`, `server/src/tts/engine-vram-cost.test.ts`, `server/src/routes/qwen-voice.test.ts`
 - Create: `server/src/gpu/engine-device.test.ts`, `server/src/gpu/analyzer-device-state.test.ts`
 
 **Design note (read before writing):** Node can only ever know the analyzer's GPU/CPU placement (`detectOllamaDevice`, `ollama-health.ts:76`), never its card index — so "don't cross-charge/cross-evict when the configured card differs" degrades, for Node, to the one thing it CAN determine synchronously: whether the CALLING TTS engine's own configured device knob is CPU. If the TTS engine about to run isn't touching the GPU at all, it categorically cannot contend with the analyzer for GPU memory, so both guards should skip their normal (conservative, assume-contention) behaviour in that case. This is a coarse, deliberately conservative narrowing — not a per-card solution (Non-goals, Round 5 confirms deferred).
@@ -1400,7 +1408,7 @@ export function shouldEvictBeforeSidecarLoad(v: VramState, engineOnGpu: boolean 
 ```
 Run: `cd server && npx vitest run src/gpu/residency.test.ts` → PASS (existing tests keep passing via the default param).
 
-- [ ] **Step 5: Thread `engineOnGpu` through `withGpuLoad` + its two real callers**
+- [ ] **Step 5: Thread `engineOnGpu` through `withGpuLoad` + BOTH of its real callers**
 
 Append to `server/src/gpu/gpu-load.test.ts`:
 ```ts
@@ -1445,9 +1453,20 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
   // ... rest unchanged ...
 ```
 
+`routes/qwen-voice.ts` (~324-327, `designQwenVoiceForCharacter`) — append a failing test to `qwen-voice.test.ts` first (mirror whatever mocking convention that file already uses for `withGpuLoad`/`gpuSemaphore` — read its existing `describe` blocks before writing), asserting the call now passes `true` for a GPU-configured Qwen knob, then wire it:
+```ts
+  return withDesignLock(p.bookDir, async () => {
+    const { withGpuLoad } = await import('../gpu/gpu-load.js');
+    const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
+    return withGpuLoad(async () => {
+      // ... unchanged body ...
+    }, engineDeviceIsGpu('qwen'));
+  });
+```
+
 - [ ] **Step 6: Run everything green**
 
-Run: `cd server && npx vitest run src/gpu/engine-device.test.ts src/gpu/analyzer-device-state.test.ts src/gpu/residency.test.ts src/gpu/gpu-load.test.ts src/tts/engine-vram-cost.test.ts`
+Run: `cd server && npx vitest run src/gpu/engine-device.test.ts src/gpu/analyzer-device-state.test.ts src/gpu/residency.test.ts src/gpu/gpu-load.test.ts src/tts/engine-vram-cost.test.ts src/routes/qwen-voice.test.ts`
 Expected: PASS.
 
 - [ ] **Step 7: Run the full server suite to catch any other `shouldEvictBeforeSidecarLoad`/`withGpuLoad` call site this task missed**
@@ -1458,7 +1477,7 @@ Expected: PASS. If a test fails on an unexpected-argument-count basis, grep `sho
 - [ ] **Step 8: Commit**
 
 ```bash
-git add server/src/gpu/analyzer-device-state.ts server/src/gpu/analyzer-device-state.test.ts server/src/gpu/engine-device.ts server/src/gpu/engine-device.test.ts server/src/gpu/residency.ts server/src/gpu/residency.test.ts server/src/gpu/gpu-load.ts server/src/gpu/gpu-load.test.ts server/src/tts/engine-vram-cost.ts server/src/tts/engine-vram-cost.test.ts server/src/tts/ensure-sidecar-loaded.ts server/src/tts/persona-gpu-plan.ts
+git add server/src/gpu/analyzer-device-state.ts server/src/gpu/analyzer-device-state.test.ts server/src/gpu/engine-device.ts server/src/gpu/engine-device.test.ts server/src/gpu/residency.ts server/src/gpu/residency.test.ts server/src/gpu/gpu-load.ts server/src/gpu/gpu-load.test.ts server/src/tts/engine-vram-cost.ts server/src/tts/engine-vram-cost.test.ts server/src/tts/ensure-sidecar-loaded.ts server/src/tts/persona-gpu-plan.ts server/src/routes/qwen-voice.ts server/src/routes/qwen-voice.test.ts
 git commit -m "feat(server): Node guards — don't cross-charge/cross-evict a GPU-idle engine (W2.6)"
 ```
 
@@ -1481,10 +1500,12 @@ Add to this file's Ship-notes section (see the bottom of this document — fille
 - [ ] `SIDECAR_VRAM_FREE_FLOOR_MB=1024` (default) — starve a card to <1024MB free (load something else onto it manually / reduce via a smaller test card) → sidecar self-exits (code 43), `/health` gpus[] showed the breach before exit.
 - [ ] `QWEN_DEVICE=cuda:0 KOKORO_DEVICE=cuda:1` (different cards) → a VoiceDesign session runs WHILE a Kokoro chapter synthesizes concurrently, no blocking (shares_device=False path).
 - [ ] `QWEN_DEVICE=cuda:0 KOKORO_DEVICE=cuda:0` (same card, default) → VoiceDesign blocks new Kokoro synths until it completes (shares_device=True path, unchanged from Wave 1).
-- [ ] Force 3 code-43 exits within 10 minutes (e.g. temporarily set `SIDECAR_VRAM_FREE_FLOOR_MB` absurdly high) → server log shows the streak-trip warning; the sidecar stops respawning; `GET` whatever route/log surfaces `supervisor.tripEvent()` shows the right card + resident engines.
+- [ ] Force 3 code-43 exits within 10 minutes via a CARD-SPECIFIC trigger (e.g. temporarily set `SIDECAR_VRAM_FREE_FLOOR_MB` absurdly high) → server log shows the streak-trip warning; the sidecar stops respawning; `supervisor.tripEvent()` shows the right card + resident engines.
+- [ ] **Force 3 code-43 exits within 10 minutes via a NON-card-specific trigger** (e.g. temporarily set `SIDECAR_RESTART_MB` absurdly low so the HOST-RAM ceiling trips 3× in a row) → the streak still trips (Task 7 counts any code-43, not just per-card ones); Task 16's `runAutoRevert` logs the distinct "tripped WITHOUT a specific card... requires MANUAL investigation" error rather than silently returning `{reverted:[]}`; TTS stays held down as expected, but this is now VISIBLE (Task 16.5's `/api/gpu/trip-status` reports `revertible:false`).
 - [ ] Analyzer confirmed on CPU (`ANALYZER=local` with an Ollama CPU-only install) → a concurrent Qwen GPU synth is NOT serialized behind the analyzer (costForEngine('analyzer') returns 0).
 - [ ] Analyzer confirmed on GPU → existing serialization behaviour is UNCHANGED (regression check against pre-Wave-2 behaviour).
 - [ ] `COQUI_DEVICE=cpu` while the analyzer holds the GPU → the Coqui load runs immediately, no eviction wait (engineOnGpu=false path in withGpuLoad).
+- [ ] Qwen voice-design (`routes/qwen-voice.ts`'s `designQwenVoiceForCharacter`) while `tts.qwen.device=cpu` → the design's `withGpuLoad` call runs immediately too (the second `withGpuLoad` call site Task 8 wires, not just `ensure-sidecar-loaded.ts`'s).
 ```
 
 - [ ] **Step 3: Commit**
@@ -1732,6 +1753,122 @@ Expected: PASS.
 ```bash
 git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_device_parse.py server/src/routes/config.ts server/src/routes/gpu-uuid.ts server/src/config/resolver.ts server/src/config/types.ts server/src/gpu/gpu-device-list-state.ts server/src/routes/gpu-devices.ts server/src/routes/config.test.ts server/src/config/resolver.test.ts
 git commit -m "feat(sidecar,server): canonical GPU-UUID device identity (Plan 2 §2.1)"
+```
+
+---
+
+### Task 10.5: Route Wave 2's raw device-env reads through the UUID resolver (closes an adversarial-review finding)
+
+**Why this task exists:** an adversarial review of this plan (assumption-checker pass, 2026-07-02) traced a concrete bug: Task 4's `_compute_vd_kokoro_shares_device()` and Task 5's `_qwen_configured_card_idx()` both read `os.environ.get("QWEN_DEVICE"/"KOKORO_DEVICE")` **directly**, bypassing Task 10's `_read_device_env()`. Once an operator sets a UUID-keyed override (Task 10 makes this the NORMAL path for any `cuda:N` picker selection), `_parse_device("cuda-uuid:GPU-1")` misparses it: `"cuda-uuid:GPU-1".startswith("cuda")` is `True`, so it falls into the cuda branch; `"cuda-uuid:GPU-1".partition(":")` yields `("cuda-uuid", ":", "GPU-1")`, so the index fragment is `"GPU-1"` — not a digit — so `_parse_device` returns `("cuda", None)`. Both `shares_device()` and `_qwen_configured_card_idx()` then default the index to **card 0** (`idx_a or 0` / `idx or 0`) regardless of which card is actually configured. Concretely: `shares_device` can report the wrong coupling verdict, and **Task 5's per-card mutex silently always locks card 0**, providing zero protection for a UUID-pinned engine on any other card — undermining the entire point of Wave 2's per-card safety net the moment Plan 2's picker is used for a multi-GPU assignment.
+
+This task must land **after Task 10** (needs `_read_device_env` to exist) but the fix belongs conceptually to Wave 2's safety guarantees — hence the `10.5` numbering, keeping it adjacent to the UUID work it depends on rather than shipping Wave 2 with a known-reintroduced gap once Plan 2 lands.
+
+**Files:**
+- Modify: `server/tts-sidecar/main.py` (`_compute_vd_kokoro_shares_device`, `_qwen_configured_card_idx` — swap raw `os.environ.get` for `_read_device_env`)
+- Modify (APPEND): `server/tts-sidecar/tests/test_design_kokoro_exclusion.py`, `server/tts-sidecar/tests/test_device_ledger.py`
+
+**Interfaces:** no new interfaces — closes a call-site gap in two functions Tasks 4 and 5 already defined; their signatures are unchanged.
+
+- [ ] **Step 1: Write the failing regression tests**
+
+Append to `test_design_kokoro_exclusion.py`:
+```python
+def test_compute_vd_kokoro_shares_device_routes_through_read_device_env(monkeypatch):
+    """Regression for the adversarial-review finding: the coupling computation
+    must resolve a UUID override BEFORE handing it to shares_device, not read
+    raw env directly (a cuda-uuid:<uuid> value would otherwise misparse as
+    unindexed 'cuda' in _parse_device and silently default to card 0)."""
+    calls = []
+
+    def fake_read(var_name):
+        calls.append(var_name)
+        return {"QWEN_DEVICE": "cuda:0", "KOKORO_DEVICE": "cuda:1"}[var_name]
+
+    monkeypatch.setattr(main, "_read_device_env", fake_read)
+    monkeypatch.setattr(main, "shares_device", lambda a, b, tm=None: (a, b) == ("cuda:0", "cuda:1"))
+    result = main._compute_vd_kokoro_shares_device()
+    assert set(calls) == {"QWEN_DEVICE", "KOKORO_DEVICE"}
+    assert result is True  # shares_device was called with the RESOLVED values, matching the fake's condition
+
+
+def test_compute_vd_kokoro_shares_device_uuid_override_resolves_to_correct_card(monkeypatch):
+    """End-to-end proof the original bug is fixed: a cuda-uuid: override for
+    QWEN_DEVICE resolves to the SAME concrete card _resolve_torch_device would
+    report for the plain cuda:N form — not silently 'card 0' by default."""
+    monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GPU-1")  # resolves to cuda:1, NOT cuda:0
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:1")  # same card -> should COUPLE
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [
+        {"uuid": "GPU-0", "idx": 0, "name": "a", "total_mb": 8000, "free_mb": 6000},
+        {"uuid": "GPU-1", "idx": 1, "name": "b", "total_mb": 16000, "free_mb": 14000},
+    ])
+    seen = {}
+
+    def spy_shares_device(a, b, tm=None):
+        seen["a"], seen["b"] = a, b
+        return a == b
+    monkeypatch.setattr(main, "shares_device", spy_shares_device)
+    assert main._compute_vd_kokoro_shares_device() is True
+    assert seen == {"a": "cuda:1", "b": "cuda:1"}  # NOT {"a": "cuda:0", ...} — the pre-fix bug's symptom
+```
+
+Append to `test_device_ledger.py`:
+```python
+def test_qwen_configured_card_idx_resolves_uuid_override(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GPU-1")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    assert main._qwen_configured_card_idx() == 1  # NOT 0 — the pre-fix bug's symptom
+
+
+def test_qwen_configured_card_idx_defaults_to_0_for_plain_auto(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "auto")
+    assert main._qwen_configured_card_idx() == 0
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `.\.venv\Scripts\python.exe -m pytest tests/test_design_kokoro_exclusion.py -k "routes_through_read_device_env or uuid_override_resolves" tests/test_device_ledger.py -k "qwen_configured_card_idx" -v`
+Expected: FAIL — `test_compute_vd_kokoro_shares_device_routes_through_read_device_env` fails because `_compute_vd_kokoro_shares_device` still calls `os.environ.get` directly, never touching the mocked `_read_device_env` (`calls` stays empty); `test_qwen_configured_card_idx_resolves_uuid_override` fails because `_qwen_configured_card_idx` returns `0` (the misparse bug) instead of `1`.
+
+- [ ] **Step 3: Fix both functions**
+
+`_compute_vd_kokoro_shares_device` (added in Task 4):
+```python
+def _compute_vd_kokoro_shares_device() -> bool:
+    """Resolve whether QWEN_DEVICE and KOKORO_DEVICE currently share a card.
+    Routes through _read_device_env (Task 10) so a UUID-keyed override
+    resolves to its real current index BEFORE shares_device sees it — reading
+    raw env here would misparse 'cuda-uuid:<uuid>' as unindexed 'cuda' in
+    _parse_device (startswith('cuda') matches, the uuid fragment isn't a
+    digit) and silently default both engines to card 0. Any failure defaults
+    True — the SAFE, conservative choice (stay coupled)."""
+    try:
+        return shares_device(_read_device_env("QWEN_DEVICE"), _read_device_env("KOKORO_DEVICE"))
+    except Exception:
+        return True
+```
+
+`_qwen_configured_card_idx` (added in Task 5):
+```python
+def _qwen_configured_card_idx() -> int:
+    """Best-effort resolved card index for QWEN_DEVICE, used to pick the
+    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Routes
+    through _read_device_env (Task 10) for the same reason
+    _compute_vd_kokoro_shares_device does — see its docstring."""
+    fam, idx = _parse_device(_read_device_env("QWEN_DEVICE"))
+    return idx or 0
+```
+
+- [ ] **Step 4: Run green**
+
+Run: `.\.venv\Scripts\python.exe -m pytest tests/test_design_kokoro_exclusion.py tests/test_device_ledger.py tests/test_device_parse.py -v`
+Expected: PASS — including Task 4's original tests (`test_compute_vd_kokoro_shares_device_reads_env`/`_defaults_true_on_error`, which mocked `shares_device` directly and are unaffected by this internal change) and Task 5's original `test_card_lock_serialises_two_threads_on_same_idx`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_design_kokoro_exclusion.py server/tts-sidecar/tests/test_device_ledger.py
+git commit -m "fix(sidecar): route shares_device/per-card-mutex device reads through the UUID resolver"
 ```
 
 ---
@@ -2293,7 +2430,7 @@ Expected: PASS.
 
 - [ ] **Step 4: Wire the revert action (write the override + restart)**
 
-Write a failing test for the wiring in a new `gpu-auto-revert.test.ts` (route-level, mocking `getActiveSupervisor().tripEvent()`, `getGpuDevices()`, `writeConfigOverride`, and `restartSidecar` the same way `advanced.test.tsx`/`config.test.ts` already mock their respective collaborators), then implement `server/src/routes/gpu-auto-revert.ts`:
+Write a failing test for the wiring in a new `gpu-auto-revert.test.ts` (route-level, mocking `getActiveSupervisor().tripEvent()`, `getGpuDevices()`, `writeConfigOverride`, and `restartSidecar` the same way `advanced.test.tsx`/`config.test.ts` already mock their respective collaborators — **include a case where `tripEvent()` returns `{card: null, residentEngines: []}` and assert `reverted` is `[]` AND a distinct error-level log fires**, per the adversarial-review finding below), then implement `server/src/routes/gpu-auto-revert.ts`:
 ```ts
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -2310,17 +2447,37 @@ const ENGINE_KNOB_KEY: Record<string, string> = {
 
 export const gpuAutoRevertRouter = Router();
 
-/** POST /api/gpu/auto-revert — reads the active supervisor's trip event (Wave
-    2 §W2.5) and, if present, reverts every resident engine on the tripped
-    card to a different safe card or CPU, then flags a restart is needed
-    (the existing restart-banner machinery picks this up via the normal
-    overridden-knob mechanism — no separate restart trigger required here). */
-gpuAutoRevertRouter.post('/auto-revert', async (_req: Request, res: Response) => {
-  const supervisor = getActiveSupervisor();
-  const trip = supervisor?.tripEvent();
-  if (!trip || !trip.card || typeof (trip.card as any).idx !== 'number') {
-    res.json({ reverted: [] });
-    return;
+export interface AutoRevertResult {
+  reverted: string[];
+  /** False when the trip couldn't be attributed to a specific card (a
+      host-RAM leak or the pre-Wave-2 device-0 VRAM ceiling can ALSO trip the
+      code-43 streak guard — see Task 6/7) — there is no device knob to
+      revert in that case, and the caller (Task 16.5) must surface this
+      distinctly rather than let a silent {reverted:[]} read as "handled". */
+  revertible: boolean;
+}
+
+/** Core auto-revert logic (Plan 2 §2.3). Reads the active supervisor's trip
+    event (Wave 2 §W2.5) and, if it names a specific card, reverts every
+    resident engine on that card to a different safe card or CPU. If the trip
+    has NO card (an adversarial-review finding: not every code-43 streak is
+    card-specific), this function does NOT silently no-op — it logs a
+    DISTINCT, actionable error explaining that auto-revert cannot help and a
+    manual investigation is needed, so an operator watching server logs (or
+    Task 16.5's surfaced status) sees WHY TTS is still held down. */
+export async function runAutoRevert(
+  trip: { card: unknown; residentEngines: string[] } | null,
+): Promise<AutoRevertResult> {
+  if (!trip || !trip.card || typeof (trip.card as any).idx !== 'number' || trip.residentEngines.length === 0) {
+    console.error(
+      '[gpu] auto-revert: the code-43 streak guard tripped WITHOUT a specific card attributed ' +
+        '(trip=%s) — likely a host-RAM leak or a device-0 VRAM ceiling breach, NOT a per-card ' +
+        'device-placement issue. There is no device knob to revert. TTS remains held down; this ' +
+        'requires MANUAL investigation (check server/sidecar logs for the restart history), not ' +
+        'an automatic fix.',
+      JSON.stringify(trip),
+    );
+    return { reverted: [], revertible: false };
   }
   const trippedIdx = (trip.card as { idx: number }).idx;
   const devices = getLastKnownGpuDevices();
@@ -2332,16 +2489,21 @@ gpuAutoRevertRouter.post('/auto-revert', async (_req: Request, res: Response) =>
     if (!knob) continue;
     const target = selectRevertTarget({
       trippedCardIdx: trippedIdx,
-      candidates: devices.map((d) => ({ idx: d.idx, freeMb: 0 })), // free_mb unknown here — see note below
+      candidates: devices.map((d) => ({ idx: d.idx, freeMb: d.freeMb })),
       requiredMb: ENGINE_PEAK_MB[engine] ?? 0,
     });
     await writeConfigOverride(knobKey, target);
     reverted.push(`${engine} -> ${target}`);
   }
-  res.json({ reverted });
+  return { reverted, revertible: true };
+}
+
+gpuAutoRevertRouter.post('/auto-revert', async (_req: Request, res: Response) => {
+  const trip = getActiveSupervisor()?.tripEvent() ?? null;
+  res.json(await runAutoRevert(trip));
 });
 ```
-> `getLastKnownGpuDevices()` (Task 10) only caches `{uuid, idx}`, not `free_mb` — extend that cache's shape to also carry `freeMb` (a one-line widen of `GpuDeviceInfo` + its population site in `gpu-devices.ts`) so `selectRevertTarget`'s `requiredMb` comparison has real data instead of always falling back to `cpu`. Do this as part of this step, not a follow-up — the revert logic is meaningless without it.
+> `getLastKnownGpuDevices()` (Task 10) only caches `{uuid, idx}`, not `free_mb` — extend that cache's shape to also carry `freeMb` (a one-line widen of `GpuDeviceInfo` in `gpu-device-list-state.ts` + its population site in `gpu-devices.ts`, where `body.devices` already carries `free_mb` per-card) so `selectRevertTarget`'s `requiredMb` comparison has real data instead of always falling back to `cpu`. Do this as part of this step, not a follow-up — the revert logic is meaningless without it.
 
 - [ ] **Step 5: Run green**
 
@@ -2350,11 +2512,11 @@ Expected: PASS.
 
 - [ ] **Step 6: Mount the route + trigger it**
 
-Mount `gpuAutoRevertRouter` in `app.ts` near the other `/api/gpu` routes. Decide the trigger: either (a) the frontend polls `supervisor.tripEvent()` via a new lightweight `GET /api/gpu/trip-status` and shows a "revert now" button in Advanced Configuration, or (b) the server calls `POST /auto-revert` automatically the moment a trip is detected (inside `sidecar-supervisor.ts`'s trip-warning branch from Task 7, via a dynamic import to avoid a circular dependency between `sidecar-supervisor.ts` and the routes layer). **Given the spec explicitly frames this as "auto-revert" (not a manual button), wire (b)**: in Task 7's trip branch, after `warn(...)`, add:
+Mount `gpuAutoRevertRouter` in `app.ts` near the other `/api/gpu` routes. Trigger it automatically the moment a trip is detected (the spec frames this as "auto-revert", not a manual button — Task 16.5 adds the operator-facing VISIBILITY on top, it doesn't change the trigger): inside `sidecar-supervisor.ts`'s trip branch (Task 7), after `warn(...)`, add:
 ```ts
-        void import('../routes/gpu-auto-revert.js').then(({ runAutoRevert }) => runAutoRevert(restart43Trip!));
+        void import('../routes/gpu-auto-revert.js').then(({ runAutoRevert }) => runAutoRevert(restart43Trip));
 ```
-Refactor `gpu-auto-revert.ts` to export the core logic as `runAutoRevert(trip)` (a plain async function, not just the route handler), with the route handler becoming a thin wrapper for manual/on-demand triggering (still useful for the on-box acceptance checklist / a future manual "revert now" UI affordance).
+(`runAutoRevert` — exported directly from Step 4's implementation, not a separate refactor — handles the `revertible: false` case itself, logging distinctly rather than silently no-op-ing; nothing further to add here.)
 
 - [ ] **Step 7: Run the full server suite**
 
@@ -2366,6 +2528,155 @@ Expected: PASS.
 ```bash
 git add server/src/gpu/auto-revert-selection.ts server/src/gpu/auto-revert-selection.test.ts server/src/routes/gpu-auto-revert.ts server/src/routes/gpu-auto-revert.test.ts server/src/gpu/gpu-device-list-state.ts server/src/tts/sidecar-supervisor.ts server/src/app.ts
 git commit -m "feat(server): auto-revert a tripped device assignment to a safe card or CPU (Plan 2 §2.3)"
+```
+
+---
+
+### Task 16.5: Surface a held-TTS trip to the operator — never silent (closes an adversarial-review finding)
+
+**Why this task exists:** an adversarial review of this plan (assumption-checker pass, 2026-07-02) found that when the code-43 streak guard trips WITHOUT a specific card (a host-RAM leak, or the pre-Wave-2 device-0 VRAM scalar ceiling, crash-looping 3×/10min — Tasks 6/7 count ANY code-43, not just per-card ones), Task 16's `runAutoRevert` correctly declines to guess a revert target, but — before this task — that outcome was only a server-log line. TTS stays held down (Task 7's supervisor stops respawning once tripped) with **no path back to running short of an operator noticing the log and manually restarting the server**, and no UI signal at all that anything is wrong beyond "generation stopped working." The user's explicit instruction on the review finding: *"need to address, can't just silently die."* This task makes the held-down state, and whether it was auto-remediated, visible in Advanced Configuration — it does not change what Task 16 does or doesn't revert, only whether anyone can SEE the outcome without reading server logs.
+
+**Files:**
+- Modify: `server/src/routes/gpu-auto-revert.ts` (add `GET /api/gpu/trip-status`, persist the LAST `runAutoRevert` outcome so the status route can report it)
+- Modify: `server/src/tts/sidecar-supervisor.ts` (expose the trip on `SidecarSupervisor` in a form Step 1 below can query — `tripEvent()` already exists from Task 7; this task adds nothing new to the interface, only a consumer)
+- Modify: `src/lib/api.ts` (`getGpuTripStatus()` client)
+- Modify: `src/views/advanced.tsx` (poll trip status; push a toast via the existing `notifications` slice when tripped — matches this codebase's established pattern, per `src/store/notifications-slice.ts`'s own header comment: "Closes the 'did anything happen?' gap when an analysis-stream / generation-stream / export error fires")
+- Modify (APPEND): `server/src/routes/gpu-auto-revert.test.ts`, `src/views/advanced.test.tsx`
+
+**Interfaces:**
+- `GET /api/gpu/trip-status -> { tripped: boolean; revertible: boolean; reverted: string[]; card: unknown; residentEngines: string[] }` — `revertible`/`reverted` mirror the LAST `runAutoRevert()` call's `AutoRevertResult` (Task 16); `tripped` is `true` whenever `supervisor.tripEvent()` is non-null, independent of whether it was revertible.
+
+- [ ] **Step 1: Server — persist the last outcome + the status route, with a failing test first**
+
+Append to `gpu-auto-revert.test.ts`:
+```ts
+describe('GET /api/gpu/trip-status', () => {
+  it('reports not tripped when no trip has occurred', async () => {
+    mockTripEvent(null);
+    const res = await request(app).get('/api/gpu/trip-status');
+    expect(res.body).toEqual({ tripped: false, revertible: false, reverted: [], card: null, residentEngines: [] });
+  });
+
+  it('reports a successful revert', async () => {
+    mockTripEvent({ card: { uuid: 'GPU-1', idx: 1 }, residentEngines: ['coqui'] });
+    await request(app).post('/api/gpu/auto-revert'); // populates the last-outcome cache
+    const res = await request(app).get('/api/gpu/trip-status');
+    expect(res.body.tripped).toBe(true);
+    expect(res.body.revertible).toBe(true);
+    expect(res.body.reverted.length).toBeGreaterThan(0);
+  });
+
+  it('reports tripped-but-not-revertible when the trip has no card', async () => {
+    mockTripEvent({ card: null, residentEngines: [] });
+    await request(app).post('/api/gpu/auto-revert');
+    const res = await request(app).get('/api/gpu/trip-status');
+    expect(res.body.tripped).toBe(true);
+    expect(res.body.revertible).toBe(false);
+    expect(res.body.reverted).toEqual([]);
+  });
+});
+```
+> `mockTripEvent` is a placeholder for however this file's existing tests already mock `getActiveSupervisor()` — match the established pattern from Step 1's earlier tests in this same file (Task 16), don't invent a second mocking convention.
+
+Run: `cd server && npx vitest run src/routes/gpu-auto-revert.test.ts -t "trip-status"` → FAIL.
+
+Implement — add a tiny module-level cache of the last outcome (mirrors this codebase's `vram-state.ts`/`analyzer-device-state.ts` last-known-value pattern) and the route:
+```ts
+let lastAutoRevertOutcome: AutoRevertResult = { reverted: [], revertible: false };
+
+export async function runAutoRevert(
+  trip: { card: unknown; residentEngines: string[] } | null,
+): Promise<AutoRevertResult> {
+  // ... existing body unchanged, EXCEPT: assign lastAutoRevertOutcome to
+  // whatever this function is about to return, right before each return
+  // statement (the {reverted:[],revertible:false} early return AND the final
+  // {reverted,revertible:true} return) ...
+}
+
+gpuAutoRevertRouter.get('/trip-status', (_req: Request, res: Response) => {
+  const trip = getActiveSupervisor()?.tripEvent() ?? null;
+  res.json({
+    tripped: trip !== null,
+    revertible: lastAutoRevertOutcome.revertible,
+    reverted: lastAutoRevertOutcome.reverted,
+    card: trip?.card ?? null,
+    residentEngines: trip?.residentEngines ?? [],
+  });
+});
+```
+
+Run: `cd server && npx vitest run src/routes/gpu-auto-revert.test.ts` → PASS.
+
+- [ ] **Step 2: Frontend — poll + toast, with a failing test first**
+
+Append to `advanced.test.tsx`:
+```tsx
+describe('AdvancedView — held-TTS trip alert (closes a silent-hold gap)', () => {
+  it('pushes an error toast when the trip is revertible', async () => {
+    mockGetGpuTripStatus({ tripped: true, revertible: true, reverted: ['coqui -> cuda:0'], card: { idx: 1 }, residentEngines: ['coqui'] });
+    render(<AdvancedView />, { wrapper: withStore });
+    await waitFor(() => expect(dispatchedToasts()).toContainEqual(
+      expect.objectContaining({ kind: 'error', dedupeKey: 'gpu-trip' }),
+    ));
+    expect(dispatchedToasts()[0].message).toMatch(/auto-reverted|coqui/i);
+  });
+
+  it('pushes a DIFFERENT message when the trip is not revertible (card-less streak)', async () => {
+    mockGetGpuTripStatus({ tripped: true, revertible: false, reverted: [], card: null, residentEngines: [] });
+    render(<AdvancedView />, { wrapper: withStore });
+    await waitFor(() => expect(dispatchedToasts()).toContainEqual(
+      expect.objectContaining({ kind: 'error', dedupeKey: 'gpu-trip' }),
+    ));
+    expect(dispatchedToasts()[0].message).toMatch(/not tied to a specific.*card|manual (investigation|restart)/i);
+  });
+
+  it('does not toast when nothing has tripped', async () => {
+    mockGetGpuTripStatus({ tripped: false, revertible: false, reverted: [], card: null, residentEngines: [] });
+    render(<AdvancedView />, { wrapper: withStore });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(dispatchedToasts()).toEqual([]);
+  });
+});
+```
+
+Run: `npx vitest run src/views/advanced.test.tsx -t "held-TTS trip"` → FAIL.
+
+Add `getGpuTripStatus()` to `src/lib/api.ts` (mirrors `getGpuDevices`'s mock/real split). In `AdvancedView`'s mount `useEffect` (the same one that fetches `gpuDevices`), add a poll:
+```tsx
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status = await api.getGpuTripStatus();
+        if (cancelled || !status.tripped) return;
+        dispatch(pushToast({
+          kind: 'error',
+          dedupeKey: 'gpu-trip',
+          message: status.revertible
+            ? `TTS was held down after repeated crashes; auto-reverted: ${status.reverted.join(', ')}. A sidecar restart is pending.`
+            : 'TTS has been held down after repeated crashes not tied to a specific GPU card. This needs manual investigation — check the server logs, then restart the server.',
+        }));
+      } catch {
+        // best-effort — a failed poll just means no alert this tick, not a UI error.
+      }
+    };
+    void poll();
+    const id = setInterval(poll, 30_000); // matches this codebase's existing /health poll cadence
+    return () => { cancelled = true; clearInterval(id); };
+  }, [dispatch]);
+```
+Import `pushToast` from `'../store/notifications-slice'`.
+
+- [ ] **Step 3: Run green**
+
+Run: `npx vitest run src/views/advanced.test.tsx` and `cd server && npx vitest run src/routes/gpu-auto-revert.test.ts`
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add server/src/routes/gpu-auto-revert.ts server/src/routes/gpu-auto-revert.test.ts src/lib/api.ts src/lib/types.ts src/views/advanced.tsx src/views/advanced.test.tsx
+git commit -m "feat(server,frontend): surface a held-TTS trip to the operator, revertible or not"
 ```
 
 ---
@@ -2523,7 +2834,9 @@ Expected: PASS (typecheck + all tests + e2e + build).
 - [ ] Force a Kokoro `cpu_fallback` (e.g. `KOKORO_DEVICE=cuda:9`) → the picker row shows the `cpu_fallback` badge with a clear text label.
 - [ ] Select a card with less free VRAM than Qwen's ~6.5GB peak → the footprint pre-warn appears before applying.
 - [ ] Set `CUDA_VISIBLE_DEVICES` in `server/.env` → Advanced Configuration surfaces the env-shadow signal; sidecar log shows the startup WARN.
-- [ ] Trigger a real code-43 streak (e.g. an absurdly low `SIDECAR_VRAM_FREE_FLOOR_MB` on a busy card) → auto-revert fires, the offending engine's knob is rewritten to a DIFFERENT card or `cpu` (never `auto`), and a restart banner (or automatic restart) follows.
+- [ ] Trigger a real code-43 streak via a CARD-SPECIFIC cause (e.g. an absurdly low `SIDECAR_VRAM_FREE_FLOOR_MB` on a busy card) → auto-revert fires, the offending engine's knob is rewritten to a DIFFERENT card or `cpu` (never `auto`); the Advanced Configuration toast shows the "auto-reverted: ..." message (Task 16.5).
+- [ ] Trigger a real code-43 streak via a NON-card-specific cause (e.g. an absurdly low `SIDECAR_RESTART_MB` host-RAM ceiling) → TTS is held down (unchanged from Wave 2), but the Advanced Configuration toast now shows the DISTINCT "not tied to a specific GPU card... manual investigation" message — confirms Task 16.5 actually closes the silent-hold gap on a real box, not just in mocked tests.
+- [ ] Set `QWEN_DEVICE`/`KOKORO_DEVICE` to two DIFFERENT physical cards via the picker (both persist as `cuda-uuid:` overrides per Task 10) → the VoiceDesign↔Kokoro coupling correctly reflects `shares_device=False` (a design session doesn't block Kokoro synth) — confirms Task 10.5's fix actually resolves the UUID form on-box, not just against the mocked `_enumerate_cuda_devices` in tests.
 - [ ] Analyzer row shows the correct live GPU/CPU state and the `docs/local-llm.md` link resolves.
 - [ ] `test:a11y` passes on Advanced Configuration with the badges/warnings rendered (not just the empty-state).
 ```
@@ -2544,23 +2857,29 @@ git commit -m "docs(docs): Plan 2 on-box acceptance checklist"
 - §W2.2 (per-card recycle + driver-free floor + ceiling reconcile) → Tasks 2 (sidecar) + 3 (Node). ✓
 - §W2.3 (`shares_device` coupling, lock ordering) → Task 4 (coupling) + Task 5 (fixed acquire order at the one proven call site — explicitly NOT an exhaustive sweep of every engine pairing, flagged as a scoped YAGNI decision). ✓ (partial by design)
 - §W2.4 (per-card mutex) → Task 5 (the `card_lock` primitive from Task 1, wired at the Qwen design-load site). ✓ (primitive + one site; other same-card pairs deferred, flagged)
-- §W2.5 (streak guard, detect+hold+log) → Task 6 (sidecar breadcrumb) + Task 7 (Node streak counter + hold). ✓
-- §W2.6 (Node guards, don't cross-charge/cross-evict) → Task 8. ✓
-- §2.1 (UUID identity) → Task 10. ✓
+- §W2.5 (streak guard, detect+hold+log) → Task 6 (sidecar breadcrumb) + Task 7 (Node streak counter + hold) + Task 16.5 (the operator-visible surfacing the raw spec text doesn't explicitly ask for, but which the "hold" half of "detect+hold+log" is meaningless without — a hold nobody can see is not a hold, it's a silent hang). ✓
+- §W2.6 (Node guards, don't cross-charge/cross-evict) → Task 8, now covering BOTH real `withGpuLoad` callers (`ensure-sidecar-loaded.ts` and `routes/qwen-voice.ts` — the second was missing from the original draft, caught by adversarial review). ✓
+- §2.1 (UUID identity) → Task 10 + Task 10.5 (closes a gap the same review found: Wave 2's `shares_device`/per-card-mutex machinery, built before Task 10 existed, read raw env directly and would have silently misparsed a UUID-form override as card 0 — Task 10.5 routes both through `_read_device_env` once it exists). ✓
 - §2.2 (settings picker: badges, resident-vs-assigned, restart wiring, batching, disabled locked rows, footprint pre-warn) → Task 12 (badges) + Task 13 (plumbing) + Task 14 (footprint). Restart wiring, batching, and disabled-locked-rows are ALREADY satisfied by existing machinery (`selectRestartPending`'s generic any-overridden-restart-sidecar-knob derivation collapses N edits into one banner; `OverrideRow` already passes `disabled={locked}` — confirmed by direct code read, no new task needed). ✓
-- §2.3 (auto-revert) → Task 16. ✓
+- §2.3 (auto-revert) → Task 16 (revert when a card is attributable) + Task 16.5 (surface the outcome — reverted or not — to the operator; closes the review's top finding, an unattributable trip previously left TTS held down with zero UI/notification signal). ✓
 - §2.4 (analyzer read-only row) → Task 15. ✓
 - §2.5 (env-shadow + `.env` cutover) → Task 11 (surfacing) + Task 17 (WARN + docs). ✓
 - Plan 2 testing (frontend/server vitest, e2e, a11y) → distributed across Tasks 12-17, consolidated in Task 17's e2e/a11y steps. ✓
 
-**Placeholder scan:** every code step shows complete, real code grounded in files read during plan authoring — no "add appropriate handling" phrasing. Three spots are explicitly flagged as "verify against current code before writing" (Task 5 Step 3's `_read_device_env` forward-reference note, Task 7 Step 1's breadcrumb-path anchor, Task 17 Step 6's route-path check) rather than asserted as certain — this mirrors Wave 1's own plan, which had an equivalent "remaining execution-time reads" list, not a defect.
+**Adversarial review (assumption-checker pass, 2026-07-02) — three findings, all addressed, user-confirmed as required fixes (not deferrable):**
+1. *Most dangerous assumption, confirmed:* a code-43 streak with no attributable card (host-RAM leak, or the pre-Wave-2 device-0 VRAM scalar ceiling) left `runAutoRevert` silently returning `{reverted:[]}` — TTS held down forever with no visible signal. **Fixed:** Task 16's `runAutoRevert` now logs a distinct, actionable error on this path and returns `revertible:false`; Task 16.5 surfaces this (and the revertible case) as an Advanced Configuration toast via the existing `notifications` slice, polled the same way `sidecar-health.ts` already polls `/health`. Task 9 and Task 18's on-box checklists both gained an explicit non-card-specific-streak case.
+2. *Confirmed via code trace:* `_compute_vd_kokoro_shares_device` (Task 4) and the per-card mutex's index resolution (Task 5) read raw env directly; a `cuda-uuid:<uuid>` override (which Task 10 makes the normal picker-write path) would misparse in `_parse_device` — `"cuda-uuid:...".startswith("cuda")` is `True`, the uuid fragment isn't a digit, so the index resolves to `None` and defaults to card 0 regardless of the real card — silently defeating BOTH the coupling guard and the per-card mutex the moment Plan 2 ships. **Fixed:** Task 10.5 routes both through `_read_device_env`, with a regression test proving a UUID override for `QWEN_DEVICE` resolves to its real index, not 0.
+3. *Confirmed via grep:* Task 8's original draft wired `engineOnGpu` through only ONE of the two real `withGpuLoad` callers (`ensure-sidecar-loaded.ts`); `routes/qwen-voice.ts:326` (`designQwenVoiceForCharacter`, confirmed Qwen-specific by the `gpuSemaphore.acquire(costForEngine('qwen'))` immediately inside it) was missing. **Fixed:** added to Task 8 Step 5 and its Files/commit list, plus an on-box checklist item in Task 9.
 
-**Type/interface consistency:** `DeviceLedger.sample()`/`sample_all()`/`card_lock()` (Task 1) are consumed identically in Tasks 2, 5, 6. `_check_per_card_ceilings`'s `{"uuid","idx","reason"}` shape (Task 2) matches what Task 6's breadcrumb writer expects. `_schedule_restart_exit(..., card=)` (Task 2) is the same signature Task 6 extends with the breadcrumb write. `shares_device()` (Task 4) is a pure function reused nowhere else in this plan besides `_compute_vd_kokoro_shares_device` — consistent. `SidecarSupervisor.tripEvent()` (Task 7) returns exactly the shape Task 16's `runAutoRevert` consumes (`{card, residentEngines}`). `readRestartBreadcrumb()`'s return shape (Task 7) matches what Task 6's Python side writes field-for-field (`card`/`reason`/`residentEngines`/`ts`). `engineDeviceIsGpu()` (Task 8) is reused by both `ensure-sidecar-loaded.ts` and `persona-gpu-plan.ts` with the same signature. `staleReason`/`StaleReason` (Tasks 10-13) flow: sidecar → `resolveKnob` (Task 10) → `KnobValueState.staleReason` → frontend `KnobValue.staleReason` (Task 12) — one type, one field name, threaded consistently. `selectRevertTarget()`'s `RevertCandidate{idx,freeMb}` (Task 16) is fed from `getLastKnownGpuDevices()`, which Task 16 Step 4 explicitly flags as needing a shape-widen (from Task 10's `{uuid,idx}` to add `freeMb`) — caught during self-review, folded into Task 16 rather than left as a silent gap.
+**Placeholder scan:** every code step shows complete, real code grounded in files read during plan authoring — no "add appropriate handling" phrasing. Remaining spots explicitly flagged as "verify against current code before writing" (Task 7 Step 1's breadcrumb-path anchor, Task 17 Step 6's route-path check) rather than asserted as certain — this mirrors Wave 1's own plan, which had an equivalent "remaining execution-time reads" list, not a defect. Task 5's original `_read_device_env` forward-reference workaround was removed entirely (replaced by the `_qwen_configured_card_idx()` helper + Task 10.5), so that placeholder-adjacent spot no longer exists.
+
+**Type/interface consistency:** `DeviceLedger.sample()`/`sample_all()`/`card_lock()` (Task 1) are consumed identically in Tasks 2, 5, 6. `_check_per_card_ceilings`'s `{"uuid","idx","reason"}` shape (Task 2) matches what Task 6's breadcrumb writer expects. `_schedule_restart_exit(..., card=)` (Task 2) is the same signature Task 6 extends with the breadcrumb write. `shares_device()` (Task 4) is consumed by `_compute_vd_kokoro_shares_device`, which Task 10.5 updates to feed it RESOLVED values, not raw env — the function's own signature is untouched, only its callers change, so no ripple beyond Tasks 4/10.5. `_qwen_configured_card_idx()` (Task 5) is likewise untouched in signature by Task 10.5, only its body. `SidecarSupervisor.tripEvent()` (Task 7) returns exactly the shape Task 16's `runAutoRevert` consumes (`{card, residentEngines} | null` — Task 16.5 confirms `runAutoRevert` now accepts the `| null` explicitly, matching how Task 7's own `tripEvent()` is typed). `readRestartBreadcrumb()`'s return shape (Task 7) matches what Task 6's Python side writes field-for-field (`card`/`reason`/`residentEngines`/`ts`). `engineDeviceIsGpu()` (Task 8) is reused by `ensure-sidecar-loaded.ts`, `persona-gpu-plan.ts`, AND `routes/qwen-voice.ts` with the same signature. `staleReason`/`StaleReason` (Tasks 10-13) flow: sidecar → `resolveKnob` (Task 10) → `KnobValueState.staleReason` → frontend `KnobValue.staleReason` (Task 12) — one type, one field name, threaded consistently. `selectRevertTarget()`'s `RevertCandidate{idx,freeMb}` (Task 16) is fed from `getLastKnownGpuDevices()`, which Task 16 Step 4 explicitly flags as needing a shape-widen (from Task 10's `{uuid,idx}` to add `freeMb`) — caught during self-review, folded into Task 16 rather than left as a silent gap. `AutoRevertResult{reverted,revertible}` (Task 16) is the exact shape Task 16.5's `/api/gpu/trip-status` route reads from its last-outcome cache.
 
 **Known scoped gaps (deliberate, not oversights):**
-- Per-card mutex (Task 5) wired at ONE call site (Qwen design-load), not every theoretically-possible same-card engine pair — YAGNI per Round 5's simplicity-first framing; flagged inline in Task 5.
+- Per-card mutex (Task 5) wired at ONE call site (Qwen design-load), not every theoretically-possible same-card engine pair — YAGNI per Round 5's simplicity-first framing; flagged inline in Task 5. **Still true after the review fixes** — Tasks 10.5/16.5 close correctness/visibility gaps, they don't expand this deliberately-scoped primitive-only delivery.
 - Auto-revert's card-freeVRAM data depends on the LAST successful `/api/gpu/devices` poll (Task 16), same staleness tolerance the existing `vram-state.ts` cache already accepts — not a new class of risk.
 - The `.env` cutover (Task 17) is a documented MANUAL step, per Round 5's decision — no code strips a user's `.env` automatically.
+- A non-card-specific streak (Task 16.5's `revertible:false` path) still leaves TTS held down with no automatic recovery — this is now VISIBLE (toast + `/api/gpu/trip-status`) rather than silent, but recovery still requires a human to read the alert and manually restart the server. Auto-recovering from a host-RAM leak is out of scope for this plan (it's a different problem than device placement, which is what Wave 2/Plan 2 solve) — the fix here was making the failure legible, not eliminating the manual step.
 
 ---
 
