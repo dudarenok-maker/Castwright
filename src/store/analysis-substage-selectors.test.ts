@@ -42,4 +42,39 @@ describe('analysis-substage selectors', () => {
     const s = mk({ b1: { progress: 40, label: 'Detecting emotions' } }, {});
     expect(selectAnalysisSubstage(s)).toBe(selectAnalysisSubstage(s));
   });
+
+  it('selectAnalysisSubstage passes chapterIndex/totalChapters/estRemainingMs through', () => {
+    const s = mk(
+      {
+        b1: {
+          progress: 40,
+          label: 'Detecting emotions',
+          chapterIndex: 3,
+          totalChapters: 12,
+          estRemainingMs: 60_000,
+        } as never,
+      },
+      {},
+    );
+    expect(selectAnalysisSubstage(s)).toEqual({
+      kind: 'prosody',
+      label: 'Detecting emotions',
+      percent: 40,
+      chapterIndex: 3,
+      totalChapters: 12,
+      estRemainingMs: 60_000,
+    });
+  });
+
+  it('omits chapterIndex/totalChapters/estRemainingMs when the entry lacks them', () => {
+    const s = mk({}, { b5: { progress: 12, label: 'Reviewing script' } });
+    expect(selectAnalysisSubstage(s)).toEqual({
+      kind: 'review',
+      label: 'Reviewing script',
+      percent: 12,
+      chapterIndex: undefined,
+      totalChapters: undefined,
+      estRemainingMs: undefined,
+    });
+  });
 });

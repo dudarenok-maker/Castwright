@@ -29,11 +29,37 @@ const firstByLowestBookId = (m: Record<string, SubstageEntry>): { bookId: string
     pass over a review pass; ties broken by lowest bookId. */
 export const selectAnalysisSubstage = createSelector(
   [(s: RootState) => s.prosody.activeStreams, (s: RootState) => s.scriptReview.activeStreams],
-  (prosody, review): { kind: 'prosody' | 'review'; label: string; percent: number } | null => {
+  (
+    prosody,
+    review,
+  ): {
+    kind: 'prosody' | 'review';
+    label: string;
+    percent: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  } | null => {
     const p = firstByLowestBookId(prosody);
-    if (p) return { kind: 'prosody', label: p.entry.label, percent: p.entry.progress };
+    if (p)
+      return {
+        kind: 'prosody',
+        label: p.entry.label,
+        percent: p.entry.progress,
+        chapterIndex: p.entry.chapterIndex,
+        totalChapters: p.entry.totalChapters,
+        estRemainingMs: p.entry.estRemainingMs,
+      };
     const r = firstByLowestBookId(review);
-    if (r) return { kind: 'review', label: r.entry.label, percent: r.entry.progress };
+    if (r)
+      return {
+        kind: 'review',
+        label: r.entry.label,
+        percent: r.entry.progress,
+        chapterIndex: r.entry.chapterIndex,
+        totalChapters: r.entry.totalChapters,
+        estRemainingMs: r.entry.estRemainingMs,
+      };
     return null;
   },
 );
