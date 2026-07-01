@@ -237,7 +237,7 @@ describe('AdvancedView — device-knob picker', () => {
     const optionValues = Array.from(select.querySelectorAll('option')).map((o) =>
       o.getAttribute('value'),
     );
-    expect(optionValues).toEqual(['auto', 'cpu', 'cuda:0', 'cuda:1']);
+    expect(optionValues).toEqual(['auto', 'cpu', 'mps', 'cuda:0', 'cuda:1']);
     expect(screen.getByText(/RTX 5070 Ti/)).toBeInTheDocument();
   });
 

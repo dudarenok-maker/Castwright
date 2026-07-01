@@ -204,7 +204,7 @@ const GPU_DEVICES: GpuDevice[] = [
 ];
 
 describe('OverrideRow — device knob', () => {
-  it('renders a select with auto/cpu plus one option per detected GPU', () => {
+  it('renders a select with auto/cpu/mps plus one option per detected GPU', () => {
     const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
     const value = makeValue({ effective: 'auto', source: 'default' });
     render(
@@ -218,7 +218,7 @@ describe('OverrideRow — device knob', () => {
     );
     const select = screen.getByRole('combobox');
     const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
-    expect(optionValues).toEqual(['auto', 'cpu', 'cuda:0', 'cuda:1']);
+    expect(optionValues).toEqual(['auto', 'cpu', 'mps', 'cuda:0', 'cuda:1']);
     expect(screen.getByText(/RTX 5070 Ti/)).toBeInTheDocument();
   });
 
@@ -257,7 +257,7 @@ describe('OverrideRow — device knob', () => {
     expect(screen.getByRole('option', { name: 'cuda:9' })).toBeInTheDocument();
   });
 
-  it('still offers auto/cpu when no GPU devices were detected (sidecar down)', () => {
+  it('still offers auto/cpu/mps when no GPU devices were detected (sidecar down)', () => {
     const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
     const value = makeValue({ effective: 'auto', source: 'default' });
     render(
@@ -271,7 +271,7 @@ describe('OverrideRow — device knob', () => {
     );
     const select = screen.getByRole('combobox');
     const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
-    expect(optionValues).toEqual(['auto', 'cpu']);
+    expect(optionValues).toEqual(['auto', 'cpu', 'mps']);
   });
 });
 

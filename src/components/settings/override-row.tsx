@@ -83,7 +83,10 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   if (descriptor.type === 'device') {
     const current = String(value.effective);
     const cudaOptions = (gpuDevices ?? []).map((d) => `cuda:${d.idx}`);
-    const options = ['auto', 'cpu', ...cudaOptions];
+    // 'mps' (Apple Silicon) isn't enumerable via GET /api/gpu/devices (CUDA-only
+    // probe), but the sidecar's device grammar accepts it for all three knobs —
+    // keep it a static, always-offered option rather than dropping it.
+    const options = ['auto', 'cpu', 'mps', ...cudaOptions];
     // A stale/manually-set value (e.g. a card that vanished) stays selectable
     // rather than silently jumping to whatever option happens to be first.
     if (!options.includes(current)) options.push(current);
