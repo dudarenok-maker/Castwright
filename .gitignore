@@ -144,3 +144,7 @@ server/src/parsers/__fixtures__/sample.azw3
 server/repro-*.mts
 server/repro-*.txt
 server/roster.json
+
+# Self-contained HTML artifacts rendered by the html-artifacts skill (plans,
+# reports, mockups). Local scratch output, never committed.
+artifacts/
