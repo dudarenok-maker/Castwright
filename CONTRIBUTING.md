@@ -500,9 +500,11 @@ The compact version:
 1. Update or create the regression plan under `docs/features/`.
 2. Add paired automated tests in the same diff.
 3. Update `docs/features/INDEX.md` and `docs/BACKLOG.md` if relevant.
-4. Run `npm run verify` locally.
-5. Surface the user-visible delta in the end-of-turn summary.
-6. No budgeted polling loops in tests (await an event or drain to quiescence);
+4. Update `docs/release-notes-next.md` and `RELEASE_NOTES.md` in this PR (see
+   "Release notes" below) — skip only when the change has no shippable delta.
+5. Run `npm run verify` locally.
+6. Surface the user-visible delta in the end-of-turn summary.
+7. No budgeted polling loops in tests (await an event or drain to quiescence);
    no `page.waitForTimeout` in new e2e (use state-based waits); no oversized
    inline test timeouts. (`scripts/check-no-budget-poll.mjs` is the automated
    gate; run it locally with `node scripts/check-no-budget-poll.mjs`.)
@@ -585,6 +587,23 @@ The regression plans under `docs/features/` are the long-form companion
 (reference plan / PR numbers in parens, e.g. `(#637, plan 195)`). The
 user-facing, brand-voice notes are separate — `RELEASE_NOTES.md`, shown in-app
 at `#/release-notes`.
+
+**Both files are updated PR-by-PR, not reconstructed at cut time** —
+[CLAUDE.md's before-shipping checklist](CLAUDE.md#before-shipping-checklist)
+item 4 lands an entry in each alongside the code that shipped it, while the
+PR's own context is fresh. "Releasing" step 2 above (`$EDITOR
+docs/release-notes-next.md`) is then a final pass over an already-populated
+draft — proofread, reorder into the anatomy below, set the version marker —
+not first-time authoring from git history. `bump-version.mjs` never resets
+either file after tagging, so right after a cut both are still "closed":
+`docs/release-notes-next.md`'s marker equals the version that just shipped,
+and `RELEASE_NOTES.md`'s top section is headed with that same shipped version.
+**The first PR to land after a cut is the one that reopens both** — bump the
+marker forward (increment minor, this project's usual cadence, unless the
+release was a patch) and clear `docs/release-notes-next.md`'s stale body from
+the last release, then head a fresh top section in `RELEASE_NOTES.md` with
+that same new version — before appending its own entry to each. Any later PR
+in the same release cycle finds both drafts already open and just appends.
 
 A release describes what shipped, diffed against the **previous public
 release**, and is organised as a **headline block + emoji-themed sections**

@@ -97,13 +97,17 @@ for subagent dispatch above.
   (unambiguous bug, obvious dead code, a straightforward CLAUDE.md
   violation) get fixed directly, committed, and pushed. Findings that turn
   on a judgment call route through the carve-out below instead of being
-  auto-applied. Any push after the review — a clear-cut fix, or nothing to
-  fix at all — re-triggers a re-review pass.
+  auto-applied.
+- **Re-review trigger**: only when the initial pass surfaced ≥1 finding
+  that is an actual correctness bug (wrong behavior, crash, security issue —
+  not a reuse/simplification/efficiency-only cleanup nit). Fixing and
+  pushing those re-triggers a pass. If the initial pass came back empty, or
+  surfaced only cleanup-only findings, fix-and-push (or push nothing) does
+  **not** re-trigger a re-review — re-running it in that case just burns
+  tokens for no new signal. This mirrors the spec/plan loop's severity-gated
+  shape (above), rather than firing on every push.
 - **Loop cap**: 2 re-review rounds, same numeric cap as the spec/plan loop
-  above — but **not the same trigger shape**. The spec/plan loop only
-  re-reviews past a severity threshold, because `assumption-checker`
-  findings carry that taxonomy. `code-review` findings don't carry one, so
-  this loop re-reviews after *any* clear-cut fix, with no severity gate.
+  above (initial pass + up to 2 re-review rounds, 3 total).
 - **Judgment-call carve-out**: see below.
 
 ## Judgment-call carve-out (shared by both review loops)
