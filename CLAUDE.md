@@ -93,8 +93,13 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 **Mandatory review gates**, both using this table's Premium tier:
 - Every non-trivial spec (`brainstorming`) or plan (`writing-plans`) gets a
   real `assumption-checker` pass before the user is asked to approve it.
-- Every PR gets a `code-review` pass (`high` effort, no `--fix`) once fully
-  staged, before merge.
+- Every PR gets a `code-review` pass (no `--fix`) once fully staged, before
+  merge — except a docs-only PR (same file-set test as CONTRIBUTING.md's
+  doc-only CI fast-path), which is exempt entirely. Otherwise effort scales
+  with the PR's commit type/scope (CONTRIBUTING.md's commit-convention
+  vocabulary): `low` for a single-scope `chore`/`test`/`build`/`ci`, `medium`
+  for a single-scope `feat`/`fix`, `high` for `refactor`/`perf` or any
+  multi-scope PR — see the model-routing skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the
