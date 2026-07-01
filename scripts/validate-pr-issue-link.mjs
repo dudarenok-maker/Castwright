@@ -32,6 +32,13 @@ function stripFencedBlocks(text) {
     const isFenceLine = /^ {0,3}`{3,}/.test(line);
     if (isFenceLine) {
       inFence = !inFence;
+      // A fence is a block boundary even when the source has no blank line
+      // on either side of it -- push a paragraph-break marker so the text
+      // before and after doesn't coalesce into one paragraph (which would
+      // let stripInlineSpans pair a stray backtick across what should be a
+      // hard boundary, the same failure mode this fix's own history is
+      // built from).
+      kept.push('');
       continue;
     }
     if (!inFence) kept.push(line);

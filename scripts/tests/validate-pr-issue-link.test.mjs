@@ -24,6 +24,11 @@ const accepted = [
   // Two real, properly-paired fenced blocks with a real link between them
   // must still resolve correctly.
   '```\nsome code\n```\n\nCloses #6\n\n```\nmore code\n```',
+  // A fence with NO blank line on either side is still a block boundary --
+  // a stray backtick before it must not pair, across the fence, with a
+  // backtick after it and swallow a real Closes/Refs reference sitting in
+  // the paragraph right after the fence closes.
+  'a`\n```\nc\n```\nCloses #9 `d`',
 ];
 
 const rejected = [
