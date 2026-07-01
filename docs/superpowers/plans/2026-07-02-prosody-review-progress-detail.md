@@ -736,7 +736,7 @@ git commit -m "feat(server): add chapter counts + pace-based ETA to annotate-emo
 ## Task 6: Server pacing — `instruct-annotation.ts`
 
 **Files:**
-- Modify: `server/src/routes/instruct-annotation.ts:131-219`
+- Modify: `server/src/routes/instruct-annotation.ts:131-213`
 - Test: `server/src/routes/instruct-annotation.test.ts`
 
 **Interfaces:**
@@ -798,7 +798,7 @@ Expected: FAIL — `phases[0].chapterIndex` is `undefined`; label still contains
 
 - [ ] **Step 3: Write the implementation**
 
-In `server/src/routes/instruct-annotation.ts`, replace lines 131–218 (from `let totalAnnotations = 0;` through the closing `} finally { clearInterval(keepAlive); }`) with the same structure as Task 5, swapping the analyzer call and label:
+In `server/src/routes/instruct-annotation.ts`, replace lines 131–213 (from `let totalAnnotations = 0;` through the closing `} finally { clearInterval(keepAlive); }` — do NOT include the `if (!closed) { send('Done'); send result; res.end(); }` block at lines 214–219, which stays untouched below the replacement) with the same structure as Task 5, swapping the analyzer call and label:
 
 ```ts
     let totalAnnotations = 0;
@@ -919,7 +919,7 @@ git commit -m "feat(server): add chapter counts + pace-based ETA to instruct-ann
 ## Task 7: Server pacing — `script-review.ts`
 
 **Files:**
-- Modify: `server/src/routes/script-review.ts:286-379`
+- Modify: `server/src/routes/script-review.ts:286-382`
 - Test: `server/src/routes/script-review.test.ts`
 
 **Interfaces:**
@@ -988,7 +988,7 @@ Expected: FAIL — `phases[0].chapterIndex` is `undefined`; label still contains
 
 - [ ] **Step 3: Write the implementation**
 
-In `server/src/routes/script-review.ts`, replace lines 286–379 (from `let totalOps = 0;` through the closing `} finally { clearInterval(keepAlive); }`) with:
+In `server/src/routes/script-review.ts`, replace lines 286–382 (from `let totalOps = 0;` through the closing `} finally { clearInterval(keepAlive); }` — the `for` loop's own closing brace is at line 379, one line before the `finally`; do NOT stop there) with:
 
 ```ts
     let totalOps = 0;
@@ -1664,7 +1664,7 @@ git commit -m "feat(frontend): forward chapter/ETA fields from script-review onP
 
 **Files:**
 - Modify: `src/components/layout.tsx:1439`
-- Modify: `src/components/top-bar.tsx:168-171`
+- Modify: `src/components/top-bar.tsx:168-170`
 
 **Interfaces:**
 - Consumes: `selectAnalysisSubstage` output (Task 4).
@@ -1674,7 +1674,7 @@ git commit -m "feat(frontend): forward chapter/ETA fields from script-review onP
 
 - [ ] **Step 1: Widen `StatusDetail.analysisSubstage`'s type**
 
-In `src/components/top-bar.tsx`, replace lines 168–171:
+In `src/components/top-bar.tsx`, replace lines 168–170 (the field's doc comment + declaration — do NOT include line 171, the `StatusDetail` interface's own closing `}`):
 
 ```ts
   /** The active analysis sub-stage (prosody/review) label + progress, or null/absent.
@@ -1863,7 +1863,14 @@ git commit -m "feat(frontend): render chapter-count + ETA in the Status-popover 
 Add to `src/components/detect-emotions-button.test.tsx` (inside the `describe('fs-33 — DetectEmotionsButton', ...)` block, after the existing tests):
 
 ```ts
-  it('renders chapter count + ETA once onProgress supplies detail', async () => {
+  it('renders chapter count + the two-pass-reconciled ETA once onProgress supplies detail', async () => {
+    /* The button runs the REAL runProsodyPasses (Task 9) — only api.detectEmotions/
+       detectInstruct are mocked here. Task 9's reconciliation combines pass 1's own
+       estRemainingMs with a projection of pass 2's full duration while pass 1 is
+       still running: combined = own-remaining + (elapsed-so-far + own-remaining).
+       With own-remaining = 125_000ms and elapsed-so-far ~0 (synchronous mock call),
+       combined ≈ 250_000ms → "~4m left", NOT the raw 125_000ms/"~2m left" a
+       single-pass reading would suggest. */
     detectEmotions.mockImplementation((_bookId: string, opts?: any) => {
       if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
       opts.onPhase({ progress: 0.25, chapterIndex: 3, totalChapters: 12, estRemainingMs: 125_000 });
@@ -1882,15 +1889,17 @@ Add to `src/components/detect-emotions-button.test.tsx` (inside the `describe('f
 
     await waitFor(() =>
       expect(screen.getByTestId('detect-emotions-progress-detail').textContent).toBe(
-        'Chapter 3 of 12 · ~2m left',
+        'Chapter 3 of 12 · ~4m left',
       ),
     );
-    // The Redux entry (feeding the Status-popover) picks up the same fields.
-    expect(store.getState().prosody.activeStreams['b1']).toMatchObject({
-      chapterIndex: 3,
-      totalChapters: 12,
-      estRemainingMs: 125_000,
-    });
+    // The Redux entry (feeding the Status-popover) picks up the same reconciled fields.
+    // Compare with a tolerance rather than exact equality — real (non-fake) elapsed
+    // time contributes a few ms of jitter on top of the 250_000ms base, which the
+    // rounded-to-minutes display text absorbs but a byte-exact ms check would not.
+    const entry = store.getState().prosody.activeStreams['b1'];
+    expect(entry).toMatchObject({ chapterIndex: 3, totalChapters: 12 });
+    expect(entry?.estRemainingMs).toBeGreaterThanOrEqual(250_000);
+    expect(entry?.estRemainingMs).toBeLessThan(251_000);
   });
 ```
 
@@ -1972,7 +1981,7 @@ Replace the running-chip render block (`if (phase === 'running') { ... }`):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/components/detect-emotions-button.test.tsx`
-Expected: PASS (all cases, including the pre-existing throttle/terminal-summary/error/cancel tests — none of them touch `detail`, so they remain unaffected)
+Expected: PASS (all cases). Verified by inspection ahead of time: the pre-existing `'confirms, runs the pass...'` test's `opts.onPhase({ progress: 0.5, label: 'ch1' })` carries no `chapterIndex`/`estRemainingMs`, so `detail` there is just `{ label: 'ch1' }` and the conditional-spread dispatch adds nothing extra; the `'Cancel aborts...'` and `'clears the prosody stream...'` tests never call `onPhase` with those fields either, and the terminal-summary/error/throttle renders are driven by the untouched local `status`/`error`/`phase` state, not `detail`. None of the pre-existing tests read the second `onProgress` argument or assert on `estRemainingMs`.
 
 - [ ] **Step 5: Commit**
 
@@ -2214,6 +2223,17 @@ git commit -m "docs(docs): add regression plan + release notes for progress-deta
 **Placeholder scan** — no TBD/TODO; every step carries complete, runnable code or an exact command.
 
 **Type consistency** — `SubstageEntry` (Tasks 2–3) is the single shape referenced by Task 4's selector, Task 9's `SubstageDetail` (a deliberately separate, narrower shape for the thunk callback — documented inline), Task 11's `StatusDetail.analysisSubstage`, and consumed identically by `formatSubstageDetail` (Task 1) in Tasks 12–14. Field names (`chapterIndex`, `totalChapters`, `estRemainingMs`) are identical across every layer, server to UI.
+
+## Adversarial review outcomes (plan-level pass, Opus tier)
+
+A second `assumption-checker` pass — this time against the plan itself, verified line-by-line against the real current source files — found:
+
+1. **(Critical, fixed)** Task 13's test fed `estRemainingMs: 125_000` into the Detect-emotions button and asserted the chip shows the same value / `~2m left`. But the button runs the real `runProsodyPasses` (Task 9), whose reconciliation *doubles* the ETA during pass 1 (`own-remaining + (elapsed + own-remaining)`) — the actual value is ~250,000ms → `~4m left`. The test as originally written could never pass. Task 13's test and its Redux-entry assertion are rewritten with the correct (tolerance-based, since real elapsed time isn't fake-timer-controlled here) expectation.
+2. **(Significant, fixed)** Task 6's stated replacement range (`131–218`) extended past the route's `finally` block into the terminal `result`/`res.end()` emission, which would delete it and hang the route on literal execution. Corrected to `131–213`, with an explicit note on what NOT to include.
+3. **(Significant, fixed)** Task 7's stated range (`286–379`) stopped one line short of the actual `finally` block (`379` is the `for` loop's own closing brace; `380–382` is the `finally`), which would leave an orphaned `finally` — a syntax error. Corrected to `286–382`.
+4. **(Minor, fixed)** Task 11's stated range for `top-bar.tsx` (`168–171`) included line 171, the `StatusDetail` interface's own closing brace, which would delete it. Corrected to `168–170`.
+5. **(Confirmed, no change needed)** The reviewer independently re-derived Task 9's fake-timer-based ETA arithmetic by hand against all four of its test expectations and confirmed the math and `vi.useFakeTimers()`/`vi.setSystemTime()` semantics are sound; confirmed Vitest's `toEqual` genuinely ignores `undefined`-valued properties (so Task 4's "no edit needed to pre-existing tests" claim holds); confirmed Task 6's `instruct-annotation.test.ts` fixture/type assumptions are accurate; confirmed Task 11's "StatusInput never needs widening" claim against `summarizeStatus`'s actual body; confirmed no task has a forward reference to a later task's export. None of these needed a fix.
+6. **(Noted, not a defect)** The reviewer flagged that the always-visible Detect-emotions chip will show the doubled (larger) ETA throughout all of pass 1, which could read as alarming rather than reassuring. This is the deliberate, spec-documented behavior of Decision 5 (the design spec's own §4 copy example anticipates exactly this: "ETA reflects the full projected pass-2 duration per Decision 5, not 'almost done.'") — not a new gap, just correctly surfaced now that Task 13's test reflects it accurately instead of masking it with a wrong expected value.
 
 ---
 
