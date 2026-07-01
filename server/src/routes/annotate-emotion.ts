@@ -131,18 +131,34 @@ annotateEmotionRouter.post(
 
     let totalAnnotations = 0;
     let annotatedChapters = 0;
+    let actualMsTotal = 0;
+    let actualCharsTotal = 0;
+    const charsByChapter = new Map<number, number>(
+      chapterIds.map((id) => [id, (byChapter.get(id) ?? []).reduce((n, sent) => n + sent.text.length, 0)]),
+    );
     try {
       for (let i = 0; i < chapterIds.length; i += 1) {
         if (closed) break;
         const chapterId = chapterIds[i];
-        send({
+        const phaseEvent: Record<string, unknown> = {
           kind: 'phase',
           phaseId: 0,
           progress: i / chapterIds.length,
-          label: `Detecting emotions — chapter ${chapterId}`,
+          label: 'Detecting emotions',
           chapterId,
-        });
+          chapterIndex: i + 1,
+          totalChapters: chapterIds.length,
+        };
+        if (actualCharsTotal > 0) {
+          const observedRate = actualMsTotal / actualCharsTotal;
+          const remainingChars = chapterIds
+            .slice(i)
+            .reduce((n, id) => n + (charsByChapter.get(id) ?? 0), 0);
+          phaseEvent.estRemainingMs = Math.round(observedRate * remainingChars);
+        }
+        send(phaseEvent);
 
+        const chapterStartedAt = Date.now();
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
           charBudget: chapterChunkBudget(selection.engine),
@@ -206,6 +222,11 @@ annotateEmotionRouter.post(
           /* One bad chapter shouldn't kill the whole pass — report it and
              carry on so the rest of the book still gets annotated. */
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+        } finally {
+          /* A failed chapter still took real wall-clock time — count it
+             toward the pacing rate so the next chapter's ETA stays honest. */
+          actualMsTotal += Date.now() - chapterStartedAt;
+          actualCharsTotal += charsByChapter.get(chapterId) ?? 0;
         }
       }
     } finally {
