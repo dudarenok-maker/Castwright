@@ -664,12 +664,16 @@ function ThroughputRow({ chapter, olderRtf }: { chapter: RecentChapter; olderRtf
       <span className="text-right text-xs text-ink/50 font-mono tabular-nums hidden md:block">
         {formatDuration(chapter.synthSec)}
       </span>
-      <span className="text-right text-xs text-ink/50 font-mono tabular-nums hidden md:block">
+      <span
+        className="text-right text-xs text-ink/50 font-mono tabular-nums hidden md:block"
+        data-testid="throughput-qa-cell"
+      >
         {fmtRtf(chapter.rerecordRtf)}
       </span>
       <span
         className={`text-right font-mono font-medium tabular-nums ${style.cls}`}
         title={`${fmtClock(chapter.at)}${style.label ? ` · ${style.label}` : ''}`}
+        data-testid="throughput-rtf-cell"
       >
         {style.glyph && (
           <span className="mr-1 text-xs" aria-label={style.label}>

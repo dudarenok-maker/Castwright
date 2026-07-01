@@ -42,8 +42,10 @@ test.describe('Admin watch console', () => {
     await expect(table.getByText('QA', { exact: true })).toBeVisible();
 
     // The mock's newest chapter (id=7) carries rerecordRtf: 0.02, formatted
-    // via fmtRtf — proves the value actually flows through, not just the label.
+    // via fmtRtf — proves the value actually flows through the QA cell
+    // specifically, not just present somewhere else in the row (e.g. the
+    // Synth-wall or RTF cells, which carry unrelated numbers).
     const row7 = page.getByTestId('throughput-row-7');
-    await expect(row7).toContainText('0.02');
+    await expect(row7.getByTestId('throughput-qa-cell')).toHaveText('0.02');
   });
 });

@@ -239,8 +239,9 @@ describe('AdminView — generation throughput table', () => {
 
     const table = await screen.findByTestId('generation-throughput-table');
     const row = within(table).getByTestId('throughput-row-2');
-    // With B3, both QA and RTF columns show dashes for null values.
-    expect(within(row).getAllByText('–')).toHaveLength(2);
+    // With B3, both the QA and RTF cells show a dash for null values.
+    expect(within(row).getByTestId('throughput-qa-cell')).toHaveTextContent('–');
+    expect(within(row).getByTestId('throughput-rtf-cell')).toHaveTextContent('–');
     expect(within(row).queryByText('▲')).toBeNull();
   });
 
@@ -291,13 +292,14 @@ describe('AdminView — generation throughput table', () => {
     // Check that the "QA" header is rendered
     expect(await screen.findByText('QA')).toBeInTheDocument();
 
-    // Check that the newest chapter row (7) shows the formatted rerecordRtf value "0.02"
+    // Check that the newest chapter row (7)'s QA cell specifically shows the
+    // formatted rerecordRtf value "0.02" (not just present somewhere in the row).
     const row7 = screen.getByTestId('throughput-row-7');
-    expect(row7).toHaveTextContent('0.02');
+    expect(within(row7).getByTestId('throughput-qa-cell')).toHaveTextContent('0.02');
 
-    // Also verify other chapters render their QA values
+    // Also verify other chapters render their QA values in the QA cell.
     const row6 = screen.getByTestId('throughput-row-6');
-    expect(row6).toHaveTextContent('0.05');
+    expect(within(row6).getByTestId('throughput-qa-cell')).toHaveTextContent('0.05');
   });
 });
 
