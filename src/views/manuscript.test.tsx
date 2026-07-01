@@ -1555,3 +1555,48 @@ describe('isExcludedSentenceId', () => {
     expect(isExcludedSentenceId(rows, 9, 9)).toBe(false);
   });
 });
+
+describe('ManuscriptView — promote first sentence to title (2026-07-01)', () => {
+  function renderPromote(currentChapterId: number, chapterSentences: Sentence[]) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: { kind: 'ready', bookId: 'b1', view: 'manuscript', currentChapterId } as never,
+        },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[chapter1, chapter2]}
+          currentChapterId={currentChapterId}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={chapterSentences}
+        />
+      </Provider>,
+    );
+  }
+
+  it('promotes the minimum-id sentence even when it is not first in the array (finding 1 regression)', () => {
+    renderPromote(2, [
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'It was a quiet morning.' } as never,
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'PUPPY TRAINING.' } as never,
+    ]);
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByRole('dialog', { name: 'Use first line as title' })).toHaveTextContent(
+      'PUPPY TRAINING',
+    );
+  });
+
+  it('disables the button and does not crash on a zero-sentence chapter (finding 4 regression)', () => {
+    renderPromote(2, []);
+    expect(screen.getByTestId('promote-first-sentence-button')).toBeDisabled();
+  });
+});

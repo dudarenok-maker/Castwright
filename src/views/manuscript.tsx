@@ -38,6 +38,7 @@ import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import { DetectEmotionsButton } from '../components/detect-emotions-button';
+import { PromoteFirstSentenceButton } from '../components/promote-first-sentence-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
@@ -311,6 +312,28 @@ export function ManuscriptView({
     if (currentChapterId == null) return sentences;
     return sentences.filter((s) => s.chapterId === currentChapterId);
   }, [sentences, currentChapterId]);
+
+  /* Promote-first-sentence-to-title (2026-07-01 spec) — the first sentence
+     by MINIMUM id within the current chapter, never array position (that
+     array isn't guaranteed id-ordered — see the design spec). Filtered
+     directly against `currentChapter?.id` rather than reusing
+     `chapterSentences` above: that memo falls back to the WHOLE BOOK when
+     `currentChapterId` is null, which would pick the wrong chapter's
+     sentence. This is a deliberate deviation from the spec's literal
+     `chapterSentences.reduce(...)` — the spec's guard was `chapterSentences.length
+     > 0`; this guard is `currentChapter?.id`, which is `undefined` only when
+     `chapters` is empty. `currentChapter` is `chapters.find(...) || chapters[0]`
+     (a few lines above), itself `undefined` on an empty `chapters` array — the
+     optional-chaining here (both in the filter and the dep array) means an
+     empty-chapters render still resolves this memo to `null` instead of
+     throwing, consistent with the existing `if (!currentChapter) return null`
+     guard further down. Also guarded to null on an empty chapter's sentence
+     list — an unguarded `.reduce()` throws on `[]`. */
+  const firstSentence = useMemo(() => {
+    const inChapter = sentences.filter((s) => s.chapterId === currentChapter?.id);
+    if (inChapter.length === 0) return null;
+    return inChapter.reduce((min, s) => (s.id < min.id ? s : min));
+  }, [sentences, currentChapter?.id]);
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 
@@ -784,6 +807,11 @@ export function ManuscriptView({
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
+              <PromoteFirstSentenceButton
+                bookId={bookId}
+                chapterId={currentChapter.id}
+                firstSentence={firstSentence}
+              />
               {/* fs-58 — LLM script-review trigger. Primary = per-chapter
                   (low-cost default); the ⌄ disclosure opens the whole-book
                   opt-in, which is RPD-gated when the book is longer than the
