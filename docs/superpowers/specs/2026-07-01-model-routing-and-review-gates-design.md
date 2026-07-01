@@ -214,6 +214,24 @@ These were reached interactively across several rounds of brainstorming
     (a PR body either contains the pattern or it doesn't; no judgment call
     is needed to evaluate it, unlike "non-trivial," "clear-cut," or
     "bug-shaped vs. backlog-shaped"), not because it is the most important.
+    (Correction from adversarial review of the implementation plan, same
+    day: a failing GitHub Actions check does not by itself block a merge —
+    only a check wired into the target branch's ruleset as a **required
+    status check** does. This repo's existing rulesets (verified via `gh
+    api repos/.../rulesets`) cover only force-push/deletion protection, not
+    required checks — and `docs/features/215-ci-label-gated-verify.md`
+    records that omission as **deliberate** ("excludes required status
+    checks so opt-in PRs can't deadlock"), not an oversight. "Real,
+    mechanical enforcement" therefore requires one additional, explicit
+    step beyond adding the workflow file: wiring `pr-issue-link.yml` into a
+    required-status-check ruleset for `main`. Because that is a repo
+    security-setting change, it is not something Claude executes
+    autonomously (the harness's own action-care rules place "modifying
+    system or security settings" in the never-auto-perform category) —
+    it is a one-time step the user runs themselves, documented with the
+    exact command in the implementation plan. Until that step is taken,
+    `pr-issue-link.yml` is visible-but-advisory, same as `pr-title-lint.yml`
+    today; this spec does not claim otherwise.)
 
 ## Adversarial review outcomes
 
@@ -420,6 +438,12 @@ path (see Decision 1).
   behavior in §5 ran correctly — only that *some* issue reference exists in
   the PR body. The other five decisions in this spec remain self-enforced
   (see the "Out of scope" section's explicit acknowledgment of that).
+- **Required-status-check wiring (added post-approval, see Decision 11's
+  correction note)**: the workflow alone is advisory. Blocking a merge on
+  it requires a separate, one-time step — adding it to `main`'s ruleset as
+  a required status check — which the user runs themselves (a security
+  setting, outside what Claude executes autonomously); the implementation
+  plan documents the exact command.
 
 ## Embedding
 
