@@ -283,7 +283,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 1. **Update or create the regression plan** under `docs/features/` — _for substantial/cross-cutting work._ New feature → new file from `TEMPLATE.md` (and tag the issue `needs-plan`). Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`). Small/localized items skip the plan doc — the issue body + paired test is the spec.
 2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
 3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
-4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask (see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR. Once `main`'s required-status-check ruleset for it is wired (a one-time, user-run setup step — see `docs/features/235-model-routing-review-gates.md`), a missing link blocks merge; until then it only fails a visible check.
+4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR. Once `main`'s required-status-check ruleset for it is wired (a one-time, user-run setup step — see `docs/features/235-model-routing-review-gates.md`), a missing link blocks merge; until then it only fails a visible check.
 5. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
 6. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
@@ -495,10 +495,12 @@ plan: [docs/features/archive/44-pr-hygiene.md](docs/features/archive/44-pr-hygie
 
 **Every PR body must link a GitHub issue** (`Closes #NN` / `Refs #NN`) —
 verified at creation time, not assumed. If none exists yet, one is
-auto-filed and linked without pausing to ask, labeled per `CONTRIBUTING.md`'s
-two-shape convention (bug-shaped work → standalone `bug` label; backlog-
-shaped work → `type:feature`/`type:chore` + `area:<prefix>`, `moscow:` left
-for you to set). `.github/workflows/pr-issue-link.yml` surfaces a failing
+auto-filed and linked without pausing to ask — **including bug-shaped work**,
+a deliberate, scoped override of "The backlog" section's general "the user
+files [bugs] as they hit them" convention, for this gate only — labeled per
+`CONTRIBUTING.md`'s two-shape convention (bug-shaped work → standalone `bug`
+label; backlog-shaped work → `type:feature`/`type:chore` + `area:<prefix>`,
+`moscow:` left for you to set). `.github/workflows/pr-issue-link.yml` surfaces a failing
 check on every PR that skips this, mirroring `pr-title-lint.yml`. Once wired
 into `main`'s required status checks (a one-time, user-run ruleset setup —
 see
