@@ -594,7 +594,12 @@ item 4 lands an entry in each alongside the code that shipped it, while the
 PR's own context is fresh. "Releasing" step 2 above (`$EDITOR
 docs/release-notes-next.md`) is then a final pass over an already-populated
 draft — proofread, reorder into the anatomy below, set the version marker —
-not first-time authoring from git history.
+not first-time authoring from git history. The first PR to land right after a
+cut has no draft section at the top of `RELEASE_NOTES.md` yet (the top section
+there is still the version that just shipped) — that PR opens a new one, headed
+with whatever version `docs/release-notes-next.md`'s
+`release-notes-next-version:` marker currently declares, before appending its
+own line.
 
 A release describes what shipped, diffed against the **previous public
 release**, and is organised as a **headline block + emoji-themed sections**

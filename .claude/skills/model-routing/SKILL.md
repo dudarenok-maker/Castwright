@@ -105,7 +105,7 @@ for subagent dispatch above.
   surfaced only cleanup-only findings, fix-and-push (or push nothing) does
   **not** re-trigger a re-review — re-running it in that case just burns
   tokens for no new signal. This mirrors the spec/plan loop's severity-gated
-  shape (below), rather than firing on every push.
+  shape (above), rather than firing on every push.
 - **Loop cap**: 2 re-review rounds, same numeric cap as the spec/plan loop
   above, same trigger shape now too — a severity threshold, not "any push."
 - **Judgment-call carve-out**: see below.
