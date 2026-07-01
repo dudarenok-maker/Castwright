@@ -599,3 +599,20 @@ Working practice:
   header is per-response — Coqui and Kokoro covered separately. Wired
   into `npm run test:all` via `npm run test:sidecar` (skips with a
   banner on an unbootstrapped venv).
+
+## Task tracking & checkpoint flagging
+
+**Task tracking is mandatory, not discretionary, once spec-writing ends.**
+Plan-writing itself is tracked (drafting each of `writing-plans`' own
+tasks/steps is itself a task via `TaskCreate`/`TaskUpdate`/`TaskList`), and
+tracking continues through implementation at one-task-per-implementation-step
+granularity. Reconcile the task list against the plan document at task/step
+boundaries — not on every edit — preserving the status of steps that didn't
+change, but catching structural changes (a step added, removed, or reworded)
+before the next one begins.
+
+**Three checkpoints get a `/compact` suggestion**, left to the user to
+accept: spec approved (end of `brainstorming`), plan approved (end of
+`writing-plans`), and PR merged/shipped. There is no tool to trigger
+compaction directly — this is a suggestion at a good moment, not a
+state-preservation mechanism.
