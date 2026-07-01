@@ -63,6 +63,8 @@ const chapter = (over: Partial<RecentChapter>): RecentChapter => ({
   bookId: 'book-a',
   modelKey: 'qwen3-tts',
   rtf: 1,
+  rerecordRtf: null,
+  verifyRtf: 0.1,
   audioSec: 600,
   synthSec: 600,
   at: '2026-06-01T09:00:00Z',
@@ -237,7 +239,9 @@ describe('AdminView — generation throughput table', () => {
 
     const table = await screen.findByTestId('generation-throughput-table');
     const row = within(table).getByTestId('throughput-row-2');
-    expect(within(row).getByText('–')).toBeInTheDocument();
+    // With B3, both the QA and RTF cells show a dash for null values.
+    expect(within(row).getByTestId('throughput-qa-cell')).toHaveTextContent('–');
+    expect(within(row).getByTestId('throughput-rtf-cell')).toHaveTextContent('–');
     expect(within(row).queryByText('▲')).toBeNull();
   });
 
@@ -271,6 +275,31 @@ describe('AdminView — generation throughput table', () => {
     renderAdmin();
     await screen.findByTestId('generation-throughput-table');
     expect(screen.queryByTestId('throughput-summary')).toBeNull();
+  });
+
+  it('B3: renders the QA (rerecordRtf) column in the throughput table', async () => {
+    // Newest chapter mock has rerecordRtf 0.02 and chapterId 7
+    mockStats.mockResolvedValue({
+      ...idleStats,
+      recentChapters: [
+        chapter({ chapterId: 7, title: 'Chapter 7', rtf: 2.41, rerecordRtf: 0.02 }),
+        chapter({ chapterId: 6, title: 'Chapter 6', rtf: 2.12, rerecordRtf: 0.05 }),
+        chapter({ chapterId: 5, title: 'Chapter 5', rtf: 1.78, rerecordRtf: 0.4 }),
+      ],
+    });
+    renderAdmin();
+
+    // Check that the "QA" header is rendered
+    expect(await screen.findByText('QA')).toBeInTheDocument();
+
+    // Check that the newest chapter row (7)'s QA cell specifically shows the
+    // formatted rerecordRtf value "0.02" (not just present somewhere in the row).
+    const row7 = screen.getByTestId('throughput-row-7');
+    expect(within(row7).getByTestId('throughput-qa-cell')).toHaveTextContent('0.02');
+
+    // Also verify other chapters render their QA values in the QA cell.
+    const row6 = screen.getByTestId('throughput-row-6');
+    expect(within(row6).getByTestId('throughput-qa-cell')).toHaveTextContent('0.05');
   });
 });
 
@@ -354,7 +383,7 @@ describe('AdminView — table scroll regions + header alignment', () => {
      scroller with ONE shared column template so the header tracks line up with
      the data rows instead of drifting on the scrollbar gutter + independent
      `auto` columns. */
-  const THROUGHPUT_COLS = 'md:grid-cols-[1fr_7rem_3.5rem_3.5rem_auto]';
+  const THROUGHPUT_COLS = 'md:grid-cols-[1fr_7rem_3.5rem_3.5rem_3.5rem_auto]';
   const TRENDS_COLS = 'sm:grid-cols-[1fr_7rem_3rem_3.5rem_auto]';
 
   it('scrolls the generation-throughput rows in the inset thin-scrollbar region', async () => {

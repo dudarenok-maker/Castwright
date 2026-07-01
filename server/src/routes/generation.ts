@@ -276,6 +276,16 @@ interface RunningJob {
       (re)generated in this run. The dynamic `done` count is
       `runDoneBase + completedThisRun.size`. */
   runDoneBase: number;
+  /** True once another job was concurrently registered at any point during
+      this job's life — i.e. this chapter's render genuinely overlapped
+      wall-clock with a sibling (same book or a different one). Drives the
+      QA-cost telemetry gate below: a static generationWorkers===1 config
+      read can't see actual cross-book concurrency (two books each configured
+      for 1 worker, generating simultaneously) or a mid-run worker-count
+      change — this tracks the real thing instead. Set in registerJob, never
+      cleared, so once a chapter's wall time overlapped another render its QA
+      sub-costs stay tainted for the rest of this job's life. */
+  hadSibling: boolean;
   /** Chapter ids the loop has reported chapter_complete for in this
       run. The frontend reads `runDone` as `runDoneBase + this.size`. */
   completedThisRun: Set<number>;
@@ -386,6 +396,15 @@ function registerJob(key: string, job: RunningJob): void {
     inFlightByBook.set(job.bookId, set);
   }
   set.add(job);
+  /* Live concurrency signal for the QA-cost telemetry gate (see `hadSibling`
+     on RunningJob) — mark EVERY currently in-flight job, not just the new
+     arrival: a job that was alone when it registered but now has a sibling
+     is genuinely overlapping too, starting from this instant. Global across
+     inFlightByChapter (all books), matching how the queue dispatcher's N
+     workers map onto N concurrent chapter jobs. */
+  if (inFlightByChapter.size > 1) {
+    for (const j of inFlightByChapter.values()) j.hadSibling = true;
+  }
 }
 
 function deregisterJob(key: string, job: RunningJob): void {
@@ -974,6 +993,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     runDoneBase,
     completedThisRun: new Set(),
     runInProgress: new Set(),
+    hadSibling: false,
   };
   registerJob(key, job);
 
@@ -1440,6 +1460,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         },
       });
 
+      /* B1/H1 — synth-only wall, captured BEFORE the loudnorm encode + disk
+         write so the RTF rollup measures TTS, not encode. (The old post-
+         finalize capture below wrongly folded encode into synthMs.) */
+      const synthOnlyMs = Date.now() - synthStartMs;
+
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
@@ -1537,17 +1562,31 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* RTF rollup. The sidecar logs per-batch compute rtf; this is the
          end-to-end pipeline figure (synth wall ÷ audio) the operator watches
          while a book renders, plus a rolling run average that also feeds the
-         dev top-bar throughput pill (GET /api/generation/stats). */
-      const synthSec = (Date.now() - synthStartMs) / 1000;
+         dev top-bar throughput pill (GET /api/generation/stats). Uses
+         synthOnlyMs (pre-encode) so the logged/recorded RTF match. */
+      const synthSec = synthOnlyMs / 1000;
       const audioSec = result.durationSec;
       const chapterRtf = audioSec > 0 ? synthSec / audioSec : 0;
+      /* B1 — the QA sub-cost split (rerecord/transcribe/embed) is only
+         meaningful as a per-chapter wall when nothing else rendered at the
+         same time; under real interleaving the summed per-block wall
+         over-counts (concurrent chapters' QA work overlaps in real time), so
+         pass null and let the stats view render n/a rather than a misleading
+         number. `job.hadSibling` tracks ACTUAL overlap (see registerJob) —
+         a static generationWorkers===1 config read would miss two
+         single-worker books rendering simultaneously, or a mid-run
+         worker-count change. */
+      const oneWorker = !job.hadSibling;
       const roll = recordChapterThroughput({
         chapterId: chapter.id,
         audioSec,
-        synthMs: Date.now() - synthStartMs,
+        synthMs: synthOnlyMs,
         title: chapter.title ?? null,
         bookId: job.bookId,
         modelKey,
+        rerecordMs: oneWorker ? result.rerecordMs : null,
+        transcribeMs: oneWorker ? result.transcribeMs : null,
+        embedMs: oneWorker ? result.embedMs : null,
       });
       console.info(
         `[generation] chapter ${chapter.id} "${chapter.title ?? ''}" rendered: ` +

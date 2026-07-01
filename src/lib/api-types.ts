@@ -1719,6 +1719,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/generation/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Live generation-throughput snapshot for the dev top-bar RTF pill
+         * @description Returns a live snapshot of generation throughput: per-chapter rolling-window
+         *     aggregate (lagging summary), per-batch live window (responsive figure), and
+         *     a recent-chapter history ring (trend across the run). Backs the dev top-bar
+         *     RTF pill so the developer can self-monitor speed without grepping logs.
+         *     All fields go null-or-zero-valued when idle > 10 minutes.
+         */
+        get: operations["getGenerationStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/generation/telemetry": {
         parameters: {
             query?: never;
@@ -3869,6 +3893,81 @@ export interface components {
             inFlight: number;
             /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
             max: number;
+        };
+        /**
+         * @description One finished chapter's own throughput, for the history ring. `rtf` is
+         *     `synthSec / audioSec` (< 1 = faster than realtime) or null when the
+         *     chapter produced no audio. QA-cost fields are populated only for single-
+         *     worker runs; null for multi-worker interleaving (sums over-count).
+         */
+        ChapterThroughputRecord: {
+            chapterId: number | string;
+            title: string | null;
+            bookId: string | null;
+            modelKey: string | null;
+            /** @description synth wall ÷ audio (< 1 = faster than realtime). */
+            rtf: number | null;
+            /** @description QA-driven re-record wall ÷ audio for this chapter; null for multi-worker runs. */
+            rerecordRtf: number | null;
+            /** @description Always-on verify floor (transcribe + embed) ÷ audio; null for multi-worker runs. */
+            verifyRtf: number | null;
+            /** @description Audio duration in seconds. */
+            audioSec: number;
+            /** @description Synthesis (TTS wall) duration in seconds. */
+            synthSec: number;
+            /**
+             * Format: date-time
+             * @description ISO timestamp when the chapter finished rendering.
+             */
+            at: string;
+        };
+        /**
+         * @description Live generation-throughput snapshot. Groups three time-windows:
+         *     (1) per-chapter rolling window (lagging summary, updates when chapters finish),
+         *     (2) per-batch live window (responsive, updates every ~batch),
+         *     (3) per-chapter history ring (trend, newest-first, bounded).
+         *     All chapter-window fields go null-or-zero when idle > 10 minutes.
+         */
+        GenerationStatsResponse: {
+            /** @description Chapters folded in since the window opened (rolling-window aggregate). */
+            chapters: number;
+            /** @description Rolling total audio seconds over the window. */
+            audioSec: number;
+            /** @description Rolling total synth (TTS wall) seconds over the window. */
+            synthSec: number;
+            /** @description synthSec ÷ audioSec over the window (< 1 = faster than realtime). */
+            rtf: number | null;
+            /** @description audioSec ÷ synthSec — the "Nx realtime" figure. */
+            xRealtime: number | null;
+            /** @description chapters ÷ window-wall-hours. */
+            chaptersPerHour: number | null;
+            /** @description The most-recently-finished chapter's own figures. */
+            last: {
+                chapterId: number | string;
+                rtf: number;
+                audioSec: number;
+                synthSec: number;
+                /** Format: date-time */
+                at: string;
+            } | null;
+            /**
+             * Format: date-time
+             * @description ISO timestamp of the last chapter fold, or null when the window is empty.
+             */
+            updatedAt: string | null;
+            /** @description Aggregate ΣgenMs ÷ ΣaudioMs over the recent-batch window (< 1 = faster than realtime). The headline LIVE figure; null when no batch is recent. */
+            liveBatchRtf: number | null;
+            /** @description The single most-recent batch's rtf. */
+            lastBatchRtf: number | null;
+            /** @description How many batches the live window is averaging. */
+            batchesInWindow: number;
+            /**
+             * Format: date-time
+             * @description ISO timestamp of the most-recent batch, or null when none is recent.
+             */
+            batchUpdatedAt: string | null;
+            /** @description Recent finished chapters, NEWEST-FIRST, capped at ~200. Survives rolling-window resets (trend across pauses). */
+            recentChapters: components["schemas"]["ChapterThroughputRecord"][];
         };
         /**
          * @description One per-chapter telemetry sample captured right after a chapter
@@ -6743,6 +6842,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GpuQueueState"];
+                };
+            };
+        };
+    };
+    getGenerationStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live generation-throughput snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationStatsResponse"];
                 };
             };
         };

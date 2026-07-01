@@ -2794,6 +2794,40 @@ describe('synthesiseChapter pre-assembly QA gate', () => {
     expect(result.segments[0].suspect).toBeUndefined();
   });
 
+  it('B1: returns QA-cost fields; rerecordMs is 0 when no re-records run', async () => {
+    // Build a chapter that synthesises clean on the first take with the QA
+    // re-record budget at 0 (maxSegmentRerecords = 0, asr absent) — no re-record
+    // synth happens, so rerecordMs must be exactly 0.
+    const provider = makeContentProvider(() => 'tone');
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line that renders cleanly.')],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+      maxSegmentRerecords: 0, // no re-records
+      // asr omitted → no transcribe
+    });
+    expect(typeof result.rerecordMs).toBe('number');
+    expect(typeof result.transcribeMs).toBe('number');
+    expect(typeof result.embedMs).toBe('number');
+    expect(result.rerecordMs).toBe(0); // no re-record synth occurred
+    expect(result.transcribeMs).toBe(0); // asr not configured → no transcribe
+    expect(result.embedMs).toBe(0); // qa.speaker.enabled off → no embed
+  });
+
+  // B1 "embedMs accounts for wall time on the failure path via finally
+  // block" used to live here but was a placebo — qa.speaker.enabled is off
+  // by default in this file (and the test never overrode it), so the gated
+  // embed pass (and the finally block under test) never executed; the
+  // assertions were trivially satisfied by embedMs's initial value of 0.
+  // The real regression test lives in the dedicated
+  // synthesise-chapter.embed-failure.test.ts, which forces
+  // qa.speaker.enabled:true and the embed call to throw after a controlled
+  // delay — isolated there so it doesn't risk changing this file's other
+  // ~97 tests, which all assume qa.speaker.enabled defaults to false.
+
   it('stamps voiceSubstitutedFrom on the segment when the provider reports a fallback', async () => {
     /* A silent voice fallback (sidecar X-Voice-Substituted-From) must reach the
        segment so the golden-audio gate can fail on it — previously it was only

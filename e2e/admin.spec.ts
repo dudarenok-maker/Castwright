@@ -29,4 +29,23 @@ test.describe('Admin watch console', () => {
     // The top-bar dot reflects the mock board's overall: 'ok'.
     await expect(page.getByTestId('topbar-health-dot')).toHaveAttribute('data-status', 'ok');
   });
+
+  test('throughput table shows the QA re-record RTF column', async ({ page }) => {
+    await page.goto('/#/admin');
+
+    // Wait for the generation throughput table to load.
+    const table = page.getByTestId('generation-throughput-table');
+    await expect(table).toBeVisible({ timeout: 10_000 });
+
+    // The "QA" header cell is visible within the throughput table (scoped so
+    // it can't collide with any other "QA" text elsewhere on the page).
+    await expect(table.getByText('QA', { exact: true })).toBeVisible();
+
+    // The mock's newest chapter (id=7) carries rerecordRtf: 0.02, formatted
+    // via fmtRtf — proves the value actually flows through the QA cell
+    // specifically, not just present somewhere else in the row (e.g. the
+    // Synth-wall or RTF cells, which carry unrelated numbers).
+    const row7 = page.getByTestId('throughput-row-7');
+    await expect(row7.getByTestId('throughput-qa-cell')).toHaveText('0.02');
+  });
 });

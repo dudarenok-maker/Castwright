@@ -2266,6 +2266,23 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/GpuQueueState' }
 
+  /api/generation/stats:
+    get:
+      summary: Live generation-throughput snapshot for the dev top-bar RTF pill
+      operationId: getGenerationStats
+      description: |
+        Returns a live snapshot of generation throughput: per-chapter rolling-window
+        aggregate (lagging summary), per-batch live window (responsive figure), and
+        a recent-chapter history ring (trend across the run). Backs the dev top-bar
+        RTF pill so the developer can self-monitor speed without grepping logs.
+        All fields go null-or-zero-valued when idle > 10 minutes.
+      responses:
+        '200':
+          description: Live generation-throughput snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenerationStatsResponse' }
+
   /api/generation/telemetry:
     get:
       summary: Per-run resource telemetry for the Admin trend panel (fs-20)
@@ -5141,6 +5158,111 @@ components:
           type: integer
           minimum: 1
           description: "Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU."
+
+    # --- Live generation throughput (dev RTF pill) -----
+    ChapterThroughputRecord:
+      type: object
+      required: [chapterId, title, bookId, modelKey, rtf, rerecordRtf, verifyRtf, audioSec, synthSec, at]
+      description: |
+        One finished chapter's own throughput, for the history ring. `rtf` is
+        `synthSec / audioSec` (< 1 = faster than realtime) or null when the
+        chapter produced no audio. QA-cost fields are populated only for single-
+        worker runs; null for multi-worker interleaving (sums over-count).
+      properties:
+        chapterId:
+          oneOf:
+            - type: integer
+            - type: string
+        title: { type: string, nullable: true }
+        bookId: { type: string, nullable: true }
+        modelKey: { type: string, nullable: true }
+        rtf: { type: number, nullable: true, description: 'synth wall ÷ audio (< 1 = faster than realtime).' }
+        rerecordRtf:
+          type: number
+          nullable: true
+          description: QA-driven re-record wall ÷ audio for this chapter; null for multi-worker runs.
+        verifyRtf:
+          type: number
+          nullable: true
+          description: Always-on verify floor (transcribe + embed) ÷ audio; null for multi-worker runs.
+        audioSec: { type: number, description: 'Audio duration in seconds.' }
+        synthSec: { type: number, description: 'Synthesis (TTS wall) duration in seconds.' }
+        at: { type: string, format: date-time, description: 'ISO timestamp when the chapter finished rendering.' }
+
+    GenerationStatsResponse:
+      type: object
+      required: [chapters, audioSec, synthSec, rtf, xRealtime, chaptersPerHour, last, updatedAt, liveBatchRtf, lastBatchRtf, batchesInWindow, batchUpdatedAt, recentChapters]
+      description: |
+        Live generation-throughput snapshot. Groups three time-windows:
+        (1) per-chapter rolling window (lagging summary, updates when chapters finish),
+        (2) per-batch live window (responsive, updates every ~batch),
+        (3) per-chapter history ring (trend, newest-first, bounded).
+        All chapter-window fields go null-or-zero when idle > 10 minutes.
+      properties:
+        chapters:
+          type: integer
+          minimum: 0
+          description: 'Chapters folded in since the window opened (rolling-window aggregate).'
+        audioSec:
+          type: number
+          minimum: 0
+          description: 'Rolling total audio seconds over the window.'
+        synthSec:
+          type: number
+          minimum: 0
+          description: 'Rolling total synth (TTS wall) seconds over the window.'
+        rtf:
+          type: number
+          nullable: true
+          description: 'synthSec ÷ audioSec over the window (< 1 = faster than realtime).'
+        xRealtime:
+          type: number
+          nullable: true
+          description: 'audioSec ÷ synthSec — the "Nx realtime" figure.'
+        chaptersPerHour:
+          type: number
+          nullable: true
+          description: 'chapters ÷ window-wall-hours.'
+        last:
+          type: object
+          nullable: true
+          description: "The most-recently-finished chapter's own figures."
+          required: [chapterId, rtf, audioSec, synthSec, at]
+          properties:
+            chapterId:
+              oneOf:
+                - type: integer
+                - type: string
+            rtf: { type: number }
+            audioSec: { type: number }
+            synthSec: { type: number }
+            at: { type: string, format: date-time }
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'ISO timestamp of the last chapter fold, or null when the window is empty.'
+        liveBatchRtf:
+          type: number
+          nullable: true
+          description: 'Aggregate ΣgenMs ÷ ΣaudioMs over the recent-batch window (< 1 = faster than realtime). The headline LIVE figure; null when no batch is recent.'
+        lastBatchRtf:
+          type: number
+          nullable: true
+          description: "The single most-recent batch's rtf."
+        batchesInWindow:
+          type: integer
+          minimum: 0
+          description: 'How many batches the live window is averaging.'
+        batchUpdatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'ISO timestamp of the most-recent batch, or null when none is recent.'
+        recentChapters:
+          type: array
+          items: { $ref: '#/components/schemas/ChapterThroughputRecord' }
+          description: 'Recent finished chapters, NEWEST-FIRST, capped at ~200. Survives rolling-window resets (trend across pauses).'
 
     # --- Per-run resource telemetry (fs-20) ---------------------------
     ResourceTelemetryRecord:

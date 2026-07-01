@@ -127,6 +127,8 @@ describe('generation-stats per-chapter history ring', () => {
       bookId: 'book-a',
       modelKey: 'qwen3-tts',
       rtf: 0.5, // 60 s synth / 120 s audio
+      rerecordRtf: null, // no QA sub-costs
+      verifyRtf: null, // no QA sub-costs
       audioSec: 120,
       synthSec: 60,
       at: new Date(T0).toISOString(),
@@ -181,5 +183,64 @@ describe('generation-stats per-chapter history ring', () => {
     recordChapterThroughput({ chapterId: 1, audioSec: 100, synthMs: 50_000 }, T0);
     __resetGenerationStatsForTest();
     expect(getGenerationStats(T0).recentChapters).toHaveLength(0);
+  });
+
+  it('B1: records rerecordRtf and verifyRtf from QA sub-costs', () => {
+    __resetGenerationStatsForTest();
+    const s = recordChapterThroughput({
+      chapterId: 1,
+      audioSec: 100,
+      synthMs: 120_000,
+      rerecordMs: 30_000, // 30s re-record over 100s audio → 0.30
+      transcribeMs: 8_000,
+      embedMs: 2_000, // (8+2)/100 → 0.10
+    });
+    expect(s.recentChapters[0].rerecordRtf).toBeCloseTo(0.3, 3);
+    expect(s.recentChapters[0].verifyRtf).toBeCloseTo(0.1, 3);
+  });
+
+  it('B1: QA fields are null when sub-costs are absent (multi-worker / no split)', () => {
+    __resetGenerationStatsForTest();
+    const s = recordChapterThroughput({ chapterId: 2, audioSec: 100, synthMs: 120_000 });
+    expect(s.recentChapters[0].rerecordRtf).toBeNull();
+    expect(s.recentChapters[0].verifyRtf).toBeNull();
+  });
+
+  it('B1: verifyRtf is computed from transcribeMs alone (embedMs absent, e.g. speaker-QA off)', () => {
+    __resetGenerationStatsForTest();
+    const s = recordChapterThroughput({
+      chapterId: 3,
+      audioSec: 100,
+      synthMs: 120_000,
+      transcribeMs: 8_000, // 8/100 → 0.08, no embedMs term
+    });
+    expect(s.recentChapters[0].rerecordRtf).toBeNull(); // no rerecordMs
+    expect(s.recentChapters[0].verifyRtf).toBeCloseTo(0.08, 3);
+  });
+
+  it('B1: verifyRtf is computed from embedMs alone (transcribeMs absent, e.g. ASR-QA off)', () => {
+    __resetGenerationStatsForTest();
+    const s = recordChapterThroughput({
+      chapterId: 4,
+      audioSec: 100,
+      synthMs: 120_000,
+      embedMs: 2_000, // 2/100 → 0.02, no transcribeMs term
+    });
+    expect(s.recentChapters[0].rerecordRtf).toBeNull();
+    expect(s.recentChapters[0].verifyRtf).toBeCloseTo(0.02, 3);
+  });
+
+  it('B1: QA fields are null (not Infinity/0) when audioSec is 0, even with sub-costs present', () => {
+    __resetGenerationStatsForTest();
+    const s = recordChapterThroughput({
+      chapterId: 5,
+      audioSec: 0,
+      synthMs: 30_000,
+      rerecordMs: 10_000,
+      transcribeMs: 5_000,
+      embedMs: 1_000,
+    });
+    expect(s.recentChapters[0].rerecordRtf).toBeNull();
+    expect(s.recentChapters[0].verifyRtf).toBeNull();
   });
 });

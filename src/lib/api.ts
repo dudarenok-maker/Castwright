@@ -7591,6 +7591,9 @@ const mock = {
       bookId: 'mock-book',
       modelKey: 'qwen3-tts',
       rtf,
+      // Newest-first: index 0 is newest → lowest QA cost (post-fix).
+      rerecordRtf: [0.02, 0.05, 0.4, 0.7, 0.9, 1.1, 1.3][i] ?? null,
+      verifyRtf: 0.1,
       audioSec: 600,
       synthSec: Math.round(600 * rtf),
       // Newest-first: index 0 is the latest. 9-minute spacing, fixed base.
@@ -7677,6 +7680,12 @@ export interface RecentChapter {
   bookId: string | null;
   modelKey: string | null;
   rtf: number | null;
+  /** B1 — QA re-record wall ÷ audio (the cost the gate fixes move). null for
+      multi-worker runs. */
+  rerecordRtf: number | null;
+  /** B1 — always-on verify floor (transcribe + embed) ÷ audio. null as above.
+      Carried for the API/history ring; not yet rendered as its own column. */
+  verifyRtf: number | null;
   audioSec: number;
   synthSec: number;
   at: string;

@@ -25,6 +25,13 @@ export interface ResourceTelemetryRecord {
   modelKey: string | null;
   rtf: number | null;
   audioSec: number;
+  /** Chapter synth wall time. Narrowed 2026-07-01 (PR-2,
+      [[127-generation-rtf-telemetry]]) to exclude the post-synth loudnorm
+      encode + disk write — records from before that change include them, so
+      a trend chart spanning the deploy boundary shows a step-change drop
+      that is NOT a real perf improvement. No version marker distinguishes
+      old vs. new records (see the plan for why this was accepted rather than
+      added). */
   wallSec: number;
   vramReservedMb: number | null;
   vramTotalMb: number | null;
