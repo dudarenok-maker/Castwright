@@ -627,6 +627,7 @@ export interface CarriedCharacter {
   character: string; aliases: string[]; voiceId: string; voiceLabel: string;
   engine: string | null; voiceKind: 'designed' | 'cloned' | 'preset';
   firstBookId: string; lastBookId: string; bookIndices: number[]; carriedFullSpan: boolean;
+  totalLines: number;
 }
 export interface SeriesMemoryDetail {
   series: { confirmedBookCount: number; spanBooks: number;

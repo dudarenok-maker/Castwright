@@ -25,6 +25,7 @@ const detail: SeriesMemoryDetail = {
         lastBookId: 'b3',
         bookIndices: [1, 2, 3],
         carriedFullSpan: true,
+        totalLines: 400,
       },
     ],
   },

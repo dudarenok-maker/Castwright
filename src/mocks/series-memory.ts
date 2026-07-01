@@ -17,7 +17,21 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
       count: 4,
       bespokeCount: 3,
       designedCount: 3,
+      // Ordered by totalLines desc — matches deriveSeriesMemory's "most-speaking-first" sort.
       characters: [
+        {
+          character: 'Narrator',
+          aliases: [],
+          voiceId: 'narrator',
+          voiceLabel: 'Deep · Female · UK',
+          engine: 'kokoro',
+          voiceKind: 'preset',
+          firstBookId: 'sb',
+          lastBookId: 'cc',
+          bookIndices: [1, 2, 3],
+          carriedFullSpan: true,
+          totalLines: 940,
+        },
         {
           character: 'Carrick',
           aliases: [],
@@ -29,6 +43,7 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
           lastBookId: 'cc',
           bookIndices: [1, 2, 3],
           carriedFullSpan: true,
+          totalLines: 610,
         },
         {
           character: 'Mara',
@@ -41,6 +56,7 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
           lastBookId: 'ns',
           bookIndices: [1, 2],
           carriedFullSpan: false,
+          totalLines: 340,
         },
         {
           character: 'Doran',
@@ -53,18 +69,7 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
           lastBookId: 'cc',
           bookIndices: [1, 3],
           carriedFullSpan: false,
-        },
-        {
-          character: 'Narrator',
-          aliases: [],
-          voiceId: 'narrator',
-          voiceLabel: 'Deep · Female · UK',
-          engine: 'kokoro',
-          voiceKind: 'preset',
-          firstBookId: 'sb',
-          lastBookId: 'cc',
-          bookIndices: [1, 2, 3],
-          carriedFullSpan: true,
+          totalLines: 155,
         },
       ],
     },

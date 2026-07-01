@@ -4257,6 +4257,7 @@ export interface components {
             lastBookId: string;
             bookIndices: number[];
             carriedFullSpan: boolean;
+            totalLines: number;
         };
         SeriesMemoryDetail: {
             series: {

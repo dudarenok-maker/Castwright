@@ -10,7 +10,7 @@ const detail: SeriesMemoryDetail = {
     characters: Array.from({ length: 56 }, (_, i) => ({
       character: `Name${i}`, aliases: [], voiceId: `v${i}`, voiceLabel: 'Designed voice',
       engine: 'qwen', voiceKind: i < 39 ? 'designed' : 'preset', firstBookId: 'b1', lastBookId: 'b12',
-      bookIndices: [1], carriedFullSpan: true,
+      bookIndices: [1], carriedFullSpan: true, totalLines: 56 - i,
     })) as SeriesMemoryDetail['carried']['characters'] },
 };
 
