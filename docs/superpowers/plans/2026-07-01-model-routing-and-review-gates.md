@@ -377,7 +377,7 @@ old_string:
 7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 
 new_string:
-4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask (see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR and is wired as a required status check on `main`, so a missing link blocks merge, not just fails a visible check.
+4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask (see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR. Once `main`'s required-status-check ruleset for it is wired (a one-time, user-run setup step — see `docs/features/235-model-routing-review-gates.md`), a missing link blocks merge; until then it only fails a visible check.
 5. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
 6. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
@@ -419,10 +419,12 @@ auto-filed and linked without pausing to ask, labeled per `CONTRIBUTING.md`'s
 two-shape convention (bug-shaped work → standalone `bug` label; backlog-
 shaped work → `type:feature`/`type:chore` + `area:<prefix>`, `moscow:` left
 for you to set). `.github/workflows/pr-issue-link.yml` surfaces a failing
-check on every PR that skips this, mirroring `pr-title-lint.yml`, and is
-wired into `main`'s required status checks so a missing link actually blocks
-merge (a one-time ruleset setup — see
-[docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md)).
+check on every PR that skips this, mirroring `pr-title-lint.yml`. Once wired
+into `main`'s required status checks (a one-time, user-run ruleset setup —
+see
+[docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md)),
+a missing link blocks merge; until that setup is done, a missing link only
+fails a visible, non-blocking check.
 Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
 
 **Requesting a CI run on a PR (plan 215).** CI is opt-in (see "Commit gate"
@@ -1161,7 +1163,46 @@ have caught them.
   the real number before running; if run unedited, the validator correctly
   rejects it rather than silently passing) — no change needed.
 - **Loop status**: round 2 tripped the threshold, findings fixed above,
-  which mandates round 3 — the last round permitted under Decision 5's cap
-  (initial + up to 2 re-review rounds = 3 total). If round 3 still trips the
-  threshold, the loop stops there and any remaining finding is handed to the
-  user rather than looped again.
+  which mandated round 3 (see below) — the last round permitted under
+  Decision 5's cap (initial + up to 2 re-review rounds = 3 total).
+
+### Round-3 (final) adversarial-review finding
+
+A third Opus-tier pass re-reviewed the round-2-corrected plan, with explicit
+instructions to fresh-eyes Tasks 1–6 (not just Task 7, which both prior
+rounds had concentrated on) and to verify round 2's fix landed cleanly. It
+confirmed round 2's Step-8 renumbering is fully consistent (no stray "Step
+6→ruleset" references remain outside historical review prose), plan number
+`235` is still free, and Tasks 5–6's infrastructure claims (`test:hooks`
+auto-discovery, the `pr-title-lint.yml` template match) hold against the
+real files. It also found one fresh defect — a genuine
+`Critical`+`Contradicted` — that both prior rounds missed because they were
+focused on Task 7:
+
+- **Critical, Contradicted — Task 3's CLAUDE.md edits asserted the
+  required-status-check as an already-in-force, present-tense fact.** Before
+  this fix, checklist item 4 read "…and is wired as a required status check
+  on `main`, so a missing link blocks merge" and "Opening the PR" read "…is
+  wired into `main`'s required status checks so a missing link actually
+  blocks merge" — both stated as accomplished fact. But Step 8 is a
+  discretionary, manual, post-merge step the user runs (or may decline) —
+  never something an implementing agent performs. At the moment Task 3's
+  edits land in CLAUDE.md (this PR's merge), Step 8 by definition has not
+  run yet, so CLAUDE.md would ship a false statement — the same
+  "unavoidable/blocks-merge" over-claim class round 1 caught in the design
+  spec's Decision 11, reintroduced here in the CLAUDE.md body text itself.
+  **Fixed by hand, without a fourth automated review round**: this is a
+  factual-accuracy correction, not a judgment call the user needs to weigh
+  (the correct direction — CLAUDE.md should track actual/conditional state,
+  not aspirational state — is already the position every other part of this
+  plan, the 235 doc, and the design spec's own Decision 11 correction take;
+  making Task 3's wording match them is not a new decision). Both sites now
+  read conditionally: "Once `main`'s required-status-check ruleset for it is
+  wired (a one-time, user-run setup step…), a missing link blocks merge;
+  until then it only fails a visible check."
+- **Loop status**: round 3 tripped the threshold (1 Critical+Contradicted).
+  Per Decision 5's cap, this was the last permitted automated round — the
+  finding above was fixed directly rather than triggering a round 4, the
+  same disposition the design spec itself used for its own round-3 finding.
+  No further automated adversarial-review round runs against this plan;
+  any additional review is at the user's discretion.
