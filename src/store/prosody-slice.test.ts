@@ -36,4 +36,53 @@ describe('prosody-slice (per-book map)', () => {
     const s2 = prosodySlice.reducer(s1, prosodyActions.applyExternalClear({ bookId: 'b9' }));
     expect(s2.activeStreams.b9).toBeUndefined();
   });
+
+  it('setActive stores chapterIndex/totalChapters/estRemainingMs when provided', () => {
+    const s = reduce([
+      prosodyActions.setActive({
+        bookId: 'b1',
+        progress: 0,
+        label: 'Detecting emotions',
+        chapterIndex: 1,
+        totalChapters: 12,
+      }),
+    ]);
+    expect(s.activeStreams.b1).toEqual<SubstageEntry>({
+      progress: 0,
+      label: 'Detecting emotions',
+      chapterIndex: 1,
+      totalChapters: 12,
+    });
+  });
+
+  it('updateProgress updates only the fields it is given, leaving others intact', () => {
+    const s = reduce([
+      prosodyActions.setActive({
+        bookId: 'b1',
+        progress: 0,
+        label: 'Detecting emotions',
+        chapterIndex: 1,
+        totalChapters: 12,
+      }),
+      prosodyActions.updateProgress({ bookId: 'b1', progress: 0.5, estRemainingMs: 60_000 }),
+    ]);
+    expect(s.activeStreams.b1).toEqual<SubstageEntry>({
+      progress: 50,
+      label: 'Detecting emotions',
+      chapterIndex: 1,
+      totalChapters: 12,
+      estRemainingMs: 60_000,
+    });
+    const s2 = prosodySlice.reducer(
+      s,
+      prosodyActions.updateProgress({ bookId: 'b1', progress: 0.6, chapterIndex: 2, label: 'Detecting instruct' }),
+    );
+    expect(s2.activeStreams.b1).toEqual<SubstageEntry>({
+      progress: 60,
+      label: 'Detecting instruct',
+      chapterIndex: 2,
+      totalChapters: 12,
+      estRemainingMs: 60_000, // untouched — this update didn't carry a new one
+    });
+  });
 });
