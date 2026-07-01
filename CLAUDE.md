@@ -69,6 +69,41 @@ Define success criteria, then loop until verified.
 - Strong success criteria let you loop independently; weak ones ("make it
   work") force constant clarification.
 
+## Model routing
+
+Route non-fork subagent/Workflow dispatch (and, as guidance, the main
+session's own model) by task shape — not by habit. Forks always inherit the
+dispatching session's model; the table below does not apply to them.
+
+| Tier | Model | Selected for |
+|---|---|---|
+| Cheap | Haiku 4.5 | Mechanical search-and-report subagents, boilerplate/scaffolding, running commands and summarizing output, single well-specified bug fixes with a clear repro and no design decisions, high-volume parallel fan-out via non-fork subagents |
+| Default | Sonnet 5 | Everything else — standard feature work, most debugging, most non-fork subagent dispatch, code review, the main session itself |
+| Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (spec/plan and PR review — see below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
+| Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
+
+A subagent that fails twice on its assigned tier is silently re-dispatched
+one rung up (Haiku → Sonnet, Sonnet → Opus) and the escalation is reported
+after the fact — no need to ask first, since subagent dispatch is cheap and
+disposable. A session-level tier mismatch (the current work matches a
+different table row than the model the session is actually running) is
+flagged instead of silently absorbed — I cannot switch my own running model,
+so a drift gets an explicit sentence naming it and asking whether to switch.
+
+**Mandatory review gates**, both using this table's Premium tier:
+- Every non-trivial spec (`brainstorming`) or plan (`writing-plans`) gets a
+  real `assumption-checker` pass before the user is asked to approve it.
+- Every PR gets a `code-review` pass (`high` effort, no `--fix`) once fully
+  staged, before merge.
+
+Full escalation logic, the "fails"/"drifted" definitions, the review-gate
+mechanics (in-session vs. subagent dispatch, re-review loop caps, the
+judgment-call carve-out), and the PR issue-linkage gate live in
+[`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md)
+— this section is the quick-reference table, that file is the full spec.
+Design rationale:
+[docs/superpowers/specs/2026-07-01-model-routing-and-review-gates-design.md](docs/superpowers/specs/2026-07-01-model-routing-and-review-gates-design.md).
+
 ## Commands
 
 - `npm start` — frontend + server + TTS sidecar in one shot (plan 43). Server owns the sidecar child-process lifecycle (per-user `autoStartSidecar` preference, default on); Ctrl+C tears the sidecar down via `taskkill /T /F` on Windows.
