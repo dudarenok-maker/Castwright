@@ -92,16 +92,45 @@ export const scriptReviewSlice = createSlice({
     },
 
     /** Start or restart a review-progress stream for one book. progress is 0..1. */
-    setActive: (s, a: PayloadAction<{ bookId: string; progress: number; label: string }>) => {
-      s.activeStreams[a.payload.bookId] = {
-        progress: Math.round(a.payload.progress * 100),
-        label: a.payload.label,
+    setActive: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        progress: number;
+        label: string;
+        chapterIndex?: number;
+        totalChapters?: number;
+        estRemainingMs?: number;
+      }>,
+    ) => {
+      const { bookId, progress, label, chapterIndex, totalChapters, estRemainingMs } = a.payload;
+      s.activeStreams[bookId] = {
+        progress: Math.round(progress * 100),
+        label,
+        ...(chapterIndex !== undefined ? { chapterIndex } : {}),
+        ...(totalChapters !== undefined ? { totalChapters } : {}),
+        ...(estRemainingMs !== undefined ? { estRemainingMs } : {}),
       };
     },
     /** Update the progress fraction (0..1) for an in-flight stream. No-op if not active. */
-    updateProgress: (s, a: PayloadAction<{ bookId: string; progress: number }>) => {
+    updateProgress: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        progress: number;
+        label?: string;
+        chapterIndex?: number;
+        totalChapters?: number;
+        estRemainingMs?: number;
+      }>,
+    ) => {
       const e = s.activeStreams[a.payload.bookId];
-      if (e) e.progress = Math.round(a.payload.progress * 100);
+      if (!e) return;
+      e.progress = Math.round(a.payload.progress * 100);
+      if (a.payload.label !== undefined) e.label = a.payload.label;
+      if (a.payload.chapterIndex !== undefined) e.chapterIndex = a.payload.chapterIndex;
+      if (a.payload.totalChapters !== undefined) e.totalChapters = a.payload.totalChapters;
+      if (a.payload.estRemainingMs !== undefined) e.estRemainingMs = a.payload.estRemainingMs;
     },
     /** Remove the active stream entry for one book (stream done or cancelled). */
     clear: (s, a: PayloadAction<{ bookId: string }>) => {
