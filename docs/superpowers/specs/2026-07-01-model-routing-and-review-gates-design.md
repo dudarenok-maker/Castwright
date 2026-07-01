@@ -4,305 +4,37 @@ _Design spec — 2026-07-01_
 
 ## Problem
 
-Token utilization has been driven by habit rather than policy: work defaults
-to whichever model the session happens to be running, with an unspoken bias
-toward over-using Opus/Fable even on mechanical work. Separately, several
-steps in the existing brainstorm → plan → implement → ship pipeline
-(`CLAUDE.md` "Branching workflow" / "Before-shipping checklist") are
-correct-but-optional in practice: adversarial review of a spec or plan only
-happens if explicitly requested, a combined code+docs review of a finished PR
-only happens if explicitly requested, post-spec task tracking is left to
-discretion rather than being systematic, PR-to-issue linkage is a documented
-convention rather than a verified one, and long conversations run past
-natural checkpoints with no prompt to compact. This spec codifies six rules
-to close those gaps, so they hold by default instead of requiring a repeated
-ask.
+Token utilization has been driven by habit rather than policy: work defaults to whichever model the session happens to be running, with an unspoken bias toward over-using Opus/Fable even on mechanical work. Separately, several steps in the existing brainstorm → plan → implement → ship pipeline (`CLAUDE.md` "Branching workflow" / "Before-shipping checklist") are correct-but-optional in practice: adversarial review of a spec or plan only happens if explicitly requested, a combined code+docs review of a finished PR only happens if explicitly requested, post-spec task tracking is left to discretion rather than being systematic, PR-to-issue linkage is a documented convention rather than a verified one, and long conversations run past natural checkpoints with no prompt to compact. This spec codifies six rules to close those gaps, so they hold by default instead of requiring a repeated ask.
 
-This is a governance spec, not a feature spec: there is no application code
-change here, only new/amended project instructions (`CLAUDE.md`, a new
-project skill) that change how work gets executed in this repo going forward.
+This is a governance spec, not a feature spec: there is no application code change here, only new/amended project instructions (`CLAUDE.md`, a new project skill) that change how work gets executed in this repo going forward.
 
 ## Decisions
 
-These were reached interactively across several rounds of brainstorming
-(see conversation) and are restated here as the binding rules.
+These were reached interactively across several rounds of brainstorming (see conversation) and are restated here as the binding rules.
 
-1. **Four-tier model routing, not three.** Fable is not a peer of Opus in the
-   routing table — it is gated separately (explicit per-task user approval
-   only, never auto-selected), because it is materially more expensive than
-   Opus and should never be reached by an automatic escalation path.
-   **The routing table applies to non-fork subagent/Workflow dispatch only.**
-   (Correction from adversarial review round 1: the `Agent` tool's own
-   schema states a fork "always runs on your model — a `model` override is
-   ignored." A fork always inherits the dispatching session's tier; it
-   cannot be independently routed. Cheap high-volume fan-out intended for
-   the Haiku tier must use a non-fork subagent, not a fork, or the routing
-   instruction is silently void. Round 1 fixed this prose but left the
-   routing table's Sonnet-tier row still listing "fork dispatch" as an
-   example — corrected in Design §1, round 2.)
-2. **Escalation is silent, not interrupt-driven, and moves one tier at a
-   time.** A subagent that fails twice on its assigned tier is
-   auto-re-dispatched one rung up — Haiku → Sonnet, Sonnet → Opus — without
-   asking first; the escalation is reported after the fact. (Note from
-   adversarial review round 3: the original wording only defined this for
-   Sonnet → Opus, leaving Haiku failures unrouted. One-rung-at-a-time
-   generalizes the same rule to both rungs rather than jumping a failing
-   Haiku dispatch straight to Opus, which would itself be the over-spend
-   this table exists to prevent.) This differs from session-level
-   model mismatches (item 3), which _do_ interrupt — the asymmetry is
-   deliberate: subagent dispatch is a disposable, cheap-to-retry decision;
-   switching the user's own session model is not something I can silently do
-   for them, so it has to surface as a question instead of an action.
-   **"Fails" means:** the dispatch terminates with a surfaced error, or its
-   returned result is rejected by my own follow-up check against the task's
-   stated acceptance criteria (e.g. tests still red after a claimed fix,
-   output doesn't match the request) — not merely "produced an answer I'd
-   have phrased differently."
-3. **Session-level tier mismatches are flagged, not silently absorbed.**
-   Because I cannot change my own running model, a task that drifts into a
-   different tier than the active session model produces an explicit
-   sentence naming the mismatch and asking whether to switch — it does not
-   get silently worked through on the "wrong" tier. **"Drifted" means:** the
-   current unit of work, judged against the same §1 table criteria used for
-   subagent dispatch, now matches a different row than the one the active
-   session model sits on.
-4. **Adversarial review of specs/plans is mandatory for non-trivial work,
-   and always runs via a real invocation of the `assumption-checker` skill
-   — never a paraphrase of its posture.** If the active session is already
-   Opus-tier, invoke the skill directly in-session (via the `Skill` tool).
-   Otherwise, dispatch an Opus-tier `Agent` subagent and instruct it to
-   invoke the `Skill` tool itself against the artifact. Either way, the
-   skill's actual output format and evidence-tagging discipline is what
-   gets used, not a hand-described version of it. (Correction from
-   adversarial review round 2: round 1's fix — "dispatching a subagent is
-   what achieves 'on Opus'" — was itself wrong when the session is already
-   Opus, and "instructed to apply the posture" risked losing the skill's
-   real rigor by paraphrasing it in a prompt instead of invoking it. Both
-   review subagents dispatched for this very spec were in fact told to
-   invoke the real `Skill` tool first and only self-apply the instructions
-   by hand as a fallback — this decision now states that as the rule
-   rather than leaving it as an unstated implementation detail.)
-   **"Non-trivial" reuses `CLAUDE.md`'s existing "Branching workflow"
-   definition of trivial work** (typo, dead-comment removal, single-line doc
-   tweak — the same bar for direct-to-main eligibility), not brainstorming's
-   complexity-scaling. (Correction: brainstorming's HARD-GATE explicitly
-   forbids exempting *any* work as "too simple to need a design" — it has no
-   triviality exemption to borrow. `CLAUDE.md` already has one, for a
-   different purpose, and this spec reuses it rather than inventing a
-   second definition.) This bar is deliberately low — almost anything that
-   produces a spec or plan in the first place clears it, so the exemption
-   rarely fires. That is expected, not a flaw: the point is reusing a real,
-   already-agreed definition instead of inventing a separate, softer one
-   that would carve out more work than intended.
-5. **The re-review loop is severity-gated and capped.** Re-review is
-   mandatory only when the finding is both load-bearing (`Critical` or
-   `Significant`) _and_ actually shown false (`Contradicted`) — a
-   correctly-flagged-but-confirmed-true assumption is not a defect and does
-   not trigger a loop. The cap (initial + 2 re-reviews) exists so an
-   unresolved disagreement escalates to the user rather than silently
-   consuming unbounded Opus-tier passes.
-6. **Judgment calls are never auto-resolved, in either review loop.** A
-   finding that requires a decision only the user can make (a genuinely
-   ambiguous or load-bearing assumption) suspends the fix-and-re-review loop
-   and routes through the normal ask-first behavior already established in
-   `CLAUDE.md` ("Think before coding"). This rule is shared verbatim between
-   the spec/plan re-review loop (§ Decision 5) and the PR review loop
-   (§ Decision 7) rather than restated separately, because it is the same
-   failure mode in both places: an automated loop mistaking a decision for a
-   defect.
-7. **A combined, independent review is mandatory once a PR is opened AND
-   fully staged** — every applicable item in `CLAUDE.md`'s before-shipping
-   checklist is either done or explicitly marked not-applicable (the same
-   allowance the checklist itself already grants), and everything is
-   committed and pushed. It uses the `code-review` skill at `high` effort,
-   run only once everything is pushed — not the separate `/review`
-   PR-comment command, and not against a working tree that still has
-   unpushed changes — reviewed **without** `--fix` on this first pass,
-   producing a findings report rather than auto-applied edits. (Note from
-   adversarial review round 3: `code-review` is itself a working/branch-diff
-   tool, not a PR-fetching one — "pushed PR diff" describes *when* this
-   runs relative to the push, not a distinct target the tool fetches from
-   GitHub; once everything is pushed, the branch diff and the PR diff are
-   the same bytes, so the timing requirement is what matters, not a claimed
-   tool capability.) (Correction from adversarial review round 2: round
-   1 claimed the skill's confidence/effort signal could gate `--fix` on a
-   per-finding basis. It cannot — `high` effort is precisely the setting
-   documented to "include uncertain findings," and confidence there is a
-   global breadth dial, not a per-finding field `--fix` can filter on.
-   Running with `--fix` at `high` effort would auto-apply exactly the
-   uncertain findings the original design meant to exclude. See Design § 3
-   for the corrected findings-handling loop, which triages by hand instead
-   of relying on a filter the tool doesn't expose. The "8-angle" breakdown
-   this decision cites — line-by-line diff, removed-behavior audit,
-   cross-file tracer, reuse, simplification, efficiency, altitude, CLAUDE.md
-   conventions — was directly observed in a live invocation of the skill
-   during this spec's own brainstorming session, not sourced from the
-   skill's static description, which names only "correctness bugs and
-   reuse/simplification/efficiency cleanups" without enumerating angles;
-   flagged here so the citation's evidence basis is honest rather than
-   implied to be documentation.) Any push to the PR after the mandatory
-   review has run — whether from folding a finding or from a
-   late-remembered doc — re-triggers the review against the new diff,
-   counted toward the same cap as any other re-review round.
-8. **Task tracking becomes mandatory, not discretionary, once spec-writing
-   ends.** Plan-writing itself is tracked (drafting each of `writing-plans`'
-   own tasks/steps is itself a task), and this continues through
-   implementation at per-step granularity. (Correction from adversarial
-   review round 1: `writing-plans` produces "Tasks" and "Steps," not
-   "sections" — wording here now matches that skill's actual vocabulary.)
-   The task list is reconciled against the plan document at task/step
-   boundaries rather than on every edit, preserving the status of steps
-   that did not change — this avoids task-list churn on minor wording edits
-   while still catching structural changes (a step added, removed, or
-   reworded) before the next one begins.
-9. **PR-gate issue verification is mandatory and self-sufficient, for every
-   case, including bug-shaped work.** At PR creation, a linked GitHub issue
-   (`Closes #NN` / `Refs #NN`) is verified, not assumed. If none exists, one
-   is auto-filed and linked — without pausing to ask — using
-   `CONTRIBUTING.md`'s actual two-shape convention rather than one uniform
-   label set: **bug-shaped work** (fixing existing broken behavior, no
-   design decision) gets the standalone `bug` label and a plain descriptive
-   title, same as the Bug issue form produces; **backlog-shaped work**
-   (new/changed behavior) gets `type:feature` or `type:chore` plus
-   `area:<prefix>`. (Correction from adversarial review round 2: round 1's
-   "`area:`/`type:` labels... `moscow:` omitted" was itself imprecise —
-   `CONTRIBUTING.md` shows bugs use the standalone `bug` label, not
-   `type:bug`, and don't carry `area:`/`moscow:` at all; only backlog-shaped
-   issues use the `type:`+`area:`+`moscow:` axes.) **`moscow:` is omitted
-   on auto-filed backlog-shaped issues**, left for the user to set — bugs
-   never carried it in the first place.
-   (Correction from adversarial review round 1: this decision was checked
-   against `CLAUDE.md`'s "The backlog" section, which states bug issues are
-   normally user-filed ("the user files them as they hit them") — the
-   conflict was surfaced to the user, who chose to keep auto-filing
-   uniformly, including for bug-shaped work, while addressing the
-   `moscow:`-guessing half of the conflict by leaving that label unset
-   rather than guessed. The bug-authorship half of the convention is
-   knowingly overridden for this gate, by explicit user decision, not by
-   silent assumption.) This upgrades the existing "Closes #NN" convention
-   already documented in `CLAUDE.md`'s "Opening the PR" section from a
-   manual habit to an enforced, self-sufficient check — mirroring how
-   Decision 2 treats subagent escalation as a cheap, low-risk action that
-   proceeds without interruption, in contrast to Decision 3's session-model
-   flagging. (Correction: the original citation of a project-`CLAUDE.md`
-   "Executing actions with care" principle was wrong — that section lives
-   in the harness-level system prompt, not this project's `CLAUDE.md`; the
-   comparison point here is Decision 2, not that harness section.)
-10. **Natural checkpoints are flagged for optional `/compact`.** At three
-    gates — spec approved (end of `brainstorming`), plan approved (end of
-    `writing-plans`), and PR merged/shipped — I say the checkpoint has been
-    reached and suggest running `/compact`, then leave the choice to the
-    user. I have no tool to trigger compaction myself; the harness's own
-    near-context-limit compression is the only automatic path, and its
-    timing is not something I control. This is a suggestion at a good
-    moment, not a state-preservation mechanism — it does not, by itself,
-    guarantee anything load-bearing survives a compaction, since that was
-    explicitly the option not chosen for this decision.
-11. **Decision 9's issue-linkage check gets a real, mechanical enforcement
-    hook — the one gate in this spec that is not purely self-judged.** A
-    new, always-on GitHub Actions workflow checks every PR's body for
-    `Closes #\d+` or `Refs #\d+` and fails the check if neither is present,
-    mirroring the existing `pr-title-lint.yml` pattern (`CLAUDE.md`: runs
-    "on every PR," unconditionally, distinct from the opt-in `verify.yml`
-    battery). This directly answers round 3's structural critique — that
-    every gate in this spec resolves to the dispatching session's own
-    judgment with no external check — for at least this one gate. It does
-    not fully resolve the critique: the other five gates (model routing,
-    the two adversarial-review loops, task tracking, `/compact` flagging)
-    remain self-enforced, and this spec does not claim otherwise. Chosen
-    because it is the cheapest and least ambiguous of the six to mechanize
-    (a PR body either contains the pattern or it doesn't; no judgment call
-    is needed to evaluate it, unlike "non-trivial," "clear-cut," or
-    "bug-shaped vs. backlog-shaped"), not because it is the most important.
-    (Correction from adversarial review of the implementation plan, same
-    day: a failing GitHub Actions check does not by itself block a merge —
-    only a check wired into the target branch's ruleset as a **required
-    status check** does. This repo's existing rulesets (verified via `gh
-    api repos/.../rulesets`) cover only force-push/deletion protection, not
-    required checks — and `docs/features/215-ci-label-gated-verify.md`
-    records that omission as **deliberate** ("excludes required status
-    checks so opt-in PRs can't deadlock"), not an oversight. "Real,
-    mechanical enforcement" therefore requires one additional, explicit
-    step beyond adding the workflow file: wiring `pr-issue-link.yml` into a
-    required-status-check ruleset for `main`. Because that is a repo
-    security-setting change, it is not something Claude executes
-    autonomously (the harness's own action-care rules place "modifying
-    system or security settings" in the never-auto-perform category) —
-    it is a one-time step the user runs themselves, documented with the
-    exact command in the implementation plan. Until that step is taken,
-    `pr-issue-link.yml` is visible-but-advisory, same as `pr-title-lint.yml`
-    today; this spec does not claim otherwise.)
+1. **Four-tier model routing, not three.** Fable is not a peer of Opus in the routing table — it is gated separately (explicit per-task user approval only, never auto-selected), because it is materially more expensive than Opus and should never be reached by an automatic escalation path. **The routing table applies to non-fork subagent/Workflow dispatch only.** (Correction from adversarial review round 1: the `Agent` tool's own schema states a fork "always runs on your model — a `model` override is ignored." A fork always inherits the dispatching session's tier; it cannot be independently routed. Cheap high-volume fan-out intended for the Haiku tier must use a non-fork subagent, not a fork, or the routing instruction is silently void. Round 1 fixed this prose but left the routing table's Sonnet-tier row still listing "fork dispatch" as an example — corrected in Design §1, round 2.)
+2. **Escalation is silent, not interrupt-driven, and moves one tier at a time.** A subagent that fails twice on its assigned tier is auto-re-dispatched one rung up — Haiku → Sonnet, Sonnet → Opus — without asking first; the escalation is reported after the fact. (Note from adversarial review round 3: the original wording only defined this for Sonnet → Opus, leaving Haiku failures unrouted. One-rung-at-a-time generalizes the same rule to both rungs rather than jumping a failing Haiku dispatch straight to Opus, which would itself be the over-spend this table exists to prevent.) This differs from session-level model mismatches (item 3), which _do_ interrupt — the asymmetry is deliberate: subagent dispatch is a disposable, cheap-to-retry decision; switching the user's own session model is not something I can silently do for them, so it has to surface as a question instead of an action. **"Fails" means:** the dispatch terminates with a surfaced error, or its returned result is rejected by my own follow-up check against the task's stated acceptance criteria (e.g. tests still red after a claimed fix, output doesn't match the request) — not merely "produced an answer I'd have phrased differently."
+3. **Session-level tier mismatches are flagged, not silently absorbed.** Because I cannot change my own running model, a task that drifts into a different tier than the active session model produces an explicit sentence naming the mismatch and asking whether to switch — it does not get silently worked through on the "wrong" tier. **"Drifted" means:** the current unit of work, judged against the same §1 table criteria used for subagent dispatch, now matches a different row than the one the active session model sits on.
+4. **Adversarial review of specs/plans is mandatory for non-trivial work, and always runs via a real invocation of the `assumption-checker` skill — never a paraphrase of its posture.** If the active session is already Opus-tier, invoke the skill directly in-session (via the `Skill` tool). Otherwise, dispatch an Opus-tier `Agent` subagent and instruct it to invoke the `Skill` tool itself against the artifact. Either way, the skill's actual output format and evidence-tagging discipline is what gets used, not a hand-described version of it. (Correction from adversarial review round 2: round 1's fix — "dispatching a subagent is what achieves 'on Opus'" — was itself wrong when the session is already Opus, and "instructed to apply the posture" risked losing the skill's real rigor by paraphrasing it in a prompt instead of invoking it. Both review subagents dispatched for this very spec were in fact told to invoke the real `Skill` tool first and only self-apply the instructions by hand as a fallback — this decision now states that as the rule rather than leaving it as an unstated implementation detail.) **"Non-trivial" reuses `CLAUDE.md`'s existing "Branching workflow" definition of trivial work** (typo, dead-comment removal, single-line doc tweak — the same bar for direct-to-main eligibility), not brainstorming's complexity-scaling. (Correction: brainstorming's HARD-GATE explicitly forbids exempting *any* work as "too simple to need a design" — it has no triviality exemption to borrow. `CLAUDE.md` already has one, for a different purpose, and this spec reuses it rather than inventing a second definition.) This bar is deliberately low — almost anything that produces a spec or plan in the first place clears it, so the exemption rarely fires. That is expected, not a flaw: the point is reusing a real, already-agreed definition instead of inventing a separate, softer one that would carve out more work than intended.
+5. **The re-review loop is severity-gated and capped.** Re-review is mandatory only when the finding is both load-bearing (`Critical` or `Significant`) _and_ actually shown false (`Contradicted`) — a correctly-flagged-but-confirmed-true assumption is not a defect and does not trigger a loop. The cap (initial + 2 re-reviews) exists so an unresolved disagreement escalates to the user rather than silently consuming unbounded Opus-tier passes.
+6. **Judgment calls are never auto-resolved, in either review loop.** A finding that requires a decision only the user can make (a genuinely ambiguous or load-bearing assumption) suspends the fix-and-re-review loop and routes through the normal ask-first behavior already established in `CLAUDE.md` ("Think before coding"). This rule is shared verbatim between the spec/plan re-review loop (§ Decision 5) and the PR review loop (§ Decision 7) rather than restated separately, because it is the same failure mode in both places: an automated loop mistaking a decision for a defect.
+7. **A combined, independent review is mandatory once a PR is opened AND fully staged** — every applicable item in `CLAUDE.md`'s before-shipping checklist is either done or explicitly marked not-applicable (the same allowance the checklist itself already grants), and everything is committed and pushed. It uses the `code-review` skill at `high` effort, run only once everything is pushed — not the separate `/review` PR-comment command, and not against a working tree that still has unpushed changes — reviewed **without** `--fix` on this first pass, producing a findings report rather than auto-applied edits. (Note from adversarial review round 3: `code-review` is itself a working/branch-diff tool, not a PR-fetching one — "pushed PR diff" describes *when* this runs relative to the push, not a distinct target the tool fetches from GitHub; once everything is pushed, the branch diff and the PR diff are the same bytes, so the timing requirement is what matters, not a claimed tool capability.) (Correction from adversarial review round 2: round 1 claimed the skill's confidence/effort signal could gate `--fix` on a per-finding basis. It cannot — `high` effort is precisely the setting documented to "include uncertain findings," and confidence there is a global breadth dial, not a per-finding field `--fix` can filter on. Running with `--fix` at `high` effort would auto-apply exactly the uncertain findings the original design meant to exclude. See Design § 3 for the corrected findings-handling loop, which triages by hand instead of relying on a filter the tool doesn't expose. The "8-angle" breakdown this decision cites — line-by-line diff, removed-behavior audit, cross-file tracer, reuse, simplification, efficiency, altitude, CLAUDE.md conventions — was directly observed in a live invocation of the skill during this spec's own brainstorming session, not sourced from the skill's static description, which names only "correctness bugs and reuse/simplification/efficiency cleanups" without enumerating angles; flagged here so the citation's evidence basis is honest rather than implied to be documentation.) Any push to the PR after the mandatory review has run — whether from folding a finding or from a late-remembered doc — re-triggers the review against the new diff, counted toward the same cap as any other re-review round.
+8. **Task tracking becomes mandatory, not discretionary, once spec-writing ends.** Plan-writing itself is tracked (drafting each of `writing-plans`' own tasks/steps is itself a task), and this continues through implementation at per-step granularity. (Correction from adversarial review round 1: `writing-plans` produces "Tasks" and "Steps," not "sections" — wording here now matches that skill's actual vocabulary.) The task list is reconciled against the plan document at task/step boundaries rather than on every edit, preserving the status of steps that did not change — this avoids task-list churn on minor wording edits while still catching structural changes (a step added, removed, or reworded) before the next one begins.
+9. **PR-gate issue verification is mandatory and self-sufficient, for every case, including bug-shaped work.** At PR creation, a linked GitHub issue (`Closes #NN` / `Refs #NN`) is verified, not assumed. If none exists, one is auto-filed and linked — without pausing to ask — using `CONTRIBUTING.md`'s actual two-shape convention rather than one uniform label set: **bug-shaped work** (fixing existing broken behavior, no design decision) gets the standalone `bug` label and a plain descriptive title, same as the Bug issue form produces; **backlog-shaped work** (new/changed behavior) gets `type:feature` or `type:chore` plus `area:<prefix>`. (Correction from adversarial review round 2: round 1's "`area:`/`type:` labels... `moscow:` omitted" was itself imprecise — `CONTRIBUTING.md` shows bugs use the standalone `bug` label, not `type:bug`, and don't carry `area:`/`moscow:` at all; only backlog-shaped issues use the `type:`+`area:`+`moscow:` axes.) **`moscow:` is omitted on auto-filed backlog-shaped issues**, left for the user to set — bugs never carried it in the first place. (Correction from adversarial review round 1: this decision was checked against `CLAUDE.md`'s "The backlog" section, which states bug issues are normally user-filed ("the user files them as they hit them") — the conflict was surfaced to the user, who chose to keep auto-filing uniformly, including for bug-shaped work, while addressing the `moscow:`-guessing half of the conflict by leaving that label unset rather than guessed. The bug-authorship half of the convention is knowingly overridden for this gate, by explicit user decision, not by silent assumption.) This upgrades the existing "Closes #NN" convention already documented in `CLAUDE.md`'s "Opening the PR" section from a manual habit to an enforced, self-sufficient check — mirroring how Decision 2 treats subagent escalation as a cheap, low-risk action that proceeds without interruption, in contrast to Decision 3's session-model flagging. (Correction: the original citation of a project-`CLAUDE.md` "Executing actions with care" principle was wrong — that section lives in the harness-level system prompt, not this project's `CLAUDE.md`; the comparison point here is Decision 2, not that harness section.)
+10. **Natural checkpoints are flagged for optional `/compact`.** At three gates — spec approved (end of `brainstorming`), plan approved (end of `writing-plans`), and PR merged/shipped — I say the checkpoint has been reached and suggest running `/compact`, then leave the choice to the user. I have no tool to trigger compaction myself; the harness's own near-context-limit compression is the only automatic path, and its timing is not something I control. This is a suggestion at a good moment, not a state-preservation mechanism — it does not, by itself, guarantee anything load-bearing survives a compaction, since that was explicitly the option not chosen for this decision.
+11. **Decision 9's issue-linkage check gets a real, mechanical enforcement hook — the one gate in this spec that is not purely self-judged.** A new, always-on GitHub Actions workflow checks every PR's body for `Closes #\d+` or `Refs #\d+` and fails the check if neither is present, mirroring the existing `pr-title-lint.yml` pattern (`CLAUDE.md`: runs "on every PR," unconditionally, distinct from the opt-in `verify.yml` battery). This directly answers round 3's structural critique — that every gate in this spec resolves to the dispatching session's own judgment with no external check — for at least this one gate. It does not fully resolve the critique: the other five gates (model routing, the two adversarial-review loops, task tracking, `/compact` flagging) remain self-enforced, and this spec does not claim otherwise. Chosen because it is the cheapest and least ambiguous of the six to mechanize (a PR body either contains the pattern or it doesn't; no judgment call is needed to evaluate it, unlike "non-trivial," "clear-cut," or "bug-shaped vs. backlog-shaped"), not because it is the most important. (Correction from adversarial review of the implementation plan, same day: a failing GitHub Actions check does not by itself block a merge — only a check wired into the target branch's ruleset as a **required status check** does. This repo's existing rulesets (verified via `gh api repos/.../rulesets`) cover only force-push/deletion protection, not required checks — and `docs/features/215-ci-label-gated-verify.md` records that omission as **deliberate** ("excludes required status checks so opt-in PRs can't deadlock"), not an oversight. "Real, mechanical enforcement" therefore requires one additional, explicit step beyond adding the workflow file: wiring `pr-issue-link.yml` into a required-status-check ruleset for `main`. Because that is a repo security-setting change, it is not something Claude executes autonomously (the harness's own action-care rules place "modifying system or security settings" in the never-auto-perform category) — it is a one-time step the user runs themselves, documented with the exact command in the implementation plan. Until that step is taken, `pr-issue-link.yml` is visible-but-advisory, same as `pr-title-lint.yml` today; this spec does not claim otherwise.)
 
 ## Adversarial review outcomes
 
-**Round 1** (dispatched on Opus, `assumption-checker` posture, against the
-initial draft) found 2 `Critical`+`Contradicted` and 3 `Significant`+
-`Contradicted` assumptions — the two Criticals were the invented
-"non-trivial" definition and the wrong claim that `code-review` lacked a
-confidence taxonomy; the three Significants were the fork/model-override
-gap, the "on Opus, inline" mechanism for `assumption-checker` being
-mechanically unspecified, and the auto-file-issue-vs-"user files bugs"
-convention conflict. (A sixth, separately-flagged citation error —
-misattributing "Executing actions with care" to project `CLAUDE.md` — was
-`Minor`, not one of the five counted findings, and is called out here only
-to avoid the ambiguity a round-2 pass caught in an earlier version of this
-summary.) All five counted findings, plus the citation error, are folded
-inline above (marked "Correction from adversarial review round 1").
+**Round 1** (dispatched on Opus, `assumption-checker` posture, against the initial draft) found 2 `Critical`+`Contradicted` and 3 `Significant`+ `Contradicted` assumptions — the two Criticals were the invented "non-trivial" definition and the wrong claim that `code-review` lacked a confidence taxonomy; the three Significants were the fork/model-override gap, the "on Opus, inline" mechanism for `assumption-checker` being mechanically unspecified, and the auto-file-issue-vs-"user files bugs" convention conflict. (A sixth, separately-flagged citation error — misattributing "Executing actions with care" to project `CLAUDE.md` — was `Minor`, not one of the five counted findings, and is called out here only to avoid the ambiguity a round-2 pass caught in an earlier version of this summary.) All five counted findings, plus the citation error, are folded inline above (marked "Correction from adversarial review round 1").
 
-**Round 2** (same mechanism, against the round-1-corrected file) found round
-1's own fix to the `code-review` confidence claim was itself wrong — `high`
-effort is documented to *include* uncertain findings, and confidence there
-is a global breadth dial, not a per-finding value `--fix` can filter on, so
-"auto-fix only high-confidence findings" was unbuildable as stated (1
-`Critical`+`Contradicted`). It also found: the routing table's Sonnet row
-still listed "fork dispatch" despite round 1's prose disclaiming it; the
-Decision 9 labeling fix was itself imprecise (bugs use the standalone `bug`
-label, not `type:`/`area:`/`moscow:`, contrary to the round-1 wording); and
-the `assumption-checker`-mechanism fix over-corrected by making subagent
-dispatch sound mandatory even when the session is already Opus-tier (3
-`Significant`+`Contradicted` total). Findings handling for the PR gate
-(Design § 3) was redesigned around manual triage rather than a `--fix`
-confidence filter that doesn't exist; the other three are corrected inline
-(marked "Correction from adversarial review round 2"). Two `Minor` findings
-(task/step sync granularity being closer to per-edit than the "avoids
-churn" framing implied; the non-trivial bar being a low one) are also
-addressed inline as honesty notes, though neither trips the mandatory
-re-review threshold on its own.
+**Round 2** (same mechanism, against the round-1-corrected file) found round 1's own fix to the `code-review` confidence claim was itself wrong — `high` effort is documented to *include* uncertain findings, and confidence there is a global breadth dial, not a per-finding value `--fix` can filter on, so "auto-fix only high-confidence findings" was unbuildable as stated (1 `Critical`+`Contradicted`). It also found: the routing table's Sonnet row still listed "fork dispatch" despite round 1's prose disclaiming it; the Decision 9 labeling fix was itself imprecise (bugs use the standalone `bug` label, not `type:`/`area:`/`moscow:`, contrary to the round-1 wording); and the `assumption-checker`-mechanism fix over-corrected by making subagent dispatch sound mandatory even when the session is already Opus-tier (3 `Significant`+`Contradicted` total). Findings handling for the PR gate (Design § 3) was redesigned around manual triage rather than a `--fix` confidence filter that doesn't exist; the other three are corrected inline (marked "Correction from adversarial review round 2"). Two `Minor` findings (task/step sync granularity being closer to per-edit than the "avoids churn" framing implied; the non-trivial bar being a low one) are also addressed inline as honesty notes, though neither trips the mandatory re-review threshold on its own.
 
-Round 2 tripped the same threshold round 1 did (1 Critical + 3 Significant,
-all Contradicted). Per the loop cap (initial + up to 2 re-review rounds),
-one more re-review round was permitted before this spec had to stop
-looping and be handed to the user as-is rather than revised further
-automatically.
+Round 2 tripped the same threshold round 1 did (1 Critical + 3 Significant, all Contradicted). Per the loop cap (initial + up to 2 re-review rounds), one more re-review round was permitted before this spec had to stop looping and be handed to the user as-is rather than revised further automatically.
 
-**Round 3** (final permitted round) again tripped the threshold — 1
-`Critical`+`Contradicted`, 3 `Significant`+`Contradicted` as reported. One
-of the three Significants was independently checked and found to be a
-false positive: the reviewer, a fresh subagent with no visibility into this
-session's own tool surface, claimed `TaskCreate`/`TaskUpdate` "don't appear"
-in the harness; both tools were confirmed present via `ToolSearch` in this
-session before accepting or rejecting the finding. The remaining findings
-held: the Critical was a genuine structural critique (documenting these
-gates more thoroughly may not compel compliance any better than the
-existing documentation these gates replace, since the Problem section's own
-premise is that the existing documentation is already skipped); the two
-surviving Significants were the Sonnet-row/fork-exclusion table
-inconsistency and an unfinished `type:chore` selection rule. Per the loop
-cap, no round 4 was run. Instead: the structural critique was surfaced to
-the user directly rather than silently patched (matching the Decision 6
-carve-out's spirit — a load-bearing judgment call about the spec's own
-premise is not something to auto-resolve past the cap), and the user chose
-to add mechanical enforcement for one gate (Decision 11 / Design § 7) rather
-than accept the critique as-is or fix wording only. The remaining concrete,
-non-judgment-call findings from round 3 (the table inconsistency, the
-`type:chore` rule, the escalation ladder's missing Haiku rung, the
-`code-review` target-vs-timing conflation, and the § 2/§ 3 trigger-shape
-overclaim) were fixed by hand in this same pass, without a further
-automated review round, since they required no judgment beyond what was
-already resolved.
+**Round 3** (final permitted round) again tripped the threshold — 1 `Critical`+`Contradicted`, 3 `Significant`+`Contradicted` as reported. One of the three Significants was independently checked and found to be a false positive: the reviewer, a fresh subagent with no visibility into this session's own tool surface, claimed `TaskCreate`/`TaskUpdate` "don't appear" in the harness; both tools were confirmed present via `ToolSearch` in this session before accepting or rejecting the finding. The remaining findings held: the Critical was a genuine structural critique (documenting these gates more thoroughly may not compel compliance any better than the existing documentation these gates replace, since the Problem section's own premise is that the existing documentation is already skipped); the two surviving Significants were the Sonnet-row/fork-exclusion table inconsistency and an unfinished `type:chore` selection rule. Per the loop cap, no round 4 was run. Instead: the structural critique was surfaced to the user directly rather than silently patched (matching the Decision 6 carve-out's spirit — a load-bearing judgment call about the spec's own premise is not something to auto-resolve past the cap), and the user chose to add mechanical enforcement for one gate (Decision 11 / Design § 7) rather than accept the critique as-is or fix wording only. The remaining concrete, non-judgment-call findings from round 3 (the table inconsistency, the `type:chore` rule, the escalation ladder's missing Haiku rung, the `code-review` target-vs-timing conflation, and the § 2/§ 3 trigger-shape overclaim) were fixed by hand in this same pass, without a further automated review round, since they required no judgment beyond what was already resolved.
 
-This spec is not being run through a fourth automated adversarial pass.
-Any further review is at the user's discretion.
+This spec is not being run through a fourth automated adversarial pass. Any further review is at the user's discretion.
 
 ## Design
 
@@ -315,181 +47,60 @@ Any further review is at the user's discretion.
 | Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (§2/§3 below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
 | Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
 
-Applies to non-fork subagent/Workflow dispatch and to the main session's own
-model choice (as guidance + proactive flagging, since only the user can
-actually switch the running session model). **Does not apply to forks** —
-a fork always inherits the dispatching session's model; there is no override
-path (see Decision 1).
+Applies to non-fork subagent/Workflow dispatch and to the main session's own model choice (as guidance + proactive flagging, since only the user can actually switch the running session model). **Does not apply to forks** — a fork always inherits the dispatching session's model; there is no override path (see Decision 1).
 
 ### 2. Mandatory adversarial review — specs & plans
 
-- **Trigger**: every non-trivial spec (`brainstorming`) and plan
-  (`writing-plans`), per `CLAUDE.md`'s Branching-workflow trivial-work
-  definition. Trivial/direct-to-main work is exempt.
-- **Mechanism**: a real invocation of the `assumption-checker` skill, not a
-  paraphrase — in-session via the `Skill` tool if the session is already
-  Opus-tier, otherwise an Opus-tier `Agent` subagent instructed to invoke
-  the `Skill` tool itself; present its returned findings myself.
-- **Timing**: findings are presented alongside the spec/plan at the same
-  review checkpoint — not before the user sees it, not after they've
-  separately approved it.
-- **Re-review trigger**: ≥1 assumption rated `Critical` (load-bearing) _and_
-  `Contradicted` (evidence), OR ≥2 rated `Significant` _and_ `Contradicted`.
-- **Loop cap**: initial pass + up to 2 re-review rounds (3 total). Still
-  tripping the threshold after that stops the loop and hands it to the user.
+- **Trigger**: every non-trivial spec (`brainstorming`) and plan (`writing-plans`), per `CLAUDE.md`'s Branching-workflow trivial-work definition. Trivial/direct-to-main work is exempt.
+- **Mechanism**: a real invocation of the `assumption-checker` skill, not a paraphrase — in-session via the `Skill` tool if the session is already Opus-tier, otherwise an Opus-tier `Agent` subagent instructed to invoke the `Skill` tool itself; present its returned findings myself.
+- **Timing**: findings are presented alongside the spec/plan at the same review checkpoint — not before the user sees it, not after they've separately approved it.
+- **Re-review trigger**: ≥1 assumption rated `Critical` (load-bearing) _and_ `Contradicted` (evidence), OR ≥2 rated `Significant` _and_ `Contradicted`.
+- **Loop cap**: initial pass + up to 2 re-review rounds (3 total). Still tripping the threshold after that stops the loop and hands it to the user.
 - **Judgment-call carve-out**: see Decision 6.
 
 ### 3. Mandatory independent review — PRs
 
-- **Sequence**: finalize implementation → local `npm run verify` → `gh pr
-  create` → work through `CLAUDE.md`'s before-shipping checklist item by
-  item (each done or explicitly marked not-applicable, per that checklist's
-  own existing allowance), committing and pushing along the way → once
-  every applicable item is addressed, that is "fully staged" and the
-  mandatory review triggers on that pushed state (not on each earlier,
-  incomplete push).
-- **Mechanism**: `code-review` skill at `high` effort, run once the PR is
-  fully staged (§ Sequence above), run **without** `--fix` — the pass
-  produces a findings report only.
-- **Findings handling**: I triage the report myself. Clear-cut findings
-  (unambiguous bug, obvious dead code, a straightforward CLAUDE.md
-  violation) get fixed directly, committed, and pushed. Findings that turn
-  on a judgment call route through the Decision 6 carve-out instead of
-  being applied. That push (or, if nothing needed a code change, my
-  confirmation that the report had nothing clear-cut to fix) is followed by
-  a re-review pass, capped at 2 re-review rounds total. (Correction from
-  adversarial review round 2: the skill has no exposed per-finding
-  confidence value `--fix` can filter on — `--fix` applies whatever the
-  pass surfaced, wholesale. Triaging by hand, the same way Decision 6
-  already requires for ambiguous findings elsewhere, replaces a filter the
-  tool doesn't have rather than assuming one exists.) **This loop's trigger
-  is not the same shape as § 2's** (note from adversarial review round 3):
-  § 2 re-reviews only past a severity threshold (≥1 `Critical`+`Contradicted`
-  or ≥2 `Significant`+`Contradicted`), because `assumption-checker` findings
-  carry that taxonomy. `code-review` findings don't, so this loop re-reviews
-  after *any* clear-cut fix, with no severity gate — only the 2-round cap is
-  shared between the two loops, not the trigger condition.
+- **Sequence**: finalize implementation → local `npm run verify` → `gh pr create` → work through `CLAUDE.md`'s before-shipping checklist item by item (each done or explicitly marked not-applicable, per that checklist's own existing allowance), committing and pushing along the way → once every applicable item is addressed, that is "fully staged" and the mandatory review triggers on that pushed state (not on each earlier, incomplete push).
+- **Mechanism**: `code-review` skill at `high` effort, run once the PR is fully staged (§ Sequence above), run **without** `--fix` — the pass produces a findings report only.
+- **Findings handling**: I triage the report myself. Clear-cut findings (unambiguous bug, obvious dead code, a straightforward CLAUDE.md violation) get fixed directly, committed, and pushed. Findings that turn on a judgment call route through the Decision 6 carve-out instead of being applied. That push (or, if nothing needed a code change, my confirmation that the report had nothing clear-cut to fix) is followed by a re-review pass, capped at 2 re-review rounds total. (Correction from adversarial review round 2: the skill has no exposed per-finding confidence value `--fix` can filter on — `--fix` applies whatever the pass surfaced, wholesale. Triaging by hand, the same way Decision 6 already requires for ambiguous findings elsewhere, replaces a filter the tool doesn't have rather than assuming one exists.) **This loop's trigger is not the same shape as § 2's** (note from adversarial review round 3): § 2 re-reviews only past a severity threshold (≥1 `Critical`+`Contradicted` or ≥2 `Significant`+`Contradicted`), because `assumption-checker` findings carry that taxonomy. `code-review` findings don't, so this loop re-reviews after *any* clear-cut fix, with no severity gate — only the 2-round cap is shared between the two loops, not the trigger condition.
 - **Judgment-call carve-out**: see Decision 6.
 
 ### 4. Task tracking, post-spec
 
-- Starts at plan-writing (drafting each of `writing-plans`' own tasks/steps
-  is itself tracked as a task), and continues through implementation.
-- Granularity: one task per individual implementation step, not per
-  section/phase.
-- Sync: the task list is reconciled against the plan document at task/step
-  boundaries, preserving completed/in-progress status for unaffected steps.
-  Uses the existing `TaskCreate`/`TaskUpdate`/`TaskList` tooling — this spec
-  formalizes when it is mandatory, not how it works mechanically. (Note from
-  adversarial review round 2: `writing-plans` defines a "step" as one
-  2–5-minute action, so "sync at step boundaries" is close to per-edit in
-  practice, not a meaningfully coarser cadence — the goal here is matching
-  the plan's own natural units, not a separate churn-reduction claim.)
+- Starts at plan-writing (drafting each of `writing-plans`' own tasks/steps is itself tracked as a task), and continues through implementation.
+- Granularity: one task per individual implementation step, not per section/phase.
+- Sync: the task list is reconciled against the plan document at task/step boundaries, preserving completed/in-progress status for unaffected steps. Uses the existing `TaskCreate`/`TaskUpdate`/`TaskList` tooling — this spec formalizes when it is mandatory, not how it works mechanically. (Note from adversarial review round 2: `writing-plans` defines a "step" as one 2–5-minute action, so "sync at step boundaries" is close to per-edit in practice, not a meaningfully coarser cadence — the goal here is matching the plan's own natural units, not a separate churn-reduction claim.)
 
 ### 5. PR-gate issue verification
 
-- **Trigger**: every `gh pr create` for non-trivial work, including
-  bug-shaped work.
-- **Check**: the PR body must contain `Closes #NN` or `Refs #NN` referencing
-  an existing GitHub issue.
-- **Missing case**: auto-file a new issue capturing the work, then add
-  `Closes #NN` to the PR body — proceeds without interruption, in every
-  case including bug-shaped work (a deliberate, explicit override of
-  `CLAUDE.md`'s general "user files bugs" convention for this specific
-  gate — see Decision 9). Labeling follows `CONTRIBUTING.md`'s actual
-  two-shape convention: bug-shaped work → standalone `bug` label, no
-  `area:`/`type:`/`moscow:`; backlog-shaped work → `area:<prefix>` +
-  `type:feature` or `type:chore`, `moscow:` omitted. (Note from adversarial
-  review round 3: `type:feature` vs. `type:chore` had no selection rule.
-  Fixed by reusing this repo's existing commit-type taxonomy
-  (`CONTRIBUTING.md`'s commit-convention table) rather than inventing a
-  separate one: `type:chore` when the work is the commit-type-`chore`
-  shape — codegen, version bumps, tidy-up, no user-facing behavior change
-  — `type:feature` otherwise.)
-- **Timing**: performed at PR creation, distinct from and prior to the
-  mandatory independent review (§3), which reviews code + docs combined
-  once the PR (and its issue link) already exist.
+- **Trigger**: every `gh pr create` for non-trivial work, including bug-shaped work.
+- **Check**: the PR body must contain `Closes #NN` or `Refs #NN` referencing an existing GitHub issue.
+- **Missing case**: auto-file a new issue capturing the work, then add `Closes #NN` to the PR body — proceeds without interruption, in every case including bug-shaped work (a deliberate, explicit override of `CLAUDE.md`'s general "user files bugs" convention for this specific gate — see Decision 9). Labeling follows `CONTRIBUTING.md`'s actual two-shape convention: bug-shaped work → standalone `bug` label, no `area:`/`type:`/`moscow:`; backlog-shaped work → `area:<prefix>` + `type:feature` or `type:chore`, `moscow:` omitted. (Note from adversarial review round 3: `type:feature` vs. `type:chore` had no selection rule. Fixed by reusing this repo's existing commit-type taxonomy (`CONTRIBUTING.md`'s commit-convention table) rather than inventing a separate one: `type:chore` when the work is the commit-type-`chore` shape — codegen, version bumps, tidy-up, no user-facing behavior change — `type:feature` otherwise.)
+- **Timing**: performed at PR creation, distinct from and prior to the mandatory independent review (§3), which reviews code + docs combined once the PR (and its issue link) already exist.
 
 ### 6. Checkpoint flagging for `/compact`
 
-- **Gates**: spec approved (end of `brainstorming`), plan approved (end of
-  `writing-plans`), PR merged/shipped.
-- **Behavior**: at each gate, state that a natural checkpoint has been
-  reached and suggest `/compact`; the user decides. No tool exists for me
-  to trigger compaction directly.
-- **Non-goal**: this is not a state-preservation mechanism. It does not
-  guarantee spec/plan/review state survives a compaction — that would
-  require a separate durable-checkpoint mechanism, which was considered
-  and explicitly not chosen (see Decision 10).
+- **Gates**: spec approved (end of `brainstorming`), plan approved (end of `writing-plans`), PR merged/shipped.
+- **Behavior**: at each gate, state that a natural checkpoint has been reached and suggest `/compact`; the user decides. No tool exists for me to trigger compaction directly.
+- **Non-goal**: this is not a state-preservation mechanism. It does not guarantee spec/plan/review state survives a compaction — that would require a separate durable-checkpoint mechanism, which was considered and explicitly not chosen (see Decision 10).
 
 ### 7. Mechanical enforcement — issue-linkage CI check
 
-- **What**: a new, always-on GitHub Actions workflow, structured like the
-  existing `pr-title-lint.yml`, that runs on every PR unconditionally (not
-  part of the opt-in `verify.yml` battery).
-- **Check**: read the PR body via the GitHub Actions PR event payload; fail
-  the check if it contains neither `Closes #\d+` nor `Refs #\d+`.
-- **Exemption**: none baked into the workflow itself — trivial/direct-to-main
-  work (Decision 9's own trigger definition) doesn't go through a PR at all,
-  so it never reaches this check; every PR that exists is, by construction,
-  non-trivial enough to be gated.
-- **Scope honesty**: this mechanizes Decision 9 only. It does not verify the
-  linked issue is well-formed, correctly labeled, or that the auto-file
-  behavior in §5 ran correctly — only that *some* issue reference exists in
-  the PR body. The other five decisions in this spec remain self-enforced
-  (see the "Out of scope" section's explicit acknowledgment of that).
-- **Required-status-check wiring (added post-approval, see Decision 11's
-  correction note)**: the workflow alone is advisory. Blocking a merge on
-  it requires a separate, one-time step — adding it to `main`'s ruleset as
-  a required status check — which the user runs themselves (a security
-  setting, outside what Claude executes autonomously); the implementation
-  plan documents the exact command.
+- **What**: a new, always-on GitHub Actions workflow, structured like the existing `pr-title-lint.yml`, that runs on every PR unconditionally (not part of the opt-in `verify.yml` battery).
+- **Check**: read the PR body via the GitHub Actions PR event payload; fail the check if it contains neither `Closes #\d+` nor `Refs #\d+`.
+- **Exemption**: none baked into the workflow itself — trivial/direct-to-main work (Decision 9's own trigger definition) doesn't go through a PR at all, so it never reaches this check; every PR that exists is, by construction, non-trivial enough to be gated.
+- **Scope honesty**: this mechanizes Decision 9 only. It does not verify the linked issue is well-formed, correctly labeled, or that the auto-file behavior in §5 ran correctly — only that *some* issue reference exists in the PR body. The other five decisions in this spec remain self-enforced (see the "Out of scope" section's explicit acknowledgment of that).
+- **Required-status-check wiring (added post-approval, see Decision 11's correction note)**: the workflow alone is advisory. Blocking a merge on it requires a separate, one-time step — adding it to `main`'s ruleset as a required status check — which the user runs themselves (a security setting, outside what Claude executes autonomously); the implementation plan documents the exact command.
 
 ## Embedding
 
-- **`CLAUDE.md`**: a new "Model routing" section (§1's table) placed near
-  the existing "Working principles"; amendments to "Before-shipping
-  checklist" and "Opening the PR" stating the mandatory review gates (§2,
-  §3) and the PR-gate issue verification (§5); a note under "Branching
-  workflow" or a new subsection covering mandatory task tracking (§4) and
-  checkpoint flagging (§6).
-- **`.github/workflows/`**: a new workflow file (§7) alongside the existing
-  `pr-title-lint.yml`, mechanically enforcing Decision 9's issue-linkage
-  check on every PR.
-- **New project skill**: `.claude/skills/model-routing/SKILL.md` — holds the
-  full decision table and escalation logic in one place, referenced (not
-  duplicated) from `CLAUDE.md`, following the existing pattern set by
-  `.claude/skills/run-app/SKILL.md`.
-- **Mechanism note**: `brainstorming` and `writing-plans` are global plugin
-  skills (versioned under the Superpowers plugin cache) and are not edited
-  by this change. The mandatory gates are enforced as project-level
-  `CLAUDE.md` instructions, which take precedence over skill defaults per
-  the standing rule already stated in this environment ("User instructions
-  ... take precedence over skills, which in turn override default
-  behavior").
+- **`CLAUDE.md`**: a new "Model routing" section (§1's table) placed near the existing "Working principles"; amendments to "Before-shipping checklist" and "Opening the PR" stating the mandatory review gates (§2, §3) and the PR-gate issue verification (§5); a note under "Branching workflow" or a new subsection covering mandatory task tracking (§4) and checkpoint flagging (§6).
+- **`.github/workflows/`**: a new workflow file (§7) alongside the existing `pr-title-lint.yml`, mechanically enforcing Decision 9's issue-linkage check on every PR.
+- **New project skill**: `.claude/skills/model-routing/SKILL.md` — holds the full decision table and escalation logic in one place, referenced (not duplicated) from `CLAUDE.md`, following the existing pattern set by `.claude/skills/run-app/SKILL.md`.
+- **Mechanism note**: `brainstorming` and `writing-plans` are global plugin skills (versioned under the Superpowers plugin cache) and are not edited by this change. The mandatory gates are enforced as project-level `CLAUDE.md` instructions, which take precedence over skill defaults per the standing rule already stated in this environment ("User instructions ... take precedence over skills, which in turn override default behavior").
 
 ## Out of scope
 
-- No change to application code, tests, or the audiobook-generation product
-  surface.
-- No change to the `assumption-checker` or `code-review` skill
-  implementations themselves — both are reused as-is.
-- **Named explicitly (per adversarial review rounds 2 and 3): five of six
-  gates in this spec are self-enforced, not mechanically checked.** "Fails"
-  (Decision 2), "drifted" (Decision 3), "non-trivial" (Decision 4),
-  "clear-cut" (Design § 3), "fully staged" (Decision 7), and "bug-shaped
-  vs. backlog-shaped" (Decision 9's own classification, as distinct from
-  its now-mechanized linkage check) all resolve to the dispatching
-  session's own judgment in the moment. Decision 11 / Design § 7 mechanizes
-  one narrow slice of Decision 9 (that *some* issue is linked) — it is a
-  real, external, unavoidable check, not a documented convention. The other
-  five gates remain exactly as self-enforced as the practices this spec
-  replaces. Round 3's adversarial review raised this directly as the
-  spec's most dangerous assumption: that writing rules down changes
-  whether they're followed, when the Problem section's own premise is that
-  these practices were *already documented* and skipped anyway. This spec
-  does not resolve that critique for the five remaining gates — it
-  narrows it by one. If those five are observed to lapse in practice, that
-  is evidence toward mechanizing more of them (following Decision 11's
-  pattern), not a sign this spec was wrong to write down what "good" looks
-  like first.
+- No change to application code, tests, or the audiobook-generation product surface.
+- No change to the `assumption-checker` or `code-review` skill implementations themselves — both are reused as-is.
+- **Named explicitly (per adversarial review rounds 2 and 3): five of six gates in this spec are self-enforced, not mechanically checked.** "Fails" (Decision 2), "drifted" (Decision 3), "non-trivial" (Decision 4), "clear-cut" (Design § 3), "fully staged" (Decision 7), and "bug-shaped vs. backlog-shaped" (Decision 9's own classification, as distinct from its now-mechanized linkage check) all resolve to the dispatching session's own judgment in the moment. Decision 11 / Design § 7 mechanizes one narrow slice of Decision 9 (that *some* issue is linked) — it is a real, external, unavoidable check, not a documented convention. The other five gates remain exactly as self-enforced as the practices this spec replaces. Round 3's adversarial review raised this directly as the spec's most dangerous assumption: that writing rules down changes whether they're followed, when the Problem section's own premise is that these practices were *already documented* and skipped anyway. This spec does not resolve that critique for the five remaining gates — it narrows it by one. If those five are observed to lapse in practice, that is evidence toward mechanizing more of them (following Decision 11's pattern), not a sign this spec was wrong to write down what "good" looks like first.
