@@ -29,7 +29,7 @@ interface Props {
   onClose: () => void;
 }
 
-const MAX_TITLE_LEN = 200;
+export const MAX_TITLE_LEN = 200;
 
 export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props) {
   /* Seed the input from the chapter the pencil was clicked against.
