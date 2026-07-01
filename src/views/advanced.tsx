@@ -27,7 +27,7 @@ import {
   selectRestartServerPending,
 } from '../store/config-slice';
 import { api } from '../lib/api';
-import type { KnobDescriptor, PromptState } from '../lib/types';
+import type { GpuDevice, KnobDescriptor, PromptState } from '../lib/types';
 
 /* ── PromptRow ────────────────────────────────────────────────────────────── */
 
@@ -175,9 +175,16 @@ export function AdvancedView() {
   const restartPending = useAppSelector(selectRestartPending);
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
+  const [gpuDevices, setGpuDevices] = useState<GpuDevice[]>([]);
 
   useEffect(() => {
     dispatch(fetchConfig());
+    // Best-effort: an unreachable sidecar just means device knobs fall back
+    // to the auto/cpu-only dropdown (see override-row.tsx).
+    api
+      .getGpuDevices()
+      .then((res) => setGpuDevices(res.devices))
+      .catch(() => setGpuDevices([]));
   }, [dispatch]);
 
   const handleResetAll = () => {
@@ -298,6 +305,7 @@ export function AdvancedView() {
                         }
                         onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw }))}
                         onRevert={() => dispatch(resetKnob(d.key))}
+                        gpuDevices={gpuDevices}
                       />
                     ),
                   )}
