@@ -67,7 +67,8 @@ jobs:
       - run: flutter build appbundle --release
       # ops-17 / #790 — Trip B. The KGP escape-hatch flags must stay present:
       # deleting them silently re-breaks the build under AGP 9 (the unmigrated
-      # audio_session / flutter_foreground_task / mobile_scanner plugins).
+      # flutter_foreground_task / mobile_scanner plugins; audio_session dropped
+      # off this list at 0.2.4).
       - name: Guard KGP escape-hatch flags (ops-17 / #790)
         run: |
           set -euo pipefail
