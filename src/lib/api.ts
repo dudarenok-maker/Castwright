@@ -7683,7 +7683,8 @@ export interface RecentChapter {
   /** B1 — QA re-record wall ÷ audio (the cost the gate fixes move). null for
       multi-worker runs. */
   rerecordRtf: number | null;
-  /** B1 — always-on verify floor (transcribe + embed) ÷ audio. null as above. */
+  /** B1 — always-on verify floor (transcribe + embed) ÷ audio. null as above.
+      Carried for the API/history ring; not yet rendered as its own column. */
   verifyRtf: number | null;
   audioSec: number;
   synthSec: number;
