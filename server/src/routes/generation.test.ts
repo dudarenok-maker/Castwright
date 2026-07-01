@@ -1391,20 +1391,17 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
 
 /* B1 (PR-2 QA-cost telemetry) — the route narrows synthMs to the pre-encode
    wall and forwards synthesiseChapter's rerecordMs/transcribeMs/embedMs QA
-   sub-costs into recordChapterThroughput, but ONLY for a single-worker run
-   (generationWorkers === 1): under multi-worker interleaving, summing each
-   block's own wall is physically meaningless, so the route passes `null`
-   instead. getGenerationStats() reads the same in-process accumulator the
-   route feeds, and `recentChapters` is newest-first, so the freshest entry
-   always reflects the chapter this test just drove through the route. */
+   sub-costs into recordChapterThroughput, but ONLY when this chapter's render
+   never overlapped another job's (`job.hadSibling`, tracked from ACTUAL
+   concurrent registration in inFlightByChapter — not a generationWorkers
+   config read, which can't see two single-worker books rendering
+   simultaneously or a mid-run worker-count change): under real interleaving,
+   summing each block's own wall is physically meaningless, so the route
+   passes `null` instead. getGenerationStats() reads the same in-process
+   accumulator the route feeds. */
 describe('POST /api/books/:bookId/generation — B1 QA-cost telemetry passthrough', () => {
-  afterEach(() => {
-    delete process.env.GEN_WORKERS;
-  });
-
-  it('single-worker render reports non-null rerecordRtf/verifyRtf on the stats accumulator', async () => {
+  it('a lone chapter render (no concurrent sibling) reports non-null rerecordRtf/verifyRtf', async () => {
     resetGenerationStats();
-    process.env.GEN_WORKERS = '1';
     synthesiseImpl = async () => ({
       pcm: Buffer.alloc(2),
       sampleRate: 24000,
@@ -1436,38 +1433,63 @@ describe('POST /api/books/:bookId/generation — B1 QA-cost telemetry passthroug
     expect(latest.verifyRtf).toBeCloseTo((500 + 300) / 1000 / 10, 5);
   });
 
-  it('multi-worker render leaves rerecordRtf/verifyRtf null (summed wall is meaningless under interleaving)', async () => {
+  it('two GENUINELY concurrent chapter renders leave rerecordRtf/verifyRtf null for both (real overlap, no generationWorkers config set at all)', async () => {
     resetGenerationStats();
-    process.env.GEN_WORKERS = '2';
-    synthesiseImpl = async () => ({
-      pcm: Buffer.alloc(2),
-      sampleRate: 24000,
-      durationSec: 10,
-      segments: [
-        {
-          characterId: 'narrator',
-          voiceName: 'Zephyr',
-          sampleStart: 0,
-          sampleEnd: 1,
-          sentenceIds: [1],
-        },
-      ],
-      rerecordMs: 2000,
-      transcribeMs: 500,
-      embedMs: 300,
-    });
-    const res = await request(app)
+    /* Gate both synth calls so neither resolves until BOTH are in flight —
+       proves the gate reacts to actual overlap (job.hadSibling), since this
+       test never touches process.env.GEN_WORKERS / generationWorkers. */
+    const resolvers: Array<() => void> = [];
+    synthesiseImpl = (args: unknown) => {
+      const signal = (args as { signal?: AbortSignal }).signal;
+      return new Promise((resolve, reject) => {
+        const settle = () =>
+          resolve({
+            pcm: Buffer.alloc(2),
+            sampleRate: 24000,
+            durationSec: 10,
+            segments: [
+              {
+                characterId: 'narrator',
+                voiceName: 'Zephyr',
+                sampleStart: 0,
+                sampleEnd: 1,
+                sentenceIds: [1],
+              },
+            ],
+            rerecordMs: 2000,
+            transcribeMs: 500,
+            embedMs: 300,
+          });
+        const abortErr = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+        if (signal?.aborted) return reject(abortErr());
+        signal?.addEventListener('abort', () => reject(abortErr()), { once: true });
+        resolvers.push(settle);
+        if (resolvers.length >= 2) {
+          for (const r of resolvers.splice(0)) r();
+        }
+      });
+    };
+    const p1 = request(app)
       .post(`/api/books/${bookId}/generation`)
-      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
-    expect(res.status).toBe(200);
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    const p2 = request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [2] });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
 
     const stats = getGenerationStats();
-    const latest = stats.recentChapters[0];
-    expect(latest.chapterId).toBe(1);
-    expect(latest.rerecordRtf).toBeNull();
-    expect(latest.verifyRtf).toBeNull();
+    const byChapter = new Map(stats.recentChapters.map((c) => [c.chapterId, c]));
+    const ch1 = byChapter.get(1)!;
+    const ch2 = byChapter.get(2)!;
+    expect(ch1.rerecordRtf).toBeNull();
+    expect(ch1.verifyRtf).toBeNull();
+    expect(ch2.rerecordRtf).toBeNull();
+    expect(ch2.verifyRtf).toBeNull();
     /* The plain rtf (whole-chapter synth ÷ audio) is unaffected by the gate —
-       only the QA sub-cost split is suppressed under multi-worker. */
-    expect(latest.rtf).not.toBeNull();
-  });
+       only the QA sub-cost split is suppressed under real overlap. */
+    expect(ch1.rtf).not.toBeNull();
+    expect(ch2.rtf).not.toBeNull();
+  }, 15_000);
 });

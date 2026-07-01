@@ -9,7 +9,7 @@ owner: null
 > Status: active
 > Key files: `server/tts-sidecar/main.py` (batch log + `SynthBatchResult` genMs/audioMs + frame header), `server/src/tts/sidecar.ts` (parse perf header), `server/src/tts/generation-stats.ts` (chapter + live-batch windows + per-chapter history ring), `server/src/routes/generation-stats.ts`, `server/src/routes/generation.ts` (rollup + `onBatchComplete`), `server/src/tts/synthesise-chapter.ts` (`onBatchComplete`), `src/components/admin-pill.tsx`, `src/views/admin.tsx` (per-chapter throughput table), `src/lib/api.ts`
 > URL surface: `GET /api/generation/stats`; top-bar Admin pill (all-users since [[172-admin-watch-console]]) + Admin-view throughput table
-> OpenAPI ops: none (dev/observability endpoint, not part of the public contract)
+> OpenAPI ops: `GET /api/generation/stats` (full schema, added PR-2 2026-07-01 — see "QA-cost telemetry" below; was previously undocumented)
 
 ## Benefit / Rationale
 
@@ -65,6 +65,34 @@ written only at chapter completion) looked stalled when it was fine.
   The sidecar `batch synth` line is pure-compute (`gen_ms ÷ Σ audio_ms`); the
   server rollup + pill are end-to-end (chapter synth wall ÷ audio), which is
   higher because it includes HTTP + queueing + cross-engine waits — by design.
+  **Narrowed 2026-07-01 (PR-2):** "chapter synth wall" now excludes the
+  post-synth loudnorm encode + disk write (captured right after
+  `synthesiseChapter` returns, not after `finalizeChapterAudioWrite`) — RTF
+  numbers (route log line, `recordChapterThroughput`'s `rtf`, and the fs-20
+  `resource-telemetry.jsonl` `wallSec`) shift down at this deploy boundary.
+  No version marker distinguishes pre/post records in the JSONL file — this
+  was accepted rather than added: the file is a capped, best-effort
+  observability ring (2000 lines, rotates), the field is advisory (a trend
+  chart), and the step-change ages out of the window within one active book's
+  worth of generation. See `server/src/tts/resource-telemetry.ts`'s `wallSec`
+  doc comment.
+- **QA-cost telemetry (PR-2, 2026-07-01):** `synthesiseChapter` also returns
+  `rerecordMs`/`transcribeMs`/`embedMs` — the wall time its own QA re-record
+  loop (signal-QA + ASR-QA) and speaker-embed pass spent, broken out of the
+  narrowed synth wall above. `generation-stats.ts` derives two more per-chapter
+  fields from these: `rerecordRtf` (rerecordMs ÷ audioSec) and `verifyRtf`
+  ((transcribeMs + embedMs) ÷ audioSec) — both `number | null`. The admin
+  throughput table (`GenerationThroughput` in `src/views/admin.tsx`) renders
+  `rerecordRtf` as a new "QA" column; `verifyRtf` is plumbed end-to-end but not
+  yet rendered. **Gated on ACTUAL concurrency, not a config read:** the split
+  is only meaningful when this chapter's render never overlapped another job's
+  wall-clock — summing per-block time under real interleaving over-counts. The
+  gate is `RunningJob.hadSibling` in `server/src/routes/generation.ts`,
+  flipped true in `registerJob` whenever `inFlightByChapter.size > 1` (global
+  across all books, matching how the queue dispatcher's N workers map onto N
+  concurrent chapter jobs) — NOT `getResolvedGenerationWorkers() === 1`, which
+  can't see two single-worker books rendering simultaneously or a mid-run
+  worker-count change and would mislabel genuinely contended data as clean.
 - **Reversibility:** delete the endpoint mount + the pill swap; the accumulator
   is inert if nothing calls `recordChapterThroughput`.
 
@@ -99,6 +127,11 @@ written only at chapter completion) looked stalled when it was fine.
   history ring stays back-compatible with existing call sites and tests.
 - Each history `rtf` is `null` (not `0`) when the chapter produced no audio, so
   the table renders a dash and skips the trend comparison (no `Infinity` row).
+- `rerecordRtf`/`verifyRtf` are `null` whenever `RunningJob.hadSibling` is true
+  for the completing job (real overlap detected) OR the QA sub-costs are
+  absent (multi-worker path never populates them) — the gate must key off
+  actual concurrency, never a static `generationWorkers` config read
+  (`server/src/routes/generation.ts`).
 
 ## Test plan
 
@@ -122,6 +155,14 @@ written only at chapter completion) looked stalled when it was fine.
 - Vitest server (`server/src/routes/generation-stats.test.ts`) — `GET
   /api/generation/stats` returns the idle shape, reflects a recorded chapter, and
   serialises the per-chapter history with `title`/`bookId`/`modelKey`.
+- Vitest server (`server/src/tts/generation-stats.test.ts`, B1 cases) —
+  `rerecordRtf`/`verifyRtf` derivation from the QA sub-costs, including
+  either-sub-cost-alone and `audioSec===0` edge cases.
+- Vitest server (`server/src/routes/generation.test.ts`, "B1 QA-cost telemetry
+  passthrough") — a lone chapter render reports non-null `rerecordRtf`/
+  `verifyRtf`; two chapters driven through GENUINE concurrent overlap (a gated
+  synth mock, no `generationWorkers` config touched) both report `null` —
+  pins the gate to actual concurrency, not the config value.
 - Vitest frontend (`src/components/worktrees-rtf-pill.test.tsx`) — idle shows
   just "wt"; generating shows the live per-batch RTF; the live per-batch figure
   is preferred over the per-chapter rollup; falls back to per-chapter when no

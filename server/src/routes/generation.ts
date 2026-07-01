@@ -64,7 +64,6 @@ import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-lang
 import {
   getCachedUserSettings,
   getLastKnownQwenInstallState,
-  getResolvedGenerationWorkers,
   getResolvedSidecarUrl,
 } from '../workspace/user-settings.js';
 import { appendTelemetry } from '../tts/resource-telemetry.js';
@@ -277,6 +276,16 @@ interface RunningJob {
       (re)generated in this run. The dynamic `done` count is
       `runDoneBase + completedThisRun.size`. */
   runDoneBase: number;
+  /** True once another job was concurrently registered at any point during
+      this job's life — i.e. this chapter's render genuinely overlapped
+      wall-clock with a sibling (same book or a different one). Drives the
+      QA-cost telemetry gate below: a static generationWorkers===1 config
+      read can't see actual cross-book concurrency (two books each configured
+      for 1 worker, generating simultaneously) or a mid-run worker-count
+      change — this tracks the real thing instead. Set in registerJob, never
+      cleared, so once a chapter's wall time overlapped another render its QA
+      sub-costs stay tainted for the rest of this job's life. */
+  hadSibling: boolean;
   /** Chapter ids the loop has reported chapter_complete for in this
       run. The frontend reads `runDone` as `runDoneBase + this.size`. */
   completedThisRun: Set<number>;
@@ -387,6 +396,15 @@ function registerJob(key: string, job: RunningJob): void {
     inFlightByBook.set(job.bookId, set);
   }
   set.add(job);
+  /* Live concurrency signal for the QA-cost telemetry gate (see `hadSibling`
+     on RunningJob) — mark EVERY currently in-flight job, not just the new
+     arrival: a job that was alone when it registered but now has a sibling
+     is genuinely overlapping too, starting from this instant. Global across
+     inFlightByChapter (all books), matching how the queue dispatcher's N
+     workers map onto N concurrent chapter jobs. */
+  if (inFlightByChapter.size > 1) {
+    for (const j of inFlightByChapter.values()) j.hadSibling = true;
+  }
 }
 
 function deregisterJob(key: string, job: RunningJob): void {
@@ -975,6 +993,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     runDoneBase,
     completedThisRun: new Set(),
     runInProgress: new Set(),
+    hadSibling: false,
   };
   registerJob(key, job);
 
@@ -1549,11 +1568,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const audioSec = result.durationSec;
       const chapterRtf = audioSec > 0 ? synthSec / audioSec : 0;
       /* B1 — the QA sub-cost split (rerecord/transcribe/embed) is only
-         meaningful as a per-chapter wall when one worker renders at a time;
-         under multi-worker interleaving the summed per-block wall over-counts
-         (concurrent chapters' QA work overlaps in real time), so pass null
-         and let the stats view render n/a rather than a misleading number. */
-      const oneWorker = getResolvedGenerationWorkers() === 1;
+         meaningful as a per-chapter wall when nothing else rendered at the
+         same time; under real interleaving the summed per-block wall
+         over-counts (concurrent chapters' QA work overlaps in real time), so
+         pass null and let the stats view render n/a rather than a misleading
+         number. `job.hadSibling` tracks ACTUAL overlap (see registerJob) —
+         a static generationWorkers===1 config read would miss two
+         single-worker books rendering simultaneously, or a mid-run
+         worker-count change. */
+      const oneWorker = !job.hadSibling;
       const roll = recordChapterThroughput({
         chapterId: chapter.id,
         audioSec,

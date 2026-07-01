@@ -1497,10 +1497,16 @@ export async function synthesiseChapter(
   /* B1 — QA-cost wall split out for the rerecordRtf telemetry. Each accumulator
      wraps exactly one class of await so the chapter wall can be attributed:
      rerecordMs = QA-driven re-record synth (the part PR-1 moves); transcribeMs +
-     embedMs = the always-on verify floor. */
+     embedMs = the always-on verify floor. `timed()` below dedupes the
+     Date.now()-before/after bookkeeping shared by every accumulated call. */
   let rerecordMs = 0;
   let transcribeMs = 0;
   let embedMs = 0;
+  const timed = async <T>(fn: () => Promise<T>): Promise<{ value: T; ms: number }> => {
+    const t0 = Date.now();
+    const value = await fn();
+    return { value, ms: Date.now() - t0 };
+  };
 
   const segmentQaByIndex = new Map<number, SegmentQaVerdict>();
   if (maxSegmentRerecords > 0) {
@@ -1535,9 +1541,8 @@ export async function synthesiseChapter(
           reasons: segmentQaByIndex.get(group.index)!.reasons,
         });
       }
-      const reT0 = Date.now();
-      const fresh = await synthGroupsBatched(pending);
-      rerecordMs += Date.now() - reT0;
+      const { value: fresh, ms: reMs } = await timed(() => synthGroupsBatched(pending));
+      rerecordMs += reMs;
       for (const group of pending) {
         const f = fresh.get(group.index);
         if (!f) continue;
@@ -1611,9 +1616,9 @@ export async function synthesiseChapter(
       verifiedCount += 1;
       const r = results[group.index]!;
       best.set(group.index, r);
-      const tT0 = Date.now();
-      segmentAsrByIndex.set(group.index, await verify(r.pcm, r.sampleRate, group));
-      transcribeMs += Date.now() - tT0;
+      const { value: verdict, ms: tMs } = await timed(() => verify(r.pcm, r.sampleRate, group));
+      segmentAsrByIndex.set(group.index, verdict);
+      transcribeMs += tMs;
     }
     /* Round-based re-records: each round re-synths ALL still-drift groups in one
        batched dispatch, re-verifies, and keeps the better take per group. Each
@@ -1633,15 +1638,13 @@ export async function synthesiseChapter(
           reasons: c.reasons,
         });
       }
-      const asrReT0 = Date.now();
-      const fresh = await synthGroupsBatched(pending);
-      rerecordMs += Date.now() - asrReT0;
+      const { value: fresh, ms: asrReMs } = await timed(() => synthGroupsBatched(pending));
+      rerecordMs += asrReMs;
       for (const group of pending) {
         const f = fresh.get(group.index);
         if (!f) continue;
-        const revT0 = Date.now();
-        const freshClass = await verify(f.pcm, f.sampleRate, group);
-        transcribeMs += Date.now() - revT0;
+        const { value: freshClass, ms: revMs } = await timed(() => verify(f.pcm, f.sampleRate, group));
+        transcribeMs += revMs;
         if (asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
           best.set(group.index, f);
           segmentAsrByIndex.set(group.index, freshClass);
