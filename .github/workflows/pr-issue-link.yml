@@ -1,0 +1,41 @@
+name: PR issue link
+
+on:
+  pull_request:
+    # Unlike pr-title-lint.yml (which drops `edited` — title typo-fixes
+    # gain nothing from re-firing), `edited` stays here: the primary way a
+    # PR resolves a missing issue link is editing the body after opening
+    # (adding `Closes #NN` retroactively), not pushing a new commit. Without
+    # `edited`, that fix wouldn't clear the failing check until the next
+    # `synchronize` push.
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Verify PR body links a GitHub issue
+    runs-on: ubuntu-latest
+    # Tiny validator; cap explicitly so a hung run can't bill the 360-min
+    # default (same rationale as pr-title-lint.yml).
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Write PR body to a temp file
+        # Same file-passing pattern as pr-title-lint.yml's PR_TITLE handling
+        # — the body can't be interpreted as a shell expression this way.
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
+
+      - name: Validate PR issue link
+        run: node scripts/validate-pr-issue-link.mjs "$RUNNER_TEMP/pr-body.txt"
