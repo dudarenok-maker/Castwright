@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -237,6 +238,71 @@ def _install_codec_timing(model: Any) -> None:
         st._codec_timed = True
     except Exception as e:  # pragma: no cover - defensive, never kill a load
         log.warning("Could not install codec timing (%s) — continuing.", e)
+
+
+def _resolve_codec_decoder(model: Any) -> Any:
+    """The compile target is TWO levels below the resolved speech_tokenizer:
+    st.model (the AutoModel-loaded Qwen3TTSTokenizerV2Model, a real nn.Module)
+    .decoder (the feed-forward Code2Wav decoder submodule whose chunked_decode
+    does the heavy per-chunk `self(codes_chunk)` calls). Returns None when any
+    hop is absent so callers no-op rather than raise (side-19 Task 4)."""
+    st = _resolve_speech_tokenizer(model)
+    codec_model = getattr(st, "model", None)
+    return getattr(codec_model, "decoder", None)
+
+
+def _should_compile_codec() -> bool:
+    """side-19 Phase 1. Compile the Code2Wav decoder only when
+    QWEN_COMPILE_CODEC is truthy AND not on Windows -- both the Triton-GPU and
+    cpp/MSVC inductor backends are historically fragile there, so it stays OFF
+    on Windows until proven on-box. Default OFF everywhere."""
+    if sys.platform == "win32":
+        return False
+    return os.environ.get("QWEN_COMPILE_CODEC", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _maybe_compile_codec(model: Any, torch: Any) -> bool:
+    """Compile the resolved codec decoder's `forward` and stash the compiled
+    callable on the model (side-19 Task 4: the decoder runs on CPU on this
+    box for BOTH tiers -> inductor's cpp backend via dynamic=True; no
+    CUDA-graph modes apply). We compile `forward`, NOT the whole decoder
+    module -- see the module docstring / plan note on why a whole-module swap
+    silently defeats chunked_decode. Any failure is swallowed -> eager
+    fallback; a perf knob must never kill a model load. Returns True iff a
+    compiled forward was installed."""
+    if not _should_compile_codec():
+        return False
+    try:
+        decoder = _resolve_codec_decoder(model)
+        if decoder is None:
+            return False
+        model._compiled_codec_forward = torch.compile(decoder.forward, dynamic=True)
+        log.info("Code2Wav decoder.forward compiled (QWEN_COMPILE_CODEC, dynamic shapes).")
+        return True
+    except Exception as e:  # pragma: no cover - defensive
+        log.warning("Could not compile Code2Wav decoder (%s) — using eager.", e)
+        model._compiled_codec_forward = None
+        return False
+
+
+@contextmanager
+def _codec_compiled_for_batch(model: Any):
+    """Swap the decoder's `forward` attribute to the compiled callable for the
+    duration of a BATCHED forward, restore the original afterwards. Batch-path
+    only: the single /synthesize path never enters this ctx, so it stays
+    eager and never eats warmup. No-op when no compiled forward exists or the
+    decoder can't be resolved."""
+    compiled = getattr(model, "_compiled_codec_forward", None)
+    decoder = _resolve_codec_decoder(model)
+    if compiled is None or decoder is None:
+        yield
+        return
+    eager = decoder.forward
+    decoder.forward = compiled
+    try:
+        yield
+    finally:
+        decoder.forward = eager
 
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")
@@ -1719,6 +1785,8 @@ class QwenEngine(Engine):
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
                 _install_codec_timing(self._base)
+                import torch  # injected into the compile hook for testability
+                _maybe_compile_codec(self._base, torch)
                 log.info("Qwen Base loaded.")
 
     def _ensure_base17_loaded(self) -> None:
@@ -1737,6 +1805,9 @@ class QwenEngine(Engine):
                     self.BASE17_MODEL, self._device,
                 )
                 self._base17 = self._load_qwen_model(self.BASE17_MODEL)
+                _install_codec_timing(self._base17)
+                import torch
+                _maybe_compile_codec(self._base17, torch)
                 log.info("Qwen 1.7B-Base loaded.")
 
     def _ensure_base17_for_mint(self) -> None:
@@ -2852,16 +2923,17 @@ class QwenEngine(Engine):
                 with self._synth_lock:
                     # Re-ensure under the lock (same rationale as synthesize()).
                     self._ensure_base17_loaded()
-                    if live_instruct:
-                        # P-C1: EVERY item runs the raw instruct bypass in ONE
-                        # batched forward — heterogeneous per-item instruct_ids.
-                        wavs, sr = self._icl_instruct_synth_batch(
-                            prompt_lists, texts, instructs, langs
-                        )
-                    else:
-                        wavs, sr = self._base17.generate_voice_clone(
-                            text=texts, language=langs, voice_clone_prompt=prompts
-                        )
+                    with _codec_compiled_for_batch(self._base17):
+                        if live_instruct:
+                            # P-C1: EVERY item runs the raw instruct bypass in ONE
+                            # batched forward — heterogeneous per-item instruct_ids.
+                            wavs, sr = self._icl_instruct_synth_batch(
+                                prompt_lists, texts, instructs, langs
+                            )
+                        else:
+                            wavs, sr = self._base17.generate_voice_clone(
+                                text=texts, language=langs, voice_clone_prompt=prompts
+                            )
                 gen_ms = (time.perf_counter() - gen_start) * 1000.0
         else:
             # ── 0.6B-Base batch path (default) ───────────────────────────────
@@ -2900,9 +2972,10 @@ class QwenEngine(Engine):
                 # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
                 # to null `_base`; see synthesize(). No-op on the warm path.
                 self._ensure_base_loaded()
-                wavs, sr = self._base.generate_voice_clone(
-                    text=texts, language=langs, voice_clone_prompt=prompts
-                )
+                with _codec_compiled_for_batch(self._base):
+                    wavs, sr = self._base.generate_voice_clone(
+                        text=texts, language=langs, voice_clone_prompt=prompts
+                    )
             gen_ms = (time.perf_counter() - gen_start) * 1000.0
         # Hard invariant: one wav per input item, in order. A mismatch means a
         # library API drift — fail loudly rather than silently misalign audio
