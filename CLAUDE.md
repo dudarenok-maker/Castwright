@@ -283,10 +283,11 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 1. **Update or create the regression plan** under `docs/features/` — _for substantial/cross-cutting work._ New feature → new file from `TEMPLATE.md` (and tag the issue `needs-plan`). Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`). Small/localized items skip the plan doc — the issue body + paired test is the spec.
 2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
 3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
-4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too.
+4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask (see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR. Once `main`'s required-status-check ruleset for it is wired (a one-time, user-run setup step — see `docs/features/235-model-routing-review-gates.md`), a missing link blocks merge; until then it only fails a visible check.
 5. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
 6. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
+8. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory `code-review` pass — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
 
 ## Out of scope until told otherwise
 
@@ -440,10 +441,10 @@ battery; a labeled PR runs only the **scope-filtered** legs the diff touched
 tests, a server-only PR skips Playwright e2e + the frontend unit suite, a root
 `package.json`/`package-lock.json` change runs every leg).
 
-What still runs automatically: `pr-title-lint.yml` on every PR, `app.yml` on
-`apps/android/**` changes (the only automated coverage for the Flutter
-companion — no local hook runs `flutter analyze`/`test`), `release.yml` on a
-`vX.Y.Z` tag, and `cross-os.yml` on its weekly Sunday cron. **Every release tag
+What still runs automatically: `pr-title-lint.yml` and `pr-issue-link.yml` on
+every PR, `app.yml` on `apps/android/**` changes (the only automated coverage
+for the Flutter companion — no local hook runs `flutter analyze`/`test`),
+`release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` on its weekly Sunday cron. **Every release tag
 now runs COMPLETE cross-platform verification before it publishes** (plan 215):
 `release.yml` gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile`
 (Ubuntu) + `verify:quick`+build on macOS **and** Windows — a red leg on any
@@ -491,6 +492,20 @@ the regression plan under `docs/features/` when one applies. Merges use the
 repo level) and the head branch is auto-deleted on merge. Full spec:
 [CONTRIBUTING.md "Pull requests"](CONTRIBUTING.md#pull-requests). Regression
 plan: [docs/features/archive/44-pr-hygiene.md](docs/features/archive/44-pr-hygiene.md).
+
+**Every PR body must link a GitHub issue** (`Closes #NN` / `Refs #NN`) —
+verified at creation time, not assumed. If none exists yet, one is
+auto-filed and linked without pausing to ask, labeled per `CONTRIBUTING.md`'s
+two-shape convention (bug-shaped work → standalone `bug` label; backlog-
+shaped work → `type:feature`/`type:chore` + `area:<prefix>`, `moscow:` left
+for you to set). `.github/workflows/pr-issue-link.yml` surfaces a failing
+check on every PR that skips this, mirroring `pr-title-lint.yml`. Once wired
+into `main`'s required status checks (a one-time, user-run ruleset setup —
+see
+[docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md)),
+a missing link blocks merge; until that setup is done, a missing link only
+fails a visible, non-blocking check.
+Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
 
 **Requesting a CI run on a PR (plan 215).** CI is opt-in (see "Commit gate"
 above): push freely — drafts and ready PRs alike bill **0 Actions minutes**.
