@@ -3,7 +3,6 @@
    object the backend returns alongside chapters. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { initialSentences } from '../data/sentences';
 import type {
   Sentence,
   UploadResponse,
@@ -78,7 +77,7 @@ const initialState: ManuscriptState = {
   format: null,
   wordCount: 0,
   sourceText: null,
-  sentences: initialSentences,
+  sentences: [],
   importCandidate: null,
   pendingReupload: null,
   mergedAwayKeys: [],
@@ -203,7 +202,7 @@ export const manuscriptSlice = createSlice({
       s.format = null;
       s.wordCount = 0;
       s.sourceText = null;
-      s.sentences = initialSentences;
+      s.sentences = [];
       s.importCandidate = null;
       s.pendingReupload = null;
       s.mergedAwayKeys = [];

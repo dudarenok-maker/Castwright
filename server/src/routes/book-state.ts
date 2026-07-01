@@ -33,6 +33,8 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock } from '../workspace/file-lock.js';
+import { z } from 'zod';
+import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
@@ -573,6 +575,19 @@ bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Respons
   }
 });
 
+/* manuscript-edits.json is written verbatim from this patch with no merge —
+   a client that computes a bad `sentences` array (e.g. stale/placeholder
+   state sent back before the real analysis hydrated) silently clobbers the
+   real file. Shape-validate before writing, and refuse a patch that would
+   wipe out a manuscript that currently has content: it's never legitimate
+   for an edit action to reduce a book to zero sentences. */
+const manuscriptPatchSchema = z
+  .object({
+    sentences: z.array(sentenceSchema),
+    mergedAwayKeys: z.array(z.string()).optional(),
+  })
+  .strict();
+
 bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);
@@ -593,9 +608,21 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(guarded));
         break;
       }
-      case 'manuscript':
-        await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), body.patch);
+      case 'manuscript': {
+        const parsed = manuscriptPatchSchema.safeParse(body.patch);
+        if (!parsed.success) {
+          return res.status(400).json({ error: `Malformed manuscript patch: ${parsed.error.message}` });
+        }
+        const editsPath = manuscriptEditsJsonPath(bookDir);
+        const existing = await readJson<{ sentences?: unknown[] }>(editsPath).catch(() => null);
+        if (existing?.sentences?.length && parsed.data.sentences.length === 0) {
+          return res.status(409).json({
+            error: 'Refusing to overwrite an analysed manuscript with an empty sentence list.',
+          });
+        }
+        await writeJsonAtomic(editsPath, parsed.data);
         break;
+      }
       case 'revisions':
         await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);
         break;
