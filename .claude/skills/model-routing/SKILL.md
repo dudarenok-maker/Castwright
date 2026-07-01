@@ -107,7 +107,7 @@ for subagent dispatch above.
   tokens for no new signal. This mirrors the spec/plan loop's severity-gated
   shape (above), rather than firing on every push.
 - **Loop cap**: 2 re-review rounds, same numeric cap as the spec/plan loop
-  above, same trigger shape now too — a severity threshold, not "any push."
+  above (initial pass + up to 2 re-review rounds, 3 total).
 - **Judgment-call carve-out**: see below.
 
 ## Judgment-call carve-out (shared by both review loops)
