@@ -56,6 +56,11 @@ import type { SeriesRosterEntry } from '../lib/api';
    the per-run `model` opt and to compute the whole-book RPD warning. */
 const REVIEW_MODEL = 'gemma-4-31b-it';
 
+/* Stable fallback for when sentencesFromStore is momentarily null (e.g.
+   mid-hydration) — a literal `[]` would be a fresh array every render and
+   defeat the useMemo hooks keyed on `sentences` below. */
+const EMPTY_SENTENCES: Sentence[] = [];
+
 interface Props {
   characters: Character[];
   chapters: Chapter[];
@@ -140,7 +145,7 @@ export function ManuscriptView({
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
-  const sentences: Sentence[] = sentencesFromStore ?? [];
+  const sentences: Sentence[] = sentencesFromStore ?? EMPTY_SENTENCES;
   /* Keep a ref so async handlers (e.g. handleReviewScript) always read
      the LIVE sentences even after an await, without depending on a
      potentially stale closure. */
