@@ -87,12 +87,33 @@ for subagent dispatch above.
   pushing along the way → once every applicable item is addressed and
   everything is pushed, that is "fully staged" and this review triggers on
   that state (not on an earlier, incomplete push).
-- **Mechanism**: the `code-review` skill at `high` effort, run once fully
-  staged, **without** `--fix` — produces a findings report only. (`--fix`
-  applies whatever the pass surfaced wholesale; there's no per-finding
-  confidence filter to gate it on, so triage happens by hand instead — see
-  Findings handling.) This is the `code-review` *skill* — a working/branch-
-  diff tool — not the separate `/review` PR-comment slash command.
+- **Exemption**: a docs-only PR — changed-file set entirely under `docs/**`,
+  root-level `*.md`, or `.github/*.md` (the same file-set test
+  CONTRIBUTING.md's "Doc-only PR fast-path" already uses for the `verify.yml`
+  `paths-ignore` skip) — is exempt from this gate entirely; no code-review
+  pass runs.
+- **Effort level**: for every other PR, scales with the PR's commit
+  type/scope, reusing CONTRIBUTING.md's existing commit-convention
+  vocabulary rather than a new classification:
+  - **`low`** — single-scope `chore`, `test`, `build`, or `ci` (mechanical,
+    no user-facing behavior change).
+  - **`medium`** — single-scope `feat` or `fix`.
+  - **`high`** — `refactor`, `perf`, or any multi-scope PR (CONTRIBUTING.md's
+    own "use sparingly" multi-scope guidance already flags these as
+    higher-risk) — today's unchanged default.
+
+  A PR whose commits mix types takes the highest tier any single commit
+  would earn on its own (e.g. one `fix` commit + one `refactor` commit →
+  `high`). `ultra` is never auto-selected here — it is billed and requires
+  explicit user opt-in (`/code-review ultra`, or the user asking for it by
+  name), per the Workflow tool's own rule.
+- **Mechanism**: the `code-review` skill at the effort level determined
+  above, run once fully staged, **without** `--fix` — produces a findings
+  report only. (`--fix` applies whatever the pass surfaced wholesale;
+  there's no per-finding confidence filter to gate it on, so triage happens
+  by hand instead — see Findings handling.) This is the `code-review`
+  *skill* — a working/branch-diff tool — not the separate `/review`
+  PR-comment slash command.
 - **Findings handling**: triage the report by hand. Clear-cut findings
   (unambiguous bug, obvious dead code, a straightforward CLAUDE.md
   violation) get fixed directly, committed, and pushed. Findings that turn
@@ -105,7 +126,10 @@ for subagent dispatch above.
   surfaced only cleanup-only findings, fix-and-push (or push nothing) does
   **not** re-trigger a re-review — re-running it in that case just burns
   tokens for no new signal. This mirrors the spec/plan loop's severity-gated
-  shape (above), rather than firing on every push.
+  shape (above), rather than firing on every push. Re-review re-derives the
+  effort level from the PR's current commit set (above) rather than
+  reusing the initial pass's tier — a fix commit can raise the tier the
+  same way any other commit would.
 - **Loop cap**: 2 re-review rounds, same numeric cap as the spec/plan loop
   above (initial pass + up to 2 re-review rounds, 3 total).
 - **Judgment-call carve-out**: see below.

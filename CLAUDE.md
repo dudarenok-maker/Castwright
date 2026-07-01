@@ -93,8 +93,13 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 **Mandatory review gates**, both using this table's Premium tier:
 - Every non-trivial spec (`brainstorming`) or plan (`writing-plans`) gets a
   real `assumption-checker` pass before the user is asked to approve it.
-- Every PR gets a `code-review` pass (`high` effort, no `--fix`) once fully
-  staged, before merge.
+- Every PR gets a `code-review` pass (no `--fix`) once fully staged, before
+  merge — except a docs-only PR (same file-set test as CONTRIBUTING.md's
+  doc-only CI fast-path), which is exempt entirely. Otherwise effort scales
+  with the PR's commit type/scope (CONTRIBUTING.md's commit-convention
+  vocabulary): `low` for a single-scope `chore`/`test`/`build`/`ci`, `medium`
+  for a single-scope `feat`/`fix`, `high` for `refactor`/`perf` or any
+  multi-scope PR — see the model-routing skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the
@@ -415,8 +420,17 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   deletion, enabled after the Pro upgrade per `com-4` — so this hook is now
   belt-and-suspenders; see
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
-  bypass the local hook intentionally with `git push --no-verify`). Then runs `npm run verify`
-  — typecheck + all tests + e2e + build. Refuses the push if any step fails.
+  bypass the local hook intentionally with `git push --no-verify`). Then, unless
+  the push is docs-only (below), runs `npm run verify` — typecheck + all tests
+  + e2e + build. Refuses the push if any step fails.
+
+**Docs-only pushes skip `npm run verify` entirely** — `scripts/is-docs-only-push.mjs`
+checks the pushed commits' changed-file set against the same doc-glob test as
+CONTRIBUTING.md's "Doc-only PR fast-path" (`docs/**`, root `*.md`, `.github/*.md`);
+a doc-only diff has no runtime surface for tests/build/e2e to exercise, so
+paying the ~15-min battery locally is wasted time/CPU on top of the CI-side
+skip. Conservative by design: any uncertainty (git error, unresolvable
+merge-base) runs the full battery rather than guessing.
 
 `npm run verify` is cache-aware (see
 [docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
