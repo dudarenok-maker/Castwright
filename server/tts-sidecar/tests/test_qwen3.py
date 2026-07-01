@@ -1211,6 +1211,11 @@ def test_mint_variant_route_409_base_absent(fake_qwen_runtime) -> None:
         },
     )
     assert resp.status_code == 409
+    body = resp.json()
+    assert "designed" in body["detail"].lower()
+    # CodeQL py/stack-trace-exposure #167 — the actionable message must NOT
+    # leak the absolute on-disk .pt path (mirrors the /synthesize 409 check).
+    assert ".pt" not in body["detail"] and ":\\" not in body["detail"]
 
 
 # ── Task 9 (fs-55): synthesize() routes model='1.7b' through 1.7B-Base ──────
@@ -1456,6 +1461,9 @@ def test_mint_variant_route_503_not_installed(fake_qwen_runtime, monkeypatch):
     body = r.json()
     assert body["code"] == "base17-unavailable"
     assert body["reason"] == "not-installed"
+    # CodeQL py/stack-trace-exposure #168 — detail is built from the
+    # controlled `reason` enum, not a raw str(exception).
+    assert body["detail"] == "Qwen 1.7B-Base unavailable (not-installed)."
 
 
 def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):

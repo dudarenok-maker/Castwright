@@ -130,6 +130,12 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     expect(res.body.error).toMatch(/name/i);
   });
 
+  it('slugifies leading/trailing punctuation runs without leaving stray underscores', async () => {
+    const res = await callCreate(bookId, { name: '__Weird--Name!!__' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).toBe('weird_name');
+  });
+
   it('409s when the book has no cast.json yet', async () => {
     const res = await callCreate(bookIdNoCast, { name: 'Ferra' });
     expect(res.status).toBe(409);

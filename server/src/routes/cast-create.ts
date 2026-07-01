@@ -43,7 +43,7 @@ function slugify(name: string): string {
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '') || 'character'
+      .replace(/^_+|(?<!_)_+$/g, '') || 'character'
   );
 }
 

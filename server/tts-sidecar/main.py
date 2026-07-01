@@ -2531,8 +2531,10 @@ class QwenEngine(Engine):
 
         base_pt, _base_json = self._voice_paths(base_voice_id)
         if not os.path.isfile(base_pt):
+            # Absolute path omitted from the message (it may reach the client
+            # body) — mirrors _load_voice_prompt's raise below.
             raise VoiceNotDesignedError(
-                f"base voice '{base_voice_id}' not designed (no {base_pt})."
+                f"base voice '{base_voice_id}' not designed (no cached embedding)."
             )
         base_prompt, _b, _ = self._load_voice_prompt(base_voice_id)
         base_items = base_prompt if isinstance(base_prompt, list) else [base_prompt]
@@ -4895,11 +4897,18 @@ async def qwen_mint_variant(req: Request) -> Response:
         )
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
-        return JSONResponse({"detail": str(exc)}, status_code=409)
+        return JSONResponse(
+            {"detail": f"Base voice '{base_voice_id}' has not been designed yet."},
+            status_code=409,
+        )
     except Base17UnavailableError as exc:
         log.warning("/qwen/mint-variant: 1.7B-Base %s", exc.reason)
         return JSONResponse(
-            {"code": "base17-unavailable", "reason": exc.reason, "detail": str(exc)},
+            {
+                "code": "base17-unavailable",
+                "reason": exc.reason,
+                "detail": f"Qwen 1.7B-Base unavailable ({exc.reason}).",
+            },
             status_code=503,
         )
     except Exception:
@@ -5032,7 +5041,7 @@ async def synthesize(req: Request) -> Response:
             engine_id, voice, exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "voice_not_designed"},
+            {"detail": f"Voice '{voice}' has not been designed yet.", "code": "voice_not_designed"},
             status_code=409,
         )
     except Exception as e:
