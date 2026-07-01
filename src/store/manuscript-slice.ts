@@ -543,6 +543,21 @@ export const manuscriptSlice = createSlice({
         s.mergedAwayKeys.push(`${a.payload.chapterId}:${m.id}`);
       }
     },
+
+    /* promote-first-sentence-to-title (2026-07-01 spec) — deletes a sentence
+       and tombstones it, same pattern as mergeSentences, so a re-analysis
+       can't resurrect it. Used when the user promotes a chapter's first
+       sentence to be the chapter title; the chapter-rename half of that
+       action lives in chaptersActions.renameChapter, dispatched separately
+       by PromoteFirstSentenceButton. */
+    promoteSentenceToTitle: (s, a: PayloadAction<{ chapterId: number; sentenceId: number }>) => {
+      const i = s.sentences.findIndex(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
+      if (i < 0) return; // no-op if the sentence is already gone
+      s.sentences.splice(i, 1);
+      s.mergedAwayKeys.push(`${a.payload.chapterId}:${a.payload.sentenceId}`);
+    },
   },
 });
 

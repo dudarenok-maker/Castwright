@@ -116,6 +116,12 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
+  /* 2026-07-01 — sibling to mergeSentences. Deleting the sentence promoted
+     into a chapter title must survive reload the same way a merge does. */
+  'manuscript/promoteSentenceToTitle': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
   /* fs-58 — text edit (strip_tag review op). Persisted the same way as other
      sentence edits so the corrected text survives reload. */
   'manuscript/setSentenceText': {

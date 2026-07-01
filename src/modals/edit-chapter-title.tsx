@@ -21,6 +21,7 @@ import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import type { Chapter } from '../lib/types';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { MAX_TITLE_LEN } from '../lib/chapter-title';
 
 interface Props {
   open: boolean;
@@ -28,8 +29,6 @@ interface Props {
   chapter: Chapter | null;
   onClose: () => void;
 }
-
-const MAX_TITLE_LEN = 200;
 
 export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props) {
   /* Seed the input from the chapter the pencil was clicked against.

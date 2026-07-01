@@ -1,0 +1,140 @@
+/* Promote-first-sentence-to-title (2026-07-01 spec) — a quick fix for
+   unstructured manuscripts where the analyzer never detected a real
+   chapter title and the actual title text sits as the chapter's first
+   sentence instead. Promoting it renames the chapter (api.renameChapter,
+   the same endpoint EditChapterTitleModal uses) and removes the sentence
+   from narration (manuscriptActions.promoteSentenceToTitle), tombstoning
+   it the same way mergeSentences does.
+
+   Styled after DetectEmotionsButton's idle/confirm popover pattern.
+   See docs/superpowers/specs/2026-07-01-promote-first-sentence-to-title-design.md. */
+
+import { useState } from 'react';
+import { useAppDispatch } from '../store';
+import { chaptersActions } from '../store/chapters-slice';
+import { manuscriptActions } from '../store/manuscript-slice';
+import { notificationsActions } from '../store/notifications-slice';
+import { api } from '../lib/api';
+import { MAX_TITLE_LEN } from '../lib/chapter-title';
+import type { Sentence } from '../lib/types';
+
+type Phase = 'idle' | 'confirm' | 'busy';
+
+interface Props {
+  bookId: string | null;
+  chapterId: number;
+  firstSentence: Sentence | null;
+  /* PR-gate review finding 2 — true when `firstSentence` is the chapter's
+     ONLY sentence, so confirming would leave the chapter with zero narrated
+     content. Strengthens the confirm-popover copy to make that explicit. */
+  isOnlySentence: boolean;
+}
+
+/** Trim + drop one trailing period — verbatim otherwise (spec Decision 5).
+    No casing changes. */
+function cleanTitle(text: string): string {
+  return text.trim().replace(/\.$/, '');
+}
+
+export function PromoteFirstSentenceButton({
+  bookId,
+  chapterId,
+  firstSentence,
+  isOnlySentence,
+}: Props) {
+  const dispatch = useAppDispatch();
+  const [phase, setPhase] = useState<Phase>('idle');
+
+  const cleaned = firstSentence ? cleanTitle(firstSentence.text) : '';
+  const disabled = !bookId || !firstSentence || cleaned.length === 0 || cleaned.length > MAX_TITLE_LEN;
+
+  async function handleConfirm() {
+    if (disabled || !bookId || !firstSentence) return;
+    setPhase('busy');
+    try {
+      await api.renameChapter(bookId, chapterId, cleaned);
+      dispatch(chaptersActions.renameChapter({ chapterId, title: cleaned }));
+      dispatch(manuscriptActions.promoteSentenceToTitle({ chapterId, sentenceId: firstSentence.id }));
+      setPhase('idle');
+    } catch (err) {
+      /* PR-gate review round 2 — a fired-off promise isn't cancelled by the
+         `key`-driven remount (finding 1's fix): if the user switches chapters
+         before this settles, the toast must still say WHICH chapter failed,
+         since the user may already be looking at a different one. */
+      const detail = (err as Error).message;
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: detail
+            ? `Could not rename chapter ${chapterId}: ${detail}`
+            : `Could not rename chapter ${chapterId}.`,
+          dedupeKey: `chapter-rename-${chapterId}`,
+        }),
+      );
+      setPhase('idle');
+    }
+  }
+
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        data-testid="promote-first-sentence-button"
+        disabled={disabled || phase === 'busy'}
+        onClick={() => setPhase((p) => (p === 'confirm' ? 'idle' : 'confirm'))}
+        title={
+          firstSentence
+            ? "Use this chapter's first line as its title, and remove it from narration"
+            : 'This chapter has no sentences to promote'
+        }
+        className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm font-semibold text-ink hover:bg-ink/5 disabled:opacity-40"
+      >
+        Use first line as title
+      </button>
+      {(phase === 'confirm' || phase === 'busy') && firstSentence && (
+        <span
+          role="dialog"
+          aria-label="Use first line as title"
+          className="absolute z-50 left-0 top-full mt-2 w-72 rounded-xl border border-ink/10 bg-white picker-surface shadow-lg p-3 text-left"
+        >
+          <p className="text-xs text-ink/70 leading-snug">
+            Set title to "<span className="font-semibold text-ink">{cleaned}</span>" and remove it
+            from narration?
+            {isOnlySentence && (
+              <>
+                {' '}
+                This is the chapter's only sentence — the chapter will have no
+                narrated content until you add more.
+              </>
+            )}
+          </p>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setPhase('idle')}
+              disabled={phase === 'busy'}
+              className="px-3 py-1.5 text-xs text-ink/60 hover:text-ink disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-testid="promote-first-sentence-confirm"
+              /* PR-gate review round 3 — must re-check the same validity
+                 condition as the trigger button, not just `busy`: a
+                 concurrent edit to this exact sentence (e.g. a script-review
+                 apply) while the popover is open can make `cleaned` empty or
+                 over-length between open and click, since it's recomputed
+                 live from the current `firstSentence` prop every render. */
+              disabled={phase === 'busy' || disabled}
+              onClick={() => void handleConfirm()}
+              className="px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink/90 disabled:opacity-50"
+            >
+              {phase === 'busy' ? 'Saving…' : 'Confirm'}
+            </button>
+          </div>
+        </span>
+      )}
+    </span>
+  );
+}

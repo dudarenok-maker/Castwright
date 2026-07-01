@@ -38,6 +38,7 @@ import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import { DetectEmotionsButton } from '../components/detect-emotions-button';
+import { PromoteFirstSentenceButton } from '../components/promote-first-sentence-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
@@ -311,6 +312,47 @@ export function ManuscriptView({
     if (currentChapterId == null) return sentences;
     return sentences.filter((s) => s.chapterId === currentChapterId);
   }, [sentences, currentChapterId]);
+
+  /* Promote-first-sentence-to-title (2026-07-01 spec) — the first sentence
+     by MINIMUM id within the current chapter, never array position (that
+     array isn't guaranteed id-ordered — see the design spec). Filtered
+     directly against `currentChapter?.id` rather than reusing
+     `chapterSentences` above: that memo falls back to the WHOLE BOOK when
+     `currentChapterId` is null, which would pick the wrong chapter's
+     sentence. This is a deliberate deviation from the spec's literal
+     `chapterSentences.reduce(...)` — the spec's guard was `chapterSentences.length
+     > 0`; this guard is `currentChapter?.id`, which is `undefined` only when
+     `chapters` is empty. `currentChapter` is `chapters.find(...) || chapters[0]`
+     (a few lines above), itself `undefined` on an empty `chapters` array — the
+     optional-chaining here (both in the filter and the dep array) means an
+     empty-chapters render still resolves this memo to `null` instead of
+     throwing, consistent with the existing `if (!currentChapter) return null`
+     guard further down. Also guarded to null on an empty chapter's sentence
+     list — an unguarded `.reduce()` throws on `[]`. */
+  /* `isOnlySentence` (PR-gate review finding 2 — true when promoting would
+     empty the chapter's narration entirely) is derived from the SAME
+     `inChapter` filter this memo already computes, not a second `.filter()`
+     call — PR-gate review round 2 caught that the sibling-memo version ran
+     the filter twice per render for no reason.
+
+     PR-gate review round 3 — also reuses `chapterSentences` above instead of
+     re-filtering `sentences` from scratch, in the common case where it's
+     already scoped to `currentChapter.id` (i.e. `currentChapterId` is set
+     and matches). Only falls back to a fresh filter in the rare case they
+     diverge — `currentChapterId` is null/stale but `currentChapter` still
+     resolved via the `|| chapters[0]` fallback below, where `chapterSentences`
+     would incorrectly be the whole book. */
+  const { firstSentence, isOnlySentence } = useMemo(() => {
+    const inChapter =
+      currentChapterId === currentChapter?.id
+        ? chapterSentences
+        : sentences.filter((s) => s.chapterId === currentChapter?.id);
+    if (inChapter.length === 0) return { firstSentence: null, isOnlySentence: false };
+    return {
+      firstSentence: inChapter.reduce((min, s) => (s.id < min.id ? s : min)),
+      isOnlySentence: inChapter.length === 1,
+    };
+  }, [sentences, chapterSentences, currentChapterId, currentChapter?.id]);
 
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 
@@ -784,6 +826,19 @@ export function ManuscriptView({
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
+              <PromoteFirstSentenceButton
+                /* PR-gate review finding 1 — key the instance to the current
+                   chapter so switching chapters unmounts/remounts the button,
+                   resetting its internal `phase` state to 'idle'. Without
+                   this, an open confirm popover survives a chapter switch and
+                   silently retargets (its `cleaned` text and `chapterId` are
+                   derived fresh from props each render) at the NEW chapter. */
+                key={currentChapter.id}
+                bookId={bookId}
+                chapterId={currentChapter.id}
+                firstSentence={firstSentence}
+                isOnlySentence={isOnlySentence}
+              />
               {/* fs-58 — LLM script-review trigger. Primary = per-chapter
                   (low-cost default); the ⌄ disclosure opens the whole-book
                   opt-in, which is RPD-gated when the book is longer than the
