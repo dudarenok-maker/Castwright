@@ -305,4 +305,45 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
 
     expect(events.some((e) => e.kind === 'result')).toBe(true);
   });
+
+  it('carries chapterIndex/totalChapters on every phase event, and estRemainingMs only from the 2nd chapter onward', async () => {
+    writeBook(SENTENCES); // 2 chapters
+    runStage3.mockImplementation(async (_m, chapterId): Promise<Stage3ChapterOutput> => {
+      await new Promise((r) => setTimeout(r, 20));
+      return chapterId === 1
+        ? { annotations: [{ sentenceId: 2 }] }
+        : { annotations: [{ sentenceId: 3 }] };
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+
+    expect(phases[0]).toMatchObject({ chapterIndex: 1, totalChapters: 2 });
+    expect(phases[0].estRemainingMs).toBeUndefined();
+    expect(phases[1]).toMatchObject({ chapterIndex: 2, totalChapters: 2 });
+    expect(typeof phases[1].estRemainingMs).toBe('number');
+  });
+
+  it('drops the "— chapter N" suffix from the phase label', async () => {
+    writeBook(SENTENCES);
+    runStage3.mockResolvedValue({ annotations: [] });
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    expect(phases.every((e) => e.label === 'Detecting instruct')).toBe(true);
+  });
+
+  it('a failed chapter still contributes its wall-clock duration to the next chapter estimate', async () => {
+    writeBook(SENTENCES);
+    runStage3.mockImplementation(async (_m, chapterId): Promise<Stage3ChapterOutput> => {
+      await new Promise((r) => setTimeout(r, 20));
+      if (chapterId === 1) throw new Error('flaky chapter');
+      return { annotations: [{ sentenceId: 3 }] };
+    });
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    expect(typeof phases[1].estRemainingMs).toBe('number');
+  });
 });
