@@ -15,18 +15,50 @@ const ISSUE_LINK_PATTERN = /\b(?:closes|refs)\s+#\d+/i;
 // both before testing so this check can't be satisfied by a false positive
 // (see docs/superpowers/specs/... memory note: backtick-wrapped Closes #NN
 // does not auto-close).
-function stripCodeSpans(text) {
-  const withoutFences = text.replace(/```[\s\S]*?```/g, '');
-  // Inline code spans cannot cross a blank line (paragraph break) per
-  // CommonMark, so strip per-paragraph rather than across the whole body —
-  // otherwise a stray/unpaired backtick in one paragraph can pair with an
-  // unrelated backtick in a later paragraph and swallow real text (including
-  // a legitimate Closes/Refs reference) sitting in between.
-  return withoutFences
+
+// A fenced code block's delimiter must be alone on its own line (optionally
+// indented up to 3 spaces) per CommonMark — a stray ``` embedded mid-line
+// (e.g. "Version ``` note.") is NOT a real fence and must not be treated as
+// one, or an unrelated stray triple-backtick later in the body can pair with
+// it and swallow everything (including a real Closes/Refs reference) across
+// paragraph breaks in between. A real fence, unlike an inline span, CAN
+// legitimately span blank lines (multi-paragraph code), so this is a
+// per-line state machine rather than a per-paragraph split.
+function stripFencedBlocks(text) {
+  const lines = text.split('\n');
+  const kept = [];
+  let inFence = false;
+  for (const line of lines) {
+    const isFenceLine = /^ {0,3}`{3,}/.test(line);
+    if (isFenceLine) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+// Inline code spans cannot cross a blank line (paragraph break) per
+// CommonMark, so strip per-paragraph rather than across the whole body —
+// otherwise a stray/unpaired backtick in one paragraph can pair with an
+// unrelated backtick in a later paragraph and swallow real text (including
+// a legitimate Closes/Refs reference) sitting in between. A span can also be
+// delimited by a run of 2+ backticks (`` `` ``), not just one, in which case
+// its content is anything not containing that same-length run — matched
+// generically via a backreference so a double-backtick span isn't
+// mis-parsed as two adjacent empty single-backtick spans (which would leak
+// its real content through unstripped).
+function stripInlineSpans(text) {
+  return text
     .replace(/\r\n/g, '\n')
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.replace(/`[^`]*`/g, ''))
+    .map((paragraph) => paragraph.replace(/(`+)(?:(?!\1)[\s\S])*?\1/g, ''))
     .join('\n\n');
+}
+
+function stripCodeSpans(text) {
+  return stripInlineSpans(stripFencedBlocks(text));
 }
 
 export function hasIssueLink(body) {

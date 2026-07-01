@@ -16,6 +16,14 @@ const accepted = [
   // a blank-line (paragraph) boundary with a later, unrelated backtick and
   // swallow a real Closes/Refs reference sitting in between.
   'It cost $5` per unit.\n\nCloses #12 — see the `config` value.',
+  // A stray, unpaired ``` embedded mid-line (not alone on its own line) is
+  // not a real fenced-code delimiter and must not pair with an unrelated
+  // ``` later in the body across paragraph breaks, swallowing a real
+  // Closes/Refs reference sitting in between.
+  'Version ```\nnote.\n\nCloses #5\n\nSee ```\nagain.',
+  // Two real, properly-paired fenced blocks with a real link between them
+  // must still resolve correctly.
+  '```\nsome code\n```\n\nCloses #6\n\n```\nmore code\n```',
 ];
 
 const rejected = [
@@ -27,6 +35,11 @@ const rejected = [
   'This encloses #123 something unrelated.',
   'Closesnt #123',
   'Closed #123',
+  // A double-backtick-delimited span is a single real code span (per
+  // CommonMark) and must not be mis-parsed as two adjacent empty
+  // single-backtick spans, which would leak its "Closes #NN" content
+  // through unstripped.
+  '``Closes #5``',
 ];
 
 for (const body of accepted) {
