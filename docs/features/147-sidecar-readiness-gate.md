@@ -11,6 +11,30 @@ owner: null
 > URL surface: none (server-internal generation gate)
 > OpenAPI ops: none
 
+> **⚠ Post-ship reconciliation (2026-07-01).** The srv-17b gate shipped
+> **2026-05-30 (`1f4bdc44`)** and is live, but three load-bearing details in the
+> sections below describe the *original* design and have since been superseded —
+> read them as history, not as the current contract:
+> - **Budget `120 s` → `210 s`.** Raised in
+>   [152 — recycle-drain readiness](152-recycle-drain-readiness.md) (`d5053446`)
+>   so a single wait spans the srv-17c drain grace (`SIDECAR_DRAIN_GRACE_MS`,
+>   default **180 s**) + respawn + a fresh load. The `120 s` figure below never
+>   covered the drain and would time out mid-drain into the 2026-05-31 cascade
+>   that 152 exists to close.
+> - **Mechanism `/load` → `/health`.** The gate now polls `GET /health` (loads
+>   nothing), not `POST /load` — `6dea27ea` (fix #1162) — because polling `/load`
+>   eagerly warmed the Qwen 0.6B base and squatted ~1.2 GB per chapter on a 1.7B
+>   render.
+> - **Wrapped in `withGpuLoad`** (`ea597cac`): the poll now also throws
+>   `GpuBusyError` ("Generation paused") when a live analysis holds the card — a
+>   second throw path the "returns, never throws except `AbortError`" invariant
+>   below predates.
+>
+> Lifecycle stays `active` (not archived) to match siblings
+> [148](148-recycle-inflight-recovery.md) and
+> [152](152-recycle-drain-readiness.md), all held pending the same shared live
+> recycle-drill acceptance.
+
 ## Benefit / Rationale
 
 - **User:** a full-book run survives the host-RAM recycle unattended. Before this, every recycle (~every 8 chapters) respawned the sidecar, the workers fired synth into the ~10–30 s respawn window, a burst of "sidecar not reachable" failures tripped the queue's consecutive-failure breaker, and the whole queue paused needing a manual Resume.
@@ -19,11 +43,11 @@ owner: null
 
 ## Architectural impact
 
-- **Changed seam:** `ensureSidecarEngineReady(engine, signal?, opts?)` gains an optional 3rd `opts` param (`{ timeoutMs?, pollIntervalMs? }`) for test injection; the 2-arg call sites in `generation.ts` are unchanged. The body changes from a single `/load` POST (fail-fast → lazy fallback) to a poll loop:
+- **Changed seam:** `ensureSidecarEngineReady(engine, signal?, opts?)` gains an optional 3rd `opts` param (`{ timeoutMs?, pollIntervalMs? }`) for test injection; the 2-arg call sites in `generation.ts` are unchanged. The body changes from a single `/load` POST (fail-fast → lazy fallback) to a poll loop [now polls `GET /health`, not `/load` — see reconciliation note]:
   - reachable + `status: 'ready'` → return.
   - reachable + non-ready / non-ok → keep waiting.
   - unreachable (connection refused — respawn in flight) → keep waiting.
-  - past `READINESS_TIMEOUT_MS` (120 s) → log + return best-effort (lazy load under the sidecar's `_base_load_lock` is still a correct fallback).
+  - past `READINESS_TIMEOUT_MS` (120 s → **now 210 s**, see reconciliation note) → log + return best-effort (lazy load under the sidecar's `_base_load_lock` is still a correct fallback).
   - run-level abort → throw `AbortError` promptly (the inter-poll sleep is abort-aware).
 - **Invariants preserved:**
   - Best-effort contract: the gate STILL never turns a would-proceed run into a failure — it only ever helps. The terminal fallback-to-lazy path is retained; it's just now reached after a full respawn budget instead of on the first failure.
@@ -34,7 +58,7 @@ owner: null
 ## Invariants to preserve
 
 - `ensureSidecarEngineReady` returns (does not throw) on a not-ready sidecar after the budget — only a run-level abort throws (`AbortError`). (`ensure-sidecar-loaded.ts`)
-- `READINESS_TIMEOUT_MS` (120 s) ≥ supervisor worst-case backoff (15 s) + a cold model load, so a single respawn is always ridden out.
+- `READINESS_TIMEOUT_MS` ≥ the srv-17c drain grace (`SIDECAR_DRAIN_GRACE_MS`, default 180 s) + supervisor worst-case backoff (15 s) + a cold model load, so a single respawn is always ridden out. **Shipped value is 210 s** (raised from the originally-planned 120 s in [152](152-recycle-drain-readiness.md) once the 180 s drain was folded in — 120 s never covered it).
 - The inter-poll `sleep` is abort-aware (rejects on signal) so a Stop/pause doesn't wait out the full poll gap.
 
 ## Test plan
