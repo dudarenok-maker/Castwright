@@ -15,8 +15,8 @@ describe('multi-GPU device knobs (Wave 1)', () => {
     (us.readConfigOverrides as any).mockReturnValue({});
   });
 
-  it('COQUI_DEVICE is a string knob; an override of cuda:1 resolves through', () => {
-    expect(getKnob('tts.coqui.device')!.type).toBe('string');
+  it('COQUI_DEVICE is a device knob; an override of cuda:1 resolves through', () => {
+    expect(getKnob('tts.coqui.device')!.type).toBe('device');
     (us.readConfigOverrides as any).mockReturnValue({ 'tts.coqui.device': 'cuda:1' });
     expect(resolveKnob(getKnob('tts.coqui.device')!).effective).toBe('cuda:1');
   });
@@ -27,9 +27,14 @@ describe('multi-GPU device knobs (Wave 1)', () => {
     expect(resolveKnob(getKnob('qa.speaker.device')!).effective).toBe('cuda:1');
   });
 
-  it('adds KOKORO_DEVICE (string, restart-sidecar, default auto)', () => {
+  it('adds KOKORO_DEVICE (device, restart-sidecar, default auto)', () => {
     const k = getKnob('tts.kokoro.device')!;
-    expect([k.env, k.type, k.apply, k.default]).toEqual(['KOKORO_DEVICE', 'string', 'restart-sidecar', 'auto']);
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['KOKORO_DEVICE', 'device', 'restart-sidecar', 'auto']);
+  });
+
+  it('QWEN_DEVICE is a device knob (picker-ready, restart-sidecar, default auto)', () => {
+    const k = getKnob('tts.qwen.device')!;
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['QWEN_DEVICE', 'device', 'restart-sidecar', 'auto']);
   });
 
   it('adds ASR_DEVICE registry knob (string, restart-sidecar, default cpu)', () => {

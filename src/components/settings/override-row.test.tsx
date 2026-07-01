@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { OverrideRow } from './override-row';
-import type { KnobDescriptor, KnobValue } from '../../lib/types';
+import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
 
 /* ─── test fixtures ─────────────────────────────────────────────────────── */
 
@@ -193,6 +193,85 @@ describe('OverrideRow — onChange coercion', () => {
     fireEvent.click(checkbox);
     expect(onChange).toHaveBeenCalledWith(true);
     expect(typeof onChange.mock.calls[0][0]).toBe('boolean');
+  });
+});
+
+/* ─── device knob (GPU picker dropdown) ─────────────────────────────────── */
+
+const GPU_DEVICES: GpuDevice[] = [
+  { uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 },
+  { uuid: 'GPU-1', idx: 1, name: 'RTX 5070 Ti', total_mb: 16000, free_mb: 14000 },
+];
+
+describe('OverrideRow — device knob', () => {
+  it('renders a select with auto/cpu plus one option per detected GPU', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        gpuDevices={GPU_DEVICES}
+      />,
+    );
+    const select = screen.getByRole('combobox');
+    const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+    expect(optionValues).toEqual(['auto', 'cpu', 'cuda:0', 'cuda:1']);
+    expect(screen.getByText(/RTX 5070 Ti/)).toBeInTheDocument();
+  });
+
+  it('calls onChange with the cuda:N value when a GPU option is selected', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+        gpuDevices={GPU_DEVICES}
+      />,
+    );
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'cuda:1' } });
+    expect(onChange).toHaveBeenCalledWith('cuda:1');
+  });
+
+  it('keeps a stale current value selectable even when it is not in the detected GPU list', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda:9', source: 'override', overridden: true });
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        gpuDevices={GPU_DEVICES}
+      />,
+    );
+    const select = screen.getByRole('combobox') as HTMLSelectElement;
+    expect(select.value).toBe('cuda:9');
+    expect(screen.getByRole('option', { name: 'cuda:9' })).toBeInTheDocument();
+  });
+
+  it('still offers auto/cpu when no GPU devices were detected (sidecar down)', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        gpuDevices={[]}
+      />,
+    );
+    const select = screen.getByRole('combobox');
+    const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+    expect(optionValues).toEqual(['auto', 'cpu']);
   });
 });
 

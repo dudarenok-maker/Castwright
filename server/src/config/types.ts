@@ -1,5 +1,8 @@
 // server/src/config/types.ts
-export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum';
+export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device';
+// 'device' is a string knob (validated identically — see resolver's coerceAndValidate
+// default case) whose UI picks from the live GPU list (GET /api/gpu/devices) instead
+// of a free-text box or a fixed enum.
 // 'rebuild' is heavier than a restart: changing the value rebuilds the Python
 // venv (a new accelerator profile = a different torch/ORT install), then restarts
 // the sidecar. Actuated by the Wave-F profile-switch action.

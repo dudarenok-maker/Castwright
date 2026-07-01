@@ -789,7 +789,9 @@ export interface KnobDescriptor {
   group: string;
   label: string;
   help: string;
-  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum';
+  /** 'device' is a string knob whose UI is a dropdown built from GET /api/gpu/devices
+      (plus 'auto'/'cpu') instead of a free-text box. */
+  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device';
   min?: number;
   max?: number;
   step?: number;
@@ -833,6 +835,21 @@ export interface ConfigResponse {
   descriptors: KnobDescriptor[];
   values: ConfigValues;
   restartPending: boolean;
+}
+
+/** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). */
+export interface GpuDevice {
+  uuid: string;
+  idx: number;
+  name: string;
+  total_mb: number;
+  free_mb: number;
+}
+
+/** Full response from GET /api/gpu/devices. `cpu` is always assumed available. */
+export interface GpuDevicesResponse {
+  devices: GpuDevice[];
+  cpu: boolean;
 }
 
 /** Prompt state from GET/PUT /api/config/prompts/:id. */

@@ -54,6 +54,7 @@ import type {
   LibraryStats,
   ContinueListeningItem,
   SeriesMemoryDetail,
+  GpuDevicesResponse,
 } from './types';
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
@@ -6949,6 +6950,17 @@ const MOCK_PROMPTS = new Map<string, PromptState>([
   ],
 ]);
 
+export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
+  await wait(20);
+  return {
+    devices: [
+      { uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 },
+      { uuid: 'GPU-1', idx: 1, name: 'RTX 5070 Ti', total_mb: 16000, free_mb: 14000 },
+    ],
+    cpu: true,
+  };
+}
+
 export async function mockGetConfig(): Promise<ConfigResponse> {
   await wait(40);
   return {
@@ -7075,6 +7087,13 @@ export function _resetMockConfig(): void {
     isForked: false,
     defaultText: 'Attribute each sentence to its speaker.',
   });
+}
+
+async function realGetGpuDevices(): Promise<GpuDevicesResponse> {
+  const res = await fetch('/api/gpu/devices');
+  if (!res.ok)
+    throw new Error(`GPU device fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
 }
 
 /* Real implementations for /api/config and /api/config/prompts. */
@@ -7418,6 +7437,7 @@ const real = {
   putPrompt: realPutPrompt,
   resetPrompt: realResetPrompt,
   restartSidecar: realRestartSidecar,
+  getGpuDevices: realGetGpuDevices,
 };
 
 const mock = {
@@ -7655,6 +7675,7 @@ const mock = {
   putPrompt: mockPutPrompt,
   resetPrompt: mockResetPrompt,
   restartSidecar: mockRestartSidecar,
+  getGpuDevices: mockGetGpuDevices,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry

@@ -10,7 +10,7 @@ import { configSlice } from '../store/config-slice';
 import { uiSlice } from '../store/ui-slice';
 import { AdvancedView } from './advanced';
 import { api } from '../lib/api';
-import type { ConfigResponse } from '../lib/types';
+import type { ConfigResponse, GpuDevicesResponse } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -21,11 +21,21 @@ vi.mock('../lib/api', () => ({
     putPrompt: vi.fn(),
     resetPrompt: vi.fn(),
     restartSidecar: vi.fn(),
+    getGpuDevices: vi.fn(),
   },
 }));
 
 const mockGetConfig = vi.mocked(api.getConfig);
 const mockPutConfig = vi.mocked(api.putConfig);
+const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
+
+const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
+  devices: [
+    { uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 },
+    { uuid: 'GPU-1', idx: 1, name: 'RTX 5070 Ti', total_mb: 16000, free_mb: 14000 },
+  ],
+  cpu: true,
+};
 
 /* Small fixture: two groups, three knobs — a live number knob, a
    restart-sidecar boolean knob, and a prompt knob. */
@@ -83,6 +93,17 @@ const FIXTURE_CONFIG: ConfigResponse = {
       isPrompt: true,
       default: 'Attribute each sentence to its speaker.',
     },
+    {
+      key: 'QWEN_DEVICE',
+      group: 'tts',
+      label: 'Qwen device',
+      help: 'Pin Qwen to a specific GPU.',
+      type: 'device',
+      apply: 'restart-sidecar',
+      risk: 'high',
+      isPrompt: false,
+      default: 'auto',
+    },
   ],
   values: {
     KOKORO_SAMPLE_RATE: {
@@ -139,6 +160,7 @@ beforeEach(() => {
     defaultText: 'Attribute each sentence to its speaker.',
   });
   vi.mocked(api.restartSidecar).mockResolvedValue({ ok: true });
+  mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
 });
 
 /* ── Group headers ────────────────────────────────────────────────────────── */
@@ -192,6 +214,54 @@ describe('AdvancedView — OverrideRow dispatch', () => {
     await waitFor(() =>
       expect(mockPutConfig).toHaveBeenCalledWith({ KOKORO_SAMPLE_RATE: 16000 }),
     );
+  });
+});
+
+/* ── Device-knob picker ───────────────────────────────────────────────────── */
+
+/* The mobile "Jump to section" nav is also a <select role="combobox">, so the
+   device-knob select must be picked out by elimination. */
+function getDeviceSelect(): HTMLSelectElement {
+  const combobox = screen
+    .getAllByRole('combobox')
+    .find((el) => el.getAttribute('aria-label') !== 'Jump to section');
+  if (!combobox) throw new Error('device knob <select> not found');
+  return combobox as HTMLSelectElement;
+}
+
+describe('AdvancedView — device-knob picker', () => {
+  it('renders the Qwen device knob as a select populated from getGpuDevices', async () => {
+    renderView();
+    await screen.findByText('Qwen device');
+    const select = getDeviceSelect();
+    const optionValues = Array.from(select.querySelectorAll('option')).map((o) =>
+      o.getAttribute('value'),
+    );
+    expect(optionValues).toEqual(['auto', 'cpu', 'cuda:0', 'cuda:1']);
+    expect(screen.getByText(/RTX 5070 Ti/)).toBeInTheDocument();
+  });
+
+  it('dispatches saveOverride with the selected cuda:N value', async () => {
+    mockPutConfig.mockResolvedValue({
+      ok: true,
+      applied: ['QWEN_DEVICE'],
+      values: {
+        ...FIXTURE_CONFIG.values,
+        QWEN_DEVICE: {
+          key: 'QWEN_DEVICE',
+          effective: 'cuda:1',
+          source: 'override',
+          locked: false,
+          overridden: true,
+        },
+      },
+    });
+    renderView();
+    await screen.findByText('Qwen device');
+    const select = getDeviceSelect();
+    fireEvent.change(select, { target: { value: 'cuda:1' } });
+
+    await waitFor(() => expect(mockPutConfig).toHaveBeenCalledWith({ QWEN_DEVICE: 'cuda:1' }));
   });
 });
 

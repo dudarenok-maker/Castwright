@@ -2,7 +2,7 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import type { KnobDescriptor, KnobValue } from '../../lib/types';
+import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
 
 /* ── apply-mode pill label ───────────────────────────────────────────────── */
 
@@ -38,9 +38,10 @@ interface ControlProps {
   value: KnobValue;
   onChange: (raw: number | boolean | string) => void;
   disabled: boolean;
+  gpuDevices?: GpuDevice[];
 }
 
-function KnobControl({ descriptor, value, onChange, disabled }: ControlProps) {
+function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: ControlProps) {
   const base =
     'px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink ' +
     'focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ' +
@@ -75,6 +76,34 @@ function KnobControl({ descriptor, value, onChange, disabled }: ControlProps) {
             {opt}
           </option>
         ))}
+      </select>
+    );
+  }
+
+  if (descriptor.type === 'device') {
+    const current = String(value.effective);
+    const cudaOptions = (gpuDevices ?? []).map((d) => `cuda:${d.idx}`);
+    const options = ['auto', 'cpu', ...cudaOptions];
+    // A stale/manually-set value (e.g. a card that vanished) stays selectable
+    // rather than silently jumping to whatever option happens to be first.
+    if (!options.includes(current)) options.push(current);
+
+    return (
+      <select
+        value={current}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full ${base}`}
+      >
+        {options.map((opt) => {
+          const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === opt);
+          const label = device ? `${opt} — ${device.name} (${device.free_mb} MB free)` : opt;
+          return (
+            <option key={opt} value={opt}>
+              {label}
+            </option>
+          );
+        })}
       </select>
     );
   }
@@ -122,9 +151,11 @@ export interface OverrideRowProps {
   value: KnobValue;
   onChange: (raw: number | boolean | string) => void;
   onRevert: () => void;
+  /** GPU cards detected via GET /api/gpu/devices — only consumed by type: 'device' knobs. */
+  gpuDevices?: GpuDevice[];
 }
 
-export function OverrideRow({ descriptor, value, onChange, onRevert }: OverrideRowProps) {
+export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices }: OverrideRowProps) {
   const locked = value.locked;
 
   return (
@@ -158,6 +189,7 @@ export function OverrideRow({ descriptor, value, onChange, onRevert }: OverrideR
           value={value}
           onChange={onChange}
           disabled={locked}
+          gpuDevices={gpuDevices}
         />
 
         {/* Env-locked indicator */}
