@@ -39,6 +39,15 @@ async function readAnalysisStream(page: Page) {
   });
 }
 
+/* Run this file's tests sequentially on a single worker. Each test does a cold
+ * `bootFreshBookIntoAnalysing` (goto('/') + upload flow) that triggers a route-level
+ * React.lazy chunk load; with fullyParallel + local workers these cold-loads pile
+ * onto the single Vite dev server and the visibility timeouts flake under peak
+ * battery contention (passes on retry in isolation, exhausts retries under full
+ * load). Serial mode caps this file at one concurrent cold-load — the same
+ * mitigation 10+ sibling specs use. */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
   test('both phase-model chips are visible on the analysing view', async ({ page }) => {
     await bootFreshBookIntoAnalysing(page);

@@ -5,6 +5,14 @@
 
 import { test, expect } from '@playwright/test';
 
+/* Run this file's tests sequentially on a single worker. Each test does a cold
+ * `goto('/#/admin')` (or `/`) that triggers a route-level React.lazy chunk load; with
+ * fullyParallel + local workers these cold-loads pile onto the single Vite dev
+ * server and the visibility timeouts flake under peak battery contention (passes
+ * on retry in isolation, exhausts retries under full load). Serial mode caps this
+ * file at one concurrent cold-load — the same mitigation 10+ sibling specs use. */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('Admin watch console', () => {
   test('reachable for all users via the top-bar Admin pill', async ({ page }) => {
     await page.goto('/');
