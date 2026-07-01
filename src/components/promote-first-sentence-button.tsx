@@ -15,7 +15,7 @@ import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
-import { MAX_TITLE_LEN } from '../modals/edit-chapter-title';
+import { MAX_TITLE_LEN } from '../lib/chapter-title';
 import type { Sentence } from '../lib/types';
 
 type Phase = 'idle' | 'confirm' | 'busy';
@@ -24,6 +24,10 @@ interface Props {
   bookId: string | null;
   chapterId: number;
   firstSentence: Sentence | null;
+  /* PR-gate review finding 2 — true when `firstSentence` is the chapter's
+     ONLY sentence, so confirming would leave the chapter with zero narrated
+     content. Strengthens the confirm-popover copy to make that explicit. */
+  isOnlySentence: boolean;
 }
 
 /** Trim + drop one trailing period — verbatim otherwise (spec Decision 5).
@@ -32,7 +36,12 @@ function cleanTitle(text: string): string {
   return text.trim().replace(/\.$/, '');
 }
 
-export function PromoteFirstSentenceButton({ bookId, chapterId, firstSentence }: Props) {
+export function PromoteFirstSentenceButton({
+  bookId,
+  chapterId,
+  firstSentence,
+  isOnlySentence,
+}: Props) {
   const dispatch = useAppDispatch();
   const [phase, setPhase] = useState<Phase>('idle');
 
@@ -84,6 +93,13 @@ export function PromoteFirstSentenceButton({ bookId, chapterId, firstSentence }:
           <p className="text-xs text-ink/70 leading-snug">
             Set title to "<span className="font-semibold text-ink">{cleaned}</span>" and remove it
             from narration?
+            {isOnlySentence && (
+              <>
+                {' '}
+                This is the chapter's only sentence — the chapter will have no
+                narrated content until you add more.
+              </>
+            )}
           </p>
           <div className="mt-3 flex items-center justify-end gap-2">
             <button

@@ -52,7 +52,12 @@ describe('PromoteFirstSentenceButton', () => {
   it('is disabled when there is no first sentence', () => {
     render(
       <Provider store={makeStore()}>
-        <PromoteFirstSentenceButton bookId="b1" chapterId={3} firstSentence={null} />
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={null}
+          isOnlySentence={false}
+        />
       </Provider>,
     );
     expect(screen.getByTestId('promote-first-sentence-button')).toBeDisabled();
@@ -62,7 +67,12 @@ describe('PromoteFirstSentenceButton', () => {
     const long = { ...firstSentence, text: 'x'.repeat(201) };
     render(
       <Provider store={makeStore()}>
-        <PromoteFirstSentenceButton bookId="b1" chapterId={3} firstSentence={long} />
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={long}
+          isOnlySentence={false}
+        />
       </Provider>,
     );
     expect(screen.getByTestId('promote-first-sentence-button')).toBeDisabled();
@@ -75,6 +85,7 @@ describe('PromoteFirstSentenceButton', () => {
           bookId="b1"
           chapterId={3}
           firstSentence={{ ...firstSentence, text: '  PUPPY TRAINING.  ' }}
+          isOnlySentence={false}
         />
       </Provider>,
     );
@@ -86,7 +97,12 @@ describe('PromoteFirstSentenceButton', () => {
   it('Cancel closes the dialog with no dispatch or api call', () => {
     render(
       <Provider store={makeStore()}>
-        <PromoteFirstSentenceButton bookId="b1" chapterId={3} firstSentence={firstSentence} />
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={firstSentence}
+          isOnlySentence={false}
+        />
       </Provider>,
     );
     fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
@@ -100,7 +116,12 @@ describe('PromoteFirstSentenceButton', () => {
     const store = makeStore();
     render(
       <Provider store={store}>
-        <PromoteFirstSentenceButton bookId="b1" chapterId={3} firstSentence={firstSentence} />
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={firstSentence}
+          isOnlySentence={false}
+        />
       </Provider>,
     );
     fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
@@ -119,7 +140,12 @@ describe('PromoteFirstSentenceButton', () => {
     const store = makeStore();
     render(
       <Provider store={store}>
-        <PromoteFirstSentenceButton bookId="b1" chapterId={3} firstSentence={firstSentence} />
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={firstSentence}
+          isOnlySentence={false}
+        />
       </Provider>,
     );
     fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
@@ -128,5 +154,40 @@ describe('PromoteFirstSentenceButton', () => {
     expect(store.getState().notifications.toasts[0].message).toBe('network down');
     expect(store.getState().manuscript.sentences).toHaveLength(2);
     expect(store.getState().chapters.chapters[0].title).toBe('Chapter 3');
+  });
+
+  it('shows the normal confirm copy (no "only sentence" warning) when isOnlySentence is false', () => {
+    render(
+      <Provider store={makeStore()}>
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={firstSentence}
+          isOnlySentence={false}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'Set title to "PUPPY TRAINING" and remove it from narration?',
+    );
+    expect(screen.getByRole('dialog')).not.toHaveTextContent("chapter's only sentence");
+  });
+
+  it('shows the stronger "only sentence" warning copy when isOnlySentence is true', () => {
+    render(
+      <Provider store={makeStore()}>
+        <PromoteFirstSentenceButton
+          bookId="b1"
+          chapterId={3}
+          firstSentence={firstSentence}
+          isOnlySentence={true}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      "This is the chapter's only sentence — the chapter will have no narrated content until you add more.",
+    );
   });
 });

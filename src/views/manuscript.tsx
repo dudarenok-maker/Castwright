@@ -335,6 +335,16 @@ export function ManuscriptView({
     return inChapter.reduce((min, s) => (s.id < min.id ? s : min));
   }, [sentences, currentChapter?.id]);
 
+  /* PR-gate review finding 2 — whether `firstSentence` is the chapter's ONLY
+     sentence, so PromoteFirstSentenceButton can warn that promoting it empties
+     the chapter's narration entirely. Sibling memo over the SAME filtered
+     array the memo above builds (rather than recomputing a second, possibly
+     divergent sentence count). */
+  const isOnlySentence = useMemo(
+    () => sentences.filter((s) => s.chapterId === currentChapter?.id).length === 1,
+    [sentences, currentChapter?.id],
+  );
+
   const findChar = useCallback((id: string) => characters.find((c) => c.id === id), [characters]);
 
   /* Plan 92 — virtualise the segment list above ~60 segments. Below
@@ -808,9 +818,17 @@ export function ManuscriptView({
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
               <PromoteFirstSentenceButton
+                /* PR-gate review finding 1 — key the instance to the current
+                   chapter so switching chapters unmounts/remounts the button,
+                   resetting its internal `phase` state to 'idle'. Without
+                   this, an open confirm popover survives a chapter switch and
+                   silently retargets (its `cleaned` text and `chapterId` are
+                   derived fresh from props each render) at the NEW chapter. */
+                key={currentChapter.id}
                 bookId={bookId}
                 chapterId={currentChapter.id}
                 firstSentence={firstSentence}
+                isOnlySentence={isOnlySentence}
               />
               {/* fs-58 — LLM script-review trigger. Primary = per-chapter
                   (low-cost default); the ⌄ disclosure opens the whole-book

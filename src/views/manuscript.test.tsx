@@ -1599,4 +1599,71 @@ describe('ManuscriptView — promote first sentence to title (2026-07-01)', () =
     renderPromote(2, []);
     expect(screen.getByTestId('promote-first-sentence-button')).toBeDisabled();
   });
+
+  it('wires isOnlySentence=true for a chapter with exactly one sentence (PR-gate finding 2)', () => {
+    renderPromote(2, [
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'PUPPY TRAINING.' } as never,
+    ]);
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByRole('dialog')).toHaveTextContent("chapter's only sentence");
+  });
+
+  it('wires isOnlySentence=false for a chapter with more than one sentence (PR-gate finding 2)', () => {
+    renderPromote(2, [
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'PUPPY TRAINING.' } as never,
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'You brought home a puppy.' } as never,
+    ]);
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByRole('dialog')).not.toHaveTextContent("chapter's only sentence");
+  });
+
+  it('resets the confirm popover to idle when the current chapter changes without clicking Cancel (PR-gate finding 1)', () => {
+    /* Regression for the stale-popover bug: PromoteFirstSentenceButton is
+       mounted without a `key` tied to the chapter, so switching chapters
+       WITHOUT clicking Cancel first used to leave the popover open,
+       silently retargeting at the new chapter (its `cleaned` text and
+       `chapterId` are derived fresh from props each render). The fix keys
+       the mount on `currentChapter.id` so a chapter switch unmounts and
+       remounts the button, resetting its internal `phase` state to
+       'idle'. */
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: { kind: 'ready', bookId: 'b1', view: 'manuscript', currentChapterId: 2 } as never,
+        },
+      },
+    });
+    const sentencesBothChapters: Sentence[] = [
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'PUPPY TRAINING.' } as never,
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'A different opener.' } as never,
+    ];
+    function renderAt(currentChapterId: number) {
+      return (
+        <Provider store={store}>
+          <ManuscriptView
+            characters={characters}
+            chapters={[chapter1, chapter2]}
+            currentChapterId={currentChapterId}
+            setCurrentChapterId={() => {}}
+            sentencesFromStore={sentencesBothChapters}
+          />
+        </Provider>
+      );
+    }
+
+    const { rerender } = render(renderAt(2));
+    fireEvent.click(screen.getByTestId('promote-first-sentence-button'));
+    expect(screen.getByRole('dialog')).toHaveTextContent('PUPPY TRAINING');
+
+    // Simulate switching to a different chapter WITHOUT clicking Cancel first.
+    rerender(renderAt(1));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

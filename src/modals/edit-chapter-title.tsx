@@ -21,6 +21,12 @@ import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import type { Chapter } from '../lib/types';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { MAX_TITLE_LEN } from '../lib/chapter-title';
+
+/* Re-exported so any existing import of MAX_TITLE_LEN from this module keeps
+   working (PR-gate review finding 3 moved the constant to lib/chapter-title
+   so it can be imported without pulling in this modal's chunk). */
+export { MAX_TITLE_LEN };
 
 interface Props {
   open: boolean;
@@ -28,8 +34,6 @@ interface Props {
   chapter: Chapter | null;
   onClose: () => void;
 }
-
-export const MAX_TITLE_LEN = 200;
 
 export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props) {
   /* Seed the input from the chapter the pencil was clicked against.
