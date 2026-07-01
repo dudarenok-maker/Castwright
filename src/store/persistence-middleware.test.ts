@@ -424,6 +424,28 @@ describe('persistenceMiddleware — payload shape', () => {
       },
     });
   });
+
+  it('2026-07-01 — dispatching promoteSentenceToTitle triggers a manuscript PUT with the tombstone', async () => {
+    /* Without a PERSIST_RULES entry the promoted-away sentence would
+       resurface on the next page load even though the chapter title
+       already changed via the (separately-persisted) rename endpoint. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      manuscript: {
+        sentences: [{ id: 2, chapterId: 3, text: 'You brought home a puppy.' }],
+        mergedAwayKeys: ['3:1'],
+      },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'manuscript/promoteSentenceToTitle' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'manuscript',
+      patch: {
+        sentences: [{ id: 2, chapterId: 3, text: 'You brought home a puppy.' }],
+        mergedAwayKeys: ['3:1'],
+      },
+    });
+  });
 });
 
 describe('persistenceMiddleware — error handling', () => {
