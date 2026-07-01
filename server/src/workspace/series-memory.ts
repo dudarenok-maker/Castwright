@@ -13,12 +13,17 @@ export interface SeriesCharacterInput {
   voiceLabel: string; engine: string | null;
   voiceKind: VoiceKind; isPrincipal: boolean;
   matchedFrom: { bookId?: string; characterId?: string } | null;
+  // Lines spoken in THIS book — summed across the chain into CarriedCharacter.totalLines,
+  // the "most-speaking-first" ordering for the reveal list. Optional/defaults to 0 so
+  // existing test fixtures that don't care about ordering need no changes.
+  lineCount?: number;
 }
 export interface SeriesBookInput { bookId: string; index: number; title: string; characters: SeriesCharacterInput[]; }
 export interface CarriedCharacter {
   character: string; aliases: string[]; voiceId: string; voiceLabel: string;
   engine: string | null; voiceKind: VoiceKind;
   firstBookId: string; lastBookId: string; bookIndices: number[]; carriedFullSpan: boolean;
+  totalLines: number;
 }
 export interface SeriesMemorySummary {
   carriedCount: number; bespokeCount: number; designedCount: number;
@@ -153,12 +158,13 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
     // is the confirmed set by contract.
     const fullSpan = indices.length === ordered.length &&
       indices.every((v, i) => v === ordered[i].index);
+    const totalLines = chain.reduce((sum, a) => sum + (a.ch.lineCount ?? 0), 0);
     carried.push({
       character: latest.ch.name, aliases: latest.ch.aliases,
       voiceId: carriedVoiceId, voiceLabel: voiced.ch.voiceLabel,
       engine: voiced.ch.engine, voiceKind: voiced.ch.voiceKind,
       firstBookId: earliest.book.bookId, lastBookId: latest.book.bookId,
-      bookIndices: indices, carriedFullSpan: fullSpan,
+      bookIndices: indices, carriedFullSpan: fullSpan, totalLines,
     });
   }
 
@@ -168,8 +174,10 @@ export function deriveSeriesMemory(books: SeriesBookInput[]): SeriesMemoryDetail
   const designedCount = carried.filter((c) => c.voiceKind === 'designed').length;
   const carriedIndices = new Set(carried.flatMap((c) => c.bookIndices));
   const spanBooks = ordered.filter((b) => carriedIndices.has(b.index)).length;
-  // bespoke first, then by first appearance, then name — the reveal/card sort.
+  // Most lines across the series first (the biggest speaking parts lead the
+  // reveal/card), then bespoke before preset, then by first appearance, then name.
   carried.sort((a, b) =>
+    b.totalLines - a.totalLines ||
     Number(b.voiceKind !== 'preset') - Number(a.voiceKind !== 'preset') ||
     a.bookIndices[0] - b.bookIndices[0] || a.character.localeCompare(b.character));
 

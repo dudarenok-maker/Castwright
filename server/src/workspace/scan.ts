@@ -454,6 +454,7 @@ export async function buildInputsFromBooks(books: LibraryBook[]): Promise<Series
           voiceKind: voiceKindFor(isTtsEngine(engine) ? engine : null),
           isPrincipal: lineCount >= PRINCIPAL_LINE_FLOOR,
           matchedFrom: ch.matchedFrom ?? null,
+          lineCount,
         };
       }),
     });

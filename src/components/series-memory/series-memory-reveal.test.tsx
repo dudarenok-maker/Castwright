@@ -29,6 +29,7 @@ const detail: SeriesMemoryDetail = {
         lastBookId: 'b3',
         bookIndices: [1, 2, 3],
         carriedFullSpan: true,
+        totalLines: 500,
       },
       {
         character: 'Sela',
@@ -41,6 +42,7 @@ const detail: SeriesMemoryDetail = {
         lastBookId: 'b3',
         bookIndices: [2, 3],
         carriedFullSpan: false,
+        totalLines: 200,
       },
       {
         character: 'Narrator',
@@ -53,6 +55,7 @@ const detail: SeriesMemoryDetail = {
         lastBookId: 'b3',
         bookIndices: [1, 2, 3],
         carriedFullSpan: true,
+        totalLines: 900,
       },
     ],
   },

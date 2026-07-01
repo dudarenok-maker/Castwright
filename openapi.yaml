@@ -5663,7 +5663,7 @@ components:
               carriedPresent: { type: integer }
     CarriedCharacter:
       type: object
-      required: [character, aliases, voiceId, voiceLabel, voiceKind, firstBookId, lastBookId, bookIndices, carriedFullSpan]
+      required: [character, aliases, voiceId, voiceLabel, voiceKind, firstBookId, lastBookId, bookIndices, carriedFullSpan, totalLines]
       properties:
         character: { type: string }
         aliases: { type: array, items: { type: string } }
@@ -5675,6 +5675,7 @@ components:
         lastBookId: { type: string }
         bookIndices: { type: array, items: { type: integer } }
         carriedFullSpan: { type: boolean }
+        totalLines: { type: integer }
     SeriesMemoryDetail:
       type: object
       required: [series, carried]

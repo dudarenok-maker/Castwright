@@ -234,11 +234,34 @@ describe('deriveSeriesMemory', () => {
     expect(summarize(d).carriedCount).toBe(d.carried.characters.length);
   });
 
-  it('sorts bespoke (designed/cloned) rows above preset rows', () => {
+  it('sorts bespoke (designed/cloned) rows above preset rows when totalLines ties (all 0)', () => {
     const d = deriveSeriesMemory(baseBooks())!;
     const lastBespokeIdx = d.carried.characters.map((c) => c.voiceKind !== 'preset').lastIndexOf(true);
     const firstPresetIdx = d.carried.characters.findIndex((c) => c.voiceKind === 'preset');
     expect(firstPresetIdx).toBeGreaterThan(lastBespokeIdx); // all bespoke before any preset
+  });
+
+  it('sums totalLines for a carried character across every book it appears in', () => {
+    const books = baseBooks();
+    const marrow = (idx: number) => books[idx].characters.find((c) => c.name === 'Marrow')!;
+    marrow(0).lineCount = 10;
+    marrow(1).lineCount = 20;
+    marrow(2).lineCount = 30;
+    const d = deriveSeriesMemory(books)!;
+    const row = d.carried.characters.find((c) => c.character === 'Marrow')!;
+    expect(row.totalLines).toBe(60);
+  });
+
+  it('sorts by totalLines desc (biggest speaking part first), overriding the bespoke/preset tie-break', () => {
+    const books = baseBooks();
+    // Narrator (preset) speaks far more than the bespoke cast — it should still lead.
+    for (const b of books) {
+      for (const c of b.characters) c.lineCount = c.name === 'Narrator' ? 50 : 5;
+    }
+    const d = deriveSeriesMemory(books)!;
+    expect(d.carried.characters[0].character).toBe('Narrator');
+    expect(d.carried.characters[0].totalLines).toBe(150); // 50 lines * 3 books
+    expect(d.carried.characters.every((c, i, arr) => i === 0 || c.totalLines <= arr[i - 1].totalLines)).toBe(true);
   });
 
   it('does not hang on a cyclic matchedFrom (A→B→A self-cycle)', () => {
