@@ -16,7 +16,17 @@ const ISSUE_LINK_PATTERN = /\b(?:closes|refs)\s+#\d+/i;
 // (see docs/superpowers/specs/... memory note: backtick-wrapped Closes #NN
 // does not auto-close).
 function stripCodeSpans(text) {
-  return text.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
+  const withoutFences = text.replace(/```[\s\S]*?```/g, '');
+  // Inline code spans cannot cross a blank line (paragraph break) per
+  // CommonMark, so strip per-paragraph rather than across the whole body —
+  // otherwise a stray/unpaired backtick in one paragraph can pair with an
+  // unrelated backtick in a later paragraph and swallow real text (including
+  // a legitimate Closes/Refs reference) sitting in between.
+  return withoutFences
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/`[^`]*`/g, ''))
+    .join('\n\n');
 }
 
 export function hasIssueLink(body) {

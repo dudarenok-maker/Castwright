@@ -12,6 +12,10 @@ const accepted = [
   'refs #99',
   'CLOSES #7',
   'See `npm run verify` first.\n\nCloses #55',
+  // A stray/unpaired backtick in an earlier paragraph must not pair across
+  // a blank-line (paragraph) boundary with a later, unrelated backtick and
+  // swallow a real Closes/Refs reference sitting in between.
+  'It cost $5` per unit.\n\nCloses #12 — see the `config` value.',
 ];
 
 const rejected = [
