@@ -3083,4 +3083,17 @@ Round 3 also confirmed, as NOT bugs: `export let lastAutoRevertOutcome`'s live E
 
 ### Wave 2 — status: NOT YET SHIPPED
 
+**On-box acceptance checklist:**
+
+- [ ] **First, confirm torch exposes real per-card UUIDs on this box**: `python -c "import torch; print(torch.cuda.get_device_properties(0).uuid)"` in the sidecar venv → prints a real UUID, not an `AttributeError`. If it errors, `_sample_card`'s `idx-N` synthetic fallback is in effect and `DeviceLedger`'s renumber-detection (Task 1) is a no-op on this box — note this explicitly in the Ship notes rather than silently assuming the guarantee holds (a round-2 review finding).
+- [ ] `SIDECAR_VRAM_FREE_FLOOR_MB=1024` (default) — starve a card to <1024MB free (load something else onto it manually / reduce via a smaller test card) → sidecar self-exits (code 43), `/health` gpus[] showed the breach before exit.
+- [ ] `QWEN_DEVICE=cuda:0 KOKORO_DEVICE=cuda:1` (different cards) → a VoiceDesign session runs WHILE a Kokoro chapter synthesizes concurrently, no blocking (shares_device=False path).
+- [ ] `QWEN_DEVICE=cuda:0 KOKORO_DEVICE=cuda:0` (same card, default) → VoiceDesign blocks new Kokoro synths until it completes (shares_device=True path, unchanged from Wave 1).
+- [ ] Force 3 code-43 exits within 10 minutes via a CARD-SPECIFIC trigger (e.g. temporarily set `SIDECAR_VRAM_FREE_FLOOR_MB` absurdly high) → server log shows the streak-trip warning; the sidecar stops respawning; `supervisor.tripEvent()` shows the right card + resident engines.
+- [ ] **Force 3 code-43 exits within 10 minutes via a NON-card-specific trigger** (e.g. temporarily set `SIDECAR_RESTART_MB` absurdly low so the HOST-RAM ceiling trips 3× in a row) → the streak still trips (Task 7 counts any code-43, not just per-card ones); Task 16's `runAutoRevert` logs the distinct "tripped WITHOUT a specific card... requires MANUAL investigation" error rather than silently returning `{reverted:[]}`; TTS stays held down as expected, but this is now VISIBLE (Task 16.5's `/api/gpu/trip-status` reports `status:'unrevertable'`).
+- [ ] Analyzer confirmed on CPU (`ANALYZER=local` with an Ollama CPU-only install) — **run at least one analysis first** (the cache in `analyzer-device-state.ts` is only populated at the one real `detectOllamaDevice()` call site, `routes/analysis.ts`; it stays `'unknown'`/full-charge before that, by design — a round-2 review caught this checklist item as untested-until-populated) → a concurrent Qwen GPU synth is NOT serialized behind the analyzer (costForEngine('analyzer') returns 0).
+- [ ] Analyzer confirmed on GPU → existing serialization behaviour is UNCHANGED (regression check against pre-Wave-2 behaviour).
+- [ ] `COQUI_DEVICE=cpu` while the analyzer holds the GPU → the Coqui load runs immediately, no eviction wait (engineOnGpu=false path in withGpuLoad).
+- [ ] Qwen voice-design (`routes/qwen-voice.ts`'s `designQwenVoiceForCharacter`) while `tts.qwen.device=cpu` → the design's `withGpuLoad` call runs immediately too (the second `withGpuLoad` call site Task 8 wires, not just `ensure-sidecar-loaded.ts`'s).
+
 ### Plan 2 — status: NOT YET SHIPPED (gated on Wave 2)
