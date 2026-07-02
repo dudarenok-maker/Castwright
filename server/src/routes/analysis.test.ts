@@ -2404,12 +2404,17 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
   }
 
   it(
-    'cloud engine (both phases): setLastKnownAnalyzerDevice("unknown") WITHOUT probing Ollama',
+    'cloud engine (both phases): does NOT probe Ollama and does NOT touch the global cache',
     async () => {
+      /* A cloud-only job has nothing new to report about the local Ollama
+         analyzer's placement — it must leave whatever a concurrent/prior
+         local job's cache write established untouched, not clobber it with
+         'unknown' (a real regression under concurrent multi-book use: see
+         docs/features/236-multi-gpu-per-model-safety.md). */
       await runJobWith('gemini', 'gemini');
 
       expect(detectOllamaDeviceMock).not.toHaveBeenCalled();
-      expect(setLastKnownAnalyzerDeviceMock).toHaveBeenCalledWith('unknown');
+      expect(setLastKnownAnalyzerDeviceMock).not.toHaveBeenCalled();
     },
     60_000,
   );
@@ -2423,6 +2428,28 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
 
       expect(detectOllamaDeviceMock).toHaveBeenCalled();
       expect(setLastKnownAnalyzerDeviceMock).toHaveBeenCalledWith('cpu');
+    },
+    60_000,
+  );
+
+  it(
+    'a concurrent cloud-engine job does not clobber a prior local job\'s cached device (concurrent multi-book regression)',
+    async () => {
+      /* Simulates: Book A's local-engine job confirms 'cpu' (setLastKnownAnalyzerDevice
+         is a single process-wide global — Book A and Book B share it). Book B's
+         cloud-engine job must not overwrite that with 'unknown', or the W2.6
+         cross-charge guard silently reverts to full-weight charging for the rest
+         of the process. */
+      detectOllamaDeviceMock.mockResolvedValueOnce('cpu');
+      await runJobWith('local', 'gemini');
+      expect(setLastKnownAnalyzerDeviceMock).toHaveBeenCalledWith('cpu');
+
+      setLastKnownAnalyzerDeviceMock.mockClear();
+      detectOllamaDeviceMock.mockClear();
+
+      await runJobWith('gemini', 'gemini');
+      expect(detectOllamaDeviceMock).not.toHaveBeenCalled();
+      expect(setLastKnownAnalyzerDeviceMock).not.toHaveBeenCalled();
     },
     60_000,
   );

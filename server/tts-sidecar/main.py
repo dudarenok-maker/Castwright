@@ -3740,7 +3740,15 @@ class DeviceLedger:
         if seen is None:
             self._known_uuids[idx] = row["uuid"]
         elif seen != row["uuid"]:
-            return None  # renumbered — vanished, never substitute
+            # Renumbered: flag THIS sample as vanished (never silently
+            # substitute the old reading for the new card), but re-seed the
+            # known uuid so the watchdog resumes protecting whatever card is
+            # now physically at this index on the NEXT sample — otherwise a
+            # renumber permanently blinds _check_per_card_ceilings to this
+            # idx for the rest of the process, losing OOM protection on a
+            # card that's present and correctly enumerated.
+            self._known_uuids[idx] = row["uuid"]
+            return None
         return row
 
     def sample(self, idx: int) -> Optional[dict]:
@@ -3991,8 +3999,16 @@ def _write_restart_breadcrumb(card: Optional[dict], metric_label: str) -> None:
         if card is not None:
             by_card = _resident_engines_by_card(_enumerate_cuda_devices())
             resident = [r["engine"] for r in by_card.get(card["idx"], [])]
-        with open(_RESTART_BREADCRUMB_PATH, "w", encoding="utf-8") as f:
-            json.dump({"card": card, "reason": metric_label, "residentEngines": resident, "ts": time.time()}, f)
+        body = json.dumps({"card": card, "reason": metric_label, "residentEngines": resident, "ts": time.time()})
+        # Write-then-rename: os.replace is atomic on the same volume (POSIX and
+        # Windows both), so a hard kill mid-write can never leave a truncated/
+        # partial breadcrumb for the reader to trip over — the very trip that
+        # most needs this diagnostic (a crash severe enough to interrupt this
+        # write) is exactly the one a torn file would otherwise degrade.
+        tmp_path = f"{_RESTART_BREADCRUMB_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.replace(tmp_path, _RESTART_BREADCRUMB_PATH)
     except Exception as e:
         log.warning("could not write restart breadcrumb (%s) — a downstream auto-revert will lack card info for this trip.", e)
 
@@ -4613,6 +4629,11 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
         cards.append({
             "uuid": None, "idx": -1, "name": "unindexed (cpu / ORT / CT2)",
             "total_mb": 0, "free_mb": 0, "torch_reserved_mb": 0, "resident": unindexed,
+            # The free floor is a global absolute (not per-card), so it still
+            # applies here — this bucket IS the Kokoro/Whisper CPU-fallback
+            # engines the floor exists to protect. reserved_ceiling_mb has no
+            # meaning without a real total_mb (matches this row's total_mb: 0).
+            "free_floor_mb": _sidecar_vram_free_floor_mb(), "reserved_ceiling_mb": 0.0,
         })
     return cards
 

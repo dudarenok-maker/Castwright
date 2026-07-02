@@ -36,6 +36,23 @@ def test_ledger_flags_vanished_on_uuid_mismatch():
     assert ledger.sample(1) is None
 
 
+def test_ledger_resumes_sampling_the_new_card_after_a_renumber():
+    """A renumber must be flagged as vanished ONCE (the transition itself),
+    not blind this idx forever — the next sample must succeed against
+    whatever card is now physically present, so _check_per_card_ceilings'
+    OOM watchdog resumes protecting it rather than silently skipping this
+    idx for the rest of the process."""
+    fake = _fake_torch()
+    ledger = main.DeviceLedger(fake)
+    assert ledger.sample(1)["uuid"] == "GPU-1"  # seeds known uuid at idx 1
+    fake.cuda.get_device_properties = lambda i: types.SimpleNamespace(
+        name="Different Card", total_memory=16 * 10**9, uuid="GPU-DIFFERENT")
+    assert ledger.sample(1) is None  # the renumber transition itself: vanished
+    row = ledger.sample(1)  # the SAME (new) card sampled again
+    assert row is not None
+    assert row["uuid"] == "GPU-DIFFERENT"
+
+
 def test_ledger_sample_all_revalidates_every_card():
     ledger = main.DeviceLedger(_fake_torch())
     rows = ledger.sample_all()
