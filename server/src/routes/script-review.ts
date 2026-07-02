@@ -33,6 +33,11 @@ import {
   primarySentenceId,
   chapterChunkBudget,
 } from '../analyzer/chapter-chunker.js';
+import {
+  buildCharsByChapter,
+  chapterPacingPhaseFields,
+  accumulateChapterPacing,
+} from '../analyzer/chapter-pacing.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 
 export const scriptReviewRouter = Router();
@@ -287,9 +292,7 @@ scriptReviewRouter.post(
     let reviewedChapters = 0;
     let actualMsTotal = 0;
     let actualCharsTotal = 0;
-    const charsByChapter = new Map<number, number>(
-      chapterIds.map((id) => [id, (byChapter.get(id) ?? []).reduce((n, sent) => n + sent.text.length, 0)]),
-    );
+    const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
     try {
       for (let i = 0; i < chapterIds.length; i += 1) {
         if (closed) break;
@@ -300,16 +303,15 @@ scriptReviewRouter.post(
           progress: i / chapterIds.length,
           label: 'Reviewing script',
           chapterId,
-          chapterIndex: i + 1,
-          totalChapters: chapterIds.length,
+          ...chapterPacingPhaseFields({
+            index: i,
+            totalChapters: chapterIds.length,
+            actualMsTotal,
+            actualCharsTotal,
+            charsByChapter,
+            remainingChapterIds: chapterIds.slice(i),
+          }),
         };
-        if (actualCharsTotal > 0) {
-          const observedRate = actualMsTotal / actualCharsTotal;
-          const remainingChars = chapterIds
-            .slice(i)
-            .reduce((n, id) => n + (charsByChapter.get(id) ?? 0), 0);
-          phaseEvent.estRemainingMs = Math.round(observedRate * remainingChars);
-        }
         send(phaseEvent);
 
         const chapterStartedAt = Date.now();
@@ -394,8 +396,11 @@ scriptReviewRouter.post(
         }
         /* A failed chunk still took real wall-clock time — count it toward
            the pacing rate so the next chapter's ETA stays honest. */
-        actualMsTotal += Date.now() - chapterStartedAt;
-        actualCharsTotal += charsByChapter.get(chapterId) ?? 0;
+        ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing(
+          { actualMsTotal, actualCharsTotal },
+          chapterStartedAt,
+          charsByChapter.get(chapterId) ?? 0,
+        ));
         reviewedChapters += 1;
       }
     } finally {
