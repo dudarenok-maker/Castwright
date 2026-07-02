@@ -3614,6 +3614,97 @@ def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
         return []
 
 
+class DeviceLedger:
+    """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
+    (_sample_card). Read from three thread contexts (the _memory_watchdog
+    asyncio loop, /health+/devices' sync threadpool threads, to_thread
+    workers) — ONE threading.Lock serialises every sample so concurrent
+    readers never race torch's CUDA context.
+
+    NEVER caches an index across calls without re-validating it: every sample
+    re-resolves get_device_properties(idx) and asserts its uuid still matches
+    what was seen at that index on a PRIOR sample. A driver/OS renumber (rare,
+    but explicitly called out by the spec) would otherwise have a cached idx
+    silently read the WRONG physical card. A uuid mismatch reports the card as
+    vanished (ceiling 0 downstream) — never silently substituted.
+
+    CAVEAT (raised by a round-2 adversarial review, not fixed here — see Task
+    9's on-box checklist): this guarantee depends on torch actually exposing
+    a real per-card uuid via get_device_properties(idx).uuid. _sample_card
+    (Wave 1, main.py ~3596) falls back to a synthetic f"idx-{idx}" string when
+    that attribute is absent — on a torch build/driver where it's absent, the
+    fallback uuid is DERIVED FROM THE INDEX ITSELF, so a renumber can never
+    produce a mismatch and this detection silently no-ops. Confirm real uuids
+    are present on the target box during Task 9's on-box acceptance before
+    trusting this guarantee in production; if they're absent, this class's
+    "never substitutes a renumbered card" claim only holds when torch exposes
+    uuids, not unconditionally.
+
+    `_sample_locked` factors the no-lock-acquisition body out of `sample`/
+    `sample_all` so `sample_all` can loop calling it WITHOUT re-entering the
+    (non-reentrant) lock — `sample_all` calling the public `sample()` while
+    already holding `self._lock` would deadlock."""
+
+    def __init__(self, torch_module: Any = None) -> None:
+        self._lock = threading.Lock()
+        self._torch_module = torch_module  # injectable for tests
+        self._known_uuids: dict[int, str] = {}  # idx -> uuid last seen at that idx
+        self._card_locks: dict[int, threading.Lock] = {}  # Task 5 consumes this
+
+    def _torch(self) -> Any:
+        if self._torch_module is not None:
+            return self._torch_module
+        import torch  # type: ignore
+        return torch
+
+    def _sample_locked(self, tm: Any, idx: int) -> Optional[dict]:
+        """Body of sample(); caller MUST already hold self._lock."""
+        try:
+            if not tm.cuda.is_available() or idx >= tm.cuda.device_count():
+                return None
+            row = _sample_card(idx, tm)
+        except Exception:
+            return None
+        seen = self._known_uuids.get(idx)
+        if seen is None:
+            self._known_uuids[idx] = row["uuid"]
+        elif seen != row["uuid"]:
+            return None  # renumbered — vanished, never substitute
+        return row
+
+    def sample(self, idx: int) -> Optional[dict]:
+        with self._lock:
+            return self._sample_locked(self._torch(), idx)
+
+    def sample_all(self) -> list[dict]:
+        with self._lock:
+            tm = self._torch()
+            try:
+                n = tm.cuda.device_count() if tm.cuda.is_available() else 0
+            except Exception:
+                n = 0
+            out = []
+            for i in range(n):
+                row = self._sample_locked(tm, i)
+                if row is not None:
+                    out.append(row)
+            return out
+
+    def card_lock(self, idx: int) -> threading.Lock:
+        """Per-card mutex for a check-residency->evict->load sequence sharing
+        this card (Task 5). Lazily created; one Lock per idx for the process
+        lifetime — cards don't appear/disappear mid-process on a supported box."""
+        with self._lock:
+            lock = self._card_locks.get(idx)
+            if lock is None:
+                lock = threading.Lock()
+                self._card_locks[idx] = lock
+            return lock
+
+
+_DEVICE_LEDGER = DeviceLedger()
+
+
 # Reserved-VRAM recycle fractions of device total (defaults; absolute MB env
 # overrides below). Soft flags a clean boundary recycle; hard self-exits. Both
 # key on RESERVED crossing the card — the spill trigger on Windows.
