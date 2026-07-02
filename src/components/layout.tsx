@@ -1050,7 +1050,17 @@ export function Layout() {
           pillActive = true;
           const { failed } = await runProsodyPasses(id, {
             dispatch,
-            onProgress: (f) => dispatch(prosodyActions.updateProgress({ bookId: id, progress: f })),
+            onProgress: (f, d) =>
+              dispatch(
+                prosodyActions.updateProgress({
+                  bookId: id,
+                  progress: f,
+                  ...(d?.label !== undefined ? { label: d.label } : {}),
+                  ...(d?.chapterIndex !== undefined ? { chapterIndex: d.chapterIndex } : {}),
+                  ...(d?.totalChapters !== undefined ? { totalChapters: d.totalChapters } : {}),
+                  ...(d?.estRemainingMs !== undefined ? { estRemainingMs: d.estRemainingMs } : {}),
+                }),
+              ),
           });
           if (failed === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });

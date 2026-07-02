@@ -36,7 +36,7 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   const { dispatch, wholeBook, chapterId, model, sentences, characterIds } = opts;
   const allOps: ReviewOpWithChapter[] = [];
   const failed: Array<{ chapterId: number; message: string }> = [];
-  dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing' }));
+  dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing script' }));
   try {
     await api.reviewScript(bookId, {
       ...(wholeBook ? {} : { chapterId }),

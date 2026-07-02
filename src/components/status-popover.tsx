@@ -111,6 +111,7 @@ export function StatusPopover({
   onGoToDesign,
 }: StatusPopoverProps) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const substageDetailText = analysisSubstage ? formatSubstageDetail(analysisSubstage) : null;
 
   /* Position under the pill, right-aligned (bottom-end). Flip above only if it
      would spill past the viewport bottom. Tracks scroll/resize like the
@@ -190,9 +191,9 @@ export function StatusPopover({
                   <span>{analysisSubstage.label}</span>
                   <span className="tabular-nums">{analysisSubstage.percent}%</span>
                 </div>
-                {formatSubstageDetail(analysisSubstage) && (
+                {substageDetailText && (
                   <span data-testid="substage-detail" className="text-xs text-ink/50 tabular-nums">
-                    {formatSubstageDetail(analysisSubstage)}
+                    {substageDetailText}
                   </span>
                 )}
               </div>
@@ -206,9 +207,9 @@ export function StatusPopover({
                   <span>{analysisSubstage.label}</span>
                   <span className="tabular-nums">{analysisSubstage.percent}%</span>
                 </div>
-                {formatSubstageDetail(analysisSubstage) && (
+                {substageDetailText && (
                   <span data-testid="substage-detail" className="text-xs text-ink/50 tabular-nums">
-                    {formatSubstageDetail(analysisSubstage)}
+                    {substageDetailText}
                   </span>
                 )}
               </div>

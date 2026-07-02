@@ -131,6 +131,7 @@ export function ManuscriptView({
   const reviewSubstage = useAppSelector((s) =>
     bookId ? s.scriptReview?.activeStreams[bookId] : undefined,
   );
+  const reviewSubstageDetailText = reviewSubstage ? formatSubstageDetail(reviewSubstage) : null;
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
@@ -903,12 +904,12 @@ export function ManuscriptView({
                 >
                   <IconSpinner className="w-4 h-4 animate-spin text-magenta" />
                   <span className="text-ink/70">{reviewSubstage.label}</span>
-                  {formatSubstageDetail(reviewSubstage) && (
+                  {reviewSubstageDetailText && (
                     <span
                       data-testid="review-script-progress-detail"
                       className="text-xs text-ink/50 tabular-nums whitespace-nowrap"
                     >
-                      {formatSubstageDetail(reviewSubstage)}
+                      {reviewSubstageDetailText}
                     </span>
                   )}
                   <span className="tabular-nums text-ink/50">{reviewSubstage.progress}%</span>

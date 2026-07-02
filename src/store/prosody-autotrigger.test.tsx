@@ -655,4 +655,67 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     expect(opts.signal).toBeUndefined();
     expect(typeof opts.onProgress).toBe('function');
   });
+
+  // ── Final whole-branch review Finding 1: eager trigger forwards `detail` ──
+  // The onProgress callback wired at this call site used to dispatch only
+  // `progress`, silently dropping label/chapterIndex/totalChapters/
+  // estRemainingMs even though runProsodyPasses (and the manual button path)
+  // supply them. Since auto-prosody is the default/common path, this was the
+  // only path where the Status popover's chapter-count/ETA enrichment never
+  // showed up. Assert the forwarded detail lands in the prosody slice.
+
+  it('forwards chapterIndex/totalChapters/estRemainingMs from onProgress detail into the prosody slice (Finding 1)', async () => {
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    /* Hold runProsodyPasses open (don't let it resolve) so the `finally` clear
+       doesn't wipe activeStreams before we inspect it — mirrors production
+       timing, where onProgress ticks arrive WHILE the pass is still running. */
+    let resolvePass!: (v: { totalAnnotations: number; totalChapters: number; failed: number }) => void;
+    runProsodyPassesMock.mockImplementationOnce(
+      (_id: string, opts: { onProgress?: (fraction: number, detail?: Record<string, unknown>) => void }) =>
+        new Promise((resolve) => {
+          resolvePass = resolve;
+          opts.onProgress?.(0.5, {
+            label: 'Detecting emotions',
+            chapterIndex: 2,
+            totalChapters: 5,
+            estRemainingMs: 12_000,
+          });
+        }),
+    );
+
+    renderLayout(store);
+
+    await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    await waitFor(() => {
+      expect(runProsodyPassesMock).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      const entry = store.getState().prosody.activeStreams.b1;
+      expect(entry).toMatchObject({
+        progress: 50,
+        label: 'Detecting emotions',
+        chapterIndex: 2,
+        totalChapters: 5,
+        estRemainingMs: 12_000,
+      });
+    });
+
+    /* Let the pass finish so the effect's finally/cleanup runs cleanly. */
+    await act(async () => {
+      resolvePass({ totalAnnotations: 0, totalChapters: 5, failed: 0 });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  });
 });

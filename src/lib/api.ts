@@ -2956,15 +2956,24 @@ async function mockDetectInstruct(
   { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   await wait(60);
-  onPhase?.({ progress: 0.5, label: 'Detecting instruct', chapterId: 1, chapterIndex: 1, totalChapters: 1 });
+  onPhase?.({ progress: 0.25, label: 'Detecting instruct', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
   onAnnotation?.({
     chapterId: 1,
     annotations: [{ sentenceId: 1, text: '[laughs]', instruct: 'warm, amused', vocalization: true }],
   });
   await wait(400);
+  onPhase?.({
+    progress: 0.85,
+    label: 'Detecting instruct',
+    chapterId: 2,
+    chapterIndex: 2,
+    totalChapters: 2,
+    estRemainingMs: 15_000,
+  });
+  await wait(400);
   onPhase?.({ progress: 1, label: 'Done' });
-  return { annotatedChapters: 1, totalAnnotations: 1 };
+  return { annotatedChapters: 2, totalAnnotations: 1 };
 }
 
 /* fs-58 — LLM script-review SSE stream. Mirrors realDetectEmotions' SSE
