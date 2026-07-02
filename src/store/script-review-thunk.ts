@@ -41,8 +41,23 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
     await api.reviewScript(bookId, {
       ...(wholeBook ? {} : { chapterId }),
       model,
-      onPhase: ({ progress }: { progress: number }) =>
-        dispatch(scriptReviewActions.updateProgress({ bookId, progress })),
+      onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }: {
+        progress: number;
+        label?: string;
+        chapterIndex?: number;
+        totalChapters?: number;
+        estRemainingMs?: number;
+      }) =>
+        dispatch(
+          scriptReviewActions.updateProgress({
+            bookId,
+            progress,
+            ...(label !== undefined ? { label } : {}),
+            ...(chapterIndex !== undefined ? { chapterIndex } : {}),
+            ...(totalChapters !== undefined ? { totalChapters } : {}),
+            ...(estRemainingMs !== undefined ? { estRemainingMs } : {}),
+          }),
+        ),
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId: chId });
       },
