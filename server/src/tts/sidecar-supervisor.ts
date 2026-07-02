@@ -46,7 +46,16 @@ const DEFAULT_MAX_CONSECUTIVE_FAILURES = 5;
    -too-small device assignment that loads fine for 35s and then dies every
    time would never trip the give-up branch (it keeps resetting). This counter
    tracks code-43 self-exits ONLY, on a pure time-window basis, regardless of
-   how long each child lived (§W2.5). */
+   how long each child lived (§W2.5).
+
+   Intentionally metric-agnostic: it counts EVERY code-43 exit — a per-card
+   VRAM/floor breach (Wave 2 §W2.2), a host-RAM ceiling breach, or a manual
+   POST /recycle — not just per-card structural breaches. A cluster of 3
+   otherwise-healthy recycles in the 10-minute window trips the same hold-down
+   as a genuinely undersized device pin. This is deliberate (see the plan's
+   Task 9 on-box checklist, which exercises the non-card-specific trigger
+   explicitly) and low-risk (3 legitimate recycles in 10 minutes is itself
+   abnormal) — not a bug if a recycle-storm trips this. */
 const RESTART43_STREAK_WINDOW_MS = 600_000; // 10 min
 const RESTART43_STREAK_TRIP_COUNT = 3;
 /* How often to poll an ADOPTED (already-listening, not-owned) sidecar for
