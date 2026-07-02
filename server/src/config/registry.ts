@@ -731,6 +731,17 @@ export const KNOBS: ConfigKnob[] = [
     default: 0, // ← _vram_restart_threshold_mb() default in tts-sidecar/main.py (line 1966–1974, env unset → _VRAM_HARD_FRACTION×total; 0 = "auto/unset" sentinel)
     apply: 'restart-sidecar', risk: 'high',
   },
+  {
+    key: 'sidecar.vramFreeFloorMb',
+    env: 'SIDECAR_VRAM_FREE_FLOOR_MB',
+    group: 'gpu-lifecycle',
+    label: 'Per-card VRAM free floor (MB)',
+    help: 'Absolute free-VRAM headroom below which a card is treated as critically low and the sidecar recycles. The only OOM guard for Kokoro/Whisper (their VRAM is invisible to the torch-reserved metric). Default 1024MB.',
+    type: 'integer',
+    default: 1024,
+    min: 0,
+    apply: 'restart-sidecar', risk: 'medium',
+  },
 
   // ── analyzer-sampling (additions) ─────────────────────────────────────────
   {

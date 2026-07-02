@@ -159,3 +159,13 @@ def test_build_gpus_payload_no_unindexed_entry_when_bucket_empty(monkeypatch):
     monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {1: [{"engine": "qwen", "actual_card": 1}]})
     out = main._build_gpus_payload(_fake_torch())
     assert [c for c in out if c["idx"] == -1] == []
+
+
+def test_build_gpus_payload_includes_per_card_ceilings(monkeypatch):
+    monkeypatch.setenv("SIDECAR_VRAM_FREE_FLOOR_MB", "1024")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {})
+    out = main._build_gpus_payload(_fake_torch())
+    assert out[0]["free_floor_mb"] == 1024.0
+    assert out[0]["reserved_ceiling_mb"] == main._VRAM_HARD_FRACTION * 16000

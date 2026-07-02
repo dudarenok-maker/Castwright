@@ -437,6 +437,14 @@ def _reset_poison_for_test() -> None:
     _poison_exit_scheduled = False
 
 
+def _reset_restart_state_for_test() -> None:
+    """Test-only: clear restart-scheduling state so cases don't bleed."""
+    global _restart_scheduled, _restart_pending, _last_restart_card
+    _restart_scheduled = False
+    _restart_pending = False
+    _last_restart_card = None
+
+
 def _parse_bool(value: Optional[str], default: bool) -> bool:
     """Parse an env-var string into a bool. `"1"`, `"true"`, `"yes"`, `"on"`
     (case-insensitive) → True; `"0"`, `"false"`, `"no"`, `"off"` → False;
@@ -3746,6 +3754,51 @@ def _vram_restart_threshold_mb(total_mb: Optional[float]) -> float:
     return 0.0
 
 
+def _sidecar_vram_free_floor_mb() -> float:
+    """Absolute per-card free-VRAM floor (MB) — the ONLY OOM guard for an
+    ORT/CT2-only card (Kokoro/Whisper), which never shows up in torch's
+    reserved-memory metric. Deliberately ABSOLUTE, not a fraction: a
+    fraction-based floor would self-satisfy on an idle low-VRAM display card
+    and never trip. Default 1024 MB (Round 5 decision — tune during Wave 2
+    on-box acceptance, not before); override SIDECAR_VRAM_FREE_FLOOR_MB."""
+    env = os.environ.get("SIDECAR_VRAM_FREE_FLOOR_MB")
+    if env is not None:
+        try:
+            return float(env)
+        except (TypeError, ValueError):
+            pass
+    return 1024.0
+
+
+def _card_reserved_ceiling_mb(total_mb: float) -> float:
+    """Per-card reserved-VRAM HARD ceiling — the same _VRAM_HARD_FRACTION
+    already used for the device-0 scalar ceiling, applied per-card."""
+    return _VRAM_HARD_FRACTION * total_mb if total_mb and total_mb > 0 else 0.0
+
+
+def _check_per_card_ceilings(ledger: "DeviceLedger", torch_module: Any = None) -> Optional[dict]:
+    """OR-rule per-card breach: for each visible card, freshly sampled via the
+    ledger, breach if EITHER free_mb < the absolute floor OR (torch-only)
+    reserved VRAM crosses THIS card's own fraction ceiling. Returns the FIRST
+    breaching card's {uuid, idx, reason}, or None. Each card's readings are
+    independently fresh — never a stale/cached value from another card's check."""
+    floor = _sidecar_vram_free_floor_mb()
+    for card in ledger.sample_all():
+        if card["free_mb"] < floor:
+            return {"uuid": card["uuid"], "idx": card["idx"], "reason": "driver_free_floor"}
+        try:
+            tm = torch_module
+            if tm is None:
+                import torch as tm  # type: ignore
+            reserved = tm.cuda.memory_reserved(card["idx"]) / 1_000_000.0
+            ceiling = _card_reserved_ceiling_mb(card["total_mb"])
+            if ceiling > 0 and reserved >= ceiling:
+                return {"uuid": card["uuid"], "idx": card["idx"], "reason": "reserved_vram_ceiling"}
+        except Exception:
+            pass
+    return None
+
+
 def _mem_restart_threshold_mb() -> float:
     """Committed-private (MB) at which the sidecar self-exits for the supervisor
     to respawn it (process recycling). Default = 70% of total physical RAM so it
@@ -3856,28 +3909,37 @@ def _drain_then_restart(grace_ms: int) -> None:
     threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
 
 
+_last_restart_card: Optional[dict] = None
+
+
 def _schedule_restart_exit(
-    metric_mb: float, threshold_mb: float, metric_label: str = "committed memory"
+    metric_mb: float, threshold_mb: float, metric_label: str = "committed memory",
+    card: Optional[dict] = None,
 ) -> None:
     """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
     Idempotent (a later over-ceiling tick won't double-schedule). Flips
     `_restart_pending` (new synth now fast-fails 503) and hands off to a drain
     thread that waits out the in-flight chapter (srv-17c) before the
     flush-delayed exit. `metric_label` names the ceiling that tripped (host
-    "committed memory" vs "reserved VRAM") so the log says which one fired."""
-    global _restart_scheduled, _restart_pending
+    "committed memory" vs "reserved VRAM") so the log says which one fired.
+    `card` is None for the pre-existing host-RAM/device-0-VRAM triggers, and
+    the breaching card's dict for a per-card trigger."""
+    global _restart_scheduled, _restart_pending, _last_restart_card
     if _restart_scheduled:
         return
     _restart_scheduled = True
     _restart_pending = True
+    _last_restart_card = card
     grace_ms = _drain_grace_ms()
     log.warning(
-        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB — "
+        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB%s — "
         "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
         "server respawns a fresh process. Completed chapters are skipped (srv-16); "
         "the in-flight chapter finishes here or is re-rendered by the server "
         "(srv-17c). Raise the ceiling to recycle less often.",
-        metric_label, metric_mb, threshold_mb, _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
+        metric_label, metric_mb, threshold_mb,
+        f" (card {card['idx']})" if card else "",
+        _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
     )
     threading.Thread(target=_drain_then_restart, args=(grace_ms,), daemon=True).start()
 
@@ -3930,6 +3992,13 @@ async def _memory_watchdog() -> None:
                 continue
             if vram_reserved is not None and _should_restart(vram_reserved, vram_hard):
                 _schedule_restart_exit(vram_reserved, vram_hard, "reserved VRAM")
+                continue
+            per_card_breach = _check_per_card_ceilings(_DEVICE_LEDGER)
+            if per_card_breach is not None:
+                _schedule_restart_exit(
+                    0.0, 0.0, f"card {per_card_breach['idx']} {per_card_breach['reason']}",
+                    card=per_card_breach,
+                )
                 continue
             # SOFT recycle: below the hard ceilings, flag a pending recycle so the
             # generation worker recycles cleanly at the next chapter boundary. Set
@@ -4443,6 +4512,9 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
     except Exception:
         for c in cards:
             c["torch_reserved_mb"] = 0
+    for c in cards:
+        c["free_floor_mb"] = _sidecar_vram_free_floor_mb()
+        c["reserved_ceiling_mb"] = _card_reserved_ceiling_mb(c["total_mb"])
     for c in cards:
         c["resident"] = resident.get(c["idx"], [])
     # ORT/CT2 engines (Kokoro/Whisper) and any cpu-fallen engine carry index=None
