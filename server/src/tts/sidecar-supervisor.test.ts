@@ -653,13 +653,24 @@ describe('sidecar supervisor (srv-15)', () => {
 
       expect(sup.tripEvent()).toBeNull(); // trip cleared
       expect(respawnCount()).toBeGreaterThan(beforeRecovery); // a fresh child was spawned
-      // A subsequent code-43 streak can trip again (the timestamp window was reset, not left poisoned):
-      for (let i = 0; i < 3; i++) {
-        now += 35_000;
-        spawn.exit(43);
-        await Promise.resolve();
-      }
-      expect(sup.tripEvent()).not.toBeNull();
+
+      // A subsequent code-43 streak must take a full fresh 3 to re-trip — if the old
+      // timestamps were left poisoned (only the trip flag cleared), even the 1st fresh
+      // exit here would already push the window to 4 stale+fresh entries and re-trip early.
+      now += 35_000;
+      spawn.exit(43);
+      await Promise.resolve();
+      expect(sup.tripEvent()).toBeNull(); // not re-tripped after just 1 fresh exit
+
+      now += 35_000;
+      spawn.exit(43);
+      await Promise.resolve();
+      expect(sup.tripEvent()).toBeNull(); // still not tripped after 2
+
+      now += 35_000;
+      spawn.exit(43);
+      await Promise.resolve();
+      expect(sup.tripEvent()).not.toBeNull(); // trips on the 3rd genuinely-fresh exit
     });
   });
 });
