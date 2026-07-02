@@ -38,6 +38,7 @@ import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import { DetectEmotionsButton } from '../components/detect-emotions-button';
+import { SubstageProgressPill } from '../components/substage-progress-pill';
 import { PromoteFirstSentenceButton } from '../components/promote-first-sentence-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
@@ -898,22 +899,13 @@ export function ManuscriptView({
                 )}
               </div>
               {reviewSubstage && (
-                <span
-                  data-testid="review-script-progress"
-                  className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm"
-                >
-                  <IconSpinner className="w-4 h-4 animate-spin text-magenta" />
-                  <span className="text-ink/70">{reviewSubstage.label}</span>
-                  {reviewSubstageDetailText && (
-                    <span
-                      data-testid="review-script-progress-detail"
-                      className="text-xs text-ink/50 tabular-nums whitespace-nowrap"
-                    >
-                      {reviewSubstageDetailText}
-                    </span>
-                  )}
-                  <span className="tabular-nums text-ink/50">{reviewSubstage.progress}%</span>
-                </span>
+                <SubstageProgressPill
+                  testId="review-script-progress"
+                  detailTestId="review-script-progress-detail"
+                  status={reviewSubstage.label}
+                  detailText={reviewSubstageDetailText}
+                  percent={reviewSubstage.progress}
+                />
               )}
               {onStartGenerating && (
                 <button

@@ -52,10 +52,10 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
           scriptReviewActions.updateProgress({
             bookId,
             progress,
-            ...(label !== undefined ? { label } : {}),
-            ...(chapterIndex !== undefined ? { chapterIndex } : {}),
-            ...(totalChapters !== undefined ? { totalChapters } : {}),
-            ...(estRemainingMs !== undefined ? { estRemainingMs } : {}),
+            label,
+            chapterIndex,
+            totalChapters,
+            estRemainingMs,
           }),
         ),
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {

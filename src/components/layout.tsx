@@ -1055,10 +1055,10 @@ export function Layout() {
                 prosodyActions.updateProgress({
                   bookId: id,
                   progress: f,
-                  ...(d?.label !== undefined ? { label: d.label } : {}),
-                  ...(d?.chapterIndex !== undefined ? { chapterIndex: d.chapterIndex } : {}),
-                  ...(d?.totalChapters !== undefined ? { totalChapters: d.totalChapters } : {}),
-                  ...(d?.estRemainingMs !== undefined ? { estRemainingMs: d.estRemainingMs } : {}),
+                  label: d?.label,
+                  chapterIndex: d?.chapterIndex,
+                  totalChapters: d?.totalChapters,
+                  estRemainingMs: d?.estRemainingMs,
                 }),
               ),
           });
