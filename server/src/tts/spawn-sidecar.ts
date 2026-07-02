@@ -141,6 +141,15 @@ export function expectedSidecarCeilings(): {
   };
 }
 
+export function expectedFreeFloorMb(): number | null {
+  const knob = allKnobs().find((k) => k.key === 'sidecar.vramFreeFloorMb');
+  if (!knob) return null;
+  const st = resolveKnob(knob);
+  if (st.source === 'default') return null;
+  const n = Number(st.effective);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 /* True when the live sidecar's effective ceiling disagrees with what this
    server would configure (beyond a 1 MB float-rounding tolerance). Only
    compares dimensions where BOTH an expectation and a reported value exist —
@@ -155,6 +164,12 @@ export function sidecarCeilingMismatch(health: SidecarHealthProbe): string | nul
   }
   if (off(expected.vramRestartMb, health.vramRestartMb)) {
     return `reserved-VRAM recycle ceiling ${Math.round(health.vramRestartMb!)}MB != configured ${expected.vramRestartMb}MB`;
+  }
+  const expectedFloor = expectedFreeFloorMb();
+  for (const g of health.gpus ?? []) {
+    if (off(expectedFloor, g.freeFloorMb)) {
+      return `card ${g.idx} free-VRAM floor ${g.freeFloorMb}MB != configured ${expectedFloor}MB`;
+    }
   }
   return null;
 }
@@ -197,6 +212,9 @@ export interface SidecarHealthProbe {
       no .env → auto ceiling) that must not silently serve this server. */
   memRestartMb?: number | null;
   vramRestartMb?: number | null;
+  /** Per-card free-VRAM floor as reported by /health gpus[] (Wave 2 §W2.2).
+      Absent on an older sidecar or when CUDA is unavailable. */
+  gpus?: Array<{ idx: number; freeFloorMb: number | null }>;
 }
 
 /** Probe a listening process's /health to decide whether it's the CURRENT
@@ -229,6 +247,13 @@ export async function probeSidecarHealth(
     const recyclePending = body.recycle_pending === true;
     const memRestartMb = typeof body.mem_restart_mb === 'number' ? body.mem_restart_mb : null;
     const vramRestartMb = typeof body.vram_restart_mb === 'number' ? body.vram_restart_mb : null;
+    const gpusRaw = Array.isArray(body.gpus) ? body.gpus : [];
+    const gpus = gpusRaw
+      .filter((g): g is Record<string, unknown> => typeof g === 'object' && g !== null)
+      .map((g) => ({
+        idx: typeof g.idx === 'number' ? g.idx : -1,
+        freeFloorMb: typeof g.free_floor_mb === 'number' ? g.free_floor_mb : null,
+      }));
     return {
       reachable: true,
       looksLikeSidecar,
@@ -237,6 +262,7 @@ export async function probeSidecarHealth(
       recyclePending,
       memRestartMb,
       vramRestartMb,
+      gpus,
     };
   } catch {
     return {
