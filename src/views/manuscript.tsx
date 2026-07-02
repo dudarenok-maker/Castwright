@@ -44,6 +44,7 @@ import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
 import { selectActiveReview } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
+import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor } from '../lib/script-review-apply';
 import { runReviewScript } from '../store/script-review-thunk';
@@ -127,6 +128,9 @@ export function ManuscriptView({
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
+  const reviewSubstage = useAppSelector((s) =>
+    bookId ? s.scriptReview?.activeStreams[bookId] : undefined,
+  );
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
@@ -892,6 +896,24 @@ export function ManuscriptView({
                   </div>
                 )}
               </div>
+              {reviewSubstage && (
+                <span
+                  data-testid="review-script-progress"
+                  className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm"
+                >
+                  <IconSpinner className="w-4 h-4 animate-spin text-magenta" />
+                  <span className="text-ink/70">{reviewSubstage.label}</span>
+                  {formatSubstageDetail(reviewSubstage) && (
+                    <span
+                      data-testid="review-script-progress-detail"
+                      className="text-xs text-ink/50 tabular-nums whitespace-nowrap"
+                    >
+                      {formatSubstageDetail(reviewSubstage)}
+                    </span>
+                  )}
+                  <span className="tabular-nums text-ink/50">{reviewSubstage.progress}%</span>
+                </span>
+              )}
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}
