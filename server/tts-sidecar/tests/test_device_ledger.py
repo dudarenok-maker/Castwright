@@ -110,3 +110,15 @@ def test_card_lock_serialises_two_threads_on_same_idx():
     t2.join(timeout=2.0)
     # b must not start until a has fully finished — proves serialisation, not just mutual presence.
     assert order == ["a-start", "a-end", "b-start", "b-end"]
+
+
+def test_qwen_configured_card_idx_resolves_uuid_override(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GPU-1")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    assert main._qwen_configured_card_idx() == 1  # NOT 0 — the pre-fix bug's symptom
+
+
+def test_qwen_configured_card_idx_defaults_to_0_for_plain_auto(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "auto")
+    assert main._qwen_configured_card_idx() == 0

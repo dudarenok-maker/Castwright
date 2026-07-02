@@ -1490,23 +1490,23 @@ def shares_device(device_a: Optional[str], device_b: Optional[str], torch_module
 
 def _qwen_configured_card_idx() -> int:
     """Best-effort resolved card index for QWEN_DEVICE, used to pick the
-    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Wave 2
-    reads the raw env directly — Plan 2's UUID resolver (_read_device_env)
-    doesn't exist yet at this point in the build order. Task 10.5 upgrades
-    this function to route through _read_device_env once it does; DO NOT
-    read raw env at any OTHER new call site without checking Task 10.5's
-    note first."""
-    fam, idx = _parse_device(os.environ.get("QWEN_DEVICE", "auto"))
+    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Routes
+    through _read_device_env (Task 10) for the same reason
+    _compute_vd_kokoro_shares_device does — see its docstring."""
+    fam, idx = _parse_device(_read_device_env("QWEN_DEVICE"))
     return idx or 0
 
 
 def _compute_vd_kokoro_shares_device() -> bool:
     """Resolve whether QWEN_DEVICE and KOKORO_DEVICE currently share a card.
-    Any failure (no torch, unreadable env) defaults True — the SAFE,
-    conservative choice (stay coupled) rather than silently disabling the
-    guard on an error."""
+    Routes through _read_device_env (Task 10) so a UUID-keyed override
+    resolves to its real current index BEFORE shares_device sees it — reading
+    raw env here would misparse 'cuda-uuid:<uuid>' as unindexed 'cuda' in
+    _parse_device (startswith('cuda') matches, the uuid fragment isn't a
+    digit) and silently default both engines to card 0. Any failure defaults
+    True — the SAFE, conservative choice (stay coupled)."""
     try:
-        return shares_device(os.environ.get("QWEN_DEVICE"), os.environ.get("KOKORO_DEVICE"))
+        return shares_device(_read_device_env("QWEN_DEVICE"), _read_device_env("KOKORO_DEVICE"))
     except Exception:
         return True
 
