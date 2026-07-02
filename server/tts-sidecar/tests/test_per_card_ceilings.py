@@ -77,8 +77,15 @@ def test_write_restart_breadcrumb_persists_card(tmp_path, monkeypatch):
     assert "ts" in body
 
 
-def test_write_restart_breadcrumb_never_raises_on_failure(monkeypatch):
-    monkeypatch.setattr(main, "_RESTART_BREADCRUMB_PATH", "/definitely/not/a/writable/path/x.json")
+def test_write_restart_breadcrumb_never_raises_on_failure(tmp_path, monkeypatch):
+    """A write failure (here: the breadcrumb's parent directory component is
+    actually a file, so os.makedirs can never succeed) must never raise into
+    the caller — this is on the sidecar's self-exit path, where an unhandled
+    exception would break the drain-and-restart flow itself."""
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")  # a regular file occupying the path a directory needs
+    breadcrumb = blocker / "sub" / "x.json"
+    monkeypatch.setattr(main, "_RESTART_BREADCRUMB_PATH", str(breadcrumb))
     main._write_restart_breadcrumb(None, "committed memory")  # must not raise
 
 
