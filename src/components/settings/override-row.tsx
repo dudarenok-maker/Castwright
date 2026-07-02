@@ -2,7 +2,17 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
+import { useState } from 'react';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
+
+// Peak VRAM footprint per device-typed engine (MB) — first-cut estimates per
+// the design spec's §2.2 text, not measured; a false-positive warning here is
+// low-cost (it's advisory, doesn't block the change) so precision isn't critical.
+const ENGINE_PEAK_MB: Record<string, number> = {
+  'tts.qwen.device': 6500,
+  'tts.coqui.device': 3000,
+  'tts.kokoro.device': 1000,
+};
 
 /* ── apply-mode pill label ───────────────────────────────────────────────── */
 
@@ -53,6 +63,8 @@ interface ControlProps {
 }
 
 function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: ControlProps) {
+  const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
+
   const base =
     'px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink ' +
     'focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ' +
@@ -103,22 +115,39 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     if (!options.includes(current)) options.push(current);
 
     return (
-      <select
-        value={current}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full ${base}`}
-      >
-        {options.map((opt) => {
-          const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === opt);
-          const label = device ? `${opt} — ${device.name} (${device.free_mb} MB free)` : opt;
-          return (
-            <option key={opt} value={opt}>
-              {label}
-            </option>
-          );
-        })}
-      </select>
+      <div>
+        <select
+          value={current}
+          disabled={disabled}
+          onChange={(e) => {
+            const selected = e.target.value;
+            const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === selected);
+            const peak = ENGINE_PEAK_MB[descriptor.key];
+            if (device && peak && device.free_mb < peak) {
+              setFootprintWarning(
+                `${device.name} may not have enough free VRAM (${device.free_mb} MB free, ~${peak} MB typically needed).`,
+              );
+            } else {
+              setFootprintWarning(null);
+            }
+            onChange(selected);
+          }}
+          className={`w-full ${base}`}
+        >
+          {options.map((opt) => {
+            const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === opt);
+            const label = device ? `${opt} — ${device.name} (${device.free_mb} MB free)` : opt;
+            return (
+              <option key={opt} value={opt}>
+                {label}
+              </option>
+            );
+          })}
+        </select>
+        {footprintWarning && (
+          <p className="text-xs text-amber-700 mt-1" role="status">{footprintWarning}</p>
+        )}
+      </div>
     );
   }
 
