@@ -275,6 +275,29 @@ describe('OverrideRow — device knob', () => {
   });
 });
 
+describe('OverrideRow — device knob stale_reason badge (Plan 2 §2.2)', () => {
+  it('shows a distinct TEXT badge for cpu_fallback (not color alone)', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda:1', source: 'override', overridden: true, staleReason: 'cpu_fallback' });
+    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
+    expect(screen.getByText(/fell back to cpu/i)).toBeInTheDocument();
+  });
+
+  it('shows a distinct TEXT badge for uuid_unresolved', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda-uuid:GONE', source: 'override', overridden: true, staleReason: 'uuid_unresolved' });
+    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
+    expect(screen.getByText(/card (no longer|not) (found|detected)/i)).toBeInTheDocument();
+  });
+
+  it('renders no badge when staleReason is absent', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda:1', source: 'override', overridden: true });
+    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
+    expect(screen.queryByTestId('stale-reason-badge')).not.toBeInTheDocument();
+  });
+});
+
 /* ─── apply pill labels ──────────────────────────────────────────────────── */
 
 describe('OverrideRow — apply pills', () => {

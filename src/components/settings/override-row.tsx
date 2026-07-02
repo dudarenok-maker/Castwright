@@ -2,7 +2,7 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
+import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
 /* ── apply-mode pill label ───────────────────────────────────────────────── */
 
@@ -29,6 +29,17 @@ function applyPillClasses(apply: KnobDescriptor['apply']): string {
     return 'bg-rose-100 text-rose-800';
   }
   return 'bg-amber-100 text-amber-800';
+}
+
+/* Text label for a device-knob stale_reason — carries the meaning itself so
+   the badge isn't distinguished by colour alone (a11y §2.2). */
+function staleReasonLabel(reason: StaleReason): string {
+  switch (reason) {
+    case 'cpu_fallback':
+      return 'fell back to CPU';
+    case 'uuid_unresolved':
+      return 'card no longer found';
+  }
 }
 
 /* ── editable input controls ─────────────────────────────────────────────── */
@@ -177,6 +188,14 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
               className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${applyPillClasses(descriptor.apply)}`}
             >
               {applyLabel(descriptor.apply)}
+            </span>
+          )}
+          {value.staleReason && (
+            <span
+              data-testid="stale-reason-badge"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[11px] font-semibold"
+            >
+              {staleReasonLabel(value.staleReason)}
             </span>
           )}
         </div>

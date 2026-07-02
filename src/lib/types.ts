@@ -814,6 +814,14 @@ export interface ConfigGroup {
   collapsedByDefault: boolean;
 }
 
+/** Reason `effective` is degraded/unresolved for a 'device' knob and the UI
+    should flag it. 'cpu_fallback' = the requested device fell back to CPU;
+    'uuid_unresolved' = a stored 'cuda-uuid:<uuid>' override matches no
+    currently-visible card in the last-known device list. (A third,
+    CUDA_VISIBLE_DEVICES env-shadow fact is global — not per-knob — and
+    surfaces as a single Advanced Configuration banner instead, not here.) */
+export type StaleReason = 'cpu_fallback' | 'uuid_unresolved';
+
 /** Per-knob runtime value as returned by GET /api/config. */
 export interface KnobValue {
   key: string;
@@ -824,6 +832,8 @@ export interface KnobValue {
   locked: boolean;
   /** True when the user has an active override for this knob. */
   overridden: boolean;
+  /** Set when `effective` is degraded/unresolved — see StaleReason. */
+  staleReason?: StaleReason;
 }
 
 /** Map of key → KnobValue returned by the config endpoints. */
