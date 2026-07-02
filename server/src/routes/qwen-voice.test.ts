@@ -61,7 +61,7 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 });
 
 const { withGpuLoadMock } = vi.hoisted(() => ({
-  withGpuLoadMock: vi.fn(async (fn: () => Promise<unknown>) => fn()), // default: passthrough
+  withGpuLoadMock: vi.fn(async (fn: () => Promise<unknown>, _onGpu?: boolean) => fn()), // default: passthrough
 }));
 vi.mock('../gpu/gpu-load.js', () => ({
   withGpuLoad: (fn: () => Promise<unknown>, onGpu?: boolean) => withGpuLoadMock(fn, onGpu),

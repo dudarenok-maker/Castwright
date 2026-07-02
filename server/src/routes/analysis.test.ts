@@ -45,7 +45,7 @@ import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from
    runs. Mock its two call-site dependencies so the test below can assert
    the wiring without touching real Ollama / real GPU-cost state. */
 const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
-  detectOllamaDeviceMock: vi.fn(async () => 'cuda' as const),
+  detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
   setLastKnownAnalyzerDeviceMock: vi.fn(),
 }));
 vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock }));
