@@ -131,6 +131,7 @@ const FIXTURE_CONFIG: ConfigResponse = {
     },
   },
   restartPending: false,
+  cudaEnvShadow: false,
 };
 
 /* Build a minimal store with config + ui slices. */
@@ -450,5 +451,25 @@ describe('AdvancedView — analyzer read-only row (Plan 2 §2.4)', () => {
     renderView();
     await openVoiceEngineSection();
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('AdvancedView — CUDA env-shadow banner (Plan 2 §2.5)', () => {
+  it('shows a banner when cudaEnvShadow is true', async () => {
+    mockGetConfig.mockResolvedValue({ ...FIXTURE_CONFIG, cudaEnvShadow: true });
+
+    renderView();
+    await screen.findByText(/CUDA_VISIBLE_DEVICES/i);
+  });
+
+  it('shows no banner when cudaEnvShadow is false', async () => {
+    mockGetConfig.mockResolvedValue({ ...FIXTURE_CONFIG, cudaEnvShadow: false });
+
+    renderView();
+    /* Wait for hydration (findAllByText — nav rail + section header both
+       carry the label text; matches the "group headers" describe block's
+       convention above). */
+    await screen.findAllByText('Text-to-speech');
+    expect(screen.queryByText(/CUDA_VISIBLE_DEVICES/i)).not.toBeInTheDocument();
   });
 });

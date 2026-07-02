@@ -273,3 +273,20 @@ necessarily the best quality/throughput trade. Before changing
 Out of scope here: replacing Ollama with vLLM / TGI / llama.cpp directly.
 Ollama's `keep_alive` + GGUF cache is doing real work for us; the cost of
 ripping it out exceeds anything we'd reasonably gain on a single-GPU dev box.
+
+## Moving from CUDA_VISIBLE_DEVICES to per-engine pins
+
+If you previously set `CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=1,0`
+in `server/.env` as a multi-GPU stop-gap, the Advanced Configuration device
+picker (Voice engine & device) now replaces it with per-engine pins that
+survive a driver renumber. To cut over:
+
+1. Set each engine's device (Qwen/Coqui/Kokoro) explicitly in Advanced
+   Configuration to the card you want.
+2. Remove the `CUDA_DEVICE_ORDER` and `CUDA_VISIBLE_DEVICES` lines from
+   `server/.env`.
+3. Restart the server (a raw env var needs a server restart, not just a
+   sidecar restart — see the design spec's "Apply semantics").
+
+The sidecar logs a WARNING at startup if `CUDA_VISIBLE_DEVICES` is still set,
+since it silently overrides every per-engine pin.

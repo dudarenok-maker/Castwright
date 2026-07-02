@@ -845,6 +845,9 @@ export interface ConfigResponse {
   descriptors: KnobDescriptor[];
   values: ConfigValues;
   restartPending: boolean;
+  /** Plan 2 §2.5 — true when CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in
+      the environment, silently overriding every per-engine device pin. */
+  cudaEnvShadow: boolean;
 }
 
 /** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). `resident`/

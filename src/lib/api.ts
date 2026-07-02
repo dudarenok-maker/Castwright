@@ -6887,6 +6887,19 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     isPrompt: true,
     default: 'Attribute each sentence to its speaker.',
   },
+  {
+    // Mirrors the real registry's tts-engine.device knobs (Plan 2) — needed so
+    // e2e can exercise the device picker's stale-reason badge in mock mode.
+    key: 'tts.qwen.device',
+    group: 'tts-engine',
+    label: 'Qwen device',
+    help: 'PyTorch device for Qwen3-TTS. "auto" picks cuda:0 → mps → cpu.',
+    type: 'device',
+    apply: 'restart-sidecar',
+    risk: 'high',
+    isPrompt: false,
+    default: 'auto',
+  },
 ];
 
 const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
@@ -6902,6 +6915,13 @@ const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
     label: 'Analyzer',
     help: 'Analysis prompt templates and tuning.',
     risk: 'medium',
+    collapsedByDefault: true,
+  },
+  {
+    id: 'tts-engine',
+    label: 'Voice engine & device',
+    help: 'Voice engine device, language, and preload behaviour.',
+    risk: 'high',
     collapsedByDefault: true,
   },
 ];
@@ -6936,6 +6956,13 @@ const MOCK_CONFIG_VALUES: import('./types').ConfigValues = {
     locked: false,
     overridden: false,
   },
+  'tts.qwen.device': {
+    key: 'tts.qwen.device',
+    effective: 'auto',
+    source: 'default',
+    locked: false,
+    overridden: false,
+  },
 };
 
 /* In-memory prompt store keyed by id. */
@@ -6953,6 +6980,9 @@ const MOCK_PROMPTS = new Map<string, PromptState>([
 
 export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
   await wait(20);
+  const seeded = (globalThis as unknown as { __SEED_GPU_DEVICES__?: GpuDevicesResponse })
+    .__SEED_GPU_DEVICES__;
+  if (seeded) return seeded;
   return {
     devices: [
       { uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 },
@@ -6976,6 +7006,7 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
     descriptors: MOCK_CONFIG_DESCRIPTORS,
     values: { ...MOCK_CONFIG_VALUES },
     restartPending: false,
+    cudaEnvShadow: false,
   };
 }
 

@@ -209,7 +209,9 @@ function PromptRow({ descriptor }: PromptRowProps) {
 
 export function AdvancedView() {
   const dispatch = useAppDispatch();
-  const { groups, descriptors, values, status, error, hydrated } = useAppSelector((s) => s.config);
+  const { groups, descriptors, values, status, error, hydrated, cudaEnvShadow } = useAppSelector(
+    (s) => s.config,
+  );
   const restartPending = useAppSelector(selectRestartPending);
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
@@ -285,6 +287,20 @@ export function AdvancedView() {
           <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
             <p className="text-sm text-amber-800">
               Some changes need an app restart to take effect.
+            </p>
+          </div>
+        )}
+        {cudaEnvShadow && (
+          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
+            <p className="text-sm text-amber-800">
+              <code className="font-mono">CUDA_VISIBLE_DEVICES</code>/
+              <code className="font-mono">CUDA_DEVICE_ORDER</code> is set in{' '}
+              <code className="font-mono">server/.env</code> — it overrides every device pin
+              below. See{' '}
+              <a href="/docs/local-llm.md" className="underline">
+                docs/local-llm.md
+              </a>{' '}
+              to switch to per-engine pins.
             </p>
           </div>
         )}

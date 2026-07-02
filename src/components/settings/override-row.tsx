@@ -89,6 +89,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   if (descriptor.type === 'enum') {
     return (
       <select
+        aria-label={descriptor.label}
         value={String(value.effective)}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
@@ -117,6 +118,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     return (
       <div>
         <select
+          aria-label={descriptor.label}
           value={current}
           disabled={disabled}
           onChange={(e) => {
@@ -156,6 +158,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     return (
       <input
         type="number"
+        aria-label={descriptor.label}
         value={Number(value.effective)}
         min={descriptor.min}
         max={descriptor.max}
@@ -175,6 +178,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   return (
     <input
       type="text"
+      aria-label={descriptor.label}
       value={String(value.effective)}
       disabled={disabled}
       onBlur={(e) => onChange(e.target.value)}

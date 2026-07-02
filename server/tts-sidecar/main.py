@@ -4329,6 +4329,26 @@ async def _preload_default_engines() -> None:
                 )
 
 
+def _warn_if_cuda_env_shadow_active() -> None:
+    """Plan 2 §2.5 cutover nudge: CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER are
+    raw env, not knobs — the picker can surface them (server-side, Task 11)
+    but can't CLEAR them (that's a manual .env edit, documented in
+    docs/local-llm.md). WARN once at boot so an operator who's moved to the
+    picker knows a stale env var is still shadowing it."""
+    if os.environ.get("CUDA_VISIBLE_DEVICES") or os.environ.get("CUDA_DEVICE_ORDER"):
+        log.warning(
+            "CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in the environment — it overrides "
+            "every per-engine device pin set via the Advanced Configuration picker. If you've "
+            "moved to per-engine pins, remove these two lines from server/.env (see "
+            "docs/local-llm.md's cutover section)."
+        )
+
+
+@app.on_event("startup")
+async def _startup_cuda_env_shadow_check() -> None:
+    _warn_if_cuda_env_shadow_active()
+
+
 def _qwen_package_installed() -> bool:
     """True if the `qwen_tts` package is importable WITHOUT importing it (no
     torch pull, no weight load). Cheap enough to call on every /health poll."""
