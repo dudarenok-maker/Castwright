@@ -2673,7 +2673,14 @@ async function realAnalyseManuscript(
 export interface DetectEmotionsOpts {
   signal?: AbortSignal;
   model?: string;
-  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onPhase?: (e: {
+    progress: number;
+    label?: string;
+    chapterId?: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  }) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
     chapterId: number;
@@ -2721,6 +2728,9 @@ async function realDetectEmotions(
             progress: p.progress,
             label: typeof p.label === 'string' ? p.label : undefined,
             chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+            chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
+            totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
+            estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
           });
         }
         break;
@@ -2790,12 +2800,19 @@ async function mockDetectEmotions(
   { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   await wait(60);
-  onPhase?.({ progress: 0.25, label: 'Detecting emotions — chapter 1', chapterId: 1 });
+  onPhase?.({ progress: 0.25, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
-  onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 1', chapterId: 1 });
+  onPhase?.({ progress: 0.5, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'excited' }] });
   await wait(500);
-  onPhase?.({ progress: 0.85, label: 'Detecting emotions — chapter 2', chapterId: 2 });
+  onPhase?.({
+    progress: 0.85,
+    label: 'Detecting emotions',
+    chapterId: 2,
+    chapterIndex: 2,
+    totalChapters: 2,
+    estRemainingMs: 15_000,
+  });
   await wait(500);
   onPhase?.({ progress: 1, label: 'Done' });
   return { annotatedChapters: 1, totalAnnotations: 1 };
@@ -2807,7 +2824,14 @@ async function mockDetectEmotions(
 export interface DetectInstructOpts {
   signal?: AbortSignal;
   model?: string;
-  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onPhase?: (e: {
+    progress: number;
+    label?: string;
+    chapterId?: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  }) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
     chapterId: number;
@@ -2855,6 +2879,9 @@ async function realDetectInstruct(
             progress: p.progress,
             label: typeof p.label === 'string' ? p.label : undefined,
             chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+            chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
+            totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
+            estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
           });
         }
         break;
@@ -2929,7 +2956,7 @@ async function mockDetectInstruct(
   { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   await wait(60);
-  onPhase?.({ progress: 0.5, label: 'Detecting instruct — chapter 1', chapterId: 1 });
+  onPhase?.({ progress: 0.5, label: 'Detecting instruct', chapterId: 1, chapterIndex: 1, totalChapters: 1 });
   await wait(500);
   onAnnotation?.({
     chapterId: 1,
@@ -2947,7 +2974,14 @@ export interface ReviewScriptOpts {
   chapterId?: number;
   model?: string;
   signal?: AbortSignal;
-  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onPhase?: (e: {
+    progress: number;
+    label?: string;
+    chapterId?: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  }) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
@@ -2995,6 +3029,9 @@ async function realReviewScript(
             progress: p.progress,
             label: typeof p.label === 'string' ? p.label : undefined,
             chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+            chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
+            totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
+            estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
           });
         }
         break;
@@ -3060,11 +3097,25 @@ async function mockReviewScript(
   { onOps, onPhase, onChapterFailed: _onChapterFailed }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
-  onPhase?.({ progress: 0.25, label: 'Reviewing…', chapterId: 1 });
+  onPhase?.({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
   await wait(500);
-  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 3 });
+  onPhase?.({
+    progress: 0.5,
+    label: 'Reviewing script',
+    chapterId: 3,
+    chapterIndex: 2,
+    totalChapters: 3,
+    estRemainingMs: 20_000,
+  });
   await wait(500);
-  onPhase?.({ progress: 0.85, label: 'Reviewing…', chapterId: 3 });
+  onPhase?.({
+    progress: 0.85,
+    label: 'Reviewing script',
+    chapterId: 3,
+    chapterIndex: 3,
+    totalChapters: 3,
+    estRemainingMs: 5_000,
+  });
   await wait(400);
   /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
   onOps?.({
