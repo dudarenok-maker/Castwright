@@ -2667,20 +2667,37 @@ async function realAnalyseManuscript(
   return result;
 }
 
+/* Shared 'phase' progress-event shape for the three substage SSE clients
+   below (detect-emotions, detect-instruct, script-review) — they all stream
+   the same server-side phase event and previously duplicated both this type
+   and its defensive parsing three times over. */
+export interface SubstagePhaseEvent {
+  progress: number;
+  label?: string;
+  chapterId?: number;
+  chapterIndex?: number;
+  totalChapters?: number;
+  estRemainingMs?: number;
+}
+function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePhaseEvent | null {
+  if (typeof p.progress !== 'number') return null;
+  return {
+    progress: p.progress,
+    label: typeof p.label === 'string' ? p.label : undefined,
+    chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+    chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
+    totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
+    estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
+  };
+}
+
 /* fs-33 — emotion-only backfill stream. Mirrors realAnalyseManuscript's SSE
    reader. Emits per-chapter progress + annotation batches; the caller applies
    them to the manuscript store (fill-only-empty) and persists them. */
 export interface DetectEmotionsOpts {
   signal?: AbortSignal;
   model?: string;
-  onPhase?: (e: {
-    progress: number;
-    label?: string;
-    chapterId?: number;
-    chapterIndex?: number;
-    totalChapters?: number;
-    estRemainingMs?: number;
-  }) => void;
+  onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
     chapterId: number;
@@ -2722,18 +2739,11 @@ async function realDetectEmotions(
 
   const handle = (p: Record<string, unknown>) => {
     switch (p.kind) {
-      case 'phase':
-        if (typeof p.progress === 'number') {
-          onPhase?.({
-            progress: p.progress,
-            label: typeof p.label === 'string' ? p.label : undefined,
-            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
-            chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
-            totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
-            estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
-          });
-        }
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
         break;
+      }
       case 'throttle':
         if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
           onThrottle?.({
@@ -2824,14 +2834,7 @@ async function mockDetectEmotions(
 export interface DetectInstructOpts {
   signal?: AbortSignal;
   model?: string;
-  onPhase?: (e: {
-    progress: number;
-    label?: string;
-    chapterId?: number;
-    chapterIndex?: number;
-    totalChapters?: number;
-    estRemainingMs?: number;
-  }) => void;
+  onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
     chapterId: number;
@@ -2873,18 +2876,11 @@ async function realDetectInstruct(
 
   const handle = (p: Record<string, unknown>) => {
     switch (p.kind) {
-      case 'phase':
-        if (typeof p.progress === 'number') {
-          onPhase?.({
-            progress: p.progress,
-            label: typeof p.label === 'string' ? p.label : undefined,
-            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
-            chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
-            totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
-            estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
-          });
-        }
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
         break;
+      }
       case 'throttle':
         if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
           onThrottle?.({
@@ -2983,14 +2979,7 @@ export interface ReviewScriptOpts {
   chapterId?: number;
   model?: string;
   signal?: AbortSignal;
-  onPhase?: (e: {
-    progress: number;
-    label?: string;
-    chapterId?: number;
-    chapterIndex?: number;
-    totalChapters?: number;
-    estRemainingMs?: number;
-  }) => void;
+  onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
@@ -3032,18 +3021,11 @@ async function realReviewScript(
 
   const handle = (p: Record<string, unknown>) => {
     switch (p.kind) {
-      case 'phase':
-        if (typeof p.progress === 'number') {
-          onPhase?.({
-            progress: p.progress,
-            label: typeof p.label === 'string' ? p.label : undefined,
-            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
-            chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
-            totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
-            estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
-          });
-        }
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
         break;
+      }
       case 'throttle':
         if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
           onThrottle?.({
