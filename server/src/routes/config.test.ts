@@ -9,7 +9,7 @@
    ensure the module's singleton import of user-settings sees the temp path.
    CASTWRIGHT_PROMPTS_DIR is also overridden so fork files land in the temp dir. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -199,6 +199,56 @@ describe('PUT /api/config/prompts/:id', () => {
       .put('/api/config/prompts/prompt.castDetection')
       .send({ text: '' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('PUT /api/config — device knob UUID translation (Plan 2 §2.1)', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Mirrors gpu-devices.test.ts's fetch-stub convention: this file has no
+  // existing device-knob test / mock plumbing to reuse, and writeConfigOverride
+  // here is the REAL file-backed implementation (no mock) — so we assert the
+  // persisted value via readConfigOverrides() rather than a spy.
+  function mockGpuDevices(devices: Array<{ uuid: string; idx: number; name?: string; total_mb?: number; free_mb?: number }>) {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ devices, cpu: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+  }
+
+  it('translates a cuda:N write into cuda-uuid:<uuid> before persisting', async () => {
+    mockGpuDevices([{ uuid: 'GPU-1', idx: 1, name: 'x', total_mb: 16000, free_mb: 14000 }]);
+    const res = await request(app).put('/api/config').send({ 'tts.qwen.device': 'cuda:1' });
+    expect(res.status).toBe(200);
+    const { readConfigOverrides } = await import('../workspace/user-settings.js');
+    expect(readConfigOverrides()['tts.qwen.device']).toBe('cuda-uuid:GPU-1');
+  });
+
+  it('stores the raw cuda:N when the sidecar device list has no match yet (reconciled on next read)', async () => {
+    mockGpuDevices([]);
+    const res = await request(app).put('/api/config').send({ 'tts.qwen.device': 'cuda:9' });
+    expect(res.status).toBe(200);
+    const { readConfigOverrides } = await import('../workspace/user-settings.js');
+    expect(readConfigOverrides()['tts.qwen.device']).toBe('cuda:9');
+  });
+
+  it('leaves auto/cpu/mps values untouched', async () => {
+    const res = await request(app).put('/api/config').send({ 'tts.qwen.device': 'auto' });
+    expect(res.status).toBe(200);
+    const { readConfigOverrides } = await import('../workspace/user-settings.js');
+    expect(readConfigOverrides()['tts.qwen.device']).toBe('auto');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -1,6 +1,7 @@
 import type { ConfigKnob, KnobValueState } from './types.js';
 import { allKnobs } from './registry.js';
 import { readConfigOverrides } from '../workspace/user-settings.js';
+import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 function parseEnv(knob: ConfigKnob, raw: string): number | boolean | string | null {
   const r = coerceAndValidate(knob, raw);
@@ -30,7 +31,23 @@ export function resolveKnob(knob: ConfigKnob): KnobValueState {
   }
   const overrides = readConfigOverrides();
   if (Object.prototype.hasOwnProperty.call(overrides, knob.key)) {
-    return { key: knob.key, effective: overrides[knob.key], source: 'override', locked: false, overridden: true };
+    const raw = overrides[knob.key];
+    if (knob.type === 'device' && typeof raw === 'string' && raw.startsWith('cuda-uuid:')) {
+      const uuid = raw.slice('cuda-uuid:'.length);
+      const card = getLastKnownGpuDevices().find((d) => d.uuid === uuid);
+      if (card) {
+        return { key: knob.key, effective: `cuda:${card.idx}`, source: 'override', locked: false, overridden: true };
+      }
+      return {
+        key: knob.key,
+        effective: raw,
+        source: 'override',
+        locked: false,
+        overridden: true,
+        staleReason: 'uuid_unresolved',
+      };
+    }
+    return { key: knob.key, effective: raw, source: 'override', locked: false, overridden: true };
   }
   return { key: knob.key, effective: knob.default, source: 'default', locked: false, overridden: false };
 }

@@ -703,7 +703,7 @@ class CoquiEngine(Engine):
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
-        self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda | cuda:N
+        self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
         self._requested_device = self._device  # preserved before any auto-resolution
         # fp16 and DeepSpeed-inference are CUDA-only XTTS speedups. Each ~1.5–2×
         # on top of CUDA itself, no audible quality loss. Defaults flip ON when
@@ -1004,7 +1004,7 @@ class KokoroEngine(Engine):
         self._dml_status: Optional[str] = None
         # KOKORO_DEVICE=cuda:N — captured here so the sess-replacement in
         # _ensure_loaded can pin the ORT InferenceSession to the indexed GPU.
-        self._requested_device: str = os.environ.get("KOKORO_DEVICE", "auto")
+        self._requested_device: str = _read_device_env("KOKORO_DEVICE") or "auto"
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -1369,6 +1369,35 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     return (p, None)
 
 
+def _resolve_uuid_to_index(value: Optional[str], torch_module: Any = None) -> Optional[str]:
+    """Front seam for Plan 2's UUID identity: a 'cuda-uuid:<uuid>' knob value
+    resolves to the box's CURRENT 'cuda:N' index via live enumeration. Any
+    other value (auto/cpu/mps/cuda:N/None) passes through unchanged. Returns
+    None when the uuid matches no visible card — the caller decides the
+    fallback; this function never silently substitutes a different card."""
+    if not value or not value.startswith("cuda-uuid:"):
+        return value
+    target_uuid = value[len("cuda-uuid:"):]
+    for card in _enumerate_cuda_devices(torch_module):
+        if card["uuid"] == target_uuid:
+            return f"cuda:{card['idx']}"
+    return None
+
+
+def _read_device_env(var_name: str) -> Optional[str]:
+    """Read a *_DEVICE env var, resolving a Plan-2 UUID form to this box's
+    current index. Every device-knob env read should go through this instead
+    of a bare os.environ.get, so a UUID-keyed assignment (portable across a
+    box's own restarts, robust to index renumbering) always resolves against
+    the box's LIVE card list."""
+    raw = os.environ.get(var_name)
+    resolved = _resolve_uuid_to_index(raw)
+    if raw and raw.startswith("cuda-uuid:") and resolved is None:
+        log.warning("%s=%s did not match any visible GPU (uuid_unresolved) — falling back to auto.", var_name, raw)
+        return "auto"
+    return resolved
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
@@ -1656,7 +1685,7 @@ class QwenEngine(Engine):
         self._design: Any = None  # transient voice-design model
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
-        self._device_pref = os.environ.get("QWEN_DEVICE", "auto")
+        self._device_pref = _read_device_env("QWEN_DEVICE") or "auto"
         # PYTORCH_ENABLE_MPS_FALLBACK lets unsupported mps ops fall back to CPU
         # instead of raising. Read per-op at dispatch, so set it early whenever
         # mps is in play. Concrete device is resolved lazily at load time (torch
@@ -4489,7 +4518,7 @@ def _compute_device_predictions(
         pref = (
             qwen._device_pref
             if isinstance(qwen, QwenEngine)
-            else os.environ.get("QWEN_DEVICE", "auto")
+            else _read_device_env("QWEN_DEVICE") or "auto"
         )
         out["qwen"] = _normalize_device_family(
             _resolve_torch_device(pref, torch_module), torch_module

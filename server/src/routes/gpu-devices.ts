@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 export const gpuDevicesRouter = Router();
 
@@ -26,6 +27,7 @@ gpuDevicesRouter.get('/devices', async (_req: Request, res: Response) => {
       devices: unknown[];
       cpu: boolean;
     };
+    setLastKnownGpuDevices((body.devices ?? []) as { uuid: string; idx: number }[]);
     return res.json(body);
   } catch {
     clearTimeout(timer);

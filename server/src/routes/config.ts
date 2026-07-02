@@ -17,6 +17,7 @@ import {
   clearAllConfigOverrides,
 } from '../workspace/user-settings.js';
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
+import { toUuidForm } from './gpu-uuid.js';
 
 export const configRouter = Router();
 
@@ -58,6 +59,9 @@ configRouter.put('/', async (req, res) => {
     if (!r.ok) {
       res.status(400).json({ error: `${key}: ${r.error}` });
       return;
+    }
+    if (knob.type === 'device' && typeof r.value === 'string') {
+      r.value = await toUuidForm(r.value);
     }
     await writeConfigOverride(key, r.value!);
     applied.push(key);

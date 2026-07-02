@@ -4,9 +4,14 @@ vi.mock('../workspace/user-settings.js', () => ({
   readConfigOverrides: vi.fn(() => ({})),
 }));
 
+vi.mock('../gpu/gpu-device-list-state.js', () => ({
+  getLastKnownGpuDevices: vi.fn(() => []),
+}));
+
 import { resolveKnob, coerceAndValidate, configValue } from './resolver.js';
 import { getKnob } from './registry.js';
 import * as us from '../workspace/user-settings.js';
+import * as gds from '../gpu/gpu-device-list-state.js';
 
 const KEY = 'analyzer.stage2.minCoverage'; // number, env STAGE2_MIN_COVERAGE, default 0.6
 
@@ -64,5 +69,26 @@ describe('resolver precedence', () => {
 
   it('configValue throws on an unknown key', () => {
     expect(() => configValue('no.such.knob')).toThrow(/unknown config key/);
+  });
+});
+
+describe('resolveKnob — device UUID reconcile (Plan 2 §2.1)', () => {
+  beforeEach(() => {
+    (gds.getLastKnownGpuDevices as any).mockReturnValue([]);
+  });
+
+  it('translates a stored cuda-uuid override back to cuda:N when the card is currently visible', () => {
+    (us.readConfigOverrides as any).mockReturnValue({ 'tts.qwen.device': 'cuda-uuid:GPU-1' });
+    (gds.getLastKnownGpuDevices as any).mockReturnValue([{ uuid: 'GPU-1', idx: 1 }]);
+    const st = resolveKnob(getKnob('tts.qwen.device')!);
+    expect(st.effective).toBe('cuda:1');
+    expect(st.staleReason).toBeUndefined();
+  });
+
+  it('flags uuid_unresolved when the stored uuid matches no currently-visible card', () => {
+    (us.readConfigOverrides as any).mockReturnValue({ 'tts.qwen.device': 'cuda-uuid:GONE' });
+    (gds.getLastKnownGpuDevices as any).mockReturnValue([]);
+    const st = resolveKnob(getKnob('tts.qwen.device')!);
+    expect(st.staleReason).toBe('uuid_unresolved');
   });
 });
