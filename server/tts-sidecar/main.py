@@ -591,7 +591,13 @@ class SynthBatchResult:
 
 
 class _VdKokoroArbiter:
-    """Mutual exclusion between a VoiceDesign forward and Kokoro synths.
+    """Mutual exclusion between a VoiceDesign forward and Kokoro synths —
+    ONLY when the two are configured onto the SAME card (`shares_device`,
+    Wave 2 §W2.3). On a single-card box (the default) they always share, so
+    behaviour is unchanged from Wave 1. On a multi-GPU box with Kokoro pinned
+    to a different card than Qwen, there's no VRAM contention to guard and
+    the two run fully concurrently — `kokoro_synth()`/`design()` become
+    no-op context managers in that case.
 
     Kokoro runs on onnxruntime-gpu (a separate allocator from torch), so a
     resident Kokoro + Qwen Base + the 1.7B VoiceDesign model oversubscribe an
@@ -607,13 +613,17 @@ class _VdKokoroArbiter:
     arbiter, so a Qwen-voiced chapter generates at full speed alongside a design.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, shares_device: bool = True) -> None:
         self._cv = threading.Condition()
         self._kokoro_in_flight = 0
         self._design_active = False
+        self._shares_device = shares_device
 
     @contextmanager
     def kokoro_synth(self):
+        if not self._shares_device:
+            yield
+            return
         with self._cv:
             while self._design_active:
                 self._cv.wait()
@@ -627,6 +637,9 @@ class _VdKokoroArbiter:
 
     @contextmanager
     def design(self):
+        if not self._shares_device:
+            yield
+            return
         with self._cv:
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
@@ -640,6 +653,15 @@ class _VdKokoroArbiter:
 
 
 _VD_KOKORO = _VdKokoroArbiter()
+
+
+@app.on_event("startup")
+async def _configure_vd_kokoro_coupling() -> None:
+    """Resolve the real QWEN_DEVICE/KOKORO_DEVICE coupling at startup (not at
+    module import time — torch must stay a lazily-imported dependency so
+    tests that stub it via sys.modules injection, not module-attribute
+    patching, keep working per the sidecar's own testing convention)."""
+    _VD_KOKORO._shares_device = _compute_vd_kokoro_shares_device()
 
 
 class Engine:
@@ -1417,6 +1439,35 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     if mps is not None and mps.is_available():
         return "mps"
     return "cpu"
+
+
+def shares_device(device_a: Optional[str], device_b: Optional[str], torch_module: Any = None) -> bool:
+    """True when two device knob values resolve to the SAME concrete card.
+    'auto' resolves via the existing _resolve_torch_device (every engine
+    shares Wave 1's device grammar) so two engines both left at 'auto' are
+    correctly treated as sharing whichever card auto picks — not as
+    never-coupled. cpu/mps never "share" in the VRAM-contention sense this
+    gates (only cuda:N contention matters)."""
+    if torch_module is None:
+        import torch as torch_module  # type: ignore
+    resolved_a = _resolve_torch_device(device_a or "auto", torch_module)
+    resolved_b = _resolve_torch_device(device_b or "auto", torch_module)
+    fam_a, idx_a = _parse_device(resolved_a)
+    fam_b, idx_b = _parse_device(resolved_b)
+    if fam_a != "cuda" or fam_b != "cuda":
+        return False
+    return (idx_a or 0) == (idx_b or 0)
+
+
+def _compute_vd_kokoro_shares_device() -> bool:
+    """Resolve whether QWEN_DEVICE and KOKORO_DEVICE currently share a card.
+    Any failure (no torch, unreadable env) defaults True — the SAFE,
+    conservative choice (stay coupled) rather than silently disabling the
+    guard on an error."""
+    try:
+        return shares_device(os.environ.get("QWEN_DEVICE"), os.environ.get("KOKORO_DEVICE"))
+    except Exception:
+        return True
 
 
 def cosine_distance(a: Any, b: Any) -> float:
