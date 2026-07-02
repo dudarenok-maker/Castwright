@@ -1,12 +1,12 @@
 ---
-status: stable
-shipped: 2026-07-02
+status: active
+shipped: null
 owner: null
 ---
 
 # Prosody + script-review progress detail — chapter counts and ETA
 
-> Status: stable
+> Status: active
 > Key files: `src/lib/substage-progress-text.ts`, `src/store/prosody-slice.ts`,
 > `src/store/script-review-slice.ts`, `src/store/analysis-substage-selectors.ts`,
 > `src/store/prosody-thunk.ts`, `src/store/script-review-thunk.ts`,
@@ -255,11 +255,4 @@ Run in mock mode (`VITE_USE_MOCKS=true`, the default for `npm run dev`).
 
 ## Ship notes
 
-Shipped 2026-07-02. All 15 implementation tasks (Tasks 1–15 of the plan)
-landed as individual commits on `worktree-feat+frontend-prosody-review-progress-detail`,
-HEAD `f83470dd` prior to this docs task. This docs-and-verification task
-(Task 16) is the final task of the plan; no behavior delta from the design
-spec — the two-pass ETA reconciliation, the server pacing contract, and all
-three render surfaces shipped exactly as designed (see the plan's two
-adversarial-review rounds for the corrections folded in before
-implementation began).
+(Filled in when status flips to `stable`. Append: shipped date, commit SHA, any behaviour delta vs. the original spec. Once filled, the plan becomes eligible for archive — move to `docs/features/archive/` in the same PR as the ship.)
