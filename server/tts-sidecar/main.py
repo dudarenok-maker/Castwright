@@ -1459,6 +1459,18 @@ def shares_device(device_a: Optional[str], device_b: Optional[str], torch_module
     return (idx_a or 0) == (idx_b or 0)
 
 
+def _qwen_configured_card_idx() -> int:
+    """Best-effort resolved card index for QWEN_DEVICE, used to pick the
+    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Wave 2
+    reads the raw env directly — Plan 2's UUID resolver (_read_device_env)
+    doesn't exist yet at this point in the build order. Task 10.5 upgrades
+    this function to route through _read_device_env once it does; DO NOT
+    read raw env at any OTHER new call site without checking Task 10.5's
+    note first."""
+    fam, idx = _parse_device(os.environ.get("QWEN_DEVICE", "auto"))
+    return idx or 0
+
+
 def _compute_vd_kokoro_shares_device() -> bool:
     """Resolve whether QWEN_DEVICE and KOKORO_DEVICE currently share a card.
     Any failure (no torch, unreadable env) defaults True — the SAFE,
@@ -2621,7 +2633,7 @@ class QwenEngine(Engine):
         _kok_pre = ENGINES.get("kokoro")
         if isinstance(_kok_pre, KokoroEngine) and _kok_pre._kokoro is not None:
             _phase("freeing-vram")
-        with self._base17_activity(), _VD_KOKORO.design():
+        with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()), self._base17_activity(), _VD_KOKORO.design():
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()

@@ -1,4 +1,4 @@
-import importlib, os, sys, types
+import importlib, os, sys, threading, time, types
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 main = importlib.import_module("main")
 
@@ -72,3 +72,24 @@ def test_ledger_sample_all_does_not_deadlock():
     t.start()
     t.join(timeout=2.0)
     assert done.is_set(), "sample_all() deadlocked"
+
+
+def test_card_lock_serialises_two_threads_on_same_idx():
+    ledger = main.DeviceLedger(_fake_torch())
+    order = []
+
+    def worker(name, hold_ms):
+        with ledger.card_lock(1):
+            order.append(f"{name}-start")
+            time.sleep(hold_ms / 1000.0)
+            order.append(f"{name}-end")
+
+    t1 = threading.Thread(target=worker, args=("a", 100))
+    t2 = threading.Thread(target=worker, args=("b", 0))
+    t1.start()
+    time.sleep(0.02)  # ensure t1 has the lock first
+    t2.start()
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+    # b must not start until a has fully finished — proves serialisation, not just mutual presence.
+    assert order == ["a-start", "a-end", "b-start", "b-end"]
