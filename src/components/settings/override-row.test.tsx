@@ -298,7 +298,7 @@ describe('OverrideRow — device knob stale_reason badge (Plan 2 §2.2)', () => 
   });
 });
 
-/* ─── apply pill labels ──────────────────────────────────────────────────── */
+/* ─── device knob footprint pre-warn ─────────────────────────────────────── */
 
 describe('OverrideRow — device knob footprint pre-warn (Plan 2 §2.2)', () => {
   it('warns when the selected card free_mb is well under the engine peak', () => {
@@ -321,6 +321,25 @@ describe('OverrideRow — device knob footprint pre-warn (Plan 2 §2.2)', () => 
         gpuDevices={[{ uuid: 'GPU-1', idx: 1, name: 'Big Card', total_mb: 16000, free_mb: 14000 }]} />,
     );
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'cuda:1' } });
+    expect(screen.queryByText(/may not have enough free vram/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the warning when reselecting a well-provisioned card after an under-provisioned one', () => {
+    const descriptor = makeDescriptor({ key: 'tts.qwen.device', type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()}
+        gpuDevices={[
+          { uuid: 'GPU-0', idx: 0, name: 'Small Card', total_mb: 4000, free_mb: 2000 },
+          { uuid: 'GPU-1', idx: 1, name: 'Big Card', total_mb: 16000, free_mb: 14000 },
+        ]} />,
+    );
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'cuda:0' } });
+    expect(screen.getByText(/may not have enough free vram/i)).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'cuda:1' } });
     expect(screen.queryByText(/may not have enough free vram/i)).not.toBeInTheDocument();
   });
 });
