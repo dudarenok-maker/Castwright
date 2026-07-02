@@ -39,6 +39,7 @@
 import { manuscriptActions } from './manuscript-slice';
 import { api } from '../lib/api';
 import type { AppDispatch } from './index';
+import type { UpdateSubstageProgressPayload } from './analysis-substage-reducers';
 
 /** Structured detail accompanying an onProgress tick — chapterIndex passed
     through per-pass unmodified, totalChapters pinned across both passes
@@ -49,6 +50,29 @@ export interface SubstageDetail {
   chapterIndex?: number;
   totalChapters?: number;
   estRemainingMs?: number;
+}
+
+/** Map a `runProsodyPasses` onProgress tick (fraction + SubstageDetail) into
+    the payload `prosodyActions.updateProgress` expects. Shared by both
+    `onProgress` call sites (the eager auto-trigger in layout.tsx and the
+    manual button in detect-emotions-button.tsx) so a future SubstageDetail /
+    updateProgress field change only needs one edit. The reducer
+    (`updateSubstageProgress`) already guards each field with a
+    `!== undefined` check, so passing `detail?.field` straight through — even
+    when `detail` itself is undefined — is safe. */
+export function buildProsodyProgressPayload(
+  bookId: string,
+  fraction: number,
+  detail: SubstageDetail | undefined,
+): UpdateSubstageProgressPayload {
+  return {
+    bookId,
+    progress: fraction,
+    label: detail?.label,
+    chapterIndex: detail?.chapterIndex,
+    totalChapters: detail?.totalChapters,
+    estRemainingMs: detail?.estRemainingMs,
+  };
 }
 
 export interface RunProsodyPassesOpts {

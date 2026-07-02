@@ -87,7 +87,7 @@ import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
-import { runProsodyPasses } from '../store/prosody-thunk';
+import { runProsodyPasses, buildProsodyProgressPayload } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
 import { selectAnalysisSubstage } from '../store/analysis-substage-selectors';
 import { shouldAutoTriggerProsody } from '../store/should-auto-trigger-prosody';
@@ -1051,16 +1051,7 @@ export function Layout() {
           const { failed } = await runProsodyPasses(id, {
             dispatch,
             onProgress: (f, d) =>
-              dispatch(
-                prosodyActions.updateProgress({
-                  bookId: id,
-                  progress: f,
-                  label: d?.label,
-                  chapterIndex: d?.chapterIndex,
-                  totalChapters: d?.totalChapters,
-                  estRemainingMs: d?.estRemainingMs,
-                }),
-              ),
+              dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d))),
           });
           if (failed === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });

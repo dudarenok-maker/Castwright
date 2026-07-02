@@ -49,9 +49,16 @@ import type { LibraryBook } from '../lib/types';
 /* ── Module mocks ──────────────────────────────────────────────────────── */
 
 const runProsodyPassesMock = vi.fn();
-vi.mock('./prosody-thunk', () => ({
-  runProsodyPasses: (...args: unknown[]) => runProsodyPassesMock(...args),
-}));
+vi.mock('./prosody-thunk', async (importOriginal) => {
+  // Mock only runProsodyPasses; keep the real buildProsodyProgressPayload
+  // (and any other exports) so the onProgress wiring under test still maps
+  // SubstageDetail → the updateProgress payload via the real shared helper.
+  const actual = await importOriginal<typeof import('./prosody-thunk')>();
+  return {
+    ...actual,
+    runProsodyPasses: (...args: unknown[]) => runProsodyPassesMock(...args),
+  };
+});
 
 const getBookStateMock = vi.fn();
 const putBookStateMock = vi.fn();

@@ -19,7 +19,11 @@
 import { useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
-import { runProsodyPasses, type SubstageDetail } from '../store/prosody-thunk';
+import {
+  runProsodyPasses,
+  buildProsodyProgressPayload,
+  type SubstageDetail,
+} from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { IconSparkle } from '../lib/icons';
@@ -58,16 +62,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         onProgress: (fraction, d) => {
           setProgress(fraction);
           setDetail(d);
-          dispatch(
-            prosodyActions.updateProgress({
-              bookId,
-              progress: fraction,
-              label: d?.label,
-              chapterIndex: d?.chapterIndex,
-              totalChapters: d?.totalChapters,
-              estRemainingMs: d?.estRemainingMs,
-            }),
-          );
+          dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(bookId, fraction, d)));
         },
         onStatus: (label) => setStatus(label),
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),

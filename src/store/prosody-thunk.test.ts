@@ -20,7 +20,7 @@ vi.mock('../lib/api', () => ({
 import { api } from '../lib/api';
 import type { DetectEmotionsOpts, DetectInstructOpts } from '../lib/api';
 import { manuscriptActions } from './manuscript-slice';
-import { runProsodyPasses } from './prosody-thunk';
+import { runProsodyPasses, buildProsodyProgressPayload } from './prosody-thunk';
 
 const EMPTY_EMOTIONS = { totalAnnotations: 0, annotatedChapters: 0 };
 const EMPTY_INSTRUCT = { totalAnnotations: 0, annotatedChapters: 0 };
@@ -462,5 +462,49 @@ describe('runProsodyPasses', () => {
     // Pinned value widens to 5 so chapterIndex (5) never exceeds the
     // displayed total — no stale "Chapter 5 of 4".
     expect(details[1]).toMatchObject({ chapterIndex: 5, totalChapters: 5 });
+  });
+});
+
+describe('buildProsodyProgressPayload', () => {
+  const bookId = 'book-1';
+
+  it('maps a full SubstageDetail into the updateProgress payload shape', () => {
+    const detail = {
+      label: 'Detecting emotions',
+      chapterIndex: 2,
+      totalChapters: 5,
+      estRemainingMs: 12_000,
+    };
+
+    expect(buildProsodyProgressPayload(bookId, 0.5, detail)).toEqual({
+      bookId,
+      progress: 0.5,
+      label: 'Detecting emotions',
+      chapterIndex: 2,
+      totalChapters: 5,
+      estRemainingMs: 12_000,
+    });
+  });
+
+  it('maps an undefined detail into a payload with undefined optional fields', () => {
+    expect(buildProsodyProgressPayload(bookId, 0.25, undefined)).toEqual({
+      bookId,
+      progress: 0.25,
+      label: undefined,
+      chapterIndex: undefined,
+      totalChapters: undefined,
+      estRemainingMs: undefined,
+    });
+  });
+
+  it('passes through a partially-populated detail field-by-field', () => {
+    expect(buildProsodyProgressPayload(bookId, 0.75, { label: 'Adding natural reactions…' })).toEqual({
+      bookId,
+      progress: 0.75,
+      label: 'Adding natural reactions…',
+      chapterIndex: undefined,
+      totalChapters: undefined,
+      estRemainingMs: undefined,
+    });
   });
 });
