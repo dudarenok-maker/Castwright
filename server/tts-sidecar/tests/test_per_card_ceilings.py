@@ -61,3 +61,34 @@ def test_schedule_restart_exit_accepts_card(monkeypatch):
         # so this test doesn't leak a "restart pending" state (503 fast-fail)
         # into every test file that runs after this one in the same session.
         main._reset_restart_state_for_test()
+
+
+def test_write_restart_breadcrumb_persists_card(tmp_path, monkeypatch):
+    breadcrumb = tmp_path / ".run" / "last-restart-trip.json"
+    monkeypatch.setattr(main, "_RESTART_BREADCRUMB_PATH", str(breadcrumb))
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {1: [{"engine": "coqui", "actual_card": 1}]})
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    main._write_restart_breadcrumb({"uuid": "GPU-1", "idx": 1}, "reserved VRAM")
+    import json
+    body = json.loads(breadcrumb.read_text(encoding="utf-8"))
+    assert body["card"] == {"uuid": "GPU-1", "idx": 1}
+    assert body["reason"] == "reserved VRAM"
+    assert body["residentEngines"] == ["coqui"]
+    assert "ts" in body
+
+
+def test_write_restart_breadcrumb_never_raises_on_failure(monkeypatch):
+    monkeypatch.setattr(main, "_RESTART_BREADCRUMB_PATH", "/definitely/not/a/writable/path/x.json")
+    main._write_restart_breadcrumb(None, "committed memory")  # must not raise
+
+
+def test_schedule_restart_exit_writes_breadcrumb(tmp_path, monkeypatch):
+    main._reset_restart_state_for_test()
+    breadcrumb = tmp_path / "trip.json"
+    monkeypatch.setattr(main, "_RESTART_BREADCRUMB_PATH", str(breadcrumb))
+    monkeypatch.setattr(main, "_drain_grace_ms", lambda: 0)
+    monkeypatch.setattr(main.threading, "Thread", lambda target, args, daemon: types.SimpleNamespace(start=lambda: None))
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {})
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    main._schedule_restart_exit(500.0, 400.0, "reserved VRAM", card={"uuid": "GPU-1", "idx": 1})
+    assert breadcrumb.exists()

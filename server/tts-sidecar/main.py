@@ -3974,6 +3974,28 @@ def _drain_then_restart(grace_ms: int) -> None:
 
 _last_restart_card: Optional[dict] = None
 
+_RESTART_BREADCRUMB_PATH = os.path.join(os.path.dirname(__file__), ".run", "last-restart-trip.json")
+
+
+def _write_restart_breadcrumb(card: Optional[dict], metric_label: str) -> None:
+    """Best-effort persisted trip info so the NODE SUPERVISOR (a separate,
+    longer-lived process) can learn WHICH CARD triggered a code-43 self-exit —
+    onChildExit only gets (code, signal), no card. Written synchronously
+    BEFORE the drain thread starts, so it's on disk well before this process
+    can vanish. A write failure here must never block the exit path — logged
+    and swallowed, since Plan 2's auto-revert simply lacks card info for that
+    one trip if it can't be written."""
+    try:
+        os.makedirs(os.path.dirname(_RESTART_BREADCRUMB_PATH), exist_ok=True)
+        resident = []
+        if card is not None:
+            by_card = _resident_engines_by_card(_enumerate_cuda_devices())
+            resident = [r["engine"] for r in by_card.get(card["idx"], [])]
+        with open(_RESTART_BREADCRUMB_PATH, "w", encoding="utf-8") as f:
+            json.dump({"card": card, "reason": metric_label, "residentEngines": resident, "ts": time.time()}, f)
+    except Exception as e:
+        log.warning("could not write restart breadcrumb (%s) — a downstream auto-revert will lack card info for this trip.", e)
+
 
 def _schedule_restart_exit(
     metric_mb: float, threshold_mb: float, metric_label: str = "committed memory",
@@ -3993,6 +4015,7 @@ def _schedule_restart_exit(
     _restart_scheduled = True
     _restart_pending = True
     _last_restart_card = card
+    _write_restart_breadcrumb(card, metric_label)
     grace_ms = _drain_grace_ms()
     log.warning(
         "sidecar %s %.0fMB crossed the restart ceiling %.0fMB%s — "
