@@ -280,3 +280,26 @@ describe('POST /api/config/prompts/:id/reset', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('GET /api/config — CUDA env-shadow surfacing (Plan 2 §2.5)', () => {
+  const prevCVD = process.env.CUDA_VISIBLE_DEVICES;
+  const prevCDO = process.env.CUDA_DEVICE_ORDER;
+  afterEach(() => {
+    if (prevCVD === undefined) delete process.env.CUDA_VISIBLE_DEVICES; else process.env.CUDA_VISIBLE_DEVICES = prevCVD;
+    if (prevCDO === undefined) delete process.env.CUDA_DEVICE_ORDER; else process.env.CUDA_DEVICE_ORDER = prevCDO;
+  });
+
+  it('reports cudaEnvShadow true when CUDA_VISIBLE_DEVICES is set', async () => {
+    process.env.CUDA_VISIBLE_DEVICES = '1,0';
+    delete process.env.CUDA_DEVICE_ORDER;
+    const res = await request(app).get('/api/config');
+    expect(res.body.cudaEnvShadow).toBe(true);
+  });
+
+  it('reports cudaEnvShadow false when neither var is set', async () => {
+    delete process.env.CUDA_VISIBLE_DEVICES;
+    delete process.env.CUDA_DEVICE_ORDER;
+    const res = await request(app).get('/api/config');
+    expect(res.body.cudaEnvShadow).toBe(false);
+  });
+});

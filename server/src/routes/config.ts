@@ -37,7 +37,13 @@ configRouter.get('/', (_req, res) => {
     isPrompt: k.isPrompt ?? false,
     default: k.default,
   }));
-  res.json({ groups: GROUPS, descriptors, values: resolveAll(), restartPending: false });
+  res.json({
+    groups: GROUPS,
+    descriptors,
+    values: resolveAll(),
+    restartPending: false,
+    cudaEnvShadow: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.CUDA_DEVICE_ORDER),
+  });
 });
 
 configRouter.put('/', async (req, res) => {
