@@ -1436,7 +1436,15 @@ export function Layout() {
     onGoToAnalysing: () => analysisPill?.onClick(),
     onGoToGeneration: () => generationPill?.onClick(),
     onGoToDesign: () => designPill?.onClick(),
-    analysisSubstage: analysisSubstage ? { label: analysisSubstage.label, percent: analysisSubstage.percent } : null,
+    analysisSubstage: analysisSubstage
+      ? {
+          label: analysisSubstage.label,
+          percent: analysisSubstage.percent,
+          chapterIndex: analysisSubstage.chapterIndex,
+          totalChapters: analysisSubstage.totalChapters,
+          estRemainingMs: analysisSubstage.estRemainingMs,
+        }
+      : null,
   };
 
   /* fs-21 — boot-splash. Gates the first paint until the readiness probe
