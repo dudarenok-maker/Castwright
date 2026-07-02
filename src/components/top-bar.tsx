@@ -167,7 +167,13 @@ export interface StatusDetail {
   onGoToDesign: () => void;
   /** The active analysis sub-stage (prosody/review) label + progress, or null/absent.
       Rendered as a secondary row inside the Analysis section of the popover. */
-  analysisSubstage?: { label: string; percent: number } | null;
+  analysisSubstage?: {
+    label: string;
+    percent: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  } | null;
 }
 
 interface TopBarProps {

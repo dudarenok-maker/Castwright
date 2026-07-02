@@ -10,12 +10,25 @@
    Results land in the manuscript slice, not here. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  setActiveSubstage,
+  updateSubstageProgress,
+  type SetActiveSubstagePayload,
+  type UpdateSubstageProgressPayload,
+} from './analysis-substage-reducers';
 
 export interface SubstageEntry {
   /** 0..100 integer percent. */
   progress: number;
   /** User-facing phase label, e.g. "Detecting emotions". */
   label: string;
+  /** 1-based sequential position among the chapters THIS PASS processes. */
+  chapterIndex?: number;
+  /** Count of chapters this pass processes. */
+  totalChapters?: number;
+  /** Pace-based ETA in ms for the rest of the operation. Absent until a
+      pacing rate has been observed (never on the very first chapter). */
+  estRemainingMs?: number;
 }
 
 export interface ProsodyState {
@@ -28,15 +41,11 @@ export const prosodySlice = createSlice({
   name: 'prosody',
   initialState,
   reducers: {
-    setActive: (s, a: PayloadAction<{ bookId: string; progress: number; label: string }>) => {
-      s.activeStreams[a.payload.bookId] = {
-        progress: Math.round(a.payload.progress * 100),
-        label: a.payload.label,
-      };
+    setActive: (s, a: PayloadAction<SetActiveSubstagePayload>) => {
+      setActiveSubstage(s.activeStreams, a.payload);
     },
-    updateProgress: (s, a: PayloadAction<{ bookId: string; progress: number }>) => {
-      const e = s.activeStreams[a.payload.bookId];
-      if (e) e.progress = Math.round(a.payload.progress * 100);
+    updateProgress: (s, a: PayloadAction<UpdateSubstageProgressPayload>) => {
+      updateSubstageProgress(s.activeStreams, a.payload);
     },
     clear: (s, a: PayloadAction<{ bookId: string }>) => {
       delete s.activeStreams[a.payload.bookId];

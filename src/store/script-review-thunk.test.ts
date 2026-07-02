@@ -42,4 +42,38 @@ describe('runReviewScript', () => {
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
+
+  it('forwards label/chapterIndex/totalChapters/estRemainingMs from onPhase into updateProgress', async () => {
+    vi.mocked(api.reviewScript).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({
+          progress: 0.5,
+          label: 'Reviewing script',
+          chapterIndex: 2,
+          totalChapters: 3,
+          estRemainingMs: 20_000,
+        });
+        return { reviewedChapters: 0, totalOps: 0 };
+      },
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch,
+      wholeBook: true,
+      model: 'gemma',
+      sentences: [],
+      characterIds: new Set<string>(),
+    });
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls[0].payload).toEqual({
+      bookId: 'b1',
+      progress: 0.5,
+      label: 'Reviewing script',
+      chapterIndex: 2,
+      totalChapters: 3,
+      estRemainingMs: 20_000,
+    });
+  });
 });

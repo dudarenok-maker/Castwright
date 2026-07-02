@@ -38,12 +38,14 @@ import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
 import { DetectEmotionsButton } from '../components/detect-emotions-button';
+import { SubstageProgressPill } from '../components/substage-progress-pill';
 import { PromoteFirstSentenceButton } from '../components/promote-first-sentence-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
 import { selectActiveReview } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
+import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor } from '../lib/script-review-apply';
 import { runReviewScript } from '../store/script-review-thunk';
@@ -127,6 +129,10 @@ export function ManuscriptView({
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
+  const reviewSubstage = useAppSelector((s) =>
+    bookId ? s.scriptReview?.activeStreams[bookId] : undefined,
+  );
+  const reviewSubstageDetailText = reviewSubstage ? formatSubstageDetail(reviewSubstage) : null;
   /* fs-58 — whole-book opt-in is gated behind a small disclosure so the
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
@@ -892,6 +898,15 @@ export function ManuscriptView({
                   </div>
                 )}
               </div>
+              {reviewSubstage && (
+                <SubstageProgressPill
+                  testId="review-script-progress"
+                  detailTestId="review-script-progress-detail"
+                  status={reviewSubstage.label}
+                  detailText={reviewSubstageDetailText}
+                  percent={reviewSubstage.progress}
+                />
+              )}
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}

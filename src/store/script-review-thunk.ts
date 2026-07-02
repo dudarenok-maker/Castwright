@@ -36,13 +36,22 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   const { dispatch, wholeBook, chapterId, model, sentences, characterIds } = opts;
   const allOps: ReviewOpWithChapter[] = [];
   const failed: Array<{ chapterId: number; message: string }> = [];
-  dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing' }));
+  dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing script' }));
   try {
     await api.reviewScript(bookId, {
       ...(wholeBook ? {} : { chapterId }),
       model,
-      onPhase: ({ progress }: { progress: number }) =>
-        dispatch(scriptReviewActions.updateProgress({ bookId, progress })),
+      onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
+        dispatch(
+          scriptReviewActions.updateProgress({
+            bookId,
+            progress,
+            label,
+            chapterIndex,
+            totalChapters,
+            estRemainingMs,
+          }),
+        ),
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId: chId });
       },

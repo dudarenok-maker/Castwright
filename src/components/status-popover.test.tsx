@@ -143,4 +143,36 @@ describe('StatusPopover', () => {
       document.removeEventListener('mousedown', docMouseDown);
     }
   });
+
+  it('renders the chapter-count + ETA line under the substage label when present', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Detecting emotions',
+            percent: 40,
+            chapterIndex: 3,
+            totalChapters: 12,
+            estRemainingMs: 125_000,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-row').textContent).toContain('Detecting emotions');
+    expect(screen.getByTestId('substage-detail').textContent).toBe('Chapter 3 of 12 · ~2m left');
+  });
+
+  it('omits the detail line when neither chapter count nor ETA is available', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: { label: 'Detecting emotions', percent: 5 },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-row')).toBeInTheDocument();
+    expect(screen.queryByTestId('substage-detail')).not.toBeInTheDocument();
+  });
 });

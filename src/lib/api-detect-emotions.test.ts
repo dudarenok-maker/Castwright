@@ -77,6 +77,27 @@ describe('api.detectEmotions', () => {
     fetchMock.mockResolvedValueOnce(sseResponse([], 404));
     await expect(api.detectEmotions('nope')).rejects.toMatchObject({ code: 'not_found' });
   });
+
+  it('parses chapterIndex/totalChapters/estRemainingMs from a phase event', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        JSON.stringify({
+          kind: 'phase',
+          progress: 0.5,
+          label: 'Detecting emotions',
+          chapterId: 3,
+          chapterIndex: 3,
+          totalChapters: 12,
+          estRemainingMs: 60_000,
+        }),
+        JSON.stringify({ kind: 'result', annotatedChapters: 1, totalAnnotations: 1 }),
+      ]),
+    );
+    const phases: Array<{ chapterIndex?: number; totalChapters?: number; estRemainingMs?: number }> = [];
+    await api.detectEmotions('book-1', { onPhase: (e) => phases.push(e) });
+    expect(phases[0]).toMatchObject({ chapterIndex: 3, totalChapters: 12, estRemainingMs: 60_000 });
+  });
 });
 
 describe('api.detectEmotions — chapter-failed is surfaced', () => {

@@ -343,4 +343,30 @@ describe('script-review-slice activeStreams', () => {
     const s2 = scriptReviewSlice.reducer(s1, scriptReviewActions.applyExternalClear({ bookId: 'bX' }));
     expect(s2.activeStreams.bX).toBeUndefined();
   });
+
+  it('setActive/updateProgress store and update chapterIndex/totalChapters/estRemainingMs', () => {
+    const s = reduceR([
+      scriptReviewActions.setActive({
+        bookId: 'b1',
+        progress: 0,
+        label: 'Reviewing script',
+        chapterIndex: 1,
+        totalChapters: 3,
+      }),
+      scriptReviewActions.updateProgress({
+        bookId: 'b1',
+        progress: 0.5,
+        chapterIndex: 2,
+        totalChapters: 3,
+        estRemainingMs: 20_000,
+      }),
+    ]);
+    expect(s.activeStreams.b1).toEqual<SubstageEntry>({
+      progress: 50,
+      label: 'Reviewing script',
+      chapterIndex: 2,
+      totalChapters: 3,
+      estRemainingMs: 20_000,
+    });
+  });
 });

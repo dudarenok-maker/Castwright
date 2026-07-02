@@ -23,3 +23,25 @@ describe('realReviewScript — chapter-failed is surfaced', () => {
     expect(res.totalOps).toBe(0);
   });
 });
+
+describe('realReviewScript — chapter/ETA fields', () => {
+  beforeEach(() => vi.restoreAllMocks());
+  it('parses chapterIndex/totalChapters/estRemainingMs from a phase event', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({
+        kind: 'phase',
+        progress: 0.33,
+        label: 'Reviewing script',
+        chapterId: 2,
+        chapterIndex: 2,
+        totalChapters: 3,
+        estRemainingMs: 20_000,
+      }),
+      JSON.stringify({ kind: 'result', done: true, reviewedChapters: 1, totalOps: 0 }),
+    ])));
+    const { api } = await import('./api');
+    const phases: Array<{ chapterIndex?: number; totalChapters?: number; estRemainingMs?: number }> = [];
+    await api.reviewScript('bk', { onPhase: (e) => phases.push(e) });
+    expect(phases[0]).toMatchObject({ chapterIndex: 2, totalChapters: 3, estRemainingMs: 20_000 });
+  });
+});

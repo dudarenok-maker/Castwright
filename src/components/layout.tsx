@@ -87,7 +87,7 @@ import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
-import { runProsodyPasses } from '../store/prosody-thunk';
+import { runProsodyPasses, buildProsodyProgressPayload } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
 import { selectAnalysisSubstage } from '../store/analysis-substage-selectors';
 import { shouldAutoTriggerProsody } from '../store/should-auto-trigger-prosody';
@@ -1050,7 +1050,8 @@ export function Layout() {
           pillActive = true;
           const { failed } = await runProsodyPasses(id, {
             dispatch,
-            onProgress: (f) => dispatch(prosodyActions.updateProgress({ bookId: id, progress: f })),
+            onProgress: (f, d) =>
+              dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d))),
           });
           if (failed === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
@@ -1436,7 +1437,15 @@ export function Layout() {
     onGoToAnalysing: () => analysisPill?.onClick(),
     onGoToGeneration: () => generationPill?.onClick(),
     onGoToDesign: () => designPill?.onClick(),
-    analysisSubstage: analysisSubstage ? { label: analysisSubstage.label, percent: analysisSubstage.percent } : null,
+    analysisSubstage: analysisSubstage
+      ? {
+          label: analysisSubstage.label,
+          percent: analysisSubstage.percent,
+          chapterIndex: analysisSubstage.chapterIndex,
+          totalChapters: analysisSubstage.totalChapters,
+          estRemainingMs: analysisSubstage.estRemainingMs,
+        }
+      : null,
   };
 
   /* fs-21 — boot-splash. Gates the first paint until the readiness probe

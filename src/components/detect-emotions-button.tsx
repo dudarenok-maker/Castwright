@@ -19,10 +19,16 @@
 import { useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
-import { runProsodyPasses } from '../store/prosody-thunk';
+import {
+  runProsodyPasses,
+  buildProsodyProgressPayload,
+  type SubstageDetail,
+} from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
-import { IconSparkle, IconSpinner } from '../lib/icons';
+import { IconSparkle } from '../lib/icons';
+import { formatSubstageDetail } from '../lib/substage-progress-text';
+import { SubstageProgressPill } from './substage-progress-pill';
 
 type Phase = 'idle' | 'confirm' | 'running';
 
@@ -32,6 +38,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SubstageDetail | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const busy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
@@ -42,6 +49,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
     if (!bookId) return;
     setPhase('running');
     setProgress(0);
+    setDetail(undefined);
     setError(null);
     setStatus('Starting…');
     const controller = new AbortController();
@@ -51,9 +59,10 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       const { totalAnnotations, totalChapters } = await runProsodyPasses(bookId, {
         dispatch,
         signal: controller.signal,
-        onProgress: (fraction) => {
+        onProgress: (fraction, d) => {
           setProgress(fraction);
-          dispatch(prosodyActions.updateProgress({ bookId, progress: fraction }));
+          setDetail(d);
+          dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(bookId, fraction, d)));
         },
         onStatus: (label) => setStatus(label),
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
@@ -84,22 +93,17 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   };
 
   if (phase === 'running') {
+    const detailText = detail ? formatSubstageDetail(detail) : null;
     return (
-      <div
-        data-testid="detect-emotions-progress"
-        className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm"
-      >
-        <IconSpinner className="w-4 h-4 animate-spin text-magenta" />
-        <span className="text-ink/70 max-w-[14rem] truncate">{status ?? 'Detecting…'}</span>
-        <span className="tabular-nums text-ink/50">{Math.round(progress * 100)}%</span>
-        <button
-          type="button"
-          onClick={() => abortRef.current?.abort()}
-          className="text-xs text-ink/50 hover:text-magenta underline"
-        >
-          Cancel
-        </button>
-      </div>
+      <SubstageProgressPill
+        testId="detect-emotions-progress"
+        detailTestId="detect-emotions-progress-detail"
+        status={status ?? 'Detecting…'}
+        detailText={detailText}
+        percent={Math.round(progress * 100)}
+        labelClassName="text-ink/70 max-w-[14rem] truncate"
+        onCancel={() => abortRef.current?.abort()}
+      />
     );
   }
 

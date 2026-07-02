@@ -31,6 +31,7 @@ import {
   type DesignPillData,
 } from './top-bar';
 import { MODEL_OPTIONS } from '../lib/models';
+import { formatSubstageDetail } from '../lib/substage-progress-text';
 
 const PANEL_WIDTH = 340;
 const ESTIMATED_HEIGHT = 320;
@@ -55,7 +56,13 @@ interface StatusPopoverProps {
   analysis: AnalysisPillData | null;
   /** The active analysis sub-stage (prosody/review) label + progress. Rendered
       as a secondary row in the Analysis section when set. */
-  analysisSubstage?: { label: string; percent: number } | null;
+  analysisSubstage?: {
+    label: string;
+    percent: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  } | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
   pendingRevisionsCount: number;
@@ -81,6 +88,36 @@ function Section({
       <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold mb-2">{title}</p>
       {children}
     </section>
+  );
+}
+
+/** The secondary substage (prosody/review) label + percent row shown under the
+    Analysis section, with an optional ETA/chapter-count detail line. Shared by
+    both Analysis-section branches — full analysis + substage, and substage-only
+    — which differ only in whether the row spans the full section width. */
+function SubstageRow({
+  analysisSubstage,
+  fullWidth,
+}: {
+  analysisSubstage: NonNullable<StatusPopoverProps['analysisSubstage']>;
+  fullWidth: boolean;
+}) {
+  const substageDetailText = formatSubstageDetail(analysisSubstage);
+  return (
+    <div
+      data-testid="substage-row"
+      className={`flex flex-col gap-0.5${fullWidth ? ' w-full' : ''}`}
+    >
+      <div className="flex items-center justify-between text-sm text-ink/70">
+        <span>{analysisSubstage.label}</span>
+        <span className="tabular-nums">{analysisSubstage.percent}%</span>
+      </div>
+      {substageDetailText && (
+        <span data-testid="substage-detail" className="text-xs text-ink/50 tabular-nums">
+          {substageDetailText}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -177,20 +214,12 @@ export function StatusPopover({
                 </span>
               </span>
             )}
-            {analysisSubstage && (
-              <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
-                <span>{analysisSubstage.label}</span>
-                <span className="tabular-nums">{analysisSubstage.percent}%</span>
-              </div>
-            )}
+            {analysisSubstage && <SubstageRow analysisSubstage={analysisSubstage} fullWidth />}
           </div>
         ) : (
           <>
             {analysisSubstage ? (
-              <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
-                <span>{analysisSubstage.label}</span>
-                <span className="tabular-nums">{analysisSubstage.percent}%</span>
-              </div>
+              <SubstageRow analysisSubstage={analysisSubstage} fullWidth={false} />
             ) : (
               <p className="text-sm text-ink/60">No analysis running.</p>
             )}

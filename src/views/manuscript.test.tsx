@@ -1191,6 +1191,88 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
       expect(review.unappliable.some((u) => u.op.id === 1)).toBe(false);
     });
   });
+
+  it('shows chapter count + ETA on the Review Script inline chip while a review runs', async () => {
+    const user = userEvent.setup();
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [liveSentence] as never,
+        },
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-1',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+
+    let triggerResolve!: () => void;
+    reviewScript.mockImplementation(
+      (
+        _bookId: string,
+        opts?: {
+          onPhase?: (e: {
+            progress: number;
+            label?: string;
+            chapterIndex?: number;
+            totalChapters?: number;
+            estRemainingMs?: number;
+          }) => void;
+        },
+      ) => {
+        opts?.onPhase?.({
+          progress: 0.25,
+          label: 'Reviewing script',
+          chapterIndex: 3,
+          totalChapters: 12,
+          estRemainingMs: 125_000,
+        });
+        return new Promise<void>((resolve) => {
+          triggerResolve = resolve;
+        });
+      },
+    );
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[quarantineChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[liveSentence]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('review-script-progress-detail').textContent).toBe(
+        'Chapter 3 of 12 · ~2m left',
+      ),
+    );
+
+    /* Settle the mock's promise before the test ends so no dangling
+       in-flight review stream outlives this test (avoids polluting the
+       next test / cleanup). */
+    triggerResolve();
+    reviewScript.mockReset();
+  });
 });
 
 /* fs-58 — handleReviewScript error surface (Fix 2).

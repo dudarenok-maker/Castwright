@@ -15,6 +15,12 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { ReviewOp } from '../lib/script-review-apply';
 import type { RootState } from './index';
 import type { SubstageEntry } from './prosody-slice';
+import {
+  setActiveSubstage,
+  updateSubstageProgress,
+  type SetActiveSubstagePayload,
+  type UpdateSubstageProgressPayload,
+} from './analysis-substage-reducers';
 
 /** ReviewOp extended with the chapterId from the SSE `ops` event envelope. */
 export type ReviewOpWithChapter = ReviewOp & { chapterId: number };
@@ -92,16 +98,12 @@ export const scriptReviewSlice = createSlice({
     },
 
     /** Start or restart a review-progress stream for one book. progress is 0..1. */
-    setActive: (s, a: PayloadAction<{ bookId: string; progress: number; label: string }>) => {
-      s.activeStreams[a.payload.bookId] = {
-        progress: Math.round(a.payload.progress * 100),
-        label: a.payload.label,
-      };
+    setActive: (s, a: PayloadAction<SetActiveSubstagePayload>) => {
+      setActiveSubstage(s.activeStreams, a.payload);
     },
     /** Update the progress fraction (0..1) for an in-flight stream. No-op if not active. */
-    updateProgress: (s, a: PayloadAction<{ bookId: string; progress: number }>) => {
-      const e = s.activeStreams[a.payload.bookId];
-      if (e) e.progress = Math.round(a.payload.progress * 100);
+    updateProgress: (s, a: PayloadAction<UpdateSubstageProgressPayload>) => {
+      updateSubstageProgress(s.activeStreams, a.payload);
     },
     /** Remove the active stream entry for one book (stream done or cancelled). */
     clear: (s, a: PayloadAction<{ bookId: string }>) => {

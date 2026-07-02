@@ -23,6 +23,11 @@ import {
   chunkWithContext,
   chapterChunkBudget,
 } from '../analyzer/chapter-chunker.js';
+import {
+  buildCharsByChapter,
+  chapterPacingPhaseFields,
+  accumulateChapterPacing,
+} from '../analyzer/chapter-pacing.js';
 
 export const instructAnnotationRouter = Router();
 
@@ -130,18 +135,31 @@ instructAnnotationRouter.post(
 
     let totalAnnotations = 0;
     let annotatedChapters = 0;
+    let actualMsTotal = 0;
+    let actualCharsTotal = 0;
+    const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
     try {
       for (let i = 0; i < chapterIds.length; i += 1) {
         if (closed) break;
         const chapterId = chapterIds[i];
-        send({
+        const phaseEvent: Record<string, unknown> = {
           kind: 'phase',
           phaseId: 0,
           progress: i / chapterIds.length,
-          label: `Detecting instruct — chapter ${chapterId}`,
+          label: 'Detecting instruct',
           chapterId,
-        });
+          ...chapterPacingPhaseFields({
+            index: i,
+            totalChapters: chapterIds.length,
+            actualMsTotal,
+            actualCharsTotal,
+            charsByChapter,
+            remainingChapterIds: chapterIds.slice(i),
+          }),
+        };
+        send(phaseEvent);
 
+        const chapterStartedAt = Date.now();
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
           charBudget: chapterChunkBudget(selection.engine),
@@ -205,6 +223,12 @@ instructAnnotationRouter.post(
           /* One bad chapter shouldn't kill the whole pass — report it and
              carry on so the rest of the book still gets annotated. */
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+        } finally {
+          ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing(
+            { actualMsTotal, actualCharsTotal },
+            chapterStartedAt,
+            charsByChapter.get(chapterId) ?? 0,
+          ));
         }
       }
     } finally {

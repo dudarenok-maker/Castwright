@@ -2667,13 +2667,37 @@ async function realAnalyseManuscript(
   return result;
 }
 
+/* Shared 'phase' progress-event shape for the three substage SSE clients
+   below (detect-emotions, detect-instruct, script-review) — they all stream
+   the same server-side phase event and previously duplicated both this type
+   and its defensive parsing three times over. */
+export interface SubstagePhaseEvent {
+  progress: number;
+  label?: string;
+  chapterId?: number;
+  chapterIndex?: number;
+  totalChapters?: number;
+  estRemainingMs?: number;
+}
+function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePhaseEvent | null {
+  if (typeof p.progress !== 'number') return null;
+  return {
+    progress: p.progress,
+    label: typeof p.label === 'string' ? p.label : undefined,
+    chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+    chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
+    totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
+    estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
+  };
+}
+
 /* fs-33 — emotion-only backfill stream. Mirrors realAnalyseManuscript's SSE
    reader. Emits per-chapter progress + annotation batches; the caller applies
    them to the manuscript store (fill-only-empty) and persists them. */
 export interface DetectEmotionsOpts {
   signal?: AbortSignal;
   model?: string;
-  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
     chapterId: number;
@@ -2715,15 +2739,11 @@ async function realDetectEmotions(
 
   const handle = (p: Record<string, unknown>) => {
     switch (p.kind) {
-      case 'phase':
-        if (typeof p.progress === 'number') {
-          onPhase?.({
-            progress: p.progress,
-            label: typeof p.label === 'string' ? p.label : undefined,
-            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
-          });
-        }
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
         break;
+      }
       case 'throttle':
         if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
           onThrottle?.({
@@ -2790,12 +2810,19 @@ async function mockDetectEmotions(
   { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   await wait(60);
-  onPhase?.({ progress: 0.25, label: 'Detecting emotions — chapter 1', chapterId: 1 });
+  onPhase?.({ progress: 0.25, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
-  onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 1', chapterId: 1 });
+  onPhase?.({ progress: 0.5, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'excited' }] });
   await wait(500);
-  onPhase?.({ progress: 0.85, label: 'Detecting emotions — chapter 2', chapterId: 2 });
+  onPhase?.({
+    progress: 0.85,
+    label: 'Detecting emotions',
+    chapterId: 2,
+    chapterIndex: 2,
+    totalChapters: 2,
+    estRemainingMs: 15_000,
+  });
   await wait(500);
   onPhase?.({ progress: 1, label: 'Done' });
   return { annotatedChapters: 1, totalAnnotations: 1 };
@@ -2807,7 +2834,7 @@ async function mockDetectEmotions(
 export interface DetectInstructOpts {
   signal?: AbortSignal;
   model?: string;
-  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
     chapterId: number;
@@ -2849,15 +2876,11 @@ async function realDetectInstruct(
 
   const handle = (p: Record<string, unknown>) => {
     switch (p.kind) {
-      case 'phase':
-        if (typeof p.progress === 'number') {
-          onPhase?.({
-            progress: p.progress,
-            label: typeof p.label === 'string' ? p.label : undefined,
-            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
-          });
-        }
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
         break;
+      }
       case 'throttle':
         if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
           onThrottle?.({
@@ -2929,15 +2952,24 @@ async function mockDetectInstruct(
   { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   await wait(60);
-  onPhase?.({ progress: 0.5, label: 'Detecting instruct — chapter 1', chapterId: 1 });
+  onPhase?.({ progress: 0.25, label: 'Detecting instruct', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
   onAnnotation?.({
     chapterId: 1,
     annotations: [{ sentenceId: 1, text: '[laughs]', instruct: 'warm, amused', vocalization: true }],
   });
   await wait(400);
+  onPhase?.({
+    progress: 0.85,
+    label: 'Detecting instruct',
+    chapterId: 2,
+    chapterIndex: 2,
+    totalChapters: 2,
+    estRemainingMs: 15_000,
+  });
+  await wait(400);
   onPhase?.({ progress: 1, label: 'Done' });
-  return { annotatedChapters: 1, totalAnnotations: 1 };
+  return { annotatedChapters: 2, totalAnnotations: 1 };
 }
 
 /* fs-58 — LLM script-review SSE stream. Mirrors realDetectEmotions' SSE
@@ -2947,7 +2979,7 @@ export interface ReviewScriptOpts {
   chapterId?: number;
   model?: string;
   signal?: AbortSignal;
-  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
@@ -2989,15 +3021,11 @@ async function realReviewScript(
 
   const handle = (p: Record<string, unknown>) => {
     switch (p.kind) {
-      case 'phase':
-        if (typeof p.progress === 'number') {
-          onPhase?.({
-            progress: p.progress,
-            label: typeof p.label === 'string' ? p.label : undefined,
-            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
-          });
-        }
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
         break;
+      }
       case 'throttle':
         if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
           onThrottle?.({
@@ -3060,11 +3088,25 @@ async function mockReviewScript(
   { onOps, onPhase, onChapterFailed: _onChapterFailed }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
-  onPhase?.({ progress: 0.25, label: 'Reviewing…', chapterId: 1 });
+  onPhase?.({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
   await wait(500);
-  onPhase?.({ progress: 0.5, label: 'Reviewing…', chapterId: 3 });
+  onPhase?.({
+    progress: 0.5,
+    label: 'Reviewing script',
+    chapterId: 3,
+    chapterIndex: 2,
+    totalChapters: 3,
+    estRemainingMs: 20_000,
+  });
   await wait(500);
-  onPhase?.({ progress: 0.85, label: 'Reviewing…', chapterId: 3 });
+  onPhase?.({
+    progress: 0.85,
+    label: 'Reviewing script',
+    chapterId: 3,
+    chapterIndex: 3,
+    totalChapters: 3,
+    estRemainingMs: 5_000,
+  });
   await wait(400);
   /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
   onOps?.({
