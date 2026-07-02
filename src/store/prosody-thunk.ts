@@ -10,15 +10,27 @@
    Progress is reported on a 0–100% scale: emotions occupies 0–50%,
    instruct occupies 50–100%.
 
-   "Detect emotions" is TWO full passes over the SAME chapters, so the
-   chapter counter (chapterIndex/totalChapters) is passed through per-pass
-   unmodified, but the ETA is reconciled here into one combined number:
-   while pass 1 runs, the combined ETA is pass 1's own remaining time PLUS
-   pass 1's own total-so-far (elapsed + remaining), used as a stand-in for
-   pass 2's not-yet-measured duration. Once pass 1 finishes, the combined
-   ETA becomes pass 2's own remaining time — and until pass 2 produces its
-   own first estimate, the last pass-1-derived number is held frozen rather
-   than dropped (avoids a false "no estimate" blip at the pass boundary).
+   "Detect emotions" is TWO full passes over the SAME chapters, run as two
+   independent SSE requests. Each pass's server route recomputes its own
+   chapterIds/totalChapters from the book's LIVE excludedChapterIds at the
+   moment that request starts — so if a chapter is excluded/included in the
+   wall-clock gap between pass 1 finishing and pass 2 starting, pass 2's
+   totalChapters can differ from pass 1's. To keep the displayed counter
+   stable, `totalChapters` is PINNED here to the widest value seen so far
+   across both passes (starting from pass 1's first report) and forwarded
+   to onProgress in place of each pass's raw totalChapters — it can only
+   widen (never shrink/jump), so a later event's chapterIndex is never left
+   exceeding the displayed total. `chapterIndex` itself is still passed
+   through per-pass unmodified.
+
+   The ETA is reconciled here into one combined number, independently of
+   the totalChapters pinning above: while pass 1 runs, the combined ETA is
+   pass 1's own remaining time PLUS pass 1's own total-so-far (elapsed +
+   remaining), used as a stand-in for pass 2's not-yet-measured duration.
+   Once pass 1 finishes, the combined ETA becomes pass 2's own remaining
+   time — and until pass 2 produces its own first estimate, the last
+   pass-1-derived number is held frozen rather than dropped (avoids a false
+   "no estimate" blip at the pass boundary).
 
    Returns a summary that is NEVER thrown away on partial failures.
    `failed` is load-bearing: Task 13 only writes the prosodyAnnotated
@@ -28,8 +40,10 @@ import { manuscriptActions } from './manuscript-slice';
 import { api } from '../lib/api';
 import type { AppDispatch } from './index';
 
-/** Structured detail accompanying an onProgress tick — the chapter counter
-    (per-pass, unmodified) plus the already-reconciled combined ETA. */
+/** Structured detail accompanying an onProgress tick — chapterIndex passed
+    through per-pass unmodified, totalChapters pinned across both passes
+    (see the module doc comment above), plus the already-reconciled combined
+    ETA. */
 export interface SubstageDetail {
   label?: string;
   chapterIndex?: number;
@@ -71,6 +85,10 @@ export async function runProsodyPasses(
 ): Promise<RunProsodyPassesResult> {
   let failed = 0;
   let combinedEstRemainingMs: number | undefined;
+  // Pinned across both passes so the displayed chapter-of-total counter
+  // never visibly jumps or shrinks if excludedChapterIds changes between
+  // pass 1 and pass 2 — it can only widen (see module doc comment above).
+  let pinnedTotalChapters: number | undefined;
   const pass1StartedAt = Date.now();
 
   // Pass 1: emotion backfill — progress 0–50%
@@ -82,10 +100,15 @@ export async function runProsodyPasses(
         const pass1TotalAsPass2Proxy = elapsedSoFarPass1 + e.estRemainingMs;
         combinedEstRemainingMs = e.estRemainingMs + pass1TotalAsPass2Proxy;
       }
+      pinnedTotalChapters = Math.max(
+        pinnedTotalChapters ?? 0,
+        e.chapterIndex ?? 0,
+        e.totalChapters ?? 0,
+      );
       onProgress?.(e.progress * 0.5, {
         label: e.label,
         chapterIndex: e.chapterIndex,
-        totalChapters: e.totalChapters,
+        totalChapters: pinnedTotalChapters,
         estRemainingMs: combinedEstRemainingMs,
       });
       if (e.label) onStatus?.(e.label);
@@ -107,10 +130,15 @@ export async function runProsodyPasses(
       if (e.estRemainingMs !== undefined) {
         combinedEstRemainingMs = e.estRemainingMs;
       }
+      pinnedTotalChapters = Math.max(
+        pinnedTotalChapters ?? 0,
+        e.chapterIndex ?? 0,
+        e.totalChapters ?? 0,
+      );
       onProgress?.(0.5 + e.progress * 0.5, {
         label: e.label,
         chapterIndex: e.chapterIndex,
-        totalChapters: e.totalChapters,
+        totalChapters: pinnedTotalChapters,
         estRemainingMs: combinedEstRemainingMs,
       });
       if (e.label) onStatus?.(e.label);

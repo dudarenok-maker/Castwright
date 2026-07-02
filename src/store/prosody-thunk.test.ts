@@ -411,4 +411,56 @@ describe('runProsodyPasses', () => {
 
     expect(details[0]).toMatchObject({ chapterIndex: 3, totalChapters: 12, label: 'Detecting emotions' });
   });
+
+  it('pins totalChapters to pass 1\'s value when pass 2 reports a SMALLER totalChapters (a chapter got excluded between passes)', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onPhase?.({ progress: 1, chapterIndex: 5, totalChapters: 5 });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        // Simulates a chapter being excluded in the gap between passes —
+        // pass 2's own server-recomputed totalChapters is now smaller.
+        opts.onPhase?.({ progress: 0.5, chapterIndex: 2, totalChapters: 4 });
+        return EMPTY_INSTRUCT;
+      },
+    );
+
+    const dispatch = vi.fn();
+    const details: Array<{ chapterIndex?: number; totalChapters?: number } | undefined> = [];
+    await runProsodyPasses(bookId, { dispatch, onProgress: (_f, d) => details.push(d) });
+
+    expect(details[0]).toMatchObject({ chapterIndex: 5, totalChapters: 5 });
+    // Pass 2's raw totalChapters (4) is NOT what's shown — it stays pinned
+    // to pass 1's value (5), so the counter never visibly jumps/shrinks.
+    expect(details[1]).toMatchObject({ chapterIndex: 2, totalChapters: 5 });
+  });
+
+  it('widens the pinned totalChapters if pass 2 genuinely covers MORE chapters than pass 1 (a chapter got un-excluded between passes)', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onPhase?.({ progress: 1, chapterIndex: 4, totalChapters: 4 });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        // Simulates a chapter being un-excluded in the gap between passes —
+        // pass 2 now covers a 5th chapter, exceeding pass 1's pinned total.
+        opts.onPhase?.({ progress: 1, chapterIndex: 5, totalChapters: 5 });
+        return EMPTY_INSTRUCT;
+      },
+    );
+
+    const dispatch = vi.fn();
+    const details: Array<{ chapterIndex?: number; totalChapters?: number } | undefined> = [];
+    await runProsodyPasses(bookId, { dispatch, onProgress: (_f, d) => details.push(d) });
+
+    expect(details[0]).toMatchObject({ chapterIndex: 4, totalChapters: 4 });
+    // Pinned value widens to 5 so chapterIndex (5) never exceeds the
+    // displayed total — no stale "Chapter 5 of 4".
+    expect(details[1]).toMatchObject({ chapterIndex: 5, totalChapters: 5 });
+  });
 });
