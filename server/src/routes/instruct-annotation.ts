@@ -220,6 +220,8 @@ instructAnnotationRouter.post(
             if (!closed) res.end();
             return;
           }
+          /* One bad chapter shouldn't kill the whole pass — report it and
+             carry on so the rest of the book still gets annotated. */
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
         } finally {
           ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing(
