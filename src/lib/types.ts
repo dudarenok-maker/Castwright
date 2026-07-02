@@ -866,6 +866,13 @@ export interface GpuDevicesResponse {
   cpu: boolean;
 }
 
+/** Response from GET /api/ollama/device (Plan 2 §2.4) — the analyzer's live
+    GPU/CPU/unknown placement, read-only (not app-pinnable; the analyzer
+    connects to a user/OS-managed Ollama daemon). */
+export interface AnalyzerDeviceResponse {
+  device: 'cuda' | 'cpu' | 'unknown';
+}
+
 /** Prompt state from GET/PUT /api/config/prompts/:id. */
 export interface PromptState {
   id: string;

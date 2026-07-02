@@ -82,6 +82,36 @@ describe('detectOllamaDevice (first-chapter ETA rate seed)', () => {
   });
 });
 
+/* Plan 2 §2.4 — Advanced Configuration's read-only analyzer-device row reads
+   this endpoint. Thin proxy over detectOllamaDevice(); the device-detection
+   logic itself is already pinned by the describe block above. */
+describe('GET /api/ollama/device', () => {
+  const mockPs = (models: unknown[] | null, status = 200) => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/api/ps')) {
+        return Promise.resolve(
+          new Response(models === null ? 'nope' : JSON.stringify({ models }), { status }),
+        );
+      }
+      return Promise.resolve(new Response('', { status: 404 }));
+    });
+  };
+
+  it('returns { device: "cuda" } when a resident model has size_vram > 0', async () => {
+    mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 4_000_000_000 }]);
+    const res = await request(makeApp()).get('/api/ollama/device');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ device: 'cuda' });
+  });
+
+  it('returns { device: "unknown" } on an unreachable daemon', async () => {
+    mockPs(null, 500);
+    const res = await request(makeApp()).get('/api/ollama/device');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ device: 'unknown' });
+  });
+});
+
 describe('GET /api/ollama/health', () => {
   it('returns reachable with the models array when the daemon answers 200', async () => {
     /* expectedModel mirrors DEFAULT_USER_SETTINGS.defaultAnalysisModel

@@ -55,6 +55,7 @@ import type {
   ContinueListeningItem,
   SeriesMemoryDetail,
   GpuDevicesResponse,
+  AnalyzerDeviceResponse,
 } from './types';
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
@@ -6961,6 +6962,13 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
   };
 }
 
+/* Plan 2 §2.4 — mocked analyzer device placement for the Advanced
+   Configuration read-only row. */
+export async function mockGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
+  await wait(20);
+  return { device: 'cuda' };
+}
+
 export async function mockGetConfig(): Promise<ConfigResponse> {
   await wait(40);
   return {
@@ -7093,6 +7101,17 @@ async function realGetGpuDevices(): Promise<GpuDevicesResponse> {
   const res = await fetch('/api/gpu/devices');
   if (!res.ok)
     throw new Error(`GPU device fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+/* Plan 2 §2.4 — real analyzer device placement, backing the Advanced
+   Configuration read-only row. */
+async function realGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
+  const res = await fetch('/api/ollama/device');
+  if (!res.ok)
+    throw new Error(
+      `Analyzer device fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -7438,6 +7457,7 @@ const real = {
   resetPrompt: realResetPrompt,
   restartSidecar: realRestartSidecar,
   getGpuDevices: realGetGpuDevices,
+  getAnalyzerDevice: realGetAnalyzerDevice,
 };
 
 const mock = {
@@ -7676,6 +7696,7 @@ const mock = {
   resetPrompt: mockResetPrompt,
   restartSidecar: mockRestartSidecar,
   getGpuDevices: mockGetGpuDevices,
+  getAnalyzerDevice: mockGetAnalyzerDevice,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry

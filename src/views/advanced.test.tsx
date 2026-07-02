@@ -22,12 +22,14 @@ vi.mock('../lib/api', () => ({
     resetPrompt: vi.fn(),
     restartSidecar: vi.fn(),
     getGpuDevices: vi.fn(),
+    getAnalyzerDevice: vi.fn(),
   },
 }));
 
 const mockGetConfig = vi.mocked(api.getConfig);
 const mockPutConfig = vi.mocked(api.putConfig);
 const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
+const mockGetAnalyzerDevice = vi.mocked(api.getAnalyzerDevice);
 
 const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
   devices: [
@@ -161,6 +163,7 @@ beforeEach(() => {
   });
   vi.mocked(api.restartSidecar).mockResolvedValue({ ok: true });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
+  mockGetAnalyzerDevice.mockResolvedValue({ device: 'unknown' });
 });
 
 /* ── Group headers ────────────────────────────────────────────────────────── */
@@ -357,5 +360,95 @@ describe('AdvancedView — back-to-Admin breadcrumb', () => {
     const btn = screen.getByTestId('advanced-back-to-admin');
     fireEvent.click(btn);
     expect(store.getState().ui.stage).toMatchObject({ kind: 'admin' });
+  });
+});
+
+/* ── Analyzer read-only device row (Plan 2 §2.4) ─────────────────────────── */
+
+/* The `analyzer.engine` knob (server group 'analyzer-models') is deliberately
+   left OUT of `descriptors` here — only its live `values` entry is fixtured.
+   Adding it to `descriptors` would render a second, genuinely-editable
+   "Analyzer engine" <select>, which would collide with the
+   `queryByRole('combobox', { name: /analyzer/i })` assertion below (that
+   query is meant to prove THIS row — the read-only one — renders no
+   combobox at all). */
+const CONFIG_WITH_TTS_ENGINE_GROUP: ConfigResponse = {
+  ...FIXTURE_CONFIG,
+  groups: [
+    ...FIXTURE_CONFIG.groups,
+    {
+      id: 'tts-engine',
+      label: 'Voice engine & device',
+      help: 'Voice engine device, language, and preload behaviour.',
+      risk: 'high',
+      collapsedByDefault: false,
+    },
+  ],
+  values: {
+    ...FIXTURE_CONFIG.values,
+    'analyzer.engine': {
+      key: 'analyzer.engine',
+      effective: 'local',
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
+  },
+};
+
+/* 'tts-engine' is risk:'high' (matches the real registry group), so
+   SettingsSection starts it collapsed regardless of collapsedByDefault —
+   the row only mounts once the section is expanded. Mirrors how a real
+   user would reach the "Voice engine & device" section. */
+async function openVoiceEngineSection(): Promise<void> {
+  /* Both the nav rail and the section header render a "Voice engine &
+     device"-named button; only the section header carries aria-expanded. */
+  const toggles = await screen.findAllByRole('button', { name: /Voice engine & device/ });
+  const toggle = toggles.find((el) => el.hasAttribute('aria-expanded'));
+  if (!toggle) throw new Error('Voice engine & device section toggle not found');
+  fireEvent.click(toggle);
+}
+
+describe('AdvancedView — analyzer read-only row (Plan 2 §2.4)', () => {
+  it('shows the analyzer GPU/CPU/unknown placement, not editable', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
+
+    renderView();
+    await openVoiceEngineSection();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.getByText(/GPU — not app-pinnable/)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /analyzer/i })).not.toBeInTheDocument();
+  });
+
+  it('links to the documented OS-env path', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cpu' });
+
+    renderView();
+    await openVoiceEngineSection();
+    const link = await screen.findByRole('link', { name: /change.*analyzer.*device/i });
+    expect(link).toHaveAttribute('href', expect.stringMatching(/local-llm/));
+  });
+
+  it('hides the row entirely when the analyzer engine is gemini (§2.4 gate)', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...CONFIG_WITH_TTS_ENGINE_GROUP,
+      values: {
+        ...CONFIG_WITH_TTS_ENGINE_GROUP.values,
+        'analyzer.engine': {
+          key: 'analyzer.engine',
+          effective: 'gemini',
+          source: 'default',
+          locked: false,
+          overridden: false,
+        },
+      },
+    });
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
+
+    renderView();
+    await openVoiceEngineSection();
+    expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
   });
 });

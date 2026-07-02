@@ -27,7 +27,14 @@ import {
   selectRestartServerPending,
 } from '../store/config-slice';
 import { api } from '../lib/api';
-import type { GpuDevice, KnobDescriptor, KnobValue, PromptState, StaleReason } from '../lib/types';
+import type {
+  GpuDevice,
+  KnobDescriptor,
+  KnobValue,
+  PromptState,
+  StaleReason,
+  AnalyzerDeviceResponse,
+} from '../lib/types';
 
 /* ── per-device-knob staleReason derivation ──────────────────────────────── */
 
@@ -207,6 +214,7 @@ export function AdvancedView() {
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
   const [gpuDevices, setGpuDevices] = useState<GpuDevice[]>([]);
+  const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device']>('unknown');
 
   useEffect(() => {
     dispatch(fetchConfig());
@@ -216,7 +224,21 @@ export function AdvancedView() {
       .getGpuDevices()
       .then((res) => setGpuDevices(res.devices))
       .catch(() => setGpuDevices([]));
+    // Best-effort: an unreachable Ollama daemon just leaves the read-only
+    // analyzer-device row showing "Unknown" (see the ANALYZER-mode gate below).
+    api
+      .getAnalyzerDevice()
+      .then((res) => setAnalyzerDevice(res.device))
+      .catch(() => setAnalyzerDevice('unknown'));
   }, [dispatch]);
+
+  /* Plan 2 §2.4 — the analyzer-device row is only meaningful when the
+     analyzer is actually dispatching through the local Ollama daemon;
+     under ANALYZER=gemini there's no local device to report. Reuses the
+     `analyzer.engine` knob's live value already hydrated into `values` by
+     fetchConfig(), rather than adding a second endpoint/state slice for
+     the same fact. */
+  const analyzerEngine = values['analyzer.engine']?.effective;
 
   const handleResetAll = () => {
     if (!window.confirm('Reset all advanced settings to their defaults?')) return;
@@ -338,6 +360,33 @@ export function AdvancedView() {
                       />
                     );
                   })}
+                  {group.id === 'tts-engine' && analyzerEngine === 'local' && (
+                    <div className="py-3 border-b border-ink/8">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-medium text-ink flex-1">
+                          Analyzer (Ollama) device
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-ink/8 text-ink/60 text-[11px] font-semibold">
+                          read-only
+                        </span>
+                      </div>
+                      <p className="text-xs text-ink/55 mb-1">
+                        {analyzerDevice === 'cuda'
+                          ? 'GPU'
+                          : analyzerDevice === 'cpu'
+                            ? 'CPU'
+                            : 'Unknown'}{' '}
+                        — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
+                        daemon.
+                      </p>
+                      <a
+                        href="/docs/local-llm.md"
+                        className="text-xs text-magenta hover:underline"
+                      >
+                        Change the analyzer&apos;s device (documented OS-env steps)
+                      </a>
+                    </div>
+                  )}
                 </SettingsSection>
               );
             })}
