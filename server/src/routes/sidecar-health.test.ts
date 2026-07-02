@@ -625,11 +625,26 @@ describe('POST /api/sidecar/restart', () => {
   it('returns 409 when the supervisor has no running child', async () => {
     (supervisorMod.getActiveSupervisor as ReturnType<typeof vi.fn>).mockReturnValue({
       current: () => null,
+      tripEvent: () => null,
     });
     const res = await request(makeApp()).post('/api/sidecar/restart');
     expect(res.status).toBe(409);
     expect(res.body.ok).toBe(false);
     expect(res.body.error).toMatch(/No sidecar child/);
+  });
+
+  it('returns a distinct 409 (not the generic "will spawn shortly" message) when the supervisor is tripped', async () => {
+    /* A code-43 streak trip (Wave 2 §W2.5) also leaves current()===null, but
+       with NO respawn coming — this route must not claim one is on the way. */
+    (supervisorMod.getActiveSupervisor as ReturnType<typeof vi.fn>).mockReturnValue({
+      current: () => null,
+      tripEvent: () => ({ card: { uuid: 'GPU-1', idx: 1 }, residentEngines: ['coqui'] }),
+    });
+    const res = await request(makeApp()).post('/api/sidecar/restart');
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/held down/i);
+    expect(res.body.error).not.toMatch(/will spawn shortly/);
   });
 
   it('kills the current child and returns ok:true once /health responds', async () => {

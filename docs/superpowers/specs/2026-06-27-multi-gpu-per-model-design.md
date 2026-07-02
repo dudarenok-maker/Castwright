@@ -306,3 +306,49 @@ self-exit card plumbing); `sidecar-supervisor.ts` (code-43 streak);
   (vs the §W2.6 guards) is a deliberate post-v1 item.
 - **Kokoro `device_id` support** — contingent on the pinned `kokoro-onnx`
   accepting `provider_options`; the InferenceSession fallback is the hedge.
+
+## Round 5 — Wave 2 + Plan 2 execution decisions (2026-07-02)
+
+Resolves the four open questions above and locks the delivery shape for the
+remaining work (Wave 1 shipped, PR #1180; the basic `device` dropdown shipped
+in Advanced Configuration, PR #1205, per issue #1202). **Auto-decided during a
+no-response brainstorming pass — flag any of these for revision on next
+touch:**
+
+- **Driver-free floor** — ship the 1024 MB default + `SIDECAR_VRAM_FREE_FLOOR_MB`
+  env override as specified; confirm/tune during the Wave 2 on-box acceptance
+  checklist (same pattern as Wave 1's Ship notes checklist), not before.
+- **Per-card recycle drain** — stays a documented v1 limit. Wave 2 makes the
+  ledger/streak-guard correctly attribute *which* card tripped the code-43
+  streak (§W2.5), but the self-exit itself remains whole-process. True
+  per-card drain (isolating one engine's process from another) is out of
+  scope — candidate for a future plan if the blast radius proves painful
+  on-box.
+- **Per-UUID Node budgets** — stays deferred. Wave 2 ships only the §W2.6
+  coarse GPU/CPU guards (don't cross-charge, don't cross-evict) over the
+  existing single global semaphore. A true per-card Node budget remains a
+  deliberate post-v1 item.
+- **Kokoro `device_id` support** — de-risk with a small spike at the start of
+  Wave 2 implementation: verify whether the pinned `kokoro-onnx` accepts
+  `provider_options=[{"device_id": N}]` before committing to the full task
+  breakdown for §1.3's Kokoro adapter. If it doesn't, fall back to
+  constructing the `InferenceSession` directly, per the spec's existing hedge.
+
+**Delivery shape:** one combined implementation plan covering both Wave 2
+(per-card safety) and Plan 2 (picker UI + UUID identity), but they still land
+as **two separate branches/PRs in sequence** — Wave 2 first (runtime only, no
+UI change, mirrors how Wave 1 shipped as #1180), Plan 2 second, gated on
+Wave 2's on-box acceptance since Plan 2 §2.3 (auto-revert) consumes Wave 2's
+§W2.5 trip event directly.
+
+**Plan 2 UI location — superseded from "Model Manager" to Advanced
+Configuration.** The original framing (issue #1202, this spec's §Key files)
+put the richer picker in Model Manager, distinct from where the basic
+dropdown shipped. Building a second configuration surface for the same knobs
+would mean two places a user could set the same device — reopened here:
+Plan 2 builds directly on top of the existing Advanced Configuration rows
+(OverrideRow/KnobControl, shipped in #1205) — adding the `stale_reason`
+badges, resident-vs-assigned comparison, batched restart wiring, disabled
+env-locked rows, and footprint pre-warn to the *same* rows, rather than
+standing up a parallel panel elsewhere. The analyzer read-only row (§2.4)
+joins the same section.

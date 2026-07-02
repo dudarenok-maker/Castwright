@@ -432,6 +432,23 @@ sidecarHealthRouter.post('/restart', async (_req: Request, res: Response) => {
   }
   const handle = supervisor.current();
   if (!handle) {
+    /* A code-43 streak trip (Wave 2 §W2.5) also leaves current()===null, but
+       with NO respawn coming — the supervisor stopped trying on purpose.
+       Give that case its own message rather than the generic "will spawn
+       shortly" claim, which would be actively misleading here: this route
+       can't recover a trip (it kills-and-waits-for-respawn; a tripped
+       supervisor has nothing to kill and nothing will respawn). The only
+       recovery today is a server restart — Plan 2's auto-revert route is the
+       one that will call clearTripAndRespawn() to fix this in-place. */
+    if (supervisor.tripEvent()) {
+      return res.status(409).json({
+        ok: false,
+        error:
+          'The sidecar is held down after repeated crash-loop exits (code-43 streak) — ' +
+          'no automatic respawn is coming. Restarting via this route cannot recover it; ' +
+          'the current device assignment needs fixing and the server restarted.',
+      });
+    }
     return res.status(409).json({
       ok: false,
       error: 'No sidecar child is currently running. If auto-start is on, the supervisor will spawn one shortly.',

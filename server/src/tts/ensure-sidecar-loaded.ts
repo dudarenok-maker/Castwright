@@ -124,6 +124,7 @@ export async function ensureSidecarEngineReady(
   if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
 
   const { withGpuLoad } = await import('../gpu/gpu-load.js');
+  const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
   const target = `${getResolvedSidecarUrl()}/health`;
   const timeoutMs = opts.timeoutMs ?? READINESS_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
@@ -147,7 +148,7 @@ export async function ensureSidecarEngineReady(
       }
       await sleep(pollIntervalMs, signal);
     }
-  });
+  }, engineDeviceIsGpu(engine));
 
   // fs-45 v1: sample this engine's reserved footprint (env-gated + clean-process
   // gate inside maybeSampleSidecarEngine). Best-effort, record-only. The gate no

@@ -437,6 +437,14 @@ def _reset_poison_for_test() -> None:
     _poison_exit_scheduled = False
 
 
+def _reset_restart_state_for_test() -> None:
+    """Test-only: clear restart-scheduling state so cases don't bleed."""
+    global _restart_scheduled, _restart_pending, _last_restart_card
+    _restart_scheduled = False
+    _restart_pending = False
+    _last_restart_card = None
+
+
 def _parse_bool(value: Optional[str], default: bool) -> bool:
     """Parse an env-var string into a bool. `"1"`, `"true"`, `"yes"`, `"on"`
     (case-insensitive) → True; `"0"`, `"false"`, `"no"`, `"off"` → False;
@@ -583,7 +591,13 @@ class SynthBatchResult:
 
 
 class _VdKokoroArbiter:
-    """Mutual exclusion between a VoiceDesign forward and Kokoro synths.
+    """Mutual exclusion between a VoiceDesign forward and Kokoro synths —
+    ONLY when the two are configured onto the SAME card (`shares_device`,
+    Wave 2 §W2.3). On a single-card box (the default) they always share, so
+    behaviour is unchanged from Wave 1. On a multi-GPU box with Kokoro pinned
+    to a different card than Qwen, there's no VRAM contention to guard and
+    the two run fully concurrently — `kokoro_synth()`/`design()` become
+    no-op context managers in that case.
 
     Kokoro runs on onnxruntime-gpu (a separate allocator from torch), so a
     resident Kokoro + Qwen Base + the 1.7B VoiceDesign model oversubscribe an
@@ -599,13 +613,17 @@ class _VdKokoroArbiter:
     arbiter, so a Qwen-voiced chapter generates at full speed alongside a design.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, shares_device: bool = True) -> None:
         self._cv = threading.Condition()
         self._kokoro_in_flight = 0
         self._design_active = False
+        self._shares_device = shares_device
 
     @contextmanager
     def kokoro_synth(self):
+        if not self._shares_device:
+            yield
+            return
         with self._cv:
             while self._design_active:
                 self._cv.wait()
@@ -619,6 +637,9 @@ class _VdKokoroArbiter:
 
     @contextmanager
     def design(self):
+        if not self._shares_device:
+            yield
+            return
         with self._cv:
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
@@ -632,6 +653,15 @@ class _VdKokoroArbiter:
 
 
 _VD_KOKORO = _VdKokoroArbiter()
+
+
+@app.on_event("startup")
+async def _configure_vd_kokoro_coupling() -> None:
+    """Resolve the real QWEN_DEVICE/KOKORO_DEVICE coupling at startup (not at
+    module import time — torch must stay a lazily-imported dependency so
+    tests that stub it via sys.modules injection, not module-attribute
+    patching, keep working per the sidecar's own testing convention)."""
+    _VD_KOKORO._shares_device = _compute_vd_kokoro_shares_device()
 
 
 class Engine:
@@ -1409,6 +1439,47 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     if mps is not None and mps.is_available():
         return "mps"
     return "cpu"
+
+
+def shares_device(device_a: Optional[str], device_b: Optional[str], torch_module: Any = None) -> bool:
+    """True when two device knob values resolve to the SAME concrete card.
+    'auto' resolves via the existing _resolve_torch_device (every engine
+    shares Wave 1's device grammar) so two engines both left at 'auto' are
+    correctly treated as sharing whichever card auto picks — not as
+    never-coupled. cpu/mps never "share" in the VRAM-contention sense this
+    gates (only cuda:N contention matters)."""
+    if torch_module is None:
+        import torch as torch_module  # type: ignore
+    resolved_a = _resolve_torch_device(device_a or "auto", torch_module)
+    resolved_b = _resolve_torch_device(device_b or "auto", torch_module)
+    fam_a, idx_a = _parse_device(resolved_a)
+    fam_b, idx_b = _parse_device(resolved_b)
+    if fam_a != "cuda" or fam_b != "cuda":
+        return False
+    return (idx_a or 0) == (idx_b or 0)
+
+
+def _qwen_configured_card_idx() -> int:
+    """Best-effort resolved card index for QWEN_DEVICE, used to pick the
+    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Wave 2
+    reads the raw env directly — Plan 2's UUID resolver (_read_device_env)
+    doesn't exist yet at this point in the build order. Task 10.5 upgrades
+    this function to route through _read_device_env once it does; DO NOT
+    read raw env at any OTHER new call site without checking Task 10.5's
+    note first."""
+    fam, idx = _parse_device(os.environ.get("QWEN_DEVICE", "auto"))
+    return idx or 0
+
+
+def _compute_vd_kokoro_shares_device() -> bool:
+    """Resolve whether QWEN_DEVICE and KOKORO_DEVICE currently share a card.
+    Any failure (no torch, unreadable env) defaults True — the SAFE,
+    conservative choice (stay coupled) rather than silently disabling the
+    guard on an error."""
+    try:
+        return shares_device(os.environ.get("QWEN_DEVICE"), os.environ.get("KOKORO_DEVICE"))
+    except Exception:
+        return True
 
 
 def cosine_distance(a: Any, b: Any) -> float:
@@ -2562,7 +2633,7 @@ class QwenEngine(Engine):
         _kok_pre = ENGINES.get("kokoro")
         if isinstance(_kok_pre, KokoroEngine) and _kok_pre._kokoro is not None:
             _phase("freeing-vram")
-        with self._base17_activity(), _VD_KOKORO.design():
+        with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()), self._base17_activity(), _VD_KOKORO.design():
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
@@ -3614,6 +3685,105 @@ def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
         return []
 
 
+class DeviceLedger:
+    """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
+    (_sample_card). Read from three thread contexts (the _memory_watchdog
+    asyncio loop, /health+/devices' sync threadpool threads, to_thread
+    workers) — ONE threading.Lock serialises every sample so concurrent
+    readers never race torch's CUDA context.
+
+    NEVER caches an index across calls without re-validating it: every sample
+    re-resolves get_device_properties(idx) and asserts its uuid still matches
+    what was seen at that index on a PRIOR sample. A driver/OS renumber (rare,
+    but explicitly called out by the spec) would otherwise have a cached idx
+    silently read the WRONG physical card. A uuid mismatch reports the card as
+    vanished (ceiling 0 downstream) — never silently substituted.
+
+    CAVEAT (raised by a round-2 adversarial review, not fixed here — see Task
+    9's on-box checklist): this guarantee depends on torch actually exposing
+    a real per-card uuid via get_device_properties(idx).uuid. _sample_card
+    (Wave 1, main.py ~3596) falls back to a synthetic f"idx-{idx}" string when
+    that attribute is absent — on a torch build/driver where it's absent, the
+    fallback uuid is DERIVED FROM THE INDEX ITSELF, so a renumber can never
+    produce a mismatch and this detection silently no-ops. Confirm real uuids
+    are present on the target box during Task 9's on-box acceptance before
+    trusting this guarantee in production; if they're absent, this class's
+    "never substitutes a renumbered card" claim only holds when torch exposes
+    uuids, not unconditionally.
+
+    `_sample_locked` factors the no-lock-acquisition body out of `sample`/
+    `sample_all` so `sample_all` can loop calling it WITHOUT re-entering the
+    (non-reentrant) lock — `sample_all` calling the public `sample()` while
+    already holding `self._lock` would deadlock."""
+
+    def __init__(self, torch_module: Any = None) -> None:
+        self._lock = threading.Lock()
+        self._torch_module = torch_module  # injectable for tests
+        self._known_uuids: dict[int, str] = {}  # idx -> uuid last seen at that idx
+        self._card_locks: dict[int, threading.Lock] = {}  # Task 5 consumes this
+
+    def _torch(self) -> Any:
+        if self._torch_module is not None:
+            return self._torch_module
+        import torch  # type: ignore
+        return torch
+
+    def _sample_locked(self, tm: Any, idx: int) -> Optional[dict]:
+        """Body of sample(); caller MUST already hold self._lock."""
+        try:
+            if not tm.cuda.is_available() or idx >= tm.cuda.device_count():
+                return None
+            row = _sample_card(idx, tm)
+        except Exception:
+            return None
+        seen = self._known_uuids.get(idx)
+        if seen is None:
+            self._known_uuids[idx] = row["uuid"]
+        elif seen != row["uuid"]:
+            # Renumbered: flag THIS sample as vanished (never silently
+            # substitute the old reading for the new card), but re-seed the
+            # known uuid so the watchdog resumes protecting whatever card is
+            # now physically at this index on the NEXT sample — otherwise a
+            # renumber permanently blinds _check_per_card_ceilings to this
+            # idx for the rest of the process, losing OOM protection on a
+            # card that's present and correctly enumerated.
+            self._known_uuids[idx] = row["uuid"]
+            return None
+        return row
+
+    def sample(self, idx: int) -> Optional[dict]:
+        with self._lock:
+            return self._sample_locked(self._torch(), idx)
+
+    def sample_all(self) -> list[dict]:
+        with self._lock:
+            tm = self._torch()
+            try:
+                n = tm.cuda.device_count() if tm.cuda.is_available() else 0
+            except Exception:
+                n = 0
+            out = []
+            for i in range(n):
+                row = self._sample_locked(tm, i)
+                if row is not None:
+                    out.append(row)
+            return out
+
+    def card_lock(self, idx: int) -> threading.Lock:
+        """Per-card mutex for a check-residency->evict->load sequence sharing
+        this card (Task 5). Lazily created; one Lock per idx for the process
+        lifetime — cards don't appear/disappear mid-process on a supported box."""
+        with self._lock:
+            lock = self._card_locks.get(idx)
+            if lock is None:
+                lock = threading.Lock()
+                self._card_locks[idx] = lock
+            return lock
+
+
+_DEVICE_LEDGER = DeviceLedger()
+
+
 # Reserved-VRAM recycle fractions of device total (defaults; absolute MB env
 # overrides below). Soft flags a clean boundary recycle; hard self-exits. Both
 # key on RESERVED crossing the card — the spill trigger on Windows.
@@ -3653,6 +3823,51 @@ def _vram_restart_threshold_mb(total_mb: Optional[float]) -> float:
     if total_mb and total_mb > 0:
         return _VRAM_HARD_FRACTION * total_mb
     return 0.0
+
+
+def _sidecar_vram_free_floor_mb() -> float:
+    """Absolute per-card free-VRAM floor (MB) — the ONLY OOM guard for an
+    ORT/CT2-only card (Kokoro/Whisper), which never shows up in torch's
+    reserved-memory metric. Deliberately ABSOLUTE, not a fraction: a
+    fraction-based floor would self-satisfy on an idle low-VRAM display card
+    and never trip. Default 1024 MB (Round 5 decision — tune during Wave 2
+    on-box acceptance, not before); override SIDECAR_VRAM_FREE_FLOOR_MB."""
+    env = os.environ.get("SIDECAR_VRAM_FREE_FLOOR_MB")
+    if env is not None:
+        try:
+            return float(env)
+        except (TypeError, ValueError):
+            pass
+    return 1024.0
+
+
+def _card_reserved_ceiling_mb(total_mb: float) -> float:
+    """Per-card reserved-VRAM HARD ceiling — the same _VRAM_HARD_FRACTION
+    already used for the device-0 scalar ceiling, applied per-card."""
+    return _VRAM_HARD_FRACTION * total_mb if total_mb and total_mb > 0 else 0.0
+
+
+def _check_per_card_ceilings(ledger: "DeviceLedger", torch_module: Any = None) -> Optional[dict]:
+    """OR-rule per-card breach: for each visible card, freshly sampled via the
+    ledger, breach if EITHER free_mb < the absolute floor OR (torch-only)
+    reserved VRAM crosses THIS card's own fraction ceiling. Returns the FIRST
+    breaching card's {uuid, idx, reason}, or None. Each card's readings are
+    independently fresh — never a stale/cached value from another card's check."""
+    floor = _sidecar_vram_free_floor_mb()
+    for card in ledger.sample_all():
+        if card["free_mb"] < floor:
+            return {"uuid": card["uuid"], "idx": card["idx"], "reason": "driver_free_floor"}
+        try:
+            tm = torch_module
+            if tm is None:
+                import torch as tm  # type: ignore
+            reserved = tm.cuda.memory_reserved(card["idx"]) / 1_000_000.0
+            ceiling = _card_reserved_ceiling_mb(card["total_mb"])
+            if ceiling > 0 and reserved >= ceiling:
+                return {"uuid": card["uuid"], "idx": card["idx"], "reason": "reserved_vram_ceiling"}
+        except Exception:
+            pass
+    return None
 
 
 def _mem_restart_threshold_mb() -> float:
@@ -3765,28 +3980,68 @@ def _drain_then_restart(grace_ms: int) -> None:
     threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
 
 
+_last_restart_card: Optional[dict] = None
+
+_RESTART_BREADCRUMB_PATH = os.path.join(os.path.dirname(__file__), ".run", "last-restart-trip.json")
+
+
+def _write_restart_breadcrumb(card: Optional[dict], metric_label: str) -> None:
+    """Best-effort persisted trip info so the NODE SUPERVISOR (a separate,
+    longer-lived process) can learn WHICH CARD triggered a code-43 self-exit —
+    onChildExit only gets (code, signal), no card. Written synchronously
+    BEFORE the drain thread starts, so it's on disk well before this process
+    can vanish. A write failure here must never block the exit path — logged
+    and swallowed, since Plan 2's auto-revert simply lacks card info for that
+    one trip if it can't be written."""
+    try:
+        os.makedirs(os.path.dirname(_RESTART_BREADCRUMB_PATH), exist_ok=True)
+        resident = []
+        if card is not None:
+            by_card = _resident_engines_by_card(_enumerate_cuda_devices())
+            resident = [r["engine"] for r in by_card.get(card["idx"], [])]
+        body = json.dumps({"card": card, "reason": metric_label, "residentEngines": resident, "ts": time.time()})
+        # Write-then-rename: os.replace is atomic on the same volume (POSIX and
+        # Windows both), so a hard kill mid-write can never leave a truncated/
+        # partial breadcrumb for the reader to trip over — the very trip that
+        # most needs this diagnostic (a crash severe enough to interrupt this
+        # write) is exactly the one a torn file would otherwise degrade.
+        tmp_path = f"{_RESTART_BREADCRUMB_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.replace(tmp_path, _RESTART_BREADCRUMB_PATH)
+    except Exception as e:
+        log.warning("could not write restart breadcrumb (%s) — a downstream auto-revert will lack card info for this trip.", e)
+
+
 def _schedule_restart_exit(
-    metric_mb: float, threshold_mb: float, metric_label: str = "committed memory"
+    metric_mb: float, threshold_mb: float, metric_label: str = "committed memory",
+    card: Optional[dict] = None,
 ) -> None:
     """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
     Idempotent (a later over-ceiling tick won't double-schedule). Flips
     `_restart_pending` (new synth now fast-fails 503) and hands off to a drain
     thread that waits out the in-flight chapter (srv-17c) before the
     flush-delayed exit. `metric_label` names the ceiling that tripped (host
-    "committed memory" vs "reserved VRAM") so the log says which one fired."""
-    global _restart_scheduled, _restart_pending
+    "committed memory" vs "reserved VRAM") so the log says which one fired.
+    `card` is None for the pre-existing host-RAM/device-0-VRAM triggers, and
+    the breaching card's dict for a per-card trigger."""
+    global _restart_scheduled, _restart_pending, _last_restart_card
     if _restart_scheduled:
         return
     _restart_scheduled = True
     _restart_pending = True
+    _last_restart_card = card
+    _write_restart_breadcrumb(card, metric_label)
     grace_ms = _drain_grace_ms()
     log.warning(
-        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB — "
+        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB%s — "
         "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
         "server respawns a fresh process. Completed chapters are skipped (srv-16); "
         "the in-flight chapter finishes here or is re-rendered by the server "
         "(srv-17c). Raise the ceiling to recycle less often.",
-        metric_label, metric_mb, threshold_mb, _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
+        metric_label, metric_mb, threshold_mb,
+        f" (card {card['idx']})" if card else "",
+        _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
     )
     threading.Thread(target=_drain_then_restart, args=(grace_ms,), daemon=True).start()
 
@@ -3839,6 +4094,13 @@ async def _memory_watchdog() -> None:
                 continue
             if vram_reserved is not None and _should_restart(vram_reserved, vram_hard):
                 _schedule_restart_exit(vram_reserved, vram_hard, "reserved VRAM")
+                continue
+            per_card_breach = _check_per_card_ceilings(_DEVICE_LEDGER)
+            if per_card_breach is not None:
+                _schedule_restart_exit(
+                    0.0, 0.0, f"card {per_card_breach['idx']} {per_card_breach['reason']}",
+                    card=per_card_breach,
+                )
                 continue
             # SOFT recycle: below the hard ceilings, flag a pending recycle so the
             # generation worker recycles cleanly at the next chapter boundary. Set
@@ -4353,6 +4615,9 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
         for c in cards:
             c["torch_reserved_mb"] = 0
     for c in cards:
+        c["free_floor_mb"] = _sidecar_vram_free_floor_mb()
+        c["reserved_ceiling_mb"] = _card_reserved_ceiling_mb(c["total_mb"])
+    for c in cards:
         c["resident"] = resident.get(c["idx"], [])
     # ORT/CT2 engines (Kokoro/Whisper) and any cpu-fallen engine carry index=None
     # → the -1 bucket, which no real card claims. Surface it as a synthetic
@@ -4364,6 +4629,11 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
         cards.append({
             "uuid": None, "idx": -1, "name": "unindexed (cpu / ORT / CT2)",
             "total_mb": 0, "free_mb": 0, "torch_reserved_mb": 0, "resident": unindexed,
+            # The free floor is a global absolute (not per-card), so it still
+            # applies here — this bucket IS the Kokoro/Whisper CPU-fallback
+            # engines the floor exists to protect. reserved_ceiling_mb has no
+            # meaning without a real total_mb (matches this row's total_mb: 0).
+            "free_floor_mb": _sidecar_vram_free_floor_mb(), "reserved_ceiling_mb": 0.0,
         })
     return cards
 

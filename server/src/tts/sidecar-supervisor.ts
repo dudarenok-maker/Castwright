@@ -19,6 +19,7 @@ import {
   probeSidecarHealth,
   adoptCommittedCeilingMb,
 } from './spawn-sidecar.js';
+import { readRestartBreadcrumb } from './restart-breadcrumb.js';
 
 async function defaultRecycleSidecar(host: string, port: number): Promise<boolean> {
   try {
@@ -40,6 +41,23 @@ const DEFAULT_DRAIN_WAIT_MS = 185_000;
 const QUICK_DEATH_MS = 30_000;
 const DEFAULT_BACKOFFS_MS = [2_000, 5_000, 15_000];
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 5;
+/* A code-43-SPECIFIC streak, independent of `consecutiveFailures` above: that
+   counter resets whenever a child lives past QUICK_DEATH_MS, so a structurally
+   -too-small device assignment that loads fine for 35s and then dies every
+   time would never trip the give-up branch (it keeps resetting). This counter
+   tracks code-43 self-exits ONLY, on a pure time-window basis, regardless of
+   how long each child lived (§W2.5).
+
+   Intentionally metric-agnostic: it counts EVERY code-43 exit — a per-card
+   VRAM/floor breach (Wave 2 §W2.2), a host-RAM ceiling breach, or a manual
+   POST /recycle — not just per-card structural breaches. A cluster of 3
+   otherwise-healthy recycles in the 10-minute window trips the same hold-down
+   as a genuinely undersized device pin. This is deliberate (see the plan's
+   Task 9 on-box checklist, which exercises the non-card-specific trigger
+   explicitly) and low-risk (3 legitimate recycles in 10 minutes is itself
+   abnormal) — not a bug if a recycle-storm trips this. */
+const RESTART43_STREAK_WINDOW_MS = 600_000; // 10 min
+const RESTART43_STREAK_TRIP_COUNT = 3;
 /* How often to poll an ADOPTED (already-listening, not-owned) sidecar for
    disappearance. Short enough that a self-recycle is detected and a fresh
    owned child respawned inside the generation path's ride-out window, but not
@@ -97,6 +115,19 @@ export interface SidecarSupervisor {
       Use this to gate the queue dispatcher; do NOT use `current() == null`
       which is permanently true for adopted sidecars. */
   recycling: () => boolean;
+  /** Non-null once 3+ code-43 self-exits happened within RESTART43_STREAK_
+      WINDOW_MS — the assignment looks structurally too small. The supervisor
+      stops respawning once this trips (TTS held down); Plan 2's auto-revert
+      route (Task 16) reads this to rewrite the offending knob, then calls
+      clearTripAndRespawn() to actually bring TTS back. */
+  tripEvent: () => { card: unknown; residentEngines: string[] } | null;
+  /** Clear a tripped streak and spawn a fresh sidecar child. The ONLY way
+      back from a trip — neither the existing POST /api/sidecar/restart route
+      (it requires a currently-running child to kill; a tripped supervisor
+      has none) nor a fresh code-43 exit (nothing is running to exit) can
+      recover otherwise. Safe to call when not tripped (resets an empty
+      streak, respawns as normal — matches an ordinary manual restart). */
+  clearTripAndRespawn: () => Promise<void>;
 }
 
 /* Module-level registry so the POST /api/sidecar/restart route can reach the
@@ -138,6 +169,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   let handle: SidecarHandle | null = null;
   let consecutiveFailures = 0;
   let lastSpawnAt = 0;
+  /* code-43-specific streak state — see RESTART43_STREAK_WINDOW_MS above. */
+  let restart43Timestamps: number[] = [];
+  let restart43Trip: { card: unknown; residentEngines: string[] } | null = null;
   /* True while a watchdog loop is polling an adopted sidecar's port. Guards
      against starting a second loop if the adopt callback fires again before
      the first loop has released. */
@@ -257,6 +291,32 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
 
   function onChildExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (stopped) return; // we killed it on purpose (shutdown) — don't resurrect.
+    if (restart43Trip !== null) {
+      // Already tripped — hold TTS down. Ignore any further exit (nothing
+      // should be running to exit, but a belt-and-suspenders guard here means
+      // even a stray callback can never sneak in another respawn attempt).
+      handle = null;
+      isRecycling = true;
+      return;
+    }
+    if (code === 43) {
+      const now = nowFn();
+      restart43Timestamps = restart43Timestamps.filter((t) => now - t <= RESTART43_STREAK_WINDOW_MS);
+      restart43Timestamps.push(now);
+      if (restart43Timestamps.length >= RESTART43_STREAK_TRIP_COUNT) {
+        const breadcrumb = readRestartBreadcrumb();
+        restart43Trip = { card: breadcrumb?.card ?? null, residentEngines: breadcrumb?.residentEngines ?? [] };
+        handle = null;
+        isRecycling = true;
+        warn(
+          `[sidecar] supervisor: ${restart43Timestamps.length} code-43 self-exits in ` +
+            `${RESTART43_STREAK_WINDOW_MS / 60_000} minutes (card=${JSON.stringify(restart43Trip.card)}) — ` +
+            `this device assignment looks structurally too small. Holding TTS down (no further ` +
+            `respawn attempts) until the assignment changes and the server restarts.`,
+        );
+        return; // hold TTS down — no respawn.
+      }
+    }
     handle = null;
     isRecycling = true; // sidecar gone — hold dispatch until the respawn completes.
     const lived = nowFn() - lastSpawnAt;
@@ -286,6 +346,15 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     })();
   }
 
+  /** The only way back from a trip — see the `clearTripAndRespawn` doc on the
+      SidecarSupervisor interface for why the existing manual-restart route
+      can't recover a tripped supervisor by itself. */
+  function clearTripAndRespawn(): Promise<void> {
+    restart43Trip = null;
+    restart43Timestamps = [];
+    return spawnOnce();
+  }
+
   return {
     async start() {
       stopped = false;
@@ -304,5 +373,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     recycling() {
       return isRecycling;
     },
+    tripEvent() {
+      return restart43Trip;
+    },
+    clearTripAndRespawn,
   };
 }

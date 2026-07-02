@@ -25,6 +25,7 @@ import {
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { detectOllamaDevice } from './ollama-health.js';
+import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
 import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
@@ -2238,10 +2239,19 @@ export async function runMainAnalyzerJob(
      Only meaningful for local Ollama; cloud engines pass 'unknown' → the
      Gemini rate. Failures degrade to 'unknown' → the CUDA rate (the app's
      target box), and the estimate self-corrects from observed pace anyway. */
-  const analyzerDevice: 'cuda' | 'cpu' | 'unknown' =
-    selection.engine === 'local' || phase1Selection.engine === 'local'
-      ? await detectOllamaDevice()
-      : 'unknown';
+  const usesLocalAnalyzer = selection.engine === 'local' || phase1Selection.engine === 'local';
+  const analyzerDevice: 'cuda' | 'cpu' | 'unknown' = usesLocalAnalyzer
+    ? await detectOllamaDevice()
+    : 'unknown';
+  /* Only a job that actually probed the local Ollama analyzer may update the
+     GLOBAL cross-charge cache (W2.6, analyzer-device-state.ts) — it's a
+     single process-wide value shared across every concurrent book. A
+     cloud-only job's 'unknown' here says nothing new about the local
+     analyzer's real placement and must not clobber a still-accurate 'cpu'/
+     'cuda' reading another concurrent/prior local job established. */
+  if (usesLocalAnalyzer) {
+    setLastKnownAnalyzerDevice(analyzerDevice);
+  }
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);

@@ -18,7 +18,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSidecar } from './spawn-sidecar.js';
+import { spawnSidecar, sidecarCeilingMismatch } from './spawn-sidecar.js';
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -1068,5 +1068,27 @@ describe('spawnSidecar', () => {
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     }
+  });
+});
+
+describe('sidecarCeilingMismatch — per-card free floor', () => {
+  it('flags a card whose reported free-floor disagrees with the configured knob', () => {
+    const prevFloor = process.env.SIDECAR_VRAM_FREE_FLOOR_MB;
+    process.env.SIDECAR_VRAM_FREE_FLOOR_MB = '1024';
+    try {
+      const health = {
+        memRestartMb: null, vramRestartMb: null,
+        gpus: [{ idx: 0, freeFloorMb: 2048 }], // sidecar reports 2048, config expects 1024
+      } as any;
+      expect(sidecarCeilingMismatch(health)).toMatch(/free.*floor/i);
+    } finally {
+      if (prevFloor === undefined) delete process.env.SIDECAR_VRAM_FREE_FLOOR_MB;
+      else process.env.SIDECAR_VRAM_FREE_FLOOR_MB = prevFloor;
+    }
+  });
+
+  it('is null when every reported card free-floor matches (or no expectation is configured)', () => {
+    const health = { memRestartMb: null, vramRestartMb: null, gpus: [{ idx: 0, freeFloorMb: null }] } as any;
+    expect(sidecarCeilingMismatch(health)).toBeNull();
   });
 });

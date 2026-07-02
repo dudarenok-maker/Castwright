@@ -61,10 +61,10 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 });
 
 const { withGpuLoadMock } = vi.hoisted(() => ({
-  withGpuLoadMock: vi.fn(async (fn: () => Promise<unknown>) => fn()), // default: passthrough
+  withGpuLoadMock: vi.fn(async (fn: () => Promise<unknown>, _onGpu?: boolean) => fn()), // default: passthrough
 }));
 vi.mock('../gpu/gpu-load.js', () => ({
-  withGpuLoad: (fn: () => Promise<unknown>) => withGpuLoadMock(fn),
+  withGpuLoad: (fn: () => Promise<unknown>, onGpu?: boolean) => withGpuLoadMock(fn, onGpu),
   GpuBusyError: class GpuBusyError extends Error {
     code = 'GPU_BUSY';
     constructor(m: string) { super(m); this.name = 'GpuBusyError'; }
@@ -224,6 +224,16 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     // The design site calls maybeSampleSidecarEngine('qwen:design') while
     // VoiceDesign is still resident (inside the withGpuLoad callback, before return).
     expect(maybeSampleSidecarEngineMock).toHaveBeenCalledWith('qwen:design');
+  });
+
+  it('passes engineDeviceIsGpu(\'qwen\') as withGpuLoad\'s second arg (W2.6 — no QWEN_DEVICE override, default "auto" is GPU)', async () => {
+    withGpuLoadMock.mockClear(); // isolate from any prior test's accumulated call history
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+
+    expect(res.status).toBe(200);
+    expect(withGpuLoadMock.mock.calls[0][1]).toBe(true);
   });
 
   it('forwards persona + a calibrationText from the character line, caches the MP3, returns {voiceId,url}', async () => {

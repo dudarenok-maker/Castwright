@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   sortEvidence,
   normaliseForMatch,
@@ -27,13 +27,52 @@ import {
   castInFlightEntryToLiveChapter,
   resolveBookAuthorForManuscript,
   dedupAndPrepare,
+  runMainAnalyzerJob,
+  type AnalysisJob,
 } from './analysis.js';
-import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
+import { clearAnalysisCache } from '../store/analysis-cache.js';
+import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
+
+/* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
+   GPU/CPU placement must be cached wherever detectOllamaDevice() actually
+   runs. Mock its two call-site dependencies so the test below can assert
+   the wiring without touching real Ollama / real GPU-cost state. */
+const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
+  detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
+  setLastKnownAnalyzerDeviceMock: vi.fn(),
+}));
+vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock }));
+vi.mock('../gpu/analyzer-device-state.js', () => ({
+  setLastKnownAnalyzerDevice: setLastKnownAnalyzerDeviceMock,
+}));
+
+/* Controls the Phase-1 analyzer selection `runMainAnalyzerJob` resolves —
+   mirrors the pattern in analysis.phase-model.test.ts / analysis-pipelining.test.ts. */
+vi.mock('../analyzer/select-analyzer.js', async () => {
+  const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
+    '../analyzer/select-analyzer.js',
+  );
+  return {
+    ...actual,
+    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1' }) => {
+      const g = globalThis as Record<string, unknown>;
+      if (opts.phase === 'phase1' && g.__analyzer_device_test_phase1_selection) {
+        return g.__analyzer_device_test_phase1_selection;
+      }
+      return actual.selectAnalyzerForPhase(
+        opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
+      );
+    },
+    isPerPhaseModelSelectionActive: () => false,
+  };
+});
 
 describe('sortEvidence', () => {
   it("sorts each character's evidence by quote length descending", () => {
@@ -2187,4 +2226,231 @@ describe('dedupAndPrepare — dedup BEFORE fold, sentence rewrite + capture for 
     expect(dd.sentences.find((s) => s.id === 1)!.characterId).toBe('anton');
     expect(dd.sentences.find((s) => s.id === 2)!.characterId).toBe('olga');
   });
+});
+
+describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
+  function buildSpyPhase0Analyzer(): Analyzer {
+    return {
+      async runStage1(): Promise<Stage1Output> {
+        throw new Error('runStage1 not used in this suite');
+      },
+      async runStage1Chapter(_manuscriptId: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        return {
+          characters: [
+            {
+              id: 'narrator',
+              name: 'Narrator',
+              role: 'narrator',
+              color: 'narrator',
+              evidence: [
+                { quote: 'lorem ipsum dolor sit amet' },
+                { quote: 'lorem ipsum dolor sit amet' },
+                { quote: 'lorem ipsum dolor sit amet' },
+              ],
+            },
+            {
+              id: `ch${chapterId}-char`,
+              name: `Character_ch${chapterId}`,
+              role: 'character',
+              color: 'unset',
+              evidence: [
+                { quote: 'lorem ipsum dolor sit amet' },
+                { quote: 'lorem ipsum dolor sit amet' },
+                { quote: 'lorem ipsum dolor sit amet' },
+              ],
+            },
+          ],
+        };
+      },
+      async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+        throw new Error('Phase-0 analyzer does not run Phase-1 calls');
+      },
+      async runEmotionChapter() {
+        throw new Error('Phase-0 analyzer does not run emotion calls');
+      },
+      async runScriptReviewChapter() {
+        throw new Error('Phase-0 analyzer does not run script review calls');
+      },
+      async runStage3Chapter() {
+        throw new Error('Phase-0 analyzer does not run instruct-annotation calls');
+      },
+    };
+  }
+
+  function buildSpyPhase1Analyzer(): Analyzer {
+    return {
+      async runStage1(): Promise<Stage1Output> {
+        throw new Error('runStage1 not used in this suite');
+      },
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new Error('Phase-1 analyzer does not run Phase-0 calls');
+      },
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return {
+          sentences: [
+            {
+              id: chapterId * 100 + 1,
+              chapterId,
+              characterId: 'narrator',
+              text: 'lorem ipsum dolor sit amet.',
+            },
+          ],
+        };
+      },
+      async runEmotionChapter() {
+        throw new Error('Phase-1 analyzer does not run emotion calls');
+      },
+      async runScriptReviewChapter() {
+        throw new Error('Phase-1 analyzer does not run script review calls');
+      },
+      async runStage3Chapter() {
+        throw new Error('Phase-1 analyzer does not run instruct-annotation calls');
+      },
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string, engine: 'local' | 'gemini'): AnalyzerSelection {
+    return { analyzer, engine, model, fallbackModel: null };
+  }
+
+  function buildStubJob(manuscriptId: string): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'main',
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  function buildStubChapters(count: number): ChapterHint[] {
+    return Array.from({ length: count }, (_, i) => ({
+      id: i + 1,
+      title: `Chapter ${i + 1}`,
+      body: `Chapter ${i + 1} body. ` + 'lorem ipsum dolor sit amet '.repeat(50),
+    }));
+  }
+
+  function registerStubManuscript(id: string, count: number): void {
+    const chapterHints = buildStubChapters(count);
+    putManuscript({
+      manuscriptId: id,
+      format: 'plaintext',
+      title: `Stub ${id}`,
+      wordCount: chapterHints.length * 100,
+      byteSize: 100_000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+    });
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+
+  afterEach(() => {
+    clearPhase1Selection();
+    detectOllamaDeviceMock.mockClear();
+    setLastKnownAnalyzerDeviceMock.mockClear();
+    process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+  });
+
+  async function runJobWith(engine0: 'local' | 'gemini', engine1: 'local' | 'gemini'): Promise<void> {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const manuscriptId = `test-analyzer-device-${engine0}-${engine1}-${Date.now()}-${Math.random()}`;
+    registerStubManuscript(manuscriptId, 1);
+
+    const phase0Selection = buildSelection(buildSpyPhase0Analyzer(), 'phase0-model', engine0);
+    const phase1Selection = buildSelection(buildSpyPhase1Analyzer(), 'phase1-model', engine1);
+    setPhase1Selection(phase1Selection);
+
+    const job = buildStubJob(manuscriptId);
+
+    try {
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+
+      await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  }
+
+  it(
+    'cloud engine (both phases): does NOT probe Ollama and does NOT touch the global cache',
+    async () => {
+      /* A cloud-only job has nothing new to report about the local Ollama
+         analyzer's placement — it must leave whatever a concurrent/prior
+         local job's cache write established untouched, not clobber it with
+         'unknown' (a real regression under concurrent multi-book use: see
+         docs/features/236-multi-gpu-per-model-safety.md). */
+      await runJobWith('gemini', 'gemini');
+
+      expect(detectOllamaDeviceMock).not.toHaveBeenCalled();
+      expect(setLastKnownAnalyzerDeviceMock).not.toHaveBeenCalled();
+    },
+    60_000,
+  );
+
+  it(
+    'local engine (phase 0): setLastKnownAnalyzerDevice gets the resolved detectOllamaDevice() value',
+    async () => {
+      detectOllamaDeviceMock.mockResolvedValueOnce('cpu');
+
+      await runJobWith('local', 'gemini');
+
+      expect(detectOllamaDeviceMock).toHaveBeenCalled();
+      expect(setLastKnownAnalyzerDeviceMock).toHaveBeenCalledWith('cpu');
+    },
+    60_000,
+  );
+
+  it(
+    'a concurrent cloud-engine job does not clobber a prior local job\'s cached device (concurrent multi-book regression)',
+    async () => {
+      /* Simulates: Book A's local-engine job confirms 'cpu' (setLastKnownAnalyzerDevice
+         is a single process-wide global — Book A and Book B share it). Book B's
+         cloud-engine job must not overwrite that with 'unknown', or the W2.6
+         cross-charge guard silently reverts to full-weight charging for the rest
+         of the process. */
+      detectOllamaDeviceMock.mockResolvedValueOnce('cpu');
+      await runJobWith('local', 'gemini');
+      expect(setLastKnownAnalyzerDeviceMock).toHaveBeenCalledWith('cpu');
+
+      setLastKnownAnalyzerDeviceMock.mockClear();
+      detectOllamaDeviceMock.mockClear();
+
+      await runJobWith('gemini', 'gemini');
+      expect(detectOllamaDeviceMock).not.toHaveBeenCalled();
+      expect(setLastKnownAnalyzerDeviceMock).not.toHaveBeenCalled();
+    },
+    60_000,
+  );
 });

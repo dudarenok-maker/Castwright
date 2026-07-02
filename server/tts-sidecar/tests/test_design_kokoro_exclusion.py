@@ -7,13 +7,117 @@ active. See docs/.../2026-06-09-voice-design-contention-robustness-design.md.
 import sys
 import threading
 import time
+import types
 from pathlib import Path
+
+import pytest
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
+import main
 from main import _VdKokoroArbiter
+
+
+@pytest.fixture(autouse=True)
+def _reset_vd_kokoro_coupling():
+    """Other test files' `TestClient(main.app)` usage fires the real
+    `_configure_vd_kokoro_coupling` startup hook against the module-level
+    `_VD_KOKORO` singleton, which can flip `_shares_device` to False on a box
+    with no CUDA (or QWEN_DEVICE/KOKORO_DEVICE pinned to different cards).
+    This file's tests assert the single-card-box default (shares_device=True)
+    directly against that singleton, so pin it before each test regardless of
+    what ran earlier in the pytest session, and restore afterward."""
+    prior = main._VD_KOKORO._shares_device
+    main._VD_KOKORO._shares_device = True
+    yield
+    main._VD_KOKORO._shares_device = prior
+
+
+def _fake_torch_cuda_available():
+    return types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: True))
+
+
+def test_shares_device_same_explicit_index():
+    tm = _fake_torch_cuda_available()
+    assert main.shares_device("cuda:1", "cuda:1", tm) is True
+
+
+def test_shares_device_different_index():
+    tm = _fake_torch_cuda_available()
+    assert main.shares_device("cuda:0", "cuda:1", tm) is False
+
+
+def test_shares_device_both_auto_resolve_same_card():
+    tm = _fake_torch_cuda_available()
+    assert main.shares_device("auto", "auto", tm) is True
+
+
+def test_shares_device_cpu_never_shares():
+    tm = _fake_torch_cuda_available()
+    assert main.shares_device("cpu", "cpu", tm) is False
+    assert main.shares_device("cpu", "cuda:0", tm) is False
+
+
+def test_arbiter_coupled_by_default_blocks_kokoro_during_design():
+    """Existing behaviour (single-card box) unchanged when shares_device isn't passed."""
+    arb = main._VdKokoroArbiter()
+    entered_design = threading.Event()
+    kokoro_blocked_until = threading.Event()
+
+    def do_design():
+        with arb.design():
+            entered_design.set()
+            kokoro_blocked_until.wait(timeout=1.0)
+
+    t = threading.Thread(target=do_design)
+    t.start()
+    entered_design.wait(timeout=1.0)
+    # A kokoro_synth() call started AFTER design is active must block until design exits.
+    acquired = threading.Event()
+
+    def do_kokoro():
+        with arb.kokoro_synth():
+            acquired.set()
+
+    t2 = threading.Thread(target=do_kokoro)
+    t2.start()
+    assert not acquired.wait(timeout=0.3)  # still blocked
+    kokoro_blocked_until.set()
+    t.join(timeout=1.0)
+    assert acquired.wait(timeout=1.0)
+    t2.join(timeout=1.0)
+
+
+def test_arbiter_uncoupled_kokoro_runs_freely_during_design():
+    """shares_device=False (different cards) → no coupling at all."""
+    arb = main._VdKokoroArbiter(shares_device=False)
+    with arb.design():
+        acquired = threading.Event()
+
+        def do_kokoro():
+            with arb.kokoro_synth():
+                acquired.set()
+
+        t = threading.Thread(target=do_kokoro)
+        t.start()
+        assert acquired.wait(timeout=1.0)  # NOT blocked — different cards
+        t.join(timeout=1.0)
+
+
+def test_compute_vd_kokoro_shares_device_reads_env(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda:0")
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:1")
+    monkeypatch.setattr(main, "shares_device", lambda a, b, tm=None: a == "cuda:0" and b == "cuda:0")
+    assert main._compute_vd_kokoro_shares_device() is False
+
+
+def test_compute_vd_kokoro_shares_device_defaults_true_on_error(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("no torch")
+    monkeypatch.setattr(main, "shares_device", boom)
+    assert main._compute_vd_kokoro_shares_device() is True
 
 
 def test_design_waits_for_in_flight_kokoro_to_drain():
