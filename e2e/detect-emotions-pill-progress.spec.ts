@@ -43,6 +43,12 @@ test.describe('detect-emotions pill progress (analysis-pill Task 10)', () => {
        await inside run(), so the pill flips to "Analysing" immediately. */
     await expect(pill).toContainText('Analysing', { timeout: 5_000 });
 
+    /* The inline running chip on the manuscript view itself shows the
+       chapter-count detail once the mock's first phase tick lands
+       (mockDetectEmotions ships chapterIndex/totalChapters from the start). */
+    const detail = page.getByTestId('detect-emotions-progress-detail');
+    await expect(detail).toContainText(/Chapter \d+ of \d+/, { timeout: 5_000 });
+
     /* Navigate to the Listen view while the stream is still running. */
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page);
