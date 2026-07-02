@@ -10,6 +10,12 @@
    Results land in the manuscript slice, not here. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import {
+  setActiveSubstage,
+  updateSubstageProgress,
+  type SetActiveSubstagePayload,
+  type UpdateSubstageProgressPayload,
+} from './analysis-substage-reducers';
 
 export interface SubstageEntry {
   /** 0..100 integer percent. */
@@ -31,45 +37,15 @@ export interface ProsodyState {
 
 const initialState: ProsodyState = { activeStreams: {} };
 
-interface SetActivePayload {
-  bookId: string;
-  progress: number;
-  label: string;
-  chapterIndex?: number;
-  totalChapters?: number;
-  estRemainingMs?: number;
-}
-interface UpdateProgressPayload {
-  bookId: string;
-  progress: number;
-  label?: string;
-  chapterIndex?: number;
-  totalChapters?: number;
-  estRemainingMs?: number;
-}
-
 export const prosodySlice = createSlice({
   name: 'prosody',
   initialState,
   reducers: {
-    setActive: (s, a: PayloadAction<SetActivePayload>) => {
-      const { bookId, progress, label, chapterIndex, totalChapters, estRemainingMs } = a.payload;
-      s.activeStreams[bookId] = {
-        progress: Math.round(progress * 100),
-        label,
-        ...(chapterIndex !== undefined ? { chapterIndex } : {}),
-        ...(totalChapters !== undefined ? { totalChapters } : {}),
-        ...(estRemainingMs !== undefined ? { estRemainingMs } : {}),
-      };
+    setActive: (s, a: PayloadAction<SetActiveSubstagePayload>) => {
+      setActiveSubstage(s.activeStreams, a.payload);
     },
-    updateProgress: (s, a: PayloadAction<UpdateProgressPayload>) => {
-      const e = s.activeStreams[a.payload.bookId];
-      if (!e) return;
-      e.progress = Math.round(a.payload.progress * 100);
-      if (a.payload.label !== undefined) e.label = a.payload.label;
-      if (a.payload.chapterIndex !== undefined) e.chapterIndex = a.payload.chapterIndex;
-      if (a.payload.totalChapters !== undefined) e.totalChapters = a.payload.totalChapters;
-      if (a.payload.estRemainingMs !== undefined) e.estRemainingMs = a.payload.estRemainingMs;
+    updateProgress: (s, a: PayloadAction<UpdateSubstageProgressPayload>) => {
+      updateSubstageProgress(s.activeStreams, a.payload);
     },
     clear: (s, a: PayloadAction<{ bookId: string }>) => {
       delete s.activeStreams[a.payload.bookId];
