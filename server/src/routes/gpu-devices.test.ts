@@ -7,6 +7,7 @@ import express from 'express';
 import request from 'supertest';
 import { gpuDevicesRouter } from './gpu-devices.js';
 import { _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { setLastKnownGpuDevices, getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 function makeApp() {
   const app = express();
@@ -21,6 +22,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
   _resetUserSettingsCache();
+  setLastKnownGpuDevices([]);
 });
 
 afterEach(() => {
@@ -62,6 +64,31 @@ describe('GET /api/gpu/devices', () => {
     const res = await request(makeApp()).get('/api/gpu/devices');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ devices: [], cpu: true });
+  });
+
+  it('populates the last-known-device-list cache on a successful response', async () => {
+    const payload = {
+      devices: [
+        { uuid: 'GPU-0', idx: 0, name: 'RTX 4070', total_mb: 8000, free_mb: 6000 },
+        { uuid: 'GPU-1', idx: 1, name: 'RTX 5070 Ti', total_mb: 16000, free_mb: 14000 },
+      ],
+      cpu: true,
+    };
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/gpu/devices');
+    expect(res.status).toBe(200);
+
+    const cached = getLastKnownGpuDevices().map(({ uuid, idx }) => ({ uuid, idx }));
+    expect(cached).toEqual([
+      { uuid: 'GPU-0', idx: 0 },
+      { uuid: 'GPU-1', idx: 1 },
+    ]);
   });
 
   it('returns {devices:[],cpu:true} when the fetch times out', async () => {
