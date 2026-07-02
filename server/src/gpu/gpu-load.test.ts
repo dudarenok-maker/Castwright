@@ -72,3 +72,13 @@ describe('withGpuLoad', () => {
     expect(load).not.toHaveBeenCalled();
   });
 });
+
+describe('withGpuLoad — engineOnGpu passthrough (W2.6)', () => {
+  it('runs the load directly (no eviction check) when engineOnGpu is false, even on a constrained card', async () => {
+    shouldEvictMock.mockClear(); // isolate from prior tests' accumulated call history
+    shouldEvictMock.mockReturnValue(true); // would normally require eviction
+    const out = await withGpuLoad(async () => 'ok', false);
+    expect(out).toBe('ok');
+    expect(shouldEvictMock).not.toHaveBeenCalled();
+  });
+});

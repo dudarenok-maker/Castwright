@@ -19,9 +19,14 @@ export class GpuBusyError extends Error {
     - Roomy card / CPU: run the load directly (it fits; no serialisation needed).
     - Constrained card: under the load-mutex — refuse if analysis is busy
       (would have to evict an active analyzer), else evict ALL residents, verify
-      they're gone (fail-closed), then run the load INSIDE the lock. */
-export async function withGpuLoad<T>(loadFn: () => Promise<T>): Promise<T> {
-  if (!shouldEvictBeforeSidecarLoad(getLastKnownVram())) {
+      they're gone (fail-closed), then run the load INSIDE the lock.
+
+    `engineOnGpu` (W2.6, default true): the engine about to load. When false,
+    it categorically can't contend with the analyzer for GPU memory, so the
+    eviction check is skipped entirely (short-circuited before
+    `shouldEvictBeforeSidecarLoad` is ever called). */
+export async function withGpuLoad<T>(loadFn: () => Promise<T>, engineOnGpu = true): Promise<T> {
+  if (!engineOnGpu || !shouldEvictBeforeSidecarLoad(getLastKnownVram(), engineOnGpu)) {
     return loadFn();
   }
   return withGpuLoadLock(async () => {

@@ -3,6 +3,7 @@ import { activeGenerationBooks } from '../routes/generation.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { shouldEvictBeforeSidecarLoad } from '../gpu/residency.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
+import { engineDeviceIsGpu } from '../gpu/engine-device.js';
 import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
 import { resolveAnalyzerKeepAlive } from '../analyzer/ollama.js';
 import { resolvePersonaEngine } from '../analyzer/voice-style.js';
@@ -57,7 +58,7 @@ export interface PersonaGpuPlan {
     spec's decision table. "Busy" combines the instantaneous semaphore hold and
     the durable render flag (a render is mid-job even between per-chunk holds). */
 export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
-  const constrained = shouldEvictBeforeSidecarLoad(getLastKnownVram());
+  const constrained = shouldEvictBeforeSidecarLoad(getLastKnownVram(), engineDeviceIsGpu('qwen'));
   if (!constrained) return { onCpu: false, evict: false, keepAlive: 0 };
 
   const busy =

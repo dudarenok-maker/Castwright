@@ -323,6 +323,7 @@ export async function designQwenVoiceForCharacter(
 
   return withDesignLock(p.bookDir, async () => {
     const { withGpuLoad } = await import('../gpu/gpu-load.js');
+    const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
     return withGpuLoad(async () => {
       const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
       const sidecarUrl = getResolvedSidecarUrl();
@@ -465,7 +466,7 @@ export async function designQwenVoiceForCharacter(
       } finally {
         releaseGpu();
       }
-    });
+    }, engineDeviceIsGpu('qwen'));
   });
 }
 

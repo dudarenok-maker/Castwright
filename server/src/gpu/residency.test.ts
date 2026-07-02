@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../config/resolver.js', () => ({ configValue: vi.fn(() => 11000) }));
 import { shouldEvictBeforeSidecarLoad } from './residency.js';
+import { configValue } from '../config/resolver.js';
 
 describe('shouldEvictBeforeSidecarLoad', () => {
   it('CPU never evicts', () => {
@@ -16,5 +17,17 @@ describe('shouldEvictBeforeSidecarLoad', () => {
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 8188 })).toBe(true);
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 12288 })).toBe(false);
     expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 16384 })).toBe(false);
+  });
+});
+
+describe('shouldEvictBeforeSidecarLoad — engineOnGpu guard (W2.6)', () => {
+  it('never evicts when the engine about to load is not itself on the GPU', () => {
+    (configValue as any).mockReturnValue(11000);
+    expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 8000 }, false)).toBe(false);
+  });
+
+  it('preserves existing behaviour when engineOnGpu defaults true', () => {
+    (configValue as any).mockReturnValue(11000);
+    expect(shouldEvictBeforeSidecarLoad({ accelerator: 'cuda', totalMb: 8000 })).toBe(true);
   });
 });

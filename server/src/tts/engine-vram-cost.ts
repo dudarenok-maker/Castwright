@@ -32,12 +32,15 @@ export const ENGINE_VRAM_COST: Record<string, number> = {
 };
 
 import { configValue } from '../config/resolver.js';
+import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 
 /** VRAM token cost for an engine name (or 'analyzer'). For the six engines
     with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr/spk) the
     value is read live through the registry so env vars and app overrides take
     effect. Gemini has no VRAM cost and stays at 0. Unknown engines fall back
-    to cost 1 so a new engine never silently grabs the whole budget. */
+    to cost 1 so a new engine never silently grabs the whole budget. The
+    analyzer is an exception (W2.6): a CONFIRMED-cpu analyzer can't contend
+    for GPU memory at all, so it's charged 0 instead of its configured weight. */
 export function costForEngine(engine: string): number {
   switch (engine) {
     case 'kokoro':
@@ -47,7 +50,11 @@ export function costForEngine(engine: string): number {
     case 'coqui':
       return configValue<number>('gpu.weight.coqui');
     case 'analyzer':
-      return configValue<number>('gpu.weight.analyzer');
+      // W2.6 "don't cross-charge": a CONFIRMED-cpu analyzer can't contend for
+      // GPU memory at all, so it shouldn't consume semaphore budget. An
+      // UNKNOWN placement stays charged (conservative — matches residency.ts's
+      // "unknown → assume GPU" convention).
+      return getLastKnownAnalyzerDevice() === 'cpu' ? 0 : configValue<number>('gpu.weight.analyzer');
     case 'asr':
       return configValue<number>('gpu.weight.asr');
     case 'spk':

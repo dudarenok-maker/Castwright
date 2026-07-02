@@ -25,6 +25,7 @@ import {
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { detectOllamaDevice } from './ollama-health.js';
+import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
 import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
@@ -2242,6 +2243,7 @@ export async function runMainAnalyzerJob(
     selection.engine === 'local' || phase1Selection.engine === 'local'
       ? await detectOllamaDevice()
       : 'unknown';
+  setLastKnownAnalyzerDevice(analyzerDevice);
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
