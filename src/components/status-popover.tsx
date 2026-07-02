@@ -31,6 +31,7 @@ import {
   type DesignPillData,
 } from './top-bar';
 import { MODEL_OPTIONS } from '../lib/models';
+import { formatSubstageDetail } from '../lib/substage-progress-text';
 
 const PANEL_WIDTH = 340;
 const ESTIMATED_HEIGHT = 320;
@@ -55,7 +56,13 @@ interface StatusPopoverProps {
   analysis: AnalysisPillData | null;
   /** The active analysis sub-stage (prosody/review) label + progress. Rendered
       as a secondary row in the Analysis section when set. */
-  analysisSubstage?: { label: string; percent: number } | null;
+  analysisSubstage?: {
+    label: string;
+    percent: number;
+    chapterIndex?: number;
+    totalChapters?: number;
+    estRemainingMs?: number;
+  } | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
   pendingRevisionsCount: number;
@@ -178,18 +185,32 @@ export function StatusPopover({
               </span>
             )}
             {analysisSubstage && (
-              <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
-                <span>{analysisSubstage.label}</span>
-                <span className="tabular-nums">{analysisSubstage.percent}%</span>
+              <div data-testid="substage-row" className="flex flex-col gap-0.5 w-full">
+                <div className="flex items-center justify-between text-sm text-ink/70">
+                  <span>{analysisSubstage.label}</span>
+                  <span className="tabular-nums">{analysisSubstage.percent}%</span>
+                </div>
+                {formatSubstageDetail(analysisSubstage) && (
+                  <span data-testid="substage-detail" className="text-xs text-ink/50 tabular-nums">
+                    {formatSubstageDetail(analysisSubstage)}
+                  </span>
+                )}
               </div>
             )}
           </div>
         ) : (
           <>
             {analysisSubstage ? (
-              <div data-testid="substage-row" className="flex items-center justify-between text-sm text-ink/70">
-                <span>{analysisSubstage.label}</span>
-                <span className="tabular-nums">{analysisSubstage.percent}%</span>
+              <div data-testid="substage-row" className="flex flex-col gap-0.5">
+                <div className="flex items-center justify-between text-sm text-ink/70">
+                  <span>{analysisSubstage.label}</span>
+                  <span className="tabular-nums">{analysisSubstage.percent}%</span>
+                </div>
+                {formatSubstageDetail(analysisSubstage) && (
+                  <span data-testid="substage-detail" className="text-xs text-ink/50 tabular-nums">
+                    {formatSubstageDetail(analysisSubstage)}
+                  </span>
+                )}
               </div>
             ) : (
               <p className="text-sm text-ink/60">No analysis running.</p>
