@@ -10,6 +10,16 @@
    Progress is reported on a 0–100% scale: emotions occupies 0–50%,
    instruct occupies 50–100%.
 
+   "Detect emotions" is TWO full passes over the SAME chapters, so the
+   chapter counter (chapterIndex/totalChapters) is passed through per-pass
+   unmodified, but the ETA is reconciled here into one combined number:
+   while pass 1 runs, the combined ETA is pass 1's own remaining time PLUS
+   pass 1's own total-so-far (elapsed + remaining), used as a stand-in for
+   pass 2's not-yet-measured duration. Once pass 1 finishes, the combined
+   ETA becomes pass 2's own remaining time — and until pass 2 produces its
+   own first estimate, the last pass-1-derived number is held frozen rather
+   than dropped (avoids a false "no estimate" blip at the pass boundary).
+
    Returns a summary that is NEVER thrown away on partial failures.
    `failed` is load-bearing: Task 13 only writes the prosodyAnnotated
    watermark when failed === 0. */
@@ -18,12 +28,22 @@ import { manuscriptActions } from './manuscript-slice';
 import { api } from '../lib/api';
 import type { AppDispatch } from './index';
 
+/** Structured detail accompanying an onProgress tick — the chapter counter
+    (per-pass, unmodified) plus the already-reconciled combined ETA. */
+export interface SubstageDetail {
+  label?: string;
+  chapterIndex?: number;
+  totalChapters?: number;
+  estRemainingMs?: number;
+}
+
 export interface RunProsodyPassesOpts {
   dispatch: AppDispatch;
   /** AbortSignal for cooperative cancellation (optional — Task 13 passes none). */
   signal?: AbortSignal;
-  /** Called with 0–1 fraction as the two passes progress. */
-  onProgress?: (fraction: number) => void;
+  /** Called with 0–1 fraction as the two passes progress, plus the
+   *  reconciled chapter/ETA detail for this tick. */
+  onProgress?: (fraction: number, detail?: SubstageDetail) => void;
   /** Called with a human-readable status label from each pass's onPhase events,
    *  and with the inter-pass "Adding natural reactions…" message. Optional —
    *  Task 13 does not pass this. */
@@ -50,12 +70,24 @@ export async function runProsodyPasses(
   { dispatch, signal, onProgress, onStatus, onThrottle }: RunProsodyPassesOpts,
 ): Promise<RunProsodyPassesResult> {
   let failed = 0;
+  let combinedEstRemainingMs: number | undefined;
+  const pass1StartedAt = Date.now();
 
   // Pass 1: emotion backfill — progress 0–50%
   const emotionResult = await api.detectEmotions(bookId, {
     signal,
     onPhase: (e) => {
-      onProgress?.(e.progress * 0.5);
+      if (e.estRemainingMs !== undefined) {
+        const elapsedSoFarPass1 = Date.now() - pass1StartedAt;
+        const pass1TotalAsPass2Proxy = elapsedSoFarPass1 + e.estRemainingMs;
+        combinedEstRemainingMs = e.estRemainingMs + pass1TotalAsPass2Proxy;
+      }
+      onProgress?.(e.progress * 0.5, {
+        label: e.label,
+        chapterIndex: e.chapterIndex,
+        totalChapters: e.totalChapters,
+        estRemainingMs: combinedEstRemainingMs,
+      });
       if (e.label) onStatus?.(e.label);
     },
     onThrottle: () => onThrottle?.(),
@@ -72,7 +104,15 @@ export async function runProsodyPasses(
   const instructResult = await api.detectInstruct(bookId, {
     signal,
     onPhase: (e) => {
-      onProgress?.(0.5 + e.progress * 0.5);
+      if (e.estRemainingMs !== undefined) {
+        combinedEstRemainingMs = e.estRemainingMs;
+      }
+      onProgress?.(0.5 + e.progress * 0.5, {
+        label: e.label,
+        chapterIndex: e.chapterIndex,
+        totalChapters: e.totalChapters,
+        estRemainingMs: combinedEstRemainingMs,
+      });
       if (e.label) onStatus?.(e.label);
     },
     onThrottle: () => onThrottle?.(),

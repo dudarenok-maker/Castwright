@@ -331,4 +331,84 @@ describe('runProsodyPasses', () => {
     // Neither onStatus nor onThrottle passed — must not throw
     await expect(runProsodyPasses(bookId, { dispatch })).resolves.toMatchObject({ failed: 0 });
   });
+
+  it('combines pass-1 remaining + pass-1-total-as-pass-2-proxy for the ETA while pass 1 runs', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        vi.setSystemTime(4000); // 4s elapsed since pass 1 started
+        opts.onPhase?.({ progress: 0.5, estRemainingMs: 1000 });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockResolvedValue(EMPTY_INSTRUCT);
+
+    const dispatch = vi.fn();
+    const details: Array<{ estRemainingMs?: number } | undefined> = [];
+    await runProsodyPasses(bookId, { dispatch, onProgress: (_f, d) => details.push(d) });
+    vi.useRealTimers();
+
+    // combined = own-remaining(1000) + pass1-total-as-proxy(elapsed 4000 + remaining 1000) = 6000
+    expect(details[0]?.estRemainingMs).toBe(6000);
+  });
+
+  it('freezes at the pass-1 projection until pass 2 produces its own estimate', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        vi.setSystemTime(2000);
+        opts.onPhase?.({ progress: 1, estRemainingMs: 0 }); // pass 1 finishing
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onPhase?.({ progress: 0.1 }); // pass 2's first chapter — no own estimate yet
+        return EMPTY_INSTRUCT;
+      },
+    );
+
+    const dispatch = vi.fn();
+    const details: Array<{ estRemainingMs?: number } | undefined> = [];
+    await runProsodyPasses(bookId, { dispatch, onProgress: (_f, d) => details.push(d) });
+    vi.useRealTimers();
+
+    // pass-1 combined = 0 + (elapsed 2000 + remaining 0) = 2000; frozen through pass 2's first tick
+    expect(details[0]?.estRemainingMs).toBe(2000);
+    expect(details[1]?.estRemainingMs).toBe(2000);
+  });
+
+  it('uses pass 2 own estRemainingMs once pass 2 reports one, ignoring the pass-1 proxy', async () => {
+    vi.mocked(api.detectEmotions).mockResolvedValue(EMPTY_EMOTIONS); // no onPhase calls
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onPhase?.({ progress: 0.5, estRemainingMs: 500 });
+        return EMPTY_INSTRUCT;
+      },
+    );
+
+    const dispatch = vi.fn();
+    const details: Array<{ estRemainingMs?: number } | undefined> = [];
+    await runProsodyPasses(bookId, { dispatch, onProgress: (_f, d) => details.push(d) });
+
+    expect(details[0]?.estRemainingMs).toBe(500);
+  });
+
+  it('forwards chapterIndex/totalChapters/label from each pass onProgress detail', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onPhase?.({ progress: 0.5, chapterIndex: 3, totalChapters: 12, label: 'Detecting emotions' });
+        return EMPTY_EMOTIONS;
+      },
+    );
+    vi.mocked(api.detectInstruct).mockResolvedValue(EMPTY_INSTRUCT);
+
+    const dispatch = vi.fn();
+    const details: Array<{ chapterIndex?: number; totalChapters?: number; label?: string } | undefined> = [];
+    await runProsodyPasses(bookId, { dispatch, onProgress: (_f, d) => details.push(d) });
+
+    expect(details[0]).toMatchObject({ chapterIndex: 3, totalChapters: 12, label: 'Detecting emotions' });
+  });
 });
