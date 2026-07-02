@@ -265,6 +265,48 @@ describe('AdvancedView — device-knob picker', () => {
   });
 });
 
+/* ── Per-row staleReason derivation (Task 13, Plan 2 §2.2) ───────────────── */
+
+describe('AdvancedView — per-row staleReason derivation', () => {
+  it('shows the cpu_fallback badge on the Qwen device row when its engine resident entry reports cpu_fallback', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FIXTURE_CONFIG,
+      descriptors: [
+        ...FIXTURE_CONFIG.descriptors,
+        {
+          key: 'tts.qwen.device',
+          group: 'tts',
+          label: 'Qwen device (real key)',
+          help: 'Pin Qwen to a specific GPU.',
+          type: 'device',
+          apply: 'restart-sidecar',
+          risk: 'high',
+          isPrompt: false,
+          default: 'auto',
+        },
+      ],
+    });
+    mockGetGpuDevices.mockResolvedValue({
+      devices: [
+        {
+          uuid: 'GPU-0',
+          idx: 0,
+          name: 'RTX 4070 Laptop',
+          total_mb: 8000,
+          free_mb: 6000,
+          resident: [{ engine: 'qwen', actual_card: 0, stale_reason: 'cpu_fallback' }],
+        },
+      ],
+      cpu: true,
+    });
+
+    renderView();
+    await screen.findByText('Qwen device (real key)');
+
+    expect(screen.getByTestId('stale-reason-badge')).toHaveTextContent('fell back to CPU');
+  });
+});
+
 /* ── Restart banner ───────────────────────────────────────────────────────── */
 
 describe('AdvancedView — restart banner', () => {

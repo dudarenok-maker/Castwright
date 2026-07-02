@@ -27,7 +27,38 @@ import {
   selectRestartServerPending,
 } from '../store/config-slice';
 import { api } from '../lib/api';
-import type { GpuDevice, KnobDescriptor, PromptState } from '../lib/types';
+import type { GpuDevice, KnobDescriptor, KnobValue, PromptState, StaleReason } from '../lib/types';
+
+/* ── per-device-knob staleReason derivation ──────────────────────────────── */
+
+/* Which sidecar engine a device knob's key pins. */
+function engineForDeviceKnob(key: string): string | null {
+  if (key === 'tts.qwen.device') return 'qwen';
+  if (key === 'tts.coqui.device') return 'coqui';
+  if (key === 'tts.kokoro.device') return 'kokoro';
+  return null;
+}
+
+/* Task 12 already sets `value.staleReason` server-side (uuid_unresolved via
+   resolveKnob) — that always wins. Otherwise, for a device knob, check whether
+   ITS engine shows up in any GET /api/gpu/devices entry's resident[] with
+   stale_reason:'cpu_fallback' (merged in server-side from the sidecar's /health,
+   Task 13). Only 'cpu_fallback' is derived here — a global-shadow fact surfaces
+   as its own Advanced Configuration banner, not a per-knob reason. */
+function deriveStaleReason(
+  descriptor: KnobDescriptor,
+  value: KnobValue,
+  gpuDevices: GpuDevice[],
+): StaleReason | undefined {
+  if (value.staleReason) return value.staleReason;
+  const engine = engineForDeviceKnob(descriptor.key);
+  if (!engine) return undefined;
+  for (const d of gpuDevices) {
+    const entry = d.resident?.find((r) => r.engine === engine);
+    if (entry?.stale_reason === 'cpu_fallback') return 'cpu_fallback';
+  }
+  return undefined;
+}
 
 /* ── PromptRow ────────────────────────────────────────────────────────────── */
 
@@ -287,28 +318,26 @@ export function AdvancedView() {
                   overriddenCount={overriddenCount}
                   onResetSection={() => dispatch(resetGroup(group.id))}
                 >
-                  {groupDescriptors.map((d) =>
-                    d.isPrompt ? (
-                      <PromptRow key={d.key} descriptor={d} />
-                    ) : (
+                  {groupDescriptors.map((d) => {
+                    if (d.isPrompt) return <PromptRow key={d.key} descriptor={d} />;
+                    const value = values[d.key] ?? {
+                      key: d.key,
+                      effective: d.default,
+                      source: 'default',
+                      locked: false,
+                      overridden: false,
+                    };
+                    return (
                       <OverrideRow
                         key={d.key}
                         descriptor={d}
-                        value={
-                          values[d.key] ?? {
-                            key: d.key,
-                            effective: d.default,
-                            source: 'default',
-                            locked: false,
-                            overridden: false,
-                          }
-                        }
+                        value={{ ...value, staleReason: deriveStaleReason(d, value, gpuDevices) }}
                         onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw }))}
                         onRevert={() => dispatch(resetKnob(d.key))}
                         gpuDevices={gpuDevices}
                       />
-                    ),
-                  )}
+                    );
+                  })}
                 </SettingsSection>
               );
             })}

@@ -101,3 +101,48 @@ describe('GET /api/gpu/devices', () => {
     expect(res.body).toEqual({ devices: [], cpu: true });
   });
 });
+
+describe('GET /api/gpu/devices — merges live resident/stale_reason data (Plan 2 §2.2)', () => {
+  function mockSidecarDevices(devices: Array<{ uuid: string; idx: number; name: string; total_mb: number; free_mb: number }>) {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ devices, cpu: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+  }
+
+  function mockSidecarHealth(health: { gpus?: unknown[] }) {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(health), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+  }
+
+  function mockSidecarHealthUnreachable() {
+    fetchMock.mockRejectedValueOnce(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
+  }
+
+  it('includes resident and stale_reason per device from the sidecar /health', async () => {
+    mockSidecarDevices([{ uuid: 'GPU-1', idx: 1, name: 'x', total_mb: 16000, free_mb: 14000 }]);
+    mockSidecarHealth({
+      gpus: [{ uuid: 'GPU-1', idx: 1, resident: [{ engine: 'qwen', actual_card: 1 }], torch_reserved_mb: 4000 }],
+    });
+    const res = await request(makeApp()).get('/api/gpu/devices');
+    expect(res.body.devices[0].resident).toEqual([{ engine: 'qwen', actual_card: 1 }]);
+    expect(res.body.devices[0].torchReservedMb).toBe(4000);
+  });
+
+  it('falls back to devices-only (no resident field) when /health is unreachable', async () => {
+    mockSidecarDevices([{ uuid: 'GPU-1', idx: 1, name: 'x', total_mb: 16000, free_mb: 14000 }]);
+    mockSidecarHealthUnreachable();
+    const res = await request(makeApp()).get('/api/gpu/devices');
+    expect(res.body.devices[0].resident).toBeUndefined();
+  });
+});

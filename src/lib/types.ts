@@ -847,13 +847,17 @@ export interface ConfigResponse {
   restartPending: boolean;
 }
 
-/** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). */
+/** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). `resident`/
+    `torchReservedMb` are merged in server-side from the sidecar's /health `gpus[]`
+    (Task 13) — absent when /health was unreachable at proxy time. */
 export interface GpuDevice {
   uuid: string;
   idx: number;
   name: string;
   total_mb: number;
   free_mb: number;
+  resident?: Array<{ engine: string; actual_card: number | null; stale_reason?: string }>;
+  torchReservedMb?: number;
 }
 
 /** Full response from GET /api/gpu/devices. `cpu` is always assumed available. */
