@@ -285,17 +285,34 @@ scriptReviewRouter.post(
 
     let totalOps = 0;
     let reviewedChapters = 0;
+    let actualMsTotal = 0;
+    let actualCharsTotal = 0;
+    const charsByChapter = new Map<number, number>(
+      chapterIds.map((id) => [id, (byChapter.get(id) ?? []).reduce((n, sent) => n + sent.text.length, 0)]),
+    );
     try {
       for (let i = 0; i < chapterIds.length; i += 1) {
         if (closed) break;
         const chapterId = chapterIds[i];
-        send({
+        const phaseEvent: Record<string, unknown> = {
           kind: 'phase',
           phaseId: 0,
           progress: i / chapterIds.length,
-          label: `Reviewing script — chapter ${chapterId}`,
+          label: 'Reviewing script',
           chapterId,
-        });
+          chapterIndex: i + 1,
+          totalChapters: chapterIds.length,
+        };
+        if (actualCharsTotal > 0) {
+          const observedRate = actualMsTotal / actualCharsTotal;
+          const remainingChars = chapterIds
+            .slice(i)
+            .reduce((n, id) => n + (charsByChapter.get(id) ?? 0), 0);
+          phaseEvent.estRemainingMs = Math.round(observedRate * remainingChars);
+        }
+        send(phaseEvent);
+
+        const chapterStartedAt = Date.now();
 
         /* fs-64 — the prior chapter's final exchange (read-only) resolves a
            tagless chapter-opening line. Null unless the immediately-preceding
@@ -375,6 +392,10 @@ scriptReviewRouter.post(
             send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
           }
         }
+        /* A failed chunk still took real wall-clock time — count it toward
+           the pacing rate so the next chapter's ETA stays honest. */
+        actualMsTotal += Date.now() - chapterStartedAt;
+        actualCharsTotal += charsByChapter.get(chapterId) ?? 0;
         reviewedChapters += 1;
       }
     } finally {

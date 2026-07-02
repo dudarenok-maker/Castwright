@@ -290,6 +290,56 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(events.find((e) => e.kind === 'result')).toMatchObject({ reviewedChapters: 2 });
   });
 
+  it('carries chapterIndex/totalChapters on every phase event, and estRemainingMs only from the 2nd chapter onward', async () => {
+    writeBook(SENTENCES); // 2 chapters
+    runReview.mockImplementation(async (): Promise<ScriptReviewOutput> => {
+      await new Promise((r) => setTimeout(r, 20));
+      return { ops: [] };
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+
+    expect(phases[0]).toMatchObject({ chapterIndex: 1, totalChapters: 2 });
+    expect(phases[0].estRemainingMs).toBeUndefined();
+    expect(phases[1]).toMatchObject({ chapterIndex: 2, totalChapters: 2 });
+    expect(typeof phases[1].estRemainingMs).toBe('number');
+  });
+
+  it('drops the "— chapter N" suffix from the phase label', async () => {
+    writeBook(SENTENCES);
+    runReview.mockResolvedValue({ ops: [] });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    expect(phases.every((e) => e.label === 'Reviewing script')).toBe(true);
+  });
+
+  it('never emits estRemainingMs for a single-chapter review', async () => {
+    writeBook(SENTENCES);
+    runReview.mockResolvedValue(CANNED_OPS);
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({ chapterIndex: 1, totalChapters: 1 });
+    expect(phases[0].estRemainingMs).toBeUndefined();
+  });
+
+  it('a failed chunk still contributes its wall-clock duration to the next chapter estimate', async () => {
+    writeBook(SENTENCES);
+    runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
+      await new Promise((r) => setTimeout(r, 20));
+      if (chapterId === 1) throw new Error('flaky chapter');
+      return { ops: [] };
+    });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    expect(typeof phases[1].estRemainingMs).toBe('number');
+  });
+
   it('chunks a large chapter across calls and reviews each sentence exactly once', async () => {
     // Force the local engine + a small num_ctx so chapterChunkBudget() derives a
     // finite, sub-chapter char budget — a large chapter then splits into >=2 chunks
