@@ -187,4 +187,43 @@ describe('fs-33 — DetectEmotionsButton', () => {
     // and it was set while running:
     expect(streamWhileRunning).toMatchObject({ label: 'Detecting emotions' });
   });
+
+  it('renders chapter count + the two-pass-reconciled ETA once onProgress supplies detail', async () => {
+    /* The button runs the REAL runProsodyPasses (Task 9) — only api.detectEmotions/
+       detectInstruct are mocked here. Task 9's reconciliation combines pass 1's own
+       estRemainingMs with a projection of pass 2's full duration while pass 1 is
+       still running: combined = own-remaining + (elapsed-so-far + own-remaining).
+       With own-remaining = 125_000ms and elapsed-so-far ~0 (synchronous mock call),
+       combined ≈ 250_000ms → "~4m left", NOT the raw 125_000ms/"~2m left" a
+       single-pass reading would suggest. */
+    detectEmotions.mockImplementation((_bookId: string, opts?: any) => {
+      if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+      opts.onPhase({ progress: 0.25, chapterIndex: 3, totalChapters: 12, estRemainingMs: 125_000 });
+      return new Promise(() => {}); // stays running so the chip is on screen to assert on
+    });
+    detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('detect-emotions-button'));
+    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('detect-emotions-progress-detail').textContent).toBe(
+        'Chapter 3 of 12 · ~4m left',
+      ),
+    );
+    // The Redux entry (feeding the Status-popover) picks up the same reconciled fields.
+    // Compare with a tolerance rather than exact equality — real (non-fake) elapsed
+    // time contributes a few ms of jitter on top of the 250_000ms base, which the
+    // rounded-to-minutes display text absorbs but a byte-exact ms check would not.
+    const entry = store.getState().prosody.activeStreams['b1'];
+    expect(entry).toMatchObject({ chapterIndex: 3, totalChapters: 12 });
+    expect(entry?.estRemainingMs).toBeGreaterThanOrEqual(250_000);
+    expect(entry?.estRemainingMs).toBeLessThan(251_000);
+  });
 });
