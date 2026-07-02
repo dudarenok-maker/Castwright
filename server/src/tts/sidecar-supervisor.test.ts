@@ -14,6 +14,9 @@ import {
   type SidecarSupervisorOpts,
 } from './sidecar-supervisor.js';
 import type { SidecarHandle, SpawnSidecarOpts } from './spawn-sidecar.js';
+import * as breadcrumbModule from './restart-breadcrumb.js';
+
+vi.mock('./restart-breadcrumb.js');
 
 const BASE_OPTS: Omit<SpawnSidecarOpts, 'onExit'> = {
   autoStart: true,
@@ -536,6 +539,127 @@ describe('sidecar supervisor (srv-15)', () => {
       // Even though the port never frees, the supervisor must eventually call spawnFn.
       await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
       expect(recycleSidecarFn).toHaveBeenCalledTimes(1); // graceful attempt was made
+    });
+  });
+
+  /* ── code-43 streak guard (§W2.5) ─────────────────────────────────────────
+   *
+   * A SEPARATE counter from `consecutiveFailures` above: that counter resets
+   * whenever a child lives past QUICK_DEATH_MS (30s), so a structurally-too-
+   * small device assignment that loads fine for 35s and then dies every time
+   * would never trip the give-up branch (it keeps resetting). This streak
+   * counts code-43 self-exits ONLY, on a pure time-window basis, regardless
+   * of how long each child lived. */
+  describe('code-43 streak guard (independent of the lived-based backoff reset)', () => {
+    it('trips after 3 code-43 exits within 10 minutes even when each child lived past QUICK_DEATH_MS', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      vi.spyOn(breadcrumbModule, 'readRestartBreadcrumb').mockReturnValue({
+        card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'],
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 35_000; // each child "lived" 35s — well past QUICK_DEATH_MS (30s), resets consecutiveFailures
+        spawn.exit(43);
+        await Promise.resolve(); // let the async onChildExit body settle
+      }
+      expect(sup.tripEvent()).toEqual({ card: { uuid: 'GPU-1', idx: 1 }, residentEngines: ['coqui'] });
+    });
+
+    it('does not trip on 3 non-43 exits', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 35_000;
+        spawn.exit(1);
+        await Promise.resolve();
+      }
+      expect(sup.tripEvent()).toBeNull();
+    });
+
+    it('a tripped supervisor stops respawning (holds TTS down)', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const respawnCount = () => spawn.fn.mock.calls.length;
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      const before = respawnCount();
+      for (let i = 0; i < 3; i++) {
+        now += 35_000;
+        spawn.exit(43);
+        await Promise.resolve();
+      }
+      const afterTrip = respawnCount();
+      now += 35_000;
+      spawn.exit(43); // a 4th exit after trip must NOT trigger another respawn attempt
+      await Promise.resolve();
+      expect(respawnCount()).toBe(afterTrip);
+      expect(afterTrip).toBeGreaterThan(before); // sanity: it DID respawn for exits 1-3, just not after trip
+    });
+
+    it('clearTripAndRespawn resets the streak and spawns a fresh child after a trip', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const respawnCount = () => spawn.fn.mock.calls.length;
+      vi.spyOn(breadcrumbModule, 'readRestartBreadcrumb').mockReturnValue({
+        card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'],
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 35_000;
+        spawn.exit(43);
+        await Promise.resolve();
+      }
+      expect(sup.tripEvent()).not.toBeNull();
+      const beforeRecovery = respawnCount();
+
+      await sup.clearTripAndRespawn();
+
+      expect(sup.tripEvent()).toBeNull(); // trip cleared
+      expect(respawnCount()).toBeGreaterThan(beforeRecovery); // a fresh child was spawned
+      // A subsequent code-43 streak can trip again (the timestamp window was reset, not left poisoned):
+      for (let i = 0; i < 3; i++) {
+        now += 35_000;
+        spawn.exit(43);
+        await Promise.resolve();
+      }
+      expect(sup.tripEvent()).not.toBeNull();
     });
   });
 });

@@ -122,6 +122,8 @@ describe('GET /api/queue', () => {
         stop: async () => {},
         current: () => null,
         recycling: () => true,
+        tripEvent: () => null,
+        clearTripAndRespawn: async () => {},
       });
 
       const res = await request(app).get('/api/queue');
@@ -136,6 +138,8 @@ describe('GET /api/queue', () => {
         stop: async () => {},
         current: () => null, // null handle = adopted sidecar, but still ready
         recycling: () => false,
+        tripEvent: () => null,
+        clearTripAndRespawn: async () => {},
       });
 
       const res = await request(app).get('/api/queue');
