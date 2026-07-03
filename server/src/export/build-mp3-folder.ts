@@ -72,6 +72,9 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
   const artist = artistForExport(state);
   const album = state.title;
 
+  /* fs-54 — same series gate as buildFfmetadata (build-m4b.ts). */
+  const hasSeries = state.isStandalone !== true && !!state.series?.trim();
+
   /* Plan 36 A3: thread the cached cover into every chapter's APIC
      frame when one is on disk. Probe once per export. */
   const coverDiskPath = coverImagePath(bookDir);
@@ -102,6 +105,8 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
       trackTotal: total,
       genre: state.genre ?? null,
       date: state.publicationDate ?? null,
+      series: hasSeries ? state.series : null,
+      seriesPart: hasSeries ? state.seriesPosition : null,
       comment: 'Rendered with Castwright · castwright.ai',
     };
     await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
