@@ -55,6 +55,7 @@ export function primaryLanIp(createSocket = () => dgram.createSocket('udp4')) {
         finish(address?.address ?? null);
       });
     } catch {
+      socket.close();
       finish(null);
     }
   });

@@ -36,7 +36,7 @@ import { resolve } from 'node:path';
 
 export interface MdnsResponderHandle {
   child: ChildProcess;
-  kill: () => void;
+  kill: () => Promise<void>;
 }
 
 /** True only for the start:lan shape (lanHttps AND NODE_ENV=production) —
@@ -104,25 +104,45 @@ export function spawnMdnsResponder(
 
   return {
     child,
-    kill: () => {
-      killedIntentionally = true;
-      const pid = child.pid;
-      if (typeof pid !== 'number') return;
-      if (platform === 'win32') {
-        try {
-          const taskkill = spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          taskkill.on('error', (err) => {
-            warn(`[mdns] taskkill for ${hostname} reported an error: ${err}`);
-          });
-        } catch (err) {
-          warn(`[mdns] failed to spawn taskkill for ${hostname}: ${err}`);
+    /* Returns a Promise that resolves once the kill attempt has genuinely
+       completed, mirroring spawn-sidecar.ts's killTree() pattern — so a
+       caller (server/src/index.ts's shutdown()) can await it before
+       process.exit() instead of firing it and hoping. On win32 that means
+       waiting for the spawned `taskkill` child's own 'exit' (successful
+       cleanup, regardless of taskkill's own exit code) or 'error' (logged,
+       then resolved — a failed kill attempt shouldn't crash shutdown). On
+       non-win32, child.kill('SIGTERM') is already synchronous and
+       fire-and-forget from Node's perspective, so we resolve right after
+       calling it — no completion event to wait for without attaching an
+       'exit' listener to the original responder child, which is out of
+       scope here. */
+    kill: () =>
+      new Promise<void>((resolvePromise) => {
+        killedIntentionally = true;
+        const pid = child.pid;
+        if (typeof pid !== 'number') {
+          resolvePromise();
+          return;
         }
-      } else {
-        child.kill('SIGTERM');
-      }
-    },
+        if (platform === 'win32') {
+          try {
+            const taskkill = spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+              stdio: 'ignore',
+              windowsHide: true,
+            });
+            taskkill.once('exit', () => resolvePromise());
+            taskkill.once('error', (err) => {
+              warn(`[mdns] taskkill for ${hostname} reported an error: ${err}`);
+              resolvePromise();
+            });
+          } catch (err) {
+            warn(`[mdns] failed to spawn taskkill for ${hostname}: ${err}`);
+            resolvePromise();
+          }
+        } else {
+          child.kill('SIGTERM');
+          resolvePromise();
+        }
+      }),
   };
 }

@@ -84,7 +84,7 @@ describe('spawnMdnsResponder', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('kill() on win32 shells out to taskkill /T /F /PID', () => {
+  it('kill() on win32 shells out to taskkill /T /F /PID', async () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn(() => child);
     const handle = spawnMdnsResponder('castwright.local', '/repo', {
@@ -94,15 +94,19 @@ describe('spawnMdnsResponder', () => {
     });
     expect(handle).not.toBeNull();
     spawnFn.mockClear();
-    handle!.kill();
+    const killPromise = handle!.kill();
     expect(spawnFn).toHaveBeenCalledWith(
       'taskkill',
       ['/PID', '4242', '/T', '/F'],
       expect.objectContaining({ stdio: 'ignore' }),
     );
+    // Resolve the fake taskkill child's own exit so the returned promise settles.
+    const taskkillChild = spawnFn.mock.results[0]?.value as FakeChild;
+    taskkillChild.emit('exit', 0);
+    await killPromise;
   });
 
-  it('kill() on non-win32 sends SIGTERM directly to the child', () => {
+  it('kill() on non-win32 sends SIGTERM directly to the child', async () => {
     const child = makeFakeChild(4242);
     const killSpy = vi.fn();
     (child as unknown as { kill: typeof killSpy }).kill = killSpy;
@@ -113,11 +117,11 @@ describe('spawnMdnsResponder', () => {
       platform: 'linux',
     });
     expect(handle).not.toBeNull();
-    handle!.kill();
+    await handle!.kill();
     expect(killSpy).toHaveBeenCalledWith('SIGTERM');
   });
 
-  it('kill() on win32 warns when the taskkill spawn itself throws synchronously', () => {
+  it('kill() on win32 warns when the taskkill spawn itself throws synchronously', async () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn().mockImplementationOnce(() => child).mockImplementationOnce(() => {
       throw new Error('ENOENT');
@@ -129,12 +133,12 @@ describe('spawnMdnsResponder', () => {
       platform: 'win32',
     });
     expect(handle).not.toBeNull();
-    handle!.kill();
+    await handle!.kill();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
   });
 
-  it('does NOT warn when the exit after kill() reports a nonzero code (Windows taskkill /F reports code=1, not null)', () => {
+  it('does NOT warn when the exit after kill() reports a nonzero code (Windows taskkill /F reports code=1, not null)', async () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn(() => child);
     const warn = vi.fn();
@@ -144,8 +148,33 @@ describe('spawnMdnsResponder', () => {
       platform: 'win32',
     });
     expect(handle).not.toBeNull();
-    handle!.kill();
+    const killPromise = handle!.kill();
     child.emit('exit', 1, null);
+    const taskkillChild = spawnFn.mock.results[1]?.value as FakeChild;
+    taskkillChild.emit('exit', 0);
+    await killPromise;
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("kill()'s returned promise resolves once the taskkill child's own 'exit' fires", async () => {
+    const child = makeFakeChild(4242);
+    const taskkillChild = makeFakeChild(9999);
+    const spawnFn = vi.fn().mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+      platform: 'win32',
+    });
+    expect(handle).not.toBeNull();
+
+    let resolved = false;
+    const killPromise = handle!.kill().then(() => {
+      resolved = true;
+    });
+    // Not resolved yet — the taskkill child hasn't exited.
+    expect(resolved).toBe(false);
+    taskkillChild.emit('exit', 0);
+    await killPromise;
+    expect(resolved).toBe(true);
   });
 });

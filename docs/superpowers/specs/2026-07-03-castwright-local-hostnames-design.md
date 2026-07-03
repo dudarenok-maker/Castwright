@@ -157,11 +157,13 @@ The two LAN scripts have different process shapes, so they own the responder dif
 but both ultimately spawn the same `scripts/mdns-responder.mjs` CLI as a child process, so
 the responder logic itself stays single-sourced.
 
-- **`dev:lan`** (root `package.json`): `dev:lan` today is exactly two `concurrently -k`
-  legs — `vite --host 0.0.0.0` and `cross-env LAN_HTTPS=1 npm --prefix server run dev`
-  (`package.json:18`). This becomes a **third** leg —
+- **`dev:lan`** (root `package.json`): `dev:lan` today is exactly two `concurrently
+  --kill-others-on-fail` legs — `vite --host 0.0.0.0` and `cross-env LAN_HTTPS=1 npm
+  --prefix server run dev` (`package.json:18`). This becomes a **third** leg —
   `"node scripts/mdns-responder.mjs --name castwright.dev.local"` — torn down automatically
-  with the other two by `concurrently -k`.
+  with the other two by `concurrently`'s `--kill-others-on-fail` — not `-k`, since the mDNS
+  leg's own graceful bind-failure `exit(0)` must not be treated as a reason to tear the
+  others down.
 - **`start:lan`**: **not** owned by `scripts/start-app-prod.mjs`. That launcher spawns the
   server `detached: true` (`scripts/start-app-prod.mjs:234`), `unref()`s it (`:248`), and
   calls `process.exit(0)` once the health check passes (`:260`) — it has no `SIGINT`/

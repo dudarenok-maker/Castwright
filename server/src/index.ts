@@ -373,8 +373,8 @@ function shutdown(signal: NodeJS.Signals): void {
   /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
      child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
-  mdnsResponderHandle?.kill();
-  void reap.finally(() => process.exit(0));
+  const mdnsKilled = mdnsResponderHandle?.kill() ?? Promise.resolve();
+  void Promise.all([reap, mdnsKilled]).finally(() => process.exit(0));
 }
 process.once('SIGINT', () => shutdown('SIGINT'));
 process.once('SIGTERM', () => shutdown('SIGTERM'));
