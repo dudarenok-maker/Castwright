@@ -43,8 +43,35 @@ export function bannerLine(version) {
   return `Castwright v${version} — Any book, performed by a full cast.`;
 }
 
+/* Written by vite.config.ts's buildManifestPlugin (`vite build` only) to the
+   repo root — deliberately NOT inside dist/, which express.static serves
+   verbatim in prod (would leak the git branch + dirty-tree flag beyond what
+   the app footer shows). Missing/unparsable (e.g. a build from before this
+   file existed) degrades to null rather than throwing. */
+function readBuildManifest() {
+  const manifestPath = resolve(repoRoot, 'build-manifest.json');
+  if (!existsSync(manifestPath)) return null;
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Format the build-manifest.json provenance line. Exported for unit testing. */
+export function formatBuildManifestLine(manifest) {
+  if (!manifest) {
+    return '[BUILD] unknown — build-manifest.json missing, run "npm run build" to populate it';
+  }
+  const sha = manifest.dirty ? `${manifest.sha}*` : manifest.sha;
+  const built = manifest.buildTime ? new Date(manifest.buildTime).toLocaleString() : 'unknown time';
+  return `[BUILD] ${sha} (${manifest.branch}) — built ${built}`;
+}
+
 function printBanner() {
-  info(`\n${bannerLine(pkgVersion)}\n`);
+  info(`\n${bannerLine(pkgVersion)}`);
+  info(formatBuildManifestLine(readBuildManifest()));
+  info('');
 }
 
 const HEALTH_TIMEOUT_MS = 60_000;

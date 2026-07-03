@@ -3,6 +3,9 @@ node_modules/
 dist/
 .vite/
 *.tsbuildinfo
+# Written by vite.config.ts's buildManifestPlugin — deliberately OUTSIDE dist/
+# (see the plugin's comment) so express.static never serves it in prod.
+/build-manifest.json
 # RELEASE_NOTES.md is now a COMMITTED, maintained brand-voice multi-version
 # history (fe-37) — served verbatim via GET /api/info and rendered at
 # #/release-notes. It is no longer generated from the tag body; the GitHub

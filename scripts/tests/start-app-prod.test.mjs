@@ -62,11 +62,40 @@ test('defaults to process.env when called with no argument', () => {
   }
 });
 
-import { bannerLine } from '../start-app-prod.mjs';
+import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';
 
 test('bannerLine renders the Castwright banner with the version', () => {
   assert.equal(
     bannerLine('1.6.0'),
     'Castwright v1.6.0 — Any book, performed by a full cast.',
+  );
+});
+
+test('formatBuildManifestLine renders sha/branch/build-time from a clean manifest', () => {
+  const iso = '2026-07-03T12:00:00.000Z';
+  const line = formatBuildManifestLine({
+    version: '1.9.0',
+    sha: 'c6d058f2',
+    branch: 'main',
+    dirty: false,
+    buildTime: iso,
+  });
+  assert.equal(line, `[BUILD] c6d058f2 (main) — built ${new Date(iso).toLocaleString()}`);
+});
+
+test('formatBuildManifestLine marks a dirty-tree build with a trailing *', () => {
+  const line = formatBuildManifestLine({
+    sha: 'c6d058f2',
+    branch: 'main',
+    dirty: true,
+    buildTime: '2026-07-03T12:00:00.000Z',
+  });
+  assert.match(line, /^\[BUILD\] c6d058f2\*/);
+});
+
+test('formatBuildManifestLine falls back to a clear message when the manifest is missing', () => {
+  assert.equal(
+    formatBuildManifestLine(null),
+    '[BUILD] unknown — build-manifest.json missing, run "npm run build" to populate it',
   );
 });
