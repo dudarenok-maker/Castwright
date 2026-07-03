@@ -250,6 +250,49 @@ describe('PUT /api/config — device knob UUID translation (Plan 2 §2.1)', () =
     expect(readConfigOverrides()['tts.qwen.device']).toBe('auto');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  /* issue #1225 — a PUT patching all three tts.*.device knobs in one body
+     used to pay one sidecar /devices round-trip PER key (3 total) via
+     toUuidForm's own unconditional fetch. The handler now resolves the
+     list once for the whole request. */
+  it('fetches the sidecar device list once for a PUT patching multiple device knobs', async () => {
+    mockGpuDevices([
+      { uuid: 'GPU-0', idx: 0, name: 'a', total_mb: 8000, free_mb: 6000 },
+      { uuid: 'GPU-1', idx: 1, name: 'b', total_mb: 16000, free_mb: 14000 },
+    ]);
+    const res = await request(app).put('/api/config').send({
+      'tts.qwen.device': 'cuda:1',
+      'tts.coqui.device': 'cuda:0',
+      'tts.kokoro.device': 'cuda:1',
+    });
+    expect(res.status).toBe(200);
+    const { readConfigOverrides } = await import('../workspace/user-settings.js');
+    expect(readConfigOverrides()['tts.qwen.device']).toBe('cuda-uuid:GPU-1');
+    expect(readConfigOverrides()['tts.coqui.device']).toBe('cuda-uuid:GPU-0');
+    expect(readConfigOverrides()['tts.kokoro.device']).toBe('cuda-uuid:GPU-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fetch the sidecar device list when the patch has no device knob', async () => {
+    const res = await request(app).put('/api/config').send({ 'analyzer.engine': 'local' });
+    expect(res.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /* Code-review on #1227 found a real fail-fast regression: an earlier draft
+     pre-scanned the whole patch and fetched the sidecar device list BEFORE
+     the per-key validation loop, so a patch with an unrelated invalid key
+     ahead of a device key paid the sidecar round-trip even though it was
+     always going to 400 on the earlier key. The fetch is now lazy, inside
+     the loop, so an earlier failing key returns before it's ever reached. */
+  it('returns 400 on an earlier invalid key without fetching the sidecar device list', async () => {
+    mockGpuDevices([{ uuid: 'GPU-1', idx: 1, name: 'x', total_mb: 16000, free_mb: 14000 }]);
+    const res = await request(app)
+      .put('/api/config')
+      .send({ bogus_key: 'x', 'tts.qwen.device': 'cuda:1' });
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 /* Mandatory PR code-review (#1224) found a real cold-start race: resolveAll()

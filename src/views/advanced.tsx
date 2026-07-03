@@ -216,7 +216,9 @@ export function AdvancedView() {
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
   const [gpuDevices, setGpuDevices] = useState<GpuDevice[]>([]);
-  const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device']>('unknown');
+  const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device'] | null>(
+    null,
+  );
 
   useEffect(() => {
     dispatch(fetchConfig());
@@ -226,12 +228,12 @@ export function AdvancedView() {
       .getGpuDevices()
       .then((res) => setGpuDevices(res.devices))
       .catch(() => setGpuDevices([]));
-    // Best-effort: an unreachable Ollama daemon just leaves the read-only
-    // analyzer-device row showing "Unknown" (see the ANALYZER-mode gate below).
+    // Best-effort: a request that never lands (network error, not just a
+    // non-2xx from Ollama) reads the same as a genuinely unreachable daemon.
     api
       .getAnalyzerDevice()
       .then((res) => setAnalyzerDevice(res.device))
-      .catch(() => setAnalyzerDevice('unknown'));
+      .catch(() => setAnalyzerDevice('unreachable'));
   }, [dispatch]);
 
   /* Plan 2 §2.4 — the analyzer-device row is only meaningful when the
@@ -391,7 +393,11 @@ export function AdvancedView() {
                           ? 'GPU'
                           : analyzerDevice === 'cpu'
                             ? 'CPU'
-                            : 'Unknown'}{' '}
+                            : analyzerDevice === 'idle'
+                              ? 'Idle (no model currently loaded)'
+                              : analyzerDevice === 'unreachable'
+                                ? 'Unreachable'
+                                : 'Checking…'}{' '}
                         — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
                         daemon.
                       </p>

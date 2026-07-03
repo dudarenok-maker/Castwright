@@ -870,10 +870,13 @@ export interface GpuDevicesResponse {
 }
 
 /** Response from GET /api/ollama/device (Plan 2 §2.4) — the analyzer's live
-    GPU/CPU/unknown placement, read-only (not app-pinnable; the analyzer
-    connects to a user/OS-managed Ollama daemon). */
+    GPU/CPU/idle/unreachable placement, read-only (not app-pinnable; the
+    analyzer connects to a user/OS-managed Ollama daemon). 'idle' means
+    Ollama answered but nothing is currently resident (the common case
+    between generations); 'unreachable' means the daemon didn't answer at
+    all — the two used to collapse into one 'unknown' value (issue #1225). */
 export interface AnalyzerDeviceResponse {
-  device: 'cuda' | 'cpu' | 'unknown';
+  device: 'cuda' | 'cpu' | 'idle' | 'unreachable';
 }
 
 /** Prompt state from GET/PUT /api/config/prompts/:id. */

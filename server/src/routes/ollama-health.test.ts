@@ -8,6 +8,7 @@ import request from 'supertest';
 import {
   ollamaHealthRouter,
   detectOllamaDevice,
+  detectOllamaDeviceDetailed,
   setOllamaBootstraps,
   _resetOllamaBootstraps,
 } from './ollama-health.js';
@@ -52,18 +53,20 @@ function mockOllamaProbes(opts: { tags: Array<{ name: string }>; ps?: Array<{ na
   });
 }
 
-describe('detectOllamaDevice (first-chapter ETA rate seed)', () => {
-  const mockPs = (models: unknown[] | null, status = 200) => {
-    fetchMock.mockImplementation((url: string) => {
-      if (url.endsWith('/api/ps')) {
-        return Promise.resolve(
-          new Response(models === null ? 'nope' : JSON.stringify({ models }), { status }),
-        );
-      }
-      return Promise.resolve(new Response('', { status: 404 }));
-    });
-  };
+/* Shared /api/ps-only mock for the detectOllamaDevice/detectOllamaDeviceDetailed/
+   GET-/device describe blocks below — all three exercise the same endpoint. */
+function mockPs(models: unknown[] | null, status = 200) {
+  fetchMock.mockImplementation((url: string) => {
+    if (url.endsWith('/api/ps')) {
+      return Promise.resolve(
+        new Response(models === null ? 'nope' : JSON.stringify({ models }), { status }),
+      );
+    }
+    return Promise.resolve(new Response('', { status: 404 }));
+  });
+}
 
+describe('detectOllamaDevice (first-chapter ETA rate seed)', () => {
   it('reports cuda when a resident model has size_vram > 0', async () => {
     mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 4_000_000_000 }]);
     expect(await detectOllamaDevice()).toBe('cuda');
@@ -82,21 +85,38 @@ describe('detectOllamaDevice (first-chapter ETA rate seed)', () => {
   });
 });
 
-/* Plan 2 §2.4 — Advanced Configuration's read-only analyzer-device row reads
-   this endpoint. Thin proxy over detectOllamaDevice(); the device-detection
-   logic itself is already pinned by the describe block above. */
-describe('GET /api/ollama/device', () => {
-  const mockPs = (models: unknown[] | null, status = 200) => {
-    fetchMock.mockImplementation((url: string) => {
-      if (url.endsWith('/api/ps')) {
-        return Promise.resolve(
-          new Response(models === null ? 'nope' : JSON.stringify({ models }), { status }),
-        );
-      }
-      return Promise.resolve(new Response('', { status: 404 }));
-    });
-  };
+/* issue #1225 — the display-only probe used by the Advanced Configuration
+   read-only row. Same /api/ps signal as detectOllamaDevice() above, but
+   splits its collapsed 'unknown' into 'idle' (Ollama answered, nothing
+   resident) vs. 'unreachable' (daemon didn't answer at all). */
+describe('detectOllamaDeviceDetailed (Advanced Configuration display)', () => {
+  it('reports cuda when a resident model has size_vram > 0', async () => {
+    mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 4_000_000_000 }]);
+    expect(await detectOllamaDeviceDetailed()).toBe('cuda');
+  });
+  it('reports cpu when the resident model has zero size_vram', async () => {
+    mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 0 }]);
+    expect(await detectOllamaDeviceDetailed()).toBe('cpu');
+  });
+  it('reports idle (not unknown) when Ollama answers with no model resident', async () => {
+    mockPs([]);
+    expect(await detectOllamaDeviceDetailed()).toBe('idle');
+  });
+  it('reports unreachable (not unknown) on a non-200 daemon response', async () => {
+    mockPs(null, 500);
+    expect(await detectOllamaDeviceDetailed()).toBe('unreachable');
+  });
+  it('reports unreachable when the fetch itself throws', async () => {
+    fetchMock.mockImplementation(() => Promise.reject(new Error('ECONNREFUSED')));
+    expect(await detectOllamaDeviceDetailed()).toBe('unreachable');
+  });
+});
 
+/* Plan 2 §2.4 — Advanced Configuration's read-only analyzer-device row reads
+   this endpoint. Thin proxy over detectOllamaDeviceDetailed(); the
+   device-detection logic itself is already pinned by the describe block
+   above. */
+describe('GET /api/ollama/device', () => {
   it('returns { device: "cuda" } when a resident model has size_vram > 0', async () => {
     mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 4_000_000_000 }]);
     const res = await request(makeApp()).get('/api/ollama/device');
@@ -104,11 +124,18 @@ describe('GET /api/ollama/device', () => {
     expect(res.body).toEqual({ device: 'cuda' });
   });
 
-  it('returns { device: "unknown" } on an unreachable daemon', async () => {
+  it('returns { device: "idle" } when Ollama answers with no model resident', async () => {
+    mockPs([]);
+    const res = await request(makeApp()).get('/api/ollama/device');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ device: 'idle' });
+  });
+
+  it('returns { device: "unreachable" } on an unreachable daemon', async () => {
     mockPs(null, 500);
     const res = await request(makeApp()).get('/api/ollama/device');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ device: 'unknown' });
+    expect(res.body).toEqual({ device: 'unreachable' });
   });
 });
 
