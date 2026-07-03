@@ -429,18 +429,6 @@ describe('ModelManagerView — voice engine preferences', () => {
     expect(patch.dualModelEnabled).toBe(true);
   });
 
-  it('shows the Qwen eager-load toggle when Qwen is the default engine', async () => {
-    renderManager({ defaultTtsModelKey: 'qwen3-tts-0.6b', resolvedTtsModelKey: 'qwen3-tts-0.6b' });
-    expect(await screen.findByTestId('account-eager-load-qwen')).toBeInTheDocument();
-    expect(screen.queryByTestId('account-eager-load-kokoro')).toBeNull();
-  });
-
-  it('shows the Kokoro eager-load toggle for a non-Qwen default engine', async () => {
-    renderManager({ defaultTtsModelKey: 'kokoro-v1', resolvedTtsModelKey: 'kokoro-v1' });
-    expect(await screen.findByTestId('account-eager-load-kokoro')).toBeInTheDocument();
-    expect(screen.queryByTestId('account-eager-load-qwen')).toBeNull();
-  });
-
   it('clamps generation workers to [1, 4] and round-trips the value', async () => {
     putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
     const user = userEvent.setup();

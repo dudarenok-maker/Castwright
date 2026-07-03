@@ -257,93 +257,68 @@ describe('userSettingsSchema — dualModelEnabled', () => {
   });
 });
 
-describe('userSettingsSchema — eagerLoadKokoro', () => {
-  it('defaults to true on a fresh user-settings document', () => {
-    expect(DEFAULT_USER_SETTINGS.eagerLoadKokoro).toBe(true);
+describe('userSettingsSchema — retired eagerLoadKokoro/eagerLoadQwen (preload-toggle dedup)', () => {
+  it('no longer appears on DEFAULT_USER_SETTINGS or a fresh parse', () => {
+    expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('eagerLoadKokoro');
+    expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('eagerLoadQwen');
+    const parsed = userSettingsSchema.parse({
+      ...DEFAULT_USER_SETTINGS,
+      eagerLoadKokoro: false,
+      eagerLoadQwen: false,
+    });
+    expect(parsed).not.toHaveProperty('eagerLoadKokoro');
+    expect(parsed).not.toHaveProperty('eagerLoadQwen');
   });
 
-  it('accepts true and false', () => {
-    expect(
-      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadKokoro: true })
-        .eagerLoadKokoro,
-    ).toBe(true);
-    expect(
-      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadKokoro: false })
-        .eagerLoadKokoro,
-    ).toBe(false);
-  });
-
-  it("rejects non-boolean values such as 'yes'", () => {
-    expect(() =>
-      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadKokoro: 'yes' }),
-    ).toThrow();
-  });
-
-  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { eagerLoadKokoro: _eagerLoadKokoro, ...legacy } = DEFAULT_USER_SETTINGS;
-    const parsed = userSettingsSchema.parse(legacy);
-    expect(parsed.eagerLoadKokoro).toBeUndefined();
-  });
-
-  it('round-trips through writeUserSettings + readUserSettings', async () => {
+  it('migrates a legacy Qwen-default settings file into tts.preload.* configOverrides on read, and strips the legacy fields from disk', async () => {
     const mod = await import('./user-settings.js');
     mod._resetUserSettingsCache();
-    const before = await mod.readUserSettings();
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        defaultTtsModelKey: 'qwen3-tts-0.6b',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: false,
+      }),
+    );
     try {
-      const updated = await mod.writeUserSettings({ eagerLoadKokoro: false });
-      expect(updated.eagerLoadKokoro).toBe(false);
-      mod._resetUserSettingsCache();
-      const reread = await mod.readUserSettings();
-      expect(reread.eagerLoadKokoro).toBe(false);
+      const settings = await mod.readUserSettings();
+      // Old semantics: Qwen is the resolved default → Kokoro/1.7B-Base were
+      // always forced lazy regardless of eagerLoadKokoro; eagerLoadQwen:false
+      // governed the 0.6B tier directly.
+      expect(settings.configOverrides['tts.preload.kokoro']).toBe(false);
+      expect(settings.configOverrides['tts.preload.qwen']).toBe(false);
+      expect(settings.configOverrides['tts.preload.qwenBase17']).toBe(false);
+      expect(settings).not.toHaveProperty('eagerLoadKokoro');
+      expect(settings).not.toHaveProperty('eagerLoadQwen');
+
+      const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+      expect(onDisk).not.toHaveProperty('eagerLoadKokoro');
+      expect(onDisk).not.toHaveProperty('eagerLoadQwen');
     } finally {
-      await mod.writeUserSettings({
-        eagerLoadKokoro: before.eagerLoadKokoro ?? true,
-      });
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
       mod._resetUserSettingsCache();
     }
   });
-});
 
-describe('userSettingsSchema — eagerLoadQwen', () => {
-  it('defaults to true on a fresh user-settings document', () => {
-    expect(DEFAULT_USER_SETTINGS.eagerLoadQwen).toBe(true);
-  });
-
-  it('accepts true and false', () => {
-    expect(
-      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadQwen: true }).eagerLoadQwen,
-    ).toBe(true);
-    expect(
-      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadQwen: false }).eagerLoadQwen,
-    ).toBe(false);
-  });
-
-  it("rejects non-boolean values such as 'yes'", () => {
-    expect(() =>
-      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadQwen: 'yes' }),
-    ).toThrow();
-  });
-
-  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
-    const { eagerLoadQwen: _eagerLoadQwen, ...legacy } = DEFAULT_USER_SETTINGS;
-    const parsed = userSettingsSchema.parse(legacy);
-    expect(parsed.eagerLoadQwen).toBeUndefined();
-  });
-
-  it('round-trips through writeUserSettings + readUserSettings', async () => {
+  it('does not clobber a configOverride the user already set explicitly', async () => {
     const mod = await import('./user-settings.js');
     mod._resetUserSettingsCache();
-    const before = await mod.readUserSettings();
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        defaultTtsModelKey: 'kokoro-v1',
+        eagerLoadKokoro: false, // legacy value says "off"
+        configOverrides: { 'tts.preload.kokoro': true }, // real Advanced Settings choice says "on"
+      }),
+    );
     try {
-      const updated = await mod.writeUserSettings({ eagerLoadQwen: false });
-      expect(updated.eagerLoadQwen).toBe(false);
-      mod._resetUserSettingsCache();
-      const reread = await mod.readUserSettings();
-      expect(reread.eagerLoadQwen).toBe(false);
+      const settings = await mod.readUserSettings();
+      expect(settings.configOverrides['tts.preload.kokoro']).toBe(true);
     } finally {
-      await mod.writeUserSettings({
-        eagerLoadQwen: before.eagerLoadQwen ?? true,
-      });
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
       mod._resetUserSettingsCache();
     }
   });

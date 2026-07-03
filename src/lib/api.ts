@@ -5879,7 +5879,6 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     analyzerPhase1Model,
     analyzerPhase1MinLagChapters,
     dualModelEnabled,
-    eagerLoadKokoro,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -5896,7 +5895,6 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         analyzerPhase1Model,
         analyzerPhase1MinLagChapters,
         dualModelEnabled,
-        eagerLoadKokoro,
       }).filter(([, v]) => v !== undefined),
     ),
   );

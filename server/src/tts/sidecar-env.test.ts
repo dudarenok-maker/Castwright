@@ -1,6 +1,10 @@
 /* Pins the buildSidecarEnv contract: resolved restart-sidecar knobs are
    injected into the child env, and knobs left at their default are NOT
-   force-set (so the sidecar uses its own default, avoiding double-defaulting). */
+   force-set (so the sidecar uses its own default, avoiding double-defaulting).
+   PRELOAD_QWEN / PRELOAD_QWEN_BASE17 / PRELOAD_KOKORO are flat, independent
+   registry knobs (preload-toggle dedup) — no coupling to modelKey. PRELOAD_COQUI
+   is the one exception, still derived from modelKey (no Advanced Settings
+   toggle stands in for it). */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../workspace/user-settings.js', () => ({ readConfigOverrides: vi.fn(() => ({})) }));
@@ -19,8 +23,6 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     });
     const env = buildSidecarEnv({
       modelKey: 'qwen3-tts-0.6b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: false,
       repoRoot: process.cwd(),
     });
     expect(env.QWEN_ATTN_IMPL).toBe('flash_attention_2');
@@ -30,8 +32,6 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     // no override, no env var — QWEN_ATTN_IMPL must not be force-set
     const env = buildSidecarEnv({
       modelKey: 'qwen3-tts-0.6b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: false,
       repoRoot: process.cwd(),
     });
     expect(env.QWEN_ATTN_IMPL).toBeUndefined();
@@ -43,8 +43,6 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     try {
       const env = buildSidecarEnv({
         modelKey: 'qwen3-tts-0.6b',
-        eagerLoadKokoro: false,
-        eagerLoadQwen: false,
         repoRoot: process.cwd(),
       });
       // source='env' is NOT default, so it is injected
@@ -55,74 +53,42 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     }
   });
 
-  it('PRELOAD_QWEN from existing logic wins when no registry override exists', () => {
-    // Qwen default + eagerLoadQwen=true → PRELOAD_QWEN=1 from existing logic
-    const env = buildSidecarEnv({
-      modelKey: 'qwen3-tts-0.6b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: true,
-      repoRoot: process.cwd(),
+  it('PRELOAD_QWEN / PRELOAD_QWEN_BASE17 / PRELOAD_KOKORO are left unset at their registry default, regardless of modelKey', () => {
+    for (const modelKey of ['qwen3-tts-0.6b', 'qwen3-tts-1.7b', 'kokoro-v1'] as const) {
+      const env = buildSidecarEnv({ modelKey, repoRoot: process.cwd() });
+      expect(env.PRELOAD_QWEN, `modelKey=${modelKey}`).toBeUndefined();
+      expect(env.PRELOAD_QWEN_BASE17, `modelKey=${modelKey}`).toBeUndefined();
+      expect(env.PRELOAD_KOKORO, `modelKey=${modelKey}`).toBeUndefined();
+    }
+  });
+
+  it('a registry override for tts.preload.qwen sets PRELOAD_QWEN regardless of modelKey', () => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'tts.preload.qwen': true,
     });
+    // Even under a Kokoro default, the flat override still applies — no more
+    // "only the resolved default engine preloads" coupling.
+    const env = buildSidecarEnv({ modelKey: 'kokoro-v1', repoRoot: process.cwd() });
     expect(env.PRELOAD_QWEN).toBe('1');
   });
 
-  it('PRELOAD_QWEN_BASE17 from existing logic wins when no registry override exists (qwen 1.7B)', () => {
-    /* Qwen-1.7B default + eagerLoadQwen=true → PRELOAD_QWEN_BASE17=1.
-       PRELOAD_QWEN must stay '0' (mutual exclusivity — we only warm the
-       chosen tier) and PRELOAD_KOKORO must be '0' (Kokoro is the on-demand
-       fallback for Qwen defaults). */
-    const env = buildSidecarEnv({
-      modelKey: 'qwen3-tts-1.7b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: true,
-      repoRoot: process.cwd(),
+  it('a registry override for tts.preload.qwenBase17 sets PRELOAD_QWEN_BASE17', () => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'tts.preload.qwenBase17': true,
     });
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-1.7b', repoRoot: process.cwd() });
     expect(env.PRELOAD_QWEN_BASE17).toBe('1');
-    expect(env.PRELOAD_QWEN).toBe('0');
-    expect(env.PRELOAD_KOKORO).toBe('0');
   });
 
-  it('PRELOAD_QWEN_BASE17 stays 0 when eagerLoadQwen is false (qwen 1.7B lazy)', () => {
-    const env = buildSidecarEnv({
-      modelKey: 'qwen3-tts-1.7b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: false,
-      repoRoot: process.cwd(),
-    });
-    expect(env.PRELOAD_QWEN_BASE17).toBe('0');
-    expect(env.PRELOAD_QWEN).toBe('0');
-    expect(env.PRELOAD_KOKORO).toBe('0');
-  });
-
-  it('registry override for PRELOAD_QWEN_BASE17 wins over derived 1.7B tier logic', () => {
-    /* A power user pinning tts.preload.qwenBase17=0 must override the
-       derived '1' from the 1.7B tier dispatcher (mirrors the existing
-       PRELOAD_QWEN precedence test above). */
+  it('a registry override for tts.preload.kokoro sets PRELOAD_KOKORO even under a Qwen default', () => {
+    /* The old "non-default engine forced lazy" rule is gone — a user can
+       pin both Qwen and Kokoro to preload at once (accepting the combined
+       VRAM cost) via two independent Advanced Settings overrides. */
     (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
-      'tts.preload.qwenBase17': false,
+      'tts.preload.kokoro': true,
     });
-    const env = buildSidecarEnv({
-      modelKey: 'qwen3-tts-1.7b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: true,
-      repoRoot: process.cwd(),
-    });
-    expect(env.PRELOAD_QWEN_BASE17).toBe('0');
-  });
-
-  it('registry override for PRELOAD_QWEN wins over derived modelKey/eagerLoad logic', () => {
-    // registry override forces PRELOAD_QWEN=0 even for a Qwen default + eagerLoadQwen=true
-    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
-      'tts.preload.qwen': false,
-    });
-    const env = buildSidecarEnv({
-      modelKey: 'qwen3-tts-0.6b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: true,
-      repoRoot: process.cwd(),
-    });
-    // The registry override must win over the derived '1', emitted as '0'.
-    expect(env.PRELOAD_QWEN).toBe('0');
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.PRELOAD_KOKORO).toBe('1');
   });
 
   it('boolean overrides are emitted as 1/0 (not true/false) so == "1" sidecar reads work', () => {
@@ -131,8 +97,6 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     });
     const env = buildSidecarEnv({
       modelKey: 'qwen3-tts-0.6b',
-      eagerLoadKokoro: false,
-      eagerLoadQwen: false,
       repoRoot: process.cwd(),
     });
     expect(env.PRELOAD_COQUI).toBe('1');
@@ -142,8 +106,6 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
 describe('buildSidecarEnv injects the accelerator profile + Kokoro ORT providers (AMD phase 2)', () => {
   const base = {
     modelKey: 'qwen3-tts-0.6b' as const,
-    eagerLoadKokoro: false,
-    eagerLoadQwen: false,
     repoRoot: process.cwd(), // no venv stamp under this path → profile from env/default
   };
   afterEach(() => {

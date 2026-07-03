@@ -2219,29 +2219,6 @@ export interface components {
              */
             dualModelEnabled?: boolean;
             /**
-             * @description When true (default), the Node server spawns the TTS sidecar
-             *     with `PRELOAD_KOKORO=1`, so Kokoro eager-loads at sidecar
-             *     startup (~1 GB VRAM, ~1 s). When false, the sidecar is spawned
-             *     with `PRELOAD_KOKORO=0` and Kokoro warms on demand on the first
-             *     synth that needs it (or via POST /load) — for Qwen-primary
-             *     users who want the ~1 GB VRAM back. Takes effect on the next
-             *     sidecar restart. Only governs the sidecar when Kokoro (or Coqui)
-             *     is the resolved default engine; under a Qwen default Kokoro is
-             *     always the on-demand fallback and `eagerLoadQwen` takes over.
-             */
-            eagerLoadKokoro?: boolean;
-            /**
-             * @description When true (default), and Qwen3-TTS is the resolved default
-             *     engine, the Node server spawns the TTS sidecar with
-             *     `PRELOAD_QWEN=1`, so Qwen's Base synth model eager-loads at
-             *     sidecar startup. When false, the sidecar is spawned with
-             *     `PRELOAD_QWEN=0` and Qwen warms on demand on the first synth
-             *     that needs it. Only takes effect when Qwen is the default engine
-             *     (otherwise Qwen stays off and Kokoro is the on-demand fallback).
-             *     Takes effect on the next sidecar restart.
-             */
-            eagerLoadQwen?: boolean;
-            /**
              * @description Number of chapters the generation queue synthesises concurrently
              *     (queue-worker concurrency). Default 1. Pulled from the flat queue
              *     across books; same-book chapters fan out within one stream via the
@@ -2314,8 +2291,6 @@ export interface components {
             analyzerPhase1Model?: string | null;
             analyzerPhase1MinLagChapters?: number | null;
             dualModelEnabled?: boolean;
-            eagerLoadKokoro?: boolean;
-            eagerLoadQwen?: boolean;
             generationWorkers?: number;
             /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
             backupEnabled?: boolean;
