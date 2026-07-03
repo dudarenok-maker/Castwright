@@ -3193,7 +3193,7 @@ Round 3 also confirmed, as NOT bugs: `export let lastAutoRevertOutcome`'s live E
 
 ### Plan 2 — status: NOT YET SHIPPED (gated on Wave 2)
 
-### Plan 2a — status: NOT YET SHIPPED (scoped subset of Plan 2: Tasks 10, 10.5, 11-15, 17 — Task 16/16.5 auto-revert deferred to a follow-up PR pending Wave 2's own on-box acceptance)
+### Plan 2a — status: SHIPPED 2026-07-03 (scoped subset of Plan 2: Tasks 10, 10.5, 11-15, 17 — Task 16/16.5 auto-revert deferred to a follow-up PR pending Wave 2's own on-box acceptance)
 
 **Scope note:** Plan 2 (above) is the full picker; Plan 2a ships everything except
 auto-revert (§2.3, Task 16) and its operator-visible toast (Task 16.5), since
@@ -3203,17 +3203,20 @@ auto-revert-only items removed, plus one item promoted in from Wave 2's own
 checklist (item 3 below — it only exercises Task 10.5's UUID resolution, not
 anything Task 16/16.5 touch, so it belongs here rather than waiting).
 
-**On-box acceptance checklist:**
+**On-box acceptance checklist — ALL PASSED (2026-07-03, real RTX 4070 Laptop 8GB
++ RTX 5070 Ti 16GB; full write-up in `docs/features/237-multi-gpu-device-picker-plan2a.md`):**
 
-- [ ] Set `tts.qwen.device` to `cuda:1` via the Advanced Configuration picker → the persisted override is `cuda-uuid:<the real GPU-1 UUID>` (inspect `~/.castwright/user-settings.json`), and the row still displays `cuda:1`.
-- [ ] Physically swap card order (or simulate via `CUDA_VISIBLE_DEVICES` reorder) → the picker still shows the SAME engine pinned to the SAME physical card by name, now at a different index (the UUID reconcile survives a renumber).
-- [ ] Set `QWEN_DEVICE`/`KOKORO_DEVICE` to two DIFFERENT physical cards via the picker (both persist as `cuda-uuid:` overrides per Task 10) → the VoiceDesign↔Kokoro coupling correctly reflects `shares_device=False` (a design session doesn't block Kokoro synth) — confirms Task 10.5's fix actually resolves the UUID form on-box, not just against the mocked `_enumerate_cuda_devices` in tests.
-- [ ] Delete the pinned card's driver entry (or set an override to a uuid that no longer exists) → the row shows the `uuid_unresolved` badge, not a silent fallback.
-- [ ] Force a Kokoro `cpu_fallback` (e.g. `KOKORO_DEVICE=cuda:9`) → the picker row shows the `cpu_fallback` badge with a clear text label.
-- [ ] Select a card with less free VRAM than Qwen's ~6.5GB peak → the footprint pre-warn appears before applying.
-- [ ] Set `CUDA_VISIBLE_DEVICES` in `server/.env` → Advanced Configuration surfaces the env-shadow banner; sidecar log shows the startup WARN.
-- [ ] Analyzer row shows the correct live GPU/CPU state and the `docs/local-llm.md` link resolves. **Note (Task 17 review, 2026-07-03):** the link is a plain `<a href="/docs/local-llm.md">`, not a hash route — docs aren't shipped in the production `dist/` bundle, so this will likely 404 in a `npm run build && npm run start:lan` deployment. Confirm this on-box; if it 404s, file a follow-up rather than blocking this checklist on it (informational banner, low impact).
-- [ ] `test:a11y` passes on Advanced Configuration with the badges/warnings rendered (not just the empty-state).
+- [x] Set `tts.qwen.device` to `cuda:1` via the Advanced Configuration picker → the persisted override is `cuda-uuid:<the real GPU-1 UUID>` (inspect `~/.castwright/user-settings.json`), and the row still displays `cuda:1`.
+- [x] Physically swap card order (or simulate via `CUDA_VISIBLE_DEVICES` reorder) → the picker still shows the SAME engine pinned to the SAME physical card by name, now at a different index (the UUID reconcile survives a renumber).
+- [x] Set `QWEN_DEVICE`/`KOKORO_DEVICE` to two DIFFERENT physical cards via the picker (both persist as `cuda-uuid:` overrides per Task 10) → the VoiceDesign↔Kokoro coupling correctly reflects `shares_device=False` (a design session doesn't block Kokoro synth) — confirms Task 10.5's fix actually resolves the UUID form on-box, not just against the mocked `_enumerate_cuda_devices` in tests.
+- [x] Delete the pinned card's driver entry (or set an override to a uuid that no longer exists) → the row shows the `uuid_unresolved` badge, not a silent fallback.
+- [x] Force a Kokoro `cpu_fallback` (e.g. `KOKORO_DEVICE=cuda:9`) → the picker row shows the `cpu_fallback` badge with a clear text label. **Found + fixed a real bug getting here** — the server's `/api/gpu/devices` merge silently dropped the sidecar's synthetic `idx:-1` bucket where `cpu_fallback` data lives; fixed in `df188e49`.
+- [x] Select a card with less free VRAM than Qwen's ~6.5GB peak → the footprint pre-warn appears before applying.
+- [x] Set `CUDA_VISIBLE_DEVICES` in `server/.env` → Advanced Configuration surfaces the env-shadow banner; sidecar log shows the startup WARN.
+- [x] Analyzer row shows the correct live GPU/CPU state and the `docs/local-llm.md` link resolves. **Confirmed the predicted 404 is real**: the link works against Vite dev (serves any repo file) but genuinely 404s against the production `dist/` bundle — tracked as [#1223](https://github.com/dudarenok-maker/Castwright/issues/1223), not fixed in this PR (informational banner, low impact).
+- [x] `test:a11y` passes on Advanced Configuration with the badges/warnings rendered (not just the empty-state).
+
+**Also found + fixed during this run (not on the original checklist, real hardware only):** a sidecar module-import-order `NameError` that crash-looped the sidecar forever on any fresh boot with a UUID-keyed device override already persisted — `ENGINES = {"qwen": QwenEngine(), ...}` (module-level) transitively called `_enumerate_cuda_devices`, defined ~2300 lines later in `main.py`. Fixed in the same commit (`df188e49`) alongside the cpu_fallback merge fix; both independently re-reviewed (Opus) and approved, 0 Critical/Important findings.
 
 **Explicitly excluded (belongs to the Task 16/16.5 follow-up PR, not this checklist):**
 - Card-specific code-43 streak → auto-revert fires → toast shows "auto-reverted: ..." (Task 18's item 7).
