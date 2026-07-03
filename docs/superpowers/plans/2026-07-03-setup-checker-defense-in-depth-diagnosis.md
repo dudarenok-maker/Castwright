@@ -481,6 +481,7 @@ const SIDECAR_NO_SUPERVISOR = diagnoseSidecar({ ...READY, supervisorActive: fals
 
 const TTS_READY: TtsDiagnosisInput = {
   noEngineAtAll: false,
+  anyEngineReady: true,
   weightsMissingEngine: null,
   kokoroPackageConfirmedBroken: false,
   qwenPackageConfirmedBroken: false,
@@ -514,10 +515,15 @@ describe('diagnoseTts', () => {
     expect(r.action).toMatchObject({ kind: 'kokoro-install' });
   });
 
-  it('reports weights-missing for the reporting engine', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, weightsMissingEngine: 'qwen' });
+  it('reports weights-missing for the reporting engine when no engine is ready yet', () => {
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineReady: false, weightsMissingEngine: 'qwen' });
     expect(r).toMatchObject({ status: 'fail', cause: 'weights-missing' });
     expect(r.action).toMatchObject({ kind: 'qwen-install' });
+  });
+
+  it('passes when one engine is ready even though another engine reports weights-missing (mixed state, round-2 plan review finding A2)', () => {
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineReady: true, weightsMissingEngine: 'qwen' });
+    expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
   });
 
   it('reports cannot-confirm-engine (not pass) when sidecar is transient and disk checks found nothing', () => {
@@ -550,13 +556,19 @@ Append to `server/src/routes/setup-diagnosis.ts`:
 
 ```ts
 export interface TtsDiagnosisInput {
-  /** True only when kokoro/coqui/qwen all report 'not-installed' on disk —
-      the actual signal diagnoseTts branches on, computed from the same
-      three detect*InstallStateOnDisk() calls the spec's `!anyTtsEnginePresent`
-      layer describes at a higher level; no separate anyTtsEnginePresent()
-      call is needed since noEngineAtAll already answers it. */
+  /** True only when kokoro/coqui/qwen all report 'not-installed' on disk. */
   noEngineAtAll: boolean;
-  /** First engine reporting 'weights-missing' on disk, or null. */
+  /** True when at least one of kokoro/coqui/qwen reports 'ready' on disk —
+      i.e. anyTtsEnginePresent(). Required so a mixed state (one engine ready,
+      another mid-install with weights-missing) still passes instead of
+      reporting the half-installed engine's problem (round-2 plan review
+      finding A2 — an earlier draft dropped this field as "dead" because
+      diagnoseTts never read it, which was the actual bug: without this
+      short-circuit, `weightsMissingEngine` below fires even when a fully
+      usable engine already exists, reversing today's ready verdict). */
+  anyEngineReady: boolean;
+  /** First engine reporting 'weights-missing' on disk, or null. Only acted
+      on when anyEngineReady is false — see above. */
   weightsMissingEngine: 'kokoro' | 'qwen' | 'coqui' | null;
   /** From the sidecar's live /health payload — only meaningful once sidecar is reachable. */
   kokoroPackageConfirmedBroken: boolean;
@@ -587,7 +599,7 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
       ENGINE_INSTALL_ACTION.kokoro,
     );
   }
-  if (input.weightsMissingEngine) {
+  if (!input.anyEngineReady && input.weightsMissingEngine) {
     return diagnosis(
       'fail',
       'weights-missing',
@@ -619,7 +631,7 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd server && npx vitest run src/routes/setup-diagnosis.test.ts`
-Expected: PASS (19 tests)
+Expected: PASS (21 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -788,7 +800,7 @@ export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosi
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd server && npx vitest run src/routes/setup-diagnosis.test.ts`
-Expected: PASS (30 tests)
+Expected: PASS (32 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1001,7 +1013,7 @@ git commit -m "feat(server): add exhaustedEvent and merge clearTripAndRespawn in
 - Modify: `server/src/routes/sidecar-health.test.ts`
 
 **Interfaces:**
-- Consumes: `SidecarSupervisor.exhaustedEvent()`/`.resetAndRespawn()` from Task 5.
+- Consumes: `SidecarSupervisor.exhaustedEvent()`/`.resetAndRespawn()` from Task 5. **Concurrency note:** `resetAndRespawn()` has no internal guard against being called twice — the safety property is that this route re-checks `exhaustedEvent()`/`tripEvent()` synchronously, with no `await` in between, immediately before calling it (Design §2). This holds even across two independent, near-simultaneous HTTP requests to this route: Node's single-threaded run-to-completion execution means the second request's handler cannot run any code — not even its own guard check — until the first request's handler yields at its first `await`, by which point the first request has already reset the state. So the second request's own guard check always observes the post-reset state and falls through to the existing 409, rather than racing a second `spawnOnce()`. Don't add a mutex/lock — it isn't needed, and would just be unused complexity on top of a guarantee the language runtime already provides here.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1276,6 +1288,7 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
   const qwenState = detectQwenInstallStateOnDisk(REPO_ROOT);
   const coquiState = detectCoquiInstallStateOnDisk(REPO_ROOT);
   const noEngineAtAll = [kokoroState, qwenState, coquiState].every((s) => s === 'not-installed');
+  const anyEngineReady = [kokoroState, qwenState, coquiState].some((s) => s === 'ready');
   const weightsMissingEngine =
     kokoroState === 'weights-missing' ? 'kokoro' :
     qwenState === 'weights-missing' ? 'qwen' :
@@ -1284,6 +1297,7 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
 
   const tts = diagnoseTts(sidecar, {
     noEngineAtAll,
+    anyEngineReady,
     weightsMissingEngine,
     ...packageFlags,
   });
@@ -1344,7 +1358,7 @@ Expected: PASS (7 tests)
 
 - [ ] **Step 5: Run the server-scoped typecheck and full server test suite**
 
-Run: `cd server && npx tsc --noEmit && npx vitest run`
+Run: `cd server && npm run typecheck && npm run test`
 Expected: PASS. **Do not run the whole-repo `npm run typecheck` yet** — it also checks the frontend, which is still on the bare-string `blockers` shape until Task 16 finishes migrating it, so it will fail here regardless of whether this task's server-side change is correct. The server-scoped command isolates the check to what this task actually touched. The whole-repo typecheck becomes green again — and gets run for real — at Task 18's `npm run verify`.
 
 - [ ] **Step 6: Commit**
@@ -1734,6 +1748,10 @@ interface Job {
   status: string;
   step: string | null;
   error: string | null;
+  /* ollama-install only, Windows path: the job can't finish headlessly — it
+     downloads a GUI installer, sets this path, and stays at 'installing'
+     until the user runs it and the app re-probes via /recheck. */
+  manualInstallerPath?: string | null;
 }
 
 const JOB_START_ENDPOINT: Partial<Record<BlockerAction['kind'], string>> = {
@@ -1764,7 +1782,14 @@ export function BlockerFixAction({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* Non-null only for the Windows ollama-install manual-installer handshake
+     (round-2 plan review finding A1): the generic headless poll loop cannot
+     reach a terminal status for this one job, since install-bootstrap.ts's
+     win32 path returns at 'installing' with this path set and waits for a
+     manual /recheck. Every other job kind never sets this. */
+  const [manualInstallerPath, setManualInstallerPath] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jobRef = useRef<{ endpoint: string; id: string } | null>(null);
 
   const action = diagnosis.action;
   if (!action) return null;
@@ -1785,6 +1810,12 @@ export function BlockerFixAction({
           setError(body.error ?? 'Failed.');
           return;
         }
+        if (body.manualInstallerPath) {
+          setBusy(false);
+          jobRef.current = { endpoint, id };
+          setManualInstallerPath(body.manualInstallerPath);
+          return;
+        }
         pollJob(endpoint, id);
       } catch (e) {
         setBusy(false);
@@ -1798,6 +1829,7 @@ export function BlockerFixAction({
     if (!endpoint) return;
     setBusy(true);
     setError(null);
+    setManualInstallerPath(null);
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -1806,7 +1838,35 @@ export function BlockerFixAction({
       });
       const body = (await res.json()) as Job;
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      if (body.manualInstallerPath) {
+        setBusy(false);
+        jobRef.current = { endpoint, id: body.id };
+        setManualInstallerPath(body.manualInstallerPath);
+        return;
+      }
       pollJob(endpoint, body.id);
+    } catch (e) {
+      setBusy(false);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const runRecheck = async () => {
+    if (!jobRef.current) return;
+    const { endpoint, id } = jobRef.current;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${endpoint}/${id}/recheck`, { method: 'POST' });
+      const body = (await res.json()) as Job;
+      if (JOB_DONE_STATUSES.includes(body.status)) {
+        setBusy(false);
+        setManualInstallerPath(null);
+        onDone();
+        return;
+      }
+      // Still 'installing' (installer not run yet) — stay in the manual state.
+      setBusy(false);
     } catch (e) {
       setBusy(false);
       setError(e instanceof Error ? e.message : String(e));
@@ -1839,6 +1899,26 @@ export function BlockerFixAction({
     return void runJobAction();
   };
 
+  if (manualInstallerPath) {
+    return (
+      <div className="space-y-1">
+        <p className="text-xs text-ink/60">
+          Installer downloaded to <code className="bg-ink/5 px-1 rounded">{manualInstallerPath}</code> — run it,
+          then click Recheck.
+        </p>
+        <button
+          type="button"
+          onClick={runRecheck}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink-soft disabled:opacity-50"
+        >
+          {busy ? 'Checking…' : 'Recheck'}
+        </button>
+        {error && <p className="text-xs text-rose-700">{error}</p>}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1">
       <button
@@ -1855,12 +1935,42 @@ export function BlockerFixAction({
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Add a test for the Windows manual-installer handshake**
+
+Add to `blocker-fix-action.test.tsx`, before the closing `});` of the `describe` block:
+
+```tsx
+it('ollama-install: shows a Recheck prompt (not endless polling) when the job needs a manual GUI install', async () => {
+  const onDone = vi.fn();
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.includes('/api/ollama/install') && init?.method === 'POST' && !url.includes('/recheck')) {
+      return Promise.resolve(jsonResponse({ id: '5', status: 'installing', step: null, error: null, manualInstallerPath: 'C:\\Users\\x\\Downloads\\OllamaSetup.exe' }));
+    }
+    if (url.includes('/api/ollama/install/5/recheck')) {
+      return Promise.resolve(jsonResponse({ id: '5', status: 'installed', step: null, error: null }));
+    }
+    return Promise.resolve(jsonResponse({}));
+  });
+  render(
+    <BlockerFixAction
+      diagnosis={{ status: 'fail', cause: 'ollama-unreachable', message: 'x', remediation: 'y', action: { kind: 'ollama-install', label: 'Install Ollama' } }}
+      onDone={onDone}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /install ollama/i }));
+  await waitFor(() => expect(screen.getByText(/OllamaSetup\.exe/i)).toBeInTheDocument());
+  expect(screen.queryByText(/working…/i)).toBeNull(); // not stuck polling
+  fireEvent.click(screen.getByRole('button', { name: /recheck/i }));
+  await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+});
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run src/components/blocker-fix-action.test.tsx`
-Expected: PASS (6 tests)
+Expected: PASS (7 tests)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/components/blocker-fix-action.tsx src/components/blocker-fix-action.test.tsx
