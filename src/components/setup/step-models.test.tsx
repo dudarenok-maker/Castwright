@@ -231,4 +231,10 @@ describe('StepModels', () => {
     renderStep(readiness);
     expect(screen.getByRole('button', { name: /set up the voice engine runtime/i })).toBeInTheDocument();
   });
+
+  it('renders the diagnosis message text when a blocker status is failing', () => {
+    renderStep(notReadyReadiness);
+    // notReadyReadiness.blockers.sidecar has message 'Voice engine runtime not set up.'
+    expect(screen.getByText('Voice engine runtime not set up.')).toBeInTheDocument();
+  });
 });
