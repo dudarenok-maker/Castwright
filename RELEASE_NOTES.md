@@ -27,6 +27,7 @@
 - **One home for "which voice engine warms up at startup."** Model Manager's eager-load checkbox and Advanced Configuration's preload settings used to quietly disagree with each other. Advanced Configuration is now the one place that controls it, for every engine.
 - **A rebuild now shows up right away.** A browser tab left open could keep showing an old version of Castwright for up to an hour after an update, even though the new one was already sitting there ready. It now always shows the one that's actually running.
 - **Checkboxes finally look like Castwright.** Every checkbox in the app — in settings, cast, and the odd dialog — used to show up as your browser's plain default. They're now a proper part of the design: a soft magenta square with a clean checkmark, wherever you find one.
+- **When setup isn't ready, it now tells you why — and often fixes it for you.** A voice engine or analyzer that isn't quite ready used to just say "not ready," with nothing to click. Now it tells you exactly what's missing, in the Setup screen and the Status menu alike, and where a safe one-click fix exists — setting up the voice engine, installing an engine's model, or connecting the local analyzer — a button does the fixing for you.
 
 # Castwright 1.9.0
 
