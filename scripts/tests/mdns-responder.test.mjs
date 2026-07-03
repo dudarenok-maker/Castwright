@@ -50,3 +50,10 @@ test('buildAnswer: never answers with more than one address (single-IP design, n
   const answers = buildAnswer('castwright.local', ['castwright.local'], '10.0.0.5');
   assert.equal(answers.length, 1);
 });
+
+test('buildAnswer: matches a differently-cased queried name case-insensitively (RFC 6762)', () => {
+  const answers = buildAnswer('Castwright.local', ['castwright.local'], '192.168.1.42');
+  assert.deepEqual(answers, [
+    { name: 'Castwright.local', type: 'A', ttl: 120, data: '192.168.1.42' },
+  ]);
+});

@@ -63,10 +63,16 @@ export function primaryLanIp(createSocket = () => dgram.createSocket('udp4')) {
 /** Pure: build the mDNS answer array for a query, or null if this responder
     doesn't serve the queried name (or has no address to answer with). Every
     answer is a single A-record — this responder never returns more than
-    one address per name (see primaryLanIp's known-limitation note above). */
+    one address per name (see primaryLanIp's known-limitation note above).
+
+    RFC 6762 requires case-insensitive name comparison, so the match is done
+    on lowercased names — but the answer echoes back `queriedName` exactly as
+    received (not lowercased), matching conventional DNS/mDNS responder
+    behaviour of preserving the queried name's original casing. */
 export function buildAnswer(queriedName, configuredHostnames, primaryIp) {
   if (primaryIp === null) return null;
-  if (!configuredHostnames.includes(queriedName)) return null;
+  const queriedNameLower = queriedName.toLowerCase();
+  if (!configuredHostnames.some((hostname) => hostname.toLowerCase() === queriedNameLower)) return null;
   return [{ name: queriedName, type: 'A', ttl: ANSWER_TTL_SECONDS, data: primaryIp }];
 }
 
@@ -119,7 +125,8 @@ async function main() {
   mdns.on('query', async (query) => {
     for (const question of query.questions ?? []) {
       if (question.type !== 'A') continue;
-      if (!hostnames.includes(question.name)) continue;
+      const questionNameLower = question.name.toLowerCase();
+      if (!hostnames.some((hostname) => hostname.toLowerCase() === questionNameLower)) continue;
       try {
         const ip = await primaryLanIp();
         const answers = buildAnswer(question.name, hostnames, ip);

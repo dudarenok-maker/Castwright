@@ -117,6 +117,23 @@ describe('spawnMdnsResponder', () => {
     expect(killSpy).toHaveBeenCalledWith('SIGTERM');
   });
 
+  it('kill() on win32 warns when the taskkill spawn itself throws synchronously', () => {
+    const child = makeFakeChild(4242);
+    const spawnFn = vi.fn().mockImplementationOnce(() => child).mockImplementationOnce(() => {
+      throw new Error('ENOENT');
+    });
+    const warn = vi.fn();
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn,
+      platform: 'win32',
+    });
+    expect(handle).not.toBeNull();
+    handle!.kill();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
+  });
+
   it('does NOT warn when the exit after kill() reports a nonzero code (Windows taskkill /F reports code=1, not null)', () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn(() => child);

@@ -109,10 +109,17 @@ export function spawnMdnsResponder(
       const pid = child.pid;
       if (typeof pid !== 'number') return;
       if (platform === 'win32') {
-        spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
+        try {
+          const taskkill = spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          taskkill.on('error', (err) => {
+            warn(`[mdns] taskkill for ${hostname} reported an error: ${err}`);
+          });
+        } catch (err) {
+          warn(`[mdns] failed to spawn taskkill for ${hostname}: ${err}`);
+        }
       } else {
         child.kill('SIGTERM');
       }
