@@ -45,6 +45,16 @@ describe('spawnMdnsResponder', () => {
     expect(args[0]).toContain('mdns-responder.mjs');
   });
 
+  it('spawns detached, so a terminal Ctrl+C cannot signal it directly and race the exit handler below', () => {
+    const spawnFn = vi.fn(() => makeFakeChild());
+    spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+    });
+    const [, , spawnOpts] = spawnFn.mock.calls[0] as unknown as [string, string[], { detached?: boolean }];
+    expect(spawnOpts.detached).toBe(true);
+  });
+
   it('returns null and warns when spawning throws', () => {
     const spawnFn = vi.fn(() => {
       throw new Error('ENOENT');
@@ -70,6 +80,21 @@ describe('spawnMdnsResponder', () => {
     child.emit('exit', 1, null);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
+  });
+
+  it('warns when the child dies from an external signal (OOM-kill / pkill / crash) — code=null but we never called kill()', () => {
+    const child = makeFakeChild(4242);
+    const spawnFn = vi.fn(() => child);
+    const warn = vi.fn();
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn,
+    });
+    expect(handle).not.toBeNull();
+    child.emit('exit', null, 'SIGKILL');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
+    expect(warn.mock.calls[0]?.[0]).toContain('SIGKILL');
   });
 
   it("does NOT warn on a clean exit(0) (the responder's own graceful bind-failure path)", () => {

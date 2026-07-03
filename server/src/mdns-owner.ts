@@ -67,9 +67,20 @@ export function spawnMdnsResponder(
 
   let child: ChildProcess;
   try {
+    /* detached:true takes the responder out of the parent's process group
+       (POSIX setsid) / console group (Windows CREATE_NEW_PROCESS_GROUP) —
+       without it, a terminal Ctrl+C fans SIGINT out to every process
+       sharing that group, so the responder would die on its own the moment
+       you hit Ctrl+C on start:lan, racing shutdown()'s own kill() call
+       (server/src/index.ts) for which one sets killedIntentionally first.
+       Losing that race made the exit handler below warn on a completely
+       ordinary shutdown. windowsHide keeps this from popping a console
+       window, the same combination server/src/tts/spawn-sidecar.ts already
+       uses for its own server-owned child. */
     child = spawnFn(process.execPath, [scriptPath, '--name', hostname], {
       stdio: 'ignore',
       windowsHide: true,
+      detached: true,
     });
   } catch (err) {
     warn(`[mdns] failed to spawn responder for ${hostname}:`, err);
@@ -86,19 +97,21 @@ export function spawnMdnsResponder(
      "Cannot find module" if the responder script or a dependency is
      missing) exits ASYNCHRONOUSLY with a nonzero code — without this, that
      failure is silent: the caller holds a handle to an already-dead child
-     and is never told. Three cases do NOT warn: a clean exit(0) (the
-     responder's own graceful bind-failure path — see
-     scripts/mdns-responder.mjs); a null code (POSIX signal termination,
-     e.g. non-Windows kill() below sending SIGTERM — the 'error' handler
-     above already covers spawn-time failures); and killedIntentionally
-     (an explicit kill() call, regardless of what exit code the OS reports
-     for it — Windows' `taskkill /F` reports a NONZERO code (commonly 1)
-     for an intentional kill, unlike POSIX SIGTERM which reports null, so
-     the code===null check alone isn't enough on Windows). */
-  child.once('exit', (code) => {
+     and is never told. Only a clean exit(0) (the responder's own graceful
+     bind-failure path — see scripts/mdns-responder.mjs) and
+     killedIntentionally (an explicit kill() call — checked first, so it
+     wins regardless of what exit code/signal the OS reports for it;
+     Windows' `taskkill /F` reports a NONZERO code (commonly 1) while POSIX
+     SIGTERM reports code=null+signal=SIGTERM) do NOT warn. Everything else
+     warns, including a null code we did NOT ask for — e.g. an OS OOM-kill,
+     an external `pkill`, or a SIGSEGV crash, all of which Node reports as
+     code=null with `signal` set. */
+  child.once('exit', (code, signal) => {
     if (killedIntentionally) return;
-    if (code !== 0 && code !== null) {
-      warn(`[mdns] responder for ${hostname} exited unexpectedly (code=${code})`);
+    if (code !== 0) {
+      warn(
+        `[mdns] responder for ${hostname} exited unexpectedly (code=${code}${signal ? `, signal=${signal}` : ''})`,
+      );
     }
   });
 
