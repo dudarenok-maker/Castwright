@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { CHAR_COLORS, shade } from '../lib/colors';
-import { IconArrow, IconLink, IconPlay, IconSparkle, IconSpinner } from '../lib/icons';
+import { IconArrow, IconCheck, IconLink, IconPlay, IconSparkle, IconSpinner } from '../lib/icons';
 import type { CharColor, Voice } from '../lib/types';
 
 type ButtonVariant = 'dark' | 'light' | 'ghost' | 'danger' | 'peach';
@@ -46,6 +46,90 @@ export function PrimaryButton({
         </span>
       )}
     </button>
+  );
+}
+
+interface CheckboxProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label?: ReactNode;
+  description?: ReactNode;
+  disabled?: boolean;
+  id?: string;
+  className?: string;
+  'data-testid'?: string;
+  'aria-label'?: string;
+}
+/* On-brand replacement for a native <input type="checkbox">, which renders
+   with the OS/browser's default accent color (usually blue) since this repo
+   has no @tailwindcss/forms plugin to restyle it. The native input stays in
+   the DOM (opacity-0, full-size) so keyboard nav, click-to-toggle-via-label,
+   and getByRole('checkbox') in tests all keep working unchanged.
+
+   Only wraps itself in a <label> when it owns visible `label` text — a
+   caller that needs the checkbox bare (embedded in its own wrapping <label>
+   or row, e.g. a list row where clicking anywhere toggles it) gets just the
+   box, so the two never nest (nested <label> is invalid HTML). */
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+  description,
+  disabled = false,
+  id,
+  className = '',
+  'data-testid': testId,
+  'aria-label': ariaLabel,
+}: CheckboxProps) {
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
+  const descId = description ? `${inputId}-description` : undefined;
+
+  const box = (
+    <span className="relative mt-0.5 inline-flex h-5 w-5 shrink-0">
+      <input
+        id={inputId}
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => !disabled && onChange(e.target.checked)}
+        aria-label={ariaLabel}
+        aria-describedby={descId}
+        data-testid={testId}
+        className="peer absolute inset-0 h-5 w-5 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      />
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none grid h-5 w-5 place-items-center rounded border-2 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-magenta/30 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-canvas ${
+          checked ? 'border-magenta bg-magenta' : 'border-ink/25 peer-hover:border-magenta/50'
+        }`}
+      >
+        {checked && <IconCheck className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+      </span>
+    </span>
+  );
+
+  return (
+    <div className={`flex flex-col gap-0.5 ${className}`}>
+      {label ? (
+        <label
+          htmlFor={inputId}
+          className={`flex items-start gap-3 select-none min-h-[44px] sm:min-h-0 ${
+            disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+          }`}
+        >
+          {box}
+          <span className="text-sm font-medium text-ink">{label}</span>
+        </label>
+      ) : (
+        box
+      )}
+      {description && (
+        <span id={descId} className="pl-8 text-[11px] text-ink/50">
+          {description}
+        </span>
+      )}
+    </div>
   );
 }
 

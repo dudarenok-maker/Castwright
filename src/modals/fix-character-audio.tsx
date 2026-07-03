@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { IconRefresh, IconClose } from '../lib/icons';
-import { PrimaryButton } from '../components/primitives';
+import { PrimaryButton, Checkbox } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
 import { spliceActions } from '../store/splice-slice';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
@@ -217,12 +217,10 @@ export function FixCharacterAudioModal({
                       key={c.id}
                       className={`flex items-center gap-3 p-2.5 rounded-xl border min-h-[44px] cursor-pointer ${selected.has(c.id) ? 'border-peach/60 bg-peach/4' : 'border-ink/10'}`}
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={selected.has(c.id)}
                         disabled={running}
                         onChange={() => toggle(c.id)}
-                        className="accent-magenta w-4 h-4"
                       />
                       <span className="flex-1 min-w-0 text-sm text-ink truncate">
                         CH {String(c.id).padStart(2, '0')} · {stripChapterPrefix(c.title)}

@@ -6,7 +6,7 @@
    the server and re-hydrates the slice. */
 
 import { useEffect, useMemo, useState } from 'react';
-import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
+import { SectionLabel, MixedHeading, PrimaryButton, Checkbox } from '../components/primitives';
 import type { BackupSnapshot, ConfigGroup, UserSettings, UserSettingsPatch } from '../lib/types';
 import type { ThemePreference } from '../lib/use-theme';
 import { api } from '../lib/api';
@@ -346,20 +346,16 @@ export function AccountView() {
               label="Automatic backups"
               sublabel="When on, the server snapshots a book's state.json on the cadence below, pruning to the retention count. Turn off to manage backups manually with 'Back up now'."
             >
-              <label className="inline-flex items-center gap-3 cursor-pointer select-none min-h-[44px] sm:min-h-0">
-                <input
-                  type="checkbox"
-                  checked={backupEnabled}
-                  onChange={(e) => setBackupEnabled(e.target.checked)}
-                  data-testid="account-backup-enabled"
-                  className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-                />
-                <span className="text-sm text-ink">
-                  {backupEnabled
+              <Checkbox
+                checked={backupEnabled}
+                onChange={setBackupEnabled}
+                data-testid="account-backup-enabled"
+                label={
+                  backupEnabled
                     ? 'Enabled — the server snapshots state.json automatically.'
-                    : 'Disabled — snapshots only when you click "Back up now".'}
-                </span>
-              </label>
+                    : 'Disabled — snapshots only when you click "Back up now".'
+                }
+              />
             </FieldRow>
             <FieldRow
               label="Cadence"
@@ -954,20 +950,17 @@ function AdvancedCard() {
             When a chapter finishes, automatically start the next one (continuous playback). The
             sleep timer's "end of chapter" mode still stops playback.
           </span>
-          <label className="mt-2 inline-flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={autoAdvance}
-              onChange={(e) => dispatch(settingsActions.setAutoAdvance(e.target.checked))}
-              data-testid="account-auto-advance"
-              className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-            />
-            <span className="text-sm text-ink">
-              {autoAdvance
+          <Checkbox
+            className="mt-2"
+            checked={autoAdvance}
+            onChange={(value) => dispatch(settingsActions.setAutoAdvance(value))}
+            data-testid="account-auto-advance"
+            label={
+              autoAdvance
                 ? 'On — plays continuously through the book.'
-                : 'Off — stops at the end of each chapter.'}
-            </span>
-          </label>
+                : 'Off — stops at the end of each chapter.'
+            }
+          />
         </div>
 
         {/* High-contrast */}
@@ -976,18 +969,13 @@ function AdvancedCard() {
           <span className="block text-xs text-ink/55 mt-0.5">
             Maximises text + border contrast for low-vision use. Composes with light or dark.
           </span>
-          <label className="mt-2 inline-flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={highContrast}
-              onChange={(e) => dispatch(settingsActions.setHighContrast(e.target.checked))}
-              data-testid="account-high-contrast"
-              className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-            />
-            <span className="text-sm text-ink">
-              {highContrast ? 'On — high-contrast palette active.' : 'Off — standard palette.'}
-            </span>
-          </label>
+          <Checkbox
+            className="mt-2"
+            checked={highContrast}
+            onChange={(value) => dispatch(settingsActions.setHighContrast(value))}
+            data-testid="account-high-contrast"
+            label={highContrast ? 'On — high-contrast palette active.' : 'Off — standard palette.'}
+          />
         </div>
 
         {/* Text size */}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconClose, IconRefresh } from '../lib/icons';
 import { helpHrefForFailureCode } from '../lib/router';
 import { HELP_FAILURE_ENTRIES } from '../data/help-failures';
-import { SectionLabel, MixedHeading } from '../components/primitives';
+import { SectionLabel, MixedHeading, Checkbox } from '../components/primitives';
 import { MANIFESTO } from '../lib/brand';
 import {
   api,
@@ -1177,31 +1177,20 @@ export function AnalysingView({
                       Hidden when bookId is null (setProsodyEnabled needs a non-null id).
                       Minimum 44px touch target on phone per mobile rule. */}
                   {bookId != null && (
-                    <div className="flex items-start gap-3 cursor-pointer select-none max-w-sm w-full px-1 min-h-[44px] sm:min-h-0">
-                      <input
-                        id="prosody-toggle"
-                        type="checkbox"
-                        checked={prosodyStored !== false}
-                        onChange={(e) => {
-                          const value = e.target.checked;
-                          dispatch(
-                            bookMetaActions.setProsodyEnabled({ bookId: bookId, value }),
-                          );
-                          void api.putBookState(bookId, {
-                            slice: 'state',
-                            patch: { prosodyEnabled: value },
-                          });
-                        }}
-                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-                      />
-                      <div className="flex flex-col gap-0.5">
-                        <label htmlFor="prosody-toggle" className="text-sm font-medium text-ink cursor-pointer">Expressive directions</label>
-                        <span className="text-[11px] text-ink/50">
-                          Generate per-line emotion + delivery directions for the higher-quality
-                          (1.7B) voice. Runs in the background after analysis.
-                        </span>
-                      </div>
-                    </div>
+                    <Checkbox
+                      id="prosody-toggle"
+                      className="max-w-sm w-full px-1"
+                      checked={prosodyStored !== false}
+                      onChange={(value) => {
+                        dispatch(bookMetaActions.setProsodyEnabled({ bookId: bookId, value }));
+                        void api.putBookState(bookId, {
+                          slice: 'state',
+                          patch: { prosodyEnabled: value },
+                        });
+                      }}
+                      label="Expressive directions"
+                      description="Generate per-line emotion + delivery directions for the higher-quality (1.7B) voice. Runs in the background after analysis."
+                    />
                   )}
                   <button
                     type="button"

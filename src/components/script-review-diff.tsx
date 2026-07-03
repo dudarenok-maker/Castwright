@@ -6,6 +6,7 @@
 
 import { useRef, useState } from 'react';
 import type { Dispatch } from '@reduxjs/toolkit';
+import { Checkbox } from './primitives';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   scriptReviewActions,
@@ -464,15 +465,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                     <h4 className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1">
                       {classLabel(cls)}
                     </h4>
-                    <label className="flex items-center gap-1.5 text-xs text-ink/55 cursor-pointer select-none min-h-[44px] sm:min-h-0">
-                      <input
-                        type="checkbox"
+                    <label
+                      htmlFor={`class-toggle-${cls}`}
+                      className="flex items-center gap-1.5 text-xs text-ink/55 cursor-pointer select-none min-h-[44px] sm:min-h-0"
+                    >
+                      <Checkbox
+                        id={`class-toggle-${cls}`}
                         data-testid={`class-toggle-${cls}`}
                         checked={allClassSelected}
                         onChange={() =>
                           dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }))
                         }
-                        className="accent-ink w-4 h-4"
                       />
                       Select all
                     </label>
@@ -490,17 +493,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                         key={key}
                         className="flex items-start gap-3 p-3 rounded-2xl border border-ink/10 bg-canvas/50"
                       >
-                        <label className="flex items-center min-h-[44px] sm:min-h-0 cursor-pointer">
-                          <input
-                            type="checkbox"
+                        <label
+                          htmlFor={`op-toggle-${key}`}
+                          className="flex items-center min-h-[44px] sm:min-h-0 cursor-pointer"
+                        >
+                          <Checkbox
+                            id={`op-toggle-${key}`}
                             data-testid={`op-toggle-${key}`}
                             checked={isSelected}
-                            onChange={() =>
-                              dispatch(scriptReviewActions.toggleOp({ bookId, key }))
-                            }
-                            className="accent-ink w-4 h-4"
+                            onChange={() => dispatch(scriptReviewActions.toggleOp({ bookId, key }))}
+                            aria-label={`Toggle this ${op.op} suggestion`}
                           />
-                          <span className="sr-only">Toggle this {op.op} suggestion</span>
                         </label>
                         <div className="flex-1 min-w-0 space-y-1">
                           <OpPreview
