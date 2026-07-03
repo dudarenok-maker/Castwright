@@ -86,6 +86,11 @@ interface TileHint {
   /** Caption shown above the input when a sync folder is already
       configured. Receives the saved path so the copy can name it. */
   savedCaption: (savedPath: string) => string;
+  /** fs-54 — when set, TileBody renders a small format toggle (mp3-folder
+      vs m4b today) instead of collapsing to the single fixed `format`
+      above. Currently only the Audiobookshelf tile uses this — every
+      other tile keeps its one fixed shape. */
+  formatOptions?: Array<{ id: FormatId; label: string }>;
 }
 
 const TILE_HINTS: Record<TileHintKey, TileHint> = {
@@ -128,7 +133,6 @@ const TILE_HINTS: Record<TileHintKey, TileHint> = {
     savedCaption: (saved) => `Stages BookPlayer-ready folders at ${saved}.`,
   },
   audiobookshelf: {
-    /* Reserved for B4. */
     format: 'mp3-folder',
     destination: 'sync-folder',
     headerTitle: 'Send to Audiobookshelf',
@@ -136,9 +140,13 @@ const TILE_HINTS: Record<TileHintKey, TileHint> = {
     footerNote:
       'Audiobookshelf rescans its library on a schedule — the new book appears after the next scan once your sync finishes pushing it.',
     bodyIntro:
-      "Audiobookshelf scans a configured library root on the server and treats each subfolder as one book. Point this at the same folder your sync app mirrors to the server's library path — the chapters arrive tagged and ready.",
+      "Audiobookshelf scans a configured library root on the server and treats each subfolder as one book. Point this at the same folder your sync app mirrors to the server's library path. Pick M4B for one chaptered file, or MP3 folder for per-chapter files with a metadata.json Audiobookshelf reads directly — either way, chapters, cover, and series arrive tagged and ready.",
     folderInputLabel: 'Audiobookshelf library folder',
     savedCaption: (saved) => `Saves to your Audiobookshelf library at ${saved}.`,
+    formatOptions: [
+      { id: 'mp3-folder', label: 'MP3 folder' },
+      { id: 'm4b', label: 'M4B' },
+    ],
   },
 };
 
@@ -412,6 +420,8 @@ export function ExportAudiobookModal({
               <TileBody
                 hint={tileHint}
                 hintKey={prefill?.appHint as string}
+                format={format}
+                setFormat={setFormat}
                 draft={syncFolderDraft}
                 setDraft={setSyncFolderDraft}
                 saved={syncFolder}
@@ -648,10 +658,15 @@ function SyncFolderTab({
 interface TileBodyProps extends SyncFolderTabProps {
   hint: TileHint;
   hintKey: string;
+  /** fs-54 — only rendered when hint.formatOptions is set. */
+  format: FormatId;
+  setFormat: (next: FormatId) => void;
 }
 function TileBody({
   hint,
   hintKey,
+  format,
+  setFormat,
   draft,
   setDraft,
   saved,
@@ -667,6 +682,24 @@ function TileBody({
   return (
     <div className="space-y-3" data-testid={bodyTestId}>
       <p>{hint.bodyIntro}</p>
+      {hint.formatOptions && (
+        <div
+          className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs w-fit"
+          data-testid="export-tile-format-toggle"
+        >
+          {hint.formatOptions.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              data-testid={`export-tile-format-${opt.id}`}
+              onClick={() => setFormat(opt.id)}
+              className={`px-3 py-1.5 rounded-full font-medium transition-colors ${format === opt.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
       {saved && !isDirty ? (
         <p className="text-xs text-ink/55" data-testid={captionTestId}>
           {hint.savedCaption(saved)}

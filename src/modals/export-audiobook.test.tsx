@@ -363,6 +363,45 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
   });
 });
 
+describe('ExportAudiobookModal — Audiobookshelf format toggle (fs-54)', () => {
+  it('shows an MP3 folder / M4B toggle', () => {
+    renderModal({
+      prefill: { format: 'mp3-folder', destination: 'sync-folder', appHint: 'audiobookshelf' },
+    });
+    expect(screen.getByTestId('export-tile-body-audiobookshelf')).toBeInTheDocument();
+    expect(screen.getByTestId('export-tile-format-mp3-folder')).toBeInTheDocument();
+    expect(screen.getByTestId('export-tile-format-m4b')).toBeInTheDocument();
+  });
+
+  it('switches the submitted format to m4b when the toggle is clicked', async () => {
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
+
+    render(
+      <Provider store={makeStoreWithSyncFolder('C:\\Users\\me\\OneDrive\\Audiobooks')}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'mp3-folder', destination: 'sync-folder', appHint: 'audiobookshelf' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('export-tile-format-m4b'));
+    fireEvent.click(screen.getByTestId('export-submit'));
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+        'demo__sa__test',
+        expect.objectContaining({ format: 'm4b', destination: 'sync-folder' }),
+      );
+    });
+  });
+
+  it('does not show the format toggle on a tile without formatOptions (e.g. Voice)', () => {
+    renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
+    expect(screen.queryByTestId('export-tile-format-toggle')).toBeNull();
+  });
+});
+
 /* Plan 79 — sync-folder UX hardening. Before this round the user had to
    spot a small "Save folder" button before the submit gate would unlock,
    the most common failure mode for Voice → Google Drive (folder typed,
