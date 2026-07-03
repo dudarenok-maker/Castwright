@@ -464,11 +464,11 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
      default are intentionally left unset — the sidecar applies its own Python
      default, avoiding double-defaulting drift.
 
-     Precedence note: this loop runs AFTER the PRELOAD_* block above, so an
-     explicit registry override for tts.preload.coqui / .kokoro / .qwen WINS
-     over the modelKey/eagerLoad-derived '0'/'1'. That is the intended
-     behaviour: a user who pins PRELOAD_QWEN via the config UI should get their
-     override respected even when modelKey logic would say otherwise. */
+     Precedence note: this loop runs AFTER the base env block above, so an
+     explicit registry override for tts.preload.coqui WINS over the
+     modelKey-derived PRELOAD_COQUI '0'/'1' set there. tts.preload.kokoro /
+     .qwen / .qwenBase17 have no base-block value to win over any more — this
+     loop is their ONLY source (see the buildSidecarEnv docblock above). */
   for (const knob of allKnobs()) {
     if (knob.apply !== 'restart-sidecar' || !knob.env) continue;
     const st = resolveKnob(knob);
