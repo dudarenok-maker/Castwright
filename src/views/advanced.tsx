@@ -27,7 +27,45 @@ import {
   selectRestartServerPending,
 } from '../store/config-slice';
 import { api } from '../lib/api';
-import type { GpuDevice, KnobDescriptor, PromptState } from '../lib/types';
+import type {
+  GpuDevice,
+  KnobDescriptor,
+  KnobValue,
+  PromptState,
+  StaleReason,
+  AnalyzerDeviceResponse,
+} from '../lib/types';
+
+/* ── per-device-knob staleReason derivation ──────────────────────────────── */
+
+/* Which sidecar engine a device knob's key pins. */
+function engineForDeviceKnob(key: string): string | null {
+  if (key === 'tts.qwen.device') return 'qwen';
+  if (key === 'tts.coqui.device') return 'coqui';
+  if (key === 'tts.kokoro.device') return 'kokoro';
+  return null;
+}
+
+/* Task 12 already sets `value.staleReason` server-side (uuid_unresolved via
+   resolveKnob) — that always wins. Otherwise, for a device knob, check whether
+   ITS engine shows up in any GET /api/gpu/devices entry's resident[] with
+   stale_reason:'cpu_fallback' (merged in server-side from the sidecar's /health,
+   Task 13). Only 'cpu_fallback' is derived here — a global-shadow fact surfaces
+   as its own Advanced Configuration banner, not a per-knob reason. */
+function deriveStaleReason(
+  descriptor: KnobDescriptor,
+  value: KnobValue,
+  gpuDevices: GpuDevice[],
+): StaleReason | undefined {
+  if (value.staleReason) return value.staleReason;
+  const engine = engineForDeviceKnob(descriptor.key);
+  if (!engine) return undefined;
+  for (const d of gpuDevices) {
+    const entry = d.resident?.find((r) => r.engine === engine);
+    if (entry?.stale_reason === 'cpu_fallback') return 'cpu_fallback';
+  }
+  return undefined;
+}
 
 /* ── PromptRow ────────────────────────────────────────────────────────────── */
 
@@ -171,11 +209,14 @@ function PromptRow({ descriptor }: PromptRowProps) {
 
 export function AdvancedView() {
   const dispatch = useAppDispatch();
-  const { groups, descriptors, values, status, error, hydrated } = useAppSelector((s) => s.config);
+  const { groups, descriptors, values, status, error, hydrated, cudaEnvShadow } = useAppSelector(
+    (s) => s.config,
+  );
   const restartPending = useAppSelector(selectRestartPending);
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
   const [gpuDevices, setGpuDevices] = useState<GpuDevice[]>([]);
+  const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device']>('unknown');
 
   useEffect(() => {
     dispatch(fetchConfig());
@@ -185,7 +226,21 @@ export function AdvancedView() {
       .getGpuDevices()
       .then((res) => setGpuDevices(res.devices))
       .catch(() => setGpuDevices([]));
+    // Best-effort: an unreachable Ollama daemon just leaves the read-only
+    // analyzer-device row showing "Unknown" (see the ANALYZER-mode gate below).
+    api
+      .getAnalyzerDevice()
+      .then((res) => setAnalyzerDevice(res.device))
+      .catch(() => setAnalyzerDevice('unknown'));
   }, [dispatch]);
+
+  /* Plan 2 §2.4 — the analyzer-device row is only meaningful when the
+     analyzer is actually dispatching through the local Ollama daemon;
+     under ANALYZER=gemini there's no local device to report. Reuses the
+     `analyzer.engine` knob's live value already hydrated into `values` by
+     fetchConfig(), rather than adding a second endpoint/state slice for
+     the same fact. */
+  const analyzerEngine = values['analyzer.engine']?.effective;
 
   const handleResetAll = () => {
     if (!window.confirm('Reset all advanced settings to their defaults?')) return;
@@ -232,6 +287,20 @@ export function AdvancedView() {
           <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
             <p className="text-sm text-amber-800">
               Some changes need an app restart to take effect.
+            </p>
+          </div>
+        )}
+        {cudaEnvShadow && (
+          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
+            <p className="text-sm text-amber-800">
+              <code className="font-mono">CUDA_VISIBLE_DEVICES</code>/
+              <code className="font-mono">CUDA_DEVICE_ORDER</code> is set in{' '}
+              <code className="font-mono">server/.env</code> — it overrides every device pin
+              below. See{' '}
+              <a href="/docs/local-llm.md" className="underline">
+                docs/local-llm.md
+              </a>{' '}
+              to switch to per-engine pins.
             </p>
           </div>
         )}
@@ -287,27 +356,52 @@ export function AdvancedView() {
                   overriddenCount={overriddenCount}
                   onResetSection={() => dispatch(resetGroup(group.id))}
                 >
-                  {groupDescriptors.map((d) =>
-                    d.isPrompt ? (
-                      <PromptRow key={d.key} descriptor={d} />
-                    ) : (
+                  {groupDescriptors.map((d) => {
+                    if (d.isPrompt) return <PromptRow key={d.key} descriptor={d} />;
+                    const value = values[d.key] ?? {
+                      key: d.key,
+                      effective: d.default,
+                      source: 'default',
+                      locked: false,
+                      overridden: false,
+                    };
+                    return (
                       <OverrideRow
                         key={d.key}
                         descriptor={d}
-                        value={
-                          values[d.key] ?? {
-                            key: d.key,
-                            effective: d.default,
-                            source: 'default',
-                            locked: false,
-                            overridden: false,
-                          }
-                        }
+                        value={{ ...value, staleReason: deriveStaleReason(d, value, gpuDevices) }}
                         onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw }))}
                         onRevert={() => dispatch(resetKnob(d.key))}
                         gpuDevices={gpuDevices}
                       />
-                    ),
+                    );
+                  })}
+                  {group.id === 'tts-engine' && analyzerEngine === 'local' && (
+                    <div className="py-3 border-b border-ink/8">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-medium text-ink flex-1">
+                          Analyzer (Ollama) device
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-ink/8 text-ink/60 text-[11px] font-semibold">
+                          read-only
+                        </span>
+                      </div>
+                      <p className="text-xs text-ink/55 mb-1">
+                        {analyzerDevice === 'cuda'
+                          ? 'GPU'
+                          : analyzerDevice === 'cpu'
+                            ? 'CPU'
+                            : 'Unknown'}{' '}
+                        — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
+                        daemon.
+                      </p>
+                      <a
+                        href="/docs/local-llm.md"
+                        className="text-xs text-magenta hover:underline"
+                      >
+                        Change the analyzer&apos;s device (documented OS-env steps)
+                      </a>
+                    </div>
                   )}
                 </SettingsSection>
               );

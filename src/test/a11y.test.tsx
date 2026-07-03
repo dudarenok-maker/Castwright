@@ -20,6 +20,7 @@ import { UploadView } from '../views/upload';
 import { ConfirmCastView } from '../views/confirm-cast';
 import { ListenView } from '../views/listen';
 import { StatsView } from '../views/stats';
+import { AdvancedView } from '../views/advanced';
 
 import { accountSlice } from '../store/account-slice';
 import { librarySlice } from '../store/library-slice';
@@ -29,6 +30,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { exportsSlice } from '../store/exports-slice';
 import { analysisSlice } from '../store/analysis-slice';
 import { chaptersSlice } from '../store/chapters-slice';
+import { configSlice } from '../store/config-slice';
 
 import type { Chapter, Character, Voice, LibraryAuthor } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
@@ -70,6 +72,53 @@ vi.mock('../lib/api', () => ({
           { date: '2026-06-13', seconds: 3600 },
         ],
       }),
+    // Advanced Configuration view fetches its config + GPU device list +
+    // analyzer device on mount.
+    getConfig: () =>
+      Promise.resolve({
+        groups: [
+          {
+            id: 'tts',
+            label: 'Text-to-speech',
+            help: 'TTS settings.',
+            risk: 'low',
+            collapsedByDefault: false,
+          },
+        ],
+        descriptors: [
+          {
+            key: 'KOKORO_SAMPLE_RATE',
+            group: 'tts',
+            label: 'Kokoro sample rate',
+            help: 'PCM output sample rate in Hz.',
+            type: 'integer',
+            min: 8000,
+            max: 48000,
+            step: 1000,
+            apply: 'live',
+            risk: 'low',
+            isPrompt: false,
+            default: 24000,
+          },
+        ],
+        values: {
+          KOKORO_SAMPLE_RATE: {
+            key: 'KOKORO_SAMPLE_RATE',
+            effective: 24000,
+            source: 'default',
+            locked: false,
+            overridden: false,
+          },
+        },
+        restartPending: false,
+        cudaEnvShadow: false,
+      }),
+    getGpuDevices: () =>
+      Promise.resolve({
+        devices: [{ uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 }],
+        cpu: true,
+      }),
+    getAnalyzerDevice: () => Promise.resolve({ device: 'unknown' as const }),
   },
 }));
 
@@ -303,6 +352,23 @@ describe('a11y — listen view', () => {
         />
       </Provider>,
     );
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+  });
+});
+
+describe('a11y — advanced configuration view', () => {
+  it('has no axe violations', async () => {
+    const store = configureStore({
+      reducer: { config: configSlice.reducer, ui: uiSlice.reducer },
+    });
+    const { container } = render(
+      <Provider store={store}>
+        <AdvancedView />
+      </Provider>,
+    );
+    // Wait for fetchConfig to hydrate so axe scans real content, not the
+    // loading state.
+    await screen.findByText('Kokoro sample rate');
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });

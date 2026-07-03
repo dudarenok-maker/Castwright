@@ -703,7 +703,7 @@ class CoquiEngine(Engine):
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
-        self._device = os.environ.get("COQUI_DEVICE", "auto")  # auto | cpu | cuda | cuda:N
+        self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
         self._requested_device = self._device  # preserved before any auto-resolution
         # fp16 and DeepSpeed-inference are CUDA-only XTTS speedups. Each ~1.5–2×
         # on top of CUDA itself, no audible quality loss. Defaults flip ON when
@@ -1004,7 +1004,7 @@ class KokoroEngine(Engine):
         self._dml_status: Optional[str] = None
         # KOKORO_DEVICE=cuda:N — captured here so the sess-replacement in
         # _ensure_loaded can pin the ORT InferenceSession to the indexed GPU.
-        self._requested_device: str = os.environ.get("KOKORO_DEVICE", "auto")
+        self._requested_device: str = _read_device_env("KOKORO_DEVICE") or "auto"
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -1369,6 +1369,77 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     return (p, None)
 
 
+def _sample_card(idx: int, torch_module: Any) -> dict:
+    """One card's discovery row (driver truth via mem_get_info — sees ALL
+    allocators). The reusable primitive Wave 2's ledger wraps per-sample."""
+    props = torch_module.cuda.get_device_properties(idx)
+    free, total = torch_module.cuda.mem_get_info(idx)
+    return {
+        "uuid": str(getattr(props, "uuid", "")) or f"idx-{idx}",
+        "idx": idx,
+        "name": props.name,
+        "total_mb": round(total / 1_000_000),
+        "free_mb": round(free / 1_000_000),
+    }
+
+
+def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
+    """[{uuid,idx,name,total_mb,free_mb}] per visible CUDA device, [] when CUDA is
+    unavailable. torch_module is injectable for tests (default → local import).
+
+    Defined here (ahead of _resolve_uuid_to_index, its only caller at module-
+    import time) rather than near DeviceLedger/_sample_card's other Wave 2
+    call sites further down the file: ENGINES = {"qwen": QwenEngine(), ...}
+    constructs its entries at MODULE-IMPORT time, and QwenEngine.__init__
+    reads QWEN_DEVICE through _read_device_env -> _resolve_uuid_to_index. A
+    'cuda-uuid:<uuid>' value reaching that constructor needs this function
+    already bound in the module namespace — being defined later in the file
+    is a NameError waiting to fire on the very first cold boot with a
+    UUID-keyed device override already on disk (reproduced on real hardware
+    during Plan 2a's on-box acceptance: the Node-side spawn-time cache in
+    getLastKnownGpuDevices() is empty before the frontend's first GET
+    /api/gpu/devices poll, so buildSidecarEnv passes the RAW 'cuda-uuid:...'
+    string through unresolved on a fresh server boot, not the pre-resolved
+    'cuda:N' form a warm cache would produce)."""
+    try:
+        if torch_module is None:
+            import torch as torch_module  # type: ignore
+        if not torch_module.cuda.is_available():
+            return []
+        return [_sample_card(i, torch_module) for i in range(torch_module.cuda.device_count())]
+    except Exception:
+        return []
+
+
+def _resolve_uuid_to_index(value: Optional[str], torch_module: Any = None) -> Optional[str]:
+    """Front seam for Plan 2's UUID identity: a 'cuda-uuid:<uuid>' knob value
+    resolves to the box's CURRENT 'cuda:N' index via live enumeration. Any
+    other value (auto/cpu/mps/cuda:N/None) passes through unchanged. Returns
+    None when the uuid matches no visible card — the caller decides the
+    fallback; this function never silently substitutes a different card."""
+    if not value or not value.startswith("cuda-uuid:"):
+        return value
+    target_uuid = value[len("cuda-uuid:"):]
+    for card in _enumerate_cuda_devices(torch_module):
+        if card["uuid"] == target_uuid:
+            return f"cuda:{card['idx']}"
+    return None
+
+
+def _read_device_env(var_name: str) -> Optional[str]:
+    """Read a *_DEVICE env var, resolving a Plan-2 UUID form to this box's
+    current index. Every device-knob env read should go through this instead
+    of a bare os.environ.get, so a UUID-keyed assignment (portable across a
+    box's own restarts, robust to index renumbering) always resolves against
+    the box's LIVE card list."""
+    raw = os.environ.get(var_name)
+    resolved = _resolve_uuid_to_index(raw)
+    if raw and raw.startswith("cuda-uuid:") and resolved is None:
+        log.warning("%s=%s did not match any visible GPU (uuid_unresolved) — falling back to auto.", var_name, raw)
+        return "auto"
+    return resolved
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
@@ -1461,23 +1532,23 @@ def shares_device(device_a: Optional[str], device_b: Optional[str], torch_module
 
 def _qwen_configured_card_idx() -> int:
     """Best-effort resolved card index for QWEN_DEVICE, used to pick the
-    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Wave 2
-    reads the raw env directly — Plan 2's UUID resolver (_read_device_env)
-    doesn't exist yet at this point in the build order. Task 10.5 upgrades
-    this function to route through _read_device_env once it does; DO NOT
-    read raw env at any OTHER new call site without checking Task 10.5's
-    note first."""
-    fam, idx = _parse_device(os.environ.get("QWEN_DEVICE", "auto"))
+    per-card mutex the 1.7B-Base design-load path acquires (Task 5). Routes
+    through _read_device_env (Task 10) for the same reason
+    _compute_vd_kokoro_shares_device does — see its docstring."""
+    fam, idx = _parse_device(_read_device_env("QWEN_DEVICE"))
     return idx or 0
 
 
 def _compute_vd_kokoro_shares_device() -> bool:
     """Resolve whether QWEN_DEVICE and KOKORO_DEVICE currently share a card.
-    Any failure (no torch, unreadable env) defaults True — the SAFE,
-    conservative choice (stay coupled) rather than silently disabling the
-    guard on an error."""
+    Routes through _read_device_env (Task 10) so a UUID-keyed override
+    resolves to its real current index BEFORE shares_device sees it — reading
+    raw env here would misparse 'cuda-uuid:<uuid>' as unindexed 'cuda' in
+    _parse_device (startswith('cuda') matches, the uuid fragment isn't a
+    digit) and silently default both engines to card 0. Any failure defaults
+    True — the SAFE, conservative choice (stay coupled)."""
     try:
-        return shares_device(os.environ.get("QWEN_DEVICE"), os.environ.get("KOKORO_DEVICE"))
+        return shares_device(_read_device_env("QWEN_DEVICE"), _read_device_env("KOKORO_DEVICE"))
     except Exception:
         return True
 
@@ -1656,7 +1727,7 @@ class QwenEngine(Engine):
         self._design: Any = None  # transient voice-design model
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
-        self._device_pref = os.environ.get("QWEN_DEVICE", "auto")
+        self._device_pref = _read_device_env("QWEN_DEVICE") or "auto"
         # PYTORCH_ENABLE_MPS_FALLBACK lets unsupported mps ops fall back to CPU
         # instead of raising. Read per-op at dispatch, so set it early whenever
         # mps is in play. Concrete device is resolved lazily at load time (torch
@@ -3658,33 +3729,6 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
         return (None, None, None)
 
 
-def _sample_card(idx: int, torch_module: Any) -> dict:
-    """One card's discovery row (driver truth via mem_get_info — sees ALL
-    allocators). The reusable primitive Wave 2's ledger wraps per-sample."""
-    props = torch_module.cuda.get_device_properties(idx)
-    free, total = torch_module.cuda.mem_get_info(idx)
-    return {
-        "uuid": str(getattr(props, "uuid", "")) or f"idx-{idx}",
-        "idx": idx,
-        "name": props.name,
-        "total_mb": round(total / 1_000_000),
-        "free_mb": round(free / 1_000_000),
-    }
-
-
-def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
-    """[{uuid,idx,name,total_mb,free_mb}] per visible CUDA device, [] when CUDA is
-    unavailable. torch_module is injectable for tests (default → local import)."""
-    try:
-        if torch_module is None:
-            import torch as torch_module  # type: ignore
-        if not torch_module.cuda.is_available():
-            return []
-        return [_sample_card(i, torch_module) for i in range(torch_module.cuda.device_count())]
-    except Exception:
-        return []
-
-
 class DeviceLedger:
     """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
     (_sample_card). Read from three thread contexts (the _memory_watchdog
@@ -3702,7 +3746,8 @@ class DeviceLedger:
     CAVEAT (raised by a round-2 adversarial review, not fixed here — see Task
     9's on-box checklist): this guarantee depends on torch actually exposing
     a real per-card uuid via get_device_properties(idx).uuid. _sample_card
-    (Wave 1, main.py ~3596) falls back to a synthetic f"idx-{idx}" string when
+    (Wave 1; moved near _resolve_uuid_to_index in Plan 2a — see its docstring)
+    falls back to a synthetic f"idx-{idx}" string when
     that attribute is absent — on a torch build/driver where it's absent, the
     fallback uuid is DERIVED FROM THE INDEX ITSELF, so a renumber can never
     produce a mismatch and this detection silently no-ops. Confirm real uuids
@@ -4300,6 +4345,26 @@ async def _preload_default_engines() -> None:
                 )
 
 
+def _warn_if_cuda_env_shadow_active() -> None:
+    """Plan 2 §2.5 cutover nudge: CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER are
+    raw env, not knobs — the picker can surface them (server-side, Task 11)
+    but can't CLEAR them (that's a manual .env edit, documented in
+    docs/local-llm.md). WARN once at boot so an operator who's moved to the
+    picker knows a stale env var is still shadowing it."""
+    if os.environ.get("CUDA_VISIBLE_DEVICES") or os.environ.get("CUDA_DEVICE_ORDER"):
+        log.warning(
+            "CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in the environment — it overrides "
+            "every per-engine device pin set via the Advanced Configuration picker. If you've "
+            "moved to per-engine pins, remove these two lines from server/.env (see "
+            "docs/local-llm.md's cutover section)."
+        )
+
+
+@app.on_event("startup")
+async def _startup_cuda_env_shadow_check() -> None:
+    _warn_if_cuda_env_shadow_active()
+
+
 def _qwen_package_installed() -> bool:
     """True if the `qwen_tts` package is importable WITHOUT importing it (no
     torch pull, no weight load). Cheap enough to call on every /health poll."""
@@ -4489,7 +4554,7 @@ def _compute_device_predictions(
         pref = (
             qwen._device_pref
             if isinstance(qwen, QwenEngine)
-            else os.environ.get("QWEN_DEVICE", "auto")
+            else _read_device_env("QWEN_DEVICE") or "auto"
         )
         out["qwen"] = _normalize_device_family(
             _resolve_torch_device(pref, torch_module), torch_module

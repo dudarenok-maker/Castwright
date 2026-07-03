@@ -16,6 +16,7 @@ export interface ConfigState {
   status: ConfigStatus;
   error: string | null;
   hydrated: boolean;
+  cudaEnvShadow: boolean;
 }
 
 const initialState: ConfigState = {
@@ -25,6 +26,7 @@ const initialState: ConfigState = {
   status: 'idle',
   error: null,
   hydrated: false,
+  cudaEnvShadow: false,
 };
 
 /* ── thunks ─────────────────────────────────────────────────────────────── */
@@ -103,6 +105,7 @@ export const configSlice = createSlice({
         s.groups = a.payload.groups;
         s.descriptors = a.payload.descriptors;
         s.values = a.payload.values;
+        s.cudaEnvShadow = a.payload.cudaEnvShadow;
         s.status = 'idle';
         s.error = null;
         s.hydrated = true;

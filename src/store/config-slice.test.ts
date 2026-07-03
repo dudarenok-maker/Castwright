@@ -85,6 +85,7 @@ const MOCK_CONFIG_RESPONSE = {
   descriptors: MOCK_DESCRIPTORS,
   values: MOCK_VALUES,
   restartPending: false,
+  cudaEnvShadow: false,
 };
 
 /* ── helpers ────────────────────────────────────────────────────────────── */

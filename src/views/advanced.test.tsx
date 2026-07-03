@@ -22,12 +22,14 @@ vi.mock('../lib/api', () => ({
     resetPrompt: vi.fn(),
     restartSidecar: vi.fn(),
     getGpuDevices: vi.fn(),
+    getAnalyzerDevice: vi.fn(),
   },
 }));
 
 const mockGetConfig = vi.mocked(api.getConfig);
 const mockPutConfig = vi.mocked(api.putConfig);
 const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
+const mockGetAnalyzerDevice = vi.mocked(api.getAnalyzerDevice);
 
 const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
   devices: [
@@ -129,6 +131,7 @@ const FIXTURE_CONFIG: ConfigResponse = {
     },
   },
   restartPending: false,
+  cudaEnvShadow: false,
 };
 
 /* Build a minimal store with config + ui slices. */
@@ -161,6 +164,7 @@ beforeEach(() => {
   });
   vi.mocked(api.restartSidecar).mockResolvedValue({ ok: true });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
+  mockGetAnalyzerDevice.mockResolvedValue({ device: 'unknown' });
 });
 
 /* ── Group headers ────────────────────────────────────────────────────────── */
@@ -265,6 +269,48 @@ describe('AdvancedView — device-knob picker', () => {
   });
 });
 
+/* ── Per-row staleReason derivation (Task 13, Plan 2 §2.2) ───────────────── */
+
+describe('AdvancedView — per-row staleReason derivation', () => {
+  it('shows the cpu_fallback badge on the Qwen device row when its engine resident entry reports cpu_fallback', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FIXTURE_CONFIG,
+      descriptors: [
+        ...FIXTURE_CONFIG.descriptors,
+        {
+          key: 'tts.qwen.device',
+          group: 'tts',
+          label: 'Qwen device (real key)',
+          help: 'Pin Qwen to a specific GPU.',
+          type: 'device',
+          apply: 'restart-sidecar',
+          risk: 'high',
+          isPrompt: false,
+          default: 'auto',
+        },
+      ],
+    });
+    mockGetGpuDevices.mockResolvedValue({
+      devices: [
+        {
+          uuid: 'GPU-0',
+          idx: 0,
+          name: 'RTX 4070 Laptop',
+          total_mb: 8000,
+          free_mb: 6000,
+          resident: [{ engine: 'qwen', actual_card: 0, stale_reason: 'cpu_fallback' }],
+        },
+      ],
+      cpu: true,
+    });
+
+    renderView();
+    await screen.findByText('Qwen device (real key)');
+
+    expect(screen.getByTestId('stale-reason-badge')).toHaveTextContent('fell back to CPU');
+  });
+});
+
 /* ── Restart banner ───────────────────────────────────────────────────────── */
 
 describe('AdvancedView — restart banner', () => {
@@ -315,5 +361,115 @@ describe('AdvancedView — back-to-Admin breadcrumb', () => {
     const btn = screen.getByTestId('advanced-back-to-admin');
     fireEvent.click(btn);
     expect(store.getState().ui.stage).toMatchObject({ kind: 'admin' });
+  });
+});
+
+/* ── Analyzer read-only device row (Plan 2 §2.4) ─────────────────────────── */
+
+/* The `analyzer.engine` knob (server group 'analyzer-models') is deliberately
+   left OUT of `descriptors` here — only its live `values` entry is fixtured.
+   Adding it to `descriptors` would render a second, genuinely-editable
+   "Analyzer engine" <select>, which would collide with the
+   `queryByRole('combobox', { name: /analyzer/i })` assertion below (that
+   query is meant to prove THIS row — the read-only one — renders no
+   combobox at all). */
+const CONFIG_WITH_TTS_ENGINE_GROUP: ConfigResponse = {
+  ...FIXTURE_CONFIG,
+  groups: [
+    ...FIXTURE_CONFIG.groups,
+    {
+      id: 'tts-engine',
+      label: 'Voice engine & device',
+      help: 'Voice engine device, language, and preload behaviour.',
+      risk: 'high',
+      collapsedByDefault: false,
+    },
+  ],
+  values: {
+    ...FIXTURE_CONFIG.values,
+    'analyzer.engine': {
+      key: 'analyzer.engine',
+      effective: 'local',
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
+  },
+};
+
+/* 'tts-engine' is risk:'high' (matches the real registry group), so
+   SettingsSection starts it collapsed regardless of collapsedByDefault —
+   the row only mounts once the section is expanded. Mirrors how a real
+   user would reach the "Voice engine & device" section. */
+async function openVoiceEngineSection(): Promise<void> {
+  /* Both the nav rail and the section header render a "Voice engine &
+     device"-named button; only the section header carries aria-expanded. */
+  const toggles = await screen.findAllByRole('button', { name: /Voice engine & device/ });
+  const toggle = toggles.find((el) => el.hasAttribute('aria-expanded'));
+  if (!toggle) throw new Error('Voice engine & device section toggle not found');
+  fireEvent.click(toggle);
+}
+
+describe('AdvancedView — analyzer read-only row (Plan 2 §2.4)', () => {
+  it('shows the analyzer GPU/CPU/unknown placement, not editable', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
+
+    renderView();
+    await openVoiceEngineSection();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.getByText(/GPU — not app-pinnable/)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /analyzer/i })).not.toBeInTheDocument();
+  });
+
+  it('links to the documented OS-env path', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cpu' });
+
+    renderView();
+    await openVoiceEngineSection();
+    const link = await screen.findByRole('link', { name: /change.*analyzer.*device/i });
+    expect(link).toHaveAttribute('href', expect.stringMatching(/local-llm/));
+  });
+
+  it('hides the row entirely when the analyzer engine is gemini (§2.4 gate)', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...CONFIG_WITH_TTS_ENGINE_GROUP,
+      values: {
+        ...CONFIG_WITH_TTS_ENGINE_GROUP.values,
+        'analyzer.engine': {
+          key: 'analyzer.engine',
+          effective: 'gemini',
+          source: 'default',
+          locked: false,
+          overridden: false,
+        },
+      },
+    });
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
+
+    renderView();
+    await openVoiceEngineSection();
+    expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('AdvancedView — CUDA env-shadow banner (Plan 2 §2.5)', () => {
+  it('shows a banner when cudaEnvShadow is true', async () => {
+    mockGetConfig.mockResolvedValue({ ...FIXTURE_CONFIG, cudaEnvShadow: true });
+
+    renderView();
+    await screen.findByText(/CUDA_VISIBLE_DEVICES/i);
+  });
+
+  it('shows no banner when cudaEnvShadow is false', async () => {
+    mockGetConfig.mockResolvedValue({ ...FIXTURE_CONFIG, cudaEnvShadow: false });
+
+    renderView();
+    /* Wait for hydration (findAllByText — nav rail + section header both
+       carry the label text; matches the "group headers" describe block's
+       convention above). */
+    await screen.findAllByText('Text-to-speech');
+    expect(screen.queryByText(/CUDA_VISIBLE_DEVICES/i)).not.toBeInTheDocument();
   });
 });

@@ -120,6 +120,44 @@ def test_compute_vd_kokoro_shares_device_defaults_true_on_error(monkeypatch):
     assert main._compute_vd_kokoro_shares_device() is True
 
 
+def test_compute_vd_kokoro_shares_device_routes_through_read_device_env(monkeypatch):
+    """Regression for the adversarial-review finding: the coupling computation
+    must resolve a UUID override BEFORE handing it to shares_device, not read
+    raw env directly (a cuda-uuid:<uuid> value would otherwise misparse as
+    unindexed 'cuda' in _parse_device and silently default to card 0)."""
+    calls = []
+
+    def fake_read(var_name):
+        calls.append(var_name)
+        return {"QWEN_DEVICE": "cuda:0", "KOKORO_DEVICE": "cuda:1"}[var_name]
+
+    monkeypatch.setattr(main, "_read_device_env", fake_read)
+    monkeypatch.setattr(main, "shares_device", lambda a, b, tm=None: (a, b) == ("cuda:0", "cuda:1"))
+    result = main._compute_vd_kokoro_shares_device()
+    assert set(calls) == {"QWEN_DEVICE", "KOKORO_DEVICE"}
+    assert result is True  # shares_device was called with the RESOLVED values, matching the fake's condition
+
+
+def test_compute_vd_kokoro_shares_device_uuid_override_resolves_to_correct_card(monkeypatch):
+    """End-to-end proof the original bug is fixed: a cuda-uuid: override for
+    QWEN_DEVICE resolves to the SAME concrete card _resolve_torch_device would
+    report for the plain cuda:N form — not silently 'card 0' by default."""
+    monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GPU-1")  # resolves to cuda:1, NOT cuda:0
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:1")  # same card -> should COUPLE
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [
+        {"uuid": "GPU-0", "idx": 0, "name": "a", "total_mb": 8000, "free_mb": 6000},
+        {"uuid": "GPU-1", "idx": 1, "name": "b", "total_mb": 16000, "free_mb": 14000},
+    ])
+    seen = {}
+
+    def spy_shares_device(a, b, tm=None):
+        seen["a"], seen["b"] = a, b
+        return a == b
+    monkeypatch.setattr(main, "shares_device", spy_shares_device)
+    assert main._compute_vd_kokoro_shares_device() is True
+    assert seen == {"a": "cuda:1", "b": "cuda:1"}  # NOT {"a": "cuda:0", ...} — the pre-fix bug's symptom
+
+
 def test_design_waits_for_in_flight_kokoro_to_drain():
     arb = _VdKokoroArbiter()
     order = []

@@ -80,3 +80,34 @@ def test_validate_cuda_index_passes_in_range():
         cuda=_types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 2)
     )
     main._validate_cuda_index("cuda:1", fake)  # must not raise
+
+
+def test_resolve_uuid_to_index_passthrough_for_non_uuid_values():
+    assert main._resolve_uuid_to_index("cuda:1") == "cuda:1"
+    assert main._resolve_uuid_to_index("auto") == "auto"
+    assert main._resolve_uuid_to_index(None) is None
+    assert main._resolve_uuid_to_index("cpu") == "cpu"
+
+
+def test_resolve_uuid_to_index_resolves_a_known_uuid(monkeypatch):
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    assert main._resolve_uuid_to_index("cuda-uuid:GPU-1") == "cuda:1"
+
+
+def test_resolve_uuid_to_index_none_for_unknown_uuid(monkeypatch):
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    assert main._resolve_uuid_to_index("cuda-uuid:GPU-VANISHED") is None
+
+
+def test_read_device_env_resolves_uuid(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GPU-1")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    assert main._read_device_env("QWEN_DEVICE") == "cuda:1"
+
+
+def test_read_device_env_falls_back_to_auto_when_uuid_unresolved(monkeypatch, caplog):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GONE")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    assert main._read_device_env("QWEN_DEVICE") == "auto"

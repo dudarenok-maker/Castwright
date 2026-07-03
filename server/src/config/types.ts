@@ -51,4 +51,14 @@ export interface KnobValueState {
   locked: boolean;
   /** True when an app override is present (and not locked by env). */
   overridden: boolean;
+  /** Set when `effective` is degraded/unresolved and the UI should flag it.
+      'cpu_fallback' is populated wherever an engine's actual resolved device
+      is surfaced as CPU-fallen-back; 'uuid_unresolved' (this task) means a
+      stored 'cuda-uuid:<uuid>' override matches no currently-visible card in
+      the last-known device list. `env_shadow` (CUDA_VISIBLE_DEVICES/
+      CUDA_DEVICE_ORDER shadowing every pin) is a GLOBAL fact, not a per-knob
+      one — it's surfaced separately as the top-level `cudaEnvShadow` flag on
+      `GET /api/config`, rendered as one Advanced Configuration banner rather
+      than a duplicated per-row reason. */
+  staleReason?: 'cpu_fallback' | 'uuid_unresolved';
 }

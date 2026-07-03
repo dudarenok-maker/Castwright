@@ -202,6 +202,15 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
   res.json(await probeOllamaHealth());
 });
 
+/* GET /api/ollama/device — Plan 2 §2.4. Surfaces the analyzer's live
+   GPU/CPU/unknown placement (same detectOllamaDevice() probe already used
+   to seed the first-chapter ETA rate) for the Advanced Configuration
+   read-only device row. Not app-pinnable — the analyzer connects to a
+   user/OS-managed Ollama daemon, so there's nothing to write here. */
+ollamaHealthRouter.get('/device', async (_req: Request, res: Response) => {
+  res.json({ device: await detectOllamaDevice() });
+});
+
 /* Ollama doesn't expose a dedicated load/unload pair — instead it interprets
    `keep_alive` on /api/generate as the eviction TTL for the loaded model.
    - `keep_alive: "5m"` + empty prompt = warm the model into VRAM and hold it.

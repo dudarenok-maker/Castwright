@@ -55,6 +55,7 @@ import type {
   ContinueListeningItem,
   SeriesMemoryDetail,
   GpuDevicesResponse,
+  AnalyzerDeviceResponse,
 } from './types';
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
@@ -6928,6 +6929,19 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     isPrompt: true,
     default: 'Attribute each sentence to its speaker.',
   },
+  {
+    // Mirrors the real registry's tts-engine.device knobs (Plan 2) — needed so
+    // e2e can exercise the device picker's stale-reason badge in mock mode.
+    key: 'tts.qwen.device',
+    group: 'tts-engine',
+    label: 'Qwen device',
+    help: 'PyTorch device for Qwen3-TTS. "auto" picks cuda:0 → mps → cpu.',
+    type: 'device',
+    apply: 'restart-sidecar',
+    risk: 'high',
+    isPrompt: false,
+    default: 'auto',
+  },
 ];
 
 const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
@@ -6943,6 +6957,13 @@ const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
     label: 'Analyzer',
     help: 'Analysis prompt templates and tuning.',
     risk: 'medium',
+    collapsedByDefault: true,
+  },
+  {
+    id: 'tts-engine',
+    label: 'Voice engine & device',
+    help: 'Voice engine device, language, and preload behaviour.',
+    risk: 'high',
     collapsedByDefault: true,
   },
 ];
@@ -6977,6 +6998,13 @@ const MOCK_CONFIG_VALUES: import('./types').ConfigValues = {
     locked: false,
     overridden: false,
   },
+  'tts.qwen.device': {
+    key: 'tts.qwen.device',
+    effective: 'auto',
+    source: 'default',
+    locked: false,
+    overridden: false,
+  },
 };
 
 /* In-memory prompt store keyed by id. */
@@ -6994,6 +7022,9 @@ const MOCK_PROMPTS = new Map<string, PromptState>([
 
 export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
   await wait(20);
+  const seeded = (globalThis as unknown as { __SEED_GPU_DEVICES__?: GpuDevicesResponse })
+    .__SEED_GPU_DEVICES__;
+  if (seeded) return seeded;
   return {
     devices: [
       { uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 },
@@ -7003,6 +7034,13 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
   };
 }
 
+/* Plan 2 §2.4 — mocked analyzer device placement for the Advanced
+   Configuration read-only row. */
+export async function mockGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
+  await wait(20);
+  return { device: 'cuda' };
+}
+
 export async function mockGetConfig(): Promise<ConfigResponse> {
   await wait(40);
   return {
@@ -7010,6 +7048,7 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
     descriptors: MOCK_CONFIG_DESCRIPTORS,
     values: { ...MOCK_CONFIG_VALUES },
     restartPending: false,
+    cudaEnvShadow: false,
   };
 }
 
@@ -7135,6 +7174,17 @@ async function realGetGpuDevices(): Promise<GpuDevicesResponse> {
   const res = await fetch('/api/gpu/devices');
   if (!res.ok)
     throw new Error(`GPU device fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+/* Plan 2 §2.4 — real analyzer device placement, backing the Advanced
+   Configuration read-only row. */
+async function realGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
+  const res = await fetch('/api/ollama/device');
+  if (!res.ok)
+    throw new Error(
+      `Analyzer device fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 
@@ -7480,6 +7530,7 @@ const real = {
   resetPrompt: realResetPrompt,
   restartSidecar: realRestartSidecar,
   getGpuDevices: realGetGpuDevices,
+  getAnalyzerDevice: realGetAnalyzerDevice,
 };
 
 const mock = {
@@ -7718,6 +7769,7 @@ const mock = {
   resetPrompt: mockResetPrompt,
   restartSidecar: mockRestartSidecar,
   getGpuDevices: mockGetGpuDevices,
+  getAnalyzerDevice: mockGetAnalyzerDevice,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry

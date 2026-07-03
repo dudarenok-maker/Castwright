@@ -2028,25 +2028,40 @@ git commit -m "feat(server): surface CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER env-
 
 ### Task 12: Frontend — resident-vs-assigned + `stale_reason` badge on the device rows (§2.2 badge half)
 
+**Scope correction (2026-07-02, resolved during Plan 2a execution):** Task 10's
+own forward-reference comments (`types.ts`/`resolver.ts`) said "Task 11
+populates the per-knob `cpu_fallback`/`env_shadow` `staleReason`s" — but
+Task 11 as actually written only adds a top-level `cudaEnvShadow: boolean`
+(§2.5 config-read half), never a per-knob `staleReason:'env_shadow'`. This
+was a genuine plan-authoring inconsistency, caught by Task 11's task-review
+and resolved with the user: `env_shadow` is a GLOBAL fact (`CUDA_VISIBLE_
+DEVICES` shadows every `cuda:N` pin identically, not one engine specifically)
+— rendering it as three duplicate per-row badges would be worse UX than one
+banner. **`StaleReason` therefore drops `'env_shadow'`, keeping only
+`'cpu_fallback' | 'uuid_unresolved'`** (both genuinely per-engine facts). The
+top-level `cudaEnvShadow` flag Task 11 already shipped is consumed by a new
+Step 6 in Task 17 (§2.5's e2e/a11y task, the natural home for the rest of
+the §2.5 cutover story) as a single Advanced Configuration banner.
+
 **Files:**
 - Modify: `src/lib/types.ts` (extend `GpuDevice`/add a `GpuResidentInfo` type mirroring the sidecar's `/health` `gpus[].resident[]`; `KnobValueState`/`KnobValue` gains `staleReason?`)
 - Modify: `src/lib/api.ts` (extend `getGpuDevices` — or add a sibling call — to also surface resident/stale_reason data; simplest: extend the EXISTING `/api/gpu/devices` response to include it, see Task 13 below for the server-side plumbing this depends on)
 - Modify: `src/components/settings/override-row.tsx` (the `type==='device'` branch renders a badge when `value.staleReason` is set)
 - Modify (APPEND): `src/components/settings/override-row.test.tsx`
 
-**a11y requirement (spec §2.2, verified against `src/test/a11y.test.tsx` — Advanced Configuration has NO existing a11y coverage, added in Task 17):** the three `stale_reason`s must be distinguishable WITHOUT relying on color alone — use distinct TEXT labels (not just colored dots), matching the existing `.env` pill's pattern (`override-row.tsx:172-174`, already text-based: `.env`).
+**a11y requirement (spec §2.2, verified against `src/test/a11y.test.tsx` — Advanced Configuration has NO existing a11y coverage, added in Task 17):** the two `stale_reason`s must be distinguishable WITHOUT relying on color alone — use distinct TEXT labels (not just colored dots), matching the existing `.env` pill's pattern (`override-row.tsx:172-174`, already text-based: `.env`).
 
 - [ ] **Step 1: Extend the types**
 
 `src/lib/types.ts` — find `GpuDevice`/`GpuDevicesResponse` (added by #1205) and `KnobValueState`/`KnobValue`, add:
 ```ts
-export type StaleReason = 'cpu_fallback' | 'env_shadow' | 'uuid_unresolved';
+export type StaleReason = 'cpu_fallback' | 'uuid_unresolved';
 
 // Extend the existing KnobValue/KnobValueState interface (whichever the
 // frontend actually names it post-#1205 — grep first) with:
 //   staleReason?: StaleReason;
 ```
-> Read the CURRENT `KnobValue`/`KnobValueState` shape in `src/lib/types.ts` before editing (it mirrors `server/src/config/types.ts`'s `KnobValueState` — Task 10/11 already added `staleReason`/`lockedByEnv` server-side; this step is the frontend mirror) and add the field there, matching whatever the existing type is actually called.
+> Read the CURRENT `KnobValue`/`KnobValueState` shape in `src/lib/types.ts` before editing (it mirrors `server/src/config/types.ts`'s `KnobValueState` — Task 10 already added `staleReason` server-side; this step is the frontend mirror) and add the field there, matching whatever the existing type is actually called.
 
 - [ ] **Step 2: Append the failing OverrideRow test**
 
@@ -2065,13 +2080,6 @@ describe('OverrideRow — device knob stale_reason badge (Plan 2 §2.2)', () => 
     const value = makeValue({ effective: 'cuda-uuid:GONE', source: 'override', overridden: true, staleReason: 'uuid_unresolved' });
     render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
     expect(screen.getByText(/card (no longer|not) (found|detected)/i)).toBeInTheDocument();
-  });
-
-  it('shows a distinct TEXT badge for env_shadow', () => {
-    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
-    const value = makeValue({ effective: 'cuda:0', source: 'override', overridden: true, staleReason: 'env_shadow' });
-    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
-    expect(screen.getByText(/overridden by.*env|CUDA_VISIBLE_DEVICES/i)).toBeInTheDocument();
   });
 
   it('renders no badge when staleReason is absent', () => {
@@ -2093,7 +2101,6 @@ function staleReasonLabel(reason: StaleReason): string {
   switch (reason) {
     case 'cpu_fallback': return 'fell back to CPU';
     case 'uuid_unresolved': return 'card no longer found';
-    case 'env_shadow': return 'overridden by CUDA_VISIBLE_DEVICES env';
   }
 }
 
@@ -2859,10 +2866,11 @@ git commit -m "feat(server,frontend): surface a held-TTS trip to the operator, r
 **Files:**
 - Modify: `server/tts-sidecar/main.py` (WARN log at startup when `CUDA_VISIBLE_DEVICES` is still set, per §2.5's "the sidecar WARNs if CUDA_VISIBLE_DEVICES is still set")
 - Modify: `docs/local-llm.md` (document the manual `.env` cutover step — strip `COQUI/ASR/SPK_DEVICE` + the two `CUDA_*` lines)
+- Modify: `src/views/advanced.tsx` (a single `cudaEnvShadow` banner — Step 4.5, added during Plan 2a execution to close the scope gap noted in Task 12)
 - Modify: `e2e/responsive/coverage.spec.ts` (add the Advanced Configuration case at 3 viewports, per this codebase's "adding a new view? append a case here" convention)
 - Create: `e2e/gpu-device-badge.spec.ts` (asserts the `fell_back`/`cpu_fallback` badge against a mocked `/health`)
 - Modify: `src/test/a11y.test.tsx` (APPEND a new `describe('a11y — advanced configuration view', ...)` block)
-- Modify (APPEND): `server/tts-sidecar/tests/test_runtime_wiring.py` or a new small test file for the startup WARN
+- Modify (APPEND): `server/tts-sidecar/tests/test_runtime_wiring.py` or a new small test file for the startup WARN, `src/views/advanced.test.tsx`
 
 - [ ] **Step 1: Sidecar startup WARN — write the failing test**
 
@@ -2937,6 +2945,93 @@ The sidecar logs a WARNING at startup if `CUDA_VISIBLE_DEVICES` is still set,
 since it silently overrides every per-engine pin.
 ```
 
+- [ ] **Step 4.5: Frontend — a single `cudaEnvShadow` banner (closes the Task 12 scope gap)**
+
+Task 11 already ships `cudaEnvShadow: boolean` on `GET /api/config`'s response, but nothing on the frontend reads it yet — `ConfigResponse` (`src/lib/types.ts`) doesn't declare the field, `ConfigState` (`src/store/config-slice.ts`) doesn't store it, and `AdvancedView` doesn't render it. This step wires all three.
+
+Append a failing test to `src/views/advanced.test.tsx`:
+```tsx
+describe('AdvancedView — CUDA env-shadow banner (Plan 2 §2.5)', () => {
+  it('shows a banner when cudaEnvShadow is true', async () => {
+    vi.spyOn(api, 'getConfig').mockResolvedValueOnce({
+      groups: [], descriptors: [], values: {}, restartPending: false, cudaEnvShadow: true,
+    });
+    render(<AdvancedView />, { wrapper: withStore });
+    await screen.findByText(/CUDA_VISIBLE_DEVICES/i);
+  });
+
+  it('shows no banner when cudaEnvShadow is false', async () => {
+    vi.spyOn(api, 'getConfig').mockResolvedValueOnce({
+      groups: [], descriptors: [], values: {}, restartPending: false, cudaEnvShadow: false,
+    });
+    render(<AdvancedView />, { wrapper: withStore });
+    await waitFor(() => expect(screen.queryByText(/CUDA_VISIBLE_DEVICES/i)).not.toBeInTheDocument());
+  });
+});
+```
+(Match this file's ACTUAL existing `api.getConfig` mocking convention — `grep -n "getConfig" src/views/advanced.test.tsx` first; the shape above is illustrative, adapt to however the file already spies on/mocks the config fetch.)
+
+Run: `npx vitest run src/views/advanced.test.tsx -t "env-shadow banner"` → FAIL.
+
+`src/lib/types.ts` — add the field to the existing `ConfigResponse` interface:
+```ts
+export interface ConfigResponse {
+  groups: ConfigGroup[];
+  descriptors: KnobDescriptor[];
+  values: ConfigValues;
+  restartPending: boolean;
+  cudaEnvShadow: boolean;
+}
+```
+
+`src/lib/api.ts` — add `cudaEnvShadow: false` to `mockGetConfig`'s returned object (mock/real parity; `realGetConfig` needs no change, it already forwards the server's full JSON body).
+
+`src/store/config-slice.ts` — add to `ConfigState`:
+```ts
+export interface ConfigState {
+  groups: ConfigGroup[];
+  descriptors: KnobDescriptor[];
+  values: ConfigValues;
+  status: ConfigStatus;
+  error: string | null;
+  hydrated: boolean;
+  cudaEnvShadow: boolean;
+}
+```
+Add `cudaEnvShadow: false` to `initialState`, and in the `fetchConfig.fulfilled` case:
+```ts
+      .addCase(fetchConfig.fulfilled, (s, a) => {
+        s.groups = a.payload.groups;
+        s.descriptors = a.payload.descriptors;
+        s.values = a.payload.values;
+        s.cudaEnvShadow = a.payload.cudaEnvShadow;
+        s.status = 'idle';
+        s.error = null;
+        s.hydrated = true;
+      })
+```
+
+`src/views/advanced.tsx` — read `cudaEnvShadow` from the config slice (same `useAppSelector((s) => s.config)` destructure `AdvancedView` already uses) and render a banner in the existing "Banners" block, alongside `RestartSidecarBanner`/the restart-server banner:
+```tsx
+const { groups, descriptors, values, status, error, hydrated, cudaEnvShadow } = useAppSelector((s) => s.config);
+```
+```tsx
+{cudaEnvShadow && (
+  <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
+    <p className="text-sm text-amber-800">
+      <code className="font-mono">CUDA_VISIBLE_DEVICES</code>/<code className="font-mono">CUDA_DEVICE_ORDER</code> is
+      set in <code className="font-mono">server/.env</code> — it overrides every device pin below. See{' '}
+      <a href="/docs/local-llm.md" className="underline">docs/local-llm.md</a> to switch to per-engine pins.
+    </p>
+  </div>
+)}
+```
+
+- [ ] **Step 4.6: Run green**
+
+Run: `npx vitest run src/views/advanced.test.tsx`
+Expected: PASS.
+
 - [ ] **Step 5: e2e — append the responsive-coverage case**
 
 In `e2e/responsive/coverage.spec.ts`, add the Advanced Configuration entry alongside the other views (match the existing array/table-driven structure in that file exactly — read it first).
@@ -2985,8 +3080,8 @@ Expected: PASS.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_cuda_env_shadow.py docs/local-llm.md e2e/responsive/coverage.spec.ts e2e/gpu-device-badge.spec.ts src/test/a11y.test.tsx
-git commit -m "feat(sidecar,docs,e2e): .env cutover WARN + e2e/a11y coverage for the device picker (Plan 2 §2.5)"
+git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_cuda_env_shadow.py docs/local-llm.md src/lib/types.ts src/lib/api.ts src/store/config-slice.ts src/views/advanced.tsx src/views/advanced.test.tsx e2e/responsive/coverage.spec.ts e2e/gpu-device-badge.spec.ts src/test/a11y.test.tsx
+git commit -m "feat(sidecar,frontend,docs,e2e): .env cutover WARN + banner + e2e/a11y coverage (Plan 2 §2.5)"
 ```
 
 ---
@@ -3097,3 +3192,32 @@ Round 3 also confirmed, as NOT bugs: `export let lastAutoRevertOutcome`'s live E
 - [ ] Qwen voice-design (`routes/qwen-voice.ts`'s `designQwenVoiceForCharacter`) while `tts.qwen.device=cpu` → the design's `withGpuLoad` call runs immediately too (the second `withGpuLoad` call site Task 8 wires, not just `ensure-sidecar-loaded.ts`'s).
 
 ### Plan 2 — status: NOT YET SHIPPED (gated on Wave 2)
+
+### Plan 2a — status: SHIPPED 2026-07-03 (scoped subset of Plan 2: Tasks 10, 10.5, 11-15, 17 — Task 16/16.5 auto-revert deferred to a follow-up PR pending Wave 2's own on-box acceptance)
+
+**Scope note:** Plan 2 (above) is the full picker; Plan 2a ships everything except
+auto-revert (§2.3, Task 16) and its operator-visible toast (Task 16.5), since
+Task 16 directly consumes Wave 2's `tripEvent()` and hasn't been exercised on
+real hardware yet. The checklist below is Task 18's full list with the two
+auto-revert-only items removed, plus one item promoted in from Wave 2's own
+checklist (item 3 below — it only exercises Task 10.5's UUID resolution, not
+anything Task 16/16.5 touch, so it belongs here rather than waiting).
+
+**On-box acceptance checklist — ALL PASSED (2026-07-03, real RTX 4070 Laptop 8GB
++ RTX 5070 Ti 16GB; full write-up in `docs/features/237-multi-gpu-device-picker-plan2a.md`):**
+
+- [x] Set `tts.qwen.device` to `cuda:1` via the Advanced Configuration picker → the persisted override is `cuda-uuid:<the real GPU-1 UUID>` (inspect `~/.castwright/user-settings.json`), and the row still displays `cuda:1`.
+- [x] Physically swap card order (or simulate via `CUDA_VISIBLE_DEVICES` reorder) → the picker still shows the SAME engine pinned to the SAME physical card by name, now at a different index (the UUID reconcile survives a renumber).
+- [x] Set `QWEN_DEVICE`/`KOKORO_DEVICE` to two DIFFERENT physical cards via the picker (both persist as `cuda-uuid:` overrides per Task 10) → the VoiceDesign↔Kokoro coupling correctly reflects `shares_device=False` (a design session doesn't block Kokoro synth) — confirms Task 10.5's fix actually resolves the UUID form on-box, not just against the mocked `_enumerate_cuda_devices` in tests.
+- [x] Delete the pinned card's driver entry (or set an override to a uuid that no longer exists) → the row shows the `uuid_unresolved` badge, not a silent fallback.
+- [x] Force a Kokoro `cpu_fallback` (e.g. `KOKORO_DEVICE=cuda:9`) → the picker row shows the `cpu_fallback` badge with a clear text label. **Found + fixed a real bug getting here** — the server's `/api/gpu/devices` merge silently dropped the sidecar's synthetic `idx:-1` bucket where `cpu_fallback` data lives; fixed in `df188e49`.
+- [x] Select a card with less free VRAM than Qwen's ~6.5GB peak → the footprint pre-warn appears before applying.
+- [x] Set `CUDA_VISIBLE_DEVICES` in `server/.env` → Advanced Configuration surfaces the env-shadow banner; sidecar log shows the startup WARN.
+- [x] Analyzer row shows the correct live GPU/CPU state and the `docs/local-llm.md` link resolves. **Confirmed the predicted 404 is real**: the link works against Vite dev (serves any repo file) but genuinely 404s against the production `dist/` bundle — tracked as [#1223](https://github.com/dudarenok-maker/Castwright/issues/1223), not fixed in this PR (informational banner, low impact).
+- [x] `test:a11y` passes on Advanced Configuration with the badges/warnings rendered (not just the empty-state).
+
+**Also found + fixed during this run (not on the original checklist, real hardware only):** a sidecar module-import-order `NameError` that crash-looped the sidecar forever on any fresh boot with a UUID-keyed device override already persisted — `ENGINES = {"qwen": QwenEngine(), ...}` (module-level) transitively called `_enumerate_cuda_devices`, defined ~2300 lines later in `main.py`. Fixed in the same commit (`df188e49`) alongside the cpu_fallback merge fix; both independently re-reviewed (Opus) and approved, 0 Critical/Important findings.
+
+**Explicitly excluded (belongs to the Task 16/16.5 follow-up PR, not this checklist):**
+- Card-specific code-43 streak → auto-revert fires → toast shows "auto-reverted: ..." (Task 18's item 7).
+- Non-card-specific code-43 streak → toast shows the distinct "not tied to a specific GPU card... manual investigation" message (Task 18's item 8).

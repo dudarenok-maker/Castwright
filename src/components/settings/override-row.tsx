@@ -2,7 +2,17 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
+import { useState } from 'react';
+import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
+
+// Peak VRAM footprint per device-typed engine (MB) — first-cut estimates per
+// the design spec's §2.2 text, not measured; a false-positive warning here is
+// low-cost (it's advisory, doesn't block the change) so precision isn't critical.
+const ENGINE_PEAK_MB: Record<string, number> = {
+  'tts.qwen.device': 6500,
+  'tts.coqui.device': 3000,
+  'tts.kokoro.device': 1000,
+};
 
 /* ── apply-mode pill label ───────────────────────────────────────────────── */
 
@@ -31,6 +41,17 @@ function applyPillClasses(apply: KnobDescriptor['apply']): string {
   return 'bg-amber-100 text-amber-800';
 }
 
+/* Text label for a device-knob stale_reason — carries the meaning itself so
+   the badge isn't distinguished by colour alone (a11y §2.2). */
+function staleReasonLabel(reason: StaleReason): string {
+  switch (reason) {
+    case 'cpu_fallback':
+      return 'fell back to CPU';
+    case 'uuid_unresolved':
+      return 'card no longer found';
+  }
+}
+
 /* ── editable input controls ─────────────────────────────────────────────── */
 
 interface ControlProps {
@@ -42,6 +63,8 @@ interface ControlProps {
 }
 
 function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: ControlProps) {
+  const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
+
   const base =
     'px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink ' +
     'focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ' +
@@ -66,6 +89,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   if (descriptor.type === 'enum') {
     return (
       <select
+        aria-label={descriptor.label}
         value={String(value.effective)}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
@@ -82,7 +106,10 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
 
   if (descriptor.type === 'device') {
     const current = String(value.effective);
-    const cudaOptions = (gpuDevices ?? []).map((d) => `cuda:${d.idx}`);
+    // idx:-1 is the synthetic "unindexed (cpu / ORT / CT2)" entry the server
+    // appends so a cpu_fallback badge has somewhere to attach (gpu-devices.ts)
+    // — it's not a real, pinnable card and must never become a `cuda:-1` option.
+    const cudaOptions = (gpuDevices ?? []).filter((d) => d.idx >= 0).map((d) => `cuda:${d.idx}`);
     // 'mps' (Apple Silicon) isn't enumerable via GET /api/gpu/devices (CUDA-only
     // probe), but the sidecar's device grammar accepts it for all three knobs —
     // keep it a static, always-offered option rather than dropping it.
@@ -92,22 +119,40 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     if (!options.includes(current)) options.push(current);
 
     return (
-      <select
-        value={current}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full ${base}`}
-      >
-        {options.map((opt) => {
-          const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === opt);
-          const label = device ? `${opt} — ${device.name} (${device.free_mb} MB free)` : opt;
-          return (
-            <option key={opt} value={opt}>
-              {label}
-            </option>
-          );
-        })}
-      </select>
+      <div>
+        <select
+          aria-label={descriptor.label}
+          value={current}
+          disabled={disabled}
+          onChange={(e) => {
+            const selected = e.target.value;
+            const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === selected);
+            const peak = ENGINE_PEAK_MB[descriptor.key];
+            if (device && peak && device.free_mb < peak) {
+              setFootprintWarning(
+                `${device.name} may not have enough free VRAM (${device.free_mb} MB free, ~${peak} MB typically needed).`,
+              );
+            } else {
+              setFootprintWarning(null);
+            }
+            onChange(selected);
+          }}
+          className={`w-full ${base}`}
+        >
+          {options.map((opt) => {
+            const device = (gpuDevices ?? []).find((d) => `cuda:${d.idx}` === opt);
+            const label = device ? `${opt} — ${device.name} (${device.free_mb} MB free)` : opt;
+            return (
+              <option key={opt} value={opt}>
+                {label}
+              </option>
+            );
+          })}
+        </select>
+        {footprintWarning && (
+          <p className="text-xs text-amber-700 mt-1" role="status">{footprintWarning}</p>
+        )}
+      </div>
     );
   }
 
@@ -116,6 +161,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     return (
       <input
         type="number"
+        aria-label={descriptor.label}
         value={Number(value.effective)}
         min={descriptor.min}
         max={descriptor.max}
@@ -135,6 +181,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   return (
     <input
       type="text"
+      aria-label={descriptor.label}
       value={String(value.effective)}
       disabled={disabled}
       onBlur={(e) => onChange(e.target.value)}
@@ -177,6 +224,14 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
               className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${applyPillClasses(descriptor.apply)}`}
             >
               {applyLabel(descriptor.apply)}
+            </span>
+          )}
+          {value.staleReason && (
+            <span
+              data-testid="stale-reason-badge"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[11px] font-semibold"
+            >
+              {staleReasonLabel(value.staleReason)}
             </span>
           )}
         </div>

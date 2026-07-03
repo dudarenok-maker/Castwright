@@ -118,9 +118,11 @@ against real hardware (RTX 4070 Laptop 8GB + RTX 5070 Ti 16GB).
 ## Out of scope
 
 - Plan 2 (picker UI: canonical GPU-UUID identity, stale-reason badges,
-  footprint pre-warn, analyzer read-only row, auto-revert) — a follow-up PR,
-  gated on this one's on-box acceptance since its auto-revert directly
-  consumes this PR's `tripEvent()`.
+  footprint pre-warn, analyzer read-only row, auto-revert) — split into
+  [237](237-multi-gpu-device-picker-plan2a.md) ("Plan 2a," everything except
+  auto-revert) and a further follow-up for Task 16/16.5 (auto-revert),
+  gated on this PR's on-box acceptance since auto-revert directly consumes
+  this PR's `tripEvent()`.
 - Per-card Node GPU budgets (the semaphore stays one global pool) — deferred,
   confirmed as a Non-goal in the design spec's Round 5 decisions.
 - Wiring the per-card mutex at any same-card engine pairing besides the one

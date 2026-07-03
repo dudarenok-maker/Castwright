@@ -273,6 +273,109 @@ describe('OverrideRow — device knob', () => {
     const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
     expect(optionValues).toEqual(['auto', 'cpu', 'mps']);
   });
+
+  /* Plan 2a on-box acceptance: the server appends a synthetic idx:-1
+     "unindexed (cpu / ORT / CT2)" entry to gpuDevices[] so a cpu_fallback
+     badge has somewhere to attach (gpu-devices.ts's mergeResidentData).
+     That entry is not a real, pinnable card — verify it never becomes a
+     bogus `cuda:-1` option in the device select. */
+  it('never offers a cuda:-1 option for the synthetic unindexed device entry', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    const gpuDevicesWithUnindexed: GpuDevice[] = [
+      ...GPU_DEVICES,
+      {
+        uuid: '',
+        idx: -1,
+        name: 'unindexed (cpu / ORT / CT2)',
+        total_mb: 0,
+        free_mb: 0,
+        resident: [{ engine: 'kokoro', actual_card: null, stale_reason: 'cpu_fallback' }],
+      },
+    ];
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        gpuDevices={gpuDevicesWithUnindexed}
+      />,
+    );
+    const select = screen.getByRole('combobox');
+    const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+    expect(optionValues).toEqual(['auto', 'cpu', 'mps', 'cuda:0', 'cuda:1']);
+    expect(optionValues).not.toContain('cuda:-1');
+  });
+});
+
+describe('OverrideRow — device knob stale_reason badge (Plan 2 §2.2)', () => {
+  it('shows a distinct TEXT badge for cpu_fallback (not color alone)', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda:1', source: 'override', overridden: true, staleReason: 'cpu_fallback' });
+    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
+    expect(screen.getByText(/fell back to cpu/i)).toBeInTheDocument();
+  });
+
+  it('shows a distinct TEXT badge for uuid_unresolved', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda-uuid:GONE', source: 'override', overridden: true, staleReason: 'uuid_unresolved' });
+    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
+    expect(screen.getByText(/card (no longer|not) (found|detected)/i)).toBeInTheDocument();
+  });
+
+  it('renders no badge when staleReason is absent', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'cuda:1', source: 'override', overridden: true });
+    render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} gpuDevices={[]} />);
+    expect(screen.queryByTestId('stale-reason-badge')).not.toBeInTheDocument();
+  });
+});
+
+/* ─── device knob footprint pre-warn ─────────────────────────────────────── */
+
+describe('OverrideRow — device knob footprint pre-warn (Plan 2 §2.2)', () => {
+  it('warns when the selected card free_mb is well under the engine peak', () => {
+    const descriptor = makeDescriptor({ key: 'tts.qwen.device', type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()}
+        gpuDevices={[{ uuid: 'GPU-0', idx: 0, name: 'Small Card', total_mb: 4000, free_mb: 2000 }]} />,
+    );
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'cuda:0' } });
+    expect(screen.getByText(/may not have enough free vram/i)).toBeInTheDocument();
+  });
+
+  it('does not warn when the selected card has ample free VRAM', () => {
+    const descriptor = makeDescriptor({ key: 'tts.qwen.device', type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()}
+        gpuDevices={[{ uuid: 'GPU-1', idx: 1, name: 'Big Card', total_mb: 16000, free_mb: 14000 }]} />,
+    );
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'cuda:1' } });
+    expect(screen.queryByText(/may not have enough free vram/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the warning when reselecting a well-provisioned card after an under-provisioned one', () => {
+    const descriptor = makeDescriptor({ key: 'tts.qwen.device', type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()}
+        gpuDevices={[
+          { uuid: 'GPU-0', idx: 0, name: 'Small Card', total_mb: 4000, free_mb: 2000 },
+          { uuid: 'GPU-1', idx: 1, name: 'Big Card', total_mb: 16000, free_mb: 14000 },
+        ]} />,
+    );
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'cuda:0' } });
+    expect(screen.getByText(/may not have enough free vram/i)).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'cuda:1' } });
+    expect(screen.queryByText(/may not have enough free vram/i)).not.toBeInTheDocument();
+  });
 });
 
 /* ─── apply pill labels ──────────────────────────────────────────────────── */

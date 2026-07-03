@@ -814,6 +814,14 @@ export interface ConfigGroup {
   collapsedByDefault: boolean;
 }
 
+/** Reason `effective` is degraded/unresolved for a 'device' knob and the UI
+    should flag it. 'cpu_fallback' = the requested device fell back to CPU;
+    'uuid_unresolved' = a stored 'cuda-uuid:<uuid>' override matches no
+    currently-visible card in the last-known device list. (A third,
+    CUDA_VISIBLE_DEVICES env-shadow fact is global — not per-knob — and
+    surfaces as a single Advanced Configuration banner instead, not here.) */
+export type StaleReason = 'cpu_fallback' | 'uuid_unresolved';
+
 /** Per-knob runtime value as returned by GET /api/config. */
 export interface KnobValue {
   key: string;
@@ -824,6 +832,8 @@ export interface KnobValue {
   locked: boolean;
   /** True when the user has an active override for this knob. */
   overridden: boolean;
+  /** Set when `effective` is degraded/unresolved — see StaleReason. */
+  staleReason?: StaleReason;
 }
 
 /** Map of key → KnobValue returned by the config endpoints. */
@@ -835,21 +845,35 @@ export interface ConfigResponse {
   descriptors: KnobDescriptor[];
   values: ConfigValues;
   restartPending: boolean;
+  /** Plan 2 §2.5 — true when CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in
+      the environment, silently overriding every per-engine device pin. */
+  cudaEnvShadow: boolean;
 }
 
-/** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). */
+/** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). `resident`/
+    `torchReservedMb` are merged in server-side from the sidecar's /health `gpus[]`
+    (Task 13) — absent when /health was unreachable at proxy time. */
 export interface GpuDevice {
   uuid: string;
   idx: number;
   name: string;
   total_mb: number;
   free_mb: number;
+  resident?: Array<{ engine: string; actual_card: number | null; stale_reason?: string }>;
+  torchReservedMb?: number;
 }
 
 /** Full response from GET /api/gpu/devices. `cpu` is always assumed available. */
 export interface GpuDevicesResponse {
   devices: GpuDevice[];
   cpu: boolean;
+}
+
+/** Response from GET /api/ollama/device (Plan 2 §2.4) — the analyzer's live
+    GPU/CPU/unknown placement, read-only (not app-pinnable; the analyzer
+    connects to a user/OS-managed Ollama daemon). */
+export interface AnalyzerDeviceResponse {
+  device: 'cuda' | 'cpu' | 'unknown';
 }
 
 /** Prompt state from GET/PUT /api/config/prompts/:id. */
