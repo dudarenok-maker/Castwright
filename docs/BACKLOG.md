@@ -439,11 +439,11 @@ _Full detail + acceptance:_ [#898](https://github.com/dudarenok-maker/Castwright
 
 ### Ops & maintenance
 
-#### `srv-50` — Auto-recycle TTS sidecar on stall-watchdog hang ([#1243](https://github.com/dudarenok-maker/Castwright/issues/1243))
+#### `srv-51` — Wrap the title-narration synth call in withCallTimeout ([#1247](https://github.com/dudarenok-maker/Castwright/issues/1247))
 
-- _What:_ The chapter stall watchdog (`ChapterStallError`, 720s no-progress) correctly fails a stuck chapter but never kills the underlying sidecar process — if the sidecar is truly wedged (e.g. an eGPU dropping off the CUDA bus mid-request, observed 2026-07-03), it keeps squatting on `:9000` + held VRAM indefinitely, and the exit-based respawn supervisor can't help because the process never exits. Make the stall/recycle-storm paths forcibly kill + respawn the sidecar (capped like the existing crash-loop guard) instead of leaving a zombie for a human to `taskkill`.
-- _Benefit (user / technical):_ generation self-heals from a wedged sidecar instead of silently failing every subsequent chapter until someone notices and manually restarts. Closes the last uncovered recycle trigger (today: exit-based + memory-ceiling-based only).
-_Full detail + acceptance:_ [#1243](https://github.com/dudarenok-maker/Castwright/issues/1243).
+- _What:_ srv-50 wrapped the previously-unprotected ASR `verify()` call with the existing `withCallTimeout`/`withRecycleRecovery` protection every other synth call site has. The final whole-branch review found one adjacent gap: the title-narration synth call (`synthesise-chapter.ts:981`) still has no per-call timeout, only the coarser 720s whole-chapter stall watchdog.
+- _Benefit (technical):_ retires the last unprotected sidecar call site with the wedged-worker hang shape, matching the reliability bar srv-50 set everywhere else.
+_Full detail + acceptance:_ [#1247](https://github.com/dudarenok-maker/Castwright/issues/1247).
 
 #### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
 
