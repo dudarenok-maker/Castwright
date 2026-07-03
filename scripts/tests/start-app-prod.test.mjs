@@ -96,6 +96,6 @@ test('formatBuildManifestLine marks a dirty-tree build with a trailing *', () =>
 test('formatBuildManifestLine falls back to a clear message when the manifest is missing', () => {
   assert.equal(
     formatBuildManifestLine(null),
-    '[BUILD] unknown — dist/build-manifest.json missing, run "npm run build" to populate it',
+    '[BUILD] unknown — build-manifest.json missing, run "npm run build" to populate it',
   );
 });

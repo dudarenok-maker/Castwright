@@ -100,6 +100,17 @@ describe('mountFrontendStatic', () => {
     expect(res.headers['cache-control']).not.toBe('no-cache');
   });
 
+  it('does NOT match a file that merely ends with "index.html" (e.g. a nested sub-index.html)', async () => {
+    mkdirSync(resolve(distDir, 'docs'), { recursive: true });
+    writeFileSync(resolve(distDir, 'index.html'), '<html />');
+    writeFileSync(resolve(distDir, 'docs', 'sub-index.html'), '<html>nested</html>');
+
+    const app = buildApp();
+    const res = await request(app).get('/docs/sub-index.html');
+    expect(res.headers['cache-control']).toMatch(/max-age=3600/);
+    expect(res.headers['cache-control']).not.toBe('no-cache');
+  });
+
   it('mounts in production mode even if index.html shows up later — semantics depend on disk at call time', () => {
     process.env.NODE_ENV = 'production';
     mkdirSync(distDir, { recursive: true });

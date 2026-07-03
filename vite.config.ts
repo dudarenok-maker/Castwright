@@ -52,16 +52,21 @@ function buildInfoConstants(info: ReturnType<typeof buildInfoRaw>) {
 
 // scripts/start-app-prod.mjs is a plain Node launcher — it can't import the
 // compile-time __GIT_SHA__ etc. constants baked into the frontend bundle, so
-// it has no way to tell the user which commit/when a `dist/` it's serving was
+// it has no way to tell the user which commit/when the build it's serving was
 // built from. Write the same provenance to a small JSON file it CAN read.
-// `apply: 'build'` skips this for `npm run dev` (no dist/ to write into).
+// Deliberately written to the repo root, NOT dist/ — anything under dist/ is
+// served verbatim by express.static (server/src/frontend-static.ts), which
+// would turn this into a public GET exposing the git branch name and
+// dirty-tree flag beyond what the prod footer intentionally shows (its
+// `!opts.dev` branch reduces to `version (sha)` only). `apply: 'build'` skips
+// this for `npm run dev` (no build to report on).
 function buildManifestPlugin(info: ReturnType<typeof buildInfoRaw>): PluginOption {
   return {
     name: 'castwright-build-manifest',
     apply: 'build',
     closeBundle() {
       writeFileSync(
-        resolve(process.cwd(), 'dist', 'build-manifest.json'),
+        resolve(process.cwd(), 'build-manifest.json'),
         `${JSON.stringify(
           {
             version: info.version,

@@ -10,7 +10,7 @@
 
 import express, { type Express } from 'express';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 export interface FrontendStaticMountResult {
   mounted: boolean;
@@ -50,7 +50,7 @@ export function mountFrontendStatic(app: Express, distDir: string): FrontendStat
       // to an hour — the browser keeps serving the stale entry point (and
       // therefore the stale build) until that cache expires.
       setHeaders: (res, filePath) => {
-        if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+        if (basename(filePath) === 'index.html') res.setHeader('Cache-Control', 'no-cache');
       },
     }),
   );
