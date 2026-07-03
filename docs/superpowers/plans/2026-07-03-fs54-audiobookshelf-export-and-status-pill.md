@@ -29,22 +29,28 @@
 
 **Interfaces:**
 - Consumes: `BookStateJson.series: string`, `.seriesPosition: number | null`, `.isStandalone: boolean` (all already on the type, `server/src/workspace/scan.ts:45-58`).
-- Produces: `buildFfmetadata`'s output now includes optional `series=`/`series-part=` FFMETADATA lines, consumed downstream by `runFfmpegMux`'s `-map_metadata 1` (unchanged).
+- Produces: `buildFfmetadata`'s output now includes optional `grouping=`/`disc=` FFMETADATA lines, consumed downstream by `runFfmpegMux`'s `-map_metadata 1` (unchanged).
+
+**Corrected during plan review, verified against real ffmpeg on this box (8.1.1):** an earlier draft of this task used `series=`/`series-part=` as the FFMETADATA keys, mirroring the ID3 approach in Task 2. That does **not** work for M4B — unlike the ID3 muxer (which falls back arbitrary unknown `-metadata` keys to a `TXXX` frame, confirmed working in Task 2), ffmpeg's **mov/mp4 muxer silently drops any `-metadata` key it doesn't recognize**, including a `----:com.apple.iTunes:series` freeform-atom attempt — both were empirically tested and neither survived into `ffprobe`'s `format.tags`. The mov muxer *does* recognize a fixed set of keys, including `grouping` (which becomes the standard `©grp` "Grouping" MP4 atom) and `disc` (`©disk`, "disc number") — both round-tripped correctly in testing. This task uses those instead:
+
+- `grouping` carries the series **name**. There is no dedicated "series" atom in the MP4/iTunes tag vocabulary; `©grp` is the closest ffmpeg-recognized field for "which collection this belongs to" and at minimum survives into any general MP4 tag reader.
+- `disc` carries the series **position** (`seriesPosition`) — repurposing "disc number of a set" for "book N of a series", the same kind of reasonable-adjacent-field reuse `©grp` already requires.
+- **Caveat, stated plainly rather than assumed:** whether Audiobookshelf's own M4B parser specifically surfaces `grouping`/`disc` as series info is *not verified* — Audiobookshelf's documented, authoritative series channel is the `metadata.json` sidecar (Task 4, mp3-folder path only) and/or folder-name parsing, neither of which the M4B path touches. This task ships a real, non-dropped, standards-adjacent embedding for any MP4 tag reader; it is a best-effort improvement for the M4B format specifically, not a guaranteed Audiobookshelf-series-view win the way Task 4's sidecar is.
 
 - [ ] **Step 1: Write the failing tests**
 
 Add to `server/src/export/build-m4b.test.ts`, inside the existing `describeIfTools('buildM4b', ...)` block (after the last existing `it(...)`):
 
 ```ts
-  it('omits series metadata for a standalone book (fs-54)', async () => {
+  it('omits grouping/disc for a standalone book (fs-54)', async () => {
     const out = join(tmpRoot, 'standalone.m4b');
     await buildM4b({ bookDir, state: makeState(), outPath: out });
     const tags = ffprobeJson(out).format.tags ?? {};
-    expect(tags.series).toBeUndefined();
-    expect(tags['series-part']).toBeUndefined();
+    expect(tags.grouping).toBeUndefined();
+    expect(tags.disc).toBeUndefined();
   });
 
-  it('emits series without series-part when seriesPosition is null on a real series book (fs-54)', async () => {
+  it('emits grouping without disc when seriesPosition is null on a real series book (fs-54)', async () => {
     const out = join(tmpRoot, 'series-noseq.m4b');
     await buildM4b({
       bookDir,
@@ -52,11 +58,11 @@ Add to `server/src/export/build-m4b.test.ts`, inside the existing `describeIfToo
       outPath: out,
     });
     const tags = ffprobeJson(out).format.tags ?? {};
-    expect(tags.series).toBe('The Coalfall Saga');
-    expect(tags['series-part']).toBeUndefined();
+    expect(tags.grouping).toBe('The Coalfall Saga');
+    expect(tags.disc).toBeUndefined();
   });
 
-  it('emits series + series-part when seriesPosition is set (fs-54)', async () => {
+  it('emits grouping + disc when seriesPosition is set (fs-54)', async () => {
     const out = join(tmpRoot, 'series-seq.m4b');
     await buildM4b({
       bookDir,
@@ -64,19 +70,19 @@ Add to `server/src/export/build-m4b.test.ts`, inside the existing `describeIfToo
       outPath: out,
     });
     const tags = ffprobeJson(out).format.tags ?? {};
-    expect(tags.series).toBe('The Coalfall Saga');
-    expect(tags['series-part']).toBe('2');
+    expect(tags.grouping).toBe('The Coalfall Saga');
+    expect(tags.disc).toBe('2');
   });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd server && npx vitest run src/export/build-m4b.test.ts -t "fs-54"`
-Expected: FAIL — `tags.series` is `undefined` in the second/third case (no series lines emitted yet).
+Expected: FAIL — `tags.grouping` is `undefined` in the second/third case (no grouping/disc lines emitted yet).
 
 - [ ] **Step 3: Implement**
 
-In `server/src/export/build-m4b.ts`, edit `buildFfmetadata` (currently lines 156-161):
+In `server/src/export/build-m4b.ts`, edit `buildFfmetadata` (currently lines 155-161, starting at `const artist = artistForExport(state);`):
 
 ```ts
   const artist = artistForExport(state);
@@ -86,20 +92,25 @@ In `server/src/export/build-m4b.ts`, edit `buildFfmetadata` (currently lines 156
   lines.push(`album_artist=${escapeFfmetadata(state.author)}`);
   if (state.genre) lines.push(`genre=${escapeFfmetadata(state.genre)}`);
   if (state.publicationDate) lines.push(`date=${escapeFfmetadata(state.publicationDate)}`);
-  /* fs-54 — series metadata for Audiobookshelf (and any other series-aware
-     consumer). Gate is `!isStandalone && !!series`, NOT presence of
-     `series` alone: a standalone book still carries a real (non-empty)
-     string in that field, so `isStandalone` — the codebase's own
-     established discriminator (server/src/routes/cast-design.ts:555,
-     qwen-voice.ts:565, single-design.ts:260) — is the correct gate.
-     `series-part` is an independently-optional sub-field: a real series
-     book can have a null `seriesPosition` when its source has no numeric
-     index (server/src/parsers/epub.ts). */
+  /* fs-54 — series metadata via the MP4 `grouping` (©grp) / `disc` (©disk)
+     atoms — the closest ffmpeg-recognized fields for "which collection" /
+     "position in that collection". There is no dedicated MP4 series atom,
+     and an arbitrary `series=`/`series-part=` key (or a `----:` freeform
+     atom) is silently dropped by ffmpeg's mov muxer (verified against real
+     ffmpeg — unlike the ID3 muxer's TXXX fallback in id3-tags.ts, mov has
+     no generic unknown-key fallback). Gate is `!isStandalone && !!series`,
+     NOT presence of `series` alone: a standalone book still carries a real
+     (non-empty) string in that field, so `isStandalone` — the codebase's
+     own established discriminator (server/src/routes/cast-design.ts:555,
+     qwen-voice.ts:565, single-design.ts:260) — is the correct gate. `disc`
+     is an independently-optional sub-field: a real series book can have a
+     null `seriesPosition` when its source has no numeric index
+     (server/src/parsers/epub.ts). */
   const hasSeries = state.isStandalone !== true && !!state.series?.trim();
   if (hasSeries) {
-    lines.push(`series=${escapeFfmetadata(state.series)}`);
+    lines.push(`grouping=${escapeFfmetadata(state.series)}`);
     if (state.seriesPosition != null) {
-      lines.push(`series-part=${escapeFfmetadata(String(state.seriesPosition))}`);
+      lines.push(`disc=${escapeFfmetadata(String(state.seriesPosition))}`);
     }
   }
 ```
@@ -442,9 +453,22 @@ Add to `server/src/export/build-mp3-folder.test.ts`:
     });
 
     it('copies cover.jpg into outDir when a cover exists on disk', async () => {
+      /* Must be a real, decodable JPEG — buildMp3Folder feeds coverJpegPath
+         into ffmpeg as an -i input for every chapter's APIC frame (existing
+         behavior, unchanged by this task), and ffmpeg rejects a bogus image
+         before writeAudiobookshelfSidecars ever runs. Same 1x1 JPEG fixture
+         already used by id3-tags.test.ts's cover-embedding tests. */
+      const jpegBytes = Buffer.from(
+        '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+          'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
+          'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+          '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
+          'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
+        'base64',
+      );
       mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
       const coverSrc = join(bookDir, '.audiobook', 'cover.jpg');
-      writeFileSync(coverSrc, Buffer.from('fake-jpeg-bytes'));
+      writeFileSync(coverSrc, jpegBytes);
       try {
         const outDir = join(tmpRoot, 'export-meta-cover', 'the Coalfall Commission');
         await buildMp3Folder({ bookDir, state: makeState(), outDir });
@@ -1048,11 +1072,12 @@ git commit -m "feat(frontend): mp3-folder / M4B format toggle on the Audiobooksh
 **Files:**
 - Modify: `src/store/exports-slice.ts`
 - Test: `src/store/exports-slice.test.ts`
+- Test: `src/store/exports-middleware.test.ts` (two pre-existing `ExportsState` literals need the new required field — see Step 1)
 
 **Interfaces:**
-- Produces: `ExportsState.linger: Record<string, { state: 'done' | 'failed' }>`; new actions `exportLingerSet({ bookId, state })` / `exportLingerCleared({ bookId })`. Consumed by Task 9 (middleware, writer) and Task 11 (layout.tsx, reader).
+- Produces: `ExportsState.linger: Record<string, { state: 'done' | 'failed' }>` (a **required** field, not optional — `layout.tsx`'s Task 11 reads `state.exports.linger` unconditionally, and an optional field would let a store construction site legally omit it, leaving `undefined` for Immer to write into at runtime); new actions `exportLingerSet({ bookId, state })` / `exportLingerCleared({ bookId })`. Consumed by Task 9 (middleware, writer) and Task 11 (layout.tsx, reader).
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing tests, and fix the two pre-existing `ExportsState` literals `linger` breaks**
 
 Update the `initial` fixture at the top of `src/store/exports-slice.test.ts` (currently `const initial: ExportsState = { byBookId: {}, lanUrls: [], lanPort: null };`) to:
 
@@ -1060,7 +1085,20 @@ Update the `initial` fixture at the top of `src/store/exports-slice.test.ts` (cu
 const initial: ExportsState = { byBookId: {}, lanUrls: [], lanPort: null, linger: {} };
 ```
 
-Then add:
+**Also fix `src/store/exports-middleware.test.ts`**, caught during plan review: its `makeStore(seed: ExportsState)` helper (line 34) has two call sites (lines 51-55 and 79-83) that construct an `ExportsState` literal without `linger` — both become `Property 'linger' is missing` compile errors once the field is required. Update both:
+
+```ts
+    const store = makeStore({
+      byBookId: { [failed.bookId]: [failed] },
+      lanUrls: [],
+      lanPort: null,
+      linger: {},
+    });
+```
+
+(Same 4-line shape at both the line-51 and line-79 call sites — add `linger: {},` to each.)
+
+Then add to `src/store/exports-slice.test.ts`:
 
 ```ts
   describe('exportLingerSet / exportLingerCleared (fs-54)', () => {
@@ -1147,13 +1185,13 @@ Add two reducers, right after `lanUrlsHydrated`:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npx vitest run src/store/exports-slice.test.ts`
-Expected: PASS (all tests in the file).
+Run: `npx vitest run src/store/exports-slice.test.ts src/store/exports-middleware.test.ts`
+Expected: PASS (all tests in both files — `exports-middleware.test.ts`'s pre-existing tests are otherwise unaffected by this task; they only needed the `linger: {}` addition to keep compiling).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/store/exports-slice.ts src/store/exports-slice.test.ts
+git add src/store/exports-slice.ts src/store/exports-slice.test.ts src/store/exports-middleware.test.ts
 git commit -m "feat(frontend): add the Export pill's linger state to exports-slice (fs-54)"
 ```
 
@@ -2227,6 +2265,7 @@ Full matrix: `build-m4b.test.ts`, `id3-tags.test.ts`, `build-mp3-folder.test.ts`
 ## Residual / follow-up
 
 - Whether a pre-`isStandalone`-field legacy book could reach the export path with `state.isStandalone` genuinely `undefined` on disk was flagged during design review as unresolved — `import.ts` guarantees an explicit boolean on every book created through it, but this wasn't independently re-verified against `state-migrate.ts`'s backfill coverage. Worth a spot-check during implementation if a real legacy-book test fixture is available.
+- The M4B path carries series metadata via the `grouping`/`disc` MP4 atoms (Task 1) rather than a dedicated series field, since ffmpeg's mov muxer drops any `-metadata` key it doesn't recognize (verified against real ffmpeg during plan review) — whether Audiobookshelf's own M4B parser reads either atom as series info is unconfirmed. The mp3-folder path's `metadata.json` (Task 4) remains the authoritative, ABS-documented series channel.
 - Direct Audiobookshelf API push + post-sync library-rescan trigger — explicitly out of scope (needs a new ABS server URL + API key setting).
 - Series-level folder nesting (`<author>/<series>/<title>/`) and a cross-book export queue modal — explicitly out of scope, see the design spec's Future work section.
 ```

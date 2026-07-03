@@ -90,6 +90,18 @@ the Voice tile already ships.
 
 ### 1.2 Series metadata in the shared builders
 
+> **Plan-phase errata (post-approval):** the gate below (`!isStandalone && !!series`,
+> `seriesPosition` as an independent optional sub-field) held up. What didn't survive
+> plan-phase verification against real ffmpeg was the **M4B key names**: `series=`/
+> `series-part=` FFMETADATA lines are silently dropped by ffmpeg's mov/mp4 muxer, which —
+> unlike the ID3 muxer's TXXX fallback used on the mp3-folder path below — has no
+> generic unknown-key fallback. The implementation plan
+> (`docs/superpowers/plans/2026-07-03-fs54-audiobookshelf-export-and-status-pill.md`,
+> Task 1) uses the MP4-recognized `grouping`/`disc` atoms instead, with the caveat that
+> Audiobookshelf reading either as series info is unconfirmed — `metadata.json` (§1.3)
+> remains the authoritative series channel. The mp3-folder ID3 path below is unaffected
+> (verified working as written).
+
 **Three rounds of adversarial review, three attempts at this gate.** Round 1 gated on
 "`state.series` is set" — wrong, because `server/src/routes/import.ts:216` stamps
 `series: STANDALONES_SERIES` directly into state at creation time for a standalone book
