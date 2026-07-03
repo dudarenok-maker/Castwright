@@ -630,11 +630,17 @@ Expected: FAIL — `Cannot find module './mdns-owner.js'`.
    child's env; the server's plain `tsx watch` dev script never does.
 
    scripts/mdns-responder.mjs is intentionally NOT part of the release
-   manifest (scripts/build-release-zip.mjs) — dev:lan/start:lan are
-   dev-checkout-only commands already (the existing scripts/setup-lan-certs.mjs
-   and scripts/print-cert-install-instructions.mjs aren't shipped either), so
-   this follows the same, pre-existing boundary rather than introducing a new
-   one. */
+   manifest (scripts/build-release-zip.mjs). To be precise about what DOES
+   ship: `start:lan`'s own script + start-app-prod.mjs ARE in the manifest,
+   so a packaged install can technically invoke `npm run start:lan` — but
+   scripts/setup-lan-certs.mjs and scripts/print-cert-install-instructions.mjs
+   (the ONLY way to generate the LAN cert) are NOT shipped, so that path was
+   already a dead end before this feature: server/src/index.ts's own
+   existing missing-cert check (`LAN_HTTPS=1 set but cert files are missing`)
+   exits the process before ever reaching the mDNS spawn call added here. A
+   packaged install genuinely running start:lan is a pre-existing, unrelated
+   gap this plan doesn't touch — this responder simply follows the same
+   dev-checkout-only boundary its cert-generation dependency already has. */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -807,9 +813,12 @@ Add the spawn call directly before the closing `};`:
   /* ops (castwright-local-hostnames) — server-owned castwright.local mDNS
      responder, start:lan only. NODE_ENV, not lanHttps, is the discriminator:
      dev:lan's server leg ALSO sets LAN_HTTPS=1 (so its Vite half can serve
-     castwright.dev.local), so gating on lanHttps alone would double-spawn a
-     castwright.local responder here that races dev:lan's own concurrently
-     leg for the UDP :5353 socket. See mdns-owner.ts + the design spec. */
+     castwright.dev.local), so gating on lanHttps alone would spin up an
+     extra, unwanted castwright.local responder here during dev:lan — a
+     process dev:lan's own concurrently neither advertises nor reaps (NOT a
+     port-5353 collision: multicast-dns binds with reuseAddr:true, so two
+     responders on one box coexist rather than erroring). See mdns-owner.ts
+     + the design spec. */
   if (shouldSpawnMdnsResponder(lanHttps)) {
     mdnsResponderHandle = spawnMdnsResponder('castwright.local', repoRoot);
   }
@@ -818,7 +827,7 @@ Add the spawn call directly before the closing `};`:
 
 - [ ] **Step 4: Reap the responder in `shutdown()`**
 
-Find:
+Find (the full function, including its two existing comment blocks — match verbatim):
 
 ```ts
 function shutdown(signal: NodeJS.Signals): void {
@@ -826,13 +835,18 @@ function shutdown(signal: NodeJS.Signals): void {
   shuttingDown = true;
   stopBackupScheduler();
   console.log(`[server] ${signal} received, tearing down sidecar...`);
+  /* #1030 — release our :9000 ownership note so the next boot (or another
+     stack) sees the port as free. No-op if we never claimed it (autoStart off)
+     or a same-lineage reload already took it over. */
   releaseSidecarOwnership(runDir);
+  /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
+     child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
   void reap.finally(() => process.exit(0));
 }
 ```
 
-Replace with:
+Replace with (only the added `mdnsResponderHandle?.kill();` line — everything else unchanged):
 
 ```ts
 function shutdown(signal: NodeJS.Signals): void {
@@ -840,7 +854,12 @@ function shutdown(signal: NodeJS.Signals): void {
   shuttingDown = true;
   stopBackupScheduler();
   console.log(`[server] ${signal} received, tearing down sidecar...`);
+  /* #1030 — release our :9000 ownership note so the next boot (or another
+     stack) sees the port as free. No-op if we never claimed it (autoStart off)
+     or a same-lineage reload already took it over. */
   releaseSidecarOwnership(runDir);
+  /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
+     child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
   mdnsResponderHandle?.kill();
   void reap.finally(() => process.exit(0));
