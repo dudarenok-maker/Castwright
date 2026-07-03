@@ -12,38 +12,42 @@ import { QwenInstall } from '../qwen-install';
 import { CoquiInstall } from '../coqui-install';
 import { OllamaInstall } from '../ollama-install';
 import { GeminiKeyField } from '../account-forms';
+import { BlockerFixAction } from '../blocker-fix-action';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { saveGeminiApiKey } from '../../store/account-slice';
-import type { SetupReadiness } from '../../lib/api';
+import type { SetupReadiness, BlockerDiagnosis } from '../../lib/api';
 
 // ── small status badge ──────────────────────────────────────────────────────
 
 function BlockerBadge({
-  status,
+  diagnosis,
   label,
+  onRefetch,
 }: {
-  status: 'pass' | 'fail';
+  diagnosis: BlockerDiagnosis;
   label: string;
+  onRefetch: () => void;
 }) {
-  const isPass = status === 'pass';
+  const isPass = diagnosis.status === 'pass';
   return (
-    <span
-      data-blocker-status={status}
-      className={[
-        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-        isPass
-          ? 'bg-emerald-100 text-emerald-800'
-          : 'bg-amber-100 text-amber-800',
-      ].join(' ')}
-    >
+    <div className="space-y-1.5">
       <span
+        data-blocker-status={diagnosis.status}
         className={[
-          'w-1.5 h-1.5 rounded-full',
-          isPass ? 'bg-emerald-600' : 'bg-amber-600',
+          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+          isPass ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800',
         ].join(' ')}
-      />
-      {label}
-    </span>
+      >
+        <span className={['w-1.5 h-1.5 rounded-full', isPass ? 'bg-emerald-600' : 'bg-amber-600'].join(' ')} />
+        {label}
+      </span>
+      {!isPass && (
+        <>
+          <p className="text-xs text-ink/60">{diagnosis.message}</p>
+          <BlockerFixAction diagnosis={diagnosis} onDone={onRefetch} />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -78,15 +82,17 @@ export function StepModels({
 
       {/* ── Voice engines section ───────────────────────────────────── */}
       <section className="space-y-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3 flex-wrap">
           <SectionHeading>Voice engines</SectionHeading>
           <BlockerBadge
-            status={readiness.blockers.sidecar}
-            label={readiness.blockers.sidecar === 'pass' ? 'Runtime ready' : 'Runtime needed'}
+            diagnosis={readiness.blockers.sidecar}
+            label={readiness.blockers.sidecar.status === 'pass' ? 'Runtime ready' : 'Runtime needed'}
+            onRefetch={onRefetch}
           />
           <BlockerBadge
-            status={readiness.blockers.tts}
-            label={readiness.blockers.tts === 'pass' ? 'Voice ready' : 'Voice needed'}
+            diagnosis={readiness.blockers.tts}
+            label={readiness.blockers.tts.status === 'pass' ? 'Voice ready' : 'Voice needed'}
+            onRefetch={onRefetch}
           />
         </div>
 
@@ -124,11 +130,12 @@ export function StepModels({
 
       {/* ── Analyzer section ────────────────────────────────────────── */}
       <section className="space-y-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3 flex-wrap">
           <SectionHeading>Analyzer</SectionHeading>
           <BlockerBadge
-            status={readiness.blockers.analyzer}
-            label={readiness.blockers.analyzer === 'pass' ? 'Analyzer ready' : 'Analyzer needed'}
+            diagnosis={readiness.blockers.analyzer}
+            label={readiness.blockers.analyzer.status === 'pass' ? 'Analyzer ready' : 'Analyzer needed'}
+            onRefetch={onRefetch}
           />
         </div>
 
