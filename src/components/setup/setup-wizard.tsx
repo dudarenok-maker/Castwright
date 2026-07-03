@@ -240,7 +240,10 @@ interface SummaryRow {
    blockers (ffmpeg, voice runtime + default voice, analyzer) drive the dots. */
 function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
   const { blockers, info } = readiness;
-  const voiceOk = blockers.sidecar === 'pass' && blockers.tts === 'pass';
+  const voiceOk = blockers.sidecar.status === 'pass' && blockers.tts.status === 'pass';
+  const voiceDetail = voiceOk
+    ? 'Runtime + default voice ready'
+    : (blockers.sidecar.status === 'fail' ? blockers.sidecar.message : blockers.tts.message);
   return [
     {
       key: 'environment',
@@ -252,22 +255,22 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
     {
       key: 'ffmpeg',
       label: 'Audio assembly',
-      detail: blockers.ffmpeg === 'pass' ? 'ffmpeg installed' : 'ffmpeg not found',
-      status: blockers.ffmpeg === 'pass' ? 'ok' : 'attention',
+      detail: blockers.ffmpeg.status === 'pass' ? 'ffmpeg installed' : blockers.ffmpeg.message,
+      status: blockers.ffmpeg.status === 'pass' ? 'ok' : 'attention',
       stepIndex: 1,
     },
     {
       key: 'voice',
       label: 'Voice engines',
-      detail: voiceOk ? 'Runtime + default voice ready' : 'Runtime or default voice needs setup',
+      detail: voiceDetail,
       status: voiceOk ? 'ok' : 'attention',
       stepIndex: 2,
     },
     {
       key: 'analyzer',
       label: 'Analyzer',
-      detail: blockers.analyzer === 'pass' ? 'Ready' : 'Needs a Gemini key or a local model',
-      status: blockers.analyzer === 'pass' ? 'ok' : 'attention',
+      detail: blockers.analyzer.status === 'pass' ? 'Ready' : blockers.analyzer.message,
+      status: blockers.analyzer.status === 'pass' ? 'ok' : 'attention',
       stepIndex: 2,
     },
     {
