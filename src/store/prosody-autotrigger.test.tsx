@@ -84,7 +84,12 @@ vi.mock('../lib/api', () => ({
       Promise.resolve({
         ready: true,
         completedAt: '2026-06-12T00:00:00.000Z',
-        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+        blockers: {
+          sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        },
         info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
       }),
     getTourStatus: vi.fn(async () => ({ completedAt: null })),

@@ -39,7 +39,12 @@ function makeReadiness(overrides: Partial<SetupReadiness> = {}): SetupReadiness 
   return {
     ready: true,
     completedAt: null,
-    blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+    blockers: {
+      sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+    },
     info: { gpu: 'cuda · 1.2 / 8.0 GB' },
     ...overrides,
   };
