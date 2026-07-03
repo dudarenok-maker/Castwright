@@ -6366,16 +6366,38 @@ async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
 
 /* fs-21 — first-run readiness. Mirrors SetupReadiness in
    server/src/routes/setup-readiness.ts. */
-export type BlockerStatus = 'pass' | 'fail';
+export type BlockerCause =
+  | 'python-missing' | 'venv-missing' | 'venv-broken' | 'supervisor-exhausted'
+  | 'supervisor-tripped' | 'unreachable-transient' | 'unreachable-no-supervisor'
+  | 'sidecar-blocked' | 'no-engine-installed' | 'weights-missing'
+  | 'cannot-confirm-engine' | 'package-broken'
+  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing'
+  | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key'
+  | 'pass';
+
+export type BlockerActionKind =
+  | 'venv-bootstrap' | 'qwen-install' | 'kokoro-install' | 'coqui-install'
+  | 'sidecar-restart' | 'ollama-install' | 'ollama-pull' | 'navigate';
+
+export interface BlockerAction {
+  kind: BlockerActionKind;
+  label: string;
+  params?: Record<string, string>;
+  href?: string;
+}
+
+export interface BlockerDiagnosis {
+  status: 'pass' | 'fail';
+  cause: BlockerCause;
+  message: string;
+  remediation: string;
+  action?: BlockerAction;
+}
+
 export interface SetupReadiness {
   ready: boolean;
   completedAt: string | null;
-  blockers: {
-    sidecar: BlockerStatus;
-    ffmpeg: BlockerStatus;
-    tts: BlockerStatus;
-    analyzer: BlockerStatus;
-  };
+  blockers: { sidecar: BlockerDiagnosis; ffmpeg: BlockerDiagnosis; tts: BlockerDiagnosis; analyzer: BlockerDiagnosis };
   info: { gpu: string };
 }
 
@@ -6389,6 +6411,13 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
    USE_MOCKS at import). Latches not-ready into sessionStorage from the
    ?setup=notready param so the state survives the redirect to #/setup, where
    the query param is gone. */
+
+function mockBlocker(status: 'pass' | 'fail'): BlockerDiagnosis {
+  return status === 'pass'
+    ? { status: 'pass', cause: 'pass', message: 'Ready', remediation: '' }
+    : { status: 'fail', cause: 'venv-missing', message: 'Not set up', remediation: 'Set it up.' };
+}
+
 export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
   if (window.location.hash.includes('setup=notready')) {
     sessionStorage.setItem('mock-setup-readiness', 'notready');
@@ -6398,13 +6427,13 @@ export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
     ? {
         ready: false,
         completedAt: null,
-        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'fail', analyzer: 'fail' },
+        blockers: { sidecar: mockBlocker('pass'), ffmpeg: mockBlocker('pass'), tts: mockBlocker('fail'), analyzer: mockBlocker('fail') },
         info: { gpu: 'CPU — no GPU detected' },
       }
     : {
         ready: true,
         completedAt: '2026-06-12T00:00:00.000Z',
-        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+        blockers: { sidecar: mockBlocker('pass'), ffmpeg: mockBlocker('pass'), tts: mockBlocker('pass'), analyzer: mockBlocker('pass') },
         info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
       };
 }
