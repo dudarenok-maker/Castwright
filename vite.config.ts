@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import mkcert from 'vite-plugin-mkcert';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Plan 124 — build-version footer. Capture version + git provenance ONCE here
 // (this callback runs at vite start / per `vite build`) and inject them as
@@ -25,7 +27,7 @@ function gitOutput(cmd: string): string | null {
   }
 }
 
-function buildInfoConstants() {
+function buildInfoRaw() {
   const version = (createRequire(import.meta.url)('./package.json') as { version: string }).version;
   const gitSha = gitOutput('git rev-parse --short HEAD') ?? 'unknown';
   const gitBranch = gitOutput('git rev-parse --abbrev-ref HEAD') ?? 'local';
@@ -35,12 +37,44 @@ function buildInfoConstants() {
   const hh = String(now.getHours()).padStart(2, '0');
   const mm = String(now.getMinutes()).padStart(2, '0');
   const buildTime = `${hh}:${mm}`;
+  return { version, gitSha, gitBranch, gitDirty, buildTime, buildTimeIso: now.toISOString() };
+}
+
+function buildInfoConstants(info: ReturnType<typeof buildInfoRaw>) {
   return {
-    __APP_VERSION__: JSON.stringify(version),
-    __GIT_SHA__: JSON.stringify(gitSha),
-    __GIT_BRANCH__: JSON.stringify(gitBranch),
-    __GIT_DIRTY__: JSON.stringify(gitDirty), // boolean literal true/false
-    __BUILD_TIME__: JSON.stringify(buildTime),
+    __APP_VERSION__: JSON.stringify(info.version),
+    __GIT_SHA__: JSON.stringify(info.gitSha),
+    __GIT_BRANCH__: JSON.stringify(info.gitBranch),
+    __GIT_DIRTY__: JSON.stringify(info.gitDirty), // boolean literal true/false
+    __BUILD_TIME__: JSON.stringify(info.buildTime),
+  };
+}
+
+// scripts/start-app-prod.mjs is a plain Node launcher — it can't import the
+// compile-time __GIT_SHA__ etc. constants baked into the frontend bundle, so
+// it has no way to tell the user which commit/when a `dist/` it's serving was
+// built from. Write the same provenance to a small JSON file it CAN read.
+// `apply: 'build'` skips this for `npm run dev` (no dist/ to write into).
+function buildManifestPlugin(info: ReturnType<typeof buildInfoRaw>): PluginOption {
+  return {
+    name: 'castwright-build-manifest',
+    apply: 'build',
+    closeBundle() {
+      writeFileSync(
+        resolve(process.cwd(), 'dist', 'build-manifest.json'),
+        `${JSON.stringify(
+          {
+            version: info.version,
+            sha: info.gitSha,
+            branch: info.gitBranch,
+            dirty: info.gitDirty,
+            buildTime: info.buildTimeIso,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    },
   };
 }
 
@@ -79,13 +113,14 @@ export default defineConfig(({ mode }) => {
   // ops-20: Tailwind v4 runs through its dedicated Vite plugin rather than the
   // `@tailwindcss/postcss` PostCSS pass (which executed inside vite:css). The
   // Vite plugin hooks the pipeline directly, so postcss.config.js is gone.
-  const plugins: PluginOption[] = [react(), tailwindcss()];
+  const buildInfo = buildInfoRaw();
+  const plugins: PluginOption[] = [react(), tailwindcss(), buildManifestPlugin(buildInfo)];
   if (useHttps) plugins.push(mkcert());
   return {
     plugins,
     root: '.',
-    // Plan 124 — compile-time build-version constants (see buildInfoConstants).
-    define: buildInfoConstants(),
+    // Plan 124 — compile-time build-version constants (see buildInfoRaw).
+    define: buildInfoConstants(buildInfo),
     server: {
       // Bind to IPv4 loopback by default. Vite 5 defaults to host:'localhost',
       // and on Node 18+ that resolves to ::1 (IPv6) only — Chrome on Windows
