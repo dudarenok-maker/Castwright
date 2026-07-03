@@ -457,6 +457,12 @@ _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ one source of truth per manuscript; less drift between the demo book and the test fixtures. Pairs with `fs-61` (#1027) and `fs-22`.
 _Full detail + acceptance:_ [#1043](https://github.com/dudarenok-maker/Castwright/issues/1043).
 
+#### `ops-21` — Robust per-interface / multi-address mDNS answers for friendly LAN hostnames ([#1239](https://github.com/dudarenok-maker/Castwright/issues/1239))
+
+- _What:_ Follow-up to the `castwright.local`/`castwright.dev.local` friendly-hostname spec (`docs/superpowers/specs/2026-07-03-castwright-local-hostnames-design.md`) — replace the v1 "OS default-route interface" mDNS-answer heuristic with a more robust strategy (per-interface answers, or multiple candidate addresses) so resolution stays correct under an active VPN or a dual-homed LAN.
+- _Benefit (technical/architectural):_ closes a known gap three rounds of adversarial spec review flagged; not a blocker for the base feature, which already degrades gracefully to the existing LAN-IP URL.
+_Full detail + acceptance:_ [#1239](https://github.com/dudarenok-maker/Castwright/issues/1239).
+
 #### `ops-18` — Catch any large-region visual change (not just the top-bar) ([#947](https://github.com/dudarenok-maker/Castwright/issues/947))
 
 - _What:_ Full-page re-blessed baselines + a contiguity gate to catch branding-scale changes outside the top-bar. Follow-up to #925; build only if a real non-top-bar regression is seen.

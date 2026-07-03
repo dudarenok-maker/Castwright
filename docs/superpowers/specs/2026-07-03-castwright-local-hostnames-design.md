@@ -262,12 +262,10 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
   existing `shutdown()` handler, not the launcher) is the locked decision.
 - Whether `scripts/setup-lan-certs.mjs` already has a test file to extend vs. needing a new
   one is a planning-time check, not a design decision.
-- **Judgment call flagged for user confirmation, not silently resolved:** three adversarial
-  review rounds (see commit history) surfaced that the "primary LAN IP" mDNS-answer
-  heuristic (Component 1) is a best-effort default, not a correctness guarantee, under a
-  VPN or dual-homed LAN. The scope decision taken here — accept it as a documented
-  limitation (Non-goal list, same treatment as the Windows-peer gap) rather than building
-  per-interface mDNS answers or multi-address responses — is a reasonable default given this
-  spec's overall "stepping stone, LAN-IP always the fallback" posture, but it changes what
-  the feature actually promises and deserves an explicit yes from the user before
-  implementation, not just a documented default.
+- **Resolved by user 2026-07-03:** three adversarial review rounds surfaced that the
+  "primary LAN IP" mDNS-answer heuristic (Component 1) is a best-effort default, not a
+  correctness guarantee, under a VPN or dual-homed LAN. User confirmed shipping the v1
+  default now (documented limitation, LAN-IP URL always the fallback) rather than building
+  per-interface/multi-address answers as part of this spec. Tracked as a follow-up:
+  [`ops-21`](https://github.com/dudarenok-maker/Castwright/issues/1239) /
+  `docs/BACKLOG.md`.
