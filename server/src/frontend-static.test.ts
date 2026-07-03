@@ -80,6 +80,26 @@ describe('mountFrontendStatic', () => {
     expect(result.reason).toMatch(/index\.html is missing/);
   });
 
+  it('serves index.html with Cache-Control: no-cache so a rebuild is visible to an open tab', async () => {
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(resolve(distDir, 'index.html'), '<!doctype html><title>built</title>');
+
+    const app = buildApp();
+    const res = await request(app).get('/');
+    expect(res.headers['cache-control']).toBe('no-cache');
+  });
+
+  it('still caches hashed assets normally (maxAge, not no-cache)', async () => {
+    mkdirSync(resolve(distDir, 'assets'), { recursive: true });
+    writeFileSync(resolve(distDir, 'index.html'), '<html />');
+    writeFileSync(resolve(distDir, 'assets', 'index-abc123.js'), 'console.log(1)');
+
+    const app = buildApp();
+    const res = await request(app).get('/assets/index-abc123.js');
+    expect(res.headers['cache-control']).toMatch(/max-age=3600/);
+    expect(res.headers['cache-control']).not.toBe('no-cache');
+  });
+
   it('mounts in production mode even if index.html shows up later — semantics depend on disk at call time', () => {
     process.env.NODE_ENV = 'production';
     mkdirSync(distDir, { recursive: true });
