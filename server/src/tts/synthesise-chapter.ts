@@ -1584,18 +1584,28 @@ export async function synthesiseChapter(
        false-flag a perfectly faithful render as `drift`. Normalise with the
        resolved `langCode` so the comparison stays aligned with the audio. fs-57
        takes the whole `group` so the vocalization carve-out below can read it. */
+    /* srv-50: wrapped in the same withCallTimeout + withRecycleRecovery
+       protection every synth call site already has — an unwrapped ASR call
+       was the exact hang the 2026-07-03 wedged-sidecar incident exposed
+       (it never threw, so nothing downstream ever got a chance to recover).
+       Wrapping the closure (not either call site) covers BOTH call sites
+       below automatically. */
     const verify = (pcm: Buffer, rate: number, group: SentenceGroup): Promise<AsrClassification> =>
-      verifySegmentTranscript(pcm, rate, normaliseForTts(group.text, langCode), {
-        language: asr.language,
-        nameAllowlist: asr.nameAllowlist,
-        thresholds: asr.thresholds,
-        transcribeFn: asr.transcribeFn,
-        sidecarUrl: asr.sidecarUrl,
-        signal,
-        /* fs-57 / srv-31: when Stage 3 prepended a vocalization, tolerate its
-           leading token(s) so the gasp doesn't count as content drift. */
-        ...(group.vocalization ? { vocalizationAllowlist: leadingVocalizationTokens(group.text) } : {}),
-      });
+      withRecycleRecovery(resolveGroup(group).route.engine, () =>
+        withCallTimeout('asr-verify', (sig) =>
+          verifySegmentTranscript(pcm, rate, normaliseForTts(group.text, langCode), {
+            language: asr.language,
+            nameAllowlist: asr.nameAllowlist,
+            thresholds: asr.thresholds,
+            transcribeFn: asr.transcribeFn,
+            sidecarUrl: asr.sidecarUrl,
+            signal: sig,
+            /* fs-57 / srv-31: when Stage 3 prepended a vocalization, tolerate its
+               leading token(s) so the gasp doesn't count as content drift. */
+            ...(group.vocalization ? { vocalizationAllowlist: leadingVocalizationTokens(group.text) } : {}),
+          }),
+        ),
+      );
     /* Sample the groups to verify (have a result + pass the stride). The stride
        walks groups-with-results in order, so `total` mirrors that ordering. */
     let sampleCounter = 0;
