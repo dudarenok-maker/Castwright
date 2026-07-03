@@ -439,6 +439,12 @@ _Full detail + acceptance:_ [#898](https://github.com/dudarenok-maker/Castwright
 
 ### Ops & maintenance
 
+#### `srv-50` — Auto-recycle TTS sidecar on stall-watchdog hang ([#1243](https://github.com/dudarenok-maker/Castwright/issues/1243))
+
+- _What:_ The chapter stall watchdog (`ChapterStallError`, 720s no-progress) correctly fails a stuck chapter but never kills the underlying sidecar process — if the sidecar is truly wedged (e.g. an eGPU dropping off the CUDA bus mid-request, observed 2026-07-03), it keeps squatting on `:9000` + held VRAM indefinitely, and the exit-based respawn supervisor can't help because the process never exits. Make the stall/recycle-storm paths forcibly kill + respawn the sidecar (capped like the existing crash-loop guard) instead of leaving a zombie for a human to `taskkill`.
+- _Benefit (user / technical):_ generation self-heals from a wedged sidecar instead of silently failing every subsequent chapter until someone notices and manually restarts. Closes the last uncovered recycle trigger (today: exit-based + memory-ceiling-based only).
+_Full detail + acceptance:_ [#1243](https://github.com/dudarenok-maker/Castwright/issues/1243).
+
 #### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
 
 - _What:_ Power-user follow-ups for the shipped `#/advanced` surface (plan 199): a "Download config.json" export of all active overrides, a complementary JSON import flow (validates keys against live descriptors), and an env-diff indicator showing when a `.env`-locked value differs from the configured default.
