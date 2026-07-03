@@ -190,3 +190,69 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
   }
   return diagnosis('pass', 'pass', 'A voice engine is ready.', '');
 }
+
+export interface FfmpegDiagnosisInput {
+  ffmpegPresent: boolean;
+  ffprobePresent: boolean;
+}
+
+export function diagnoseFfmpeg(input: FfmpegDiagnosisInput): BlockerDiagnosis {
+  if (!input.ffmpegPresent && !input.ffprobePresent) {
+    return diagnosis(
+      'fail', 'both-missing',
+      'ffmpeg and ffprobe are not on PATH.',
+      'Install ffmpeg (which bundles ffprobe) for your OS, then click Recheck.',
+    );
+  }
+  if (!input.ffmpegPresent) {
+    return diagnosis('fail', 'ffmpeg-missing', 'ffmpeg is not on PATH.', 'Install ffmpeg for your OS, then click Recheck.');
+  }
+  if (!input.ffprobePresent) {
+    return diagnosis('fail', 'ffprobe-missing', 'ffprobe is not on PATH.', 'Install ffmpeg (which bundles ffprobe) for your OS, then click Recheck.');
+  }
+  return diagnosis('pass', 'pass', 'ffmpeg and ffprobe are both installed.', '');
+}
+
+export interface AnalyzerDiagnosisInput {
+  engine: 'local' | 'gemini';
+  ollamaReachable: boolean;
+  ollamaError: string | null;
+  modelPulled: boolean;
+  expectedModel: string;
+  pullable: string[];
+  geminiKeySet: boolean;
+}
+
+export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosis {
+  if (input.engine === 'gemini') {
+    if (!input.geminiKeySet) {
+      return diagnosis(
+        'fail', 'no-gemini-key',
+        'No Gemini API key is configured.',
+        'Enter a Gemini API key in Advanced Settings.',
+        { kind: 'navigate', label: 'Open Advanced Settings', href: '#/advanced' },
+      );
+    }
+    return diagnosis('pass', 'pass', 'Gemini API key configured.', '');
+  }
+  if (!input.ollamaReachable) {
+    return diagnosis(
+      'fail', 'ollama-unreachable',
+      input.ollamaError ?? 'The local Ollama analyzer is not reachable.',
+      'Install and start Ollama.',
+      { kind: 'ollama-install', label: 'Install Ollama' },
+    );
+  }
+  if (!input.modelPulled) {
+    const action = input.pullable.includes(input.expectedModel)
+      ? { kind: 'ollama-pull' as const, label: `Pull ${input.expectedModel}`, params: { model: input.expectedModel } }
+      : undefined;
+    return diagnosis(
+      'fail', 'model-not-pulled',
+      `The analyzer model "${input.expectedModel}" has not been pulled.`,
+      action ? `Pull ${input.expectedModel}.` : `Pull it via the terminal: ollama pull ${input.expectedModel}`,
+      action,
+    );
+  }
+  return diagnosis('pass', 'pass', 'Analyzer ready.', '');
+}

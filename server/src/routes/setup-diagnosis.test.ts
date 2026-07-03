@@ -182,3 +182,66 @@ describe('diagnoseTts', () => {
     expect(r.cause).not.toBe('package-broken');
   });
 });
+
+import { diagnoseFfmpeg, diagnoseAnalyzer } from './setup-diagnosis.js';
+import type { FfmpegDiagnosisInput, AnalyzerDiagnosisInput } from './setup-diagnosis.js';
+
+describe('diagnoseFfmpeg', () => {
+  it('passes when both are present', () => {
+    const r = diagnoseFfmpeg({ ffmpegPresent: true, ffprobePresent: true });
+    expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+  it('reports ffmpeg-missing', () => {
+    const r = diagnoseFfmpeg({ ffmpegPresent: false, ffprobePresent: true });
+    expect(r).toMatchObject({ status: 'fail', cause: 'ffmpeg-missing' });
+    expect(r.action).toBeUndefined();
+  });
+  it('reports ffprobe-missing', () => {
+    const r = diagnoseFfmpeg({ ffmpegPresent: true, ffprobePresent: false });
+    expect(r.cause).toBe('ffprobe-missing');
+  });
+  it('reports both-missing', () => {
+    const r = diagnoseFfmpeg({ ffmpegPresent: false, ffprobePresent: false });
+    expect(r.cause).toBe('both-missing');
+  });
+});
+
+const ANALYZER_LOCAL_READY: AnalyzerDiagnosisInput = {
+  engine: 'local',
+  ollamaReachable: true,
+  ollamaError: null,
+  modelPulled: true,
+  expectedModel: 'qwen3.5:9b',
+  pullable: ['qwen3.5:9b'],
+  geminiKeySet: false,
+};
+
+describe('diagnoseAnalyzer', () => {
+  it('passes for a reachable, pulled local model', () => {
+    expect(diagnoseAnalyzer(ANALYZER_LOCAL_READY)).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+  it('reports ollama-unreachable with an install action', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, ollamaReachable: false, ollamaError: 'ECONNREFUSED' });
+    expect(r).toMatchObject({ status: 'fail', cause: 'ollama-unreachable' });
+    expect(r.action).toMatchObject({ kind: 'ollama-install' });
+  });
+  it('reports model-not-pulled with a pull action when the model is in the allowlist', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, modelPulled: false });
+    expect(r).toMatchObject({ status: 'fail', cause: 'model-not-pulled' });
+    expect(r.action).toMatchObject({ kind: 'ollama-pull', params: { model: 'qwen3.5:9b' } });
+  });
+  it('omits the pull action when the model is not in the allowlist', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, modelPulled: false, pullable: ['other-model'] });
+    expect(r).toMatchObject({ status: 'fail', cause: 'model-not-pulled' });
+    expect(r.action).toBeUndefined();
+  });
+  it('reports no-gemini-key with a navigate action for the gemini engine', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, engine: 'gemini', geminiKeySet: false });
+    expect(r).toMatchObject({ status: 'fail', cause: 'no-gemini-key' });
+    expect(r.action).toMatchObject({ kind: 'navigate' });
+  });
+  it('passes for the gemini engine when a key is set', () => {
+    const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, engine: 'gemini', geminiKeySet: true });
+    expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+});
