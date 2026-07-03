@@ -7,7 +7,7 @@
      - `inconclusive` (untrusted transcript) → no re-record,
      - sampleEvery strides the pass. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type {
@@ -265,6 +265,49 @@ describe('synthesiseChapter ASR content-QA pass', () => {
       engine: 'gemini',
     });
     expect(res.segments.find((s) => s.kind !== 'title')?.asr).toBeUndefined();
+  });
+
+  it('a hung ASR verify() call times out and is retried via onRecoverRecycle, instead of hanging forever', async () => {
+    const provider = makeProvider();
+    // transcribeFn never resolves — simulates the 2026-07-03 wedged-sidecar
+    // incident (a worker thread stuck mid-transcribe).
+    const hangingTranscribe = (): Promise<TranscribeResult> => new Promise(() => {});
+    const onRecoverRecycle = vi.fn(async () => {});
+
+    const err = await synthesiseChapter({
+      sentences: [sentence(1)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      callTimeoutMs: 40,
+      asr: { maxRerecords: 0, transcribeFn: hangingTranscribe },
+      onRecoverRecycle,
+      maxRecycleRecoveries: 2,
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+    // Exhausts the shared recovery budget (2) since the transcribe call keeps
+    // hanging on every retry — same shape as a hung synth call.
+    expect(onRecoverRecycle).toHaveBeenCalledTimes(2);
+    expect(err).toMatchObject({ name: 'RecycleStormError' });
+  }, 15_000);
+
+  it('a normal in-budget ASR call is unaffected by the timeout wrap', async () => {
+    const provider = makeProvider();
+    const { fn } = makeTranscriber([TEXT]);
+    const res = await synthesiseChapter({
+      sentences: [sentence(1)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      callTimeoutMs: 50_000,
+      asr: { maxRerecords: 2, transcribeFn: fn },
+    });
+    expect(res.segments.find((s) => s.kind !== 'title')?.asr?.verdict).toBe('ok');
   });
 });
 

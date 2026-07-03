@@ -439,6 +439,12 @@ _Full detail + acceptance:_ [#898](https://github.com/dudarenok-maker/Castwright
 
 ### Ops & maintenance
 
+#### `srv-51` — Wrap the title-narration synth call in withCallTimeout ([#1247](https://github.com/dudarenok-maker/Castwright/issues/1247))
+
+- _What:_ srv-50 wrapped the previously-unprotected ASR `verify()` call with the existing `withCallTimeout`/`withRecycleRecovery` protection every other synth call site has. The final whole-branch review found one adjacent gap: the title-narration synth call (`synthesise-chapter.ts:981`) still has no per-call timeout, only the coarser 720s whole-chapter stall watchdog.
+- _Benefit (technical):_ retires the last unprotected sidecar call site with the wedged-worker hang shape, matching the reliability bar srv-50 set everywhere else.
+_Full detail + acceptance:_ [#1247](https://github.com/dudarenok-maker/Castwright/issues/1247).
+
 #### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
 
 - _What:_ Power-user follow-ups for the shipped `#/advanced` surface (plan 199): a "Download config.json" export of all active overrides, a complementary JSON import flow (validates keys against live descriptors), and an env-diff indicator showing when a `.env`-locked value differs from the configured default.
