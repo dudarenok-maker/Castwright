@@ -39,10 +39,12 @@ import {
   AnalysisPill,
   GenerationPill,
   DesignPill,
+  ExportPill,
   summarizeStatus,
   type StatusSummary,
   type AnalysisPillData,
   type DesignPillData,
+  type ExportPillData,
 } from './top-bar';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
@@ -505,6 +507,47 @@ describe('DesignPill', () => {
     render(<DesignPill data={{ state: 'running', done: 0, total: 1, percent: 30, skipped: 0, failureCount: 0, currentName: 'Aria', phase: 'rendering', onClick: () => {} }} />);
     expect(screen.getByText(/Aria/)).toBeInTheDocument();
     expect(screen.getByText(/rendering audition/i)).toBeInTheDocument();
+  });
+});
+
+/* fs-54 — the fourth status pill, "Export" progress/linger. Same direct-render
+   pattern as GenerationPill/DesignPill above. */
+describe('ExportPill', () => {
+  const renderPill = (data: ExportPillData) => render(<ExportPill data={data} />);
+
+  it('renders the running summary with runningCount and percent', () => {
+    renderPill({ state: 'running', runningCount: 2, percent: 0.45, onClick: vi.fn() });
+    const pill = screen.getByTestId('export-pill');
+    expect(pill.textContent).toContain('Exporting');
+    expect(pill.textContent).toContain('2 running');
+    expect(pill.textContent).toContain('45%');
+  });
+
+  it('renders the "Stalled" label for the stalled state', () => {
+    renderPill({ state: 'stalled', runningCount: 1, percent: 0.1, onClick: vi.fn() });
+    const pill = screen.getByTestId('export-pill');
+    expect(pill.textContent).toContain('Stalled');
+    expect(pill.textContent).toContain('1 running');
+    expect(pill.textContent).toContain('10%');
+  });
+
+  it('renders "Export done" for the done state (no running detail)', () => {
+    renderPill({ state: 'done', onClick: vi.fn() });
+    const pill = screen.getByTestId('export-pill');
+    expect(pill.textContent).toBe('Export done');
+  });
+
+  it('renders "Export failed" for the failed state (no running detail)', () => {
+    renderPill({ state: 'failed', onClick: vi.fn() });
+    const pill = screen.getByTestId('export-pill');
+    expect(pill.textContent).toBe('Export failed');
+  });
+
+  it('fires onClick when clicked', () => {
+    const onClick = vi.fn();
+    renderPill({ state: 'running', runningCount: 3, percent: 0.5, onClick });
+    fireEvent.click(screen.getByTestId('export-pill'));
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
 
