@@ -73,17 +73,27 @@ function fmtGb(mb: number | null | undefined): string {
   return mb == null ? '?' : (mb / 1024).toFixed(1);
 }
 
-export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
+export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<DiagnosticsResponse> {
   /* Probe the sidecar once and reuse it for both the sidecar row AND the GPU
      row — the sidecar /health is where VRAM figures come from. */
   const sidecar = await probeSidecarHealth().catch(
     (e: Error) => ({ status: 'unreachable' as const, url: '', proxy: 'sidecar' as const, error: e.message }),
   );
   const engine = getResolvedAnalysisEngine();
+  /* Callers that only need a subset of checks (e.g. GET /api/setup/readiness,
+     which re-derives its own ffmpeg/analyzer diagnosis from richer data than
+     a DiagnosticsCheck row exposes) can skip the rest so this aggregator
+     doesn't pay for a probe whose result gets thrown away. Default (no skip)
+     preserves the full board for GET /api/diagnostics and any other caller. */
+  const skip = new Set(opts?.skip ?? []);
 
-  const checks = await Promise.all([
+  const checkDefs: {
+    id: CheckId;
+    label: string;
+    body: () => Promise<DiagnosticsCheck> | DiagnosticsCheck;
+  }[] = [
     // GPU / VRAM headroom — derived from the sidecar's torch CUDA figures.
-    runCheck('gpu', 'GPU / VRAM', () => {
+    { id: 'gpu', label: 'GPU / VRAM', body: () => {
       if (sidecar.status !== 'reachable') {
         return {
           id: 'gpu',
@@ -122,10 +132,10 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
         detail,
         value: total != null ? `${fmtGb(reserved)}/${fmtGb(total)} GB` : null,
       };
-    }),
+    } },
 
     // Voice engine (TTS sidecar) reachability + resident models.
-    runCheck('sidecar', 'Voice engine', () => {
+    { id: 'sidecar', label: 'Voice engine', body: () => {
       if (sidecar.status !== 'reachable') {
         return {
           id: 'sidecar',
@@ -169,13 +179,13 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
         detail: resident.length ? `reachable · ${resident.join(', ')}` : 'reachable · no model resident',
         value: resident.join(', ') || null,
       };
-    }),
+    } },
 
     // ASR (Whisper) content-QA engine (srv-31). Display-only — it loads lazily
     // on /transcribe and idle-evicts, so there's no Load/Stop here. OFF unless
     // SEG_ASR_ENABLED, in which case we surface whether it's resident + device.
     // Never a `fail` row: an idle (not-yet-loaded) ASR is the normal state.
-    runCheck('asr', 'ASR (Whisper)', () => {
+    { id: 'asr', label: 'ASR (Whisper)', body: () => {
       if (sidecar.status !== 'reachable') {
         return {
           id: 'asr',
@@ -202,11 +212,11 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
           : `enabled · idle · ${device}`,
         value: sidecar.asrLoaded ? device : null,
       };
-    }),
+    } },
 
     // Analyzer (Ollama) connectivity — only meaningful when the local engine
     // is selected; with Gemini it's not in use and never a failure.
-    runCheck('analyzer', 'Analyzer (Ollama)', async () => {
+    { id: 'analyzer', label: 'Analyzer (Ollama)', body: async () => {
       if (engine !== 'local') {
         return {
           id: 'analyzer',
@@ -241,11 +251,11 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
           : `reachable · ${ollama.expectedModel} pulled`,
         value: ollama.expectedModel ?? null,
       };
-    }),
+    } },
 
     // Gemini config presence (no live call) — only fails when Gemini is the
     // selected engine but no key is configured.
-    runCheck('gemini', 'Analyzer (Gemini)', () => {
+    { id: 'gemini', label: 'Analyzer (Gemini)', body: () => {
       const hasKey = getResolvedGeminiApiKey() != null;
       if (engine !== 'gemini') {
         return {
@@ -263,10 +273,10 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
             status: 'fail',
             detail: 'GEMINI_API_KEY not set',
           };
-    }),
+    } },
 
     // ffmpeg + ffprobe presence on PATH.
-    runCheck('ffmpeg', 'ffmpeg / ffprobe', () => {
+    { id: 'ffmpeg', label: 'ffmpeg / ffprobe', body: () => {
       const { ffmpeg, ffprobe } = probeFfmpeg();
       if (ffmpeg && ffprobe) {
         return { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail: 'both present' };
@@ -278,10 +288,10 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
         status: 'fail',
         detail: `${missing} not found on PATH`,
       };
-    }),
+    } },
 
     // Free disk on the workspace volume.
-    runCheck('disk', 'Free disk', async () => {
+    { id: 'disk', label: 'Free disk', body: async () => {
       const probe = await probeDiskSpace(WORKSPACE_ROOT);
       const detail =
         probe.status === 'fail'
@@ -290,8 +300,12 @@ export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
             ? `${probe.freeGb} GB free — below ${DISK_WARN_GB} GB`
             : `${probe.freeGb} GB free`;
       return { id: 'disk', label: 'Free disk', status: probe.status, detail, value: probe.freeGb };
-    }),
-  ]);
+    } },
+  ];
+
+  const checks = await Promise.all(
+    checkDefs.filter((c) => !skip.has(c.id)).map((c) => runCheck(c.id, c.label, c.body)),
+  );
 
   return {
     ts: new Date().toISOString(),

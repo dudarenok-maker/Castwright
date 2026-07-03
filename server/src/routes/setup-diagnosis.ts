@@ -90,9 +90,9 @@ export function diagnoseSidecar(input: SidecarDiagnosisInput): BlockerDiagnosis 
     return diagnosis(
       'fail',
       'supervisor-tripped',
-      'The voice engine is held down after repeated crash-loop exits.',
-      'Reset and restart the voice engine.',
-      { kind: 'sidecar-restart', label: 'Reset & restart voice engine' },
+      'The voice engine is held down after repeated crash-loop exits (code-43 streak).',
+      'Restarting the voice engine alone cannot recover this — the device assignment ' +
+        'needs fixing, then the server itself needs restarting.',
     );
   }
   if (!input.sidecarReachable) {

@@ -138,7 +138,13 @@ async function packageBrokenFlags(
 }
 
 setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
-  const diagnostics = await buildDiagnostics();
+  /* This route only reads the 'sidecar' and 'gpu' rows off diagnostics —
+     it derives its own richer ffmpeg/analyzer diagnosis below from data a
+     DiagnosticsCheck row doesn't expose (booleans, error text, pullable
+     models), so skip the rest to avoid buildDiagnostics() re-running those
+     same probes (ffmpeg spawn, Ollama health, disk space) for a result this
+     route throws away. */
+  const diagnostics = await buildDiagnostics({ skip: ['asr', 'analyzer', 'gemini', 'ffmpeg', 'disk'] });
   const venvPresent = sidecarVenvPresent(REPO_ROOT);
   const pythonFound = venvPresent ? true : probePython312Cached();
   const corePackageInstalled = venvPresent ? venvCorePackageInstalled(REPO_ROOT) : false;

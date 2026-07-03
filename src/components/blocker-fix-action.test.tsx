@@ -111,6 +111,35 @@ describe('BlockerFixAction', () => {
     await waitFor(() => expect(screen.getByText(/pip install failed/i)).toBeInTheDocument(), { timeout: 5000 });
   });
 
+  it('unmounting mid-poll stops the poll loop instead of calling onDone in the background', async () => {
+    // PR #1252 mandatory-review finding: pollJob's recursive setTimeout chain
+    // had no unmount cleanup, unlike venv-bootstrap.tsx's pattern this
+    // component claims to mirror. Before the fix, unmounting while a poll was
+    // scheduled left the timer running — the next tick would still fetch and
+    // call onDone (a caller-owned callback) on an unmounted component.
+    const onDone = vi.fn();
+    let pollCount = 0;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/setup/venv/bootstrap') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: '1', status: 'bootstrapping', step: null, error: null }));
+      }
+      if (url.includes('/api/setup/venv/bootstrap/1')) {
+        pollCount += 1;
+        return Promise.resolve(jsonResponse({ id: '1', status: 'installed', step: null, error: null }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    const { unmount } = render(<BlockerFixAction diagnosis={VENV_MISSING} onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: /set up the voice engine runtime/i }));
+    // POLL_MS is 1500ms — unmount well before the first scheduled poll fires.
+    await new Promise((r) => setTimeout(r, 200));
+    unmount();
+    // Wait past when the poll would have fired if the timer weren't cleared.
+    await new Promise((r) => setTimeout(r, 2000));
+    expect(pollCount).toBe(0);
+    expect(onDone).not.toHaveBeenCalled();
+  }, 10000);
+
   it('ollama-install: shows a Recheck prompt (not endless polling) when the job needs a manual GUI install', async () => {
     const onDone = vi.fn();
     // Matches the REAL route's shape (install-bootstrap.ts): the POST returns

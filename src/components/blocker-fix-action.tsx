@@ -2,7 +2,7 @@
    across the Setup checker and the Status popover. Owns its own job-polling
    loop (mirrors venv-bootstrap.tsx's pattern) so callers don't hand-roll
    button wiring per action kind. */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { BlockerAction, BlockerDiagnosis } from '../lib/api';
 
 interface Job {
@@ -52,6 +52,19 @@ export function BlockerFixAction({
   const [manualInstallerPath, setManualInstallerPath] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const jobRef = useRef<{ endpoint: string; id: string } | null>(null);
+  /* pollJob's recursive setTimeout chain outlives a single render — a fix can
+     still be running when the Status popover closes or a wizard step swaps
+     out. clearTimeout on unmount stops the NEXT scheduled tick; this guard
+     additionally stops an already-in-flight fetch's response from calling
+     setState (or onDone, a caller-owned callback) after unmount, mirroring
+     venv-bootstrap.tsx's cleanup for the same recursive-poll shape. */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, []);
 
   const action = diagnosis.action;
   if (!action) return null;
@@ -62,6 +75,7 @@ export function BlockerFixAction({
       try {
         const res = await fetch(`${endpoint}/${id}`);
         const body = (await res.json()) as Job;
+        if (!mountedRef.current) return;
         if (JOB_DONE_STATUSES.includes(body.status)) {
           setBusy(false);
           onDone();
@@ -80,6 +94,7 @@ export function BlockerFixAction({
         }
         pollJob(endpoint, id);
       } catch (e) {
+        if (!mountedRef.current) return;
         setBusy(false);
         setError(e instanceof Error ? e.message : String(e));
       }

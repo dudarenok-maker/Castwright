@@ -52,10 +52,15 @@ describe('diagnoseSidecar', () => {
     expect(r.action).toMatchObject({ kind: 'sidecar-restart' });
   });
 
-  it('reports supervisor-tripped with a sidecar-restart action', () => {
+  it('reports supervisor-tripped with no action — POST /api/sidecar/restart cannot recover a trip', () => {
+    // A code-43 trip means the device assignment itself is broken; resetAndRespawn()
+    // would just crash-loop back into the same trip, so the route intentionally
+    // returns 409 for this cause (sidecar-health.ts's tripEvent() branch) rather
+    // than spawning a fresh child. Attaching a `sidecar-restart` action here would
+    // show a working-looking button that always fails — this is text-only guidance.
     const r = diagnoseSidecar({ ...READY, supervisorTripped: true });
     expect(r).toMatchObject({ status: 'fail', cause: 'supervisor-tripped' });
-    expect(r.action).toMatchObject({ kind: 'sidecar-restart' });
+    expect(r.action).toBeUndefined();
   });
 
   it('supervisor-exhausted takes priority over supervisor-tripped when both are somehow true', () => {
