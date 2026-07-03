@@ -64,4 +64,24 @@ describe('useSetupDiagnosis', () => {
     act(() => result.current.refetch());
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
   });
+
+  it('clears the polling interval on unmount', async () => {
+    const spy = vi.spyOn(api.api, 'getSetupReadiness').mockResolvedValue({
+      ready: true, completedAt: null,
+      blockers: {
+        sidecar: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+        ffmpeg: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+        tts: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+        analyzer: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+      },
+      info: { gpu: '' },
+    });
+    const { unmount } = renderHook(() => useSetupDiagnosis(5_000));
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 });
