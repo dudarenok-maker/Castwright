@@ -7,7 +7,7 @@ export function SeriesSparkline({ summary, onOpen }: { summary: SeriesMemorySumm
   const baseFor = (p: SeriesMemorySummary['perBook'][number]) => Math.max(p.principalCount, p.carriedPresent, 1);
   const max = Math.max(1, ...summary.perBook.map(baseFor));
   return (
-    <div className="mt-1 rounded-xl border border-peach/20 bg-peach/8 px-3.5 py-2.5">
+    <div className="inline-flex max-w-full flex-col gap-2 rounded-xl border border-peach/20 bg-peach/8 px-4 py-3">
       <button
         type="button" onClick={onOpen}
         data-testid="series-sparkline"
@@ -27,8 +27,8 @@ export function SeriesSparkline({ summary, onOpen }: { summary: SeriesMemorySumm
           );
         })}
       </button>
-      <p className="mt-2 text-xs text-ink/60">{summary.carriedCount} of your cast, kept true across the series.</p>
-      <div className="mt-1.5 flex items-center gap-3 text-[11px] text-ink/50">
+      <p className="text-xs text-ink/60">{summary.carriedCount} of your cast, kept true across the series.</p>
+      <div className="flex items-center gap-3 text-[11px] text-ink/50">
         <span className="flex items-center gap-1">
           <span className="inline-block w-2.5 h-2.5 rounded-sm bg-gradient-to-t from-peach to-magenta" />
           Carried
