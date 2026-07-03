@@ -72,6 +72,21 @@ describe('spawnMdnsResponder', () => {
     expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
   });
 
+  it('warns when the child dies from an external signal (OOM-kill / pkill / crash) — code=null but we never called kill()', () => {
+    const child = makeFakeChild(4242);
+    const spawnFn = vi.fn(() => child);
+    const warn = vi.fn();
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn,
+    });
+    expect(handle).not.toBeNull();
+    child.emit('exit', null, 'SIGKILL');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
+    expect(warn.mock.calls[0]?.[0]).toContain('SIGKILL');
+  });
+
   it("does NOT warn on a clean exit(0) (the responder's own graceful bind-failure path)", () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn(() => child);

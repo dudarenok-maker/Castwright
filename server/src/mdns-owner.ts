@@ -86,19 +86,21 @@ export function spawnMdnsResponder(
      "Cannot find module" if the responder script or a dependency is
      missing) exits ASYNCHRONOUSLY with a nonzero code — without this, that
      failure is silent: the caller holds a handle to an already-dead child
-     and is never told. Three cases do NOT warn: a clean exit(0) (the
-     responder's own graceful bind-failure path — see
-     scripts/mdns-responder.mjs); a null code (POSIX signal termination,
-     e.g. non-Windows kill() below sending SIGTERM — the 'error' handler
-     above already covers spawn-time failures); and killedIntentionally
-     (an explicit kill() call, regardless of what exit code the OS reports
-     for it — Windows' `taskkill /F` reports a NONZERO code (commonly 1)
-     for an intentional kill, unlike POSIX SIGTERM which reports null, so
-     the code===null check alone isn't enough on Windows). */
-  child.once('exit', (code) => {
+     and is never told. Only a clean exit(0) (the responder's own graceful
+     bind-failure path — see scripts/mdns-responder.mjs) and
+     killedIntentionally (an explicit kill() call — checked first, so it
+     wins regardless of what exit code/signal the OS reports for it;
+     Windows' `taskkill /F` reports a NONZERO code (commonly 1) while POSIX
+     SIGTERM reports code=null+signal=SIGTERM) do NOT warn. Everything else
+     warns, including a null code we did NOT ask for — e.g. an OS OOM-kill,
+     an external `pkill`, or a SIGSEGV crash, all of which Node reports as
+     code=null with `signal` set. */
+  child.once('exit', (code, signal) => {
     if (killedIntentionally) return;
-    if (code !== 0 && code !== null) {
-      warn(`[mdns] responder for ${hostname} exited unexpectedly (code=${code})`);
+    if (code !== 0) {
+      warn(
+        `[mdns] responder for ${hostname} exited unexpectedly (code=${code}${signal ? `, signal=${signal}` : ''})`,
+      );
     }
   });
 
