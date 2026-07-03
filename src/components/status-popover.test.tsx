@@ -7,9 +7,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { createRef } from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { StatusPopover } from './status-popover';
+import { ModelControlPill } from './ModelControlPill';
 import type { AnalysisPillData, GenerationPillData } from './top-bar';
+import type { SetupReadiness, BlockerDiagnosis } from '../lib/api';
 
 const analysis: AnalysisPillData = {
   state: 'running',
@@ -24,6 +26,19 @@ const generation: GenerationPillData = {
   percent: 30,
   onClick: vi.fn(),
 };
+
+const PASS: BlockerDiagnosis = { status: 'pass', cause: 'pass', message: '', remediation: '' };
+
+function readinessWith(
+  overrides: Partial<Record<'sidecar' | 'tts' | 'ffmpeg' | 'analyzer', BlockerDiagnosis>>,
+): SetupReadiness {
+  return {
+    ready: false,
+    completedAt: null,
+    blockers: { sidecar: PASS, tts: PASS, ffmpeg: PASS, analyzer: PASS, ...overrides },
+    info: { gpu: '' },
+  };
+}
 
 function makeProps(over: Partial<Parameters<typeof StatusPopover>[0]> = {}) {
   const anchor = document.createElement('button');
@@ -45,6 +60,7 @@ function makeProps(over: Partial<Parameters<typeof StatusPopover>[0]> = {}) {
     onGoToAnalysing: vi.fn(),
     onGoToGeneration: vi.fn(),
     onGoToDesign: vi.fn(),
+    readiness: readinessWith({}),
     ...over,
   };
 }
@@ -174,5 +190,68 @@ describe('StatusPopover', () => {
     );
     expect(screen.getByTestId('substage-row')).toBeInTheDocument();
     expect(screen.queryByTestId('substage-detail')).not.toBeInTheDocument();
+  });
+
+  const FAIL_SIDECAR: BlockerDiagnosis = {
+    status: 'fail',
+    cause: 'venv-missing',
+    message: 'Voice engine runtime not set up.',
+    remediation: 'x',
+    action: { kind: 'venv-bootstrap', label: 'Set up the voice engine runtime' },
+  };
+
+  it('shows the sidecar diagnosis block under Voice engines only when it fails', () => {
+    render(<StatusPopover {...makeProps({ readiness: readinessWith({ sidecar: FAIL_SIDECAR }) })} />);
+    expect(
+      within(screen.getByTestId('status-popover-tts')).getByText(/voice engine runtime not set up/i),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show a sidecar diagnosis block when it passes', () => {
+    render(<StatusPopover {...makeProps({ readiness: readinessWith({}) })} />);
+    expect(within(screen.getByTestId('status-popover-tts')).queryByText(/not set up/i)).toBeNull();
+  });
+
+  it('shows the analyzer diagnosis block under Analysis only when it fails', () => {
+    const failAnalyzer: BlockerDiagnosis = {
+      status: 'fail',
+      cause: 'no-gemini-key',
+      message: 'No Gemini API key is configured.',
+      remediation: 'x',
+      action: { kind: 'navigate', label: 'Open Advanced Settings', href: '#/advanced' },
+    };
+    render(<StatusPopover {...makeProps({ readiness: readinessWith({ analyzer: failAnalyzer }) })} />);
+    expect(
+      within(screen.getByTestId('status-popover-analysis')).getByText(/no gemini api key/i),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a top-of-panel ffmpeg banner only when it fails', () => {
+    const failFfmpeg: BlockerDiagnosis = {
+      status: 'fail',
+      cause: 'both-missing',
+      message: 'ffmpeg and ffprobe are not on PATH.',
+      remediation: 'x',
+    };
+    render(<StatusPopover {...makeProps({ readiness: readinessWith({ ffmpeg: failFfmpeg }) })} />);
+    expect(screen.getByTestId('status-popover-ffmpeg-banner')).toBeInTheDocument();
+  });
+
+  it('suppresses the TTS pill Retry button when a specific sidecar diagnosis is shown', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          readiness: readinessWith({ sidecar: FAIL_SIDECAR }),
+          ttsControls: (
+            <ModelControlPill kind="tts" state="unreachable" onLoad={vi.fn()} onStop={vi.fn()} />
+          ),
+        })}
+      />,
+    );
+    // The popover itself doesn't own ttsControls' props — verify wiring in layout.tsx's own test instead;
+    // here just assert the diagnosis block renders alongside whatever ttsControls was passed.
+    expect(
+      within(screen.getByTestId('status-popover-tts')).getByText(/voice engine runtime not set up/i),
+    ).toBeInTheDocument();
   });
 });

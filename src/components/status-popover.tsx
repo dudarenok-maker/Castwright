@@ -32,6 +32,8 @@ import {
 } from './top-bar';
 import { MODEL_OPTIONS } from '../lib/models';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
+import type { BlockerDiagnosis, SetupReadiness } from '../lib/api';
+import { BlockerFixAction } from './blocker-fix-action';
 
 const PANEL_WIDTH = 340;
 const ESTIMATED_HEIGHT = 320;
@@ -72,6 +74,12 @@ interface StatusPopoverProps {
   onGoToAnalysing: () => void;
   onGoToGeneration: () => void;
   onGoToDesign: () => void;
+  /** Shared diagnosis, from useSetupDiagnosis() — drives the four
+      diagnosis blocks below. Optional so existing callers/tests that don't
+      care about diagnosis state aren't forced to pass it; when absent, no
+      diagnosis blocks render. */
+  readiness?: SetupReadiness | null;
+  onDiagnosisRefetch?: () => void;
 }
 
 function Section({
@@ -121,6 +129,18 @@ function SubstageRow({
   );
 }
 
+/** Renders a blocker's message + fix action inside a Section, or nothing when
+    the blocker is passing. Shared by the Voice engines / Analysis sections. */
+function DiagnosisBlock({ diagnosis, onDone }: { diagnosis: BlockerDiagnosis; onDone: () => void }) {
+  if (diagnosis.status === 'pass') return null;
+  return (
+    <div className="mt-2 space-y-1.5">
+      <p className="text-sm text-ink/70">{diagnosis.message}</p>
+      <BlockerFixAction diagnosis={diagnosis} onDone={onDone} />
+    </div>
+  );
+}
+
 export function StatusPopover({
   open,
   anchorRef,
@@ -139,6 +159,8 @@ export function StatusPopover({
   onGoToAnalysing,
   onGoToGeneration,
   onGoToDesign,
+  readiness,
+  onDiagnosisRefetch,
 }: StatusPopoverProps) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -194,9 +216,26 @@ export function StatusPopover({
       onFocusCapture={onFocusCapture}
       onBlurCapture={onBlurCapture}
     >
+      {readiness?.blockers.ffmpeg.status === 'fail' && (
+        <div
+          data-testid="status-popover-ffmpeg-banner"
+          className="py-2 px-1 border-b border-ink/10 bg-amber-50/50 -mx-4 -mt-1 mb-1"
+        >
+          <p className="text-xs font-semibold text-amber-900 px-4">{readiness.blockers.ffmpeg.message}</p>
+          <div className="px-4 pt-1">
+            <BlockerFixAction diagnosis={readiness.blockers.ffmpeg} onDone={() => onDiagnosisRefetch?.()} />
+          </div>
+        </div>
+      )}
       <Section title="Voice engines" testid="status-popover-tts">
         {ttsControls ?? (
           <p className="text-sm text-ink/60">Voice engine controls appear once a manuscript is open.</p>
+        )}
+        {readiness && (
+          <>
+            <DiagnosisBlock diagnosis={readiness.blockers.sidecar} onDone={() => onDiagnosisRefetch?.()} />
+            <DiagnosisBlock diagnosis={readiness.blockers.tts} onDone={() => onDiagnosisRefetch?.()} />
+          </>
         )}
       </Section>
       <Section title="Analysis" testid="status-popover-analysis">
@@ -225,6 +264,7 @@ export function StatusPopover({
             )}
           </>
         )}
+        {readiness && <DiagnosisBlock diagnosis={readiness.blockers.analyzer} onDone={() => onDiagnosisRefetch?.()} />}
       </Section>
       <Section title="Design" testid="status-popover-design">
         {design ? (

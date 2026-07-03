@@ -13,6 +13,7 @@ import { useAppDispatch } from '../store';
 import { startLinearTour, startScreenTour } from '../store/tour-slice';
 import { screenForStage } from '../lib/tour-steps';
 import { type DesignPhase } from '../lib/design-phase';
+import type { SetupReadiness } from '../lib/api';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
 export interface GenerationPillData {
@@ -174,6 +175,10 @@ export interface StatusDetail {
     totalChapters?: number;
     estRemainingMs?: number;
   } | null;
+  /** fs-21 wave 4 — shared setup diagnosis (useSetupDiagnosis()), forwarded
+      to the popover so it can render the four blocker diagnosis blocks. */
+  readiness?: SetupReadiness | null;
+  onDiagnosisRefetch?: () => void;
 }
 
 interface TopBarProps {
@@ -833,6 +838,8 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         design={detail.design}
         pendingRevisionsCount={detail.pendingRevisionsCount}
         analysisSubstage={detail.analysisSubstage}
+        readiness={detail.readiness}
+        onDiagnosisRefetch={detail.onDiagnosisRefetch}
         onOpenRevisions={() => {
           detail.onOpenRevisions();
           closeAll();

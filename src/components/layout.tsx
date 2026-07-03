@@ -55,6 +55,7 @@ import { TtsNoticeBanner } from './tts-notice-banner';
 import { WhatsNewBanner } from './whats-new-banner';
 import { UpdateNotifierBanner } from './update-notifier-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
+import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
   selectEnginesInUse,
   selectDefaultTtsEngine,
@@ -484,6 +485,10 @@ export function Layout() {
      server-side (~2 s worst-case probe timeout); a failed probe fails OPEN so
      a flaky readiness endpoint never locks the user out of the app. */
   const [setupReady, setSetupReady] = useState<boolean | null>(null); // null = checking
+  /* fs-21 wave 4 — shared diagnosis poller (also consumed by the Setup
+     wizard). Drives the Status popover's four blocker diagnosis blocks and
+     the "specific fix available" suppression on the TTS pill's Retry. */
+  const { readiness: setupReadiness, refetch: refetchSetupDiagnosis } = useSetupDiagnosis();
   useEffect(() => {
     let cancelled = false;
     api
@@ -1163,6 +1168,14 @@ export function Layout() {
      sessions don't thrash an 8 GB GPU's VRAM. */
   const gpuQueueDepth = ttsLifecycle.gpuQueueDepth;
   const showGpuQueueBadge = typeof gpuQueueDepth === 'number' && gpuQueueDepth > 0;
+  /* Only suppress the pill's own Retry when the sidecar diagnosis has a
+     specific, actionable cause about to render as a Status-popover
+     DiagnosisBlock — a merely-transient booting state has no diagnosis
+     action either, so the pill's Retry stays the only affordance there,
+     matching today's behavior. */
+  const suppressUnreachableSidecarAction =
+    setupReadiness?.blockers.sidecar.status === 'fail' &&
+    setupReadiness.blockers.sidecar.cause !== 'unreachable-transient';
   const ttsPillElement = showTtsControls ? (
     <span className="inline-flex items-center gap-2 flex-wrap">
       {showGpuQueueBadge && (
@@ -1179,6 +1192,7 @@ export function Layout() {
           engineLabel="Kokoro"
           state={ttsLifecycle.kokoro.state}
           unreachableLabel="Voice engine not running"
+          suppressUnreachableAction={suppressUnreachableSidecarAction}
           onLoad={() => {
             void ttsLifecycle.kokoro.onLoad();
           }}
@@ -1193,6 +1207,7 @@ export function Layout() {
           engineLabel="Coqui XTTS"
           state={ttsLifecycle.coqui.state}
           unreachableLabel="Voice engine not running"
+          suppressUnreachableAction={suppressUnreachableSidecarAction}
           onLoad={() => {
             void ttsLifecycle.coqui.onLoad();
           }}
@@ -1207,6 +1222,7 @@ export function Layout() {
           engineLabel="Qwen"
           state={ttsLifecycle.qwen.state}
           unreachableLabel="Voice engine not running"
+          suppressUnreachableAction={suppressUnreachableSidecarAction}
           onLoad={() => {
             void ttsLifecycle.qwen.onLoad();
           }}
@@ -1223,6 +1239,7 @@ export function Layout() {
           engineLabel="Qwen 1.7B"
           state={ttsLifecycle.qwen1_7b.state}
           unreachableLabel="Voice engine not running"
+          suppressUnreachableAction={suppressUnreachableSidecarAction}
           onLoad={() => {
             void ttsLifecycle.qwen1_7b.onLoad();
           }}
@@ -1446,6 +1463,8 @@ export function Layout() {
           estRemainingMs: analysisSubstage.estRemainingMs,
         }
       : null,
+    readiness: setupReadiness,
+    onDiagnosisRefetch: refetchSetupDiagnosis,
   };
 
   /* fs-21 — boot-splash. Gates the first paint until the readiness probe
