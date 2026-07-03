@@ -10,7 +10,7 @@
 
 import express, { type Express } from 'express';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 export interface FrontendStaticMountResult {
   mounted: boolean;
@@ -39,7 +39,21 @@ export function mountFrontendStatic(app: Express, distDir: string): FrontendStat
     };
   }
 
-  app.use(express.static(resolved, { fallthrough: true, maxAge: '1h' }));
+  app.use(
+    express.static(resolved, {
+      fallthrough: true,
+      maxAge: '1h',
+      // index.html is the one file whose content must be re-checked on every
+      // load: it's what points the browser at the current build's
+      // content-hashed JS/CSS. Caching it for the same 1h as everything else
+      // makes a fresh `npm run build` invisible to an already-open tab for up
+      // to an hour — the browser keeps serving the stale entry point (and
+      // therefore the stale build) until that cache expires.
+      setHeaders: (res, filePath) => {
+        if (basename(filePath) === 'index.html') res.setHeader('Cache-Control', 'no-cache');
+      },
+    }),
+  );
   return {
     mounted: true,
     distDir: resolved,

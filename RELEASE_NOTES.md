@@ -25,6 +25,7 @@
 - **Dialogue in another language stays with its speaker.** In a German, French or other non-English book, lines wrapped in the language's own quotation marks — „…", «…» — could slip away from their character and fall to the narrator; they now stay with the person who spoke them.
 - **The analyzer's device row tells you what's actually going on.** Instead of an unhelpful "Unknown" most of the time it's checked, Advanced Configuration now says plainly whether the local analyzer is idle or genuinely out of reach.
 - **One home for "which voice engine warms up at startup."** Model Manager's eager-load checkbox and Advanced Configuration's preload settings used to quietly disagree with each other. Advanced Configuration is now the one place that controls it, for every engine.
+- **A rebuild now shows up right away.** A browser tab left open could keep showing an old version of Castwright for up to an hour after an update, even though the new one was already sitting there ready. It now always shows the one that's actually running.
 - **Checkboxes finally look like Castwright.** Every checkbox in the app — in settings, cast, and the odd dialog — used to show up as your browser's plain default. They're now a proper part of the design: a soft magenta square with a clean checkmark, wherever you find one.
 
 # Castwright 1.9.0
