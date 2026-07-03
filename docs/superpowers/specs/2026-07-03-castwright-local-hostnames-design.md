@@ -53,6 +53,12 @@ one-off manual step.
   existing LAN-IP URL.
 - **IPv6 / AAAA records.** IPv4-only, matching the existing `enumerateLanIps()` helper the
   LAN-cert flow already uses.
+- **The `npm start` + `server/.env` `LAN_HTTPS=1` path** (`start-app.ps1`, which flips Vite
+  and the server into LAN HTTPS without going through the dedicated `dev:lan`/`start:lan`
+  scripts). This spec only wires the two scripts named in the original ask; this third,
+  less-common LAN entry point keeps today's LAN-IP-only behavior with no friendly hostname —
+  a known, accepted gap rather than a silent one, matching this spec's general "LAN-IP URL
+  is always the fallback" posture.
 
 ## Relationship to the LAN public-cert broker
 
@@ -97,18 +103,30 @@ doesn't need an immediate follow-up bump). Pure JS, no native bindings, cross-pl
   A-record actively misdirects a client to whichever interface it picks — e.g. a Docker
   Desktop/WSL/VPN virtual adapter that happens to also be non-internal IPv4, and isn't
   filtered out by that helper's `internal`/`169.254.*` checks). Instead, the responder
-  determines the single interface the OS itself would use for outbound LAN traffic (the
-  standard `dgram` "connect a UDP socket to an external address, read back the local
-  address the OS bound" trick — no packets are actually sent), and answers with that one
-  address. No caching, so it stays correct if the dev box changes networks mid-session. All
-  other queries are ignored — this responder never answers for any name it wasn't told to
-  serve.
+  determines the single interface the OS itself would use for outbound traffic to an
+  external address (the standard `dgram` "connect a UDP socket to an external address, read
+  back the local address the OS bound" trick — no packets are actually sent), and answers
+  with that one address. No caching, so it stays correct if the dev box changes networks
+  mid-session. All other queries are ignored — this responder never answers for any name it
+  wasn't told to serve.
+  - **Known limitation, accepted for v1:** this picks the OS's *default-route* interface,
+    which is correct for the common single-LAN dev box but can still misdirect on a box
+    with an active VPN (default route through the tunnel adapter) or two real LAN interfaces
+    on different subnets (e.g. Ethernet holds the default route but the phone is on Wi-Fi).
+    This is a best-effort simplification, not a guarantee — the same class of accepted,
+    documented gap as the Windows-peer-resolution limitation (Non-goal 3), not a new failure
+    mode: a misdirected connection just times out and the tester falls back to the existing
+    LAN-IP URL, same as today. A fuller fix (answer per the interface the query arrived on,
+    or return multiple candidate addresses and let the OS's own Happy-Eyeballs-style retry
+    sort it out — note `vite.config.ts:90-96` already documents this repo hitting that
+    exact multi-address-timeout tradeoff for IPv4/IPv6) is out of scope for this spec.
 - Non-fatal failure: if binding the multicast socket fails (port 5353 already claimed by a
   real Bonjour/Chromecast/etc. service, or the OS blocks multicast), log one clear warning
   line and exit — never crash or block the caller. `dev:lan`/`start:lan` continue exactly
   as they do today, LAN-IP URLs unaffected.
-- Extracted as a pure function (`buildAnswer(queriedName, configuredHostnames, ips)` or
-  similar) so the answer-construction logic is unit-testable without a real socket.
+- Extracted as a pure function (`buildAnswer(queriedName, configuredHostnames, primaryIp)`
+  or similar — note singular `primaryIp`, matching the single-address design above) so the
+  answer-construction logic is unit-testable without a real socket.
 
 ### 2. `scripts/setup-lan-certs.mjs`
 
@@ -215,8 +233,8 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 
 - `scripts/mdns-responder.mjs`'s answer-construction logic extracted as a pure function and
   unit-tested (Vitest, following the existing `scripts/*.test.mjs` pattern used by
-  `build-companion-apk.test.mjs`): correct A-record answer for a configured name, no answer
-  for an unconfigured name, correct multi-IP answer when multiple LAN interfaces are active.
+  `build-companion-apk.test.mjs`): correct single-address A-record answer for a configured
+  name, no answer for an unconfigured name.
 - `scripts/setup-lan-certs.mjs`: extend its existing test coverage (if any) or add a test
   asserting `castwright.local` / `castwright.dev.local` are included in the `hosts` array
   passed to `mkcert`.
@@ -244,3 +262,12 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
   existing `shutdown()` handler, not the launcher) is the locked decision.
 - Whether `scripts/setup-lan-certs.mjs` already has a test file to extend vs. needing a new
   one is a planning-time check, not a design decision.
+- **Judgment call flagged for user confirmation, not silently resolved:** three adversarial
+  review rounds (see commit history) surfaced that the "primary LAN IP" mDNS-answer
+  heuristic (Component 1) is a best-effort default, not a correctness guarantee, under a
+  VPN or dual-homed LAN. The scope decision taken here — accept it as a documented
+  limitation (Non-goal list, same treatment as the Windows-peer gap) rather than building
+  per-interface mDNS answers or multi-address responses — is a reasonable default given this
+  spec's overall "stepping stone, LAN-IP always the fallback" posture, but it changes what
+  the feature actually promises and deserves an explicit yes from the user before
+  implementation, not just a documented default.
