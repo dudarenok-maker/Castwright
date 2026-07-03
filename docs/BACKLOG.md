@@ -381,12 +381,6 @@ _Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-
 
 ### Agents & integrations
 
-#### `fs-54` — Audiobookshelf export / hand-off ([#978](https://github.com/dudarenok-maker/Castwright/issues/978))
-
-- _What:_ Push or export finished books into Audiobookshelf (the OSS audience's library home). **Triage decision (2026-06-21): a bridge, not a pivot** — the companion app is the strategic library answer.
-- _Benefit (user):_ interop with the OSS field's de-facto library without diverting from the companion-app bet.
-_Full detail + acceptance:_ [#978](https://github.com/dudarenok-maker/Castwright/issues/978).
-
 ### Voice & cast sharing
 
 Build bottom-up: `side-13` (safe-load gate) → `fs-28` (bundle format) → `fs-29` / `fs-30` → `fs-31` (externally-facing). Scoped to **synthetic / designed** voices with a consent/licensing note throughout — never framed as cloning a real person's voice.
