@@ -28,8 +28,10 @@ one-off manual step.
   `npm run dev:lan`'s LAN-IP URL does today.
 - `https://castwright.local:8443` reaches the built-bundle Node server exactly like
   `npm run start:lan`'s LAN-IP URL does today.
-- Both names resolve from other LAN devices (phone, tablet, another PC), not just the dev
-  box itself.
+- Both names resolve from other LAN devices with native mDNS support — iOS, Android,
+  macOS — not just the dev box itself. (A Windows LAN peer is a known gap, not a goal —
+  see Non-goal 3; the dev box itself is Windows, but it advertises the names rather than
+  needing to resolve its own broadcast.)
 - No new manual per-run step — the hostnames come up automatically whenever `dev:lan` /
   `start:lan` run, the same way LAN-IP HTTPS already does.
 - Degrades gracefully: if hostname resolution can't be set up on a given network (firewall,
@@ -51,6 +53,12 @@ one-off manual step.
   existing LAN-IP URL.
 - **IPv6 / AAAA records.** IPv4-only, matching the existing `enumerateLanIps()` helper the
   LAN-cert flow already uses.
+- **The `npm start` + `server/.env` `LAN_HTTPS=1` path** (`start-app.ps1`, which flips Vite
+  and the server into LAN HTTPS without going through the dedicated `dev:lan`/`start:lan`
+  scripts). This spec only wires the two scripts named in the original ask; this third,
+  less-common LAN entry point keeps today's LAN-IP-only behavior with no friendly hostname —
+  a known, accepted gap rather than a silent one, matching this spec's general "LAN-IP URL
+  is always the fallback" posture.
 
 ## Relationship to the LAN public-cert broker
 
@@ -88,16 +96,37 @@ doesn't need an immediate follow-up bump). Pure JS, no native bindings, cross-pl
 - CLI: `node scripts/mdns-responder.mjs --name castwright.dev.local` (repeatable `--name`
   for multiple hostnames from one process, though the two call sites below each pass one).
 - Listens for standard mDNS A-record queries. For each configured hostname, answers with
-  the **current** LAN IPv4 addresses, computed live per query via `enumerateLanIps()`
-  (already exported from `scripts/setup-lan-certs.mjs` — reused, not duplicated). No
-  caching, so it stays correct if the dev box changes networks mid-session. All other
-  queries are ignored — this responder never answers for any name it wasn't told to serve.
+  the dev box's **current primary LAN IPv4 address**, computed live per query. This is
+  *not* `enumerateLanIps()` (the helper `scripts/setup-lan-certs.mjs` already exports and
+  reuses for cert SANs) — that helper returns every non-internal IPv4 interface, which is
+  fine for a cert's SAN list (an extra SAN is inert) but wrong for an mDNS answer (an extra
+  A-record actively misdirects a client to whichever interface it picks — e.g. a Docker
+  Desktop/WSL/VPN virtual adapter that happens to also be non-internal IPv4, and isn't
+  filtered out by that helper's `internal`/`169.254.*` checks). Instead, the responder
+  determines the single interface the OS itself would use for outbound traffic to an
+  external address (the standard `dgram` "connect a UDP socket to an external address, read
+  back the local address the OS bound" trick — no packets are actually sent), and answers
+  with that one address. No caching, so it stays correct if the dev box changes networks
+  mid-session. All other queries are ignored — this responder never answers for any name it
+  wasn't told to serve.
+  - **Known limitation, accepted for v1:** this picks the OS's *default-route* interface,
+    which is correct for the common single-LAN dev box but can still misdirect on a box
+    with an active VPN (default route through the tunnel adapter) or two real LAN interfaces
+    on different subnets (e.g. Ethernet holds the default route but the phone is on Wi-Fi).
+    This is a best-effort simplification, not a guarantee — the same class of accepted,
+    documented gap as the Windows-peer-resolution limitation (Non-goal 3), not a new failure
+    mode: a misdirected connection just times out and the tester falls back to the existing
+    LAN-IP URL, same as today. A fuller fix (answer per the interface the query arrived on,
+    or return multiple candidate addresses and let the OS's own Happy-Eyeballs-style retry
+    sort it out — note `vite.config.ts:90-96` already documents this repo hitting that
+    exact multi-address-timeout tradeoff for IPv4/IPv6) is out of scope for this spec.
 - Non-fatal failure: if binding the multicast socket fails (port 5353 already claimed by a
   real Bonjour/Chromecast/etc. service, or the OS blocks multicast), log one clear warning
   line and exit — never crash or block the caller. `dev:lan`/`start:lan` continue exactly
   as they do today, LAN-IP URLs unaffected.
-- Extracted as a pure function (`buildAnswer(queriedName, configuredHostnames, ips)` or
-  similar) so the answer-construction logic is unit-testable without a real socket.
+- Extracted as a pure function (`buildAnswer(queriedName, configuredHostnames, primaryIp)`
+  or similar — note singular `primaryIp`, matching the single-address design above) so the
+  answer-construction logic is unit-testable without a real socket.
 
 ### 2. `scripts/setup-lan-certs.mjs`
 
@@ -110,23 +139,58 @@ older cert without the new SANs re-run that command, same as today's LAN-IP-chan
 ### 3. `vite.config.ts`
 
 - `mkcert({ hosts: ['castwright.dev.local'] })` — the plugin already supports a `hosts`
-  option (default: `localhost` + detected local IPs); this adds the dev hostname to its
-  auto-generated cert.
+  option (confirmed against `vite-plugin-mkcert`'s own README: "Custom hosts, default value
+  is `localhost` + `local ip addrs`"); this adds the dev hostname to its auto-generated cert
+  on top of, not instead of, its existing defaults.
 - `server.allowedHosts` gains `castwright.dev.local`. Vite 8's DNS-rebinding protection
   rejects requests whose `Host` header isn't `localhost`/an IP/an explicitly allowed name;
-  LAN IPs already pass today, but a bare hostname needs to be listed explicitly.
+  LAN IPs already pass today (today's `dev:lan` works over a raw LAN IP with no
+  `allowedHosts` config, which is the behavioral evidence for this), but a bare hostname
+  needs to be listed explicitly — verify this against Vite's actual source during
+  implementation rather than taking it purely on inference.
 - Both changes are gated behind the existing `useHttps` branch (i.e., only apply in LAN
   mode) — plain `npm run dev` config is untouched.
 
 ### 4. Wiring into the LAN scripts
 
-- `dev:lan` (root `package.json`): add a third `concurrently` leg —
-  `"node scripts/mdns-responder.mjs --name castwright.dev.local"` — alongside the existing
-  `vite --host 0.0.0.0` and server legs.
-- `start:lan` → `scripts/start-app-prod.mjs`: spawn the responder (`--name castwright.local`)
-  as a child process using the same spawn/track/teardown pattern already used for the TTS
-  sidecar child — started after the server is confirmed up, killed together with the rest
-  of the stack on Ctrl+C (`taskkill /T /F` on Windows, matching existing shutdown handling).
+The two LAN scripts have different process shapes, so they own the responder differently —
+but both ultimately spawn the same `scripts/mdns-responder.mjs` CLI as a child process, so
+the responder logic itself stays single-sourced.
+
+- **`dev:lan`** (root `package.json`): `dev:lan` today is exactly two `concurrently -k`
+  legs — `vite --host 0.0.0.0` and `cross-env LAN_HTTPS=1 npm --prefix server run dev`
+  (`package.json:18`). This becomes a **third** leg —
+  `"node scripts/mdns-responder.mjs --name castwright.dev.local"` — torn down automatically
+  with the other two by `concurrently`'s `--kill-others-on-fail` — not `-k`, since the mDNS
+  leg's own graceful bind-failure `exit(0)` must not be treated as a reason to tear the
+  others down.
+- **`start:lan`**: **not** owned by `scripts/start-app-prod.mjs`. That launcher spawns the
+  server `detached: true` (`scripts/start-app-prod.mjs:234`), `unref()`s it (`:248`), and
+  calls `process.exit(0)` once the health check passes (`:260`) — it has no `SIGINT`/
+  `SIGTERM` handling and isn't a supervising process, so nothing owned by *it* survives past
+  `start:lan` returning. The actual long-lived process is the Node **server** itself, which
+  already owns exactly this kind of child-process lifecycle for the TTS sidecar:
+  `server/src/index.ts` spawns the sidecar via `server/src/tts/spawn-sidecar.ts` and reaps
+  it in a real `shutdown()` handler registered on `SIGINT`/`SIGTERM`
+  (`server/src/index.ts:341-357`).
+
+  The mDNS responder for `castwright.local` follows the identical pattern, with one
+  additional discriminator that the dev-mode case above doesn't need: **both** `start:lan`
+  and `dev:lan` set `LAN_HTTPS=1`, so gating the server-side spawn on `lanHttps` alone would
+  make the server *also* spawn a `castwright.local` responder during `dev:lan` — racing the
+  dedicated `concurrently` leg above for the UDP :5353 socket, for a hostname `dev:lan`
+  never advertises anywhere else. The two flows are distinguished by `NODE_ENV`, not
+  `LAN_HTTPS`: `start-app-prod.mjs:232` sets `NODE_ENV: 'production'` on the server child's
+  env for `start:lan`; the server's plain `dev` script (`tsx watch …`, `server/package.json`)
+  never sets it. So the server spawns the responder only when
+  `lanHttps && process.env.NODE_ENV === 'production'`. The spawn point is inside
+  `listenerCallback` (`server/src/index.ts:150`, invoked by both the HTTPS and plain-HTTP
+  `.listen()` calls) — the `if (lanHttps && …)` guard is required there regardless, since
+  that callback already runs on the non-LAN path too. The child handle is stored in a
+  module-scoped variable (mirroring `sidecarSupervisor` at `index.ts:126`) so `shutdown()`
+  can see and kill it alongside `sidecarSupervisor?.stop()`. Exact new-file placement (e.g.
+  alongside `bind-host.ts`) is left to the implementation plan; the ownership model
+  (server-owned, `NODE_ENV`-gated, reaped in `shutdown()`) is the locked decision here.
 
 ### 5. `scripts/print-cert-install-instructions.mjs` (`install:cert-mobile`)
 
@@ -138,12 +202,16 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 ## Data flow
 
 1. Developer runs `npm run dev:lan` (or `npm run start:lan`).
-2. The launcher starts the app server (Vite or Node) bound to `0.0.0.0`, plus the new mDNS
-   responder child process advertising the one hostname relevant to that script.
+2. The app server (Vite or Node) binds `0.0.0.0`, and the mDNS responder child process for
+   that script's hostname comes up alongside it — as a sibling `concurrently` leg for
+   `dev:lan`, or spawned and owned by the Node server itself for `start:lan` (see Component
+   4). Either way, the responder is tied to the same lifecycle as the server it serves: it
+   dies when the server does, not when a short-lived launcher script happens to exit.
 3. A phone/tablet on the same LAN broadcasts a standard mDNS query for
    `castwright.dev.local` (e.g. because the user typed that URL into a browser).
-4. The responder answers with the dev box's current LAN IPv4 address(es); the OS's native
-   mDNS resolver on the client device completes the lookup with no extra configuration.
+4. The responder answers with the dev box's current primary LAN IPv4 address (the OS's
+   preferred outbound interface, not every detected interface); the OS's native mDNS
+   resolver on the client device completes the lookup with no extra configuration.
 5. The browser connects over HTTPS. The TLS handshake presents a cert whose SAN list
    includes `castwright.dev.local` (Vite) or `castwright.local` (Node) — no warning, since
    the device already trusts the mkcert root CA from the existing one-time LAN setup.
@@ -167,11 +235,22 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 
 - `scripts/mdns-responder.mjs`'s answer-construction logic extracted as a pure function and
   unit-tested (Vitest, following the existing `scripts/*.test.mjs` pattern used by
-  `build-companion-apk.test.mjs`): correct A-record answer for a configured name, no answer
-  for an unconfigured name, correct multi-IP answer when multiple LAN interfaces are active.
+  `build-companion-apk.test.mjs`): correct single-address A-record answer for a configured
+  name, no answer for an unconfigured name.
 - `scripts/setup-lan-certs.mjs`: extend its existing test coverage (if any) or add a test
   asserting `castwright.local` / `castwright.dev.local` are included in the `hosts` array
   passed to `mkcert`.
+- The new server-owned spawn/reap logic for `start:lan` (Component 4) gets its own test,
+  mirroring however `server/src/tts/spawn-sidecar.ts` / the sidecar supervisor are
+  themselves tested — this is the piece most likely to regress silently (a leaked or
+  never-started child), so it does not get waved off to manual acceptance alone. Explicitly
+  covers the `NODE_ENV` discriminator: `lanHttps=true, NODE_ENV!=='production'` (the
+  `dev:lan` server-leg shape) must NOT spawn a responder — this is exactly the double-spawn
+  bug the round-2 design review caught, so it gets a regression test rather than relying on
+  the discriminator being correctly re-derived by a future reader.
+- The "primary LAN IP" selection helper (the outbound-socket trick used for mDNS answers,
+  as distinct from `enumerateLanIps()`) gets a unit test asserting it returns a single
+  address, not the full interface list.
 - No e2e coverage — this is dev/LAN tooling, not shipped product behavior reachable from
   `npm run test:e2e`'s mock-mode Vite instance.
 - Manual acceptance (documented in the regression plan, not automatable): run `dev:lan` and
@@ -180,7 +259,15 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 
 ## Open items carried into planning
 
-- Exact spawn/teardown wiring inside `start-app-prod.mjs` (child-process bookkeeping
-  alongside the sidecar) is an implementation detail for the plan, not locked here.
+- Exact new-file placement for the server-side mDNS-owner module (Component 4) is a
+  planning-time choice, not locked here — the ownership model (server-owned via the
+  existing `shutdown()` handler, not the launcher) is the locked decision.
 - Whether `scripts/setup-lan-certs.mjs` already has a test file to extend vs. needing a new
   one is a planning-time check, not a design decision.
+- **Resolved by user 2026-07-03:** three adversarial review rounds surfaced that the
+  "primary LAN IP" mDNS-answer heuristic (Component 1) is a best-effort default, not a
+  correctness guarantee, under a VPN or dual-homed LAN. User confirmed shipping the v1
+  default now (documented limitation, LAN-IP URL always the fallback) rather than building
+  per-interface/multi-address answers as part of this spec. Tracked as a follow-up:
+  [`ops-21`](https://github.com/dudarenok-maker/Castwright/issues/1239) /
+  `docs/BACKLOG.md`.

@@ -401,6 +401,38 @@ describeIfTools('buildM4b', () => {
     }
     expect(statSync(join(tmpRoot, 'progress.m4b')).size).toBeGreaterThan(0);
   }, 30_000);
+
+  it('omits grouping/disc for a standalone book (fs-54)', async () => {
+    const out = join(tmpRoot, 'standalone.m4b');
+    await buildM4b({ bookDir, state: makeState(), outPath: out });
+    const tags = ffprobeJson(out).format.tags ?? {};
+    expect(tags.grouping).toBeUndefined();
+    expect(tags.disc).toBeUndefined();
+  });
+
+  it('emits grouping without disc when seriesPosition is null on a real series book (fs-54)', async () => {
+    const out = join(tmpRoot, 'series-noseq.m4b');
+    await buildM4b({
+      bookDir,
+      state: makeState({ series: 'The Coalfall Saga', seriesPosition: null, isStandalone: false }),
+      outPath: out,
+    });
+    const tags = ffprobeJson(out).format.tags ?? {};
+    expect(tags.grouping).toBe('The Coalfall Saga');
+    expect(tags.disc).toBeUndefined();
+  });
+
+  it('emits grouping + disc when seriesPosition is set (fs-54)', async () => {
+    const out = join(tmpRoot, 'series-seq.m4b');
+    await buildM4b({
+      bookDir,
+      state: makeState({ series: 'The Coalfall Saga', seriesPosition: 2, isStandalone: false }),
+      outPath: out,
+    });
+    const tags = ffprobeJson(out).format.tags ?? {};
+    expect(tags.grouping).toBe('The Coalfall Saga');
+    expect(tags.disc).toBe('2');
+  });
 });
 
 if (!toolsPresent) {

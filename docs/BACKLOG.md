@@ -381,12 +381,6 @@ _Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-
 
 ### Agents & integrations
 
-#### `fs-54` — Audiobookshelf export / hand-off ([#978](https://github.com/dudarenok-maker/Castwright/issues/978))
-
-- _What:_ Push or export finished books into Audiobookshelf (the OSS audience's library home). **Triage decision (2026-06-21): a bridge, not a pivot** — the companion app is the strategic library answer.
-- _Benefit (user):_ interop with the OSS field's de-facto library without diverting from the companion-app bet.
-_Full detail + acceptance:_ [#978](https://github.com/dudarenok-maker/Castwright/issues/978).
-
 ### Voice & cast sharing
 
 Build bottom-up: `side-13` (safe-load gate) → `fs-28` (bundle format) → `fs-29` / `fs-30` → `fs-31` (externally-facing). Scoped to **synthetic / designed** voices with a consent/licensing note throughout — never framed as cloning a real person's voice.
@@ -439,6 +433,12 @@ _Full detail + acceptance:_ [#898](https://github.com/dudarenok-maker/Castwright
 
 ### Ops & maintenance
 
+#### `srv-51` — Wrap the title-narration synth call in withCallTimeout ([#1247](https://github.com/dudarenok-maker/Castwright/issues/1247))
+
+- _What:_ srv-50 wrapped the previously-unprotected ASR `verify()` call with the existing `withCallTimeout`/`withRecycleRecovery` protection every other synth call site has. The final whole-branch review found one adjacent gap: the title-narration synth call (`synthesise-chapter.ts:981`) still has no per-call timeout, only the coarser 720s whole-chapter stall watchdog.
+- _Benefit (technical):_ retires the last unprotected sidecar call site with the wedged-worker hang shape, matching the reliability bar srv-50 set everywhere else.
+_Full detail + acceptance:_ [#1247](https://github.com/dudarenok-maker/Castwright/issues/1247).
+
 #### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
 
 - _What:_ Power-user follow-ups for the shipped `#/advanced` surface (plan 199): a "Download config.json" export of all active overrides, a complementary JSON import flow (validates keys against live descriptors), and an env-diff indicator showing when a `.env`-locked value differs from the configured default.
@@ -456,6 +456,12 @@ _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Reduce the number of Coalfall homes — point e2e + language-detection tests at the `samples/` manuscripts (or vice-versa) so English/ru text isn't duplicated in `__fixtures__/`, optionally add an English `manuscript.en.md` to `samples/` for `.md` uniformity, and resolve the open question of whether the Castwright-original book belongs under `brand/` (git-ignored) vs staying the shipped bundled demo in `samples/`.
 - _Benefit (technical):_ one source of truth per manuscript; less drift between the demo book and the test fixtures. Pairs with `fs-61` (#1027) and `fs-22`.
 _Full detail + acceptance:_ [#1043](https://github.com/dudarenok-maker/Castwright/issues/1043).
+
+#### `ops-21` — Robust per-interface / multi-address mDNS answers for friendly LAN hostnames ([#1239](https://github.com/dudarenok-maker/Castwright/issues/1239))
+
+- _What:_ Follow-up to the `castwright.local`/`castwright.dev.local` friendly-hostname spec (`docs/superpowers/specs/2026-07-03-castwright-local-hostnames-design.md`) — replace the v1 "OS default-route interface" mDNS-answer heuristic with a more robust strategy (per-interface answers, or multiple candidate addresses) so resolution stays correct under an active VPN or a dual-homed LAN.
+- _Benefit (technical/architectural):_ closes a known gap three rounds of adversarial spec review flagged; not a blocker for the base feature, which already degrades gracefully to the existing LAN-IP URL.
+_Full detail + acceptance:_ [#1239](https://github.com/dudarenok-maker/Castwright/issues/1239).
 
 #### `ops-18` — Catch any large-region visual change (not just the top-bar) ([#947](https://github.com/dudarenok-maker/Castwright/issues/947))
 

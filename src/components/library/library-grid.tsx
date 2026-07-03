@@ -93,29 +93,31 @@ export function LibraryGrid({
           <div className="mt-4 space-y-8">
             {author.series.map((series) => (
               <div key={series.name}>
-                <div className="flex items-baseline justify-between mb-3">
-                  <h3 className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink/55">
+                <div className="flex items-start justify-between mb-4">
+                  <h3 className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink/55 pt-0.5">
                     {series.name}
                   </h3>
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex items-center gap-2.5">
+                      {series.seriesMemory && (
+                        <SeriesMemoryChip
+                          summary={series.seriesMemory}
+                          bookCount={series.seriesMemory.confirmedBookCount}
+                          onOpen={() => onOpenSeriesMemory?.(series)}
+                        />
+                      )}
+                      <span className="text-[11px] text-ink/40">
+                        {series.books.length} {series.books.length === 1 ? 'book' : 'books'}
+                      </span>
+                    </div>
                     {series.seriesMemory && (
-                      <SeriesMemoryChip
+                      <SeriesSparkline
                         summary={series.seriesMemory}
-                        bookCount={series.seriesMemory.confirmedBookCount}
                         onOpen={() => onOpenSeriesMemory?.(series)}
                       />
                     )}
-                    <span className="text-[11px] text-ink/40">
-                      {series.books.length} {series.books.length === 1 ? 'book' : 'books'}
-                    </span>
                   </div>
                 </div>
-                {series.seriesMemory && (
-                  <SeriesSparkline
-                    summary={series.seriesMemory}
-                    onOpen={() => onOpenSeriesMemory?.(series)}
-                  />
-                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                   {series.books.map((b) => (
                     <BookCard

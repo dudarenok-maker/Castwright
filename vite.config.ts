@@ -120,7 +120,11 @@ export default defineConfig(({ mode }) => {
   // Vite plugin hooks the pipeline directly, so postcss.config.js is gone.
   const buildInfo = buildInfoRaw();
   const plugins: PluginOption[] = [react(), tailwindcss(), buildManifestPlugin(buildInfo)];
-  if (useHttps) plugins.push(mkcert());
+  // ops (castwright-local-hostnames) — castwright.dev.local joins the
+  // plugin's default localhost + detected-IP SAN list (additive — confirmed
+  // against the plugin's own README: "Custom hosts, default value is
+  // `localhost` + `local ip addrs`").
+  if (useHttps) plugins.push(mkcert({ hosts: ['castwright.dev.local'] }));
   return {
     plugins,
     root: '.',
@@ -137,6 +141,11 @@ export default defineConfig(({ mode }) => {
       host: '127.0.0.1',
       port: vitePort,
       open: !useHttps, // skip auto-open in LAN mode — user is on a mobile device
+      // ops (castwright-local-hostnames) — Vite 8's DNS-rebinding guard only
+      // allows localhost/IP-literal Host headers by default; a bare hostname
+      // needs to be listed explicitly. Only set in LAN mode — plain `npm run
+      // dev` (loopback-only) is untouched.
+      allowedHosts: useHttps ? ['castwright.dev.local'] : undefined,
       proxy: {
         '/api': { target: apiTarget, changeOrigin: true, secure: false },
         '/audio': { target: apiTarget, changeOrigin: true, secure: false },

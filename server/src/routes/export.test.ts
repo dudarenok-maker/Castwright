@@ -412,6 +412,54 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     const manifestPath = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
     expect(existsSync(manifestPath)).toBe(false);
   });
+
+  it('nests an mp3-folder sync-folder export under a sanitized author subfolder (fs-54)', async () => {
+    const { writeUserSettings } = await import('../workspace/user-settings.js');
+    const { sanitiseForZip } = await import('../export/build-mp3-zip.js');
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-sync-author-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+
+      const create = await request(app)
+        .post(`/api/books/${bookId}/exports`)
+        .send({ format: 'mp3-folder', destination: 'sync-folder' });
+      expect(create.status).toBe(201);
+
+      const { body: done } = await waitForDone(create.body.id as string);
+      expect(done.status).toBe('done');
+
+      const expectedDir = join(syncRoot, sanitiseForZip(AUTHOR), sanitiseForZip(TITLE));
+      expect(done.syncPath).toBe(expectedDir);
+      expect(existsSync(join(expectedDir, 'metadata.json'))).toBe(true);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('nests a single-file (M4B) sync-folder export under a sanitized author subfolder (fs-54)', async () => {
+    const { writeUserSettings } = await import('../workspace/user-settings.js');
+    const { sanitiseForZip } = await import('../export/build-mp3-zip.js');
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-sync-author-m4b-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+
+      const create = await request(app)
+        .post(`/api/books/${bookId}/exports`)
+        .send({ format: 'm4b', destination: 'sync-folder' });
+      expect(create.status).toBe(201);
+
+      const { body: done } = await waitForDone(create.body.id as string);
+      expect(done.status).toBe('done');
+
+      const expectedPath = join(syncRoot, sanitiseForZip(AUTHOR), done.filename as string);
+      expect(done.syncPath).toBe(expectedPath);
+      expect(existsSync(expectedPath)).toBe(true);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
 });
 
 describe('GET /api/books/:bookId/exports (list)', () => {

@@ -516,8 +516,14 @@ async function runExportJob(
       job.progress = 1;
 
       if (syncFolder) {
+        /* fs-54 — author-level nesting, applied to every sync-folder
+           destination (this branch AND the single-file branch below), not
+           just Audiobookshelf — keeps behavior consistent across every
+           export tile and needs no wire-protocol change: `state.author`
+           is already in scope here. */
+        const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
         const bookSubfolder = sanitiseForZip(state.title);
-        const synced = await writeFolderToSyncFolder(outPath, syncFolder, bookSubfolder);
+        const synced = await writeFolderToSyncFolder(outPath, authoredSyncDir, bookSubfolder);
         job.syncPath = synced.syncPath;
       }
       /* No downloadUrl for folder exports — the route-layer guard
@@ -562,7 +568,8 @@ async function runExportJob(
       }
 
       if (job.destination === 'sync-folder' && syncFolder) {
-        const synced = await writeToSyncFolder(outPath, syncFolder, job.filename);
+        const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
+        const synced = await writeToSyncFolder(outPath, authoredSyncDir, job.filename);
         job.syncPath = synced.syncPath;
       }
       job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;

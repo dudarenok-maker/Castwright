@@ -34,7 +34,7 @@ import {
   buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, type SeriesRosterEntry } from '../lib/api';
-import type { Character } from '../lib/types';
+import type { Character, BookExportJob } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
@@ -47,6 +47,7 @@ import {
   type GenerationPillData,
   type AnalysisPillData,
   type DesignPillData,
+  type ExportPillData,
   type StatusDetail,
 } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
@@ -167,6 +168,8 @@ export function Layout() {
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
   const analysisSubstage = useAppSelector(selectAnalysisSubstage);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
+  const exportsByBookId = useAppSelector((s) => s.exports.byBookId);
+  const exportsLinger = useAppSelector((s) => s.exports.linger);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
   const pending = useAppSelector((s) => s.revisions.pending);
@@ -1269,6 +1272,36 @@ export function Layout() {
     return () => clearInterval(id);
   }, [pillAlive]);
 
+  /* fs-54 — client-side stall tracking for export jobs. Unlike the
+     generation/analysis/design streams (which stamp lastTickAt on every
+     server tick), BookExportJob carries none — adding one would be a wire
+     change the design spec deliberately avoided. Instead, track per-job-id
+     the last time `progress` actually changed; a job whose progress hasn't
+     moved in STALL_THRESHOLD_MS is stalled. Lives in a ref (not state) so
+     updating it never itself triggers a re-render — the per-second
+     forceClockTick above already re-renders Layout, which is when the ref
+     is read (in the exportPill IIFE below). */
+  const exportProgressRef = useRef<Record<string, { progress: number | null; changedAt: number }>>(
+    {},
+  );
+  useEffect(() => {
+    const now = Date.now();
+    const seen = new Set<string>();
+    for (const jobs of Object.values(exportsByBookId)) {
+      for (const job of jobs) {
+        if (job.status !== 'queued' && job.status !== 'in_progress') continue;
+        seen.add(job.id);
+        const prev = exportProgressRef.current[job.id];
+        if (!prev || prev.progress !== (job.progress ?? null)) {
+          exportProgressRef.current[job.id] = { progress: job.progress ?? null, changedAt: now };
+        }
+      }
+    }
+    for (const id of Object.keys(exportProgressRef.current)) {
+      if (!seen.has(id)) delete exportProgressRef.current[id];
+    }
+  }, [exportsByBookId]);
+
   /* Pill is anchored to the middleware's cross-book snapshot, NOT the live
      chapters slice. The snapshot keeps moving while the user is on the
      generating book; it freezes (but keeps rendering) once they navigate
@@ -1409,6 +1442,61 @@ export function Layout() {
     };
   })();
 
+  /* fs-54 — cross-book Export status pill. Mirrors the analysis/generation/
+     design pill IIFEs: computed inline (not memoised) so the per-second
+     forceClockTick keeps it live, survives navigation, one click routes
+     back to the relevant book's Listen view. Visibility is the union of
+     (a) any non-terminal job anywhere, and (b) an active completion-linger
+     entry — without (b) the pill would vanish the instant the last job
+     goes terminal, before the "Export done"/"Export failed" summary can be
+     seen. */
+  const exportPill: ExportPillData | null = (() => {
+    const nonTerminalJobs: Array<{ bookId: string; job: BookExportJob }> = [];
+    for (const [bookId, jobs] of Object.entries(exportsByBookId)) {
+      for (const job of jobs) {
+        if (job.status === 'queued' || job.status === 'in_progress') {
+          nonTerminalJobs.push({ bookId, job });
+        }
+      }
+    }
+    const lingerEntries = Object.entries(exportsLinger);
+    if (nonTerminalJobs.length === 0 && lingerEntries.length === 0) return null;
+
+    if (nonTerminalJobs.length > 0) {
+      const now = Date.now();
+      const inProgress = nonTerminalJobs.filter(({ job }) => job.status === 'in_progress');
+      const percent =
+        inProgress.length > 0
+          ? inProgress.reduce((sum, { job }) => sum + (job.progress ?? 0), 0) / inProgress.length
+          : undefined;
+      /* Stalled only when EVERY in-flight (in_progress) job is quiet — one
+         moving job means the run is alive. A queued-only set is never
+         "stalled" (it's just waiting its turn). */
+      const stalled =
+        inProgress.length > 0 &&
+        inProgress.every(({ job }) => {
+          const tracked = exportProgressRef.current[job.id];
+          return tracked != null && now - tracked.changedAt > STALL_THRESHOLD_MS;
+        });
+      const targetBookId = nonTerminalJobs[0].bookId;
+      return {
+        state: stalled ? 'stalled' : 'running',
+        runningCount: nonTerminalJobs.length,
+        percent,
+        onClick: () => navigate(`/books/${targetBookId}/listen`),
+      };
+    }
+
+    /* No live jobs left — render the linger entry. Per-book, not per-job
+       (matching how the other three pills aggregate); with several books
+       lingering at once, the most recently-set one wins. */
+    const [lingerBookId, lingerEntry] = lingerEntries[lingerEntries.length - 1];
+    return {
+      state: lingerEntry.state,
+      onClick: () => navigate(`/books/${lingerBookId}/listen`),
+    };
+  })();
+
   /* Plan 120 — collapse the live state into the single dominant summary the
      compact Status pill renders. Computed inline (not memoised) so the
      per-second forceClockTick above keeps the "stalled" rung fresh against
@@ -1428,6 +1516,7 @@ export function Layout() {
     analysisPill !== null ||
     generationPill !== null ||
     designPill !== null ||
+    exportPill !== null ||
     analysisSubstage !== null ||
     pending.length > 0;
   const statusSummary = showStatus
@@ -1435,6 +1524,7 @@ export function Layout() {
         analysis: analysisPill,
         generation: generationPill,
         design: designPill,
+        exportPill,
         pendingRevisionsCount: pending.length,
         anyModelLoading,
         analysisSubstage: analysisSubstage ? { kind: analysisSubstage.kind, percent: analysisSubstage.percent } : null,
@@ -1449,11 +1539,13 @@ export function Layout() {
     analysis: analysisPill,
     generation: generationPill,
     design: designPill,
+    exportPill,
     pendingRevisionsCount: pending.length,
     onOpenRevisions: () => dispatch(uiActions.setShowRevisionPlayer(true)),
     onGoToAnalysing: () => analysisPill?.onClick(),
     onGoToGeneration: () => generationPill?.onClick(),
     onGoToDesign: () => designPill?.onClick(),
+    onGoToExport: () => exportPill?.onClick(),
     analysisSubstage: analysisSubstage
       ? {
           label: analysisSubstage.label,

@@ -50,6 +50,36 @@ function readId3Frame(mp3: Buffer, wantedId: 'TIT2' | 'TRCK' | 'TALB'): string |
   return null;
 }
 
+function readId3TxxxFrame(mp3: Buffer, description: string): string | null {
+  if (mp3[0] !== 0x49 || mp3[1] !== 0x44 || mp3[2] !== 0x33) return null;
+  const tagSize =
+    ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
+  let p = 10;
+  while (p < 10 + tagSize - 10) {
+    const frameId = mp3.subarray(p, p + 4).toString('latin1');
+    const frameSize = mp3.readUInt32BE(p + 4);
+    if (frameSize === 0) break;
+    if (frameId === 'TXXX') {
+      const enc = mp3[p + 10];
+      const body = mp3.subarray(p + 11, p + 10 + frameSize);
+      const nul = enc === 1 ? body.indexOf(Buffer.from([0, 0])) : body.indexOf(0);
+      if (nul >= 0) {
+        const descBytes = body.subarray(0, nul);
+        const desc = enc === 3 || enc === 0 ? descBytes.toString('latin1') : descBytes.toString('utf16le');
+        if (desc === description) {
+          const valueBytes = body.subarray(nul + (enc === 1 ? 2 : 1));
+          return (enc === 3 || enc === 0
+            ? valueBytes.toString('latin1')
+            : valueBytes.toString('utf16le')
+          ).replace(/\0+$/, '');
+        }
+      }
+    }
+    p += 10 + frameSize;
+  }
+  return null;
+}
+
 function makeState(over: Partial<BookStateJson> = {}): BookStateJson {
   return {
     bookId: 'demo__sa__test',
@@ -103,7 +133,9 @@ describeIfFfmpeg('buildMp3Folder', () => {
     expect(result.entries).toHaveLength(2);
     expect(result.totalBytes).toBeGreaterThan(0);
 
-    const names = readdirSync(outDir).sort();
+    const names = readdirSync(outDir)
+      .filter((n) => n.endsWith('.mp3'))
+      .sort();
     expect(names).toEqual(['01 - Chapter 1 - Opening.mp3', '02 - Chapter 2.mp3']);
 
     const ch1 = readFileSync(join(outDir, names[0]));
@@ -142,7 +174,9 @@ describeIfFfmpeg('buildMp3Folder', () => {
 
     await buildMp3Folder({ bookDir, state: makeState(), outDir });
 
-    const names = readdirSync(outDir).sort();
+    const names = readdirSync(outDir)
+      .filter((n) => n.endsWith('.mp3'))
+      .sort();
     expect(names).toEqual(['01 - Chapter 1 - Opening.mp3', '02 - Chapter 2.mp3']);
     expect(existsSync(join(outDir, '99 - Stale Chapter.mp3'))).toBe(false);
   }, 30_000);
@@ -162,4 +196,104 @@ describeIfFfmpeg('buildMp3Folder', () => {
       expect(ratios[i]).toBeGreaterThanOrEqual(ratios[i - 1] - 1e-9);
     }
   }, 30_000);
+
+  it('writes series + series-part TXXX frames when the book is in a series (fs-54)', async () => {
+    const outDir = join(tmpRoot, 'export-series', 'Book Two');
+    await buildMp3Folder({
+      bookDir,
+      state: makeState({ series: 'The Coalfall Saga', seriesPosition: 2, isStandalone: false }),
+      outDir,
+    });
+    const names = readdirSync(outDir)
+      .filter((n) => n.endsWith('.mp3'))
+      .sort();
+    const ch1 = readFileSync(join(outDir, names[0]));
+    expect(readId3TxxxFrame(ch1, 'series')).toBe('The Coalfall Saga');
+    expect(readId3TxxxFrame(ch1, 'series-part')).toBe('2');
+  });
+
+  it('omits series TXXX frames for a standalone book (fs-54)', async () => {
+    const outDir = join(tmpRoot, 'export-no-series', 'the Coalfall Commission');
+    await buildMp3Folder({ bookDir, state: makeState(), outDir });
+    const names = readdirSync(outDir)
+      .filter((n) => n.endsWith('.mp3'))
+      .sort();
+    const ch1 = readFileSync(join(outDir, names[0]));
+    expect(readId3TxxxFrame(ch1, 'series')).toBeNull();
+  });
+
+  describe('Audiobookshelf sidecars (fs-54)', () => {
+    it('writes metadata.json with core fields and no series for a standalone book', async () => {
+      const outDir = join(tmpRoot, 'export-meta-standalone', 'the Coalfall Commission');
+      await buildMp3Folder({ bookDir, state: makeState(), outDir });
+      const meta = JSON.parse(readFileSync(join(outDir, 'metadata.json'), 'utf8'));
+      expect(meta.title).toBe('the Coalfall Commission');
+      expect(meta.authors).toEqual(['Della Renwick']);
+      expect(meta.narrators).toEqual(['Anders Vale']);
+      expect(meta.genres).toEqual(['Fantasy']);
+      expect(meta.language).toBe('en');
+      expect(meta.series).toBeUndefined();
+    });
+
+    it('includes a series entry without sequence when seriesPosition is null on a real series book', async () => {
+      const outDir = join(tmpRoot, 'export-meta-series-noseq', 'Book Two');
+      await buildMp3Folder({
+        bookDir,
+        state: makeState({ series: 'The Coalfall Saga', seriesPosition: null, isStandalone: false }),
+        outDir,
+      });
+      const meta = JSON.parse(readFileSync(join(outDir, 'metadata.json'), 'utf8'));
+      expect(meta.series).toEqual([{ name: 'The Coalfall Saga' }]);
+    });
+
+    it('includes series + sequence when seriesPosition is set', async () => {
+      const outDir = join(tmpRoot, 'export-meta-series-seq', 'Book Two');
+      await buildMp3Folder({
+        bookDir,
+        state: makeState({ series: 'The Coalfall Saga', seriesPosition: 2, isStandalone: false }),
+        outDir,
+      });
+      const meta = JSON.parse(readFileSync(join(outDir, 'metadata.json'), 'utf8'));
+      expect(meta.series).toEqual([{ name: 'The Coalfall Saga', sequence: 2 }]);
+    });
+
+    it('omits narrators when narratorCredit is the Castwright brand default', async () => {
+      const outDir = join(tmpRoot, 'export-meta-brand-narrator', 'the Coalfall Commission');
+      await buildMp3Folder({ bookDir, state: makeState({ narratorCredit: 'Castwright' }), outDir });
+      const meta = JSON.parse(readFileSync(join(outDir, 'metadata.json'), 'utf8'));
+      expect(meta.narrators).toEqual([]);
+    });
+
+    it('copies cover.jpg into outDir when a cover exists on disk', async () => {
+      /* Must be a real, decodable JPEG — buildMp3Folder feeds coverJpegPath
+         into ffmpeg as an -i input for every chapter's APIC frame (existing
+         behavior, unchanged by this task), and ffmpeg rejects a bogus image
+         before writeAudiobookshelfSidecars ever runs. Same 1x1 JPEG fixture
+         already used by id3-tags.test.ts's cover-embedding tests. */
+      const jpegBytes = Buffer.from(
+        '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+          'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEB' +
+          'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB' +
+          '/8AAEQgAAQABAwERAAIRAQMRAf/EABQAAQAAAAAAAAAAAAAAAAAAAAj/xAAUAQEAAAAAAAAA' +
+          'AAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Aov8A/9k=',
+        'base64',
+      );
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      const coverSrc = join(bookDir, '.audiobook', 'cover.jpg');
+      writeFileSync(coverSrc, jpegBytes);
+      try {
+        const outDir = join(tmpRoot, 'export-meta-cover', 'the Coalfall Commission');
+        await buildMp3Folder({ bookDir, state: makeState(), outDir });
+        expect(existsSync(join(outDir, 'cover.jpg'))).toBe(true);
+      } finally {
+        rmSync(coverSrc, { force: true });
+      }
+    });
+
+    it('omits cover.jpg when no cover exists on disk', async () => {
+      const outDir = join(tmpRoot, 'export-meta-no-cover', 'the Coalfall Commission');
+      await buildMp3Folder({ bookDir, state: makeState(), outDir });
+      expect(existsSync(join(outDir, 'cover.jpg'))).toBe(false);
+    });
+  });
 });

@@ -26,9 +26,11 @@ import {
   AnalysisPill,
   GenerationPill,
   DesignPill,
+  ExportPill,
   type AnalysisPillData,
   type GenerationPillData,
   type DesignPillData,
+  type ExportPillData,
 } from './top-bar';
 import { MODEL_OPTIONS } from '../lib/models';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
@@ -67,6 +69,7 @@ interface StatusPopoverProps {
   } | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
+  exportPill: ExportPillData | null;
   pendingRevisionsCount: number;
   /** Navigate handlers (wired in Layout via the pills' existing onClick); the
       StatusPill clears its sticky-open after these fire so the panel closes. */
@@ -80,6 +83,7 @@ interface StatusPopoverProps {
       diagnosis blocks render. */
   readiness?: SetupReadiness | null;
   onDiagnosisRefetch?: () => void;
+  onGoToExport: () => void;
 }
 
 function Section({
@@ -154,6 +158,7 @@ export function StatusPopover({
   analysisSubstage,
   generation,
   design,
+  exportPill,
   pendingRevisionsCount,
   onOpenRevisions,
   onGoToAnalysing,
@@ -161,6 +166,7 @@ export function StatusPopover({
   onGoToDesign,
   readiness,
   onDiagnosisRefetch,
+  onGoToExport,
 }: StatusPopoverProps) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -278,6 +284,13 @@ export function StatusPopover({
           <GenerationPill data={{ ...generation, onClick: onGoToGeneration }} />
         ) : (
           <p className="text-sm text-ink/60">Nothing generating.</p>
+        )}
+      </Section>
+      <Section title="Export" testid="status-popover-export">
+        {exportPill ? (
+          <ExportPill data={{ ...exportPill, onClick: onGoToExport }} />
+        ) : (
+          <p className="text-sm text-ink/60">Nothing exporting.</p>
         )}
       </Section>
       <Section title="Revisions" testid="status-popover-revisions">

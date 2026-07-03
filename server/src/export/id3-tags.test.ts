@@ -228,6 +228,54 @@ describeIf('applyId3v24Tags', () => {
     expect(tags.comment).toBeUndefined();
   });
 
+  it('writes series + series-part as custom ID3v2 frames when both are set', async () => {
+    const destPath = join(tmpDir, 'with-series.mp3');
+    await applyId3v24Tags(srcPath, destPath, {
+      title: 'Chapter 1',
+      album: 'The Coalfall Saga: Book Two',
+      artist: 'Jane Narrator',
+      albumArtist: 'Some Author',
+      track: 1,
+      trackTotal: 3,
+      series: 'The Coalfall Saga',
+      seriesPart: 2,
+    });
+    const { tags } = await probe(destPath);
+    expect(tags.series).toBe('The Coalfall Saga');
+    expect(tags['series-part']).toBe('2');
+  });
+
+  it('omits series-part when only series is set', async () => {
+    const destPath = join(tmpDir, 'series-no-part.mp3');
+    await applyId3v24Tags(srcPath, destPath, {
+      title: 'Chapter 1',
+      album: 'Album',
+      artist: 'Narrator',
+      albumArtist: 'Author',
+      track: 1,
+      trackTotal: 1,
+      series: 'The Coalfall Saga',
+    });
+    const { tags } = await probe(destPath);
+    expect(tags.series).toBe('The Coalfall Saga');
+    expect(tags['series-part']).toBeUndefined();
+  });
+
+  it('omits series entirely when not provided', async () => {
+    const destPath = join(tmpDir, 'no-series.mp3');
+    await applyId3v24Tags(srcPath, destPath, {
+      title: 'Chapter 1',
+      album: 'Album',
+      artist: 'Narrator',
+      albumArtist: 'Author',
+      track: 1,
+      trackTotal: 1,
+    });
+    const { tags } = await probe(destPath);
+    expect(tags.series).toBeUndefined();
+    expect(tags['series-part']).toBeUndefined();
+  });
+
   /* Plan 36 A3: APIC embedding for MP3.ZIP exports. The cover-art
      pipeline writes <bookDir>/.audiobook/cover.jpg; build-mp3-zip.ts
      probes that file once per export and threads it as the optional

@@ -28,6 +28,10 @@
 - **A rebuild now shows up right away.** A browser tab left open could keep showing an old version of Castwright for up to an hour after an update, even though the new one was already sitting there ready. It now always shows the one that's actually running.
 - **Checkboxes finally look like Castwright.** Every checkbox in the app — in settings, cast, and the odd dialog — used to show up as your browser's plain default. They're now a proper part of the design: a soft magenta square with a clean checkmark, wherever you find one.
 - **When setup isn't ready, it now tells you why — and often fixes it for you.** A voice engine or analyzer that isn't quite ready used to just say "not ready," with nothing to click. Now it tells you exactly what's missing, in the Setup screen and the Status menu alike, and where a safe one-click fix exists — setting up the voice engine, installing an engine's model, or connecting the local analyzer — a button does the fixing for you.
+- **A stuck voice engine now picks itself back up.** On rare occasions the voice engine could go quiet mid-render without actually crashing — reachable one moment, unresponsive the next — and generation would sit stalled until you noticed and restarted it by hand. Castwright now recognises that state and restarts the engine on its own, so a render can pick back up instead of waiting on you.
+- **A name instead of a number, on your own network.** Testing on your phone or tablet now points at `castwright.local` (or `castwright.dev.local` while developing) instead of a raw address that changes every time your router hands out a new one.
+- **Audiobookshelf, done properly.** Series, cover, and metadata now travel with every book you send to Audiobookshelf — and you can pick a single chaptered file or a folder of tracks, whichever your library prefers.
+- **An export you don't have to watch.** Kick off an export and walk away — a small indicator in the top bar tells you when it's done, or if something went wrong, no matter which screen you're on.
 
 # Castwright 1.9.0
 

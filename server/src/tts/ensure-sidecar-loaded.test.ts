@@ -16,12 +16,22 @@ vi.mock('../gpu/gpu-load.js', () => ({
   GpuBusyError: class extends Error {},
 }));
 
+const forceSidecarRecycleMock = vi.fn(async (..._args: unknown[]) => true);
+vi.mock('./sidecar-supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sidecar-supervisor.js')>();
+  return {
+    ...actual,
+    forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
+  };
+});
+
 import { ensureSidecarEngineReady, reconcileResidentQwenTiers } from './ensure-sidecar-loaded.js';
 
 const realFetch = global.fetch;
 afterEach(() => {
   global.fetch = realFetch;
   vi.restoreAllMocks();
+  forceSidecarRecycleMock.mockClear();
 });
 
 /* A settled /health response: reachable, not recycling, engine installed. */
@@ -116,6 +126,19 @@ describe('ensureSidecarEngineReady', () => {
     await expect(ensureSidecarEngineReady('qwen', undefined, FAST)).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
     expect(f.mock.calls.length).toBeGreaterThan(1); // polled, didn't bail on first failure
+    // srv-50: exhausting the readiness budget is strong evidence of a wedge —
+    // force a recycle instead of silently giving up.
+    expect(forceSidecarRecycleMock).toHaveBeenCalledTimes(1);
+    expect(forceSidecarRecycleMock.mock.calls[0][0]).toContain('qwen');
+  });
+
+  it('does NOT force-recycle when readiness resolves before the deadline', async () => {
+    const f = vi.fn().mockResolvedValue(readyResp);
+    global.fetch = f as unknown as typeof fetch;
+
+    await ensureSidecarEngineReady('qwen', undefined, PATIENT);
+
+    expect(forceSidecarRecycleMock).not.toHaveBeenCalled();
   });
 
   it('gives up best-effort after the budget when /load keeps returning non-ok', async () => {
