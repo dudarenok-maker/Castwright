@@ -18,12 +18,19 @@ export interface ExportsState {
   byBookId: Record<string, BookExportJob[]>;
   lanUrls: string[];
   lanPort: number | null;
+  /** fs-54 — per-book terminal-completion snapshot for the global Export
+      status pill's brief "done"/"failed" summary. Keyed by bookId; a later
+      completion for the same book overwrites an earlier one (consistent
+      with how the other three status pills aggregate per-book, not
+      per-job). Populated + cleared by export-pill-middleware.ts. */
+  linger: Record<string, { state: 'done' | 'failed' }>;
 }
 
 const initialState: ExportsState = {
   byBookId: {},
   lanUrls: [],
   lanPort: null,
+  linger: {},
 };
 
 export const exportsSlice = createSlice({
@@ -72,6 +79,15 @@ export const exportsSlice = createSlice({
     lanUrlsHydrated: (s, a: PayloadAction<{ urls: string[]; port: number }>) => {
       s.lanUrls = a.payload.urls;
       s.lanPort = a.payload.port;
+    },
+
+    /* fs-54 — Export pill completion linger (see ExportsState.linger doc).
+       Dispatched by export-pill-middleware.ts. */
+    exportLingerSet: (s, a: PayloadAction<{ bookId: string; state: 'done' | 'failed' }>) => {
+      s.linger[a.payload.bookId] = { state: a.payload.state };
+    },
+    exportLingerCleared: (s, a: PayloadAction<{ bookId: string }>) => {
+      delete s.linger[a.payload.bookId];
     },
   },
 });

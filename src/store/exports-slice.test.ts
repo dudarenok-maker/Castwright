@@ -22,7 +22,7 @@ const makeJob = (overrides: Partial<BookExportJob> = {}): BookExportJob => ({
   ...overrides,
 });
 
-const initial: ExportsState = { byBookId: {}, lanUrls: [], lanPort: null };
+const initial: ExportsState = { byBookId: {}, lanUrls: [], lanPort: null, linger: {} };
 
 describe('exportsSlice', () => {
   it('prepends a job to byBookId on exportStarted', () => {
@@ -80,6 +80,39 @@ describe('exportsSlice', () => {
         }),
       );
       expect(s1.byBookId['b1'].map((j) => j.id)).toEqual(['exp_2', 'exp_1']);
+    });
+  });
+
+  describe('exportLingerSet / exportLingerCleared (fs-54)', () => {
+    it('records a done/failed snapshot for a book', () => {
+      const s = exportsSlice.reducer(
+        initial,
+        exportsActions.exportLingerSet({ bookId: 'b1', state: 'done' }),
+      );
+      expect(s.linger['b1']).toEqual({ state: 'done' });
+    });
+
+    it('overwrites an earlier snapshot for the same book', () => {
+      let s = exportsSlice.reducer(
+        initial,
+        exportsActions.exportLingerSet({ bookId: 'b1', state: 'done' }),
+      );
+      s = exportsSlice.reducer(s, exportsActions.exportLingerSet({ bookId: 'b1', state: 'failed' }));
+      expect(s.linger['b1']).toEqual({ state: 'failed' });
+    });
+
+    it('removes the snapshot for a book on clear', () => {
+      let s = exportsSlice.reducer(
+        initial,
+        exportsActions.exportLingerSet({ bookId: 'b1', state: 'done' }),
+      );
+      s = exportsSlice.reducer(s, exportsActions.exportLingerCleared({ bookId: 'b1' }));
+      expect(s.linger['b1']).toBeUndefined();
+    });
+
+    it('clearing an unset book is a no-op', () => {
+      const s = exportsSlice.reducer(initial, exportsActions.exportLingerCleared({ bookId: 'b1' }));
+      expect(s.linger).toEqual({});
     });
   });
 });
