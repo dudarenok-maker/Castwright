@@ -7,6 +7,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { fetchSidecarDevices } from '../gpu/fetch-sidecar-devices.js';
 
 export const gpuDevicesRouter = Router();
 
@@ -15,27 +16,14 @@ const PROBE_TIMEOUT_MS = 2_000;
 type ResidentEntry = { engine: string; actual_card: number | null; stale_reason?: string };
 
 gpuDevicesRouter.get('/devices', async (_req: Request, res: Response) => {
-  const url = getResolvedSidecarUrl();
-  const target = `${url}/devices`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  try {
-    const upstream = await fetch(target, { method: 'GET', signal: controller.signal });
-    clearTimeout(timer);
-    if (!upstream.ok) {
-      return res.json({ devices: [], cpu: true });
-    }
-    const body = (await upstream.json().catch(() => ({ devices: [], cpu: true }))) as {
-      devices: Array<{ uuid: string; idx: number; name: string; total_mb: number; free_mb: number }>;
-      cpu: boolean;
-    };
-    setLastKnownGpuDevices(body.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
-    const merged = await mergeResidentData(url, body.devices);
-    return res.json({ devices: merged, cpu: body.cpu });
-  } catch {
-    clearTimeout(timer);
+  const result = await fetchSidecarDevices();
+  if (!result) {
     return res.json({ devices: [], cpu: true });
   }
+  setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
+  const url = getResolvedSidecarUrl();
+  const merged = await mergeResidentData(url, result.devices);
+  return res.json({ devices: merged, cpu: result.cpu });
 });
 
 /** Best-effort merge of /health gpus[] resident/stale_reason/torch_reserved_mb

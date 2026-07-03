@@ -18,10 +18,32 @@ import {
 } from '../workspace/user-settings.js';
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
 import { toUuidForm } from './gpu-uuid.js';
+import { fetchSidecarDevices } from '../gpu/fetch-sidecar-devices.js';
+import { getLastKnownGpuDevices, setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 export const configRouter = Router();
 
-configRouter.get('/', (_req, res) => {
+/* resolveAll() -> resolveKnob() reconciles a stored 'cuda-uuid:<uuid>'
+   override against getLastKnownGpuDevices()'s cache SYNCHRONOUSLY — it's
+   only ever warmed by GET /api/gpu/devices's own handler (or toUuidForm,
+   on a PUT). On a fresh server boot, AdvancedView's mount effect fires
+   fetchConfig() and getGpuDevices() concurrently with no ordering; this
+   route is a synchronous local computation and routinely resolves BEFORE
+   the sidecar round-trip GET /api/gpu/devices needs. That race mislabels a
+   perfectly valid uuid pin as staleReason:'uuid_unresolved' ("card no
+   longer found") on the very first Advanced Settings load after a restart
+   — reproduced and confirmed by the mandatory PR code-review. Warm the
+   cache here too (a no-op once anything else has already warmed it) so
+   resolveAll() never reconciles against a cache that's empty only because
+   nothing has asked the sidecar yet. */
+async function ensureGpuDeviceListWarm(): Promise<void> {
+  if (getLastKnownGpuDevices().length > 0) return;
+  const result = await fetchSidecarDevices();
+  if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
+}
+
+configRouter.get('/', async (_req, res) => {
+  await ensureGpuDeviceListWarm();
   const descriptors = allKnobs().map((k) => ({
     key: k.key,
     group: k.group,

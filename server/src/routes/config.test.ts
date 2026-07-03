@@ -252,6 +252,86 @@ describe('PUT /api/config — device knob UUID translation (Plan 2 §2.1)', () =
   });
 });
 
+/* Mandatory PR code-review (#1224) found a real cold-start race: resolveAll()
+   -> resolveKnob() reconciles a stored 'cuda-uuid:<uuid>' override against
+   getLastKnownGpuDevices()'s cache SYNCHRONOUSLY, but that cache is only ever
+   warmed by GET /api/gpu/devices's own handler (or a PUT's toUuidForm). On a
+   fresh boot, AdvancedView's mount effect fires fetchConfig() and
+   getGpuDevices() concurrently with no ordering — GET /api/config is a
+   synchronous local computation and routinely resolves BEFORE the sidecar
+   round-trip GET /api/gpu/devices needs, so a perfectly valid uuid pin got
+   mislabeled staleReason:'uuid_unresolved' ("card no longer found") on the
+   very first Advanced Settings load after a restart. Fixed by having GET /
+   warm the cache itself (a no-op once anything else already has). */
+describe('GET /api/config — warms the device-list cache before resolving (cold-start race)', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('does not report uuid_unresolved for a valid pin when the cache starts cold', async () => {
+    const { setLastKnownGpuDevices } = await import('../gpu/gpu-device-list-state.js');
+    const { writeConfigOverride } = await import('../workspace/user-settings.js');
+
+    // Simulate a pin already persisted from a PRIOR session (survives a restart).
+    await writeConfigOverride('tts.qwen.device', 'cuda-uuid:GPU-1');
+    // Simulate a fresh boot: the cache hasn't been warmed by anything yet.
+    setLastKnownGpuDevices([]);
+    // The sidecar (reached fresh by this route's own warm-up) reports the card is real.
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          devices: [{ uuid: 'GPU-1', idx: 1, name: 'x', total_mb: 16000, free_mb: 14000 }],
+          cpu: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(res.body.values['tts.qwen.device'].staleReason).toBeUndefined();
+    expect(res.body.values['tts.qwen.device'].effective).toBe('cuda:1');
+  });
+
+  it('skips the sidecar round-trip when the cache is already warm', async () => {
+    const { setLastKnownGpuDevices } = await import('../gpu/gpu-device-list-state.js');
+    const { writeConfigOverride } = await import('../workspace/user-settings.js');
+
+    await writeConfigOverride('tts.qwen.device', 'cuda-uuid:GPU-1');
+    setLastKnownGpuDevices([{ uuid: 'GPU-1', idx: 1 }]);
+
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.body.values['tts.qwen.device'].effective).toBe('cuda:1');
+  });
+
+  it('still reports uuid_unresolved when the sidecar is genuinely unreachable', async () => {
+    const { setLastKnownGpuDevices } = await import('../gpu/gpu-device-list-state.js');
+    const { writeConfigOverride } = await import('../workspace/user-settings.js');
+
+    await writeConfigOverride('tts.qwen.device', 'cuda-uuid:GPU-1');
+    setLastKnownGpuDevices([]);
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
+
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(res.body.values['tts.qwen.device'].staleReason).toBe('uuid_unresolved');
+  });
+});
+
 describe('POST /api/config/prompts/:id/reset', () => {
   it('fork then reset clears the fork — GET shows isForked:false', async () => {
     // Fork it first.
