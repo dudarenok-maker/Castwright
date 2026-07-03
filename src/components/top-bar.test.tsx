@@ -426,6 +426,42 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
     expect(summarizeStatus({ ...base, analysis: { state: 'running', percent: 12, kind: 'full' } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
       .toMatchObject({ detail: '12%' });
   });
+
+  it('shows "Exporting" with a rounded percent while an export runs and nothing else outranks it', () => {
+    const result = summarizeStatus({
+      analysis: null,
+      generation: null,
+      design: null,
+      exportPill: { state: 'running', runningCount: 1, percent: 0.42, onClick: () => {} },
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(result).toEqual({ label: 'Exporting', tone: 'peach', icon: 'spinner', detail: '42%' });
+  });
+
+  it('folds an export stall into the shared "Stalled" rung', () => {
+    const result = summarizeStatus({
+      analysis: null,
+      generation: null,
+      design: null,
+      exportPill: { state: 'stalled', runningCount: 1, onClick: () => {} },
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(result.label).toBe('Stalled');
+  });
+
+  it('does not surface an export "done"/"failed" linger on the compact pill (popover-only, like Design)', () => {
+    const result = summarizeStatus({
+      analysis: null,
+      generation: null,
+      design: null,
+      exportPill: { state: 'done', onClick: () => {} },
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(result.label).toBe('Status');
+  });
 });
 
 describe('DesignPill', () => {

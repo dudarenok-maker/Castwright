@@ -75,6 +75,26 @@ export interface DesignPillData {
   onClick: () => void;
 }
 
+/* fs-54 — sibling of GenerationPillData/DesignPillData for the global Export
+   status pill. Unlike Generation (done/total chapter counts), BookExportJob
+   carries a single 0..1 `progress` per job, not a sub-divided counter — so
+   this aggregates a COUNT of non-terminal jobs across every book, not a
+   done/total fraction. `done`/`failed` are the completion-linger states
+   (export-pill-middleware.ts); like the Design pill's terminal 'done', they
+   don't drive the compact Status pill's dominant rung — only the popover. */
+export type ExportPillState = 'running' | 'stalled' | 'done' | 'failed';
+export interface ExportPillData {
+  state: ExportPillState;
+  /** Non-terminal job count across every book. Present only for
+      'running'/'stalled'. */
+  runningCount?: number;
+  /** Average `progress` (0..1) across in_progress jobs. Undefined during
+      the terminal 'done'/'failed' linger — those states render as text,
+      not a percent bar, same as the Design pill's own 'done' summary. */
+  percent?: number;
+  onClick: () => void;
+}
+
 /* The top bar no longer renders the TTS / analysis / generation / revisions
    pills inline; they live behind a single compact Status pill that reveals a
    hover/tap popover. `summarizeStatus` collapses the live state into ONE
@@ -94,6 +114,11 @@ export interface StatusInput {
   analysis: AnalysisPillData | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
+  /** fs-54 — see ExportPillData's doc comment for the naming note (`export`
+      is a reserved word, hence `exportPill`). Optional (not `exportPill:
+      ExportPillData | null`) so every pre-existing summarizeStatus() call
+      site in top-bar.test.tsx keeps compiling unchanged. */
+  exportPill?: ExportPillData | null;
   pendingRevisionsCount: number;
   /** True when any in-use TTS engine pill is mid-load (Layout derives this
       from the per-engine ttsLifecycle state). */
@@ -115,6 +140,7 @@ export function summarizeStatus({
   analysis,
   generation,
   design,
+  exportPill = null,
   pendingRevisionsCount,
   anyModelLoading,
   analysisSubstage = null,
@@ -124,7 +150,8 @@ export function summarizeStatus({
   if (
     analysis?.state === 'stalled' ||
     generation?.state === 'stalled' ||
-    design?.state === 'stalled'
+    design?.state === 'stalled' ||
+    exportPill?.state === 'stalled'
   )
     return { label: 'Stalled', tone: 'amber', icon: 'clock' };
   if (generation?.state === 'running')
@@ -141,6 +168,13 @@ export function summarizeStatus({
     return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
   if (design?.state === 'running')
     return { label: 'Designing', tone: 'peach', icon: 'spinner', detail: `${design.percent}%` };
+  if (exportPill?.state === 'running')
+    return {
+      label: 'Exporting',
+      tone: 'peach',
+      icon: 'spinner',
+      detail: exportPill.percent != null ? `${Math.round(exportPill.percent * 100)}%` : undefined,
+    };
   if (analysis?.state === 'paused') return { label: 'Paused', tone: 'neutral', icon: 'clock' };
   if (pendingRevisionsCount > 0)
     return {
@@ -165,6 +199,11 @@ export interface StatusDetail {
   onGoToAnalysing: () => void;
   onGoToGeneration: () => void;
   onGoToDesign: () => void;
+  /** fs-54 — see ExportPillData's doc comment for the naming note. Optional
+      (with onGoToExport below) so top-bar.test.tsx's existing STATUS_DETAIL
+      fixture, which doesn't set either, keeps compiling unchanged. */
+  exportPill?: ExportPillData | null;
+  onGoToExport?: () => void;
   /** The active analysis sub-stage (prosody/review) label + progress, or null/absent.
       Rendered as a secondary row inside the Analysis section of the popover. */
   analysisSubstage?: {
@@ -831,6 +870,7 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         analysis={detail.analysis}
         generation={detail.generation}
         design={detail.design}
+        exportPill={detail.exportPill ?? null}
         pendingRevisionsCount={detail.pendingRevisionsCount}
         analysisSubstage={detail.analysisSubstage}
         onOpenRevisions={() => {
@@ -847,6 +887,10 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         }}
         onGoToDesign={() => {
           detail.onGoToDesign();
+          closeAll();
+        }}
+        onGoToExport={() => {
+          detail.onGoToExport?.();
           closeAll();
         }}
       />
@@ -1012,6 +1056,53 @@ export function DesignPill({ data }: { data: DesignPillData }) {
           ? `${v.label} ${currentName} · ${phase === 'rendering' ? 'rendering audition' : 'designing'}`
           : `${v.label} · ${summary}`}
       </span>
+    </button>
+  );
+}
+
+/* fs-54 — the fourth status pill, "Export" progress/linger. Exported for
+   reuse inside the Status popover (onClick overridden to navigate-and-close),
+   same pattern as AnalysisPill/GenerationPill/DesignPill. */
+export function ExportPill({ data }: { data: ExportPillData }) {
+  const { state, runningCount, percent, onClick } = data;
+  const variants: Record<
+    ExportPillState,
+    { className: string; icon: React.ReactNode; label: string }
+  > = {
+    running: {
+      className: 'bg-peach/15 hover:bg-peach/25 text-magenta',
+      icon: <IconSpinner className="w-3.5 h-3.5" />,
+      label: 'Exporting',
+    },
+    stalled: {
+      className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+      icon: <IconClock className="w-3.5 h-3.5" />,
+      label: 'Stalled',
+    },
+    done: {
+      className: 'bg-ink/6 hover:bg-ink/10 text-ink/70',
+      icon: <IconClock className="w-3.5 h-3.5" />,
+      label: 'Export done',
+    },
+    failed: {
+      className: 'bg-rose-100 hover:bg-rose-200 text-rose-800',
+      icon: <IconWarning className="w-3.5 h-3.5" />,
+      label: 'Export failed',
+    },
+  };
+  const v = variants[state];
+  const running =
+    state === 'running' || state === 'stalled'
+      ? `${runningCount ?? 0} running${percent != null ? ` · ${Math.round(percent * 100)}%` : ''}`
+      : null;
+  return (
+    <button
+      onClick={onClick}
+      data-testid="export-pill"
+      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${v.className}`}
+    >
+      {v.icon}
+      <span className="tabular-nums">{running ? `${v.label} · ${running}` : v.label}</span>
     </button>
   );
 }
