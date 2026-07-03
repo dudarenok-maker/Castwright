@@ -1189,6 +1189,7 @@ export function AnalysingView({
                         });
                       }}
                       label="Expressive directions"
+                      labelClassName="text-sm font-medium text-ink"
                       description="Generate per-line emotion + delivery directions for the higher-quality (1.7B) voice. Runs in the background after analysis."
                     />
                   )}

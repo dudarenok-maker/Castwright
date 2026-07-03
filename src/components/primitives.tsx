@@ -49,14 +49,33 @@ export function PrimaryButton({
   );
 }
 
+type CheckboxAccent = 'magenta' | 'peach' | 'ink';
+
+const CHECKBOX_ACCENT_CLASSES: Record<CheckboxAccent, { checked: string; unchecked: string }> = {
+  magenta: {
+    checked: 'border-magenta bg-magenta',
+    unchecked: 'border-ink/25 peer-hover:border-magenta/50 peer-focus-visible:ring-magenta/30',
+  },
+  peach: {
+    checked: 'border-peach bg-peach',
+    unchecked: 'border-ink/25 peer-hover:border-peach/50 peer-focus-visible:ring-peach/30',
+  },
+  ink: {
+    checked: 'border-ink bg-ink',
+    unchecked: 'border-ink/25 peer-hover:border-ink/50 peer-focus-visible:ring-ink/30',
+  },
+};
+
 interface CheckboxProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label?: ReactNode;
+  labelClassName?: string;
   description?: ReactNode;
   disabled?: boolean;
   id?: string;
   className?: string;
+  accent?: CheckboxAccent;
   'data-testid'?: string;
   'aria-label'?: string;
 }
@@ -74,16 +93,19 @@ export function Checkbox({
   checked,
   onChange,
   label,
+  labelClassName,
   description,
   disabled = false,
   id,
   className = '',
+  accent = 'magenta',
   'data-testid': testId,
   'aria-label': ariaLabel,
 }: CheckboxProps) {
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const descId = description ? `${inputId}-description` : undefined;
+  const accentClasses = CHECKBOX_ACCENT_CLASSES[accent];
 
   const box = (
     <span className="relative mt-0.5 inline-flex h-5 w-5 shrink-0">
@@ -100,8 +122,8 @@ export function Checkbox({
       />
       <span
         aria-hidden="true"
-        className={`pointer-events-none grid h-5 w-5 place-items-center rounded border-2 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-magenta/30 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-canvas ${
-          checked ? 'border-magenta bg-magenta' : 'border-ink/25 peer-hover:border-magenta/50'
+        className={`pointer-events-none grid h-5 w-5 place-items-center rounded border-2 transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-canvas ${
+          checked ? accentClasses.checked : accentClasses.unchecked
         }`}
       >
         {checked && <IconCheck className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
@@ -110,16 +132,16 @@ export function Checkbox({
   );
 
   return (
-    <div className={`flex flex-col gap-0.5 ${className}`}>
+    <div className={`flex flex-col gap-0.5 ${disabled ? 'opacity-50' : ''} ${className}`}>
       {label ? (
         <label
           htmlFor={inputId}
           className={`flex items-start gap-3 select-none min-h-[44px] sm:min-h-0 ${
-            disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+            disabled ? 'cursor-not-allowed' : 'cursor-pointer'
           }`}
         >
           {box}
-          <span className="text-sm font-medium text-ink">{label}</span>
+          <span className={labelClassName ?? 'text-sm text-ink'}>{label}</span>
         </label>
       ) : (
         box

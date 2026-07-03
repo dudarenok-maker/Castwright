@@ -560,6 +560,7 @@ function ConfirmCharacterCard({
               <Checkbox
                 checked={overrideLibrary}
                 onChange={onToggleOverride}
+                accent="peach"
                 aria-label={`Sync profile with ${character.matchedFrom?.bookTitle}`}
               />
               <span>

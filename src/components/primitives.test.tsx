@@ -76,4 +76,33 @@ describe('Checkbox', () => {
     fireEvent.click(screen.getByText('Row text'));
     expect(onChange).toHaveBeenCalledWith(true);
   });
+
+  it('dims a disabled checkbox rendered bare (no label prop), matching the labeled-mode disabled look', () => {
+    const { container } = render(
+      <Checkbox checked={false} onChange={() => {}} aria-label="Select row" disabled />,
+    );
+    expect(container.querySelector('.opacity-50')).not.toBeNull();
+  });
+
+  it('applies the peach accent to the checked box instead of the default magenta', () => {
+    const { container } = render(
+      <Checkbox checked onChange={() => {}} aria-label="Sync profile" accent="peach" />,
+    );
+    const visualBox = container.querySelector('[aria-hidden="true"]');
+    expect(visualBox?.className).toContain('bg-peach');
+    expect(visualBox?.className).not.toContain('bg-magenta');
+  });
+
+  it('lets a caller override the label text styling via labelClassName', () => {
+    render(
+      <Checkbox
+        checked={false}
+        onChange={() => {}}
+        label="Also stop generation in progress"
+        labelClassName="text-sm text-ink/75"
+      />,
+    );
+    const labelText = screen.getByText('Also stop generation in progress');
+    expect(labelText.className).toBe('text-sm text-ink/75');
+  });
 });

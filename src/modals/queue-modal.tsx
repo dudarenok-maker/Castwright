@@ -299,6 +299,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                 onChange={setAlsoStop}
                 data-testid="queue-clear-also-stop"
                 label="Also stop generation in progress"
+                labelClassName="text-sm text-ink/75"
               />
             )}
           </div>

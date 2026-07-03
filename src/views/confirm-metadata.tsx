@@ -217,6 +217,7 @@ export function ConfirmMetadataView() {
             onChange={setIsStandalone}
             disabled={busy}
             label="This is a standalone (not part of a series)"
+            labelClassName="text-sm text-ink/80"
           />
 
           {!isStandalone && (

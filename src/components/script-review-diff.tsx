@@ -473,6 +473,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                         id={`class-toggle-${cls}`}
                         data-testid={`class-toggle-${cls}`}
                         checked={allClassSelected}
+                        accent="ink"
                         onChange={() =>
                           dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }))
                         }
@@ -501,6 +502,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                             id={`op-toggle-${key}`}
                             data-testid={`op-toggle-${key}`}
                             checked={isSelected}
+                            accent="ink"
                             onChange={() => dispatch(scriptReviewActions.toggleOp({ bookId, key }))}
                             aria-label={`Toggle this ${op.op} suggestion`}
                           />
