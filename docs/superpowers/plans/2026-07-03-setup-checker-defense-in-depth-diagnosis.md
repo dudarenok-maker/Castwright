@@ -481,7 +481,7 @@ const SIDECAR_NO_SUPERVISOR = diagnoseSidecar({ ...READY, supervisorActive: fals
 
 const TTS_READY: TtsDiagnosisInput = {
   noEngineAtAll: false,
-  anyEngineReady: true,
+  anyEngineUsable: true,
   weightsMissingEngine: null,
   kokoroPackageConfirmedBroken: false,
   qwenPackageConfirmedBroken: false,
@@ -516,14 +516,24 @@ describe('diagnoseTts', () => {
   });
 
   it('reports weights-missing for the reporting engine when no engine is ready yet', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineReady: false, weightsMissingEngine: 'qwen' });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, weightsMissingEngine: 'qwen' });
     expect(r).toMatchObject({ status: 'fail', cause: 'weights-missing' });
     expect(r.action).toMatchObject({ kind: 'qwen-install' });
   });
 
   it('passes when one engine is ready even though another engine reports weights-missing (mixed state, round-2 plan review finding A2)', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineReady: true, weightsMissingEngine: 'qwen' });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: true, weightsMissingEngine: 'qwen' });
     expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+
+  it('passes when one engine is live-confirmed-broken but another is usable (round-3 plan review finding 1)', () => {
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: true, kokoroPackageConfirmedBroken: true });
+    expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+
+  it('reports package-broken when the only ready engine is the broken one', () => {
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageConfirmedBroken: true });
+    expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
   });
 
   it('reports cannot-confirm-engine (not pass) when sidecar is transient and disk checks found nothing', () => {
@@ -558,17 +568,21 @@ Append to `server/src/routes/setup-diagnosis.ts`:
 export interface TtsDiagnosisInput {
   /** True only when kokoro/coqui/qwen all report 'not-installed' on disk. */
   noEngineAtAll: boolean;
-  /** True when at least one of kokoro/coqui/qwen reports 'ready' on disk —
-      i.e. anyTtsEnginePresent(). Required so a mixed state (one engine ready,
-      another mid-install with weights-missing) still passes instead of
-      reporting the half-installed engine's problem (round-2 plan review
-      finding A2 — an earlier draft dropped this field as "dead" because
-      diagnoseTts never read it, which was the actual bug: without this
-      short-circuit, `weightsMissingEngine` below fires even when a fully
-      usable engine already exists, reversing today's ready verdict). */
-  anyEngineReady: boolean;
+  /** True when at least one engine is BOTH 'ready' on disk AND not live-
+      confirmed-broken — i.e. an engine a book could actually render with
+      right now. Deliberately richer than a plain disk-readiness check
+      (round-3 plan review finding 1): gating `weights-missing` alone on
+      disk-readiness (an earlier draft) still let a *live-broken* engine's
+      package-broken verdict fail the whole blocker even when a DIFFERENT
+      engine was fully usable — the same "usable engine, reported not-ready"
+      reversal the disk-only check was created to prevent (round-2 finding
+      A2), reproduced one layer down. Both `weights-missing` and
+      `package-broken` below gate on this single combined signal instead of
+      two different ones, so there's one definition of "is anything actually
+      usable," not two that can disagree. */
+  anyEngineUsable: boolean;
   /** First engine reporting 'weights-missing' on disk, or null. Only acted
-      on when anyEngineReady is false — see above. */
+      on when anyEngineUsable is false — see above. */
   weightsMissingEngine: 'kokoro' | 'qwen' | 'coqui' | null;
   /** From the sidecar's live /health payload — only meaningful once sidecar is reachable. */
   kokoroPackageConfirmedBroken: boolean;
@@ -599,7 +613,7 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
       ENGINE_INSTALL_ACTION.kokoro,
     );
   }
-  if (!input.anyEngineReady && input.weightsMissingEngine) {
+  if (!input.anyEngineUsable && input.weightsMissingEngine) {
     return diagnosis(
       'fail',
       'weights-missing',
@@ -616,7 +630,7 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
       'Try again shortly.',
     );
   }
-  if (input.kokoroPackageConfirmedBroken || input.qwenPackageConfirmedBroken) {
+  if (!input.anyEngineUsable && (input.kokoroPackageConfirmedBroken || input.qwenPackageConfirmedBroken)) {
     return diagnosis(
       'fail',
       'package-broken',
@@ -631,7 +645,7 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd server && npx vitest run src/routes/setup-diagnosis.test.ts`
-Expected: PASS (21 tests)
+Expected: PASS (23 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -800,7 +814,7 @@ export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosi
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd server && npx vitest run src/routes/setup-diagnosis.test.ts`
-Expected: PASS (32 tests)
+Expected: PASS (34 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1288,16 +1302,26 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
   const qwenState = detectQwenInstallStateOnDisk(REPO_ROOT);
   const coquiState = detectCoquiInstallStateOnDisk(REPO_ROOT);
   const noEngineAtAll = [kokoroState, qwenState, coquiState].every((s) => s === 'not-installed');
-  const anyEngineReady = [kokoroState, qwenState, coquiState].some((s) => s === 'ready');
   const weightsMissingEngine =
     kokoroState === 'weights-missing' ? 'kokoro' :
     qwenState === 'weights-missing' ? 'qwen' :
     coquiState === 'weights-missing' ? 'coqui' : null;
   const packageFlags = await packageBrokenFlags(diagnostics);
+  /* "Usable" = ready on disk AND not live-confirmed-broken. Coqui has no
+     live package-broken signal (coqui-tts is a BASE sidecar requirement
+     present whenever the venv is bootstrapped — see coqui-install-detect.ts
+     — so its readiness on disk is the whole story). Computed AFTER
+     packageFlags, not alongside the plain disk-readiness check, precisely
+     because a disk-only "any engine ready" signal is what let a live-broken
+     engine still fail the whole blocker in round-3 plan review finding 1. */
+  const anyEngineUsable =
+    (kokoroState === 'ready' && !packageFlags.kokoroPackageConfirmedBroken) ||
+    (qwenState === 'ready' && !packageFlags.qwenPackageConfirmedBroken) ||
+    coquiState === 'ready';
 
   const tts = diagnoseTts(sidecar, {
     noEngineAtAll,
-    anyEngineReady,
+    anyEngineUsable,
     weightsMissingEngine,
     ...packageFlags,
   });
@@ -1942,12 +1966,21 @@ Add to `blocker-fix-action.test.tsx`, before the closing `});` of the `describe`
 ```tsx
 it('ollama-install: shows a Recheck prompt (not endless polling) when the job needs a manual GUI install', async () => {
   const onDone = vi.fn();
+  // Matches the REAL route's shape (install-bootstrap.ts): the POST returns
+  // synchronously at 'detecting' with no manualInstallerPath yet — the path
+  // only appears on a LATER poll, once the background job reaches the
+  // win32 manual-install branch. A test that puts manualInstallerPath
+  // directly on the POST response exercises runJobAction's branch, which
+  // never actually runs in production — only pollJob's branch does.
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     if (url.includes('/api/ollama/install') && init?.method === 'POST' && !url.includes('/recheck')) {
-      return Promise.resolve(jsonResponse({ id: '5', status: 'installing', step: null, error: null, manualInstallerPath: 'C:\\Users\\x\\Downloads\\OllamaSetup.exe' }));
+      return Promise.resolve(jsonResponse({ id: '5', status: 'detecting', step: null, error: null, manualInstallerPath: null }));
     }
     if (url.includes('/api/ollama/install/5/recheck')) {
       return Promise.resolve(jsonResponse({ id: '5', status: 'installed', step: null, error: null }));
+    }
+    if (url.includes('/api/ollama/install/5')) {
+      return Promise.resolve(jsonResponse({ id: '5', status: 'installing', step: null, error: null, manualInstallerPath: 'C:\\Users\\x\\Downloads\\OllamaSetup.exe' }));
     }
     return Promise.resolve(jsonResponse({}));
   });
@@ -1958,7 +1991,9 @@ it('ollama-install: shows a Recheck prompt (not endless polling) when the job ne
     />,
   );
   fireEvent.click(screen.getByRole('button', { name: /install ollama/i }));
-  await waitFor(() => expect(screen.getByText(/OllamaSetup\.exe/i)).toBeInTheDocument());
+  // The manualInstallerPath only appears on the poll (POLL_MS=1500 later),
+  // not on the initial POST response — give waitFor enough time to see it.
+  await waitFor(() => expect(screen.getByText(/OllamaSetup\.exe/i)).toBeInTheDocument(), { timeout: 5000 });
   expect(screen.queryByText(/working…/i)).toBeNull(); // not stuck polling
   fireEvent.click(screen.getByRole('button', { name: /recheck/i }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
@@ -2351,6 +2386,8 @@ git commit -m "fix(frontend): step-ffmpeg reads the new BlockerDiagnosis status 
 
 **Interfaces:**
 - Consumes: `useSetupDiagnosis()` (Task 9), `<BlockerFixAction>` (Task 10), `suppressUnreachableAction` (Task 11).
+
+**Scope note (round-3 plan review):** the spec's Design §1 describes a standing, always-rendered `recheck` action on every blocker card, independent of the poll. This plan does not add one — `useSetupDiagnosis()`'s 10s poll plus `BlockerFixAction`'s post-mutation refetch (Task 10) already surface a fix within one poll cycle, and the Setup checker's bespoke widgets already ship their own "Re-check" buttons (`VenvBootstrap`, `step-ffmpeg.tsx`) for the case that actually needs one — a user who fixed something entirely outside the app (e.g. installed ffmpeg in a terminal) between polls. A standing recheck button in the Status popover specifically is a small, cheap follow-up if that gap is felt in practice; it's called out here explicitly rather than left as a silent divergence from the spec's literal wording.
 
 - [ ] **Step 1: Write the failing tests**
 
