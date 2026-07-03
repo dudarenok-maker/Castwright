@@ -6418,16 +6418,43 @@ function mockBlocker(status: 'pass' | 'fail'): BlockerDiagnosis {
     : { status: 'fail', cause: 'venv-missing', message: 'Not set up', remediation: 'Set it up.' };
 }
 
+/* The sidecar's venv-missing failure in the notReady branch below, copied
+   verbatim from the server's real diagnoseSidecar() venv-missing case
+   (server/src/routes/setup-diagnosis.ts) so this mock's message/action text
+   can't silently drift from the real API contract. Unlike the generic
+   mockBlocker('fail') shape, this one carries an `action` — BlockerFixAction
+   (src/components/blocker-fix-action.tsx) renders nothing without one, so a
+   bare mockBlocker('fail') can never drive an e2e fix-action click. */
+const mockSidecarVenvMissing: BlockerDiagnosis = {
+  status: 'fail',
+  cause: 'venv-missing',
+  message: 'Voice engine runtime not set up.',
+  remediation: 'Set up the voice engine runtime — this is a one-time, ~2 GB download.',
+  action: { kind: 'venv-bootstrap', label: 'Set up the voice engine runtime' },
+};
+
 export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
   if (window.location.hash.includes('setup=notready')) {
     sessionStorage.setItem('mock-setup-readiness', 'notready');
   }
   const notReady = sessionStorage.getItem('mock-setup-readiness') === 'notready';
+  /* e2e-only escape hatch: BlockerFixAction's venv-bootstrap job talks to raw
+     fetch() (network-mocked directly by Playwright in e2e), not this JS mock,
+     so it has no way to tell this function the venv got installed. The
+     setup-checker-venv-fix e2e spec flips this flag once its mocked job
+     reaches 'installed', so the resulting onDone -> onRefetch actually
+     observes the fix instead of replaying the same failure forever. */
+  const sidecarFixed = sessionStorage.getItem('mock-venv-fixed') === 'true';
   return notReady
     ? {
         ready: false,
         completedAt: null,
-        blockers: { sidecar: mockBlocker('pass'), ffmpeg: mockBlocker('pass'), tts: mockBlocker('fail'), analyzer: mockBlocker('fail') },
+        blockers: {
+          sidecar: sidecarFixed ? mockBlocker('pass') : mockSidecarVenvMissing,
+          ffmpeg: mockBlocker('pass'),
+          tts: mockBlocker('fail'),
+          analyzer: mockBlocker('fail'),
+        },
         info: { gpu: 'CPU — no GPU detected' },
       }
     : {
