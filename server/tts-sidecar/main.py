@@ -1369,6 +1369,48 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     return (p, None)
 
 
+def _sample_card(idx: int, torch_module: Any) -> dict:
+    """One card's discovery row (driver truth via mem_get_info — sees ALL
+    allocators). The reusable primitive Wave 2's ledger wraps per-sample."""
+    props = torch_module.cuda.get_device_properties(idx)
+    free, total = torch_module.cuda.mem_get_info(idx)
+    return {
+        "uuid": str(getattr(props, "uuid", "")) or f"idx-{idx}",
+        "idx": idx,
+        "name": props.name,
+        "total_mb": round(total / 1_000_000),
+        "free_mb": round(free / 1_000_000),
+    }
+
+
+def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
+    """[{uuid,idx,name,total_mb,free_mb}] per visible CUDA device, [] when CUDA is
+    unavailable. torch_module is injectable for tests (default → local import).
+
+    Defined here (ahead of _resolve_uuid_to_index, its only caller at module-
+    import time) rather than near DeviceLedger/_sample_card's other Wave 2
+    call sites further down the file: ENGINES = {"qwen": QwenEngine(), ...}
+    constructs its entries at MODULE-IMPORT time, and QwenEngine.__init__
+    reads QWEN_DEVICE through _read_device_env -> _resolve_uuid_to_index. A
+    'cuda-uuid:<uuid>' value reaching that constructor needs this function
+    already bound in the module namespace — being defined later in the file
+    is a NameError waiting to fire on the very first cold boot with a
+    UUID-keyed device override already on disk (reproduced on real hardware
+    during Plan 2a's on-box acceptance: the Node-side spawn-time cache in
+    getLastKnownGpuDevices() is empty before the frontend's first GET
+    /api/gpu/devices poll, so buildSidecarEnv passes the RAW 'cuda-uuid:...'
+    string through unresolved on a fresh server boot, not the pre-resolved
+    'cuda:N' form a warm cache would produce)."""
+    try:
+        if torch_module is None:
+            import torch as torch_module  # type: ignore
+        if not torch_module.cuda.is_available():
+            return []
+        return [_sample_card(i, torch_module) for i in range(torch_module.cuda.device_count())]
+    except Exception:
+        return []
+
+
 def _resolve_uuid_to_index(value: Optional[str], torch_module: Any = None) -> Optional[str]:
     """Front seam for Plan 2's UUID identity: a 'cuda-uuid:<uuid>' knob value
     resolves to the box's CURRENT 'cuda:N' index via live enumeration. Any
@@ -3687,33 +3729,6 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
         return (None, None, None)
 
 
-def _sample_card(idx: int, torch_module: Any) -> dict:
-    """One card's discovery row (driver truth via mem_get_info — sees ALL
-    allocators). The reusable primitive Wave 2's ledger wraps per-sample."""
-    props = torch_module.cuda.get_device_properties(idx)
-    free, total = torch_module.cuda.mem_get_info(idx)
-    return {
-        "uuid": str(getattr(props, "uuid", "")) or f"idx-{idx}",
-        "idx": idx,
-        "name": props.name,
-        "total_mb": round(total / 1_000_000),
-        "free_mb": round(free / 1_000_000),
-    }
-
-
-def _enumerate_cuda_devices(torch_module: Any = None) -> list[dict]:
-    """[{uuid,idx,name,total_mb,free_mb}] per visible CUDA device, [] when CUDA is
-    unavailable. torch_module is injectable for tests (default → local import)."""
-    try:
-        if torch_module is None:
-            import torch as torch_module  # type: ignore
-        if not torch_module.cuda.is_available():
-            return []
-        return [_sample_card(i, torch_module) for i in range(torch_module.cuda.device_count())]
-    except Exception:
-        return []
-
-
 class DeviceLedger:
     """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
     (_sample_card). Read from three thread contexts (the _memory_watchdog
@@ -3731,7 +3746,8 @@ class DeviceLedger:
     CAVEAT (raised by a round-2 adversarial review, not fixed here — see Task
     9's on-box checklist): this guarantee depends on torch actually exposing
     a real per-card uuid via get_device_properties(idx).uuid. _sample_card
-    (Wave 1, main.py ~3596) falls back to a synthetic f"idx-{idx}" string when
+    (Wave 1; moved near _resolve_uuid_to_index in Plan 2a — see its docstring)
+    falls back to a synthetic f"idx-{idx}" string when
     that attribute is absent — on a torch build/driver where it's absent, the
     fallback uuid is DERIVED FROM THE INDEX ITSELF, so a renumber can never
     produce a mismatch and this detection silently no-ops. Confirm real uuids

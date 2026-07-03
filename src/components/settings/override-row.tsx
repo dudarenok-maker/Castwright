@@ -106,7 +106,10 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
 
   if (descriptor.type === 'device') {
     const current = String(value.effective);
-    const cudaOptions = (gpuDevices ?? []).map((d) => `cuda:${d.idx}`);
+    // idx:-1 is the synthetic "unindexed (cpu / ORT / CT2)" entry the server
+    // appends so a cpu_fallback badge has somewhere to attach (gpu-devices.ts)
+    // — it's not a real, pinnable card and must never become a `cuda:-1` option.
+    const cudaOptions = (gpuDevices ?? []).filter((d) => d.idx >= 0).map((d) => `cuda:${d.idx}`);
     // 'mps' (Apple Silicon) isn't enumerable via GET /api/gpu/devices (CUDA-only
     // probe), but the sidecar's device grammar accepts it for all three knobs —
     // keep it a static, always-offered option rather than dropping it.

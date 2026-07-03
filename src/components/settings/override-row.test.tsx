@@ -273,6 +273,40 @@ describe('OverrideRow — device knob', () => {
     const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
     expect(optionValues).toEqual(['auto', 'cpu', 'mps']);
   });
+
+  /* Plan 2a on-box acceptance: the server appends a synthetic idx:-1
+     "unindexed (cpu / ORT / CT2)" entry to gpuDevices[] so a cpu_fallback
+     badge has somewhere to attach (gpu-devices.ts's mergeResidentData).
+     That entry is not a real, pinnable card — verify it never becomes a
+     bogus `cuda:-1` option in the device select. */
+  it('never offers a cuda:-1 option for the synthetic unindexed device entry', () => {
+    const descriptor = makeDescriptor({ type: 'device', default: 'auto' });
+    const value = makeValue({ effective: 'auto', source: 'default' });
+    const gpuDevicesWithUnindexed: GpuDevice[] = [
+      ...GPU_DEVICES,
+      {
+        uuid: '',
+        idx: -1,
+        name: 'unindexed (cpu / ORT / CT2)',
+        total_mb: 0,
+        free_mb: 0,
+        resident: [{ engine: 'kokoro', actual_card: null, stale_reason: 'cpu_fallback' }],
+      },
+    ];
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        gpuDevices={gpuDevicesWithUnindexed}
+      />,
+    );
+    const select = screen.getByRole('combobox');
+    const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+    expect(optionValues).toEqual(['auto', 'cpu', 'mps', 'cuda:0', 'cuda:1']);
+    expect(optionValues).not.toContain('cuda:-1');
+  });
 });
 
 describe('OverrideRow — device knob stale_reason badge (Plan 2 §2.2)', () => {
