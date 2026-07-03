@@ -20,10 +20,17 @@ vi.mock('../components/setup/step-finish', () => ({
   StepFinish: () => <div data-testid="step-finish-stub">finish</div>,
 }));
 
+const PASS_BLOCKER = { status: 'pass', cause: 'pass', message: '', remediation: '' } as const;
+
 const READINESS = {
   ready: false,
   completedAt: null,
-  blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'fail', analyzer: 'fail' },
+  blockers: {
+    sidecar: PASS_BLOCKER,
+    ffmpeg: PASS_BLOCKER,
+    tts: { status: 'fail', cause: 'no-engine-installed', message: '', remediation: '' },
+    analyzer: { status: 'fail', cause: 'no-gemini-key', message: '', remediation: '' },
+  },
   info: { gpu: 'CPU — no GPU detected' },
 } as const;
 
