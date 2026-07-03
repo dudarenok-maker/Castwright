@@ -18,7 +18,7 @@
    the backend — the parent view owns those mutations (so it can sequence
    the auto-evict-of-the-other-model flow with a toast/banner). */
 
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 export type ModelKind = 'tts' | 'analyzer';
 export type ModelControlState = 'idle' | 'loading' | 'ready' | 'streaming' | 'unreachable';
@@ -51,6 +51,10 @@ interface Props {
      labels stay tied to `kind` so screen-reader semantics don't drift
      when multiple per-engine pills mount side by side. */
   engineLabel?: string;
+  /** When true and state === 'unreachable', omit the Retry button — used
+      when a more specific BlockerDiagnosis fix action is rendered alongside
+      this pill, so the user doesn't see two buttons for one problem. */
+  suppressUnreachableAction?: boolean;
 }
 
 interface Tone {
@@ -145,13 +149,14 @@ export function ModelControlPill({
   onStop,
   unreachableLabel,
   engineLabel,
+  suppressUnreachableAction,
 }: Props) {
   const tone = TONES[state];
   const action = actionFor(state);
+  const hideButton = state === 'unreachable' && suppressUnreachableAction;
   const ariaLabel = engineLabel
     ? `${engineLabel} ${state}`
     : `${kindNoun(kind)} ${state}`;
-  const dotStyle: CSSProperties | undefined = tone.pulse ? undefined : undefined;
   return (
     <span className="inline-flex items-center gap-2 flex-wrap" role="group" aria-label={ariaLabel}>
       <span
@@ -159,21 +164,22 @@ export function ModelControlPill({
       >
         <span
           className={`w-1.5 h-1.5 rounded-full ${tone.dot} ${tone.pulse ? 'animate-pulse' : ''}`}
-          style={dotStyle}
           aria-hidden="true"
         />
         <span>{labelFor(kind, state, streamingDetail, unreachableLabel, engineLabel)}</span>
       </span>
-      <button
-        type="button"
-        onClick={action.handler === 'load' ? onLoad : onStop}
-        disabled={action.disabled}
-        aria-disabled={action.disabled}
-        aria-label={`${action.label} (${kindNoun(kind).toLowerCase()})`}
-        className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${tone.button}`}
-      >
-        {action.label}
-      </button>
+      {!hideButton && (
+        <button
+          type="button"
+          onClick={action.handler === 'load' ? onLoad : onStop}
+          disabled={action.disabled}
+          aria-disabled={action.disabled}
+          aria-label={`${action.label} (${kindNoun(kind).toLowerCase()})`}
+          className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${tone.button}`}
+        >
+          {action.label}
+        </button>
+      )}
     </span>
   );
 }

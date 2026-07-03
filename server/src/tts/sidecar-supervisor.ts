@@ -119,15 +119,22 @@ export interface SidecarSupervisor {
       WINDOW_MS — the assignment looks structurally too small. The supervisor
       stops respawning once this trips (TTS held down); Plan 2's auto-revert
       route (Task 16) reads this to rewrite the offending knob, then calls
-      clearTripAndRespawn() to actually bring TTS back. */
+      resetAndRespawn() to actually bring TTS back. */
   tripEvent: () => { card: unknown; residentEngines: string[] } | null;
-  /** Clear a tripped streak and spawn a fresh sidecar child. The ONLY way
-      back from a trip — neither the existing POST /api/sidecar/restart route
-      (it requires a currently-running child to kill; a tripped supervisor
-      has none) nor a fresh code-43 exit (nothing is running to exit) can
-      recover otherwise. Safe to call when not tripped (resets an empty
-      streak, respawns as normal — matches an ordinary manual restart). */
-  clearTripAndRespawn: () => Promise<void>;
+  /** True once consecutiveFailures has exceeded maxConsecutiveFailures and the
+      supervisor gave up respawning (the plain, non-code-43 give-up path).
+      Computed live from consecutiveFailures — clears the instant
+      resetAndRespawn() zeroes it, with no separate flag to forget to clear. */
+  exhaustedEvent: () => boolean;
+  /** The way back from EITHER give-up state (a code-43 trip or plain
+      consecutive-failure exhaustion) — resets whichever streak/counter is
+      set and spawns a fresh child. Has no internal guard against concurrent
+      calls: safety for that comes from every CALLER re-checking
+      exhaustedEvent()/tripEvent() synchronously, with no intervening await,
+      immediately before calling (see the /restart route in
+      sidecar-health.ts). Safe to call when nothing is tripped/exhausted —
+      resets an empty streak and respawns as normal. */
+  resetAndRespawn: () => Promise<void>;
 }
 
 /* Module-level registry so the POST /api/sidecar/restart route can reach the
@@ -383,12 +390,10 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     })();
   }
 
-  /** The only way back from a trip — see the `clearTripAndRespawn` doc on the
-      SidecarSupervisor interface for why the existing manual-restart route
-      can't recover a tripped supervisor by itself. */
-  function clearTripAndRespawn(): Promise<void> {
+  function resetAndRespawn(): Promise<void> {
     restart43Trip = null;
     restart43Timestamps = [];
+    consecutiveFailures = 0;
     return spawnOnce();
   }
 
@@ -413,6 +418,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     tripEvent() {
       return restart43Trip;
     },
-    clearTripAndRespawn,
+    exhaustedEvent() {
+      return consecutiveFailures > maxConsecutiveFailures;
+    },
+    resetAndRespawn,
   };
 }

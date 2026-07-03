@@ -29,7 +29,7 @@ describe('mockGetSetupReadiness', () => {
     window.location.hash = '#/?setup=notready';
     const first = await mockGetSetupReadiness();
     expect(first.ready).toBe(false);
-    expect(first.blockers.tts).toBe('fail');
+    expect(first.blockers.tts.status).toBe('fail');
     window.location.hash = '#/setup';
     const second = await mockGetSetupReadiness();
     expect(second.ready).toBe(false);

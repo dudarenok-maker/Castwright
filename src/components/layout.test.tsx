@@ -13,7 +13,7 @@
    effects the layout runs alongside. Those have their own paired tests. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -86,14 +86,21 @@ vi.mock('../lib/api', () => ({
        tests stay focused on per-book hydration. */
     getSeriesRoster: vi.fn(async () => ({ characters: [] })),
     /* fs-21 — boot-splash readiness gate fetches this once on mount; resolve
-       ready so the splash clears and the normal app renders. */
-    getSetupReadiness: () =>
-      Promise.resolve({
-        ready: true,
-        completedAt: '2026-06-12T00:00:00.000Z',
-        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
-        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
-      }),
+       ready so the splash clears and the normal app renders. A vi.fn() (not
+       a plain arrow) so individual tests can override the resolved value
+       per-test (see the Retry-suppression describe block below), same
+       pattern as getSidecarHealth/setShelfStatus elsewhere in this file. */
+    getSetupReadiness: vi.fn(async () => ({
+      ready: true,
+      completedAt: '2026-06-12T00:00:00.000Z',
+      blockers: {
+        sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      },
+      info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+    })),
     /* Guided-tour boot fetch — resolve to not-completed so the tour slice
        stays inactive (overlay renders null) and the test harness is unaffected. */
     getTourStatus: vi.fn(async () => ({ completedAt: null })),
@@ -728,6 +735,98 @@ describe('Layout — default-engine TTS pill reachable without an open book', ()
     fireEvent.click(await findByTestId('status-pill'));
     expect(await findByRole('group', { name: /^Kokoro / })).toBeTruthy();
     expect(queryByRole('group', { name: /^Qwen / })).toBeNull();
+  });
+});
+
+describe('Layout — suppresses the TTS pill Retry only for an actionable sidecar diagnosis', () => {
+  /* Task 15 code-review finding: the `suppressUnreachableSidecarAction`
+     branch in layout.tsx (`cause !== 'unreachable-transient'`) had zero
+     test coverage anywhere — ModelControlPill.test.tsx only pins the
+     generic prop mechanically, and status-popover.test.tsx's own
+     "suppression" test explicitly punts verification here. These two
+     cases exercise the real caller-side decision: a specific, actionable
+     sidecar cause (e.g. venv-missing) hides the Kokoro pill's Retry
+     button (its own Status-popover diagnosis block is the affordance
+     instead); a merely-transient "still booting" cause leaves Retry as
+     the only affordance, so it must stay visible. getSidecarHealth
+     (mocked at the top of this file) always resolves 'unreachable', which
+     is the precondition for Retry to even be a question — see
+     ModelControlPill's `hideButton = state === 'unreachable' &&
+     suppressUnreachableAction`. */
+  const DIAGNOSIS_MESSAGE = 'sidecar test diagnosis message';
+
+  function readinessWithSidecarCause(cause: 'venv-missing' | 'unreachable-transient') {
+    /* `ready: true` here is a deliberate test-fixture simplification: the
+       real server computes `ready` as AND-of-all-blockers (a genuine sidecar
+       fail would also flip this false and redirect to /setup — a separate,
+       already-covered concern). Forcing it true keeps this test isolated to
+       the Retry-suppression branch under test, without the redirect
+       side-effect unmounting Layout (this test's <Routes> only declares
+       "/"). */
+    return {
+      ready: true,
+      completedAt: '2026-06-12T00:00:00.000Z',
+      blockers: {
+        sidecar: { status: 'fail' as const, cause, message: DIAGNOSIS_MESSAGE, remediation: 'x' },
+        ffmpeg: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+        tts: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+        analyzer: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
+      },
+      info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+    };
+  }
+
+  async function renderWithSidecarCause(cause: 'venv-missing' | 'unreachable-transient') {
+    /* Two api.getSetupReadiness() call sites fire on a Layout mount —
+       Layout's own boot-splash probe (layout.tsx) and useSetupDiagnosis's
+       fetchNow (use-setup-diagnosis.ts) — so queue the override for both;
+       any later test's calls fall back to the mock factory's default
+       (all-pass) resolution once this queue drains. */
+    vi.mocked(api.getSetupReadiness).mockResolvedValueOnce(readinessWithSidecarCause(cause) as never);
+    vi.mocked(api.getSetupReadiness).mockResolvedValueOnce(readinessWithSidecarCause(cause) as never);
+
+    const store = makeStore();
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('kokoro-v1'));
+
+    const { findByTestId, findByRole, findByText } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    fireEvent.click(await findByTestId('status-pill'));
+    const kokoroPill = await findByRole('group', { name: /^Kokoro / });
+    /* Pin the precondition: the pill must actually be in the 'unreachable'
+       state (driven by the top-of-file getSidecarHealth mock) before the
+       Retry-button assertion below means anything. */
+    await waitFor(() => {
+      expect(kokoroPill.getAttribute('aria-label')).toMatch(/unreachable/i);
+    });
+    /* Also wait for the sidecar DiagnosisBlock's own message to have
+       rendered — proof that `setupReadiness` (the async getSetupReadiness
+       resolution, a separate race from the sidecar-health poll above) has
+       landed before asserting on the Retry button either way. Without this,
+       the "keeps Retry visible" case could pass for the wrong reason (the
+       assertion running before readiness resolves, when suppression is
+       still false by default regardless of cause). */
+    await findByText(DIAGNOSIS_MESSAGE);
+    return kokoroPill;
+  }
+
+  it('hides the Kokoro pill Retry button when the sidecar diagnosis has an actionable cause', async () => {
+    const kokoroPill = await renderWithSidecarCause('venv-missing');
+    await waitFor(() => {
+      expect(within(kokoroPill).queryByRole('button', { name: /retry/i })).toBeNull();
+    });
+  });
+
+  it('keeps the Kokoro pill Retry button visible when the sidecar diagnosis is merely transient', async () => {
+    const kokoroPill = await renderWithSidecarCause('unreachable-transient');
+    expect(within(kokoroPill).queryByRole('button', { name: /retry/i })).not.toBeNull();
   });
 });
 

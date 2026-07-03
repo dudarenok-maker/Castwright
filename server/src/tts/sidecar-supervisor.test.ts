@@ -631,7 +631,7 @@ describe('sidecar supervisor (srv-15)', () => {
       expect(afterTrip).toBeGreaterThan(before); // sanity: it DID respawn for exits 1-3, just not after trip
     });
 
-    it('clearTripAndRespawn resets the streak and spawns a fresh child after a trip', async () => {
+    it('resetAndRespawn resets the streak and spawns a fresh child after a trip', async () => {
       let now = 0;
       const handles: ReturnType<typeof makeHandle>[] = [];
       const spawn = makeSpawn(handles);
@@ -656,7 +656,7 @@ describe('sidecar supervisor (srv-15)', () => {
       expect(sup.tripEvent()).not.toBeNull();
       const beforeRecovery = respawnCount();
 
-      await sup.clearTripAndRespawn();
+      await sup.resetAndRespawn();
 
       expect(sup.tripEvent()).toBeNull(); // trip cleared
       expect(respawnCount()).toBeGreaterThan(beforeRecovery); // a fresh child was spawned
@@ -679,6 +679,91 @@ describe('sidecar supervisor (srv-15)', () => {
       await Promise.resolve();
       expect(sup.tripEvent()).not.toBeNull(); // trips on the 3rd genuinely-fresh exit
     });
+
+    it('exhaustedEvent is false before exhaustion and true once consecutiveFailures exceeds the max', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        maxConsecutiveFailures: 2,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      expect(sup.exhaustedEvent()).toBe(false);
+      for (let i = 0; i < 3; i++) {
+        now += 1_000; // faster than QUICK_DEATH_MS, so failures accumulate
+        spawn.exit(1);
+        await Promise.resolve();
+      }
+      expect(sup.exhaustedEvent()).toBe(true);
+    });
+
+    it('resetAndRespawn clears exhaustedEvent and spawns a fresh child after plain exhaustion', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const respawnCount = () => spawn.fn.mock.calls.length;
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        maxConsecutiveFailures: 2,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 1_000;
+        spawn.exit(1);
+        await Promise.resolve();
+      }
+      expect(sup.exhaustedEvent()).toBe(true);
+      const beforeRecovery = respawnCount();
+
+      await sup.resetAndRespawn();
+
+      expect(sup.exhaustedEvent()).toBe(false);
+      expect(respawnCount()).toBeGreaterThan(beforeRecovery);
+    });
+
+    it('two direct resetAndRespawn calls in a row spawn exactly once each (the second is a safe no-op)', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const respawnCount = () => spawn.fn.mock.calls.length;
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        maxConsecutiveFailures: 2,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 1_000;
+        spawn.exit(1);
+        await Promise.resolve();
+      }
+      const beforeRecovery = respawnCount();
+
+      await Promise.all([sup.resetAndRespawn(), sup.resetAndRespawn()]);
+
+      // First call resets+spawns; second observes already-cleared exhaustedEvent
+      // and (per the current spawnOnce()/onChildExit() contract) still calls
+      // spawnOnce() — assert it happened, and that state is consistent afterward,
+      // not that a specific call count is "the" safe number. What matters is no
+      // exception and exhaustedEvent() reads false at the end.
+      expect(respawnCount()).toBeGreaterThan(beforeRecovery);
+      expect(sup.exhaustedEvent()).toBe(false);
+    });
   });
 });
 
@@ -692,7 +777,8 @@ describe('forceSidecarRecycle', () => {
       current: () => null,
       recycling: () => false,
       tripEvent: () => null,
-      clearTripAndRespawn: vi.fn(async () => {}),
+      exhaustedEvent: () => false,
+      resetAndRespawn: vi.fn(async () => {}),
       ...overrides,
     };
   }

@@ -8,7 +8,7 @@ import { render, screen } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { accountSlice } from '../../store/account-slice';
-import type { SetupReadiness } from '../../lib/api';
+import type { SetupReadiness, BlockerDiagnosis } from '../../lib/api';
 import { StepModels } from './step-models';
 
 // ── stub child components ──────────────────────────────────────────────────
@@ -67,6 +67,28 @@ vi.mock('../account-forms', () => ({
   ),
 }));
 
+vi.mock('../blocker-fix-action', () => ({
+  BlockerFixAction: ({
+    diagnosis,
+    onDone,
+  }: {
+    diagnosis: BlockerDiagnosis;
+    onDone?: () => void;
+  }) => {
+    const action = diagnosis.action;
+    if (!action) return null;
+    return (
+      <button
+        data-testid="stub-blocker-fix-action"
+        type="button"
+        onClick={onDone}
+      >
+        {action.label}
+      </button>
+    );
+  },
+}));
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function makeStore() {
@@ -78,14 +100,24 @@ function makeStore() {
 const notReadyReadiness: SetupReadiness = {
   ready: false,
   completedAt: null,
-  blockers: { sidecar: 'fail', ffmpeg: 'pass', tts: 'fail', analyzer: 'fail' },
+  blockers: {
+    sidecar: { status: 'fail', cause: 'venv-missing', message: 'Voice engine runtime not set up.', remediation: 'Set it up.' },
+    ffmpeg: { status: 'pass', cause: 'pass', message: 'FFmpeg is available.', remediation: '' },
+    tts: { status: 'fail', cause: 'sidecar-blocked', message: 'Voice engines not available.', remediation: 'Check sidecar.' },
+    analyzer: { status: 'fail', cause: 'no-gemini-key', message: 'No analyzer configured.', remediation: 'Set up analyzer.' },
+  },
   info: { gpu: 'none' },
 };
 
 const readyReadiness: SetupReadiness = {
   ready: true,
   completedAt: '2026-01-01T00:00:00Z',
-  blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+  blockers: {
+    sidecar: { status: 'pass', cause: 'pass', message: 'Voice engine runtime ready.', remediation: '' },
+    ffmpeg: { status: 'pass', cause: 'pass', message: 'FFmpeg is available.', remediation: '' },
+    tts: { status: 'pass', cause: 'pass', message: 'Voice engines ready.', remediation: '' },
+    analyzer: { status: 'pass', cause: 'pass', message: 'Analyzer configured.', remediation: '' },
+  },
   info: { gpu: 'NVIDIA A100' },
 };
 
@@ -189,5 +221,20 @@ describe('StepModels', () => {
     renderStep();
     // Initial store has apiKeyStatus:'unset'
     expect(screen.getByTestId('stub-gemini-key-field').dataset.status).toBe('unset');
+  });
+
+  it('renders a fix-action button under the sidecar badge when a diagnosis has an action', () => {
+    const readiness = { ...notReadyReadiness, blockers: {
+      ...notReadyReadiness.blockers,
+      sidecar: { status: 'fail' as const, cause: 'venv-missing' as const, message: 'Voice engine runtime not set up.', remediation: 'Set it up.', action: { kind: 'venv-bootstrap' as const, label: 'Set up the voice engine runtime' } },
+    }};
+    renderStep(readiness);
+    expect(screen.getByRole('button', { name: /set up the voice engine runtime/i })).toBeInTheDocument();
+  });
+
+  it('renders the diagnosis message text when a blocker status is failing', () => {
+    renderStep(notReadyReadiness);
+    // notReadyReadiness.blockers.sidecar has message 'Voice engine runtime not set up.'
+    expect(screen.getByText('Voice engine runtime not set up.')).toBeInTheDocument();
   });
 });
