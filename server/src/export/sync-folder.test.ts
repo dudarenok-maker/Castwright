@@ -4,11 +4,11 @@
    tmp file is cleaned up on terminal failure, and the returned syncPath
    matches what landed on disk. */
 
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeToSyncFolder } from './sync-folder.js';
+import { writeToSyncFolder, writeFolderToSyncFolder } from './sync-folder.js';
 
 describe('writeToSyncFolder', () => {
   let tmpRoot: string;
@@ -132,5 +132,53 @@ describe('writeToSyncFolder — Drive hint wrapping', () => {
     } finally {
       rmSync(plainTmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe('writeFolderToSyncFolder', () => {
+  let tmpRoot: string;
+  let srcDir: string;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'sync-folder-dir-'));
+    srcDir = join(tmpRoot, 'staging');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, '01 - Chapter One.mp3'), 'mp3-bytes-1');
+    writeFileSync(join(srcDir, '02 - Chapter Two.mp3'), 'mp3-bytes-2');
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('copies every .mp3 into <destDir>/<bookSubfolder>/', async () => {
+    const destDir = join(tmpRoot, 'sync');
+    const result = await writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission');
+    expect(result.copied).toBe(2);
+    const names = readdirSync(result.syncPath).sort();
+    expect(names).toEqual(['01 - Chapter One.mp3', '02 - Chapter Two.mp3']);
+  });
+
+  it('copies metadata.json and cover.jpg through the allowlist (fs-54)', async () => {
+    writeFileSync(join(srcDir, 'metadata.json'), '{"title":"x"}');
+    writeFileSync(join(srcDir, 'cover.jpg'), 'jpeg-bytes');
+    const destDir = join(tmpRoot, 'sync');
+    const result = await writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission');
+    expect(result.copied).toBe(4);
+    const names = readdirSync(result.syncPath).sort();
+    expect(names).toEqual([
+      '01 - Chapter One.mp3',
+      '02 - Chapter Two.mp3',
+      'cover.jpg',
+      'metadata.json',
+    ]);
+  });
+
+  it('excludes an unrelated stray file that is neither .mp3 nor an allowlisted sidecar', async () => {
+    writeFileSync(join(srcDir, 'README.txt'), 'not for shipping');
+    const destDir = join(tmpRoot, 'sync');
+    const result = await writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission');
+    expect(result.copied).toBe(2);
+    expect(existsSync(join(result.syncPath, 'README.txt'))).toBe(false);
   });
 });

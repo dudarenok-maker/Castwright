@@ -75,11 +75,16 @@ export async function writeFolderToSyncFolder(
   const entries = await readdir(srcDir);
   let copied = 0;
   for (const name of entries) {
-    /* Skip anything that doesn't look like a packed chapter file.
-       Defensive — the builder only ever writes .mp3 today, but
-       future formats (per-chapter cuesheets, README.txt) wouldn't
-       want to leak into a Voice / Smart AudioBook folder scan. */
-    if (!name.toLowerCase().endsWith('.mp3')) continue;
+    /* fs-54 — allowlist, not a bare extension check. Per-chapter MP3s are
+       always eligible; `metadata.json` + `cover.jpg` are the Audiobookshelf
+       sidecars build-mp3-folder.ts now writes into every mp3-folder export's
+       staging dir (all three folder-scanning tiles get them — Smart
+       AudioBook Player / BookPlayer just ignore the extras). Anything else
+       (a stray README, a future cuesheet) still doesn't leak into the sync
+       target. */
+    const lower = name.toLowerCase();
+    const isAllowed = lower.endsWith('.mp3') || name === 'metadata.json' || name === 'cover.jpg';
+    if (!isAllowed) continue;
     const src = join(srcDir, name);
     const finalPath = join(targetDir, basename(name));
     const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}-${copied}`;
