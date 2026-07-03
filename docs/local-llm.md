@@ -105,6 +105,79 @@ where both co-reside. A VRAM-aware in-app warning + per-model MB budgeting is tr
 but deferred (issue #845 / `fs-45`) until there's measured telemetry from real
 12/16 GB hardware.
 
+## The TTS sidecar side of the budget
+
+The analyzer table above is half the VRAM picture. The sidecar hosts three
+synth engines plus Whisper ASR, each with its own resident size, preload
+default, and eviction behaviour. The engine map is `ENGINES` in
+`server/tts-sidecar/main.py:3401` (`coqui` / `kokoro` / `qwen`); ASR and the
+speaker-embedding model (`SPK`) are standalone singletons outside that map
+(`main.py:3301`, `3398`).
+
+| Engine                      | Resident size    | Preload default                              | Idle eviction                              |
+| ---------------------------- | ---------------- | --------------------------------------------- | -------------------------------------------- |
+| Coqui XTTS v2                 | ~3.5 GB (fp16)    | `PRELOAD_COQUI=false` — button-driven          | none; explicit `/unload` only                |
+| Kokoro v1                     | ~1 GB             | `PRELOAD_KOKORO=true` — eager at sidecar start | none; always resident                        |
+| Qwen 0.6B-Base                | ~1.2 GB           | `PRELOAD_QWEN=false` — button-driven           | none; explicit `/unload` only                |
+| Qwen 1.7B-Base                | ~3.4 GB           | `PRELOAD_QWEN_BASE17=false`                    | `QWEN_BASE17_IDLE_TTL` (default 120s)         |
+| Qwen 1.7B-VoiceDesign          | ~4–5 GB           | never preloaded; always transient              | `QWEN_DESIGN_IDLE_TTL` (default 120s), or freed immediately at the next real `/synthesize` |
+| Whisper ASR                   | 0 on CPU / ~150–400 MB on CUDA | `SEG_ASR_ENABLED=false`, `ASR_DEVICE=cpu` | `ASR_IDLE_TTL` (default 120s), CUDA mode only |
+
+(Env-var defaults + comments: `server/src/config/registry.ts:462-682`; sidecar
+watchdog wiring: `main.py:3416-3538`. Correction vs. an old note that had
+floated around as `autoPreloadKokoro`: the real var is `PRELOAD_KOKORO`.)
+
+**Load/unload path.** `POST /api/sidecar/load` (Node proxy
+`server/src/routes/sidecar-health.ts:325`, 90s budget) and `POST
+/api/sidecar/unload` (same file, `:368`, 2s budget) front the sidecar's own
+`/load` / `/unload` handlers (`main.py:4903` onward), which are idempotent
+per-engine via a `_load_lock`. This is the same pair `ModelControlPill` calls
+for Coqui/Qwen; Kokoro has no pill because it's never explicitly loaded or
+unloaded — see the table above.
+
+**Co-residency — what the sidecar actually enforces vs. what it doesn't:**
+
+- **Qwen 1.7B-VoiceDesign ↔ 1.7B-Base are mutually exclusive.** Loading
+  either evicts the other; symmetric (`main.py:2532-2543`,
+  `test_qwen_design_base17_exclusion.py`).
+- **VoiceDesign evicts resident Kokoro first** (`main.py:2518-2531`,
+  `_VD_KOKORO.design()` arbiter) — Kokoro's "always resident" default above
+  is the thing that gets bumped.
+- **Qwen 0.6B-Base and 1.7B-VoiceDesign DO co-reside** during an active
+  design session — `_ensure_base_loaded()` runs alongside
+  `_ensure_design_loaded()` (`main.py:2546`).
+- **Loading any TTS engine evicts the resident analyzer first**, unless the
+  card is roomy (`GPU_SAFE_COEXIST_MB`, default 11000 MB) — this is the
+  `withGpuLoad` path already covered above (`server/src/gpu/gpu-load.ts:28`).
+- **VoiceDesign vs. ASR is *not* a hard sidecar-side exclusion.** There's no
+  eviction code linking the two the way there is for VoiceDesign↔Base17 or
+  VoiceDesign↔Kokoro — they're independent singletons with their own idle-TTL
+  watchdogs. Any serialization between them comes only from the Node-side
+  weighted semaphore below (or, if that's disabled, the blunt
+  `GPU_CONCURRENCY=1` fallback that serializes every GPU op process-wide). If
+  you've seen this written elsewhere as a guaranteed exclusion, treat it as
+  "governed by the semaphore," not as sidecar-enforced.
+
+**The weighted VRAM semaphore.** `server/src/gpu/semaphore.ts:35`
+(`GpuSemaphore`, token-budget FIFO) gates concurrent GPU ops across *every*
+engine, not just ASR. Weights live in
+`server/src/tts/engine-vram-cost.ts:15-32`:
+
+```
+kokoro: 1   qwen: 1   coqui: 3   gemini: 0   analyzer: 4   asr: 1   spk: 1
+```
+
+Budget is `GPU_VRAM_BUDGET` (default `0` = disabled, which falls back to
+`GPU_CONCURRENCY`, default `1` — i.e. fully serial GPU access). The suggested
+budget for an 8 GB card is **4** (comment at `engine-vram-cost.ts:69-80`),
+which is enough for e.g. `asr(1) + qwen(1) + kokoro(1)` concurrently but not
+`analyzer(4) + anything`.
+
+Per-engine device pins (which physical GPU each engine targets, for
+multi-GPU boxes) are covered later in this doc under "Moving from
+`CUDA_VISIBLE_DEVICES` to per-engine pins" — same `registry.ts` config
+surface, `tts.{coqui,kokoro,qwen}.device`.
+
 ## Pinning the analyzer to 100% GPU
 
 By default Ollama makes its own GPU-vs-CPU layer-split decision on every model
