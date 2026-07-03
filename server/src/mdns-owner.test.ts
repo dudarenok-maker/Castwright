@@ -38,7 +38,7 @@ describe('spawnMdnsResponder', () => {
       warn: vi.fn(),
     });
     expect(spawnFn).toHaveBeenCalledTimes(1);
-    const [cmd, args] = spawnFn.mock.calls[0] as [string, string[]];
+    const [cmd, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
     expect(cmd).toBe(process.execPath);
     expect(args).toContain('--name');
     expect(args).toContain('castwright.local');
