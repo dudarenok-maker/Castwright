@@ -28,8 +28,10 @@ one-off manual step.
   `npm run dev:lan`'s LAN-IP URL does today.
 - `https://castwright.local:8443` reaches the built-bundle Node server exactly like
   `npm run start:lan`'s LAN-IP URL does today.
-- Both names resolve from other LAN devices (phone, tablet, another PC), not just the dev
-  box itself.
+- Both names resolve from other LAN devices with native mDNS support — iOS, Android,
+  macOS — not just the dev box itself. (A Windows LAN peer is a known gap, not a goal —
+  see Non-goal 3; the dev box itself is Windows, but it advertises the names rather than
+  needing to resolve its own broadcast.)
 - No new manual per-run step — the hostnames come up automatically whenever `dev:lan` /
   `start:lan` run, the same way LAN-IP HTTPS already does.
 - Degrades gracefully: if hostname resolution can't be set up on a given network (firewall,
@@ -114,19 +116,37 @@ older cert without the new SANs re-run that command, same as today's LAN-IP-chan
   auto-generated cert.
 - `server.allowedHosts` gains `castwright.dev.local`. Vite 8's DNS-rebinding protection
   rejects requests whose `Host` header isn't `localhost`/an IP/an explicitly allowed name;
-  LAN IPs already pass today, but a bare hostname needs to be listed explicitly.
+  LAN IPs already pass today (today's `dev:lan` works over a raw LAN IP with no
+  `allowedHosts` config, which is the behavioral evidence for this), but a bare hostname
+  needs to be listed explicitly — verify this against Vite's actual source during
+  implementation rather than taking it purely on inference.
 - Both changes are gated behind the existing `useHttps` branch (i.e., only apply in LAN
   mode) — plain `npm run dev` config is untouched.
 
 ### 4. Wiring into the LAN scripts
 
-- `dev:lan` (root `package.json`): add a third `concurrently` leg —
-  `"node scripts/mdns-responder.mjs --name castwright.dev.local"` — alongside the existing
+The two LAN scripts have different process shapes, so they own the responder differently —
+but both ultimately spawn the same `scripts/mdns-responder.mjs` CLI as a child process, so
+the responder logic itself stays single-sourced.
+
+- **`dev:lan`** (root `package.json`): `dev:lan` is a long-lived `concurrently -k` process
+  group, so a fourth leg works cleanly and is torn down automatically with the rest —
+  `"node scripts/mdns-responder.mjs --name castwright.dev.local"` alongside the existing
   `vite --host 0.0.0.0` and server legs.
-- `start:lan` → `scripts/start-app-prod.mjs`: spawn the responder (`--name castwright.local`)
-  as a child process using the same spawn/track/teardown pattern already used for the TTS
-  sidecar child — started after the server is confirmed up, killed together with the rest
-  of the stack on Ctrl+C (`taskkill /T /F` on Windows, matching existing shutdown handling).
+- **`start:lan`**: **not** owned by `scripts/start-app-prod.mjs`. That launcher spawns the
+  server `detached: true`, `unref()`s it, and calls `process.exit(0)` once the health check
+  passes (`scripts/start-app-prod.mjs:256-286`) — it has no `SIGINT`/`SIGTERM` handling and
+  isn't a supervising process, so nothing owned by *it* survives past `start:lan` returning.
+  The actual long-lived process is the Node **server** itself, which already owns exactly
+  this kind of child-process lifecycle for the TTS sidecar: `server/src/index.ts` spawns the
+  sidecar via `server/src/tts/spawn-sidecar.ts` and reaps it in a real `shutdown()` handler
+  registered on `SIGINT`/`SIGTERM` (`server/src/index.ts:341-357`). The mDNS responder for
+  `castwright.local` follows the identical pattern: when `lanHttps` is true, the server
+  spawns `node scripts/mdns-responder.mjs --name castwright.local` right after the HTTPS
+  listener comes up, and `shutdown()` gains a line to kill that child alongside
+  `sidecarSupervisor?.stop()`. Exact new-file placement (e.g. alongside `bind-host.ts`) is
+  left to the implementation plan; the ownership model — server-owned, not launcher-owned —
+  is the locked decision here.
 
 ### 5. `scripts/print-cert-install-instructions.mjs` (`install:cert-mobile`)
 
@@ -138,8 +158,11 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 ## Data flow
 
 1. Developer runs `npm run dev:lan` (or `npm run start:lan`).
-2. The launcher starts the app server (Vite or Node) bound to `0.0.0.0`, plus the new mDNS
-   responder child process advertising the one hostname relevant to that script.
+2. The app server (Vite or Node) binds `0.0.0.0`, and the mDNS responder child process for
+   that script's hostname comes up alongside it — as a sibling `concurrently` leg for
+   `dev:lan`, or spawned and owned by the Node server itself for `start:lan` (see Component
+   4). Either way, the responder is tied to the same lifecycle as the server it serves: it
+   dies when the server does, not when a short-lived launcher script happens to exit.
 3. A phone/tablet on the same LAN broadcasts a standard mDNS query for
    `castwright.dev.local` (e.g. because the user typed that URL into a browser).
 4. The responder answers with the dev box's current LAN IPv4 address(es); the OS's native
@@ -172,6 +195,10 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 - `scripts/setup-lan-certs.mjs`: extend its existing test coverage (if any) or add a test
   asserting `castwright.local` / `castwright.dev.local` are included in the `hosts` array
   passed to `mkcert`.
+- The new server-owned spawn/reap logic for `start:lan` (Component 4) gets its own test,
+  mirroring however `server/src/tts/spawn-sidecar.ts` / the sidecar supervisor are
+  themselves tested — this is the piece most likely to regress silently (a leaked or
+  never-started child), so it does not get waved off to manual acceptance alone.
 - No e2e coverage — this is dev/LAN tooling, not shipped product behavior reachable from
   `npm run test:e2e`'s mock-mode Vite instance.
 - Manual acceptance (documented in the regression plan, not automatable): run `dev:lan` and
@@ -180,7 +207,8 @@ peer may need Bonjour installed — the LAN-IP URL remains the reliable fallback
 
 ## Open items carried into planning
 
-- Exact spawn/teardown wiring inside `start-app-prod.mjs` (child-process bookkeeping
-  alongside the sidecar) is an implementation detail for the plan, not locked here.
+- Exact new-file placement for the server-side mDNS-owner module (Component 4) is a
+  planning-time choice, not locked here — the ownership model (server-owned via the
+  existing `shutdown()` handler, not the launcher) is the locked decision.
 - Whether `scripts/setup-lan-certs.mjs` already has a test file to extend vs. needing a new
   one is a planning-time check, not a design decision.
