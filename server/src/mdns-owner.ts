@@ -67,9 +67,20 @@ export function spawnMdnsResponder(
 
   let child: ChildProcess;
   try {
+    /* detached:true takes the responder out of the parent's process group
+       (POSIX setsid) / console group (Windows CREATE_NEW_PROCESS_GROUP) —
+       without it, a terminal Ctrl+C fans SIGINT out to every process
+       sharing that group, so the responder would die on its own the moment
+       you hit Ctrl+C on start:lan, racing shutdown()'s own kill() call
+       (server/src/index.ts) for which one sets killedIntentionally first.
+       Losing that race made the exit handler below warn on a completely
+       ordinary shutdown. windowsHide keeps this from popping a console
+       window, the same combination server/src/tts/spawn-sidecar.ts already
+       uses for its own server-owned child. */
     child = spawnFn(process.execPath, [scriptPath, '--name', hostname], {
       stdio: 'ignore',
       windowsHide: true,
+      detached: true,
     });
   } catch (err) {
     warn(`[mdns] failed to spawn responder for ${hostname}:`, err);

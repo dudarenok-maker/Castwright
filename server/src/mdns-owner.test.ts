@@ -45,6 +45,16 @@ describe('spawnMdnsResponder', () => {
     expect(args[0]).toContain('mdns-responder.mjs');
   });
 
+  it('spawns detached, so a terminal Ctrl+C cannot signal it directly and race the exit handler below', () => {
+    const spawnFn = vi.fn(() => makeFakeChild());
+    spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+    });
+    const [, , spawnOpts] = spawnFn.mock.calls[0] as unknown as [string, string[], { detached?: boolean }];
+    expect(spawnOpts.detached).toBe(true);
+  });
+
   it('returns null and warns when spawning throws', () => {
     const spawnFn = vi.fn(() => {
       throw new Error('ENOENT');
