@@ -168,11 +168,12 @@ Both fixes are commit `df188e49`, independently re-reviewed (Opus,
   code-43 streaks, analyzer CPU/GPU cross-charge confirmation) — separate
   from this PR's scoped Plan 2a checklist; still owed, tracked in
   [236](236-multi-gpu-per-model-safety.md).
-- The `/docs/local-llm.md` links in the env-shadow banner and the analyzer
-  row 404 in a production (`dist/`) deployment — confirmed on-box (`curl`
-  against `:8080`'s served bundle). Low-impact (advisory links only); tracked
-  as [#1223](https://github.com/dudarenok-maker/Castwright/issues/1223), not
-  fixed in this PR.
+- ~~The `/docs/local-llm.md` links in the env-shadow banner and the analyzer
+  row 404 in a production (`dist/`) deployment~~ — fixed by
+  [#1223](https://github.com/dudarenok-maker/Castwright/issues/1223)'s
+  `scripts/sync-docs-to-public.mjs` `prebuild` step, which mirrors
+  `docs/local-llm.md` into `public/docs/` (git-ignored, regenerated on every
+  build) so both hrefs resolve in `dist/` too.
 
 ## Ship notes
 

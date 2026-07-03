@@ -390,6 +390,11 @@ test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
 });
 
+test('stepTouchedByDiff: editing the prebuild doc-sync script invalidates the build cache (issue #1223)', () => {
+  const diff = ['scripts/sync-docs-to-public.mjs'];
+  assert.equal(stepTouchedByDiff(stepByName['build'], diff), true);
+});
+
 test('stepTouchedByDiff: the server lockfile is in scope for server legs only', () => {
   const diff = ['server/package-lock.json'];
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);

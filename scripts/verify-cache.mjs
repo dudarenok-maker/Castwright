@@ -154,6 +154,7 @@ export const STEPS = [
         'tsconfig.json',
         'server/tsconfig.json',
         'index.html',
+        'scripts/sync-docs-to-public.mjs',
       ],
       includeLockfiles: ['root', 'server'],
     },
