@@ -29,12 +29,46 @@ import { dirname, resolve } from 'node:path';
    workspace/paths.ts exports WORKSPACE_ROOT, NOT a repo root — don't import. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-export type BlockerStatus = 'pass' | 'fail';
+export type BlockerCause =
+  // sidecar
+  | 'python-missing' | 'venv-missing' | 'venv-broken' | 'supervisor-exhausted'
+  | 'supervisor-tripped' | 'unreachable-transient' | 'unreachable-no-supervisor'
+  // tts
+  | 'sidecar-blocked' | 'no-engine-installed' | 'weights-missing'
+  | 'cannot-confirm-engine' | 'package-broken'
+  // ffmpeg
+  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing'
+  // analyzer
+  | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key'
+  // shared terminal
+  | 'pass';
+
+export type BlockerActionKind =
+  | 'venv-bootstrap' | 'qwen-install' | 'kokoro-install' | 'coqui-install'
+  | 'sidecar-restart' | 'ollama-install' | 'ollama-pull' | 'navigate';
+
+export interface BlockerAction {
+  kind: BlockerActionKind;
+  label: string;
+  /** Extra data an action needs beyond its kind, e.g. { model: 'qwen3.5:9b' } for ollama-pull. */
+  params?: Record<string, string>;
+  /** For 'navigate' only — an in-app hash route (e.g. '#/models'). */
+  href?: string;
+}
+
+export interface BlockerDiagnosis {
+  status: 'pass' | 'fail';
+  cause: BlockerCause;
+  message: string;
+  remediation: string;
+  /** Present when a safe automated fix exists; absent for text-only guidance. */
+  action?: BlockerAction;
+}
 
 export interface SetupReadiness {
   ready: boolean;
   completedAt: string | null;
-  blockers: { sidecar: BlockerStatus; ffmpeg: BlockerStatus; tts: BlockerStatus; analyzer: BlockerStatus };
+  blockers: { sidecar: BlockerDiagnosis; ffmpeg: BlockerDiagnosis; tts: BlockerDiagnosis; analyzer: BlockerDiagnosis };
   info: { gpu: string };
 }
 
