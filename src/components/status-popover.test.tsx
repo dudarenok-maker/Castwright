@@ -40,11 +40,13 @@ function makeProps(over: Partial<Parameters<typeof StatusPopover>[0]> = {}) {
     analysis,
     generation,
     design: null,
+    exportPill: null,
     pendingRevisionsCount: 2,
     onOpenRevisions: vi.fn(),
     onGoToAnalysing: vi.fn(),
     onGoToGeneration: vi.fn(),
     onGoToDesign: vi.fn(),
+    onGoToExport: vi.fn(),
     ...over,
   };
 }
@@ -174,5 +176,37 @@ describe('StatusPopover', () => {
     );
     expect(screen.getByTestId('substage-row')).toBeInTheDocument();
     expect(screen.queryByTestId('substage-detail')).not.toBeInTheDocument();
+  });
+});
+
+describe('StatusPopover — Export section (fs-54)', () => {
+  it('renders the Export pill when exportPill is set', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          exportPill: { state: 'running', runningCount: 1, percent: 0.5, onClick: vi.fn() },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('status-popover-export')).toHaveTextContent('Exporting');
+  });
+
+  it('shows a placeholder message when no export is running', () => {
+    render(<StatusPopover {...makeProps({ exportPill: null })} />);
+    expect(screen.getByTestId('status-popover-export')).toHaveTextContent('Nothing exporting.');
+  });
+
+  it('routes through onGoToExport when the Export pill is clicked', () => {
+    const onGoToExport = vi.fn();
+    render(
+      <StatusPopover
+        {...makeProps({
+          exportPill: { state: 'running', runningCount: 1, onClick: vi.fn() },
+          onGoToExport,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('export-pill'));
+    expect(onGoToExport).toHaveBeenCalled();
   });
 });
