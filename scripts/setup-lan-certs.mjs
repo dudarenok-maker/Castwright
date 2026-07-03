@@ -93,6 +93,17 @@ export function enumerateLanIps() {
   return ips;
 }
 
+/** The mkcert SAN list: localhost + loopback + the friendly hostnames
+    (castwright.local / castwright.dev.local) + every detected LAN IPv4.
+    An unused SAN is inert (unlike an mDNS answer, where returning every
+    interface actively misdirects a client — see scripts/mdns-responder.mjs's
+    primaryLanIp(), which deliberately does NOT reuse enumerateLanIps() for
+    that reason). Extracted as a pure function so the hosts list is
+    unit-testable without invoking the real mkcert binary. */
+export function buildCertHosts(ips) {
+  return ['localhost', '127.0.0.1', 'castwright.local', 'castwright.dev.local', ...ips];
+}
+
 export async function setupLanCerts({ silent = false } = {}) {
   const log = silent ? () => {} : info;
   const version = tryMkcertVersion();
@@ -118,7 +129,7 @@ export async function setupLanCerts({ silent = false } = {}) {
   mkdirSync(certDir, { recursive: true });
 
   const ips = enumerateLanIps();
-  const hosts = ['localhost', '127.0.0.1', ...ips];
+  const hosts = buildCertHosts(ips);
   log(`generating cert for hosts: ${hosts.join(', ')}`);
 
   try {
