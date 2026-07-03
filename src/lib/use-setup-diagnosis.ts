@@ -12,7 +12,7 @@ export function useSetupDiagnosis(pollMs: number = DEFAULT_POLL_MS): {
   refetch: () => void;
 } {
   const [readiness, setReadiness] = useState<SetupReadiness | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchNow = useCallback(() => {
     api.getSetupReadiness().then(setReadiness).catch(() => {});

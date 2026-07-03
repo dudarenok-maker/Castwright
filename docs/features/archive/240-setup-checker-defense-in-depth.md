@@ -33,10 +33,19 @@ owner: null
   fed by exactly one round of live probing per `GET /readiness` call. Adding
   a new cause or action is a matter of extending one cause chain and one
   action-mapping table, not touching every UI consumer separately.
-- **Architectural:** locks in a single shared diagnosis engine consumed by
-  both UI surfaces via one hook (`useSetupDiagnosis()`), so the wizard and
-  the popover cannot drift into disagreeing about the same underlying state
-  — a risk called out explicitly in the design spec's Decision 1.
+- **Architectural:** locks in a single shared diagnosis engine on the server
+  (one `GET /readiness` computes each blocker's diagnosis exactly once), so
+  the wizard and the popover cannot structurally disagree about the same
+  underlying cause — a risk called out explicitly in the design spec's
+  Decision 1. The Status popover consumes this via the shared
+  `useSetupDiagnosis()` polling hook; the Setup wizard route
+  (`src/routes/index.tsx`'s `SetupRoute`) currently has its own inline
+  fetch-on-mount + manual-refetch instead of the hook — both still read the
+  identical server response shape, so this is a code-duplication gap, not a
+  data-disagreement risk. Wiring `SetupRoute` onto the shared hook too is a
+  candidate follow-up (it would add a 10s poll to the wizard screen, a minor
+  behavior change worth a deliberate decision rather than a drive-by fix
+  here).
 
 ## Architectural impact
 
@@ -149,11 +158,12 @@ owner: null
   `step-models.test.tsx`, `step-ffmpeg.test.tsx`) — assert each step renders
   the right diagnosis message/action per blocker.
 - Vitest frontend (`src/components/status-popover.test.tsx`,
-  `src/components/layout.test.tsx`, `src/components/top-bar.test.tsx`) —
-  assert all four diagnosis blocks render in the popover, the ffmpeg banner
-  shows only on fail, and the sidecar Retry-suppression branch in
-  `layout.tsx` is exercised (both the actionable-cause and
-  `unreachable-transient` branches).
+  `src/components/layout.test.tsx`) — assert all four diagnosis blocks
+  render in the popover, the ffmpeg banner shows only on fail, and the
+  sidecar Retry-suppression branch in `layout.tsx` is exercised (both the
+  actionable-cause and `unreachable-transient` branches). `top-bar.test.tsx`
+  (unchanged by this plan) still passes with the two new optional
+  `StatusDetail` fields threaded through it.
 - Playwright e2e (`e2e/setup-checker-venv-fix.spec.ts`) — drives the real
   failure→fix→pass cycle for the sidecar's `venv-missing` diagnosis: mocks
   the venv-bootstrap job endpoints, confirms the exact diagnosis message and
@@ -178,7 +188,7 @@ the not-ready mock state.
 4. Click the header **Status pill** from any stage → the popover shows the
    same four sections (Voice engines / Analysis), each with the matching
    diagnosis block or nothing if passing — confirms the wizard and popover
-   agree, since they share `useSetupDiagnosis()`.
+   agree, since both read the identical `GET /readiness` response.
 5. **Real-backend causes not reachable via the mock latch** (needs a real,
    deliberately-broken local sidecar/Ollama to exercise; not required for
    every PR, tracked here for the eventual on-box acceptance pass):
