@@ -120,9 +120,13 @@ async function main() {
     for (const question of query.questions ?? []) {
       if (question.type !== 'A') continue;
       if (!hostnames.includes(question.name)) continue;
-      const ip = await primaryLanIp();
-      const answers = buildAnswer(question.name, hostnames, ip);
-      if (answers) mdns.respond({ answers });
+      try {
+        const ip = await primaryLanIp();
+        const answers = buildAnswer(question.name, hostnames, ip);
+        if (answers) mdns.respond({ answers });
+      } catch (err) {
+        process.stderr.write(`[mdns-responder] failed to answer query for ${question.name}: ${err.message}\n`);
+      }
     }
   });
 
