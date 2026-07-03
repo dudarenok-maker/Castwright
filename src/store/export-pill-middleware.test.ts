@@ -76,6 +76,7 @@ describe('exportPillMiddleware', () => {
     const job = makeJob({ status: 'in_progress' });
     store.dispatch(exportsActions.exportStarted(job));
     store.dispatch(exportsActions.exportUpdated({ ...job, status: 'done', progress: 1 }));
+    expect(store.getState().exports.linger['b1']).toEqual({ state: 'done' });
     vi.advanceTimersByTime(5001);
     expect(store.getState().exports.linger['b1']).toBeUndefined();
   });
