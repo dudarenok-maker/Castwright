@@ -68,6 +68,7 @@ import {
 } from '../workspace/user-settings.js';
 import { appendTelemetry } from '../tts/resource-telemetry.js';
 import { probeSidecarHealth } from './sidecar-health.js';
+import { forceSidecarRecycle } from '../tts/sidecar-supervisor.js';
 import { abortInFlightSplice } from './chapter-job-coordination.js';
 import {
   synthesiseChapter,
@@ -1749,12 +1750,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           `[generation] chapter ${chapter.id} (${chapter.slug}) STALLED during ${stallPhase}: ` +
             `no progress for ${Math.round(noProgressMs / 1000)}s — recorded as failed so the queue advances.`,
         );
+        if (stallPhase === 'synthesis') {
+          await forceSidecarRecycle(
+            `chapter ${chapter.id} stalled ${Math.round(noProgressMs / 1000)}s during synthesis`,
+          );
+        }
       } else if (isRecycleStorm) {
         const recoveries = (e as { recoveries?: number })?.recoveries ?? MAX_RECYCLE_RECOVERIES;
         console.error(
           `[generation] chapter ${chapter.id} (${chapter.slug}) RECYCLE STORM: sidecar recycled ` +
             `${recoveries}× on one chapter — recorded non-fatal. On the queue path the run is ` +
             `stopped by pausing the queue (below); the back-compat \`*\` job relies on the cascade.`,
+        );
+        await forceSidecarRecycle(
+          `chapter ${chapter.id} hit a recycle storm (${recoveries} in-loop recoveries exhausted)`,
         );
       } else {
         console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);

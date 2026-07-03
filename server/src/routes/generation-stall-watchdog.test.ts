@@ -60,6 +60,14 @@ vi.mock('../tts/mp3.js', async (importOriginal) => {
         : actual.encodePcmToAudio(pcm as Buffer, sr as number, opts as never),
   };
 });
+const forceSidecarRecycleMock = vi.fn(async (..._args: unknown[]) => true);
+vi.mock('../tts/sidecar-supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/sidecar-supervisor.js')>();
+  return {
+    ...actual,
+    forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
+  };
+});
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -181,6 +189,7 @@ afterAll(async () => {
 const ENTRY_ID = 'stall-entry-1';
 
 beforeEach(async () => {
+  forceSidecarRecycleMock.mockClear();
   encodeImpl = null;
   /* Reset the persisted state so a prior test's failure doesn't leak in. */
   const state = JSON.parse(readFileSync(statePath, 'utf8'));
@@ -236,6 +245,9 @@ describe('per-chapter no-progress watchdog', () => {
     expect(ch.generationState).toBe('failed');
     expect(ch.generationError).toMatch(/no progress/i);
     expect(ch.generationError).toMatch(/synthesis/i);
+    // srv-50: a synthesis-phase stall is strong evidence the sidecar is
+    // wedged — force a recycle instead of only failing the chapter.
+    expect(forceSidecarRecycleMock).toHaveBeenCalledTimes(1);
   }, 10_000);
 
   it('aborts + records a stall when ASSEMBLY hangs (the window with no per-call timeout)', async () => {
@@ -252,6 +264,9 @@ describe('per-chapter no-progress watchdog', () => {
     const ch = persistedChapter();
     expect(ch.generationState).toBe('failed');
     expect(ch.generationError).toMatch(/assembly/i);
+    // srv-50: an assembly-phase stall is not a sidecar problem (it's a
+    // wedged ffmpeg/encode) — must NOT force-recycle.
+    expect(forceSidecarRecycleMock).not.toHaveBeenCalled();
   }, 10_000);
 
   it('does NOT abort a chapter that keeps ticking within the window', async () => {
