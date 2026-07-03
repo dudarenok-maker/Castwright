@@ -8,10 +8,13 @@
  *
  * All timing is injected (delayFn / nowFn) so the suite is deterministic and
  * instant — no real timers, no real process. */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   createSidecarSupervisor,
+  registerActiveSupervisor,
+  forceSidecarRecycle,
   type SidecarSupervisorOpts,
+  type SidecarSupervisor,
 } from './sidecar-supervisor.js';
 import type { SidecarHandle, SpawnSidecarOpts } from './spawn-sidecar.js';
 import * as breadcrumbModule from './restart-breadcrumb.js';
@@ -670,5 +673,81 @@ describe('sidecar supervisor (srv-15)', () => {
       await Promise.resolve();
       expect(sup.tripEvent()).not.toBeNull(); // trips on the 3rd genuinely-fresh exit
     });
+  });
+});
+
+describe('forceSidecarRecycle', () => {
+  afterEach(() => registerActiveSupervisor(null));
+
+  function fakeSupervisor(overrides: Partial<SidecarSupervisor> = {}): SidecarSupervisor {
+    return {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      current: () => null,
+      recycling: () => false,
+      tripEvent: () => null,
+      clearTripAndRespawn: vi.fn(async () => {}),
+      ...overrides,
+    };
+  }
+
+  it('kills the current handle and returns true', async () => {
+    const handle = makeHandle();
+    registerActiveSupervisor(fakeSupervisor({ current: () => handle }));
+
+    const result = await forceSidecarRecycle('test reason', vi.fn());
+
+    expect(result).toBe(true);
+    expect(handle.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false (no kill) when there is no active supervisor', async () => {
+    registerActiveSupervisor(null);
+    const result = await forceSidecarRecycle('test reason', vi.fn());
+    expect(result).toBe(false);
+  });
+
+  it('returns false (no kill) when the supervisor reports recycling() already true', async () => {
+    const handle = makeHandle();
+    registerActiveSupervisor(fakeSupervisor({ recycling: () => true, current: () => handle }));
+
+    const result = await forceSidecarRecycle('test reason', vi.fn());
+
+    expect(result).toBe(false);
+    expect(handle.kill).not.toHaveBeenCalled();
+  });
+
+  it('returns false (no kill) when there is no current handle', async () => {
+    registerActiveSupervisor(fakeSupervisor({ current: () => null }));
+    const result = await forceSidecarRecycle('test reason', vi.fn());
+    expect(result).toBe(false);
+  });
+
+  it('a second concurrent call while the first is still in-flight no-ops (synchronous guard)', async () => {
+    const handle = makeHandle();
+    let releaseKill!: () => void;
+    handle.kill.mockImplementation(() => new Promise<void>((r) => (releaseKill = r)));
+    registerActiveSupervisor(fakeSupervisor({ current: () => handle }));
+
+    const first = forceSidecarRecycle('first', vi.fn());
+    // Second call races in BEFORE the first kill() resolves.
+    const second = await forceSidecarRecycle('second', vi.fn());
+    expect(second).toBe(false);
+    expect(handle.kill).toHaveBeenCalledTimes(1); // only the first caller actually killed
+
+    releaseKill();
+    expect(await first).toBe(true);
+  });
+
+  it('warns with the given reason', async () => {
+    const handle = makeHandle();
+    registerActiveSupervisor(fakeSupervisor({ current: () => handle }));
+    const warn = vi.fn();
+
+    await forceSidecarRecycle('chapter 7 stalled 720s during synthesis', warn);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('chapter 7 stalled 720s during synthesis'),
+    );
   });
 });

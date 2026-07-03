@@ -147,6 +147,43 @@ export function getActiveSupervisor(): SidecarSupervisor | null {
   return _activeSupervisor;
 }
 
+/* Synchronous in-flight guard (module-level). Set before the first `await`
+   below and cleared in `finally` — because JS has no preemption between
+   awaits, this closes a race a `supervisor.recycling()`-only check would
+   leave open (that flag flips inside the async onChildExit handler, AFTER
+   kill() is called, not synchronously with it). */
+let recycleInFlight = false;
+
+/** Force-kill the current supervised sidecar child so the existing
+    onChildExit → backoff → respawn path brings up a fresh process. Used when
+    the caller has strong evidence the sidecar is wedged (not merely slow) —
+    a readiness-poll exhausted its full budget, a chapter made zero progress
+    for the full stall window, or in-loop recovery attempts were exhausted
+    (RecycleStormError). Reuses the exact primitive `POST /api/sidecar/restart`
+    already uses (`handle.kill()`), so the existing crash-loop cap applies
+    automatically — this function adds no new cap logic. Returns false
+    (no-op) when there's no active supervisor, a recycle is already in
+    flight, or one is already known to be recovering — so concurrent callers
+    don't pile up redundant kills on the same dying process. */
+export async function forceSidecarRecycle(
+  reason: string,
+  warn: (...args: unknown[]) => void = console.warn,
+): Promise<boolean> {
+  if (recycleInFlight) return false;
+  const supervisor = getActiveSupervisor();
+  if (!supervisor || supervisor.recycling()) return false;
+  const handle = supervisor.current();
+  if (!handle) return false;
+  recycleInFlight = true;
+  try {
+    warn(`[sidecar] forced recycle: ${reason}`);
+    await handle.kill();
+    return true;
+  } finally {
+    recycleInFlight = false;
+  }
+}
+
 export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSupervisor {
   const {
     buildOpts,
