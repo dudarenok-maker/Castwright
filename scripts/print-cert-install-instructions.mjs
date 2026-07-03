@@ -54,6 +54,13 @@ const nodeUrl = `https://${primaryIp}:8443`;
 rule('LAN URLs');
 line(`Vite dev (HMR):     ${viteUrl}        (run with: npm run dev:lan)`);
 line(`Node prod bundle:   ${nodeUrl}        (run with: npm run start:lan)`);
+line('');
+line('Friendly hostnames (same servers, once dev:lan / start:lan is running):');
+line('  https://castwright.dev.local:5173   (Vite dev)');
+line('  https://castwright.local:8443       (Node prod bundle)');
+line('  iOS / Android / macOS resolve .local names automatically. A Windows LAN');
+line('  peer may need Bonjour installed to resolve them — the LAN-IP URLs above');
+line('  always work as a fallback.');
 if (lanIps.length > 1) {
   line('');
   line(`Other LAN IPs:  ${lanIps.slice(1).join(', ')}`);
