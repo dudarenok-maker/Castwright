@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function StepFfmpeg({ readiness, onRefetch }: Props) {
-  const passed = readiness.blockers.ffmpeg === 'pass';
+  const passed = readiness.blockers.ffmpeg.status === 'pass';
 
   if (passed) {
     return (

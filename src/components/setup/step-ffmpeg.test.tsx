@@ -7,12 +7,19 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { StepFfmpeg } from './step-ffmpeg';
 import type { SetupReadiness } from '../../lib/api';
 
-function makeReadiness(ffmpeg: 'pass' | 'fail'): SetupReadiness {
+function makeReadiness(status: 'pass' | 'fail'): SetupReadiness {
   return {
-    ready: ffmpeg === 'pass',
+    ready: status === 'pass',
     completedAt: null,
-    blockers: { sidecar: 'pass', ffmpeg, tts: 'pass', analyzer: 'pass' },
-    info: { gpu: 'cpu' },
+    blockers: {
+      sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      ffmpeg: status === 'pass'
+        ? { status: 'pass', cause: 'pass', message: 'ffmpeg and ffprobe are both installed.', remediation: '' }
+        : { status: 'fail', cause: 'both-missing', message: 'ffmpeg and ffprobe are not on PATH.', remediation: 'Install ffmpeg.' },
+    },
+    info: { gpu: '' },
   };
 }
 
