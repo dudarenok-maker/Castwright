@@ -116,4 +116,19 @@ describe('spawnMdnsResponder', () => {
     handle!.kill();
     expect(killSpy).toHaveBeenCalledWith('SIGTERM');
   });
+
+  it('does NOT warn when the exit after kill() reports a nonzero code (Windows taskkill /F reports code=1, not null)', () => {
+    const child = makeFakeChild(4242);
+    const spawnFn = vi.fn(() => child);
+    const warn = vi.fn();
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn,
+      platform: 'win32',
+    });
+    expect(handle).not.toBeNull();
+    handle!.kill();
+    child.emit('exit', 1, null);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
