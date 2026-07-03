@@ -36,6 +36,7 @@
    same-book displacement) cancels the wait promptly. */
 
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { forceSidecarRecycle } from './sidecar-supervisor.js';
 import type { TtsEngine } from './index.js';
 
 /* Engines whose model lives in the local sidecar and must be loaded before
@@ -143,6 +144,9 @@ export async function ensureSidecarEngineReady(
       if (Date.now() >= deadline) {
         console.warn(
           `[generation] readiness ${engine}: sidecar not ready after ${timeoutMs}ms (last: ${lastReason}) — proceeding to lazy load.`,
+        );
+        await forceSidecarRecycle(
+          `readiness poll for ${engine} exhausted ${timeoutMs}ms (last: ${lastReason})`,
         );
         return;
       }
