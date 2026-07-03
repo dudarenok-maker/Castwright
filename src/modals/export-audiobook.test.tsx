@@ -400,6 +400,43 @@ describe('ExportAudiobookModal — Audiobookshelf format toggle (fs-54)', () => 
     renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
     expect(screen.queryByTestId('export-tile-format-toggle')).toBeNull();
   });
+
+  it('does not revert the format toggle when saving the sync folder path (fs-54)', async () => {
+    mockedApi.putUserSettings.mockResolvedValue({
+      exportSyncFolder: 'C:\\Users\\me\\OneDrive\\Audiobooks',
+    } as never);
+    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
+
+    render(
+      <Provider store={makeStore()}>
+        <ExportAudiobookModal
+          open={true}
+          bookId="demo__sa__test"
+          prefill={{ format: 'mp3-folder', destination: 'sync-folder', appHint: 'audiobookshelf' }}
+          onClose={vi.fn()}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('export-tile-format-m4b'));
+
+    const input = screen.getByTestId('sync-folder-input');
+    fireEvent.change(input, { target: { value: 'C:\\Users\\me\\OneDrive\\Audiobooks' } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(mockedApi.putUserSettings).toHaveBeenCalledWith({
+        exportSyncFolder: 'C:\\Users\\me\\OneDrive\\Audiobooks',
+      });
+    });
+
+    fireEvent.click(screen.getByTestId('export-submit'));
+    await waitFor(() => {
+      expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+        'demo__sa__test',
+        expect.objectContaining({ format: 'm4b', destination: 'sync-folder' }),
+      );
+    });
+  });
 });
 
 /* Plan 79 — sync-folder UX hardening. Before this round the user had to

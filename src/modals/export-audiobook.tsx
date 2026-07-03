@@ -19,7 +19,7 @@
    missing-chapter slug list with a "Re-open Generate view" CTA. */
 
 import QRCode from 'qrcode';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconClose, IconDownload, IconExternal } from '../lib/icons';
 import { ExportQueueRow } from '../components/export-queue-row';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
@@ -202,9 +202,19 @@ export function ExportAudiobookModal({
   /* Reset transient UI state on close so the next open is a clean slate.
      Prefill (when set) overrides the per-open defaults — so the Voice tile
      reopening the modal lands on M4B + sync-folder regardless of what the
-     previous open left selected. */
+     previous open left selected.
+
+     Gated on the open FALSE→TRUE transition (via wasOpenRef), not merely
+     "open is currently true" — this effect's own deps include
+     account.exportSyncFolder (so syncFolderDraft picks up the latest saved
+     path on open), but that same value changes mid-open whenever the user
+     saves the sync-folder path from inside this modal (handleSaveSyncFolder
+     dispatches saveAccountSettings). Without the transition gate, that save
+     re-fires the whole reset block — including setFormat — silently
+     reverting a format toggle the user had just changed (fs-54 bug). */
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpenRef.current) {
       setTab(prefill?.destination ?? initialTab);
       setFormat(prefill?.format ?? 'm4b');
       setActiveJobId(null);
@@ -212,6 +222,7 @@ export function ExportAudiobookModal({
       setSubmitting(false);
       setSyncFolderDraft(account.exportSyncFolder ?? '');
     }
+    wasOpenRef.current = open;
   }, [open, initialTab, prefill?.destination, prefill?.format, account.exportSyncFolder]);
 
   /* QR render of the first LAN URL. Stays null until both the URL and
