@@ -155,7 +155,7 @@ describe('forceSidecarRecycle', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd server && npx vitest run src/tts/sidecar-supervisor.test.ts`
-Expected: FAIL — `forceSidecarRecycle` and `registerActiveSupervisor` (already exported, so that import is fine) errors: `"forceSidecarRecycle" is not exported by "src/tts/sidecar-supervisor.ts"` (a TypeScript/module resolution failure, since the function doesn't exist yet).
+Expected: FAIL — `registerActiveSupervisor` is already exported (that part of the import is fine), but `forceSidecarRecycle` doesn't exist yet, so every new test in the `forceSidecarRecycle` describe block fails with `TypeError: forceSidecarRecycle is not a function` (it imports as `undefined`).
 
 - [ ] **Step 3: Implement `forceSidecarRecycle`**
 
@@ -248,13 +248,17 @@ Refs #1243"
 
 - [ ] **Step 1: Write the failing tests**
 
-Open `server/src/tts/ensure-sidecar-loaded.test.ts`. Add a mock for the supervisor module right after the existing `gpu-load.js` mock (after line 17, before the `ensureSidecarEngineReady` import on line 19):
+Open `server/src/tts/ensure-sidecar-loaded.test.ts`. Add a mock for the supervisor module right after the existing `gpu-load.js` mock (after line 17, before the `ensureSidecarEngineReady` import on line 19). Use `importOriginal` + spread (not a bare replacement object) so every other real export of `sidecar-supervisor.js` — `getActiveSupervisor`, `registerActiveSupervisor`, `createSidecarSupervisor`, etc. — stays intact for any code path this file's tests might touch, only `forceSidecarRecycle` is overridden. This mirrors the existing `vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => ...)` pattern already used in `generation-stall-watchdog.test.ts`:
 
 ```ts
 const forceSidecarRecycleMock = vi.fn(async () => true);
-vi.mock('./sidecar-supervisor.js', () => ({
-  forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
-}));
+vi.mock('./sidecar-supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sidecar-supervisor.js')>();
+  return {
+    ...actual,
+    forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
+  };
+});
 ```
 
 Then add `forceSidecarRecycleMock.mockClear();` to the existing `afterEach` (currently `afterEach(() => { global.fetch = realFetch; vi.restoreAllMocks(); });` around line 22-25) — change it to:
@@ -388,13 +392,17 @@ Refs #1243"
 
 - [ ] **Step 1: Write the failing tests**
 
-**3a. Stall-watchdog file.** Open `server/src/routes/generation-stall-watchdog.test.ts`. Add a supervisor mock right after the existing `vi.mock('../tts/mp3.js', ...)` block (after line 62, before the `const AUTHOR = ...` line):
+**3a. Stall-watchdog file.** Open `server/src/routes/generation-stall-watchdog.test.ts`. Add a supervisor mock right after the existing `vi.mock('../tts/mp3.js', ...)` block (after line 62, before the `const AUTHOR = ...` line). Use `importOriginal` + spread, same as Task 2, so `getActiveSupervisor`/`registerActiveSupervisor`/etc. stay real:
 
 ```ts
 const forceSidecarRecycleMock = vi.fn(async () => true);
-vi.mock('../tts/sidecar-supervisor.js', () => ({
-  forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
-}));
+vi.mock('../tts/sidecar-supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/sidecar-supervisor.js')>();
+  return {
+    ...actual,
+    forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
+  };
+});
 ```
 
 Add `forceSidecarRecycleMock.mockClear();` to the top of the existing `beforeEach` (currently starting `beforeEach(async () => { encodeImpl = null; ...` around line 183) — insert as its first line:
@@ -406,7 +414,7 @@ beforeEach(async () => {
   /* ... rest unchanged ... */
 ```
 
-Extend the existing synthesis-stall test (`'aborts + records a generationError when synthesis makes no progress'`, lines 224-239) with a new assertion, and add a new test proving the assembly-phase stall does NOT recycle. Replace:
+Extend the existing synthesis-stall test (`'aborts + records a generationError when synthesis makes no progress'`, lines 224-239) with a new assertion, and extend the existing assembly-stall test (`'aborts + records a stall when ASSEMBLY hangs (the window with no per-call timeout)'`, lines 241-255) to prove it does NOT recycle. Replace:
 
 ```ts
   it('aborts + records a generationError when synthesis makes no progress', async () => {
@@ -424,6 +432,22 @@ Extend the existing synthesis-stall test (`'aborts + records a generationError w
     expect(ch.generationState).toBe('failed');
     expect(ch.generationError).toMatch(/no progress/i);
     expect(ch.generationError).toMatch(/synthesis/i);
+  }, 10_000);
+
+  it('aborts + records a stall when ASSEMBLY hangs (the window with no per-call timeout)', async () => {
+    process.env.CHAPTER_NO_PROGRESS_MS = '250';
+    synthesiseImpl = async () => okResult(); // synth completes fast
+    encodeImpl = () => hangForever(); // ffmpeg/encode wedges → assembly never finishes
+
+    const body = await runChapter();
+
+    expect(body).toContain('"type":"chapter_failed"');
+    expect(body).not.toContain('"type":"chapter_complete"');
+    expect(body).toContain('assembly');
+
+    const ch = persistedChapter();
+    expect(ch.generationState).toBe('failed');
+    expect(ch.generationError).toMatch(/assembly/i);
   }, 10_000);
 ```
 
@@ -450,7 +474,7 @@ with:
     expect(forceSidecarRecycleMock).toHaveBeenCalledTimes(1);
   }, 10_000);
 
-  it('does NOT force-recycle on an assembly-phase stall (not a sidecar problem)', async () => {
+  it('aborts + records a stall when ASSEMBLY hangs (the window with no per-call timeout)', async () => {
     process.env.CHAPTER_NO_PROGRESS_MS = '250';
     synthesiseImpl = async () => okResult(); // synth completes fast
     encodeImpl = () => hangForever(); // ffmpeg/encode wedges → assembly never finishes
@@ -458,7 +482,14 @@ with:
     const body = await runChapter();
 
     expect(body).toContain('"type":"chapter_failed"');
+    expect(body).not.toContain('"type":"chapter_complete"');
     expect(body).toContain('assembly');
+
+    const ch = persistedChapter();
+    expect(ch.generationState).toBe('failed');
+    expect(ch.generationError).toMatch(/assembly/i);
+    // srv-50: an assembly-phase stall is not a sidecar problem (it's a
+    // wedged ffmpeg/encode) — must NOT force-recycle.
     expect(forceSidecarRecycleMock).not.toHaveBeenCalled();
   }, 10_000);
 ```
@@ -467,9 +498,13 @@ with:
 
 ```ts
 const forceSidecarRecycleMock = vi.fn(async () => true);
-vi.mock('../tts/sidecar-supervisor.js', () => ({
-  forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
-}));
+vi.mock('../tts/sidecar-supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/sidecar-supervisor.js')>();
+  return {
+    ...actual,
+    forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
+  };
+});
 ```
 
 Change this file's existing `beforeEach` (around line 170) from:
@@ -633,7 +668,19 @@ Refs #1243"
 
 - [ ] **Step 1: Write the failing test**
 
-Open `server/src/tts/synthesise-chapter-asr.test.ts`. No new imports are needed — `synthesiseChapter` and `TranscribeResult` are already imported.
+Open `server/src/tts/synthesise-chapter-asr.test.ts`. The new tests need `vi.fn()`, which this file does not currently import — change:
+
+```ts
+import { describe, it, expect } from 'vitest';
+```
+
+to:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+```
+
+`synthesiseChapter` and `TranscribeResult` are already imported.
 
 Add this new test at the end of the `describe('synthesiseChapter ASR content-QA pass', () => { ... })` block, right before its closing `});`:
 
@@ -760,6 +807,47 @@ git commit -m "feat(server): wrap ASR verify() with the existing call-timeout + 
 
 Closes #1243"
 ```
+
+---
+
+## Adversarial review outcomes
+
+An Opus-tier `assumption-checker` pass against this plan and the actual
+source/test files found:
+
+1. **(Critical, fixed)** Task 4's test code uses `vi.fn()`, but
+   `synthesise-chapter-asr.test.ts` only imports `{ describe, it, expect }`
+   from `vitest` — as written, Step 4 would fail with `vi is not defined`.
+   Fixed: Task 4 Step 1 now explicitly widens that import to include `vi`.
+2. **(Significant, hardened)** Tasks 2 and 3's `vi.mock('.../sidecar-
+   supervisor.js', () => ({ forceSidecarRecycle: ... }))` blocks fully
+   replaced the module, leaving every other real export (`getActiveSupervisor`,
+   `registerActiveSupervisor`, etc.) `undefined` within each test file. The
+   review traced call sites and found no test in the affected files currently
+   reaches those other exports, so this wasn't an active bug — but it was
+   fragile against any future test in the same files touching them. Fixed by
+   switching all three mock sites to the `importOriginal` + spread pattern
+   already used elsewhere in this codebase (`generation-stall-watchdog.test.ts`'s
+   existing `synthesise-chapter.js` mock), which structurally can't drop an
+   export regardless of what future tests need.
+3. **(Minor, fixed)** Task 3's original assembly-phase addition was a new,
+   near-duplicate test copying most of the existing assembly-stall test's
+   body. Fixed by extending the existing test in place with the
+   `not.toHaveBeenCalled()` assertion, matching how the synthesis-phase test
+   is extended, instead of adding a redundant one.
+4. **(Cosmetic, fixed)** Task 1 Step 2's expected-failure description said
+   "TypeScript/module resolution failure" — the actual Vitest/esbuild failure
+   mode is a runtime `TypeError: forceSidecarRecycle is not a function`
+   (the missing export imports as `undefined`, not a compile error). Wording
+   corrected.
+5. **(Confirmed, no change)** Every quoted "before" code block, file path,
+   line number, and mock-module relative path was verified word-for-word
+   against the actual current source; the `fakeSupervisor()` test double's
+   shape was confirmed to satisfy the real `SidecarSupervisor` interface;
+   Task 4's hung-ASR-call control flow was traced end-to-end through the real
+   `withCallTimeout`/`withRecycleRecovery`/`RecycleStormError` code and
+   confirmed to behave exactly as the test asserts, with no timeout-flakiness
+   risk (3×40ms well inside the 15s test budget).
 
 ---
 
