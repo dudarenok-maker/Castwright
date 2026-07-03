@@ -63,6 +63,14 @@ vi.mock('../tts/index.js', async (importOriginal) => {
     selectTtsProvider: () => ({ synthesize: vi.fn() }),
   };
 });
+const forceSidecarRecycleMock = vi.fn(async (..._args: unknown[]) => true);
+vi.mock('../tts/sidecar-supervisor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/sidecar-supervisor.js')>();
+  return {
+    ...actual,
+    forceSidecarRecycle: (...args: unknown[]) => forceSidecarRecycleMock(...args),
+  };
+});
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -168,6 +176,7 @@ afterAll(async () => {
 const ENTRY_ID = 'recycle-entry-1';
 
 beforeEach(async () => {
+  forceSidecarRecycleMock.mockClear();
   ensureReadyCalls = 0;
   ensureReadyImpl = async () => {};
   await writeQueueFile(queuePath, {
@@ -250,6 +259,10 @@ describe('srv-17c in-worker recovery after a mid-synth sidecar death', () => {
     // NOT a generic vram-spill / unknown classification.
     expect(body).toContain('"errorCode":"recycle-storm"');
     expect(body).toMatch(/"remediation":"[^"]*(?:sidecar|concurrency|headroom)/i);
+    // srv-50: RecycleStormError means in-loop recovery already failed
+    // maxRecycleRecoveries times — force a recycle rather than leaving a
+    // possibly-wedged sidecar for the next chapter to hit the same wall.
+    expect(forceSidecarRecycleMock).toHaveBeenCalledTimes(1);
     /* C3 — on the QUEUE path one POST = one chapter, so the cross-chapter
        cascade can never escalate. A recycle-storm instead PAUSES the queue
        server-side, stopping a thrashing sidecar from grinding chapter after
