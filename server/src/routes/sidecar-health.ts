@@ -422,6 +422,27 @@ sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
 const RESTART_HEALTH_POLL_MS = 500;
 const RESTART_HEALTH_POLL_TIMEOUT_MS = 60_000; // generous — a Kokoro boot is ~1s, Coqui ~60s
 
+/** Poll /health until the sidecar responds OK or the deadline passes. Shared
+    by both /restart branches (kill-and-wait for a running child; reset-and-
+    wait for an exhausted supervisor) so there is one poll loop, not two
+    copies that can drift. */
+async function waitForSidecarHealthy(deadlineMs: number): Promise<boolean> {
+  const url = getResolvedSidecarUrl();
+  const target = `${url}/health`;
+  while (Date.now() < deadlineMs) {
+    await new Promise((r) => setTimeout(r, RESTART_HEALTH_POLL_MS));
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+      const r = await fetch(target, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      if (r.ok) return true;
+    } catch {
+      /* sidecar still starting — keep polling */
+    }
+  }
+  return false;
+}
+
 sidecarHealthRouter.post('/restart', async (_req: Request, res: Response) => {
   const supervisor = getActiveSupervisor();
   if (!supervisor) {
@@ -436,10 +457,9 @@ sidecarHealthRouter.post('/restart', async (_req: Request, res: Response) => {
        with NO respawn coming — the supervisor stopped trying on purpose.
        Give that case its own message rather than the generic "will spawn
        shortly" claim, which would be actively misleading here: this route
-       can't recover a trip (it kills-and-waits-for-respawn; a tripped
-       supervisor has nothing to kill and nothing will respawn). The only
-       recovery today is a server restart — Plan 2's auto-revert route is the
-       one that will call clearTripAndRespawn() to fix this in-place. */
+       can't recover a trip by killing-and-waiting (a tripped supervisor has
+       nothing to kill and nothing will respawn) unless it explicitly calls
+       resetAndRespawn(), which the branch below does. */
     if (supervisor.tripEvent()) {
       return res.status(409).json({
         ok: false,
@@ -447,6 +467,22 @@ sidecarHealthRouter.post('/restart', async (_req: Request, res: Response) => {
           'The sidecar is held down after repeated crash-loop exits (code-43 streak) — ' +
           'no automatic respawn is coming. Restarting via this route cannot recover it; ' +
           'the current device assignment needs fixing and the server restarted.',
+      });
+    }
+    /* Plain (non-code-43) exhaustion: consecutiveFailures exceeded the cap and
+       the supervisor gave up. Unlike the trip case above, this IS recoverable
+       from this route — resetAndRespawn() zeroes the counter and spawns a
+       fresh child. The exhaustedEvent()/resetAndRespawn() check-then-call
+       here has no intervening await, which is what makes a second
+       near-simultaneous request to this same route safe (see
+       sidecar-supervisor.ts's resetAndRespawn doc). */
+    if (supervisor.exhaustedEvent()) {
+      await supervisor.resetAndRespawn();
+      const healthy = await waitForSidecarHealthy(Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS);
+      if (healthy) return res.json({ ok: true });
+      return res.status(503).json({
+        ok: false,
+        error: `Sidecar did not become healthy within ${RESTART_HEALTH_POLL_TIMEOUT_MS / 1000}s after reset.`,
       });
     }
     return res.status(409).json({
@@ -458,26 +494,8 @@ sidecarHealthRouter.post('/restart', async (_req: Request, res: Response) => {
   /* Kill the child. The supervisor's onChildExit callback fires (since
      stopped=false) and schedules a respawn with backoff. */
   await handle.kill();
-
-  /* Poll /health until the fresh sidecar responds. getResolvedSidecarUrl()
-     carries the SSRF guard — a non-local URL falls back to localhost. */
-  const url = getResolvedSidecarUrl();
-  const target = `${url}/health`;
-  const deadline = Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, RESTART_HEALTH_POLL_MS));
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-      const r = await fetch(target, { signal: controller.signal }).finally(() =>
-        clearTimeout(timer),
-      );
-      if (r.ok) return res.json({ ok: true });
-    } catch {
-      /* sidecar still starting — keep polling */
-    }
-  }
-
+  const healthy = await waitForSidecarHealthy(Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS);
+  if (healthy) return res.json({ ok: true });
   return res.status(503).json({
     ok: false,
     error: `Sidecar did not become healthy within ${RESTART_HEALTH_POLL_TIMEOUT_MS / 1000}s after restart.`,

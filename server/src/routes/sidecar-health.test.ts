@@ -626,6 +626,7 @@ describe('POST /api/sidecar/restart', () => {
     (supervisorMod.getActiveSupervisor as ReturnType<typeof vi.fn>).mockReturnValue({
       current: () => null,
       tripEvent: () => null,
+      exhaustedEvent: () => false,
     });
     const res = await request(makeApp()).post('/api/sidecar/restart');
     expect(res.status).toBe(409);
@@ -687,6 +688,43 @@ describe('POST /api/sidecar/restart', () => {
     await request(makeApp()).post('/api/sidecar/restart');
     /* kill() MUST be called before the health poll loop. */
     expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls resetAndRespawn and polls health when the supervisor is exhausted (not tripped)', async () => {
+    const resetAndRespawn = vi.fn(async () => {});
+    (supervisorMod.getActiveSupervisor as ReturnType<typeof vi.fn>).mockReturnValue({
+      start: async () => {},
+      stop: async () => {},
+      current: () => null,
+      recycling: () => true,
+      tripEvent: () => null,
+      exhaustedEvent: () => true,
+      resetAndRespawn,
+    });
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+
+    const res = await request(makeApp()).post('/api/sidecar/restart');
+
+    expect(resetAndRespawn).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('still returns the generic 409 when neither tripped nor exhausted', async () => {
+    (supervisorMod.getActiveSupervisor as ReturnType<typeof vi.fn>).mockReturnValue({
+      start: async () => {},
+      stop: async () => {},
+      current: () => null,
+      recycling: () => true,
+      tripEvent: () => null,
+      exhaustedEvent: () => false,
+      resetAndRespawn: vi.fn(async () => {}),
+    });
+
+    const res = await request(makeApp()).post('/api/sidecar/restart');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/will spawn one shortly/i);
   });
 });
 
