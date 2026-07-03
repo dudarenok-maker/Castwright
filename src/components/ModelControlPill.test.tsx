@@ -198,6 +198,21 @@ describe('ModelControlPill — action routing', () => {
   });
 });
 
+describe('ModelControlPill — suppressUnreachableAction prop', () => {
+  it('hides the Retry button when suppressUnreachableAction is true, but keeps the label', () => {
+    render(
+      <ModelControlPill kind="tts" state="unreachable" onLoad={vi.fn()} onStop={vi.fn()} suppressUnreachableAction />,
+    );
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
+    expect(screen.getByText(/voice engine unavailable/i)).toBeInTheDocument();
+  });
+
+  it('shows Retry as normal when suppressUnreachableAction is not set', () => {
+    render(<ModelControlPill kind="tts" state="unreachable" onLoad={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+});
+
 describe('ModelControlPill — Qwen 1.7B-Base pill (fs-55)', () => {
   /* Pin that the Qwen 1.7B-Base pill renders the correct label in each state.
      The pill is a plain ModelControlPill with engineLabel="Qwen 1.7B"; these
