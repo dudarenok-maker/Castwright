@@ -20,6 +20,7 @@
     "install:cert-mobile": "node scripts/print-cert-install-instructions.mjs",
     "tts:sidecar": "node scripts/launch-sidecar.mjs",
     "apk:companion": "node scripts/build-companion-apk.mjs",
+    "prebuild": "node scripts/sync-docs-to-public.mjs",
     "build": "tsc -b && vite build && npm --prefix server run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && npm --prefix server run typecheck",
