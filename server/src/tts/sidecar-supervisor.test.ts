@@ -21,8 +21,6 @@ vi.mock('./restart-breadcrumb.js');
 const BASE_OPTS: Omit<SpawnSidecarOpts, 'onExit'> = {
   autoStart: true,
   modelKey: 'kokoro-v1' as SpawnSidecarOpts['modelKey'],
-  eagerLoadKokoro: true,
-  eagerLoadQwen: true,
   repoRoot: '/repo',
 };
 

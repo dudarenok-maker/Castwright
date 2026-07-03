@@ -24,6 +24,7 @@
 - **A chapter title isn't read twice.** Some EPUB and Kindle books repeat the chapter heading at the top of the chapter's own text; Castwright now reads it once, the way you'd expect.
 - **Dialogue in another language stays with its speaker.** In a German, French or other non-English book, lines wrapped in the language's own quotation marks — „…", «…» — could slip away from their character and fall to the narrator; they now stay with the person who spoke them.
 - **The analyzer's device row tells you what's actually going on.** Instead of an unhelpful "Unknown" most of the time it's checked, Advanced Configuration now says plainly whether the local analyzer is idle or genuinely out of reach.
+- **One home for "which voice engine warms up at startup."** Model Manager's eager-load checkbox and Advanced Configuration's preload settings used to quietly disagree with each other. Advanced Configuration is now the one place that controls it, for every engine.
 
 # Castwright 1.9.0
 

@@ -231,13 +231,11 @@ const listenerCallback = () => {
      eager-load / model-key change is picked up by the next process. */
   sidecarSupervisor = createSidecarSupervisor({
     buildOpts: async () => {
-      const settings = await readUserSettings();
+      await readUserSettings();
       return {
         autoStart: getResolvedAutoStartSidecar(),
-        /* Resolved (Qwen-when-installed) key — drives PRELOAD_QWEN vs Kokoro. */
+        /* Resolved (Qwen-when-installed) key — drives PRELOAD_COQUI. */
         modelKey: getResolvedTtsModelKey(),
-        eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
-        eagerLoadQwen: settings.eagerLoadQwen ?? true,
         repoRoot: bootRepoRoot,
       };
     },

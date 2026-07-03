@@ -16,7 +16,7 @@ import {
   type SectionNavItem,
 } from './settings/settings-accordion';
 import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
-import { TTS_ENGINES, engineForModelKey, type TtsEngineId } from '../lib/tts-models';
+import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
@@ -125,8 +125,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(
     account.dualModelEnabled ?? false,
   );
-  const [eagerLoadKokoro, setEagerLoadKokoro] = useState<boolean>(account.eagerLoadKokoro ?? true);
-  const [eagerLoadQwen, setEagerLoadQwen] = useState<boolean>(account.eagerLoadQwen ?? true);
   const [generationWorkers, setGenerationWorkers] = useState<number>(
     account.generationWorkers ?? 1,
   );
@@ -144,8 +142,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     setAnalyzerPhase1MinLagChapters(account.analyzerPhase1MinLagChapters ?? null);
     setAutoStartSidecar(account.autoStartSidecar ?? true);
     setDualModelEnabled(account.dualModelEnabled ?? false);
-    setEagerLoadKokoro(account.eagerLoadKokoro ?? true);
-    setEagerLoadQwen(account.eagerLoadQwen ?? true);
     setGenerationWorkers(account.generationWorkers ?? 1);
   }, [
     account.hydrated,
@@ -161,8 +157,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     account.analyzerPhase1MinLagChapters,
     account.autoStartSidecar,
     account.dualModelEnabled,
-    account.eagerLoadKokoro,
-    account.eagerLoadQwen,
     account.generationWorkers,
   ]);
 
@@ -177,16 +171,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
 
   const persistedAutoStart = account.autoStartSidecar ?? true;
   const autoStartDirty = autoStartSidecar !== persistedAutoStart;
-  const persistedEagerLoadKokoro = account.eagerLoadKokoro ?? true;
-  const eagerLoadKokoroDirty = eagerLoadKokoro !== persistedEagerLoadKokoro;
-  const persistedEagerLoadQwen = account.eagerLoadQwen ?? true;
-  const eagerLoadQwenDirty = eagerLoadQwen !== persistedEagerLoadQwen;
-  /* The eager-load toggle governs the DEFAULT engine only — any Qwen tier
-     (0.6B or 1.7B) routes through engineForModelKey's prefix check, so we
-     light up the eager-load Qwen chip for both. Build-side tier dispatch
-     (PRELOAD_QWEN vs PRELOAD_QWEN_BASE17) happens in buildSidecarEnv based
-     on the saved defaultTtsModelKey. */
-  const eagerEngineIsQwen = engineForModelKey(defaultTtsModelKey) === 'qwen';
 
   /* srv-21 — block Save on a sidecar URL that isn't an http(s) private/loopback
      host (prevents pointing the server's outbound fetches at an arbitrary
@@ -206,9 +190,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       analyzerPhase1MinLagChapters !== (account.analyzerPhase1MinLagChapters ?? null) ||
       dualModelEnabled !== (account.dualModelEnabled ?? false) ||
       generationWorkers !== (account.generationWorkers ?? 1) ||
-      autoStartDirty ||
-      eagerLoadKokoroDirty ||
-      eagerLoadQwenDirty
+      autoStartDirty
     );
   }, [
     account,
@@ -225,8 +207,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     dualModelEnabled,
     generationWorkers,
     autoStartDirty,
-    eagerLoadKokoroDirty,
-    eagerLoadQwenDirty,
   ]);
 
   const saving = account.status === 'saving';
@@ -250,8 +230,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       analyzerPhase1MinLagChapters,
       autoStartSidecar,
       dualModelEnabled,
-      eagerLoadKokoro,
-      eagerLoadQwen,
       generationWorkers,
     };
     const action = await dispatch(saveAccountSettings(patch));
@@ -460,57 +438,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             </span>
           </label>
         </FieldRow>
-        {eagerEngineIsQwen ? (
-          <FieldRow
-            label="Eager-load Qwen at startup"
-            sublabel="On by default while Qwen is your default engine — the voice engine preloads Qwen's synth model at boot so the first chapter doesn't wait on a cold load. Turn off to warm it lazily on first synth and keep that VRAM free until generation starts. Kokoro stays the on-demand fallback either way. Takes effect on the next voice-engine restart."
-          >
-            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={eagerLoadQwen}
-                onChange={(e) => setEagerLoadQwen(e.target.checked)}
-                data-testid="account-eager-load-qwen"
-                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-              />
-              <span className="text-sm text-ink">
-                {eagerLoadQwen
-                  ? 'Enabled — the voice engine preloads Qwen at startup.'
-                  : 'Disabled — Qwen warms on demand on first synth.'}
-              </span>
-            </label>
-            {eagerLoadQwenDirty && (
-              <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                Restart the voice engine to apply this change.
-              </p>
-            )}
-          </FieldRow>
-        ) : (
-          <FieldRow
-            label="Eager-load Kokoro at startup"
-            sublabel="On by default. Turn off if Qwen is your main engine — Kokoro then loads only when a Kokoro voice (e.g. the narrator) is synthesized, freeing ~1 GB VRAM. Takes effect on the next voice-engine restart."
-          >
-            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={eagerLoadKokoro}
-                onChange={(e) => setEagerLoadKokoro(e.target.checked)}
-                data-testid="account-eager-load-kokoro"
-                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-              />
-              <span className="text-sm text-ink">
-                {eagerLoadKokoro
-                  ? 'Enabled — the voice engine preloads Kokoro at startup.'
-                  : 'Disabled — Kokoro warms on demand on first synth.'}
-              </span>
-            </label>
-            {eagerLoadKokoroDirty && (
-              <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                Restart the voice engine to apply this change.
-              </p>
-            )}
-          </FieldRow>
-        )}
         <FieldRow
           label="Generation workers"
           sublabel="How many chapters the generation queue synthesizes at once (1–4, default 2). Chapters are pulled from the queue across books. This is queue concurrency only — the GPU stays the limit on simultaneous synthesis, so raising this never risks running out of VRAM. Takes effect on the next generation run."

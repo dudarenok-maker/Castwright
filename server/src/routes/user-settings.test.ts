@@ -227,8 +227,7 @@ describe('user-settings router', () => {
   /* Regression — EVERY writable setting must survive PUT → GET → disk.
      The qwen bug above shipped because a new model key was added to the
      schema but missed from the PUT allow-list, so its save silently 400'd
-     and the value "reverted" on the next load (the user-reported symptom,
-     also seen with eagerLoadKokoro). This locks the whole object: one
+     and the value "reverted" on the next load. This locks the whole object: one
      non-default sample per writable field, asserted in the PUT echo AND on
      disk. The key list is derived from the schema, so a future field added
      without a sample value fails the guard below — forcing it to be
@@ -264,10 +263,6 @@ describe('user-settings router', () => {
       analyzerPhase1Model: 'gemini-3.1-flash-lite',
       analyzerPhase1MinLagChapters: 5,
       dualModelEnabled: true,
-      /* The user's other reported field — eager-load off for a Qwen-primary
-         setup. */
-      eagerLoadKokoro: false,
-      eagerLoadQwen: false,
       generationWorkers: 4,
       backupEnabled: false,
       backupCadence: 'weekly',

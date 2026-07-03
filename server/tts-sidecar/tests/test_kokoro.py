@@ -685,7 +685,7 @@ def test_health_after_kokoro_load_unload_cycle(kokoro_unloaded_client) -> None:
 # The sidecar eager-loads Kokoro at startup by default (PRELOAD_KOKORO unset
 # or =1) — cheap (~1 GB / ~1 s) and matches the kokoro-v1 engine default.
 # Qwen-primary users set PRELOAD_KOKORO=0 (propagated by the Node server from
-# the account-level "Eager-load Kokoro at startup" toggle) so the eager load
+# Advanced Settings' "Preload Kokoro at startup" knob) so the eager load
 # is skipped and Kokoro warms on demand on first synth, freeing ~1 GB VRAM.
 # These tests pin the gate by calling the startup hook directly with a spy
 # engine and asserting whether _ensure_loaded ran.

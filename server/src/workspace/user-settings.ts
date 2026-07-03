@@ -66,6 +66,48 @@ export async function migrateLegacyUserSettings(opts: {
   return true;
 }
 
+/* One-time migration: the retired eagerLoadKokoro/eagerLoadQwen fields
+   governed PRELOAD_KOKORO/QWEN/QWEN_BASE17 with an implicit "non-default
+   engine forced lazy" coupling to defaultTtsModelKey. That coupling is gone —
+   Advanced Settings' tts.preload.* knobs (server/src/config/registry.ts) are
+   now flat, engine-independent booleans. Translate any pre-existing legacy
+   values into equivalent configOverrides entries so an upgrade can't silently
+   change effective preload behaviour (Kokoro's own default is eager — without
+   this a Qwen-primary user who had it force-lazy would suddenly start
+   eager-loading Kokoro again). Uses the raw `defaultTtsModelKey` field (not
+   the fully-resolved getResolvedTtsModelKey) as the old coupling's proxy,
+   since the Qwen-install probe that resolver depends on hasn't run yet this
+   early in boot — a fine approximation for a one-time backward-compat
+   translation. No-op (returns `raw` unchanged) once neither legacy field is
+   present, so this only ever fires once per install. */
+function migrateLegacyEagerLoadFields(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  const obj = raw as Record<string, unknown>;
+  const hasLegacy = typeof obj.eagerLoadKokoro === 'boolean' || typeof obj.eagerLoadQwen === 'boolean';
+  if (!hasLegacy) return raw;
+
+  const overrides = { ...(obj.configOverrides as Record<string, unknown> | undefined) };
+  const modelKey = obj.defaultTtsModelKey;
+  const isQwenDefault = modelKey === 'qwen3-tts-0.6b' || modelKey === 'qwen3-tts-1.7b';
+  const eagerLoadKokoro = obj.eagerLoadKokoro !== false;
+  const eagerLoadQwen = obj.eagerLoadQwen !== false;
+
+  if (!('tts.preload.kokoro' in overrides)) {
+    overrides['tts.preload.kokoro'] = isQwenDefault ? false : eagerLoadKokoro;
+  }
+  if (!('tts.preload.qwen' in overrides)) {
+    overrides['tts.preload.qwen'] = isQwenDefault && modelKey === 'qwen3-tts-0.6b' ? eagerLoadQwen : false;
+  }
+  if (!('tts.preload.qwenBase17' in overrides)) {
+    overrides['tts.preload.qwenBase17'] = isQwenDefault && modelKey === 'qwen3-tts-1.7b' ? eagerLoadQwen : false;
+  }
+
+  const next: Record<string, unknown> = { ...obj, configOverrides: overrides };
+  delete next.eagerLoadKokoro;
+  delete next.eagerLoadQwen;
+  return next;
+}
+
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const TTS_MODEL_KEY_VALUES = [
@@ -163,27 +205,6 @@ export const userSettingsSchema = z.object({
      with a `false` default so legacy user-settings.json files load
      unchanged. Takes effect on the next generation run (no restart). */
   dualModelEnabled: z.boolean().optional(),
-  /* When true (default), the spawned TTS sidecar gets PRELOAD_KOKORO=1 and
-     eager-loads Kokoro at startup (~1 GB VRAM, ~1 s). When false, the
-     sidecar gets PRELOAD_KOKORO=0 and Kokoro warms on demand on first
-     synth — for Qwen-primary users who want the ~1 GB VRAM back. Changing
-     it re-spawns env on the next sidecar restart. Optional with a `true`
-     default so legacy user-settings.json files load unchanged. Only
-     governs the sidecar when Kokoro/Coqui is the resolved default engine;
-     under a Qwen default Kokoro is the on-demand fallback and
-     `eagerLoadQwen` takes over. */
-  eagerLoadKokoro: z.boolean().optional(),
-  /* When true (default) AND Qwen3-TTS is the resolved default engine, the
-     spawned sidecar gets PRELOAD_QWEN=1 (0.6B tier) or PRELOAD_QWEN_BASE17=1
-     (1.7B Quality tier) so the chosen Qwen Base synth model eager-loads at
-     startup. The tier is selected by `defaultTtsModelKey` (one knob, two env
-     vars) — the build-side dispatcher in server/src/tts/spawn-sidecar.ts
-     `buildSidecarEnv` picks the matching env var from the resolved modelKey.
-     When false, both env vars are `'0'` and the chosen Qwen tier warms on
-     demand on first synth. No effect unless a Qwen tier is the default
-     engine. Changing it re-spawns env on the next sidecar restart. Optional
-     with a `true` default so legacy user-settings.json files load unchanged. */
-  eagerLoadQwen: z.boolean().optional(),
   /* Plan 111 — number of chapters the generation queue synthesises
      concurrently (queue-worker concurrency). Default 2. Queue/synthesis
      concurrency only; the process-global GPU semaphore (GPU_CONCURRENCY)
@@ -285,17 +306,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      deliberate user choice (~8 GB headroom). Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   dualModelEnabled: false,
-  /* On by default — eager-loading Kokoro at sidecar startup is cheap
-     (~1 GB VRAM, ~1 s) and matches the kokoro-v1 engine default. Qwen-
-     primary users turn this off to reclaim that ~1 GB; Kokoro then warms
-     on demand. Flip in lockstep with src/lib/account-defaults.ts
-     FRONTEND_ACCOUNT_DEFAULTS. */
-  eagerLoadKokoro: true,
-  /* On by default — when Qwen is the default engine the sidecar eager-loads
-     Qwen Base at startup. Qwen-primary users who want the synth model to
-     warm lazily turn this off. No effect under a Kokoro/Coqui default. Flip
-     in lockstep with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
-  eagerLoadQwen: true,
   /* Plan 111 — 1 concurrent generation worker by default (safe-by-default:
      the Qwen forward is serialised, so a 2nd worker just contends on the lock
      and accelerates the host-memory leak). Flip in lockstep with
@@ -332,7 +342,13 @@ export async function readUserSettings(): Promise<UserSettings> {
     cached = { ...DEFAULT_USER_SETTINGS };
     return cached;
   }
-  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(raw as object) });
+  const migrated = migrateLegacyEagerLoadFields(raw);
+  if (migrated !== raw) {
+    await writeJsonAtomic(USER_SETTINGS_PATH, migrated).catch((err) => {
+      console.warn('[user-settings] eager-load migration write failed (non-fatal):', err);
+    });
+  }
+  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });
   cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
   return cached;
 }

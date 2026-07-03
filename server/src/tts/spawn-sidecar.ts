@@ -37,17 +37,6 @@ export type TtsModelKey = UserSettings['defaultTtsModelKey'];
 export interface SpawnSidecarOpts {
   autoStart: boolean;
   modelKey: TtsModelKey;
-  /* When true (default), the spawned sidecar gets PRELOAD_KOKORO=1 and
-     eager-loads Kokoro at startup. When false (Qwen-primary users who
-     want the ~1 GB VRAM back), PRELOAD_KOKORO=0 and Kokoro warms on
-     demand on first synth. Only honoured when Kokoro/Coqui is the default
-     engine; under a Qwen default Kokoro is always the on-demand fallback. */
-  eagerLoadKokoro: boolean;
-  /* When true (default) AND Qwen is the default engine, the spawned sidecar
-     gets PRELOAD_QWEN=1 and eager-loads Qwen Base at startup. When false,
-     PRELOAD_QWEN=0 and Qwen warms on demand on first synth. No effect unless
-     Qwen is the default engine. */
-  eagerLoadQwen: boolean;
   repoRoot: string;
   /* Override-points for tests. */
   port?: number;
@@ -425,8 +414,6 @@ function killTree(pid: number, spawnFn: typeof spawn, ownGroup = false): Promise
     flag or async probe helpers. */
 export interface BuildSidecarEnvOpts {
   modelKey: TtsModelKey;
-  eagerLoadKokoro: boolean;
-  eagerLoadQwen: boolean;
   repoRoot: string;
 }
 
@@ -438,29 +425,18 @@ export interface BuildSidecarEnvOpts {
     Construction is two layers:
       1. `...process.env` — parent env pass-through (fs-1 weight-path vars,
          PYTORCH_CUDA_ALLOC_CONF default, etc.).
-      2. PRELOAD vars + QWEN_VOICES_DIR derived from modelKey + eager-load toggles.
+      2. PRELOAD_COQUI + QWEN_VOICES_DIR derived from modelKey.
       3. Registry override loop — any restart-sidecar knob whose effective
          source is NOT 'default' (i.e. an explicit env var or an app override)
-         is injected as a string. An explicit registry override for a PRELOAD_QWEN
-         or PRELOAD_KOKORO knob WINS over the modelKey/eagerLoad-derived value — that
-         is the intended precedence so advanced users can pin preloads via the config
-         UI without touching code. */
+         is injected as a string. This is the ONLY place PRELOAD_QWEN /
+         PRELOAD_QWEN_BASE17 / PRELOAD_KOKORO come from — each is a flat,
+         engine-independent boolean (Advanced Settings' tts.preload.* knobs);
+         when left at its registry default, it's intentionally omitted here
+         so the sidecar's own Python default applies (no default-coupling to
+         whichever engine is currently the resolved default). */
 export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
-  const { modelKey, eagerLoadKokoro, eagerLoadQwen, repoRoot } = opts;
+  const { modelKey, repoRoot } = opts;
 
-  /* The default engine honours its own eager-load toggle; the non-default
-     engine always stays LAZY as the on-demand fallback.
-     Qwen default (any tier) → the matching PRELOAD_QWEN* var follows
-        eagerLoadQwen, Kokoro forced off. Tier is selected by modelKey so the
-        sidecar warm-loads the exact base the user picked (0.6B or 1.7B).
-     Kokoro/Coqui default → all Qwen preloads off, Kokoro follows eagerLoadKokoro.
-     The tier dispatcher mirrors the frontend's engineForModelKey prefix-routing
-     so the build-side never falls back to Kokoro just because the user picked
-     the 1.7B Quality tier. */
-  const qwenTier: '0.6b' | '1.7b' | null =
-    modelKey === 'qwen3-tts-1.7b' ? '1.7b' :
-    modelKey === 'qwen3-tts-0.6b' ? '0.6b' : null;
-  const isQwenDefault = qwenTier !== null;
   /* The `...process.env` spread carries the parent's full environment —
      including KOKORO_MODEL_PATH / KOKORO_VOICES_PATH for fs-1 shared weights.
      Keep that spread: replacing it with an allowlist would orphan the weights
@@ -468,9 +444,6 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
-    PRELOAD_QWEN: isQwenDefault && qwenTier === '0.6b' ? (eagerLoadQwen ? '1' : '0') : '0',
-    PRELOAD_QWEN_BASE17: isQwenDefault && qwenTier === '1.7b' ? (eagerLoadQwen ? '1' : '0') : '0',
-    PRELOAD_KOKORO: isQwenDefault ? '0' : eagerLoadKokoro ? '1' : '0',
     /* Park the Qwen designed-voice embedding cache in the per-workspace
        tree (sibling to voices.json), not the sidecar's __file__-relative
        dir. A sidecar restart / cwd change / workspace move can't orphan a
@@ -533,8 +506,6 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const {
     autoStart,
     modelKey,
-    eagerLoadKokoro,
-    eagerLoadQwen,
     repoRoot,
     port = DEFAULT_PORT,
     host = DEFAULT_HOST,
@@ -645,7 +616,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
      for restart-sidecar knobs are injected here too (Task B). The spawn-sidecar
      tests pin the produced env values; sidecar-env.test.ts pins the override-
      injection contract. */
-  const env = buildSidecarEnv({ modelKey, eagerLoadKokoro, eagerLoadQwen, repoRoot });
+  const env = buildSidecarEnv({ modelKey, repoRoot });
 
   /* Open the sidecar's log files (tts.log / tts.err.log, the same convention
      start-app.ps1 uses) and hand the child their raw file descriptors as
@@ -705,7 +676,9 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   }
 
   log(
-    `[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, PRELOAD_QWEN=${env.PRELOAD_QWEN}, PRELOAD_KOKORO=${env.PRELOAD_KOKORO}, modelKey=${modelKey})`,
+    `[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, ` +
+      `PRELOAD_QWEN=${env.PRELOAD_QWEN ?? 'sidecar-default'}, ` +
+      `PRELOAD_KOKORO=${env.PRELOAD_KOKORO ?? 'sidecar-default'}, modelKey=${modelKey})`,
   );
 
   /* If the child exits on its own (e.g. start.ps1/start.sh venv check failed),
