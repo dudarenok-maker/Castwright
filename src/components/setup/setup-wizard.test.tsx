@@ -40,7 +40,7 @@ const READINESS: SetupReadiness = {
     sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
     ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
     tts: { status: 'fail', cause: 'venv-missing', message: 'TTS engine not available', remediation: 'Install Kokoro weights' },
-    analyzer: { status: 'fail', cause: 'no-model', message: 'Analyzer not configured', remediation: 'Set up Gemini or Ollama' },
+    analyzer: { status: 'fail', cause: 'no-gemini-key', message: 'Analyzer not configured', remediation: 'Set up Gemini or Ollama' },
   },
   info: { gpu: 'CPU — no GPU detected' },
 };
