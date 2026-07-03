@@ -90,28 +90,49 @@ the Voice tile already ships.
 
 ### 1.2 Series metadata in the shared builders
 
-**Two rounds of adversarial review, two wrong gates — this is the corrected one.**
-Round 1 gated on "`state.series` is set", which is wrong because standalone books carry
-the synthetic sentinel `STANDALONES_SERIES = 'Standalones'`
-(`server/src/workspace/paths.ts:75`), never an empty string. Round 2's fix,
-`state.seriesPosition != null`, is **also** wrong: `series` and `seriesPosition` are
-populated independently at ingest (`server/src/ingest/epub.ts:127-128` — a book can carry
-a real series name with a `null` position when the source EPUB has no calibre-style
-index), so gating series-name emission on position presence silently drops series
-metadata for exactly the books missing a numeric index — the opposite failure mode from
-round 1.
+**Three rounds of adversarial review, three attempts at this gate.** Round 1 gated on
+"`state.series` is set" — wrong, because `server/src/routes/import.ts:216` stamps
+`series: STANDALONES_SERIES` directly into state at creation time for a standalone book
+(never an empty string). Round 2's fix, `state.seriesPosition != null`, was also wrong:
+`series` and `seriesPosition` can be populated independently (a real series name with a
+`null` position when the source has no numeric index), so gating on position silently
+drops series metadata for books missing one. Round 3 proposed `!state.isStandalone`
+alone, reasoning that the sentinel "is never stored in `state.series`" — that reasoning
+turned out to be wrong too (`import.ts:216` **does** store it at creation; a later
+`isStandalone` toggle via `PATCH /book-state`, per `server/src/routes/book-state.ts`,
+deliberately does *not* rewrite `state.series`, so the two fields can drift out of sync
+after an edit) — but the resulting gate, `!isStandalone`, is nonetheless the field this
+codebase already uses everywhere else for this exact decision.
 
-**The correct, authoritative signal is `BookStateJson.isStandalone: boolean`**
-(`server/src/workspace/scan.ts:58`) — the codebase's own purpose-built discriminator,
-already used the same way by `server/src/analytics/listen-stats-aggregate.ts:91`
-(`if (b.isStandalone || !b.series) continue;`):
+**The gate: `state.isStandalone !== true && !!state.series?.trim()`.** `isStandalone` is
+the dominant, already-established discriminator for "does this book participate in a
+series" throughout the codebase — used bare, with no series co-check, at
+`server/src/routes/cast-design.ts:555`, `qwen-voice.ts:565`, `single-design.ts:260`,
+`series-cast-scan.ts:124`, `series-full-cast-scan.ts:73`, and `voices.ts:629`. This spec
+adds one defensive `&& !!state.series?.trim()` on top of that dominant pattern — cheap,
+and it closes the one remaining gap the drift above can produce (an `isStandalone: false`
+book whose `series` was never backfilled to a real name). `seriesPosition` remains a
+separate, independently-optional sub-field:
 
-- Emit `series=<state.series>` whenever `!state.isStandalone` — regardless of whether
-  `seriesPosition` is set.
+- Emit `series=<state.series>` whenever `!isStandalone && !!series`.
 - Emit `series-part=<state.seriesPosition>` **only when `seriesPosition != null`** — a
   genuinely optional sub-field of an emitted series, not the series gate itself.
-- When `state.isStandalone` is `true`, omit series entirely (never emit the
-  `'Standalones'` sentinel name).
+- Otherwise, omit series entirely.
+
+**Residual open question for the plan phase, not resolved here:** whether a book
+imported before the `isStandalone` field existed in the schema could still have it
+`undefined` on disk today. `import.ts:215` (`!!body.isStandalone`) guarantees every book
+created through that path gets an explicit boolean, and `server/src/workspace/scan.ts:696`
+defaults absent `isStandalone` to `false` — but that default lives in a *library-summary*
+builder, not confirmed to be the same code path `routes/export.ts`'s `findBookByBookId`
+uses to load `state` for export (`findBookByBookId` returns the raw on-disk
+`BookStateJson`, not the summary object at `scan.ts:690-704`). If a genuinely
+pre-migration book exists with `isStandalone` absent, `!isStandalone` degenerates to
+`!undefined === true` and would spuriously emit series for a book with no series data at
+all — caught for such a book by the `!!series?.trim()` co-check only if its `series` also
+happens to be falsy. The plan phase should confirm whether `state-migrate.ts` (referenced
+in `server/src/workspace/state-migrate.test.ts`) backfills `isStandalone` for every
+on-disk book before this code path can ever see one without it.
 
 Both metadata builders gain this series passthrough:
 
@@ -139,8 +160,9 @@ builds into):
   `state.author`), `narrators` (array, from `artistForExport`-equivalent human-narrator
   logic in `narrator-credit.ts`, omitted when the narrator is the Castwright brand
   default), `series` (array-of-objects `{ name, sequence }`, **gated on
-  `!state.isStandalone`, with `sequence` present only when `seriesPosition != null`** —
-  see §1.2), `genres` (array, from `state.genre`), `description` (from
+  `state.isStandalone !== true && !!state.series?.trim()`, with `sequence` present only
+  when `seriesPosition != null`** — see §1.2), `genres` (array, from `state.genre`),
+  `description` (from
   `state.description`), `publishedYear` (parsed from `state.publicationDate`),
   `language` (from the book's detected/set language, if the codebase already surfaces
   one at export time — needs confirming in the plan phase against `fs-2`'s language
@@ -148,6 +170,11 @@ builds into):
 - **`cover.jpg`** — copied from `coverImagePath(bookDir)` when it exists, same source
   the per-chapter APIC frames already use. Atomic tmp+rename, same as the MP3 files;
   skipped silently when no cover exists.
+
+Both must be written **after** `buildMp3Folder`'s existing `rm(outDir)` staging-recreate
+step (per `docs/features/archive/34-mp3-folder-export.md`'s "stale-file purge"
+invariant), not before — otherwise the rm wipes them along with any prior run's leftover
+chapter files.
 
 **Critical plumbing gap caught by adversarial review:** writing these two files into the
 staging directory is not sufficient — they never reach the user's actual sync folder as
@@ -218,10 +245,19 @@ Job-shape correction, also caught on review: `BookExportJob` (the OpenAPI-genera
 `openapi.yaml`'s `BookExportJob` schema) is a single 0..1 `progress` ratio per job, not a
 sub-divided `{done, total}` counter the way a generation stream's chapter count is — so
 the Export pill cannot reuse the Generation pill's `done`/`total` shape verbatim. It
-aggregates a **count of jobs**, not a fraction of sub-items, and status has five values
-(`queued | in_progress | done | failed | cancelled`, not just `in_progress`/terminal) —
-non-terminal is `queued` **or** `in_progress` (`exports-middleware.ts:51`'s `TERMINAL`
-set is `{done, failed, cancelled}`, so its complement includes `queued`).
+aggregates a **count of jobs**, not a fraction of sub-items.
+
+**On `queued`:** the wire type's `status` enum has five values
+(`queued | in_progress | done | failed | cancelled`), and the non-terminal check is
+written against all of them for type-completeness (`!TERMINAL.has(status)`, matching
+`exports-middleware.ts:51`'s `TERMINAL = {done, failed, cancelled}`) — but every export
+job today is created directly in `in_progress` (`server/src/routes/export.ts:298`); no
+code path in `server/src/export*` ever assigns `queued`. Per CLAUDE.md's "no error
+handling for impossible scenarios," this spec does **not** add a dedicated queued-only
+pill state, copy, or test case — the check is future-proofed against the full type, not
+a modeled feature. If the server ever gains an actual queue (multiple exports throttled
+per book), `queued` jobs would already count toward `runningCount` for free; nothing
+else needs to change for that day to work.
 
 ### 2.1 `ExportPillData` and the linger snapshot
 
@@ -232,14 +268,15 @@ New type in `top-bar.tsx`, sibling to `GenerationPillData`/`AnalysisPillData`/
 export type ExportPillState = 'running' | 'stalled' | 'done' | 'failed';
 export interface ExportPillData {
   state: ExportPillState;
-  /** Non-terminal (queued + in_progress) job count across every book.
-      Present only for 'running'/'stalled'. */
+  /** Non-terminal job count across every book (`!TERMINAL.has(status)`,
+      so type-complete against `queued` too, though the server doesn't
+      emit it today — see the Part 2 intro). Present only for
+      'running'/'stalled'. */
   runningCount?: number;
-  /** Average `progress` across in_progress jobs (queued jobs have no
-      progress to average). Undefined while only queued jobs exist, or
-      during the terminal 'done'/'failed' linger — those states render
-      as text ("Export done"/"Export failed"), not a percent bar, same
-      as the Design pill's own 'done' summary has no percent. */
+  /** Average `progress` across in_progress jobs. Undefined during the
+      terminal 'done'/'failed' linger — those states render as text
+      ("Export done"/"Export failed"), not a percent bar, same as the
+      Design pill's own 'done' summary has no percent. */
   percent?: number;
   onClick: () => void;
 }
@@ -266,8 +303,7 @@ middleware in §2.3. This is a Redux-readable field `layout.tsx`'s IIFE can sele
 directly, unlike a snapshot trapped in middleware closure state.
 
 `stalled` should reuse the same `STALL_THRESHOLD_MS` idea the other three pills use
-(`layout.tsx`'s per-second `forceClockTick`), applied only to `in_progress` jobs (a
-`queued` job isn't "stalled" in the same sense — it's just waiting its turn). But
+(`layout.tsx`'s per-second `forceClockTick`), applied only to `in_progress` jobs. But
 `BookExportJob` doesn't currently carry a `lastTickAt`-equivalent field — the plan phase
 decides whether to add one (stamped on each `exportUpdated` poll) or derive staleness
 from time-since-last-poll-response tracked client-side in the aggregation IIFE itself
@@ -277,8 +313,8 @@ from time-since-last-poll-response tracked client-side in the aggregation IIFE i
 
 New `exportPill` IIFE alongside the existing `generationPill`/`analysisPill`/
 `designPill` ones (`layout.tsx:1262-1393`): scans `exports.byBookId` across every book
-for non-terminal (`queued` **or** `in_progress`) jobs and counts them (`runningCount`);
-`percent` averages `progress` across the `in_progress` subset only. **Pill visibility is
+for non-terminal jobs and counts them (`runningCount`); `percent` averages `progress`
+across the `in_progress` subset. **Pill visibility is
 the union of two independent sources**, not non-terminal jobs alone: (a) at least one
 non-terminal job exists anywhere, OR (b) `exports.linger` (§2.1/§2.3) has at least one
 entry. Without (b), the pill would vanish the instant the last job goes terminal,
@@ -287,16 +323,22 @@ between this section and §2.3, caught on review.
 
 ### 2.3 Completion linger
 
-A small new middleware, `src/store/export-pill-middleware.ts`, modeled directly on
-`cast-design-stream-middleware.ts`'s snapshot+timer pattern: watches for `exportUpdated`
-actions, and when a job transitions into `done` or `failed` **and** no other non-terminal
-job remains for that book, dispatches `exportLingerSet({ bookId, state })` (writing into
-the new `exports.linger` slice state from §2.1) and starts a short timer — matching the
-Design pill's lingering-summary duration — that dispatches `exportLingerCleared({
-bookId })` when it fires. If a new export starts on the same book before the timer
-fires (`exportStarted` for that `bookId`), the pending timer is cancelled and the linger
-entry cleared immediately, same guard `cast-design-stream-middleware.ts` already uses —
-so a fresh run's live progress is never shadowed by a stale done/failed summary.
+A small new middleware, `src/store/export-pill-middleware.ts`, modeled on
+`cast-design-stream-middleware.ts`'s snapshot+timer pattern — **with one correction from
+round-3 review**: the reference middleware's guard is *passive*, not an active
+`clearTimeout`. It sets a `setTimeout` that fires unconditionally and no-ops if the
+snapshot it captured is no longer the current one (`cast-design-stream-middleware.ts`'s
+`onIdle` check) — it keeps no timer handle to cancel. `export-pill-middleware.ts` follows
+the same passive shape: on `exportUpdated` transitioning a job into `done` or `failed`
+with no other non-terminal job left for that book, dispatch `exportLingerSet({ bookId,
+state })` and schedule a `setTimeout` (matching the Design pill's lingering-summary
+duration) that dispatches `exportLingerCleared({ bookId })` **only if** `exports.linger[bookId]`
+still matches what this timer set (read current state at fire time, no-op if a newer
+entry already replaced or cleared it). Separately, when a **new** export starts on that
+book (`exportStarted`) while a linger entry is still present, the middleware immediately
+dispatches `exportLingerCleared({ bookId })` — the earlier stale summary shouldn't shadow
+live progress — with no timer-cancellation machinery needed, since the now-orphaned
+pending timeout's own no-op check handles the rest.
 
 **`cancelled` is deliberately excluded from the linger** — it's a result of the user's
 own dismiss/retry action, not something they need to be notified about after the fact —
@@ -328,9 +370,9 @@ Generate view.
 Added to `summarizeStatus()` and the `StatusDetail` interface (both defined in
 `src/components/top-bar.tsx`) alongside `analysis`/`generation`/`design`, plus a new
 `export` prop/section on `<StatusPopover>` (`src/components/status-popover.tsx`, the
-consumer that renders `StatusDetail` — `AnalysisPill`/`GenerationPill`/`DesignPill` at
-lines ~205/231/238), so Export participates in the same compact top-bar summary and
-hover/tap popover.
+consumer that renders `StatusDetail` — `AnalysisPill`/`DesignPill`/`GenerationPill` at
+lines 205/231/238 respectively), so Export participates in the same compact top-bar
+summary and hover/tap popover.
 
 ## Error handling
 
@@ -347,13 +389,16 @@ hover/tap popover.
 ## Testing (paired, per CLAUDE.md testing discipline)
 
 - **Server:**
-  - `build-mp3-folder.test.ts` — `metadata.json` shape: three cases pin the corrected
+  - `build-mp3-folder.test.ts` — `metadata.json` shape: four cases pin the corrected
     gate — (1) `isStandalone: true` → no `series` field at all (not even the
-    `'Standalones'` sentinel name); (2) `isStandalone: false` + `seriesPosition: null`
-    (a real series book with no calibre index) → `series` present, `sequence` absent;
-    (3) `isStandalone: false` + `seriesPosition` set → both present. Plus `cover.jpg`
-    presence/absence.
-  - `build-m4b.test.ts` — same three-case series/series-part FFMETADATA matrix as above.
+    `'Standalones'` sentinel name, even though it may literally be present in
+    `state.series` on disk); (2) `isStandalone: false` + `seriesPosition: null` (a real
+    series book with no calibre index) → `series` present, `sequence` absent;
+    (3) `isStandalone: false` + `seriesPosition` set → both present; (4) `isStandalone:
+    false` + empty/falsy `series` (the drift case where a `PATCH /book-state` toggle left
+    them inconsistent) → no `series` field, pinning the defensive `!!series?.trim()`
+    co-check. Plus `cover.jpg` presence/absence.
+  - `build-m4b.test.ts` — same four-case series/series-part FFMETADATA matrix as above.
   - `id3-tags.test.ts` — series frame presence/absent, whichever frame the plan settles
     on.
   - `sync-folder.test.ts` — `writeFolderToSyncFolder`'s allowlist actually copies
@@ -365,17 +410,17 @@ hover/tap popover.
 - **Frontend:**
   - `export-audiobook.test.tsx` (or `listen-download-section.test.tsx`) — Audiobookshelf
     tile's new format toggle (mp3-folder vs m4b, both defaulting to sync-folder).
-  - `layout.test.tsx` / `top-bar.test.tsx` — `exportPill` aggregation: single running
-    (queued and in_progress both count as running), multi-book `runningCount`, `percent`
-    averaged over `in_progress` only, stalled, visibility via the linger union (§2.2) when
-    zero non-terminal jobs remain but a linger entry exists, cancelled-clears-immediately.
+  - `layout.test.tsx` / `top-bar.test.tsx` — `exportPill` aggregation: single running,
+    multi-book `runningCount`, `percent` averaged over `in_progress` only, stalled,
+    visibility via the linger union (§2.2) when zero non-terminal jobs remain but a
+    linger entry exists, cancelled-clears-immediately.
   - `exports-slice.test.ts` — `exportLingerSet`/`exportLingerCleared` reducer cases.
   - `export-pill-middleware.test.ts` — new file, mirrors
-    `cast-design-stream-middleware.test.ts`'s snapshot-and-timer coverage: done/failed
+    `cast-design-stream-middleware.test.ts`'s passive-snapshot-guard coverage: done/failed
     dispatches `exportLingerSet` only when no other non-terminal job remains for that
-    book, clears after the timer, restarts (cancel pending timer + immediate clear) when
-    a new export starts on the same book before the timer fires, cancelled never
-    dispatches `exportLingerSet`.
+    book; the scheduled clear no-ops if the linger entry no longer matches what it set;
+    a new export starting on the same book clears the stale linger entry immediately;
+    cancelled never dispatches `exportLingerSet`.
 - **Regression plan:** this is cross-cutting (server export builders + the shared
   sync-folder primitive + a new frontend pill), so it gets its own
   `docs/features/NN-*.md` regression plan per the before-shipping checklist, not just
@@ -386,8 +431,8 @@ hover/tap popover.
 
 - `server/src/export/build-mp3-folder.ts` — `metadata.json` + `cover.jpg` written into
   staging.
-- `server/src/export/build-m4b.ts` — series FFMETADATA lines (`!isStandalone` gate,
-  `seriesPosition != null` for `series-part` only).
+- `server/src/export/build-m4b.ts` — series FFMETADATA lines (`isStandalone !== true &&
+  !!series?.trim()` gate, `seriesPosition != null` for `series-part` only).
 - `server/src/export/id3-tags.ts` — series ID3 frame.
 - `server/src/export/sync-folder.ts` — `writeFolderToSyncFolder`'s copy filter relaxed
   to allowlist `metadata.json`/`cover.jpg` alongside `.mp3` (§1.3 fix). Writer
