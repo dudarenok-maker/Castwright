@@ -184,7 +184,7 @@ describe('diagnoseTts', () => {
 });
 
 import { diagnoseFfmpeg, diagnoseAnalyzer } from './setup-diagnosis.js';
-import type { FfmpegDiagnosisInput, AnalyzerDiagnosisInput } from './setup-diagnosis.js';
+import type { AnalyzerDiagnosisInput } from './setup-diagnosis.js';
 
 describe('diagnoseFfmpeg', () => {
   it('passes when both are present', () => {
