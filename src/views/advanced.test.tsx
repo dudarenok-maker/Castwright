@@ -164,7 +164,7 @@ beforeEach(() => {
   });
   vi.mocked(api.restartSidecar).mockResolvedValue({ ok: true });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
-  mockGetAnalyzerDevice.mockResolvedValue({ device: 'unknown' });
+  mockGetAnalyzerDevice.mockResolvedValue({ device: 'idle' });
 });
 
 /* ── Group headers ────────────────────────────────────────────────────────── */
@@ -410,8 +410,8 @@ async function openVoiceEngineSection(): Promise<void> {
   fireEvent.click(toggle);
 }
 
-describe('AdvancedView — analyzer read-only row (Plan 2 §2.4)', () => {
-  it('shows the analyzer GPU/CPU/unknown placement, not editable', async () => {
+describe('AdvancedView — analyzer read-only row (Plan 2 §2.4, issue #1225)', () => {
+  it('shows the analyzer GPU/CPU/idle/unreachable placement, not editable', async () => {
     mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
     mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
 
@@ -420,6 +420,24 @@ describe('AdvancedView — analyzer read-only row (Plan 2 §2.4)', () => {
     await screen.findByText(/Analyzer \(Ollama\) device/i);
     expect(screen.getByText(/GPU — not app-pinnable/)).toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: /analyzer/i })).not.toBeInTheDocument();
+  });
+
+  it('shows "Idle" (not "Unknown") when Ollama has nothing resident', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'idle' });
+
+    renderView();
+    await openVoiceEngineSection();
+    expect(await screen.findByText(/Idle \(no model currently loaded\)/)).toBeInTheDocument();
+  });
+
+  it('shows "Unreachable" when the daemon never answers', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerDevice.mockRejectedValue(new Error('network error'));
+
+    renderView();
+    await openVoiceEngineSection();
+    expect(await screen.findByText(/Unreachable — not app-pinnable/)).toBeInTheDocument();
   });
 
   it('links to the documented OS-env path', async () => {

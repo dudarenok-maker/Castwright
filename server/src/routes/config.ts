@@ -17,8 +17,8 @@ import {
   clearAllConfigOverrides,
 } from '../workspace/user-settings.js';
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
-import { toUuidForm } from './gpu-uuid.js';
-import { fetchSidecarDevices } from '../gpu/fetch-sidecar-devices.js';
+import { toUuidForm, needsUuidTranslation } from './gpu-uuid.js';
+import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-sidecar-devices.js';
 import { getLastKnownGpuDevices, setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 export const configRouter = Router();
@@ -71,6 +71,15 @@ configRouter.get('/', async (_req, res) => {
 configRouter.put('/', async (req, res) => {
   const patch = (req.body ?? {}) as Record<string, unknown>;
   const applied: string[] = [];
+  /* Resolve the sidecar's device list at most once for the whole request,
+     lazily — a PUT patching all three tts.*.device knobs in one body used
+     to pay 3 sequential sidecar round-trips for an identical list (issue
+     #1225). Fetched on first actual need (a bare 'cuda:N' value to
+     translate) and reused for any later device key in the same patch;
+     `undefined` means "not fetched yet", so a patch whose first key fails
+     validation (unknown key, locked, bad value) still returns its error
+     without ever touching the sidecar. */
+  let sidecarDevices: SidecarDevicesResponse | null | undefined;
   for (const [key, raw] of Object.entries(patch)) {
     const knob = getKnob(key);
     if (!knob || knob.isPrompt) {
@@ -88,8 +97,9 @@ configRouter.put('/', async (req, res) => {
       res.status(400).json({ error: `${key}: ${r.error}` });
       return;
     }
-    if (knob.type === 'device' && typeof r.value === 'string') {
-      r.value = await toUuidForm(r.value);
+    if (knob.type === 'device' && typeof r.value === 'string' && needsUuidTranslation(r.value)) {
+      if (sidecarDevices === undefined) sidecarDevices = await fetchSidecarDevices();
+      r.value = await toUuidForm(r.value, sidecarDevices);
     }
     await writeConfigOverride(key, r.value!);
     applied.push(key);

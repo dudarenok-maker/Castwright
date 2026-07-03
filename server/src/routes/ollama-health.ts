@@ -67,28 +67,59 @@ interface OllamaPsResponse {
   }>;
 }
 
-/** Best-effort GPU/CPU detection from Ollama /api/ps (`size_vram`). Seeds the
-    analyzer's first-chapter ETA rate before any wall-clock sample exists —
-    local Ollama runs ~10× faster on CUDA than CPU (user-measured ≈150 vs
-    ≈15 chars/s). Returns 'unknown' on any failure (no model resident, daemon
-    down, parse error); the caller defaults to the GPU rate and the estimate
-    self-corrects from observed pace within the first chapter regardless. */
-export async function detectOllamaDevice(): Promise<'cuda' | 'cpu' | 'unknown'> {
+type OllamaResidentModel = NonNullable<OllamaPsResponse['models']>[number];
+
+/* Shared /api/ps probe: null means unreachable (non-2xx or the request
+   itself failed); an array (possibly empty) means Ollama answered. Kept
+   separate from the two public probes below so each can fold that
+   distinction the way its caller needs it. */
+async function probeOllamaResidentModels(): Promise<OllamaResidentModel[] | null> {
   const url = getResolvedOllamaUrl();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
     const resp = await fetch(`${url}/api/ps`, { method: 'GET', signal: controller.signal });
-    if (!resp.ok) return 'unknown';
+    if (!resp.ok) return null;
     const body = (await resp.json().catch(() => ({}))) as OllamaPsResponse;
-    const models = Array.isArray(body.models) ? body.models : [];
-    if (models.length === 0) return 'unknown';
-    return models.some((m) => (m.size_vram ?? 0) > 0) ? 'cuda' : 'cpu';
+    return Array.isArray(body.models) ? body.models : [];
   } catch {
-    return 'unknown';
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Best-effort GPU/CPU detection from Ollama /api/ps (`size_vram`). Seeds the
+    analyzer's first-chapter ETA rate before any wall-clock sample exists —
+    local Ollama runs ~10× faster on CUDA than CPU (user-measured ≈150 vs
+    ≈15 chars/s). Returns 'unknown' on any failure (no model resident, daemon
+    down, parse error); the caller defaults to the GPU rate and the estimate
+    self-corrects from observed pace within the first chapter regardless.
+
+    Deliberately collapses "nothing resident" and "daemon unreachable" into
+    the same 'unknown' — this feeds the GPU/CPU cost-eviction guards
+    (gpu/analyzer-device-state.ts), which only need "definitely CPU" vs.
+    "assume GPU, be safe." See detectOllamaDeviceDetailed() for the
+    finer-grained version the read-only Advanced Configuration row uses. */
+export async function detectOllamaDevice(): Promise<'cuda' | 'cpu' | 'unknown'> {
+  const models = await probeOllamaResidentModels();
+  if (!models || models.length === 0) return 'unknown';
+  return models.some((m) => (m.size_vram ?? 0) > 0) ? 'cuda' : 'cpu';
+}
+
+/** Same probe as detectOllamaDevice(), but for display: distinguishes
+    "Ollama's reachable, nothing is currently loaded" (idle) from "can't
+    reach Ollama at all" (unreachable) instead of collapsing both into
+    'unknown' — the row otherwise reads as broken/unhelpful on every visit
+    that lands between generations, since Ollama's default keep_alive has
+    usually already evicted the model by the time someone opens Advanced
+    Configuration (issue #1225). Not used by the cost-eviction guards —
+    those intentionally stay on the coarser detectOllamaDevice() above. */
+export async function detectOllamaDeviceDetailed(): Promise<'cuda' | 'cpu' | 'idle' | 'unreachable'> {
+  const models = await probeOllamaResidentModels();
+  if (models === null) return 'unreachable';
+  if (models.length === 0) return 'idle';
+  return models.some((m) => (m.size_vram ?? 0) > 0) ? 'cuda' : 'cpu';
 }
 
 /* Shape returned by probeOllamaHealth(). The /health route forwards this
@@ -203,12 +234,13 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
 });
 
 /* GET /api/ollama/device — Plan 2 §2.4. Surfaces the analyzer's live
-   GPU/CPU/unknown placement (same detectOllamaDevice() probe already used
-   to seed the first-chapter ETA rate) for the Advanced Configuration
+   GPU/CPU/idle/unreachable placement for the Advanced Configuration
    read-only device row. Not app-pinnable — the analyzer connects to a
-   user/OS-managed Ollama daemon, so there's nothing to write here. */
+   user/OS-managed Ollama daemon, so there's nothing to write here. Uses
+   the detailed probe (not the cost-guard's detectOllamaDevice()) so the
+   row can tell "idle" apart from "unreachable" — see issue #1225. */
 ollamaHealthRouter.get('/device', async (_req: Request, res: Response) => {
-  res.json({ device: await detectOllamaDevice() });
+  res.json({ device: await detectOllamaDeviceDetailed() });
 });
 
 /* Ollama doesn't expose a dedicated load/unload pair — instead it interprets

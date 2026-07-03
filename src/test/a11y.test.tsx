@@ -118,7 +118,7 @@ vi.mock('../lib/api', () => ({
         devices: [{ uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 }],
         cpu: true,
       }),
-    getAnalyzerDevice: () => Promise.resolve({ device: 'unknown' as const }),
+    getAnalyzerDevice: () => Promise.resolve({ device: 'idle' as const }),
   },
 }));
 
