@@ -1079,7 +1079,32 @@ it('still returns the generic 409 when neither tripped nor exhausted', async () 
 Run: `cd server && npx vitest run src/routes/sidecar-health.test.ts`
 Expected: FAIL — the exhausted case falls through to the generic 409 instead of calling `resetAndRespawn`.
 
-- [ ] **Step 3: Add the exhausted branch and fix the stale comment**
+- [ ] **Step 3: Extract the shared health-poll loop, add the exhausted branch, and fix the stale comment**
+
+The existing `handle` branch (below line 456, unchanged in shape) already contains a health-poll loop identical to the one the new exhausted branch needs. Extract it once rather than duplicating it — add this helper above the route handler:
+
+```ts
+/** Poll /health until the sidecar responds OK or the deadline passes. Shared
+    by both /restart branches (kill-and-wait for a running child; reset-and-
+    wait for an exhausted supervisor) so there is one poll loop, not two
+    copies that can drift. */
+async function waitForSidecarHealthy(deadlineMs: number): Promise<boolean> {
+  const url = getResolvedSidecarUrl();
+  const target = `${url}/health`;
+  while (Date.now() < deadlineMs) {
+    await new Promise((r) => setTimeout(r, RESTART_HEALTH_POLL_MS));
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+      const r = await fetch(target, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      if (r.ok) return true;
+    } catch {
+      /* sidecar still starting — keep polling */
+    }
+  }
+  return false;
+}
+```
 
 In `server/src/routes/sidecar-health.ts`, replace the comment above line 435 and the branch structure through line 456:
 
@@ -1111,20 +1136,8 @@ In `server/src/routes/sidecar-health.ts`, replace the comment above line 435 and
        sidecar-supervisor.ts's resetAndRespawn doc). */
     if (supervisor.exhaustedEvent()) {
       await supervisor.resetAndRespawn();
-      const url = getResolvedSidecarUrl();
-      const target = `${url}/health`;
-      const deadline = Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, RESTART_HEALTH_POLL_MS));
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-          const r = await fetch(target, { signal: controller.signal }).finally(() => clearTimeout(timer));
-          if (r.ok) return res.json({ ok: true });
-        } catch {
-          /* sidecar still starting — keep polling */
-        }
-      }
+      const healthy = await waitForSidecarHealthy(Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS);
+      if (healthy) return res.json({ ok: true });
       return res.status(503).json({
         ok: false,
         error: `Sidecar did not become healthy within ${RESTART_HEALTH_POLL_TIMEOUT_MS / 1000}s after reset.`,
@@ -1137,7 +1150,19 @@ In `server/src/routes/sidecar-health.ts`, replace the comment above line 435 and
   }
 ```
 
-(The existing kill-and-poll logic below this block, for the `handle` case, is unchanged — note the health-poll loop above duplicates it; if your editor flags this, extract a small shared `pollUntilHealthy(deadline)` helper used by both branches rather than leaving two copies to drift.)
+The existing kill-and-poll logic below this block (for the `handle` case — killing the current child, then polling) now has its own duplicate loop. Replace that loop with the same helper, so both branches share it:
+
+```ts
+  await handle.kill();
+  const healthy = await waitForSidecarHealthy(Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS);
+  if (healthy) return res.json({ ok: true });
+  return res.status(503).json({
+    ok: false,
+    error: `Sidecar did not become healthy within ${RESTART_HEALTH_POLL_TIMEOUT_MS / 1000}s after restart.`,
+  });
+```
+
+(This replaces that branch's existing inline `while` loop and its trailing `return res.status(503)...` — everything from the `await handle.kill()` line to the end of the route handler.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
