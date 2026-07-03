@@ -41,7 +41,7 @@ import {
 import { chaptersActions } from '../store/chapters-slice';
 import { uiActions } from '../store/ui-slice';
 import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash } from '../lib/icons';
-import { PrimaryButton } from '../components/primitives';
+import { PrimaryButton, Checkbox } from '../components/primitives';
 import { ConfirmDialog } from './confirm-dialog';
 
 interface QueueModalProps {
@@ -294,16 +294,13 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                 : 'Stop the generation running in the background?'}
             </p>
             {count > 0 && hasLiveGeneration && (
-              <label className="flex items-center gap-2 text-sm text-ink/75 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={alsoStop}
-                  onChange={(e) => setAlsoStop(e.target.checked)}
-                  data-testid="queue-clear-also-stop"
-                  className="w-4 h-4 rounded border-ink/30 text-magenta focus:ring-magenta"
-                />
-                Also stop generation in progress
-              </label>
+              <Checkbox
+                checked={alsoStop}
+                onChange={setAlsoStop}
+                data-testid="queue-clear-also-stop"
+                label="Also stop generation in progress"
+                labelClassName="text-sm text-ink/75"
+              />
             )}
           </div>
         }

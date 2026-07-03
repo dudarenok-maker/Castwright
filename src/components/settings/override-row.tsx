@@ -3,6 +3,7 @@
    The parent view wires this to the knob registry + change dispatch. */
 
 import { useState } from 'react';
+import { Checkbox } from '../primitives';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
 // Peak VRAM footprint per device-typed engine (MB) — first-cut estimates per
@@ -73,16 +74,12 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
 
   if (descriptor.type === 'boolean') {
     return (
-      <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={Boolean(value.effective)}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-          className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30 disabled:cursor-not-allowed"
-        />
-        <span className="text-sm text-ink">{value.effective ? 'Enabled' : 'Disabled'}</span>
-      </label>
+      <Checkbox
+        checked={Boolean(value.effective)}
+        disabled={disabled}
+        onChange={onChange}
+        label={value.effective ? 'Enabled' : 'Disabled'}
+      />
     );
   }
 

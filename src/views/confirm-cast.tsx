@@ -1,7 +1,14 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { IconCheck, IconRefresh } from '../lib/icons';
-import { SectionLabel, MixedHeading, Avatar, Pill, PrimaryButton } from '../components/primitives';
+import {
+  SectionLabel,
+  MixedHeading,
+  Avatar,
+  Pill,
+  PrimaryButton,
+  Checkbox,
+} from '../components/primitives';
 import type { Character, Voice, CharColor } from '../lib/types';
 import { useAppSelector } from '../store';
 import { engineForModelKey } from '../lib/tts-models';
@@ -550,11 +557,10 @@ function ConfirmCharacterCard({
                 if (e.key === ' ' || e.key === 'Enter') e.stopPropagation();
               }}
             >
-              <input
-                type="checkbox"
-                className="mt-0.5 accent-peach"
+              <Checkbox
                 checked={overrideLibrary}
-                onChange={(e) => onToggleOverride(e.target.checked)}
+                onChange={onToggleOverride}
+                accent="peach"
                 aria-label={`Sync profile with ${character.matchedFrom?.bookTitle}`}
               />
               <span>

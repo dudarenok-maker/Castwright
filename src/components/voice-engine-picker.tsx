@@ -23,6 +23,7 @@ import { IconSparkle, IconRefresh, IconWaveform, IconSpinner, IconPause } from '
 import type { TtsEngine, TtsModelKey } from '../lib/types';
 import { type DesignPhase } from '../lib/design-phase';
 import { DesignProgress } from './design-progress';
+import { Checkbox } from './primitives';
 
 /* Engine value the selector emits. 'default' maps to "no per-character
    engine" (use the project default). The rest are real TtsEngine ids. */
@@ -145,16 +146,14 @@ export function VoiceEnginePicker({
           engine AND the 1.7B-Base model is resident on the sidecar. */}
       {(value === 'qwen' || lockedToQwen) && qwen17bAvailable && onCharModelKeyChange && (
         <label
+          htmlFor="qwen-1.7b-toggle-input"
           className="mt-2 flex items-center gap-2 cursor-pointer select-none"
           data-testid="qwen-1.7b-toggle"
         >
-          <input
-            type="checkbox"
+          <Checkbox
+            id="qwen-1.7b-toggle-input"
             checked={charModelKey === 'qwen3-tts-1.7b'}
-            onChange={(e) =>
-              onCharModelKeyChange(e.target.checked ? 'qwen3-tts-1.7b' : null)
-            }
-            className="accent-magenta w-4 h-4"
+            onChange={(value) => onCharModelKeyChange(value ? 'qwen3-tts-1.7b' : null)}
           />
           <span className="text-[11px] text-ink/70 font-medium">
             Higher quality (1.7B) — uses the larger Qwen model for this character

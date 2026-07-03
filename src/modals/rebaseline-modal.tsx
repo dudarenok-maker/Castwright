@@ -35,7 +35,7 @@ import {
   IconCheck,
   IconAlertTri,
 } from '../lib/icons';
-import { Avatar } from '../components/primitives';
+import { Avatar, Checkbox } from '../components/primitives';
 import { api } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -728,12 +728,10 @@ function CharacterToggleRow({
         className="flex items-center gap-3 p-3 rounded-2xl border border-ink/10 bg-white hover:bg-ink/2 cursor-pointer min-h-[44px]"
         data-testid={`rebaseline-row-${character.id}`}
       >
-        <input
-          type="checkbox"
+        <Checkbox
           checked={checked}
           onChange={onToggle}
           aria-label={`Rebaseline ${character.name}`}
-          className="w-5 h-5 accent-magenta shrink-0"
         />
         <Avatar name={character.name} color={character.color as CharColor} size={32} />
         <div className="flex-1 min-w-0">
@@ -805,13 +803,12 @@ function ProposeStep({
           >
             <div className="flex items-start gap-3">
               {!done && p.status !== 'failed' && p.status !== 'unchanged' && (
-                <input
-                  type="checkbox"
+                <Checkbox
+                  className="mt-1"
                   checked={p.include}
                   onChange={() => onToggleInclude(p.characterId)}
                   aria-label={`Include ${character.name}`}
                   data-testid={`rebaseline-include-${p.characterId}`}
-                  className="mt-1 w-5 h-5 accent-magenta shrink-0"
                 />
               )}
               <Avatar name={character.name} color={character.color as CharColor} size={36} />

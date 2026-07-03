@@ -10,7 +10,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { IconClose, IconPencil } from '../lib/icons';
-import { PrimaryButton } from '../components/primitives';
+import { PrimaryButton, Checkbox } from '../components/primitives';
 import { useAppSelector } from '../store';
 import type { LibraryBook } from '../lib/types';
 
@@ -219,18 +219,13 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
               />
             </Field>
 
-            <div className="md:col-span-2 flex items-center gap-2">
-              <input
-                id="edit-book-standalone"
-                type="checkbox"
-                checked={isStandalone}
-                onChange={(e) => setIsStandalone(e.target.checked)}
-                className="w-4 h-4 rounded border-ink/30 text-magenta focus:ring-magenta"
-              />
-              <label htmlFor="edit-book-standalone" className="text-sm text-ink select-none">
-                Standalone (not part of a series)
-              </label>
-            </div>
+            <Checkbox
+              id="edit-book-standalone"
+              className="md:col-span-2"
+              checked={isStandalone}
+              onChange={setIsStandalone}
+              label="Standalone (not part of a series)"
+            />
 
             <Field label="Series">
               <input
