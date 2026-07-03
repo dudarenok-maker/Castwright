@@ -37,6 +37,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { IconDrag, IconChevR, IconClose } from '../lib/icons';
+import { Checkbox } from './primitives';
 import type { Chapter, Sentence } from '../lib/types';
 
 export interface RestructurePanelProps {
@@ -144,13 +145,11 @@ function SortableChapterRow({
         >
           {position}
         </span>
-        <input
-          type="checkbox"
+        <Checkbox
           aria-label={`Select chapter ${chapter.title} for merge`}
           checked={selected}
           disabled={busy || !selectable || isExcluded}
           onChange={onToggleSelect}
-          className="w-4 h-4 accent-magenta cursor-pointer disabled:cursor-not-allowed"
           data-testid={`restructure-check-${chapter.id}`}
         />
         <div className="flex-1 min-w-0">

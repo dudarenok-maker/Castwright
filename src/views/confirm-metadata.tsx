@@ -10,7 +10,7 @@ import { uiActions } from '../store/ui-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { api, SlugCollisionError } from '../lib/api';
-import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
+import { SectionLabel, MixedHeading, PrimaryButton, Checkbox } from '../components/primitives';
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { IconSpinner } from '../lib/icons';
 import type { ConfirmBookResponse, LibraryBook } from '../lib/types';
@@ -210,19 +210,15 @@ export function ConfirmMetadataView() {
             />
           </Field>
 
-          <div className="flex items-center gap-3 pt-1">
-            <input
-              id="standalone"
-              type="checkbox"
-              checked={isStandalone}
-              onChange={(e) => setIsStandalone(e.target.checked)}
-              disabled={busy}
-              className="rounded border-ink/20"
-            />
-            <label htmlFor="standalone" className="text-sm text-ink/80 select-none">
-              This is a standalone (not part of a series)
-            </label>
-          </div>
+          <Checkbox
+            id="standalone"
+            className="pt-1"
+            checked={isStandalone}
+            onChange={setIsStandalone}
+            disabled={busy}
+            label="This is a standalone (not part of a series)"
+            labelClassName="text-sm text-ink/80"
+          />
 
           {!isStandalone && (
             <>

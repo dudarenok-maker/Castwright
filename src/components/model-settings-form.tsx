@@ -8,7 +8,7 @@
    deliberately stays in Account (a user-library concern, not a model one). */
 
 import { useEffect, useMemo, useState } from 'react';
-import { PrimaryButton } from './primitives';
+import { PrimaryButton, Checkbox } from './primitives';
 import { FieldRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
 import {
   SettingsAccordion,
@@ -399,20 +399,16 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
           label="Auto-start with server"
           sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python voice engine as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart."
         >
-          <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={autoStartSidecar}
-              onChange={(e) => setAutoStartSidecar(e.target.checked)}
-              data-testid="account-auto-start-sidecar"
-              className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-            />
-            <span className="text-sm text-ink">
-              {autoStartSidecar
+          <Checkbox
+            checked={autoStartSidecar}
+            onChange={setAutoStartSidecar}
+            data-testid="account-auto-start-sidecar"
+            label={
+              autoStartSidecar
                 ? 'Enabled — the server will spawn the sidecar at boot.'
-                : 'Disabled — you manage the sidecar process yourself.'}
-            </span>
-          </label>
+                : 'Disabled — you manage the sidecar process yourself.'
+            }
+          />
           {autoStartDirty && (
             <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
               Restart the server to apply this change.
@@ -423,20 +419,16 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
           label="Keep both voice engines loaded (dual-model mode)"
           sublabel="Loads two voice engines into GPU memory at once so a book can mix engines (e.g. Kokoro + Qwen) without swap latency. Only enable if your GPU has headroom (~8 GB); the analyzer auto-evicts during generation. Off by default — when off, a mixed-engine book still generates but pays an engine-swap cost."
         >
-          <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={dualModelEnabled}
-              onChange={(e) => setDualModelEnabled(e.target.checked)}
-              data-testid="account-dual-model-enabled"
-              className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-            />
-            <span className="text-sm text-ink">
-              {dualModelEnabled
+          <Checkbox
+            checked={dualModelEnabled}
+            onChange={setDualModelEnabled}
+            data-testid="account-dual-model-enabled"
+            label={
+              dualModelEnabled
                 ? 'Enabled — both engines may stay resident; mixed-engine books skip the swap.'
-                : 'Disabled — one engine at a time; mixed-engine books pay a swap cost.'}
-            </span>
-          </label>
+                : 'Disabled — one engine at a time; mixed-engine books pay a swap cost.'
+            }
+          />
         </FieldRow>
         <FieldRow
           label="Generation workers"

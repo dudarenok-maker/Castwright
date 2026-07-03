@@ -13,6 +13,7 @@
    with "Include all". */
 
 import { chapterSlug } from '../lib/chapter-heuristics';
+import { Checkbox } from './primitives';
 
 export interface ChapterExclusionListChapter {
   id: number;
@@ -114,12 +115,10 @@ export function ChapterExclusionList({
                   key={ch.id}
                   className="flex items-center gap-3 py-1.5 px-2 rounded-lg hover:bg-ink/3 cursor-pointer"
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={included}
                     disabled={disabled}
-                    onChange={(e) => onToggle(slug, e.target.checked)}
-                    className="rounded border-ink/20"
+                    onChange={(value) => onToggle(slug, value)}
                   />
                   <span
                     className={`flex-1 text-[13px] ${included ? 'text-ink' : 'text-ink/40 line-through decoration-1'}`}
