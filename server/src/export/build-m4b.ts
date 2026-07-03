@@ -159,6 +159,27 @@ function buildFfmetadata(
   lines.push(`album_artist=${escapeFfmetadata(state.author)}`);
   if (state.genre) lines.push(`genre=${escapeFfmetadata(state.genre)}`);
   if (state.publicationDate) lines.push(`date=${escapeFfmetadata(state.publicationDate)}`);
+  /* fs-54 — series metadata via the MP4 `grouping` (©grp) / `disc` (©disk)
+     atoms — the closest ffmpeg-recognized fields for "which collection" /
+     "position in that collection". There is no dedicated MP4 series atom,
+     and an arbitrary `series=`/`series-part=` key (or a `----:` freeform
+     atom) is silently dropped by ffmpeg's mov muxer (verified against real
+     ffmpeg — unlike the ID3 muxer's TXXX fallback in id3-tags.ts, mov has
+     no generic unknown-key fallback). Gate is `!isStandalone && !!series`,
+     NOT presence of `series` alone: a standalone book still carries a real
+     (non-empty) string in that field, so `isStandalone` — the codebase's
+     own established discriminator (server/src/routes/cast-design.ts:555,
+     qwen-voice.ts:565, single-design.ts:260) — is the correct gate. `disc`
+     is an independently-optional sub-field: a real series book can have a
+     null `seriesPosition` when its source has no numeric index
+     (server/src/parsers/epub.ts). */
+  const hasSeries = state.isStandalone !== true && !!state.series?.trim();
+  if (hasSeries) {
+    lines.push(`grouping=${escapeFfmetadata(state.series)}`);
+    if (state.seriesPosition != null) {
+      lines.push(`disc=${escapeFfmetadata(String(state.seriesPosition))}`);
+    }
+  }
   /* Plan 33 — long-form "about this audiobook" copy. ffmpeg's mp4 muxer
      maps `description` → iTunes `desc` atom (short description) and
      `synopsis` → `ldes` atom (long description). Both M4B-reader apps

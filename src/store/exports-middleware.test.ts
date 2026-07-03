@@ -52,6 +52,7 @@ describe('retryExport thunk', () => {
       byBookId: { [failed.bookId]: [failed] },
       lanUrls: [],
       lanPort: null,
+      linger: {},
     });
 
     await retryExport({
@@ -80,6 +81,7 @@ describe('retryExport thunk', () => {
       byBookId: { [failed.bookId]: [failed] },
       lanUrls: [],
       lanPort: null,
+      linger: {},
     });
 
     const returned = await retryExport({

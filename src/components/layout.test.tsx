@@ -13,7 +13,7 @@
    effects the layout runs alongside. Those have their own paired tests. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -147,6 +147,7 @@ import { api } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
+import { exportsActions } from '../store/exports-slice';
 import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
 import type { Chapter } from '../lib/types';
 
@@ -584,6 +585,91 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
     fireEvent.click(await findByTestId('status-pill'));
     const qwenPill = await findByRole('group', { name: /^Qwen\s+(ready|idle|loading|unreachable)$/i });
     expect(qwenPill).toBeTruthy();
+  });
+});
+
+describe('Layout — Export status pill (fs-54)', () => {
+  it('shows the Export pill with a running count when a non-terminal job exists for any book', async () => {
+    const store = makeStore();
+    store.dispatch(
+      exportsActions.exportStarted({
+        id: 'exp_1',
+        bookId: 'b1',
+        format: 'mp3-zip',
+        destination: 'download',
+        status: 'in_progress',
+        filename: 'Test.zip',
+        sizeBytes: null,
+        progress: 0.5,
+        downloadUrl: null,
+        syncPath: null,
+        errorReason: null,
+        createdAt: '2026-01-01T00:00:00Z',
+        completedAt: null,
+      }),
+    );
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    fireEvent.click(await findByTestId('status-pill'));
+    const pill = await findByTestId('export-pill');
+    expect(pill).toHaveTextContent('Exporting');
+    expect(pill).toHaveTextContent('1 running');
+    expect(pill).toHaveTextContent('50%');
+  });
+
+  it('keeps the Export pill visible via the linger union after the job goes done', async () => {
+    const store = makeStore();
+    store.dispatch(
+      exportsActions.exportLingerSet({ bookId: 'b1', state: 'done' }),
+    );
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    fireEvent.click(await findByTestId('status-pill'));
+    const pill = await findByTestId('export-pill');
+    expect(pill).toHaveTextContent('Export done');
+  });
+
+  it('shows no Export pill in the popover when there are no jobs and no linger entry', async () => {
+    /* Pin the default engine deterministically (same precedent as "Layout —
+       default-engine TTS pill reachable without an open book") so the
+       Status pill is guaranteed present regardless of account-hydration
+       timing — this test asserts on the Export section specifically, not
+       on whether the Status pill itself renders (that's a pre-existing,
+       unrelated concern). */
+    const store = makeStore();
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('kokoro-v1'));
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    fireEvent.click(await findByTestId('status-pill'));
+    expect(screen.queryByTestId('export-pill')).toBeNull();
+    expect(await findByTestId('status-popover-export')).toHaveTextContent('Nothing exporting.');
   });
 });
 

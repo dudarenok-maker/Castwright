@@ -16,6 +16,10 @@
      track        → TRCK ("N/total")
      genre        → TCON
      date         → TDRC (YYYY or YYYY-MM-DD)
+     series       → TXXX:series (fs-54 — ID3v2 has no first-class series
+                    frame; ffmpeg's mp3 muxer maps an unrecognized
+                    `-metadata` key to a TXXX frame keyed by that name)
+     seriesPart   → TXXX:series-part (fs-54, same mechanism)
      cover (opt)  → APIC (embedded JPEG/PNG, attached_pic disposition) */
 
 import { spawn } from 'node:child_process';
@@ -29,6 +33,11 @@ export interface Id3Tags {
   trackTotal: number;
   genre?: string | null;
   date?: string | null;
+  /** fs-54 — series name; omitted entirely (not written) when absent. */
+  series?: string | null;
+  /** fs-54 — series position/sequence; only meaningful (and only ever
+      written) alongside a non-null `series`. */
+  seriesPart?: number | null;
   /** Optional free-form comment written to the ID3v2 COMM frame.
       When set, ffmpeg emits `-metadata comment=<value>`.
       Intended for the "Rendered with Castwright · castwright.ai" stamp. */
@@ -78,6 +87,10 @@ export async function applyId3v24Tags(
   ];
   if (tags.genre) args.push('-metadata', `genre=${tags.genre}`);
   if (tags.date) args.push('-metadata', `date=${tags.date}`);
+  if (tags.series) {
+    args.push('-metadata', `series=${tags.series}`);
+    if (tags.seriesPart != null) args.push('-metadata', `series-part=${tags.seriesPart}`);
+  }
   if (tags.comment) args.push('-metadata', `comment=${tags.comment}`);
   args.push('-f', 'mp3', destPath);
 
