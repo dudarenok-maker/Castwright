@@ -195,6 +195,12 @@ describe('sidecar supervisor (srv-15)', () => {
       spawnFn,
       probeFn,
       healthProbeFn,
+      // Unlike the disappearance-only tests above, the leak-saturated ceiling
+      // path drains via recycleSidecarFn before respawning — leaving this
+      // unmocked falls through to the real fetch-based default, which hits
+      // the shared TTS sidecar port and blows the vi.waitFor budget below
+      // whenever that port is occupied (#1241).
+      recycleSidecarFn: vi.fn(async () => true),
       delayFn: async () => {},
       adoptedPollMs: 1,
       adoptedHealthPollMs: 1, // health-check every tick
