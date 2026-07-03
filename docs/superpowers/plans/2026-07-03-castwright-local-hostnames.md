@@ -17,9 +17,9 @@ Copied verbatim (in effect) from `docs/superpowers/specs/2026-07-03-castwright-l
 - **No guaranteed Windows-LAN-peer resolution** — a known, documented gap; LAN-IP URL is always the fallback.
 - **IPv4-only.** No AAAA/IPv6 records.
 - **mDNS answers use a single "primary LAN IP"** (the OS's default-route interface, via the "connect a UDP socket to an external address, read back the local address" trick) — **never** `enumerateLanIps()` (that helper is correct for cert SANs, wrong for mDNS answers — see spec Component 1). This is a known, accepted best-effort limitation under VPN/dual-homed LANs, tracked as follow-up **ops-21** (issue [#1239](https://github.com/dudarenok-maker/Castwright/issues/1239)) — not part of this plan.
-- **`start:lan`'s responder is server-owned**, gated on `lanHttps && process.env.NODE_ENV === 'production'` (NOT `lanHttps` alone — that would double-spawn during `dev:lan`). Spawned inside `listenerCallback` in `server/src/index.ts`, reaped in the existing `shutdown()` handler alongside `sidecarSupervisor?.stop()`.
+- **`start:lan`'s responder is server-owned**, gated on `lanHttps && process.env.NODE_ENV === 'production'` (NOT `lanHttps` alone — that would double-spawn during `dev:lan`, running an unwanted second, unowned `castwright.local` responder process that `dev:lan`'s `concurrently` never advertises or reaps — see the Task 4 file header for why this is about an unwanted extra process, not a literal port-5353 collision: `multicast-dns` binds with `reuseAddr: true` by default, so two responders on one box coexist rather than erroring). Spawned inside `listenerCallback` in `server/src/index.ts`, reaped in the existing `shutdown()` handler alongside `sidecarSupervisor?.stop()`.
 - **`dev:lan`'s responder is a `concurrently` leg**, not server-owned.
-- **Non-fatal everywhere:** a responder bind failure (port 5353 conflict, blocked multicast) must never take down `dev:lan` or `start:lan` — the existing LAN-IP URLs keep working exactly as today.
+- **Non-fatal everywhere:** a responder bind failure — realistically `EACCES` (permission denied) or multicast blocked by a firewall/OS policy, not a same-machine port conflict (see above) — must never take down `dev:lan` or `start:lan` — the existing LAN-IP URLs keep working exactly as today.
 - **`multicast-dns` pinned to latest at implementation time** (`^7.2.5` as of this plan) — confirm current latest with `npm view multicast-dns version` before Task 1 Step 1, so this doesn't need an immediate follow-up bump.
 
 ---
@@ -145,11 +145,13 @@ Expected: FAIL — `Cannot find module '../mdns-responder.mjs'` (the file doesn'
 
    Answers standard mDNS A-record queries for the exact hostname(s) it was
    told to serve, with the OS's current primary LAN IPv4 address. Never
-   answers for any other name. A bind failure (port 5353 already claimed by
-   a real Bonjour/Chromecast service, or multicast blocked) is logged and
-   the process exits 0 — non-fatal to the caller (dev:lan's concurrently
-   leg, or the server's mdns-owner); the existing LAN-IP URL keeps working
-   exactly as before this feature existed. */
+   answers for any other name. A bind failure — realistically EACCES or
+   multicast blocked by a firewall/OS policy, NOT "another mDNS responder
+   already has the port" (multicast-dns binds with reuseAddr:true, so
+   same-box responders coexist rather than colliding) — is logged and the
+   process exits 0 — non-fatal to the caller (dev:lan's concurrently leg, or
+   the server's mdns-owner); the existing LAN-IP URL keeps working exactly
+   as before this feature existed. */
 
 import dgram from 'node:dgram';
 import mdnsFactory from 'multicast-dns';
@@ -234,20 +236,31 @@ async function main() {
      legs on a NONZERO exit, so this graceful "I couldn't bind, moving on"
      path must not look like a crash to concurrently. An actual crash
      (uncaught exception) still exits nonzero and correctly signals a real
-     problem. */
+     problem.
+
+     `multicast-dns` binds with `reuseAddr: true` by default, so a second
+     responder on the same box does NOT collide on port 5353 — this only
+     fires for a real bind failure (EACCES / a firewall or OS policy
+     blocking multicast), not "another mDNS responder is already running". */
   mdns.once('error', (err) => {
     process.stderr.write(
-      `[mdns-responder] could not bind (port 5353 may already be in use by another mDNS ` +
-        `responder, or multicast is blocked): ${err.message}\n` +
+      `[mdns-responder] could not bind (permission denied, or multicast blocked by a ` +
+        `firewall/OS policy): ${err.message}\n` +
         `[mdns-responder] friendly hostname(s) [${hostnames.join(', ')}] will NOT resolve — ` +
         `the existing LAN-IP URL still works.\n`,
     );
     process.exit(0);
   });
 
+  // Check hostname membership BEFORE touching the network — most inbound
+  // mDNS traffic on a real LAN is for names this responder doesn't serve
+  // (other devices' own advertisements), so primaryLanIp()'s socket
+  // open/connect/close should only run for a query we're actually going to
+  // answer, not for every foreign A-query the responder happens to see.
   mdns.on('query', async (query) => {
     for (const question of query.questions ?? []) {
       if (question.type !== 'A') continue;
+      if (!hostnames.includes(question.name)) continue;
       const ip = await primaryLanIp();
       const answers = buildAnswer(question.name, hostnames, ip);
       if (answers) mdns.respond({ answers });
@@ -526,6 +539,32 @@ describe('spawnMdnsResponder', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it('warns when the child exits nonzero shortly after spawn (e.g. a missing/broken script) instead of leaking a dead handle silently', () => {
+    const child = makeFakeChild(4242);
+    const spawnFn = vi.fn(() => child);
+    const warn = vi.fn();
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn,
+    });
+    expect(handle).not.toBeNull();
+    child.emit('exit', 1, null);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('castwright.local');
+  });
+
+  it('does NOT warn on a clean exit(0) (the responder's own graceful bind-failure path)', () => {
+    const child = makeFakeChild(4242);
+    const spawnFn = vi.fn(() => child);
+    const warn = vi.fn();
+    spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn,
+    });
+    child.emit('exit', 0, null);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('kill() on win32 shells out to taskkill /T /F /PID', () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn(() => child);
@@ -565,6 +604,7 @@ describe('spawnMdnsResponder', () => {
 
 Run: `cd server && npx vitest run src/mdns-owner.test.ts`
 Expected: FAIL — `Cannot find module './mdns-owner.js'`.
+(10 tests will be defined at this point — 4 for `shouldSpawnMdnsResponder`, 6 for `spawnMdnsResponder`.)
 
 - [ ] **Step 3: Implement `server/src/mdns-owner.ts`**
 
@@ -581,10 +621,20 @@ Expected: FAIL — `Cannot find module './mdns-owner.js'`.
    NODE_ENV, not LAN_HTTPS, is the discriminator: dev:lan ALSO sets
    LAN_HTTPS=1 for its server leg (so its own concurrently leg can serve
    castwright.dev.local), but must NOT also get a server-spawned
-   castwright.local responder — that would race the dedicated dev:lan
-   responder leg for the UDP :5353 socket, for a hostname dev:lan never
-   advertises. start-app-prod.mjs sets NODE_ENV=production on the server
-   child's env; the server's plain `tsx watch` dev script never does. */
+   castwright.local responder — that would spin up an extra, unwanted
+   process for a hostname dev:lan never advertises, one that dev:lan's own
+   `concurrently` doesn't own or reap on Ctrl+C (multicast-dns binds with
+   reuseAddr:true, so this is NOT a port-5353 collision — both responders
+   would happily coexist; the problem is the orphaned extra process, not a
+   bind error). start-app-prod.mjs sets NODE_ENV=production on the server
+   child's env; the server's plain `tsx watch` dev script never does.
+
+   scripts/mdns-responder.mjs is intentionally NOT part of the release
+   manifest (scripts/build-release-zip.mjs) — dev:lan/start:lan are
+   dev-checkout-only commands already (the existing scripts/setup-lan-certs.mjs
+   and scripts/print-cert-install-instructions.mjs aren't shipped either), so
+   this follows the same, pre-existing boundary rather than introducing a new
+   one. */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -634,6 +684,19 @@ export function spawnMdnsResponder(
   child.once('error', (err) => {
     warn(`[mdns] responder for ${hostname} reported an error:`, err);
   });
+  /* The 'error' handler above only catches a SYNCHRONOUS spawn throw (e.g.
+     a bad node binary). A child that starts fine but then crashes (e.g.
+     "Cannot find module" if the responder script or a dependency is
+     missing) exits ASYNCHRONOUSLY with a nonzero code — without this, that
+     failure is silent: the caller holds a handle to an already-dead child
+     and is never told. A clean exit(0) (the responder's own graceful
+     bind-failure path — see scripts/mdns-responder.mjs) is NOT a failure
+     and does not warn. */
+  child.once('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      warn(`[mdns] responder for ${hostname} exited unexpectedly (code=${code})`);
+    }
+  });
 
   return {
     child,
@@ -656,7 +719,7 @@ export function spawnMdnsResponder(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd server && npx vitest run src/mdns-owner.test.ts`
-Expected: PASS — 8 tests, 0 failures.
+Expected: PASS — 10 tests, 0 failures.
 
 - [ ] **Step 5: Commit**
 
@@ -824,7 +887,9 @@ Replace with:
     "dev:lan": "cross-env VITE_HTTPS=1 concurrently --kill-others-on-fail -n frontend,server,mdns -c blue,magenta,yellow \"vite --host 0.0.0.0\" \"cross-env LAN_HTTPS=1 npm --prefix server run dev\" \"node scripts/mdns-responder.mjs --name castwright.dev.local\"",
 ```
 
-(`-k`/`--kill-others` tears down every leg the moment ANY leg exits, for ANY reason — including the mDNS responder's own graceful `process.exit(0)` on a handled bind failure, per Task 1 Step 4's comment. `--kill-others-on-fail` only tears the others down on a NONZERO exit, so a real crash in any of the three legs still correctly kills the rest, but a clean bind-failure exit from the responder no longer takes Vite and the server down with it.)
+(`-k`/`--kill-others` tears down every leg the moment ANY leg exits, for ANY reason — including the mDNS responder's own graceful `process.exit(0)` on a handled bind failure, per Task 1 Step 4's comment. `--kill-others-on-fail` only tears the others down on a NONZERO exit, so a real crash in any of the three legs still correctly kills the rest, but a clean bind-failure exit from the responder no longer takes Vite and the server down with it.
+
+This does mean the `frontend` and `server` legs also lose `-k`'s "tear the others down on ANY exit, including a clean one" behavior — in practice neither is expected to exit cleanly during normal `dev:lan` use (both are long-running dev servers), so this is a low-risk, largely theoretical trade-off, not a functional regression; called out here for completeness rather than left implicit. `--kill-signal`/`--kill-others-on-fail` only govern what `concurrently` does when ONE leg exits on its own — a direct Ctrl+C is delivered by the terminal to the whole process group regardless of that flag, so all three legs are expected to still exit together on Ctrl+C; this is exactly what Task 8's manual acceptance step 4 confirms on a real run rather than something asserted here as already proven.)
 
 - [ ] **Step 2: Sanity-check the script is valid JSON and shells correctly**
 
@@ -939,7 +1004,7 @@ owner: null
 
 ## Invariants to preserve
 
-1. `shouldSpawnMdnsResponder` in `server/src/mdns-owner.ts` must stay gated on `lanHttps && NODE_ENV === 'production'`, not `lanHttps` alone — gating on `lanHttps` alone double-spawns a `castwright.local` responder during `dev:lan` (its server leg also sets `LAN_HTTPS=1`), racing the dedicated `dev:lan` responder leg for UDP :5353.
+1. `shouldSpawnMdnsResponder` in `server/src/mdns-owner.ts` must stay gated on `lanHttps && NODE_ENV === 'production'`, not `lanHttps` alone — gating on `lanHttps` alone spins up an extra, unwanted `castwright.local` responder process during `dev:lan` (its server leg also sets `LAN_HTTPS=1`) that `dev:lan`'s own `concurrently` neither advertises nor reaps on Ctrl+C. (Not a literal port-5353 collision — `multicast-dns` binds with `reuseAddr:true`, so two responders on one box coexist rather than erroring; the harm is the orphaned extra process, not a bind failure.)
 2. `scripts/mdns-responder.mjs`'s `primaryLanIp()` must stay a single address, never reuse `enumerateLanIps()` — that helper returns every non-internal IPv4 interface, correct for cert SANs (an unused SAN is inert) but wrong for an mDNS answer (an extra A-record can misdirect a client).
 3. `dev:lan`'s `concurrently` invocation must keep `--kill-others-on-fail`, not `-k`/`--kill-others` — the mDNS leg's graceful bind-failure exit (code 0) must not be treated as a reason to tear down the Vite/server legs.
 
@@ -961,7 +1026,7 @@ No e2e coverage — this is dev/LAN tooling, not shipped product behavior reacha
 4. Stop `dev:lan` (Ctrl+C). Confirm all three processes exit.
 5. Run `npm run build && npm run start:lan`. From the same phone/tablet, browse to `https://castwright.local:8443`. Expected: loads with no certificate warning.
 6. Stop `start:lan` (Ctrl+C or `npm run stop:prod`). Confirm the server process AND the spawned mDNS responder child both exit (no orphaned `node scripts/mdns-responder.mjs` process left running — check via Task Manager / `ps`).
-7. (Optional, confirms the non-fatal-degrade path) While `dev:lan` is running, manually start a second process bound to UDP :5353 to force a bind conflict, then restart `dev:lan`. Expected: the `mdns` leg logs a warning and exits 0; the `frontend` and `server` legs keep running unaffected; `castwright.dev.local` doesn't resolve but the LAN-IP URL still works.
+7. (Optional, confirms the non-fatal-degrade path) A real bind failure is hard to force on demand — `multicast-dns` binds with `reuseAddr:true`, so simply starting a second process on UDP :5353 does NOT reproduce a conflict (both coexist). Instead, temporarily edit `scripts/mdns-responder.mjs`'s `main()` to call `process.exit(0)` immediately after parsing `--name` (simulating the graceful bind-failure path without needing a real `EACCES`/blocked-multicast condition), then run `npm run dev:lan`. Expected: the `mdns` leg exits immediately with code 0; the `frontend` and `server` legs keep running unaffected (this is the exact behavior Task 6's `-k` → `--kill-others-on-fail` change exists to guarantee). Revert the temporary edit afterward.
 
 ## Out of scope
 
