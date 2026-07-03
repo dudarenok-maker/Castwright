@@ -149,8 +149,10 @@ on-disk book before this code path can ever see one without it.
 Both metadata builders gain this series passthrough:
 
 - **`buildFfmetadata`** (`server/src/export/build-m4b.ts:148`) — add
-  `series=<name>` / `series-part=<position>` FFMETADATA lines alongside the existing
-  `title`/`artist`/`album`/`album_artist`/`genre`/`date` lines.
+  `grouping=<name>` / `disc=<position>` FFMETADATA lines alongside the existing
+  `title`/`artist`/`album`/`album_artist`/`genre`/`date` lines. **See the errata banner
+  above this section** — `series=`/`series-part=` don't survive ffmpeg's mov/mp4 muxer;
+  `grouping`/`disc` are the ffmpeg-recognized MP4 atoms that do.
 - **`applyId3v24Tags`** (`server/src/export/id3-tags.ts`) — add series to the `Id3Tags`
   interface and thread it through as ffmpeg `-metadata` flags. ID3v2 has no first-class
   series frame; the plan phase picks between `TIT1` (content-group, semantically closest
@@ -410,7 +412,8 @@ summary and hover/tap popover.
     false` + empty/falsy `series` (the drift case where a `PATCH /book-state` toggle left
     them inconsistent) → no `series` field, pinning the defensive `!!series?.trim()`
     co-check. Plus `cover.jpg` presence/absence.
-  - `build-m4b.test.ts` — same four-case series/series-part FFMETADATA matrix as above.
+  - `build-m4b.test.ts` — same four-case gate matrix as above, asserting `grouping`/`disc`
+    FFMETADATA tags (not `series`/`series-part` — see the errata banner in §1.2).
   - `id3-tags.test.ts` — series frame presence/absent, whichever frame the plan settles
     on.
   - `sync-folder.test.ts` — `writeFolderToSyncFolder`'s allowlist actually copies
@@ -443,8 +446,9 @@ summary and hover/tap popover.
 
 - `server/src/export/build-mp3-folder.ts` — `metadata.json` + `cover.jpg` written into
   staging.
-- `server/src/export/build-m4b.ts` — series FFMETADATA lines (`isStandalone !== true &&
-  !!series?.trim()` gate, `seriesPosition != null` for `series-part` only).
+- `server/src/export/build-m4b.ts` — `grouping`/`disc` FFMETADATA lines (`isStandalone !==
+  true && !!series?.trim()` gate, `seriesPosition != null` for `disc` only) — see the §1.2
+  errata banner for why `grouping`/`disc`, not `series`/`series-part`.
 - `server/src/export/id3-tags.ts` — series ID3 frame.
 - `server/src/export/sync-folder.ts` — `writeFolderToSyncFolder`'s copy filter relaxed
   to allowlist `metadata.json`/`cover.jpg` alongside `.mp3` (§1.3 fix). Writer
