@@ -28,6 +28,7 @@
 - **A rebuild now shows up right away.** A browser tab left open could keep showing an old version of Castwright for up to an hour after an update, even though the new one was already sitting there ready. It now always shows the one that's actually running.
 - **Checkboxes finally look like Castwright.** Every checkbox in the app — in settings, cast, and the odd dialog — used to show up as your browser's plain default. They're now a proper part of the design: a soft magenta square with a clean checkmark, wherever you find one.
 - **A stuck voice engine now picks itself back up.** On rare occasions the voice engine could go quiet mid-render without actually crashing — reachable one moment, unresponsive the next — and generation would sit stalled until you noticed and restarted it by hand. Castwright now recognises that state and restarts the engine on its own, so a render can pick back up instead of waiting on you.
+- **A name instead of a number, on your own network.** Testing on your phone or tablet now points at `castwright.local` (or `castwright.dev.local` while developing) instead of a raw address that changes every time your router hands out a new one.
 
 # Castwright 1.9.0
 
