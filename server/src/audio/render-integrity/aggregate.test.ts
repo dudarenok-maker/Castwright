@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:net';
 import { scoreBook } from './aggregate.js';
 import { readVerdicts } from './verdicts-io.js';
 import { readCentroids } from './centroids-io.js';
@@ -85,6 +86,24 @@ describe('scoreBook', () => {
     // Qwen character. This triggers the too-thin branch → auditionCentroid is called.
     // Without a live sidecar, auditionCentroid returns null → referenceKind:'too-short'
     // → all segments of this character score 'inconclusive'.
+    //
+    // auditionCentroid has no injection seam threaded through scoreBook, so it
+    // makes a REAL network call to getResolvedSidecarUrl() (default
+    // localhost:9000). Point LOCAL_TTS_URL at a guaranteed-empty ephemeral port
+    // instead of relying on the shared default port having nothing on it — the
+    // dev box's own TTS sidecar can occupy :9000 (or sit there wedged/unresponsive,
+    // see #1243), which turns the "fails fast" assumption into a 15s hang (#1242).
+    const probe = createServer();
+    const ephemeralPort = await new Promise<number>((resolve) => {
+      probe.listen(0, '127.0.0.1', () => {
+        const addr = probe.address();
+        resolve(typeof addr === 'object' && addr ? addr.port : 0);
+      });
+    });
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const prevLocalTtsUrl = process.env.LOCAL_TTS_URL;
+    process.env.LOCAL_TTS_URL = `http://127.0.0.1:${ephemeralPort}`;
+
     const dir = mkdtempSync(join(tmpdir(), 'spk-thin-'));
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(dir, 'audio'), { recursive: true });
@@ -106,7 +125,12 @@ describe('scoreBook', () => {
       },
     }));
 
-    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    try {
+      await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    } finally {
+      if (prevLocalTtsUrl === undefined) delete process.env.LOCAL_TTS_URL;
+      else process.env.LOCAL_TTS_URL = prevLocalTtsUrl;
+    }
 
     const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
     expect(verdicts).not.toBeNull();
