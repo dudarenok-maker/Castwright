@@ -480,7 +480,6 @@ const SIDECAR_TRANSIENT = diagnoseSidecar({ ...READY, sidecarReachable: false })
 const SIDECAR_NO_SUPERVISOR = diagnoseSidecar({ ...READY, supervisorActive: false, sidecarReachable: false });
 
 const TTS_READY: TtsDiagnosisInput = {
-  anyEnginePresent: true,
   noEngineAtAll: false,
   weightsMissingEngine: null,
   kokoroPackageConfirmedBroken: false,
@@ -493,30 +492,30 @@ describe('diagnoseTts', () => {
   });
 
   it('reports sidecar-blocked (not no-engine-installed) when the sidecar has an actionable failure', () => {
-    const r = diagnoseTts(SIDECAR_VENV_MISSING, { ...TTS_READY, anyEnginePresent: false, noEngineAtAll: true });
+    const r = diagnoseTts(SIDECAR_VENV_MISSING, { ...TTS_READY, noEngineAtAll: true });
     expect(r).toMatchObject({ status: 'fail', cause: 'sidecar-blocked' });
     expect(r.action).toBeUndefined();
   });
 
   it('does NOT gate on unreachable-transient — disk checks still run', () => {
-    const r = diagnoseTts(SIDECAR_TRANSIENT, { ...TTS_READY, anyEnginePresent: false, noEngineAtAll: true });
+    const r = diagnoseTts(SIDECAR_TRANSIENT, { ...TTS_READY, noEngineAtAll: true });
     expect(r).toMatchObject({ status: 'fail', cause: 'no-engine-installed' });
     expect(r.action).toMatchObject({ kind: 'kokoro-install' });
   });
 
   it('DOES gate on unreachable-no-supervisor — it is actionable, not transient', () => {
-    const r = diagnoseTts(SIDECAR_NO_SUPERVISOR, { ...TTS_READY, anyEnginePresent: false, noEngineAtAll: true });
+    const r = diagnoseTts(SIDECAR_NO_SUPERVISOR, { ...TTS_READY, noEngineAtAll: true });
     expect(r.cause).toBe('sidecar-blocked');
   });
 
   it('reports no-engine-installed when the sidecar passes but no engine has a package', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEnginePresent: false, noEngineAtAll: true });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, noEngineAtAll: true });
     expect(r).toMatchObject({ status: 'fail', cause: 'no-engine-installed' });
     expect(r.action).toMatchObject({ kind: 'kokoro-install' });
   });
 
   it('reports weights-missing for the reporting engine', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEnginePresent: false, weightsMissingEngine: 'qwen' });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, weightsMissingEngine: 'qwen' });
     expect(r).toMatchObject({ status: 'fail', cause: 'weights-missing' });
     expect(r.action).toMatchObject({ kind: 'qwen-install' });
   });
@@ -551,8 +550,11 @@ Append to `server/src/routes/setup-diagnosis.ts`:
 
 ```ts
 export interface TtsDiagnosisInput {
-  anyEnginePresent: boolean;
-  /** True only when kokoro/coqui/qwen all report 'not-installed' on disk. */
+  /** True only when kokoro/coqui/qwen all report 'not-installed' on disk —
+      the actual signal diagnoseTts branches on, computed from the same
+      three detect*InstallStateOnDisk() calls the spec's `!anyTtsEnginePresent`
+      layer describes at a higher level; no separate anyTtsEnginePresent()
+      call is needed since noEngineAtAll already answers it. */
   noEngineAtAll: boolean;
   /** First engine reporting 'weights-missing' on disk, or null. */
   weightsMissingEngine: 'kokoro' | 'qwen' | 'coqui' | null;
@@ -921,10 +923,14 @@ Expected: FAIL — `sup.resetAndRespawn is not a function`, `sup.exhaustedEvent 
 
 - [ ] **Step 4: Add `exhaustedEvent()` and rename `clearTripAndRespawn` to `resetAndRespawn`**
 
-In `server/src/tts/sidecar-supervisor.ts`, in the `SidecarSupervisor` interface (around line 103-131), replace the `clearTripAndRespawn` member:
+In `server/src/tts/sidecar-supervisor.ts`, in the `SidecarSupervisor` interface (around line 103-131), the existing `tripEvent` doc comment names `clearTripAndRespawn()` by name ("...then calls `clearTripAndRespawn()` to actually bring TTS back.") — that reference must be updated to the new name too, not left dangling. Replace the `tripEvent` doc comment and the `clearTripAndRespawn` member together:
 
 ```ts
-  /** Non-null once 3+ code-43 self-exits happened... (unchanged doc) */
+  /** Non-null once 3+ code-43 self-exits happened within RESTART43_STREAK_
+      WINDOW_MS — the assignment looks structurally too small. The supervisor
+      stops respawning once this trips (TTS held down); Plan 2's auto-revert
+      route (Task 16) reads this to rewrite the offending knob, then calls
+      resetAndRespawn() to actually bring TTS back. */
   tripEvent: () => { card: unknown; residentEngines: string[] } | null;
   /** True once consecutiveFailures has exceeded maxConsecutiveFailures and the
       supervisor gave up respawning (the plain, non-code-43 give-up path).
@@ -942,7 +948,7 @@ In `server/src/tts/sidecar-supervisor.ts`, in the `SidecarSupervisor` interface 
   resetAndRespawn: () => Promise<void>;
 ```
 
-Around line 349-356, replace `clearTripAndRespawn`:
+Around line 349-356, there's a second doc comment directly above the implementation ("/** The only way back from a trip — see the `clearTripAndRespawn` doc on the SidecarSupervisor interface... */") — remove it entirely rather than rename it, since the interface-level doc (just replaced above) already carries the full explanation for both callers reading the interface and callers reading the implementation:
 
 ```ts
   function resetAndRespawn(): Promise<void> {
@@ -1277,7 +1283,6 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
   const packageFlags = await packageBrokenFlags(diagnostics);
 
   const tts = diagnoseTts(sidecar, {
-    anyEnginePresent: anyTtsEnginePresent(REPO_ROOT),
     noEngineAtAll,
     weightsMissingEngine,
     ...packageFlags,
@@ -1337,10 +1342,10 @@ import {
 Run: `cd server && npx vitest run src/routes/setup-readiness.test.ts`
 Expected: PASS (7 tests)
 
-- [ ] **Step 5: Run full server typecheck and test suite**
+- [ ] **Step 5: Run the server-scoped typecheck and full server test suite**
 
-Run: `npm run typecheck && cd server && npx vitest run`
-Expected: PASS. Fix any remaining server-side compile errors surfaced by the `BlockerDiagnosis` type change before moving on — the frontend errors are expected and handled in Tasks 8-16.
+Run: `cd server && npx tsc --noEmit && npx vitest run`
+Expected: PASS. **Do not run the whole-repo `npm run typecheck` yet** — it also checks the frontend, which is still on the bare-string `blockers` shape until Task 16 finishes migrating it, so it will fail here regardless of whether this task's server-side change is correct. The server-scoped command isolates the check to what this task actually touched. The whole-repo typecheck becomes green again — and gets run for real — at Task 18's `npm run verify`.
 
 - [ ] **Step 6: Commit**
 
@@ -1657,6 +1662,27 @@ describe('BlockerFixAction', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/sidecar/restart', expect.objectContaining({ method: 'POST' }));
   });
 
+  it('ollama-pull: completes on the "pulled" terminal status, not just "installed"', async () => {
+    const onDone = vi.fn();
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/ollama/pull') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: '9', status: 'pulling', step: null, error: null }));
+      }
+      if (url.includes('/api/ollama/pull/9')) {
+        return Promise.resolve(jsonResponse({ id: '9', status: 'pulled', step: null, error: null }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    render(
+      <BlockerFixAction
+        diagnosis={{ status: 'fail', cause: 'model-not-pulled', message: 'x', remediation: 'y', action: { kind: 'ollama-pull', label: 'Pull qwen3.5:9b', params: { model: 'qwen3.5:9b' } } }}
+        onDone={onDone}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /pull qwen3\.5:9b/i }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1), { timeout: 5000 });
+  });
+
   it('navigate: clicking sets window.location.hash and calls onDone', () => {
     const onDone = vi.fn();
     render(
@@ -1719,7 +1745,13 @@ const JOB_START_ENDPOINT: Partial<Record<BlockerAction['kind'], string>> = {
   'ollama-pull': '/api/ollama/pull',
 };
 
-const JOB_DONE_STATUSES = ['installed', 'done'];
+/* Every install-job kind (venv-bootstrap, kokoro/qwen/coqui/ollama-install)
+   reports success as 'installed' — EXCEPT ollama-pull, whose success status
+   is 'pulled' (PullJobStatus in server/src/ollama/pull-bootstrap.ts). Missing
+   'pulled' here would strand the ollama-pull fix button in "Working…"
+   forever even though the pull actually succeeded server-side — the exact
+   dead-end this feature exists to eliminate. No job kind emits 'done'. */
+const JOB_DONE_STATUSES = ['installed', 'pulled'];
 const JOB_ERROR_STATUSES = ['error'];
 const POLL_MS = 1_500;
 
@@ -1826,7 +1858,7 @@ export function BlockerFixAction({
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run src/components/blocker-fix-action.test.tsx`
-Expected: PASS (5 tests)
+Expected: PASS (6 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1928,7 +1960,11 @@ export function ModelControlPill({
 }
 ```
 
-(This removes the unused `dotStyle`/`CSSProperties` local — it was always `undefined` in both branches of the original ternary, so dropping it is a pre-existing dead-code cleanup that falls directly out of this edit, not a separate unrelated change.)
+This removes the unused `dotStyle`/`CSSProperties` local — it was always `undefined` in both branches of the original ternary, so dropping it is a pre-existing dead-code cleanup that falls directly out of this edit, not a separate unrelated change. Also narrow the top-of-file import accordingly, since `CSSProperties` is no longer referenced anywhere in the file:
+
+```ts
+import type { ReactNode } from 'react';
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
