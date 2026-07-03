@@ -64,6 +64,11 @@ import {
   releaseSidecarOwnership,
 } from './tts/sidecar-owner.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
+import {
+  shouldSpawnMdnsResponder,
+  spawnMdnsResponder,
+  type MdnsResponderHandle,
+} from './mdns-owner.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -124,6 +129,10 @@ const LAN_HTTPS_PORT = Number(process.env.LAN_HTTPS_PORT ?? 8443);
    the SIGINT/SIGTERM handlers below can stop it (which reaps the child without
    triggering a respawn). Null until the boot block constructs it. */
 let sidecarSupervisor: SidecarSupervisor | null = null;
+/* ops (castwright-local-hostnames) — mirrors sidecarSupervisor above: only
+   ever set for start:lan (see shouldSpawnMdnsResponder), reaped in
+   shutdown() alongside the sidecar. */
+let mdnsResponderHandle: MdnsResponderHandle | null = null;
 
 /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
    listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
@@ -247,6 +256,19 @@ const listenerCallback = () => {
      disabled in user-settings). Timers are unref()'d so they never hold the
      process open on their own. */
   startBackupScheduler();
+
+  /* ops (castwright-local-hostnames) — server-owned castwright.local mDNS
+     responder, start:lan only. NODE_ENV, not lanHttps, is the discriminator:
+     dev:lan's server leg ALSO sets LAN_HTTPS=1 (so its Vite half can serve
+     castwright.dev.local), so gating on lanHttps alone would spin up an
+     extra, unwanted castwright.local responder here during dev:lan — a
+     process dev:lan's own concurrently neither advertises nor reaps (NOT a
+     port-5353 collision: multicast-dns binds with reuseAddr:true, so two
+     responders on one box coexist rather than erroring). See mdns-owner.ts
+     + the design spec. */
+  if (shouldSpawnMdnsResponder(lanHttps)) {
+    mdnsResponderHandle = spawnMdnsResponder('castwright.local', repoRoot);
+  }
 };
 
 /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
@@ -351,6 +373,7 @@ function shutdown(signal: NodeJS.Signals): void {
   /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
      child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
+  mdnsResponderHandle?.kill();
   void reap.finally(() => process.exit(0));
 }
 process.once('SIGINT', () => shutdown('SIGINT'));
