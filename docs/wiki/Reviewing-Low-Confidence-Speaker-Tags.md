@@ -1,6 +1,6 @@
 # Reviewing Low-Confidence Speaker Tags
 
-Before generating audio, worth a pass over any line the analyzer wasn't
+Before generating audio, it's worth a pass over any line the analyzer wasn't
 confident about attributing to a speaker (confidence under 75%). The
 manuscript view's sticky stats bar counts them per chapter and lets you
 jump straight to each one with the ▲/▼ buttons (or the `J`/`K` keys).
