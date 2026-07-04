@@ -80,6 +80,7 @@ interface EnqueueRequestEntry {
   characterId?: unknown;
   modelKey?: unknown;
   addedAt?: unknown;
+  fallbackConfirmed?: unknown;
 }
 
 queueRouter.post('/enqueue', async (req: Request, res: Response) => {
@@ -112,6 +113,7 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
          the dispatcher falls back to the session default. */
       ...(isTtsModelKey(r.modelKey) ? { modelKey: r.modelKey } : {}),
       ...(isString(r.addedAt) ? { addedAt: r.addedAt } : {}),
+      ...(r.fallbackConfirmed === true ? { fallbackConfirmed: true } : {}),
     });
   }
   /* Plan 108 Wave 3 — stamp each entry with the TTS engines its chapter needs

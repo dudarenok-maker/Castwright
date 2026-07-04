@@ -44,6 +44,16 @@ describe('queue-io.enqueue', () => {
     expect(f.entries.find((e) => e.id === 'e2')).not.toHaveProperty('modelKey');
   });
 
+  it('fe-46 — carries an optional per-entry fallbackConfirmed onto the stored entry', () => {
+    const f = enqueue(emptyFile(), [
+      { ...sampleEntry('e1'), fallbackConfirmed: true },
+      sampleEntry('e2'),
+    ]);
+    expect(f.entries.find((e) => e.id === 'e1')?.fallbackConfirmed).toBe(true);
+    // No flag on the input → field omitted, not stamped false.
+    expect(f.entries.find((e) => e.id === 'e2')).not.toHaveProperty('fallbackConfirmed');
+  });
+
   it('appends entries at the bottom and renumbers contiguously', () => {
     let f = emptyFile();
     f = enqueue(f, [sampleEntry('e1'), sampleEntry('e2')]);
