@@ -3,7 +3,7 @@
 ![Cast review](images/reviewing-cast-and-assigning-voices/01-cast-review.png)
 
 Every speaking character gets a row: role, the voice currently assigned,
-line/scene counts, and a status pill (Designed, Sampled, Generated, Needs
+line counts, and a status pill (Designed, Sampled, Generated, Needs
 voice, and so on). "Design full cast" designs bespoke Qwen voices for
 whatever's missing in one pass — see [Designing a Voice](Designing-a-Voice)
 for the single-character version of that flow. "Continue to manuscript" is
