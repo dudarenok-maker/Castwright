@@ -38,7 +38,7 @@ export function setLastKnownEngineDevices(devices: SidecarDeviceMap | null | und
   }
   const next = emptyState();
   for (const engine of TRACKED_ENGINES) {
-    next[engine] = (devices[engine] ?? 'unknown') as EngineDeviceFamily;
+    next[engine] = devices[engine] ?? 'unknown';
   }
   lastKnown = next;
 }
