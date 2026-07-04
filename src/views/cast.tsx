@@ -17,6 +17,7 @@ import {
   Pill,
   VoiceSwatch,
   CarriedBadge,
+  PrimaryButton,
 } from '../components/primitives';
 import { VariantGlyphStrip } from '../components/variant-glyph-strip';
 import {
@@ -65,6 +66,7 @@ import { api } from '../lib/api';
 import type { MergeSuggestion } from '../lib/api';
 import type { CastDesignScope } from '../store/cast-design-slice';
 import { buildVariantTasks, variantWorkCounts } from '../lib/variant-tasks';
+import { compareCastRows } from '../lib/cast-sort';
 
 interface Props {
   characters: Character[];
@@ -87,26 +89,16 @@ interface Props {
      (top-banner entry). When called with a characterId, scopes the
      modal to that character — pill click on a cast row. */
   onShowDrift: (characterId?: string) => void;
+  /** fe-46 — advances the flow to the manuscript view. Always visible, never
+      disabled — the voice-readiness gate lives at generation start, not at
+      this navigation step. */
+  onContinueToManuscript: () => void;
 }
 
-/* Cast table ordering (display only — sorts a filtered copy, never the store
-   order). Rows sort by line count descending so the most-spoken characters
-   lead; the two generic minor-cast buckets (`unknown-male` / `unknown-female`,
-   see server/src/analyzer/fold-minor-cast.ts) always sink to the bottom
-   regardless of their pooled line count. Ties break by name for stability. */
-const UNKNOWN_BUCKET_IDS = new Set(['unknown-male', 'unknown-female']);
 /* fe-16 — module-level stable empty map so the fallback selector returns the
    SAME reference across renders when the slice field is absent (pre-fe-16
    preloaded test stores), keeping the selector cheap. */
 const EMPTY_FALLBACK_MAP: Record<string, string> = {};
-export function compareCastRows(a: Character, b: Character): number {
-  const aBucket = UNKNOWN_BUCKET_IDS.has(a.id);
-  const bBucket = UNKNOWN_BUCKET_IDS.has(b.id);
-  if (aBucket !== bBucket) return aBucket ? 1 : -1;
-  const byLines = (b.lines ?? 0) - (a.lines ?? 0);
-  if (byLines !== 0) return byLines;
-  return a.name.localeCompare(b.name);
-}
 
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
@@ -146,6 +138,7 @@ export function CastView({
   onShowMatchDetail,
   driftEvents,
   onShowDrift,
+  onContinueToManuscript,
 }: Props) {
   /* fs-34 — index used emotions per character ONCE (not per row) for the
      "N tags need a variant" cast-row count. */
@@ -781,6 +774,12 @@ export function CastView({
               <span className="hidden sm:inline">{showLibrary ? 'Hide' : 'Show'} library</span>
               <span className="sm:hidden">Library</span>
             </button>
+            {/* fe-46 — always visible, never disabled; the voice-readiness
+                gate lives at generation start, not at this navigation step. */}
+            <PrimaryButton variant="dark" icon={false} onClick={onContinueToManuscript}>
+              Continue to manuscript
+              <IconChevR className="w-4 h-4" />
+            </PrimaryButton>
           </div>
         </div>
 

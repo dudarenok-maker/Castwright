@@ -249,13 +249,13 @@ export function ConfirmCastView({
               void handleConfirm();
             }}
           >
-            Confirm cast and review manuscript
+            Confirm cast and design voices
           </PrimaryButton>
         </div>
 
         <p className="text-center text-xs text-ink/40 mt-6 max-w-lg mx-auto">
-          We'll start generating chapter audio with these voices. You can refine the cast or
-          regenerate any chapter later from inside the app.
+          Next you'll design voices for the cast, then review the manuscript. You can refine the
+          cast or regenerate any chapter later from inside the app.
         </p>
       </div>
     </div>
@@ -572,9 +572,9 @@ function ConfirmCharacterCard({
                 <span className="text-ink/40">
                   {' '}
                   Description, attributes, and aliases get merged — both books inherit the richer
-                  profile. Voices and already-generated chapter audio don't change — but the
-                  matched book will surface drift events for any character whose audio is now out
-                  of step with the merged profile, to review at your own pace.
+                  profile. Voices and already-generated chapter audio don't change — but the matched
+                  book will surface drift events for any character whose audio is now out of step
+                  with the merged profile, to review at your own pace.
                 </span>
               </span>
             </label>

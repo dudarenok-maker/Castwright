@@ -13,7 +13,7 @@
  * prove the queue is authoritative (chapters show up as real entries). */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm, confirmTierPromptIfPresent } from './helpers';
+import { goToConfirm, confirmTierPromptIfPresent, confirmCastAndReachManuscript } from './helpers';
 
 interface QueueEntryShape {
   id: string;
@@ -194,8 +194,7 @@ test.describe('queue modal (plan 102 / 111)', () => {
     test.setTimeout(60_000);
 
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
     await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
     await confirmTierPromptIfPresent(page); // #1160 voice-model tier prompt
@@ -233,8 +232,7 @@ test.describe('queue modal (plan 102 / 111)', () => {
       );
 
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
     /* Poll until stable (passes instantly if 0, catches a delayed enqueue within 2 s). */
     await expect.poll(queueLen, { timeout: 2_000 }).toBe(0);
 

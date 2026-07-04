@@ -32,7 +32,7 @@
  * promotes min(K, queued.length) chapters in the same tick). */
 
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm, confirmTierPromptIfPresent } from './helpers';
+import { goToConfirm, confirmTierPromptIfPresent, confirmCastAndReachManuscript } from './helpers';
 
 /* Plan 58 — file-level serial mode keeps long cold-boot walks in one
    worker so SSE phase transitions don't miss their event window when
@@ -109,10 +109,10 @@ test.describe('parallel chapter generation (BACKLOG #26, plan 87)', () => {
        multiple queued chapters (4-9 inclusive) — enough work for the
        K=2 pool to interleave. */
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
-    /* Start generating. confirmCast lands on view='manuscript'; the user
+    /* Start generating. fe-46 lands confirmCast on Cast; the helper above
+       continues to Manuscript. From there the user
        clicks "Approve cast & start generating", which lands on
        `#/books/:bookId/generate` AND dispatches ui/requestStartGeneration —
        the only action that auto-enqueues the queued chapters (plan 137; merely

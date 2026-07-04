@@ -93,6 +93,11 @@ export interface EnqueueInput {
      speaking characters. Omitted when cast/analysis isn't available. */
   requiredEngines?: TtsEngine[];
   multiTts?: boolean;
+  /* fe-46 — stamped true when the frontend's voice-readiness gate already got
+     explicit "Proceed anyway" consent for this enqueue batch, so the
+     per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for these
+     fresh entries. */
+  fallbackConfirmed?: boolean;
 }
 
 /** Append entries to the bottom of the queue. Renumbers `order` to stay
@@ -120,6 +125,7 @@ export function enqueue(file: QueueFile, inputs: EnqueueInput[]): QueueFile {
          otherwise (legacy / cast or analysis unavailable). */
       ...(input.requiredEngines ? { requiredEngines: input.requiredEngines } : {}),
       ...(input.multiTts != null ? { multiTts: input.multiTts } : {}),
+      ...(input.fallbackConfirmed === true ? { fallbackConfirmed: true } : {}),
     });
   }
   return renumber({ ...file, entries: [...file.entries, ...fresh] });

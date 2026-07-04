@@ -80,7 +80,7 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
        silently enqueue them so the dispatcher drains them. Deterministic ids
        (`autowork-<bookId>-<chapterId>`) + the not-already-queued pre-check keep
        it idempotent across repeated triggers. */
-    const enqueueOnWork = (): void => {
+    const enqueueOnWork = (fallbackConfirmed: boolean): void => {
       const after = store.getState() as StreamableRootState;
       /* Defence-in-depth Generate-view gate: only the viewed book on the Generate
          view may enqueue. The `ui/requestStartGeneration` trigger already encodes
@@ -127,6 +127,7 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
           bookId: stageBookId,
           chapterId: c.id,
           scope: 'this' as const,
+          ...(fallbackConfirmed ? { fallbackConfirmed: true } : {}),
         }));
       if (fresh.length === 0) return;
       void dispatch(enqueueQueueEntries(fresh, { silent: true })).catch(() => {
@@ -181,7 +182,10 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
         }
       }
 
-      if (ENQUEUE_TRIGGER_TYPES.has(type)) enqueueOnWork();
+      if (ENQUEUE_TRIGGER_TYPES.has(type)) {
+        const payload = (a as { payload?: { fallbackConfirmed?: boolean } }).payload;
+        enqueueOnWork(!!payload?.fallbackConfirmed);
+      }
 
       return result;
     };

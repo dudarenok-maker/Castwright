@@ -104,12 +104,19 @@ export interface UiState {
       on the global Voices view pass the series' representative book (the
       one whose principal cast seeds the modal). Null when closed. */
   rebaselineBookId: string | null;
-  /** True while the "Choose voice model" prompt shown before a generation
+  /** Set while the "Choose voice model" prompt shown before a generation
       run is open. Lets the user pick the Qwen tier (0.6B fast / 1.7B quality)
       at the moment they start generating, defaulting to whatever the cast is
       pinned to. The actual start (`requestStartGeneration`) is dispatched by
-      the modal's confirm, after the tier is applied to the cast. Transient. */
-  startGenPrompt: boolean;
+      the modal's confirm, after the tier is applied to the cast. `fallbackConfirmed`
+      is set when the fe-46 voice-readiness gate's "Proceed anyway" opened this
+      prompt, and rides through to the enqueue call so the per-chapter fallback
+      gate doesn't re-prompt for this run's chapters. Transient. */
+  startGenPrompt: { fallbackConfirmed?: boolean } | null;
+  /** fe-46 — set when `startGenerationFlow` finds a speaking Qwen character
+      with no designed voice; the voice-readiness gate modal renders instead
+      of (before) the tier prompt. Transient. */
+  voiceReadinessGate: { bookId: string } | null;
 }
 
 const initialState: UiState = {
@@ -135,7 +142,8 @@ const initialState: UiState = {
   queueModalOpen: false,
   rebaselineModalOpen: false,
   rebaselineBookId: null,
-  startGenPrompt: false,
+  startGenPrompt: null,
+  voiceReadinessGate: null,
 };
 
 export const uiSlice = createSlice({
@@ -203,7 +211,11 @@ export const uiSlice = createSlice({
     },
     confirmCast: (s) => {
       if (s.stage.kind !== 'confirm') return;
-      s.stage = { kind: 'ready', bookId: s.stage.bookId, view: 'manuscript', ...READY_DEFAULTS };
+      /* fe-46 — land on Cast first so voice design is a taught step of the
+         flow (confirm → Cast → Manuscript → Generate), not a detour;
+         `openBook` already defaults reopened books to Cast, so this removes
+         an inconsistency rather than introducing a new one. */
+      s.stage = { kind: 'ready', bookId: s.stage.bookId, view: 'cast', ...READY_DEFAULTS };
     },
     reanalyse: (s, a: PayloadAction<{ manuscriptId?: string | null } | undefined>) => {
       if (s.stage.kind !== 'confirm') return;
@@ -240,13 +252,23 @@ export const uiSlice = createSlice({
        middleware can auto-enqueue the book's queued chapters on this ONE action
        and never on a passive open/hydrate/view-switch. See
        docs/features/archive/137-reopen-never-auto-enqueues.md. */
-    requestStartGeneration: () => {},
-    /* Open / close the pre-generation "Choose voice model" prompt (P3). */
-    openStartGenPrompt: (s) => {
-      s.startGenPrompt = true;
+    requestStartGeneration: (_s, _a: PayloadAction<{ fallbackConfirmed?: boolean } | undefined>) => {},
+    /* Open / close the pre-generation "Choose voice model" prompt (P3). Only
+       the fe-46 voice-readiness gate's "Proceed anyway" passes a payload. */
+    openStartGenPrompt: (s, a: PayloadAction<{ fallbackConfirmed?: boolean } | undefined>) => {
+      s.startGenPrompt = { fallbackConfirmed: a.payload?.fallbackConfirmed };
     },
     closeStartGenPrompt: (s) => {
-      s.startGenPrompt = false;
+      s.startGenPrompt = null;
+    },
+    /* fe-46 — pre-flight voice-readiness gate, opened by `startGenerationFlow`
+       instead of the tier prompt when a speaking Qwen character has no
+       designed voice. */
+    openVoiceReadinessGate: (s, a: PayloadAction<{ bookId: string }>) => {
+      s.voiceReadinessGate = a.payload;
+    },
+    closeVoiceReadinessGate: (s) => {
+      s.voiceReadinessGate = null;
     },
     setCurrentChapterId: (s, a: PayloadAction<number>) => {
       if (s.stage.kind !== 'ready') return;

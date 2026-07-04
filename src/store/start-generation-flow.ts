@@ -11,6 +11,7 @@
 
 import { uiActions } from './ui-slice';
 import { engineForModelKey } from '../lib/tts-models';
+import { selectVoiceReadinessGateShouldFire } from './voice-readiness-selectors';
 import type { AppDispatch, RootState } from './index';
 import type { Character } from '../lib/types';
 
@@ -28,11 +29,22 @@ export function castRendersOnQwen(
 
 export function startGenerationFlow() {
   return (dispatch: AppDispatch, getState: () => RootState): void => {
-    const { cast, ui } = getState();
-    if (castRendersOnQwen(cast.characters, ui.ttsModelKey)) {
-      dispatch(uiActions.openStartGenPrompt());
-    } else {
+    const state = getState();
+    const { cast, ui } = state;
+    if (!castRendersOnQwen(cast.characters, ui.ttsModelKey)) {
       dispatch(uiActions.requestStartGeneration());
+      return;
     }
+    /* fe-46 — pre-flight voice-readiness gate takes precedence over the tier
+       prompt: a speaking Qwen character with no designed voice needs an
+       explicit, informed choice (design now / proceed anyway) before the
+       tier choice is even relevant. Partially-designed casts still need the
+       tier prompt for their designed characters — deliberately NOT merged. */
+    const bookId = ui.stage.kind === 'ready' ? ui.stage.bookId : null;
+    if (bookId && selectVoiceReadinessGateShouldFire(state, bookId)) {
+      dispatch(uiActions.openVoiceReadinessGate({ bookId }));
+      return;
+    }
+    dispatch(uiActions.openStartGenPrompt());
   };
 }

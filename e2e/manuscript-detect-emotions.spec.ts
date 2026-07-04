@@ -7,13 +7,12 @@
  * Pairs with the fs-33/fs-34 plan; mirrors manuscript-emotion-preview.spec.ts. */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 test.describe('manuscript — Detect emotions (fs-33)', () => {
   test('confirm → run → done, and the streamed emotion lands on a sentence', async ({ page }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     const button = page.getByTestId('detect-emotions-button');
     await expect(button).toBeVisible({ timeout: 5_000 });

@@ -813,6 +813,7 @@ function ReadyViewSwitch({
                 : uiActions.setShowDriftReport(true),
             )
           }
+          onContinueToManuscript={() => dispatch(uiActions.changeView('manuscript'))}
         />
       );
     case 'library':

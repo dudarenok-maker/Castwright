@@ -211,6 +211,22 @@ describe('POST /api/queue/enqueue', () => {
     expect(dup.status).toBe(409);
   });
 
+  it('fe-46 — forwards fallbackConfirmed:true onto the stored entry when set', async () => {
+    const res = await request(app)
+      .post('/api/queue/enqueue')
+      .send({
+        entries: [
+          { id: 'e-confirmed', bookId: 'book-A', chapterId: 1, scope: 'this', fallbackConfirmed: true },
+          { id: 'e-unconfirmed', bookId: 'book-A', chapterId: 2, scope: 'this' },
+        ],
+      });
+    expect(res.status).toBe(200);
+    const confirmed = res.body.entries.find((e: { id: string }) => e.id === 'e-confirmed');
+    const unconfirmed = res.body.entries.find((e: { id: string }) => e.id === 'e-unconfirmed');
+    expect(confirmed.fallbackConfirmed).toBe(true);
+    expect(unconfirmed.fallbackConfirmed).toBeUndefined();
+  });
+
   it('omits engine fields when the book is not on disk (legacy / unknown)', async () => {
     const res = await request(app)
       .post('/api/queue/enqueue')

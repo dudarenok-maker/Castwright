@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-07-04
 owner: null
 ---
 
 # Cast-first landing + pre-flight voice-readiness gate (fe-46)
 
-> Status: draft — approved plan, adversarially reviewed, awaiting implementation
+> Status: stable — shipped 2026-07-04 on `feat/frontend-voice-design-flow`
 > Spec: `docs/superpowers/specs/2026-07-04-voice-design-generation-flow-design.md`
 > Key files: `src/store/ui-slice.ts`, `src/store/start-generation-flow.ts`,
 > `src/store/voice-readiness-selectors.ts` (new), `src/lib/cast-sort.ts` (new),
@@ -245,4 +245,25 @@ Mock mode (`VITE_USE_MOCKS=true`):
 
 ## Ship notes
 
-(To be filled at ship: date, SHA, behaviour delta vs spec.)
+Shipped 2026-07-04 on `feat/frontend-voice-design-flow` (PR link to be added
+once opened). Behaviour matches the plan above; no deltas at implementation
+time. Work order followed exactly (2a → 2b → 1 → 3 → 4 → new e2e → docs →
+`npm run verify`).
+
+Coverage at ship: `src/lib/cast-sort.test.ts` (new, extracted comparator),
+`src/store/voice-readiness-selectors.test.ts` (new, 15 cases),
+`src/store/start-generation-flow.test.ts` (extended — gate vs tier-prompt
+branching), `src/modals/voice-readiness-gate.test.tsx` (new, 6 cases),
+`src/store/ui-slice.test.ts` (extended — `confirmCast` lands on `'cast'`,
+`startGenPrompt`/`voiceReadinessGate` reducers), `src/store/
+generation-stream-middleware.test.ts` (extended — `fallbackConfirmed`
+stamping), server `queue-io.test.ts` + `queue.test.ts` (extended —
+`fallbackConfirmed` persists through enqueue). New Playwright e2e spec
+`e2e/cast-first-landing-and-voice-gate.spec.ts` covers all four acceptance
+scenarios; `e2e/helpers.ts` gained `confirmCastAndReachManuscript`, swapped
+into the 14 listed specs (18 files touched once the 4 cast-view specs whose
+button-label regex also needed updating are counted).
+
+`generation-fallback-gate.test.ts`'s existing "renders straight through when
+the re-dispatch carries fallbackConfirmed" case already proves the FIRST-run
+skip this plan depended on — no new server test needed there.

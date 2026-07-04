@@ -1,11 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 test('fs-56 — author edits a per-line instruct; it shows + round-trips in-session', async ({ page }) => {
   // Nav preamble copied verbatim from manuscript-emotion-preview.spec.ts (proven).
   await goToConfirm(page);
-  await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-  await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+  await confirmCastAndReachManuscript(page);
 
   // The instruct chip renders on every line (ungated). The empty chip is
   // opacity-0/hover-reveal but is in the DOM and clickable (Playwright's

@@ -17,15 +17,14 @@
  * sentence id=13). */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 test.describe('manuscript reassign picker — portal + dismissal + dark surface', () => {
   test('inspector picker is portal-rendered to document.body, not clipped by the inspector card', async ({
     page,
   }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     /* Jump to the low-conf sentence to open the inspector deterministically. */
     const chapter3 = page.getByRole('button', { name: /Cold Galley|Chapter 3/i }).first();
@@ -62,8 +61,7 @@ test.describe('manuscript reassign picker — portal + dismissal + dark surface'
     page,
   }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     /* Pick a chapter with at least one normal-confidence segment so the
        hover-only Reassign button reveal is exercised. Chapter 1 is the
@@ -101,8 +99,7 @@ test.describe('manuscript reassign picker — portal + dismissal + dark surface'
 
   test('Esc and click-outside both dismiss the inspector picker', async ({ page }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
     await page.getByLabel('Next low-confidence sentence').click();
     await expect(page.getByText('Reassign whole segment to').first()).toBeVisible();
     await page.getByText(/Change…/).first().click();
@@ -129,8 +126,7 @@ test.describe('manuscript reassign picker — portal + dismissal + dark surface'
        a noticeable lift over --canvas (#14110f = rgb(20, 17, 15)) so
        the popover reads as a distinct surface — that's the regression. */
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
 
     await page.getByLabel('Next low-confidence sentence').click();

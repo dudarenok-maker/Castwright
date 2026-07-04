@@ -21,7 +21,7 @@
  * Wall-clock budget: ~20 s warm (analysis mock ~7.6 s + click chain). */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 test.describe('manuscript low-confidence triage', () => {
   test('▼ jumps to low-conf sentence → search picker → roster pick reassigns', async ({
@@ -29,9 +29,8 @@ test.describe('manuscript low-confidence triage', () => {
   }) => {
     await goToConfirm(page);
 
-    /* Step 1: confirm cast → manuscript view. */
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    /* Step 1: confirm cast → cast (fe-46) → manuscript view. */
+    await confirmCastAndReachManuscript(page);
 
     /* Step 2: pick chapter 3 in the sidebar — that's where the
        canned-data low-confidence sentence (id=13, confidence 0.62)
@@ -102,8 +101,7 @@ test.describe('manuscript low-confidence triage', () => {
     page,
   }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     /* Pick chapter 3 (carries the canned low-conf sentence id=13). */
     const chapter3 = page.getByRole('button', { name: /Cold Galley|Chapter 3/i }).first();
@@ -139,8 +137,7 @@ test.describe('manuscript low-confidence triage', () => {
      a chapter with low-conf sentences carries the amber count badge. */
   test('sidebar chapter row shows amber low-conf count badge', async ({ page }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     /* Canned data has at least one chapter with confidence < 0.75
        (chapter 3, sentence 13). The badge should be visible at desktop

@@ -25,3 +25,24 @@ time. The previous release's body shipped with the v1.10.0 tag annotation.
 -->
 
 - **Hardware guidance reconciled with castwright.ai.** The About page and the "Will it run on my machine?" device panel now say a 6 GB GPU gets you started and 8 GB is the sweet spot, matching the FAQ on the website (#1274).
+
+## ✨ Headline features
+
+### Cast-first landing + pre-flight voice-readiness gate (new)
+
+- **`confirmCast` now lands on the Cast view, not Manuscript** — the flow
+  becomes confirm → Cast → Manuscript → Generate, with a new "Continue to
+  manuscript" CTA on the Cast view's header action row.
+- **A pre-flight voice-readiness gate** opens instead of the tier prompt when
+  `startGenerationFlow` finds a speaking Qwen character with no designed
+  voice: lists them (talk-time order), "Design full cast" as the primary
+  action, "Proceed anyway — generic Kokoro fallback voices" for English
+  books, a hard block (no proceed affordance) for non-English books.
+- New reusable `src/store/voice-readiness-selectors.ts`
+  (`selectUndesignedQwenCharacters` shares the cast view's exact
+  `needsVoiceIds` semantics via `resolveVoiceStatus`) and `src/lib/cast-sort.ts`
+  (`compareCastRows` extracted out of `views/cast.tsx`).
+  `EnqueueInput`/`QueueEntry` gain an optional per-entry `fallbackConfirmed`
+  flag, stamped at enqueue by the proceed-anyway path so the per-chapter
+  `awaiting_fallback_confirm` gate doesn't re-prompt for that run's fresh
+  chapters (later enqueues still get the per-chapter backstop).

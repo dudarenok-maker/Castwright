@@ -11,7 +11,7 @@
  * extra chapter navigation is needed to reach a chapter with sentences. */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 const FIRST_SENTENCE =
   'The wind had turned by the time Halloran reached the wheelhouse';
@@ -21,8 +21,7 @@ test.describe('manuscript — promote first sentence to title (PR-gate finding 4
     page,
   }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     const button = page.getByTestId('promote-first-sentence-button');
     await expect(button).toBeVisible({ timeout: 5_000 });
@@ -50,8 +49,7 @@ test.describe('manuscript — promote first sentence to title (PR-gate finding 4
 
   test('cancel closes the popover with no title change', async ({ page }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     const button = page.getByTestId('promote-first-sentence-button');
     await expect(button).toBeVisible({ timeout: 5_000 });

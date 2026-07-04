@@ -46,7 +46,8 @@ function makeStore({
     queueModalOpen: false,
     rebaselineModalOpen: false,
     rebaselineBookId: null,
-    startGenPrompt: false,
+    startGenPrompt: null,
+    voiceReadinessGate: null,
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

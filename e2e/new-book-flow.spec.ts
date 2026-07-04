@@ -14,6 +14,7 @@
  * Pairs with docs/features/archive/37-e2e-playwright.md. */
 
 import { test, expect, type Page } from '@playwright/test';
+import { confirmCastAndReachManuscript } from './helpers';
 
 /* Read `ui.stage.kind` from the live Redux store. The store is exposed
    on `window.__store__` only in DEV + e2e Vite modes (see src/main.tsx). */
@@ -94,16 +95,14 @@ test.describe('new book flow', () => {
     await expect(page).toHaveURL(/#\/books\/.+\/confirm$/, { timeout: 15_000 });
     expect(await getStageKind(page)).toBe('confirm');
 
-    /* Step 7: confirm-cast view — click the primary CTA to advance to
-       the ready stage. confirmCast dispatches set the stage to
-       { kind: 'ready', view: 'manuscript', currentChapterId: 3, ... }
-       which the router serialises to #/books/:bookId/manuscript. */
+    /* Step 7: confirm-cast view — click the primary CTA. fe-46 lands
+       confirmCast on the Cast view first ({ kind: 'ready', view: 'cast',
+       currentChapterId: 3, ... }); "Continue to manuscript" then advances
+       to #/books/:bookId/manuscript. */
     await expect(
-      page.getByRole('button', { name: /Confirm cast and review manuscript/i }),
+      page.getByRole('button', { name: /Confirm cast and design voices/i }),
     ).toBeVisible({ timeout: 5_000 });
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
     expect(await getStageKind(page)).toBe('ready');
 
     /* Step 8: refresh-restores-stage. The redux-persist wiring shipped
