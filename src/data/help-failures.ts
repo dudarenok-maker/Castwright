@@ -29,6 +29,7 @@ const TITLES = {
   'xtts-speaker-desync': 'Voice catalog out of sync',
   'cuda-poisoned': 'GPU error (auto-recovering)',
   'gpu-acceleration-unavailable': 'Running on CPU (GPU acceleration unavailable)',
+  'voice-not-designed': 'Non-English chapter missing a designed voice',
   auth: 'Gemini API key problem',
   unknown: 'Unrecognised error',
 } satisfies Record<FailureCode, string>;

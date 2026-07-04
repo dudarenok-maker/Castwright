@@ -176,7 +176,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
        dispatcher reads it on the post-close reconcile. */
     tick({ type: 'idle' } as GenerationTick);
     expect(runner.hasOpenStreamForChapter('b1', 2)).toBe(false);
-    expect(runner.takeChapterFailure('b1', 2)).toBe('sidecar 500');
+    expect(runner.takeChapterFailure('b1', 2)).toEqual({ reason: 'sidecar 500', errorCode: undefined });
     /* One-shot — a re-run that succeeds can't read a stale failure. */
     expect(runner.takeChapterFailure('b1', 2)).toBeNull();
   });
@@ -209,7 +209,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
     runner.open('b1', 'kokoro-v1', { chapterIds: [3], force: true }, { chapterId: 3 });
     onTickFor('b1', 3)({ type: 'chapter_failed', chapterId: 3, errorReason: 'boom' } as GenerationTick);
-    expect(runner.takeChapterFailure('b1', 3)).toBe('boom');
+    expect(runner.takeChapterFailure('b1', 3)).toEqual({ reason: 'boom', errorCode: undefined });
   });
 
   it('takeChapterFailure is null for a chapter that did not fail', () => {
@@ -267,6 +267,38 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(toasts[0].message).toMatch(/Chapter 3/);
     expect(toasts[0].message).toMatch(/Wren, Nim/);
     expect(toasts[0].dedupeKey).toBe('fallback-confirm:q3');
+  });
+
+  it('#1263: surfaces a voice-not-designed chapter_failed tick as an immediate error toast', () => {
+    /* The old chapter_awaiting_fallback_confirm park (asserted above) always
+       toasted immediately; this failure class replaces that park for
+       non-English books (#1263) and must not go silent while waiting for the
+       3-strike breaker toast in queue-dispatcher-middleware. */
+    const { store, runner } = makeRunner();
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [3], force: true }, { chapterId: 3 });
+    onTickFor('b1', 3)({
+      type: 'chapter_failed',
+      chapterId: 3,
+      errorReason: 'No designed Qwen voice for Bob — design it in the cast view before generating.',
+      errorCode: 'voice-not-designed',
+    } as unknown as GenerationTick);
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe('error');
+    expect(toasts[0].message).toMatch(/Chapter 3/);
+    expect(toasts[0].message).toMatch(/No designed Qwen voice for Bob/);
+    expect(toasts[0].dedupeKey).toBe('voice-not-designed:b1:3');
+  });
+
+  it('does NOT toast an ordinary chapter_failed tick without the voice-not-designed code', () => {
+    const { store, runner } = makeRunner();
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [3], force: true }, { chapterId: 3 });
+    onTickFor('b1', 3)({
+      type: 'chapter_failed',
+      chapterId: 3,
+      errorReason: 'sidecar 500',
+    } as unknown as GenerationTick);
+    expect(store.getState().notifications.toasts).toHaveLength(0);
   });
 
   it('refreshes the viewed book’s snapshot from rows on a progress tick', () => {

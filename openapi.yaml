@@ -4786,6 +4786,7 @@ components:
         - analyzer-content-blocked
         - attribution-incomplete
         - gpu-acceleration-unavailable
+        - voice-not-designed
 
     ChapterQaVerdict:
       type: object

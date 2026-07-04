@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import type { QwenInstallState } from '../workspace/user-settings.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -384,7 +384,58 @@ describe('fs-2 never-cross-language generation gate', () => {
     expect(body).not.toContain('chapter_awaiting_fallback_confirm');
     expect(body).toContain('chapter_failed');
     expect(body).toMatch(/no designed qwen voice for sofiya/i);
+    expect(body).toContain('"errorCode":"voice-not-designed"');
     expect(synthCalled).toBe(false);
+  }, 10_000);
+
+  it('#1263: persists the failure to state.json so a reload shows Failed, not Queued', async () => {
+    writeManifest('qwen-v_sofiya', 'English');
+    await runRuStream();
+    const statePath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      RU_TITLE,
+      '.audiobook',
+      'state.json',
+    );
+    const state = JSON.parse(await readFile(statePath, 'utf8'));
+    const ch = state.chapters.find((c: { id: number }) => c.id === 1);
+    expect(ch.generationState).toBe('failed');
+    expect(ch.generationError).toMatch(/no designed qwen voice for sofiya/i);
+    expect(ch.generationErrorCode).toBe('voice-not-designed');
+    expect(ch.generationRemediation).toBeTruthy();
+  }, 10_000);
+
+  it('#1263: omits the redundant "(and the narrator)" clause when the narrator itself is undesigned', async () => {
+    /* Give the narrator an actual speaking line this time (the shared fixture
+       only has sofiya speaking, so the narrator never enters fallbackSet) —
+       then bake its designed voice English, invalid reuse into this Russian
+       book, same as the sofiya case above. This time the UNDESIGNED character
+       IS the narrator, so "design them (and the narrator)" would otherwise
+       name it twice. Restore the shared single-line cache afterward so later
+       tests in this describe block see the fixture they expect. */
+    const cacheModule = await import('../store/analysis-cache.js');
+    await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
+      chapters: {
+        1: [
+          { id: 1, chapterId: 1, characterId: 'narrator', text: 'Начало.' },
+          { id: 2, chapterId: 1, characterId: 'sofiya', text: 'Привет.' },
+        ],
+      },
+    });
+    try {
+      writeManifest('qwen-v_narr', 'English');
+      const body = await runRuStream();
+      expect(body).toContain('chapter_failed');
+      expect(body).toMatch(/no designed qwen voice for narrator/i);
+      expect(body).not.toMatch(/and the narrator/i);
+    } finally {
+      await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
+        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'sofiya', text: 'Привет.' }] },
+      });
+    }
   }, 10_000);
 
   it('is FATAL (no synth, no park) when Qwen is unavailable on a Russian book', async () => {

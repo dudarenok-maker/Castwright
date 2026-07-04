@@ -91,6 +91,7 @@ import {
 } from '../tts/segment-asr-qa.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
@@ -1144,16 +1145,58 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         if (nonEnglishBook) {
           const names = fallbackSet.map((c) => c.name ?? c.id).join(', ');
           const plural = fallbackSet.length > 1;
-          const language = bookLanguage ?? 'non-English';
+          /* Only remind about the narrator separately when it ISN'T already
+             undesigned itself (and thus already named in `names`) — the
+             narrator speaks in nearly every chapter, so it's the common
+             member of fallbackSet, and "design them (and the narrator)" reads
+             redundant when the narrator IS "them". */
+          const narratorAlreadyListed = fallbackSet.some((c) => c.id === 'narrator');
+          const narratorNote = narratorAlreadyListed ? '' : ' (and the narrator)';
+          const errorReason =
+            `No designed Qwen voice for ${names} — design ${plural ? 'them' : 'it'}${narratorNote} ` +
+            `in the cast view before generating. English Kokoro voices cannot read ${bookLanguage} text.`;
           job.runInProgress.delete(chapter.id);
+          job.currentChapterId = null;
           broadcast(job, {
             type: 'chapter_failed',
             chapterId: chapter.id,
-            errorReason:
-              `No designed Qwen voice for ${names} — design ${plural ? 'them' : 'it'} (and the ` +
-              `narrator) in the cast view before generating. English Kokoro voices cannot read ` +
-              `${language} text.`,
+            errorReason,
+            errorCode: 'voice-not-designed',
+            remediation: FAILURE_REMEDIATIONS['voice-not-designed'].remediation,
           });
+          /* Durably record the failure in state.json so the chapter survives a
+             reload / queue-clear as "Failed · reason" instead of re-hydrating
+             as the misleading "Queued" (no audio on disk → absent from
+             completedSlugs). Mirrors the outer catch's persist below. Wrapped
+             in try/catch so a persistence hiccup never masks the real failure
+             the user needs to see. */
+          try {
+            const statePath = stateJsonPath(bookDir);
+            const prev = await readJson<BookStateJson>(statePath);
+            if (prev) {
+              const next: BookStateJson = {
+                ...prev,
+                chapters: prev.chapters.map((c) =>
+                  c.id === chapter.id
+                    ? {
+                        ...c,
+                        generationState: 'failed',
+                        generationError: errorReason,
+                        generationErrorCode: 'voice-not-designed',
+                        generationRemediation: FAILURE_REMEDIATIONS['voice-not-designed'].remediation,
+                      }
+                    : c,
+                ),
+                updatedAt: new Date().toISOString(),
+              };
+              await writeJsonAtomic(statePath, stampStateSchema(next));
+            }
+          } catch (persistErr) {
+            console.warn(
+              '[generation] failed to persist voice-not-designed state (continuing):',
+              (persistErr as Error).message,
+            );
+          }
           return;
         }
         /* Flip in_progress → awaiting_confirm FIRST (serialised, so the srv-12
