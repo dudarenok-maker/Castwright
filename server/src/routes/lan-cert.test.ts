@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import http from 'node:http';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
@@ -129,5 +130,69 @@ describe('POST /api/lan/cert/regenerate', () => {
       expect.objectContaining({ timeout: 90_000, windowsHide: true }),
       expect.any(Function),
     );
+  });
+
+  it('rejects a second regenerate request with 409 while one is already in flight', async () => {
+    writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
+    writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
+    let resolveFirst: (() => void) | undefined;
+    // Resolves the instant execFile is actually invoked — which only happens
+    // AFTER the route has already checked the in-flight flag and flipped it
+    // to true (execFileAsync's Promise executor calls execFile synchronously),
+    // so awaiting this is a reliable "flag is now true" signal.
+    let firstCallStarted: () => void;
+    const firstCallStartedPromise = new Promise<void>((r) => {
+      firstCallStarted = r;
+    });
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      firstCallStarted();
+      // Don't call the callback yet — simulates a still-running subprocess,
+      // so the first request's in-flight window is observable.
+      resolveFirst = () =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          '[setup-lan-certs] generating cert for hosts: localhost\n',
+          '',
+        );
+      return {} as ReturnType<typeof execFile>;
+    });
+
+    // supertest/superagent don't actually send a request until it's awaited
+    // (or .then() is called) — so two "fire and await later" supertest calls
+    // can't observe overlap reliably. A real listening http.Server + raw
+    // http.request calls (which send on .end(), no lazy thenable) gives
+    // deterministic control over when each request actually hits the wire.
+    const server = makeApp().listen(0);
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('expected AddressInfo');
+    const port = address.port;
+
+    function post(): Promise<{ status: number }> {
+      return new Promise((resolvePost, reject) => {
+        const req = http.request(
+          { method: 'POST', hostname: '127.0.0.1', port, path: '/api/lan/cert/regenerate' },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolvePost({ status: res.statusCode as number }));
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+    }
+
+    try {
+      const firstRequest = post();
+      await firstCallStartedPromise;
+
+      const secondResponse = await post();
+      expect(secondResponse.status).toBe(409);
+
+      resolveFirst?.();
+      const firstResponse = await firstRequest;
+      expect(firstResponse.status).toBe(200);
+    } finally {
+      server.close();
+    }
   });
 });

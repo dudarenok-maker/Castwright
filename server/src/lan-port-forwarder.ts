@@ -12,6 +12,7 @@
    which exists specifically to cover this). */
 
 import net from 'node:net';
+import { shouldSpawnMdnsResponder } from './mdns-owner.js';
 
 export interface PortForwarderHandle {
   server: net.Server;
@@ -19,14 +20,15 @@ export interface PortForwarderHandle {
 }
 
 /** True only for the start:lan shape (lanHttps AND NODE_ENV=production) —
-    identical shape and rationale to shouldSpawnMdnsResponder (mdns-owner.ts):
-    dev:lan's server leg also sets LAN_HTTPS=1, and must not also get a
-    port-443 forwarder it doesn't advertise or own. */
+    delegates to shouldSpawnMdnsResponder's identical gating logic rather than
+    duplicating it, so the two can never silently drift apart. dev:lan's
+    server leg also sets LAN_HTTPS=1, and must not also get a port-443
+    forwarder it doesn't advertise or own. */
 export function shouldSpawnPortForwarder(
   lanHttps: boolean,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return lanHttps && env.NODE_ENV === 'production';
+  return shouldSpawnMdnsResponder(lanHttps, env);
 }
 
 /** Start the :443-to-targetPort raw TCP forwarder. Never throws — a bind

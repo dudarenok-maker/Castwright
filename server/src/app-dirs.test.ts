@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { resolve } from 'node:path';
-import { resolveLogDir, resolveRunDir } from './app-dirs.js';
+import { resolveLogDir, resolveRunDir, resolveLanCertPaths } from './app-dirs.js';
 
 describe('app-dirs', () => {
   const prevLog = process.env.APP_LOG_DIR;
@@ -38,5 +38,21 @@ describe('app-dirs', () => {
   it('resolves a relative env value to an absolute path', () => {
     process.env.APP_LOG_DIR = 'relative/logs';
     expect(resolveLogDir('/srv/app')).toBe(resolve('relative/logs'));
+  });
+
+  it('resolveLanCertPaths derives both cert paths under resolveRunDir()/certs', () => {
+    delete process.env.APP_RUN_DIR;
+    expect(resolveLanCertPaths('/srv/app')).toEqual({
+      certFile: resolve('/srv/app', '.run', 'certs', 'lan-cert.pem'),
+      keyFile: resolve('/srv/app', '.run', 'certs', 'lan-key.pem'),
+    });
+  });
+
+  it('resolveLanCertPaths honours APP_RUN_DIR like resolveRunDir does', () => {
+    process.env.APP_RUN_DIR = resolve('/shared/run');
+    expect(resolveLanCertPaths('/srv/app/releases/v1.6.0')).toEqual({
+      certFile: resolve('/shared/run', 'certs', 'lan-cert.pem'),
+      keyFile: resolve('/shared/run', 'certs', 'lan-key.pem'),
+    });
   });
 });
