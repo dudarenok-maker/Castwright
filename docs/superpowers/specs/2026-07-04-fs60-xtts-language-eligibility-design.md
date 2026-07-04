@@ -40,9 +40,11 @@ This spec covers only the XTTS half. Kokoro non-English gets its own follow-up i
 ## 1. Motivation
 
 The primary driver is **resilience**, not voice variety: today, if a non-English book's designed Qwen voice
-is unavailable, undesigned, or erroring, generation fails loud (`MissingDesignedVoiceError`) with no
-fallback — the mirror-image of English books, which silently fall back to Kokoro. This spec gives non-English
-books an equivalent fallback path onto Coqui.
+is unavailable or undesigned, generation fails loud (`MissingDesignedVoiceError`) with no fallback — the
+mirror-image of English books, which silently fall back to Kokoro. This spec gives non-English books an
+equivalent fallback path onto Coqui. **Scoped to exactly today's trigger conditions** (unavailable/undesigned)
+— a mid-render Qwen synth *error* does not go through this seam today (it hits separate retry/recycle logic)
+and adding error-triggered fallback is explicitly out of scope here, not silently folded in.
 
 It's also a **prerequisite for fs-38 (voice cloning, draft)**: fs-38's XTTS reference-clip cloning path is
 the same boot-time-English-locked Coqui integration this spec fixes. Without per-synth language threading,
@@ -91,12 +93,24 @@ table row — no branching logic to touch either way.
 
 **Fully API-driven — no duplicated frontend logic.** `openapi.yaml` gains a computed `eligibleTtsEngines:
 TtsEngine[]` field on the book-metadata schema already returned by book-state GET (which already carries
-`language`). Regenerate `src/lib/api-types.ts` via `npm run openapi:types`. The three frontend call sites
-that currently compute `lockedToQwen = bookLanguage !== 'en'` inline — `cast.tsx:153`, `profile-drawer.tsx:279`,
-`voice-readiness-gate.tsx:37` — read this field instead and intersect it with `installedEngines` before
-handing the result to `voice-engine-picker.tsx` (unchanged component; it already accepts a filtered engine
-list as a prop, so no picker redesign is needed). This gives zero-drift, single-source-of-truth eligibility
-rather than the ~6-site duplication pattern the current boolean already exhibits.
+`language`). Regenerate `src/lib/api-types.ts` via `npm run openapi:types`.
+
+Two of the three call sites compute `bookLanguage !== 'en'` inline today — `cast.tsx:153`
+(`isNonEnglish`) and `profile-drawer.tsx:279` (`lockedToQwen`) — and switch to reading `eligibleTtsEngines`
+instead. The third, `voice-readiness-gate.tsx`, reads it via a Redux selector,
+`selectIsBookNonEnglish` (`store/voice-readiness-selectors.ts:60-63`), not an inline compute — that selector
+is replaced by an eligibility-aware equivalent (§5 covers the resulting behavior change to the gate itself).
+
+`voice-engine-picker.tsx`'s `lockedToQwen: boolean` prop (component, lines 52-57 and 118-143) is a hard
+override — when true it discards `installedEngines` entirely and renders a single disabled Qwen option with
+a fixed "This book isn't English…" note. **The component itself needs no code change.** What changes is what
+its callers compute and pass in: today `lockedToQwen = bookLanguage !== 'en'`; after this spec,
+`lockedToQwen = eligibleTtsEngines.length === 1` (still true, same locked UX, for any language that still has
+no fallback — i.e. everything outside en/ru/es/fr/de) and `installedEngines = intersect(allInstalledEngines,
+eligibleTtsEngines)` (so for ru/es/fr/de, `lockedToQwen` becomes `false` and the picker's existing unlocked
+branch naturally renders exactly `{Default (Qwen), Qwen, Coqui}` — no new rendering logic, just different
+inputs). This is a caller-side fix, not a picker redesign, but it's a real behavior change at all three call
+sites, not a drop-in field read.
 
 **`overrideTtsVoices` shape is unchanged.** XTTS's catalog voices (`COQUI_PROFILE_VOICES` —
 "Damien Black," "Claribel Dervla," etc.) are XTTS v2's built-in multilingual studio speakers: the *same*
@@ -117,10 +131,12 @@ Coqui synth call uses `request.language or self._language` — falling back to t
 every Coqui synth call in `synthesise-chapter.ts` threads `book.language` through.
 
 **Qwen → Coqui fallback.** `applyQwenFallback` (`synthesise-chapter.ts:873-893`) has exactly one downgrade
-path today (→ Kokoro), blocked when `forbidKokoroFallback` is set. This gains a second, independent branch:
-if the character's designed-Qwen route is unavailable/undesigned/erroring **and** `coqui` is in the book's
-`eligibleTtsEngines` **and** Kokoro-fallback is forbidden (i.e. non-English) → fall back to Coqui instead of
-throwing `MissingDesignedVoiceError`. The Coqui voice resolves exactly like today's English Coqui fallback:
+path today (→ Kokoro), blocked when `forbidKokoroFallback` is set, firing on exactly the same condition it
+checks today — `!voiceName || qwenUnavailable` (undesigned voice, or the whole Qwen engine unavailable). This
+gains a second, independent branch on that **same** trigger condition (no new triggers — see §1's scope
+note): if that condition holds **and** `coqui` is in the book's `eligibleTtsEngines` **and** Kokoro-fallback
+is forbidden (i.e. non-English) → fall back to Coqui instead of throwing `MissingDesignedVoiceError`. The
+Coqui voice resolves exactly like today's English Coqui fallback:
 `pickVoiceForEngine('coqui', character, hint)` → profile inference against `COQUI_PROFILE_VOICES` when no
 explicit override exists — no new per-language voice data (§2). If `coqui` is *not* in the eligible set
 (a still-unsupported language), behavior is byte-identical to today: fail loud.
@@ -131,62 +147,90 @@ stays Qwen-only** — unchanged, per §2's reasoning.
 
 ## 4. VRAM handling
 
-**Kokoro's eager-preload default flips to off.** `autoPreloadKokoro` (per-user preference,
-`server/src/config/registry.ts`) changes its shipped default from `true` to `false` — Kokoro now loads
-on-demand like Coqui/Qwen already do, rather than sitting eagerly resident. This is motivated directly by
-this spec: once non-English books are no longer forced onto a single engine, an always-hot English-only
-engine is a less universally good use of VRAM headroom. Existing installs that have explicitly set the
-preference keep their choice; only the shipped default changes.
+**Kokoro's eager-preload default flips to off.** The real knob is `tts.preload.kokoro`
+(`server/src/config/registry.ts:523-529`, env `PRELOAD_KOKORO`) — a **boot-time sidecar preload flag**, not
+a live per-user "on demand" toggle; its own help text says changing it requires a sidecar restart. (The
+earlier draft of this spec called this `autoPreloadKokoro`, a name that doesn't exist in the codebase —
+corrected here.) This spec flips its shipped default from `true` to `false`, matching how `PRELOAD_COQUI`
+and `PRELOAD_QWEN` already default off — Kokoro will no longer be preloaded at sidecar boot, and instead
+loads on first request, same as Coqui/Qwen already do. This takes effect on the next sidecar restart, not
+instantly. Motivation is unchanged: once non-English books are no longer forced onto a single engine, an
+always-hot English-only engine is a less universally good default use of VRAM headroom. Existing installs
+that have explicitly set the preference keep their choice; only the shipped default changes.
 
 **Qwen and Coqui are similarly VRAM-heavy and must never be resident together.** Unlike Kokoro (cheap,
 non-exclusive), Qwen and Coqui are comparable weight classes — running both loaded simultaneously risks OOM
 on 6–8 GB cards. When a non-English chapter's `requiredEngines` set includes both `qwen` and `coqui` (only
 possible now that Coqui-fallback exists for non-English books), segments are **partitioned by engine before
 synthesis** rather than interleaved: all Qwen-routed segments render first (Qwen resident, Coqui not
-loaded), then the sidecar evicts Qwen and loads Coqui, then the remaining Coqui-routed segments render. This
-reuses the scatter/gather **index-order reassembly** primitive already proven in plan 113 (Qwen true
-batching) — every segment carries its original sentence index, and final audio assembly walks that index
-regardless of synthesis order, so partitioning by engine doesn't disturb output. Kokoro-routed segments
-(English books only) are unaffected and continue to interleave freely with Qwen as today.
+loaded), then the sidecar evicts Qwen and loads Coqui, then the remaining Coqui-routed segments render.
+Final audio assembly reuses the scatter/gather **index-order reassembly** primitive already proven in plan
+113 (Qwen true batching) as-is — every segment carries its original sentence index, so partitioning by
+engine doesn't disturb output regardless of synthesis order. **The partition-then-evict-then-render
+sequencing itself is new** — today's pool dispatches engine groups and lets the GPU semaphore serialize
+admission, with no explicit "evict between phases" step; this spec adds that orchestration, it doesn't reuse
+an existing one. Kokoro-routed segments (English books only) are unaffected and continue to interleave
+freely with Qwen as today.
 
-**Cross-book concurrency still needs a budget-table update.** Serialization solves the *within-chapter*
-risk, but this app's concurrent multi-book workflow is a first-class invariant (Book A rendering English
-with Kokoro+Qwen while Book B renders Russian with Qwen/Coqui, simultaneously) — so system-wide, all three
-engines can still legitimately be resident at once across books. `server/src/tts/engine-vram-cost.ts`
-(`ENGINE_VRAM_COST = { kokoro:1, qwen:1, coqui:3, analyzer:4 }`, `DEFAULT_GPU_VRAM_BUDGET = 4`) currently
-only enumerates 2-engine combos as "fitting," because Kokoro+Qwen+Coqui concurrently was unreachable before
-this spec. The budget-check logic is extended to recognize this now-possible 3-way cross-book combination
-and emit the existing "engines unloaded to free VRAM" style warning for it. This stays **advisory** (warn,
-not block) — consistent with the existing dual-model advisory today.
+**Cross-book concurrency needs no admission-logic change — only an advisory-warning update, if that.**
+`server/src/tts/engine-vram-cost.ts` (full table: `ENGINE_VRAM_COST = { kokoro:1, qwen:1, coqui:3, gemini:0,
+asr:1, spk:1, analyzer:4 }`, `DEFAULT_GPU_VRAM_BUDGET = 4`) is, per its own file header, a **generic additive
+N-way semaphore** — it admits any combination of concurrently-requested engines whose summed cost fits the
+budget, not a hand-enumerated list of allowed combos. Kokoro(1)+Qwen(1)+Coqui(3)=5>4 already serializes
+correctly today with **zero code change** — the semaphore was already general enough for a 3-way cross-book
+case, it just never arose before (non-English books couldn't use Coqui at all). The file's inline comments
+describing 2-engine combos as "fitting" are documentation of *today's typical* case, not the enforcement
+logic, and don't need editing for correctness. The one open question is whether the existing advisory
+warning's message text should be updated to explicitly name the new 3-way combination for operator clarity —
+a small, optional copy change, not a logic change.
 
 ## 5. Frontend
 
-`profile-drawer.tsx`'s `lockedToQwen: boolean` and `cast.tsx`'s inline equivalent are replaced by reading the
-new `eligibleTtsEngines` field (§2) and intersecting it with `installedEngines` before handing the list to
-`voice-engine-picker.tsx` — unchanged component, already accepts a filtered engine list. `voice-readiness-gate.tsx`
-reads the same field for its readiness check. XTTS becomes a manually selectable option for non-English
-characters on eligible languages, not just a silent fallback — no new components needed.
+`profile-drawer.tsx`'s `lockedToQwen` computation and `cast.tsx`'s `isNonEnglish` are both replaced by
+deriving from the new `eligibleTtsEngines` field (§2), per the §2 caller-side fix — `lockedToQwen` becomes
+`eligibleTtsEngines.length === 1`, `installedEngines` becomes the eligible∩installed set. `voice-engine-picker.tsx`
+itself is unchanged. XTTS becomes a manually selectable option for ru/es/fr/de characters, not just a silent
+fallback.
+
+**`voice-readiness-gate.tsx` changes behavior, not just its data source.** Today `selectIsBookNonEnglish`
+(`store/voice-readiness-selectors.ts:60-63`) drives a hard block for every non-English book with an
+undesigned speaking Qwen character — no "Proceed anyway," per `voiceReadinessGateMessage`'s copy ("This
+book can't fall back to a generic voice"). That copy is now inaccurate for ru/es/fr/de once Coqui fallback
+exists. This selector is replaced with an eligibility-aware equivalent (e.g. `selectHasNoFallbackEngine`,
+true only when `eligibleTtsEngines` excludes `coqui` too — i.e. still-unsupported languages) so ru/es/fr/de
+books get the same soft-gate English already has ("proceed and they'll render with a Coqui fallback voice"),
+while genuinely fallback-less languages keep today's hard block unchanged. This is a real behavior change
+to this modal, not a drop-in field swap.
+
+**`cast.tsx`'s eager-Qwen-load effect (lines 148-172) needs no change.** It unconditionally warms Qwen for
+every non-English book on cast-view entry; Qwen remains the primary/preferred engine for ru/es/fr/de even
+after this spec (Coqui is a fallback/manual alternative, not a replacement), so eagerly loading Qwen there
+is still correct. Confirmed by reading the effect, not assumed.
 
 ## 6. Testing plan
 
 - **Server unit:** `resolveEligibleEngines` against every language×engine combination in
   `ENGINE_LANGUAGE_SUPPORT`, including an installed-engines intersection case. `applyQwenFallback`'s new
-  Coqui branch: undesigned/erroring Qwen + coqui-eligible language → falls back to a Coqui archetype voice;
-  same scenario on a still-unsupported language → unchanged fail-loud `MissingDesignedVoiceError`.
+  Coqui branch: undesigned/unavailable Qwen + coqui-eligible language → falls back to a Coqui archetype
+  voice; same scenario on a still-unsupported language → unchanged fail-loud `MissingDesignedVoiceError`.
 - **Server integration:** a chapter with `requiredEngines = {qwen, coqui}` renders all Qwen segments,
-  evicts, loads Coqui, renders the remainder, and reassembles in original sentence-index order (mirrors the
-  existing plan-113 scatter/gather test pattern).
+  evicts, loads Coqui, renders the remainder, and reassembles in original sentence-index order.
 - **Sidecar pytest:** `/synthesize` accepts a per-request `language` field for Coqui and it overrides the
   boot-time `COQUI_LANGUAGE` default; an omitted field still falls back to the env var.
-- **Frontend unit:** `voice-engine-picker`/`profile-drawer`/`cast.tsx`/`voice-readiness-gate.tsx` read
-  `eligibleTtsEngines` from the API response instead of computing `lockedToQwen` inline; Coqui appears as a
-  selectable option for ru/es/fr/de books, still absent for other non-English languages.
+- **Frontend unit:** `voice-engine-picker`/`profile-drawer`/`cast.tsx` read `eligibleTtsEngines` and derive
+  `lockedToQwen`/`installedEngines` correctly (Coqui selectable for ru/es/fr/de, still locked-Qwen-only for
+  other non-English languages). `voice-readiness-gate.tsx`'s new eligibility-aware selector: a ru/es/fr/de
+  book with an undesigned speaking Qwen character gets the soft-gate ("Proceed anyway") copy and affordance;
+  a still-unsupported non-English language keeps today's hard block.
 - **E2E:** a non-English (Russian) book where a character's Qwen route is forced to fail (undesigned)
   resolves audibly to a Coqui fallback voice rather than blocking generation — extends the existing
   generation e2e fixtures per CLAUDE.md's canonical-fixture guidance (`the-coalfall-commission.ru.md`).
 - **Live-GPU acceptance (owed, not automatable):** a real Russian/Spanish/French/German chapter actually
-  renders via Coqui fallback and sounds correct; Kokoro's new on-demand load doesn't regress English
-  cold-start latency noticeably; a mixed Qwen+Coqui chapter serializes correctly with no OOM on an 8 GB card.
+  renders via Coqui fallback and sounds correct — **this is the load-bearing acceptance check**, since
+  whether the same catalog speaker embedding actually sounds acceptable in another language (vs. accented or
+  degraded) is a model-behavior claim this design can't verify from source, only from a real listen; also:
+  Kokoro's new on-demand load doesn't regress English cold-start latency noticeably; a mixed Qwen+Coqui
+  chapter serializes correctly with no OOM on an 8 GB card.
 
 ## 7. Deferred — follow-up issues
 
