@@ -329,13 +329,21 @@ function makeFileHandler(variant: AudioVariant = 'current') {
         headers: { 'Content-Type': audio.mime, 'Cache-Control': 'no-cache' },
       },
       (err) => {
-        if (err && !res.headersSent) {
-          console.warn(
-            `[chapter-audio] sendFile failed for ${audio.path}: ${err.message}`,
-            { status: (err as { status?: number }).status },
-          );
-          res.status(500).end();
-        }
+        if (!err) return;
+        /* `send`'s own errors (dotfile-deny, malformed path, a genuine
+           ENOENT if the file is deleted between the existence check above
+           and this call) carry a real `.status`; log unconditionally —
+           including the mid-stream case where headers are already sent and
+           the response itself can't be changed — so a future failure is
+           never silent again. */
+        const status = (err as { status?: number }).status ?? 500;
+        console.error(
+          `[chapter-audio] sendFile failed for ${audio.path}${
+            res.headersSent ? ' (after headers sent)' : ''
+          }: ${err.message}`,
+          { status },
+        );
+        if (!res.headersSent) res.status(status).end();
       },
     );
   };
