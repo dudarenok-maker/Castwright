@@ -475,6 +475,12 @@ _Full detail + acceptance:_ [#1043](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit (technical/architectural):_ closes a known gap three rounds of adversarial spec review flagged; not a blocker for the base feature, which already degrades gracefully to the existing LAN-IP URL.
 _Full detail + acceptance:_ [#1239](https://github.com/dudarenok-maker/Castwright/issues/1239).
 
+#### `ops-24` — LAN port-443 forwarder collapses per-client identity, weakening rate limits ([#1309](https://github.com/dudarenok-maker/Castwright/issues/1309))
+
+- _What:_ Follow-up to `ops-23`'s port-443 forwarder (#1295/#1296) — the forwarder's fixed-source-IP relay design means every client reaching the app through it shares one identity, collapsing `pairing.ts`'s `redeemLimiter` (5/60s) into a single LAN-wide bucket. Real fix is PROXY protocol so the forwarder preserves true per-client identity end-to-end.
+- _Benefit (user/technical):_ a mistyped pairing code or a stale QR retry on one device no longer locks every other device on the LAN out of pairing; closes the gap between the forwarder's byte-blind design and the app's per-IP rate-limiting assumptions.
+_Full detail + acceptance:_ [#1309](https://github.com/dudarenok-maker/Castwright/issues/1309).
+
 #### `ops-18` — Catch any large-region visual change (not just the top-bar) ([#947](https://github.com/dudarenok-maker/Castwright/issues/947))
 
 - _What:_ Full-page re-blessed baselines + a contiguity gate to catch branding-scale changes outside the top-bar. Follow-up to #925; build only if a real non-top-bar regression is seen.
