@@ -157,3 +157,8 @@ server/roster.json
 # Self-contained HTML artifacts rendered by the html-artifacts skill (plans,
 # reports, mockups). Local scratch output, never committed.
 artifacts/
+
+# Local clone of the separate Castwright.wiki.git repo, used by
+# scripts/sync-wiki.mjs as its push staging area. Recreated fresh on every
+# `npm run wiki:sync` run; never committed.
+.wiki-sync-cache/
