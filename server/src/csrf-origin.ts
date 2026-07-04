@@ -10,6 +10,20 @@ import { readCwLanCookie } from './lan-auth.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/* castwright-local-port-cert follow-up: castwright.dev.local is a dev-only
+   hostname (only ever resolvable via the dev-only mDNS responder `dev:lan`
+   spawns — never advertised in production/start:lan), and its port varies
+   per-worktree (scripts/wt-new.mjs writes a per-worktree VITE_PORT into the
+   worktree's root .env.local so parallel `npm run dev`/`dev:lan` don't
+   collide on 5173). The server process never sees that VITE_PORT (it only
+   loads server/.env, not the frontend's root .env.local), so a single
+   hardcoded-port literal can't track it. Since the hostname itself is
+   already fully trusted, widen along the port dimension only: match any
+   port on this exact hostname rather than guessing the right number. Does
+   NOT touch castwright.local (the production hostname) or anything
+   IP-based. */
+const DEV_LAN_HOSTNAME_ORIGIN = /^https:\/\/castwright\.dev\.local:\d+$/;
+
 function allowedOrigins(): Set<string> {
   const port = Number(process.env.LAN_HTTPS_PORT ?? 8443);
   const loopback = [
@@ -30,7 +44,6 @@ function allowedOrigins(): Set<string> {
   const friendlyHostnames = [
     `https://castwright.local:${port}`,
     'https://castwright.local',
-    'https://castwright.dev.local:5173',
   ];
   try {
     const { urls } = enumerateLanUrls(port, 'https'); // ['https://192.168.x.y:8443', ...]
@@ -65,6 +78,8 @@ export function requireSameOrigin(req: Request, res: Response, next: NextFunctio
   if (!MUTATING.has((req.method ?? 'GET').toUpperCase())) return next();
   if (!hasCwLanCookie(req)) return next(); // header/Bearer or loopback: not cookie-CSRF-able
   const origin = originOf(req);
-  if (origin !== undefined && allowedOrigins().has(origin)) return next();
+  if (origin !== undefined && (allowedOrigins().has(origin) || DEV_LAN_HOSTNAME_ORIGIN.test(origin))) {
+    return next();
+  }
   res.status(403).json({ error: 'Cross-origin request rejected.' });
 }

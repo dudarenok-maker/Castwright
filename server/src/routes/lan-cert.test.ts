@@ -16,6 +16,22 @@ vi.mock('node:child_process', () => ({
   execFile: vi.fn(),
 }));
 
+// Only mocked for the TOCTOU test below (readFileSyncOverride) -- every other
+// test leaves it undefined and falls through to the real implementation, so
+// existsSync/writeFileSync/mkdtempSync/rmSync used elsewhere in this file
+// still hit the real filesystem.
+let readFileSyncOverride: (() => never) | undefined;
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      if (readFileSyncOverride) return readFileSyncOverride();
+      return actual.readFileSync(...args);
+    },
+  };
+});
+
 import { execFile } from 'node:child_process';
 import { lanCertRouter, __setCertPathsForTest } from './lan-cert.js';
 
@@ -41,6 +57,7 @@ describe('POST /api/lan/cert/regenerate', () => {
     rmSync(certDir, { recursive: true, force: true });
     __setCertPathsForTest(null);
     vi.mocked(execFile).mockReset();
+    readFileSyncOverride = undefined;
   });
 
   it('on success: hot-swaps the live server and returns 200 with the host list', async () => {
@@ -90,6 +107,33 @@ describe('POST /api/lan/cert/regenerate', () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toContain('mkcert is not on PATH');
     expect(setSecureContext).not.toHaveBeenCalled();
+  });
+
+  it('on a TOCTOU hot-swap read failure: still returns 200 with the host list (not a 500)', async () => {
+    writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
+    writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        null,
+        '[setup-lan-certs] generating cert for hosts: localhost, castwright.local\n',
+        '',
+      );
+      return {} as ReturnType<typeof execFile>;
+    });
+    readFileSyncOverride = () => {
+      throw new Error('ENOENT: no such file or directory (simulated TOCTOU race)');
+    };
+    const setSecureContext = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await request(makeApp({ setSecureContext })).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(200);
+    expect(res.body.hosts).toEqual(['localhost', 'castwright.local']);
+    expect(setSecureContext).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('hot-swap read failed'));
+
+    warnSpy.mockRestore();
   });
 
   it('when no live HTTPS server is registered, skips the hot-swap without erroring', async () => {

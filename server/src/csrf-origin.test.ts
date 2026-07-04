@@ -80,6 +80,37 @@ it('passes a cookie POST from the dev:lan castwright.dev.local origin', () => {
   expect(next).toHaveBeenCalled();
 });
 
+it('passes a cookie POST from castwright.dev.local on a DIFFERENT port (per-worktree VITE_PORT)', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local:5199' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('403s a cookie POST from a lookalike hostname masquerading as castwright.dev.local', () => {
+  const next = vi.fn();
+  const r1 = res();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://evil-castwright.dev.local:5173' }),
+    r1,
+    next,
+  );
+  expect(next).not.toHaveBeenCalled();
+  expect(r1.statusCode).toBe(403);
+
+  const r2 = res();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local.evil.com:5173' }),
+    r2,
+    next,
+  );
+  expect(next).not.toHaveBeenCalled();
+  expect(r2.statusCode).toBe(403);
+});
+
 it('passes a cookie POST from a bare (no-port) LAN-IP origin — the host-blind forwarder makes this reachable too', () => {
   const { urls } = enumerateLanUrls(8443, 'https');
   if (urls.length === 0) return; // sandboxed runner with no LAN interface — nothing to assert

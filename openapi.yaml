@@ -2444,6 +2444,15 @@ paths:
                     type: array
                     items: { type: string }
                     description: 'The hostnames/IPs the new certificate covers.'
+        '409':
+          description: A regeneration is already in progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
         '500':
           description: mkcert failed (not installed, generation error, etc.)
           content:

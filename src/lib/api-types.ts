@@ -7034,6 +7034,17 @@ export interface operations {
                     };
                 };
             };
+            /** @description A regeneration is already in progress */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
             /** @description mkcert failed (not installed, generation error, etc.) */
             500: {
                 headers: {

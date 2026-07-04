@@ -120,10 +120,22 @@ lanCertRouter.post('/cert/regenerate', async (req: Request, res: Response) => {
     const hosts = parseHostsFromOutput(stdout);
 
     if (existsSync(certFile) && existsSync(keyFile)) {
-      const server = req.app.get('lanHttpsServer') as
-        | { setSecureContext: (opts: { key: Buffer; cert: Buffer }) => void }
-        | undefined;
-      server?.setSecureContext({ key: readFileSync(keyFile), cert: readFileSync(certFile) });
+      // Best-effort hot-swap: the actual regeneration (what the user asked
+      // for) already succeeded above. If either file gets deleted or is
+      // mid-write in the gap between existsSync and readFileSync (antivirus
+      // scan, external cleanup, etc.), don't let that TOCTOU race turn a
+      // successful regeneration into a misleading 500 -- log and still
+      // return the success response with the host list.
+      try {
+        const server = req.app.get('lanHttpsServer') as
+          | { setSecureContext: (opts: { key: Buffer; cert: Buffer }) => void }
+          | undefined;
+        server?.setSecureContext({ key: readFileSync(keyFile), cert: readFileSync(certFile) });
+      } catch (err) {
+        console.warn(
+          `[lan-cert] regenerated the certificate but the hot-swap read failed: ${(err as Error).message}`,
+        );
+      }
     }
 
     res.status(200).json({ hosts });
