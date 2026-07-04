@@ -6035,6 +6035,14 @@ async function realRevokeDevice(id: string) {
   if (!res.ok) throw new ApiError(`revoke failed (${res.status})`, res.status);
   return res.json() as Promise<{ ok: true }>;
 }
+async function realRegenerateLanCert() {
+  const res = await fetch('/api/lan/cert/regenerate', { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new ApiError(body?.error ?? `regenerate cert failed (${res.status})`, res.status);
+  }
+  return res.json() as Promise<{ hosts: string[] }>;
+}
 async function realRedeemBrowserPair(body: { code: string }) {
   const res = await fetch('/api/pair/redeem-browser', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -6047,6 +6055,9 @@ const mockCreateDevicePairSession = async (_b: { label: string }) =>
   ({ url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`, code: 'MOCKCODEMOCKCODE', expiresAt: Date.now() + 300_000 });
 const mockListDevices = async () => ({ devices: [] as PublicDevice[] });
 const mockRevokeDevice = async (_id: string) => ({ ok: true as const });
+const mockRegenerateLanCert = async () => ({
+  hosts: ['localhost', 'castwright.local', 'castwright.dev.local', '192.168.1.42'],
+});
 const mockRedeemBrowserPair = async (_b: { code: string }) =>
   ({ label: 'This browser', expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
 
@@ -7445,6 +7456,7 @@ const real = {
   createDevicePairSession: realCreateDevicePairSession,
   listDevices: realListDevices,
   revokeDevice: realRevokeDevice,
+  regenerateLanCert: realRegenerateLanCert,
   redeemBrowserPair: realRedeemBrowserPair,
   getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
@@ -7712,6 +7724,7 @@ const mock = {
   createDevicePairSession: mockCreateDevicePairSession,
   listDevices: mockListDevices,
   revokeDevice: mockRevokeDevice,
+  regenerateLanCert: mockRegenerateLanCert,
   redeemBrowserPair: mockRedeemBrowserPair,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
