@@ -1,0 +1,104 @@
+/* castwright-local-port-cert — the server-owned port-443 TCP forwarder that
+   lets `https://castwright.local` (and any bare LAN IP) work with no port
+   typed, by relaying raw bytes to the real HTTPS server on LAN_HTTPS_PORT
+   (default 8443). See the design spec:
+   docs/superpowers/specs/2026-07-04-castwright-local-port-cert-design.md
+
+   Host-blind by design: this never inspects the Host header or SNI, so it
+   relays ANY connection reaching :443 to the real server — simple (no TLS
+   termination, no per-hostname routing table), but it means every LAN IP
+   also becomes reachable on :443 with no port, not just the friendly
+   hostname (see server/src/csrf-origin.ts's port-less-IP allow-list entry,
+   which exists specifically to cover this). */
+
+import net from 'node:net';
+
+export interface PortForwarderHandle {
+  server: net.Server;
+  close: () => Promise<void>;
+}
+
+/** True only for the start:lan shape (lanHttps AND NODE_ENV=production) —
+    identical shape and rationale to shouldSpawnMdnsResponder (mdns-owner.ts):
+    dev:lan's server leg also sets LAN_HTTPS=1, and must not also get a
+    port-443 forwarder it doesn't advertise or own. */
+export function shouldSpawnPortForwarder(
+  lanHttps: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return lanHttps && env.NODE_ENV === 'production';
+}
+
+/** Start the :443-to-targetPort raw TCP forwarder. Never throws — a bind
+    failure surfaces via the server's own 'error' event (logged here), not a
+    synchronous throw, so the caller always gets a usable handle back. */
+export function startPortForwarder(
+  targetPort: number,
+  opts: {
+    listenPort?: number;
+    createServerFn?: typeof net.createServer;
+    connectFn?: typeof net.connect;
+    warn?: (...args: unknown[]) => void;
+  } = {},
+): PortForwarderHandle {
+  const {
+    listenPort = 443,
+    createServerFn = net.createServer,
+    connectFn = net.connect,
+    warn = console.warn,
+  } = opts;
+
+  const server = createServerFn((client) => {
+    /* localAddress: '127.0.0.2' (NOT the default 127.0.0.1) is a required
+       security invariant, not an incidental detail (adversarial review
+       round 2). Without it, this connection would present as trusted
+       loopback to server/src/lan-auth.ts's isLoopbackRequest(), silently
+       bypassing the LAN_AUTH_TOKEN gate (requireLanToken) for every client
+       reaching the app through this forwarder. 127.0.0.0/8 is entirely
+       loopback (RFC 5735), so 127.0.0.2 is just as non-routable and
+       local-only as 127.0.0.1 — it costs nothing functionally. */
+    const upstream = connectFn({
+      port: targetPort,
+      host: '127.0.0.1',
+      localAddress: '127.0.0.2',
+    });
+
+    const destroyBoth = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+
+    client.pipe(upstream);
+    upstream.pipe(client);
+    /* If the bind above ever fails at runtime (e.g. Windows refuses an
+       unassigned 127.x local address), the failure is per-connection, not a
+       server-level bind error: :443 still accepts the client fine, then
+       THIS connect errors. Distinct log line from the listener-level warn
+       below so the two failure modes aren't conflated. */
+    upstream.once('error', (err) => {
+      warn(`[lan-port-forwarder] upstream connect failed: ${(err as Error).message}`);
+      destroyBoth();
+    });
+    client.once('error', destroyBoth);
+    client.once('close', destroyBoth);
+    upstream.once('close', destroyBoth);
+  });
+
+  server.once('error', (err) => {
+    warn(
+      `[lan-port-forwarder] could not bind :${listenPort} (port already in use, or ` +
+        `permission denied): ${(err as Error).message}. The bare-hostname/bare-IP ` +
+        `convenience won't work; the explicit :${targetPort} URL is unaffected.`,
+    );
+  });
+
+  server.listen(listenPort, '0.0.0.0');
+
+  return {
+    server,
+    close: () =>
+      new Promise<void>((resolvePromise) => {
+        server.close(() => resolvePromise());
+      }),
+  };
+}
