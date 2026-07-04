@@ -69,6 +69,11 @@ import {
   spawnMdnsResponder,
   type MdnsResponderHandle,
 } from './mdns-owner.js';
+import {
+  shouldSpawnPortForwarder,
+  startPortForwarder,
+  type PortForwarderHandle,
+} from './lan-port-forwarder.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -133,6 +138,10 @@ let sidecarSupervisor: SidecarSupervisor | null = null;
    ever set for start:lan (see shouldSpawnMdnsResponder), reaped in
    shutdown() alongside the sidecar. */
 let mdnsResponderHandle: MdnsResponderHandle | null = null;
+/* castwright-local-port-cert — mirrors mdnsResponderHandle above: only ever
+   set for start:lan (see shouldSpawnPortForwarder), closed in shutdown()
+   alongside the sidecar and the mDNS responder. */
+let portForwarderHandle: PortForwarderHandle | null = null;
 
 /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
    listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
@@ -269,6 +278,13 @@ const listenerCallback = () => {
   if (shouldSpawnMdnsResponder(lanHttps)) {
     mdnsResponderHandle = spawnMdnsResponder('castwright.local', repoRoot);
   }
+
+  /* castwright-local-port-cert — server-owned :443 forwarder to LAN_HTTPS_PORT,
+     start:lan only (same NODE_ENV-gated shape as the mDNS responder above —
+     dev:lan's server leg also sets LAN_HTTPS=1 and must not also get this). */
+  if (shouldSpawnPortForwarder(lanHttps)) {
+    portForwarderHandle = startPortForwarder(LAN_HTTPS_PORT);
+  }
 };
 
 /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
@@ -349,6 +365,13 @@ if (lanHttps) {
     bindHost,
     listenerCallback,
   );
+  /* castwright-local-port-cert — expose the live server so the cert-regen
+     route (server/src/routes/lan-cert.ts) can call setSecureContext() on it
+     without a circular import (index.ts imports the router; the router
+     can't import back from index.ts). Express's own app.set()/app.get() is
+     the idiomatic pattern for exactly this "expose a singleton to route
+     handlers" need — no new module required. */
+  app.set('lanHttpsServer', server);
   attachListenErrorHandler(server, LAN_HTTPS_PORT);
 } else {
   const server = app.listen(PORT, bindHost, listenerCallback);
@@ -374,7 +397,8 @@ function shutdown(signal: NodeJS.Signals): void {
      child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
   const mdnsKilled = mdnsResponderHandle?.kill() ?? Promise.resolve();
-  void Promise.all([reap, mdnsKilled]).finally(() => process.exit(0));
+  const forwarderClosed = portForwarderHandle?.close() ?? Promise.resolve();
+  void Promise.all([reap, mdnsKilled, forwarderClosed]).finally(() => process.exit(0));
 }
 process.once('SIGINT', () => shutdown('SIGINT'));
 process.once('SIGTERM', () => shutdown('SIGTERM'));
