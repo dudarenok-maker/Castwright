@@ -72,12 +72,16 @@ whenever, no ranking. `moscow:*` labels remain meaningful only for
 **This is a real reclassification, not cosmetic cleanup.** The
 assumption-checker review confirmed three `type:chore` issues
 (`side-23`/#1228, `ops-17`/#790, `srv-4`/#431) currently carry `moscow:should`
-and are ranked in `docs/BACKLOG.md`'s Should bucket today. All three are also
-`tracking` — upstream-blocked watchdogs ("wake when X ships"), not
-do-whenever busywork. Moving them out loses their MoSCoW rank and their
-`docs/BACKLOG.md` visibility; their new visible home is the **Waiting /
-Blocked** lane on the Bugs & Chores board (§B), not the generated doc. This
-trade-off is deliberate — see §B and §D — not an oversight.
+and are ranked in `docs/BACKLOG.md`'s Should bucket today. Two of the three
+(`side-23`, `srv-4`) already carry `tracking` — upstream-blocked watchdogs
+("wake when X ships"), not do-whenever busywork. `ops-17` matches the exact
+same semantic (its body: "Blocked upstream... re-check periodically and bump
+when upstream ships") but doesn't yet carry the `tracking` label — rollout
+step 3 adds it there so label-driven routing (§B) actually catches it. Moving
+these out loses their MoSCoW rank and their `docs/BACKLOG.md` visibility;
+their new visible home is the **Waiting/Blocked** lane on the Bugs & Chores
+board (§B), not the generated doc. This trade-off is deliberate — see §B and
+§D — not an oversight.
 
 `docs/BACKLOG.md` only ever reflects `type:feature` issues going forward.
 Bugs were already excluded by existing convention; chores are now excluded
@@ -100,13 +104,14 @@ only the subset of Status values that applies to its track:
   by the same Status field, showing `Backlog` (used here as "Open,
   unclaimed"), `In Progress`, `Waiting/Blocked`, and `Done` (4 columns;
   `Next` hidden — this track isn't priority-queued). `tracking`-labeled
-  issues (upstream-blocked watchdogs like `side-23`/`ops-17`/`srv-4`) live in
-  `Waiting/Blocked` rather than being stranded in `Backlog` indefinitely —
-  this is their home now that they've lost `docs/BACKLOG.md` visibility (see
-  §A). Placement into `Waiting/Blocked` is a manual drag during rollout (and
-  thereafter whenever a chore turns out to be externally blocked) — the
-  `tracking` label already signals which issues these are, but auto-routing
-  by label isn't part of the built-in workflow set below and isn't built now.
+  issues (upstream-blocked watchdogs like `side-23`/`ops-17`/`srv-4`, once
+  rollout step 3 adds the label to `ops-17`) live in `Waiting/Blocked` rather
+  than being stranded in `Backlog` indefinitely — this is their home now that
+  they've lost `docs/BACKLOG.md` visibility (see §A). Placement into
+  `Waiting/Blocked` is a manual drag during rollout (and thereafter whenever
+  a chore turns out to be externally blocked) — the `tracking` label signals
+  which issues these are, but auto-routing by label isn't part of the
+  built-in workflow set below and isn't built now.
 
 **Built-in automation only** (no custom scripting) for the common-path
 transitions: a new issue is auto-added to the board with Status = `Backlog`;
@@ -202,11 +207,16 @@ releases — not built now.
    a manual pass to correct/fill in `Next` and `Parked`.
 3. Strip `moscow:*` labels off all existing `type:chore` issues, including
    the `tracking` ones (confirmed: `side-23`/#1228, `ops-17`/#790,
-   `srv-4`/#431, and any others found by `gh issue list --label
-   type:chore,moscow:must,moscow:should,moscow:could`). This is a real
-   reprioritization, not cleanup — flag it in the PR description as such.
-   Set each `tracking` chore's Status to `Waiting/Blocked` on the board as
-   part of this same pass, so it doesn't silently lose visibility mid-rollout.
+   `srv-4`/#431). Find the full set with three separate queries — one per
+   moscow tier, since `gh issue list --label` AND-combines multiple labels
+   rather than OR-ing them: `gh issue list --label type:chore --label
+   moscow:must`, then `--label moscow:should`, then `--label moscow:could`.
+   This is a real reprioritization, not cleanup — flag it in the PR
+   description as such. Add `tracking` to `ops-17`/#790 (matches the same
+   upstream-blocked-watchdog semantic as the other two but doesn't carry the
+   label yet), then set all three (and any other `tracking` chores the
+   queries surface) to Status = `Waiting/Blocked` on the board as part of
+   this same pass, so nothing silently loses visibility mid-rollout.
 4. **Initiative retrofit:** identify existing multi-issue efforts (language
    support work, the LAN cert broker, voice cloning, etc.), create a parent
    tracking issue per initiative, link existing issues as sub-issues.
