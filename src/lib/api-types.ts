@@ -2993,16 +2993,41 @@ export interface components {
             recycling: boolean;
         };
         QueueEnqueueRequest: {
+            /** @description One or more entries to enqueue. The frontend pre-expands `scope:'forward'` (regenerate chapter N + all subsequent) into per-chapter entries before posting. */
+            entries: components["schemas"]["QueueEnqueueEntry"][];
+        };
+        QueueEnqueueEntry: {
+            /** @description Frontend-minted unique entry id (kept deterministic in tests; a crypto.randomUUID()-based id in production) — lets the broadcast layer correlate ticks to entries without a server-issued id round-trip. */
+            id: string;
             bookId: string;
-            /** @description One or more chapter ids to enqueue. The frontend pre-expands `forward` scope into per-chapter ids before posting. */
-            chapterIds: number[];
+            chapterId: number;
             /**
-             * @default this
+             * @description `this` = (re)generate the named chapter. `character` = regenerate
+             *     the named character's lines in this chapter only.
              * @enum {string}
              */
             scope: "this" | "character";
             /** @description Required when scope === 'character'. */
             characterId?: string;
+            /**
+             * @description Optional per-entry TTS model override (e.g. a regenerate that should
+             *     run at the Qwen 1.7B quality tier instead of the session default).
+             *     When absent the dispatcher uses the global `ui.ttsModelKey`.
+             * @enum {string}
+             */
+            modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * Format: date-time
+             * @description Optional ISO 8601 timestamp; server defaults to now() when omitted.
+             */
+            addedAt?: string;
+            /**
+             * @description Optional — true when the caller already confirmed this entry's
+             *     Qwen→Kokoro fallback (e.g. the voice-readiness gate's "proceed
+             *     anyway"), so the per-chapter `awaiting_confirm` gate doesn't
+             *     re-prompt for it.
+             */
+            fallbackConfirmed?: boolean;
         };
         QueueReorderRequest: {
             /** @description Full list of entry ids in the desired final order. Server validates the list matches the current queue minus the in-flight pinned entry; mismatch returns 409 (concurrent enqueue happened; client refetches and retries). */
