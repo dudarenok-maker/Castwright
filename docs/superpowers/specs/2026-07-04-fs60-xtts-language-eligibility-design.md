@@ -56,16 +56,26 @@ existing voice-engine picker, not just a silent behind-the-scenes substitution.
 
 ## 2. Language & engine eligibility model
 
-**Per-engine capability, not per-language branching.** A new data table,
+**Per-engine capability, not per-language branching — but Qwen's row is a wildcard, not a five-item list.**
+A book's detected `language` can genuinely be outside en/ru/es/fr/de today — `server/src/tts/language-registry.ts`
+tracks a real "detected but unsupported" state (that's how fr/de existed before fs-50 flipped them to
+`supported:true`). The **synthesis-routing** invariant "non-English ⇒ Qwen, fail loud" (fs-2/plan 162) is
+unconditional across *every* non-English language, independent of whether the *analyze* pipeline's quality
+is fully tuned for it — those are two different axes. Modeling Qwen's eligibility as only the five
+analyze-supported languages would silently narrow that invariant for anything beyond them (an unsupported-language
+book would resolve to zero eligible engines instead of today's forced-Qwen-then-fail-loud). So the new table,
 `ENGINE_LANGUAGE_SUPPORT` (`server/src/tts/voice-mapping.ts`, alongside the existing `*_PROFILE_VOICES`
-tables):
+tables), models Qwen as universal:
 
 ```ts
-export const ENGINE_LANGUAGE_SUPPORT: Record<TtsEngine, string[]> = {
-  qwen:   ['en', 'ru', 'es', 'fr', 'de'],  // today's shipped analyze-supported set
-  coqui:  ['en', 'ru', 'es', 'fr', 'de'],  // NEW row this spec enables
-  kokoro: ['en'],                           // unchanged — no G2P for anything else
-  gemini: [...],                            // whatever Gemini's real non-English behavior is today — verify
+export const ENGINE_LANGUAGE_SUPPORT: Record<TtsEngine, string[] | '*'> = {
+  qwen:   '*',                              // matches today's unconditional non-English⇒Qwen invariant;
+                                             // analyze-quality-per-language is a separate, non-eligibility
+                                             // concern this table doesn't model
+  coqui:  ['en', 'ru', 'es', 'fr', 'de'],   // NEW row this spec enables — deliberately scoped to the
+                                             // analyze-supported five (fs-70 owns going further)
+  kokoro: ['en'],                            // unchanged — no G2P for anything else
+  gemini: [...],                             // whatever Gemini's real non-English behavior is today — verify
                                              // at implementation time (not independently confirmed in this
                                              // design), rather than assumed equal to Qwen's set
 };
@@ -83,8 +93,22 @@ A new pure function, `resolveEligibleEngines(bookLanguage, installedEngines)` in
 `server/src/tts/language.ts` (next to `isNonEnglish`), computes:
 
 ```
-installedEngines.filter(engine => ENGINE_LANGUAGE_SUPPORT[engine].includes(bookLanguage))
+installedEngines.filter(engine => {
+  const support = ENGINE_LANGUAGE_SUPPORT[engine];
+  return support === '*' || support.includes(bookLanguage);
+})
 ```
+
+With this, a still-unsupported-language book (qwen installed, coqui installed) resolves to
+`eligibleTtsEngines = ['qwen']` — exactly one engine, and it's Qwen — matching today's behavior exactly
+(forced Qwen, fail loud if undesigned) and making `lockedToQwen = eligibleTtsEngines.length === 1 &&
+eligibleTtsEngines[0] === 'qwen'` (§5) correctly evaluate `true` there, same locked UX as today. For
+en/ru/es/fr/de, `eligibleTtsEngines = ['qwen', 'coqui']` (both installed) → `lockedToQwen = false`, unlocked.
+The only remaining edge case is a supported-language book where **neither** qwen nor coqui is installed —
+`eligibleTtsEngines = []` — which is a genuinely new, previously-unreachable state (today's boolean
+`lockedToQwen` never modeled "no engine at all"); the picker/gate should treat empty the same way they'd
+treat any other zero-installed-engine misconfiguration (out of this spec's scope to invent new UX for, since
+it's an install-configuration state, not a language-eligibility one).
 
 This becomes the **single enforcement authority**, replacing the ad-hoc `isNonEnglish`/`forbidKokoroFallback`
 checks at the three server-side enforcement sites: `generation.ts:591-593`, `chapter-splice.ts:302`,
