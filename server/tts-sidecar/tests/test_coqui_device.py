@@ -18,11 +18,15 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
-def _torch_stub(cuda_available: bool = True) -> types.SimpleNamespace:
+def _torch_stub(cuda_available: bool = True, mps_available: bool = False) -> types.SimpleNamespace:
     """Minimal torch stub for _resolve_runtime_options injection.
-    Only cuda.is_available() is called (and only when device == 'auto')."""
+    cuda.is_available() and (since the MPS fix) backends.mps.is_available()
+    are read, and only when device == 'auto'."""
     t = types.SimpleNamespace()
     t.cuda = types.SimpleNamespace(is_available=lambda: cuda_available)
+    t.backends = types.SimpleNamespace(
+        mps=types.SimpleNamespace(is_available=lambda: mps_available)
+    )
     return t
 
 
@@ -111,3 +115,41 @@ def test_requested_device_default(monkeypatch):
     monkeypatch.delenv("COQUI_DEVICE", raising=False)
     eng = main.CoquiEngine()
     assert eng._requested_device == "auto"
+
+
+def test_auto_falls_to_mps_when_no_cuda(monkeypatch):
+    """'auto' with no CUDA but MPS available (Apple Silicon) resolves to mps,
+    not cpu — the bug this fix closes. Mirrors test_qwen_device.py's
+    equivalent case for QwenEngine's _resolve_torch_device."""
+    monkeypatch.setenv("COQUI_DEVICE", "auto")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+    eng = main.CoquiEngine()
+    opts = eng._resolve_runtime_options(_torch_stub(cuda_available=False, mps_available=True))
+    assert opts["device"] == "mps"
+    # fp16/deepspeed stay off on mps — same non-cuda branch as cpu.
+    assert opts["half"] is False
+    assert opts["deepspeed"] is False
+
+
+def test_auto_falls_to_cpu_when_neither_cuda_nor_mps(monkeypatch):
+    """'auto' with neither CUDA nor MPS available still resolves to cpu — no
+    regression for a plain CPU-only box."""
+    monkeypatch.setenv("COQUI_DEVICE", "auto")
+    eng = main.CoquiEngine()
+    opts = eng._resolve_runtime_options(_torch_stub(cuda_available=False, mps_available=False))
+    assert opts["device"] == "cpu"
+
+
+def test_auto_cuda_available_now_resolves_to_indexed_cuda_zero(monkeypatch):
+    """Documents an accepted, harmless side effect of reusing
+    _resolve_torch_device: 'auto' + CUDA available now resolves to 'cuda:0'
+    (an explicit index) rather than the old bare 'cuda' string. Functionally
+    identical (same physical device); pinned here so it's a visible,
+    intentional change rather than a silent one."""
+    monkeypatch.setenv("COQUI_DEVICE", "auto")
+    eng = main.CoquiEngine()
+    opts = eng._resolve_runtime_options(_torch_stub(cuda_available=True))
+    assert opts["device"] == "cuda:0"
+    assert opts["half"] is True
+    assert opts["deepspeed"] is True
