@@ -2,6 +2,7 @@
    produces. Hashes follow the verified router grammar (src/lib/router.ts):
    `#/`, `#/books/:bookId/<view>`, `#/books/:bookId/analysing`, `#/account`,
    `#/voices`. Adding a scene = one row here (see e2e/marketing/README.md). */
+import type { Page } from '@playwright/test';
 
 export type Viewport = 'desktop' | 'phone' | 'tablet';
 
@@ -23,8 +24,7 @@ export interface Scene {
       before the screenshot. Best-effort — a thrown action is caught and
       logged, never aborts the run, so a selector drift degrades to "scene
       captured pre-interaction" rather than failing the whole capture. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  action?: (page: any) => Promise<void>;
+  action?: (page: Page) => Promise<void>;
 }
 
 export const SCENES: Scene[] = [
