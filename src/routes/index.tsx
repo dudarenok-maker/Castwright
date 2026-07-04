@@ -22,6 +22,7 @@ import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
+import { selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
@@ -737,7 +738,7 @@ function ReadyViewSwitch({
      active book. The slice's `drift` is flat across books since the
      Drift Report became multi-book; filter to bookId here so a
      non-active book's events don't render badges on this book's cast. */
-  const drift = useAppSelector((s) => s.revisions.drift.filter((d) => d.bookId === bookId));
+  const drift = useAppSelector((s) => selectDriftForBook(s, bookId));
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
   const voices = useAppSelector((s) => s.voices.voices);

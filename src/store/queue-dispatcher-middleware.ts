@@ -127,8 +127,17 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
              the slot but do NOT /complete it and do NOT add it to `completed` —
              it must stay re-claimable once the user confirms it back to
              `queued`. (A /complete would be a server no-op anyway, but adding it
-             to `completed` would wedge the confirmed re-dispatch.) */
-          if (queue.entries.find((e) => e.id === entryId)?.status === 'awaiting_confirm') {
+             to `completed` would wedge the confirmed re-dispatch.)
+
+             Asked of the RUNNER, not the queue slice's `status` field (#1284):
+             nothing dispatches a queue-snapshot update off the park tick, so
+             `queue.entries` here can still show the entry's pre-park status
+             (`in_progress`) — reading that stale value routed a park down the
+             "real completion" branch below, /completed it (a server no-op, but
+             `completed.add(entryId)` isn't undone by that no-op), and
+             permanently blacklisted the entry from STEP 2's re-claim once the
+             user confirmed it back to `queued`. */
+          if (runner.takeChapterAwaitingConfirm(bookId, chapterId)) {
             continue;
           }
           /* Did this chapter FAIL? If so, complete it as `failed` so the entry

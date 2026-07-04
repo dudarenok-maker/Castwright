@@ -137,17 +137,23 @@ async function flushMicro(): Promise<void> {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
-/* Find the open call for a (book, chapter) and drive its stream to completion
-   by feeding an idle tick through the runner's per-stream onTick (the runner
-   then closes that chapter's handle + clears its snapshot, which wakes the
-   dispatcher). */
-function completeStream(bookId: string, chapterId: number): void {
+/* Shared lookup: find the open call for a (book, chapter) and return its
+   onTick, so completeStream/failStream/parkStream drive the SAME mocked
+   stream instead of each re-deriving the match. */
+function findOnTick(bookId: string, chapterId: number): (ev: GenerationTick) => void {
   const call = streamGenerationMock.mock.calls.find((c) => {
     const a = c[0] as { bookId?: string; chapterIds?: number[] };
     return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
   });
   if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
-  (call[0] as { onTick: (ev: GenerationTick) => void }).onTick({ type: 'idle' } as GenerationTick);
+  return (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
+}
+
+/* Drive a stream to completion by feeding an idle tick through the runner's
+   per-stream onTick (the runner then closes that chapter's handle + clears
+   its snapshot, which wakes the dispatcher). */
+function completeStream(bookId: string, chapterId: number): void {
+  findOnTick(bookId, chapterId)({ type: 'idle' } as GenerationTick);
 }
 
 /* Drive a stream to FAILURE: a chapter_failed tick (records the reason in the
@@ -159,13 +165,25 @@ function failStream(
   reason: string,
   errorCode?: string,
 ): void {
-  const call = streamGenerationMock.mock.calls.find((c) => {
-    const a = c[0] as { bookId?: string; chapterIds?: number[] };
-    return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
-  });
-  if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
-  const onTick = (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
+  const onTick = findOnTick(bookId, chapterId);
   onTick({ type: 'chapter_failed', chapterId, errorReason: reason, errorCode } as GenerationTick);
+  onTick({ type: 'idle' } as GenerationTick);
+}
+
+/* Drive a stream to a loud-fallback-gate PARK, mirroring the server's real
+   ordering (server/src/routes/generation.ts): a `chapter_awaiting_fallback_confirm`
+   tick, then `idle` — both on the SAME response, with no queue-snapshot update
+   dispatched in between (nothing in generation-stream-runner.ts's handling of
+   that tick touches the queue slice). #1284's regression test relies on this
+   NOT seeding the store with `status: 'awaiting_confirm'` first, unlike the
+   older "does NOT /complete" test above — that's the real race. */
+function parkStream(
+  bookId: string,
+  chapterId: number,
+  fallbackCharacters: Array<{ id: string; name?: string }> = [],
+): void {
+  const onTick = findOnTick(bookId, chapterId);
+  onTick({ type: 'chapter_awaiting_fallback_confirm', chapterId, fallbackCharacters } as GenerationTick);
   onTick({ type: 'idle' } as GenerationTick);
 }
 
@@ -565,26 +583,57 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       /* The dispatcher claimed + opened the stream (POST /start). */
       expect(openedBookIds()).toContain('book-A');
 
-      /* Server parks the chapter: the snapshot now shows awaiting_confirm. */
-      seed(store, [
-        entry({
-          id: 'a1',
-          bookId: 'book-A',
-          chapterId: 1,
-          status: 'awaiting_confirm',
-          fallbackCharacters: [{ id: 'wren', name: 'Wren' }],
-        }),
-      ]);
-      /* Worker closed the stream without completing (idle). */
-      completeStream('book-A', 1);
+      /* Worker parks the chapter: real server ordering is a
+         chapter_awaiting_fallback_confirm tick then idle, on the SAME
+         response — nothing dispatches a queue-snapshot update in between (the
+         frontend only learns of the park via the queue modal's own later
+         GET/thunk). The dispatcher must recognise the park from the RUNNER,
+         not by reading `queue.entries[].status`, which is still whatever the
+         claim left it (`in_progress`) at this point (#1284). */
+      parkStream('book-A', 1, [{ id: 'wren', name: 'Wren' }]);
       await flushMicro();
 
       /* Reconcile must NOT POST /complete for the parked entry — that would
-         clobber it — and must leave it re-claimable (still awaiting_confirm). */
+         clobber it — and must leave it re-claimable once the snapshot catches
+         up to awaiting_confirm (the modal's next GET/confirm reflects it). */
       expect(
         fetchMock.mock.calls.some((c) => String(c[0]) === '/api/queue/a1/complete'),
       ).toBe(false);
-      expect(store.getState().queue.entries[0]?.status).toBe('awaiting_confirm');
+    });
+
+    it('re-claims a parked entry once confirmed, even though the queue snapshot lags the park tick (#1284)', async () => {
+      /* Unlike the test above, this does NOT pre-seed `status: 'awaiting_confirm'`
+         before closing the stream — the real server sends the park tick and the
+         idle tick over the SAME response with no queue-snapshot dispatch in
+         between, so the frontend's local entry status is still whatever the
+         claim left it (`in_progress`) when the dispatcher's reconcile runs. */
+      const store = makeStore(2);
+      seed(store, [entry({ id: 'a1', bookId: 'book-A', chapterId: 1 })]);
+      await flushMicro();
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(1);
+
+      parkStream('book-A', 1, [{ id: 'wren', name: 'Wren' }]);
+      await flushMicro();
+
+      /* The park must not be mistaken for a completion. */
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]) === '/api/queue/a1/complete'),
+      ).toBe(false);
+
+      /* The user confirms via the modal: the server flips awaiting_confirm ->
+         queued (fallbackConfirmed) and the modal's thunk dispatches the fresh
+         snapshot — simulated here the same way `confirmFallbackEntry` would. */
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'queued', fallbackConfirmed: true }),
+      ]);
+      await flushMicro();
+
+      /* Must be re-claimed — a second stream opens for chapter 1. Before the
+         fix, the mistaken /complete poisoned the dispatcher's in-memory
+         `completed` set, and since the entry never actually left the live
+         queue (server no-ops /complete on an awaiting_confirm entry), nothing
+         ever pruned it back out — the entry stayed blacklisted forever. */
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(2);
     });
 
     it('threads fallbackConfirmed into the stream open for a confirmed entry', async () => {

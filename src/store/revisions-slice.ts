@@ -283,6 +283,20 @@ export const selectDriftByBook = createSelector(
   },
 );
 
+/** Drift events for ONE book — the cast view's per-character drift badges are
+    scoped to the active book, unlike the multi-book Drift Report above.
+    Memoised via createSelector (mirrors `selectDriftByBook`): an inline
+    `state.revisions.drift.filter(...)` allocates a fresh array every call
+    even when nothing changed, which react-redux's dev-mode stability check
+    flags as "returned a different result" and forces the calling component
+    to re-render on every store dispatch — a confirmed contributing factor to
+    a GenerationView-area crash (#1285), since this selector's caller
+    (`ReadyViewSwitch`) is GenerationView's direct parent. */
+export const selectDriftForBook = createSelector(
+  [selectDriftArray, (_state: { revisions: RevisionsState }, bookId: string) => bookId],
+  (drift, bookId): DriftEvent[] => drift.filter((d) => d.bookId === bookId),
+);
+
 /* A drift-card group bundles every chapter affected by the same
    `(bookId, characterId, snapshot)` triple under one card. The compare
    table at the top of the card is the diff between this snapshot and
