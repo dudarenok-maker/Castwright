@@ -1126,8 +1126,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        failing the chapter) so the user can confirm (render anyway) or skip —
        other chapters keep flowing. Scope: queue-driven runs only (there's a row
        to flip), Qwen healthy (the qwenUnavailable all-cast case has its own
-       loud warning above), and not already confirmed for this entry. */
-    if (qwenInUse && !qwenUnavailable && job.queueEntryId != null && !job.fallbackConfirmed) {
+       loud warning above), and not already confirmed for this entry.
+       #1263 — excluded for non-English books: `forbidKokoroFallback`
+       is unconditional there (see the synthesiseChapter call below), so
+       "confirm" (render anyway) can never actually succeed. Parking would
+       just offer a button that deterministically re-fails. Skip the park and
+       fall through to synthesiseChapter, which throws MissingDesignedVoiceError
+       immediately — one clear failure instead of a confirm→fail loop. */
+    if (
+      qwenInUse &&
+      !qwenUnavailable &&
+      job.queueEntryId != null &&
+      !job.fallbackConfirmed &&
+      !nonEnglishBook
+    ) {
       const speakingIds = new Set(sentences.map((s) => s.characterId));
       const speakers = cast.characters.filter((c) => speakingIds.has(c.id));
       const fallbackSet = computeQwenKokoroFallbackSet(speakers, engine);
