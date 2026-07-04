@@ -75,9 +75,10 @@ describe('startPortForwarder', () => {
   }
 
   it('relays bytes in both directions between client and upstream', async () => {
-    // Dummy upstream: an echo server on an ephemeral port.
+    // Dummy upstream: an echo server on an ephemeral port. IPv4-pinned for
+    // the same reason as the SECURITY test below (avoid dual-stack ambiguity).
     const upstream = net.createServer((sock) => sock.pipe(sock));
-    upstream.listen(0);
+    upstream.listen(0, '127.0.0.1');
     const upstreamPort = await listenAndGetPort(upstream);
 
     const handle = startPortForwarder(upstreamPort, { listenPort: 0 });
@@ -101,7 +102,15 @@ describe('startPortForwarder', () => {
       observedRemoteAddress = sock.remoteAddress;
       sock.end();
     });
-    upstream.listen(0);
+    /* Bind IPv4-only explicitly (not the default unspecified host, which
+       binds the dual-stack `::` when available) — a dual-stack socket
+       reports an accepted IPv4 peer as the IPv4-mapped `::ffff:127.0.0.2`,
+       which would false-fail the exact-string assertion below on a
+       perfectly correct implementation. This is the ONLY automated guardian
+       of the auth-bypass fix (adversarial review round 2) — pin the family
+       so a false failure can never tempt a future editor into loosening the
+       assertion instead of fixing the real test. */
+    upstream.listen(0, '127.0.0.1');
     const upstreamPort = await listenAndGetPort(upstream);
 
     const handle = startPortForwarder(upstreamPort, { listenPort: 0 });
@@ -123,7 +132,12 @@ describe('startPortForwarder', () => {
 
   it('warns (does not throw) when the listen port is already in use', async () => {
     const blocker = net.createServer();
-    blocker.listen(0);
+    /* Bind 0.0.0.0 explicitly, matching the family startPortForwarder itself
+       binds — a blocker on a different address family than the forwarder's
+       0.0.0.0 bind may not actually collide on every platform (a dual-stack
+       ::-only blocker vs. an IPv4-only forwarder bind, for instance), which
+       would hang this test waiting for an 'error' that never fires. */
+    blocker.listen(0, '0.0.0.0');
     const blockedPort = await listenAndGetPort(blocker);
 
     const warn = vi.fn();
@@ -667,6 +681,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..', '..', '..');
 const scriptPath = resolve(repoRoot, 'scripts', 'setup-lan-certs.mjs');
 
+/* Known, currently-inert gap (plan review): scripts/setup-lan-certs.mjs
+   hardcodes its cert output to `<repoRoot>/.run/certs`, NOT resolveRunDir()'s
+   APP_RUN_DIR override — so in a hypothetical future versioned-dir install
+   with APP_RUN_DIR set, this route (and index.ts's served LAN_CERT_FILE,
+   which IS resolveRunDir-based) would look in the wrong place and the
+   hot-swap would silently no-op. Inert today because setup-lan-certs.mjs
+   isn't shipped in the release manifest at all (see mdns-owner.ts's own
+   comment — a packaged install can't generate LAN certs regardless), and in
+   a dev checkout APP_RUN_DIR is unset so both paths already agree. Not fixed
+   here — out of scope for this plan, which doesn't touch setup-lan-certs.mjs
+   — but documented rather than silently left for someone to discover later. */
 let certFile = resolve(resolveRunDir(repoRoot), 'certs', 'lan-cert.pem');
 let keyFile = resolve(resolveRunDir(repoRoot), 'certs', 'lan-key.pem');
 
