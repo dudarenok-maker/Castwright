@@ -163,17 +163,26 @@ export const SCENES: Scene[] = [
     hash: '#/advanced',
     viewports: ['desktop'],
     action: async (page) => {
-      await page.getByText('Voice engine & device', { exact: true }).click({ timeout: 5000 });
+      // "Voice engine & device" also renders as the accordion section's own
+      // header button and (hidden on desktop) as a mobile <option> inside
+      // the lg:hidden dropdown — scope to the left-rail <nav
+      // aria-label="Settings sections"> so the match is unambiguous.
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Voice engine & device', { exact: true })
+        .click({ timeout: 5000 });
     },
   },
   {
     /* Saltgrave (hollow-tide-2) is mid-generation (7/11 done) — the Regenerate
-       action on a finished chapter opens the real per-chapter modal. */
+       action on a finished chapter opens the real per-chapter modal. The
+       per-chapter button's accessible name is its aria-label
+       ("Regenerate this chapter"), not its visible "Regenerate" text. */
     id: 'regenerate-modal',
     hash: '#/books/hollow-tide-2/generate',
     viewports: ['desktop'],
     action: async (page) => {
-      await page.getByRole('button', { name: 'Regenerate', exact: true }).first().click({ timeout: 5000 });
+      await page.getByRole('button', { name: 'Regenerate this chapter' }).first().click({ timeout: 5000 });
     },
   },
   {

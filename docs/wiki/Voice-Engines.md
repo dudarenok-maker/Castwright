@@ -40,7 +40,10 @@ unloaded independently.
 Gemini isn't a local model, so it has no Model Manager row — there's nothing
 to load or unload. It shows up instead as a voice family in the Voice
 Library and as one of the tabs in a character's **Model voice** picker
-(Profile Drawer → Voice profile), alongside Coqui and Kokoro. Below, "Charon"
+(Profile Drawer → Voice profile), alongside Coqui and Kokoro — those preset
+tabs only render once that character's engine is set to something other than
+Qwen; a Qwen-engine character designs a bespoke voice instead (see
+[Designing a Voice](Designing-a-Voice)) and never sees this picker. Below, "Charon"
 — a Gemini voice reused across two cast members in *The Hollow Tide* series —
 with **Audition base voice** and **Rebaseline the series** actions.
 

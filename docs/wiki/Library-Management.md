@@ -32,6 +32,12 @@ same grouping as a plain section heading rather than a collapsible one.
 
 ![Series grouping — table view](images/library-management/02-series-grouping.png)
 
+Once you've listened across multiple books in a series, a **Series Memory**
+chip appears next to the section header, summarising which characters'
+voices have carried through from one book to the next — the continuity
+[Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices)
+talks about, made visible on the shelf.
+
 ## Book bundles
 
 The plan for this page originally called for a screenshot of a **book
