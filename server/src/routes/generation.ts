@@ -1126,24 +1126,36 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        failing the chapter) so the user can confirm (render anyway) or skip —
        other chapters keep flowing. Scope: queue-driven runs only (there's a row
        to flip), Qwen healthy (the qwenUnavailable all-cast case has its own
-       loud warning above), and not already confirmed for this entry.
-       #1263 — excluded for non-English books: `forbidKokoroFallback`
-       is unconditional there (see the synthesiseChapter call below), so
-       "confirm" (render anyway) can never actually succeed. Parking would
-       just offer a button that deterministically re-fails. Skip the park and
-       fall through to synthesiseChapter, which throws MissingDesignedVoiceError
-       immediately — one clear failure instead of a confirm→fail loop. */
-    if (
-      qwenInUse &&
-      !qwenUnavailable &&
-      job.queueEntryId != null &&
-      !job.fallbackConfirmed &&
-      !nonEnglishBook
-    ) {
+       loud warning above), and not already confirmed for this entry. */
+    if (qwenInUse && !qwenUnavailable && job.queueEntryId != null && !job.fallbackConfirmed) {
       const speakingIds = new Set(sentences.map((s) => s.characterId));
       const speakers = cast.characters.filter((c) => speakingIds.has(c.id));
       const fallbackSet = computeQwenKokoroFallbackSet(speakers, engine);
       if (fallbackSet.length > 0) {
+        /* #1263 — non-English books never park here: `forbidKokoroFallback`
+           is unconditional for them (see the synthesiseChapter call below),
+           so "confirm" (render anyway) could never actually succeed — parking
+           would just offer a button that deterministically re-fails. Fail the
+           chapter immediately instead, naming every undesigned character up
+           front (mirroring the park's own list) rather than letting
+           synthesiseChapter's MissingDesignedVoiceError surface only the
+           first one it happens to hit and forcing an iterative
+           design-retry-design-retry loop. */
+        if (nonEnglishBook) {
+          const names = fallbackSet.map((c) => c.name ?? c.id).join(', ');
+          const plural = fallbackSet.length > 1;
+          const language = bookLanguage ?? 'non-English';
+          job.runInProgress.delete(chapter.id);
+          broadcast(job, {
+            type: 'chapter_failed',
+            chapterId: chapter.id,
+            errorReason:
+              `No designed Qwen voice for ${names} — design ${plural ? 'them' : 'it'} (and the ` +
+              `narrator) in the cast view before generating. English Kokoro voices cannot read ` +
+              `${language} text.`,
+          });
+          return;
+        }
         /* Flip in_progress → awaiting_confirm FIRST (serialised, so the srv-12
            res-close orphan-reset + srv-16 done-flip see a non-in_progress entry
            and no-op), then broadcast + return without rendering. */

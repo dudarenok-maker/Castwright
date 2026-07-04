@@ -372,24 +372,19 @@ describe('fs-2 never-cross-language generation gate', () => {
     expect(lastSynthArgs?.cast?.every((c) => c.ttsEngine === 'qwen')).toBe(true);
   }, 10_000);
 
-  it('#1263: fails fast (no park) for a cross-language reused voice on a non-English book', async () => {
+  it('#1263: fails fast (no park, no synth) for a cross-language reused voice on a non-English book', async () => {
     /* sofiya's designed voice was baked English — reusing it into a Russian book
        must NOT render it. `forbidKokoroFallback` is unconditional for
        non-English books, so "Render anyway" could never actually succeed here —
        the gate must NOT park to awaiting_confirm (that offer would just
-       deterministically re-fail); it must fail the chapter immediately with
-       the clear MissingDesignedVoiceError message instead. */
+       deterministically re-fail); it must fail the chapter immediately, naming
+       the affected character, without ever reaching synthesiseChapter. */
     writeManifest('qwen-v_sofiya', 'English');
-    const { MissingDesignedVoiceError } = await import('../tts/synthesise-chapter.js');
-    synthesiseImpl = async () => {
-      throw new MissingDesignedVoiceError('Sofiya', 'Russian');
-    };
     const body = await runRuStream();
     expect(body).not.toContain('chapter_awaiting_fallback_confirm');
     expect(body).toContain('chapter_failed');
-    expect(body).toMatch(/no designed voice/i);
-    expect(synthCalled).toBe(true);
-    expect(lastSynthArgs?.forbidKokoroFallback).toBe(true);
+    expect(body).toMatch(/no designed qwen voice for sofiya/i);
+    expect(synthCalled).toBe(false);
   }, 10_000);
 
   it('is FATAL (no synth, no park) when Qwen is unavailable on a Russian book', async () => {
