@@ -107,23 +107,27 @@ export const selectQueueEntryById =
   (s: RootSliceShape): QueueEntry | undefined =>
     s.queue.entries.find((e) => e.id === id);
 
-/** Entries grouped by bookId, preserving cross-book order. Cheap to recompute
-    per render because the modal needs both the flat list AND the per-book
-    grouping (for the "Book A · n chapters" headers). */
-export const selectQueueByBook = (
-  s: RootSliceShape,
-): { bookId: string; entries: QueueEntry[] }[] => {
-  const grouped: Record<string, QueueEntry[]> = {};
-  const order: string[] = [];
-  for (const entry of s.queue.entries) {
-    if (!grouped[entry.bookId]) {
-      grouped[entry.bookId] = [];
-      order.push(entry.bookId);
+/** Entries grouped by bookId, preserving cross-book order. Memoised on the
+    entries reference (mirrors `selectInFlightEntryIds` below) — an unmemoized
+    version allocates a fresh array + per-book arrays on every call, which
+    react-redux's dev-mode stability check flags as "returned a different
+    result when called with the same parameters" and forces the modal to
+    re-render on every store dispatch, not just queue-relevant ones (#1285). */
+export const selectQueueByBook = createSelector(
+  [selectQueueEntries],
+  (entries): { bookId: string; entries: QueueEntry[] }[] => {
+    const grouped: Record<string, QueueEntry[]> = {};
+    const order: string[] = [];
+    for (const entry of entries) {
+      if (!grouped[entry.bookId]) {
+        grouped[entry.bookId] = [];
+        order.push(entry.bookId);
+      }
+      grouped[entry.bookId].push(entry);
     }
-    grouped[entry.bookId].push(entry);
-  }
-  return order.map((bookId) => ({ bookId, entries: grouped[bookId] }));
-};
+    return order.map((bookId) => ({ bookId, entries: grouped[bookId] }));
+  },
+);
 
 /** The FIRST in-flight entry (status === 'in_progress'), or null. Kept for the
     reorder/drag path which still pins one entry; under queue-sole concurrency
