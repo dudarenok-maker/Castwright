@@ -40,6 +40,7 @@ export const BRAND_NAME = 'Castwright';
     build footer uses the bare {@link BRAND_NAME} instead. */
 export const MADE_WITH = 'Made with Castwright';
 
-/** Hardware-honesty line (decision 9) — widened for Apple Silicon. */
+/** Hardware-honesty line (decision 9) — widened for Apple Silicon; 6 GB entry
+    point / 8 GB sweet spot reconciled with the castwright.ai FAQ. */
 export const HARDWARE_LINE =
-  'A gaming PC or laptop with an 8 GB GPU — or any Apple Silicon Mac — is enough.';
+  'A gaming PC or laptop with a 6 GB GPU gets you started, and 8 GB is the sweet spot — or any Apple Silicon Mac.';
