@@ -65,10 +65,16 @@ export const ENGINE_LANGUAGE_SUPPORT: Record<TtsEngine, string[]> = {
   gemini: [...],                            // whatever Gemini's real non-English behavior is today — verify
                                              // at implementation time (not independently confirmed in this
                                              // design), rather than assumed equal to Qwen's set
-  piper:  [...],                            // and every other TtsEngine variant — the Record type requires
-                                             // an exhaustive key set, so this table can't ship partial
 };
 ```
+
+`TtsEngine` also includes `'piper'` at the type level (`server/src/tts/model-keys.ts:18`), but it's a dead
+placeholder — `'piper-en-us-medium'` is commented `// future local` and no Piper sidecar backend was ever
+built. This spec doesn't give it a table row; whoever eventually implements Piper for real adds one then.
+Since `Record<TtsEngine, string[]>` requires an exhaustive key set, the implementation either drops `'piper'`
+from the `TtsEngine` union as part of this work (it's unused dead code, and CLAUDE.md's surgical-changes
+principle says remove code your change orphans) or keys the table as `Partial<Record<TtsEngine, string[]>>`
+with unimplemented engines treated as unsupported everywhere — a call for whoever implements this plan.
 
 A new pure function, `resolveEligibleEngines(bookLanguage, installedEngines)` in
 `server/src/tts/language.ts` (next to `isNonEnglish`), computes:
