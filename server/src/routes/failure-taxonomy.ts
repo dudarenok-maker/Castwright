@@ -42,6 +42,7 @@ export type FailureCode =
   | 'xtts-speaker-desync'
   | 'cuda-poisoned'
   | 'gpu-acceleration-unavailable'
+  | 'voice-not-designed'
   | 'auth'
   | 'unknown';
 

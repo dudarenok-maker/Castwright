@@ -157,6 +157,12 @@ export const FAILURE_REMEDIATIONS = {
       'Load the engine from its model pill (or wait for the auto-load to finish — the pill turns ' +
       'green), then retry the chapter.',
   },
+  'voice-not-designed': {
+    userMessage:
+      'A non-English chapter needs a designed voice for every speaking character — the English-only ' +
+      'Kokoro fallback cannot stand in.',
+    remediation: 'Design the missing voice(s) in the cast view, then retry the chapter.',
+  },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */
     userMessage:

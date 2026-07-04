@@ -153,14 +153,19 @@ function completeStream(bookId: string, chapterId: number): void {
 /* Drive a stream to FAILURE: a chapter_failed tick (records the reason in the
    runner) followed by idle (closes the stream → wakes the dispatcher, which
    then reconciles the entry as `failed`). */
-function failStream(bookId: string, chapterId: number, reason: string): void {
+function failStream(
+  bookId: string,
+  chapterId: number,
+  reason: string,
+  errorCode?: string,
+): void {
   const call = streamGenerationMock.mock.calls.find((c) => {
     const a = c[0] as { bookId?: string; chapterIds?: number[] };
     return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
   });
   if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
   const onTick = (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
-  onTick({ type: 'chapter_failed', chapterId, errorReason: reason } as GenerationTick);
+  onTick({ type: 'chapter_failed', chapterId, errorReason: reason, errorCode } as GenerationTick);
   onTick({ type: 'idle' } as GenerationTick);
 }
 
@@ -490,6 +495,33 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect(tripped!.kind).toBe('error');
       expect(tripped!.message).toContain('book-A');
       expect(tripped!.message).toContain('sidecar 500');
+    });
+
+    it('#1263: voice-not-designed failures never trip the breaker, even 3 identical in a row', async () => {
+      /* This is a deterministic per-book cast-config issue, not the
+         "something's systemically wrong" signal the breaker exists to
+         catch — it must not pause unrelated books' queues (the old
+         awaiting_confirm park it replaced was ALSO breaker-exempt). */
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+
+      for (let i = 0; i < 3; i++) {
+        failStream('book-A', 3, 'No designed Qwen voice for Bob', 'voice-not-designed');
+        await flushMicro();
+        if (i < 2) {
+          requeue(store, 'a3');
+          await flushMicro();
+        }
+      }
+
+      expect(store.getState().queue.paused).toBe(false);
+      expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
+        false,
+      );
+      /* The entry still lingers as failed (Retry stays available) — only the
+         streak-breaker participation is skipped, not the failure itself. */
+      expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('failed');
     });
 
     it('resets the streak on a successful chapter so prior failures do not accumulate', async () => {
