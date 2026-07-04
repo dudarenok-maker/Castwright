@@ -29,6 +29,29 @@ test('copyWikiTree copies markdown and images, excluding .git', () => {
   }
 });
 
+test('copyWikiTree mirrors: removes stale dest files no longer in source, preserves .git', () => {
+  const src = mkdtempSync(path.join(tmpdir(), 'wiki-src-'));
+  const dest = mkdtempSync(path.join(tmpdir(), 'wiki-dest-'));
+  try {
+    writeFileSync(path.join(src, 'Home.md'), '# Home');
+
+    // Simulate a freshly-cloned wiki repo: a page that no longer exists in
+    // srcDir (deleted locally) plus a .git dir that must survive the sync.
+    writeFileSync(path.join(dest, 'Stale.md'), 'stale page');
+    mkdirSync(path.join(dest, '.git'), { recursive: true });
+    writeFileSync(path.join(dest, '.git', 'HEAD'), 'ref: refs/heads/master');
+
+    copyWikiTree(src, dest);
+
+    assert.equal(existsSync(path.join(dest, 'Stale.md')), false);
+    assert.equal(readFileSync(path.join(dest, '.git', 'HEAD'), 'utf8'), 'ref: refs/heads/master');
+    assert.equal(readFileSync(path.join(dest, 'Home.md'), 'utf8'), '# Home');
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
+
 test('copyWikiTree throws when the source directory is missing', () => {
   const dest = mkdtempSync(path.join(tmpdir(), 'wiki-dest-'));
   try {

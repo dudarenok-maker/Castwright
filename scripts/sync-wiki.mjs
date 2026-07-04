@@ -6,7 +6,7 @@
 //
 // Run manually after a merge to main touches docs/wiki/**.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -16,6 +16,15 @@ const WIKI_REMOTE = 'https://github.com/dudarenok-maker/Castwright.wiki.git';
 export function copyWikiTree(srcDir, destDir) {
   if (!existsSync(srcDir)) {
     throw new Error(`sync-wiki: source directory not found: ${srcDir}`);
+  }
+  // Mirror, not overlay: clear any pre-existing dest entries (e.g. from a
+  // freshly-cloned wiki repo) other than .git, so a page/image deleted from
+  // srcDir actually disappears from destDir instead of lingering forever.
+  if (existsSync(destDir)) {
+    for (const entry of readdirSync(destDir)) {
+      if (entry === '.git') continue;
+      rmSync(path.join(destDir, entry), { recursive: true, force: true });
+    }
   }
   cpSync(srcDir, destDir, {
     recursive: true,
