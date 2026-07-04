@@ -5457,6 +5457,20 @@ async function realGetWorkspaceInfo(): Promise<WorkspaceInfo> {
   return res.json();
 }
 
+/* bug #1298 — e2e seam: `?e2eWorkspaceRoot=<path>` forces a realistic (long)
+   workspace path so the phone-viewport overflow regression has something to
+   actually overflow on — the default `(mock)` placeholder is too short to
+   ever trigger a max-width bug. Same shape as `readE2eUpdateOverride` (mock
+   mode is in-process, so page.route can't intercept). Pure + exported so
+   it's unit-tested directly. */
+export function readE2eWorkspaceRootOverride(search: string): string | null {
+  try {
+    return new URLSearchParams(search).get('e2eWorkspaceRoot');
+  } catch {
+    return null;
+  }
+}
+
 async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
   await wait(40);
   /* Marketing capture: show a realistic, configured-looking workspace path
@@ -5468,6 +5482,10 @@ async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
       booksRoot: '~/Audiobooks/Castwright/books',
       source: 'env',
     };
+  const override = readE2eWorkspaceRootOverride(
+    typeof window !== 'undefined' ? window.location.search : '',
+  );
+  if (override) return { root: override, booksRoot: `${override}/books`, source: 'env' };
   return { root: '(mock)', booksRoot: '(mock)/books', source: 'default' };
 }
 

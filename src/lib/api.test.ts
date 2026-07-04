@@ -9,6 +9,7 @@ import {
   mockSetShelfStatus,
   _resetMockListenStats,
   readE2eUpdateOverride,
+  readE2eWorkspaceRootOverride,
   readCastDesignStream,
   mockCreateCharacter,
   api,
@@ -186,6 +187,19 @@ describe('readE2eUpdateOverride (fe-27 update override)', () => {
       updateAvailable: true,
       latestVersion: '9.9.9',
     });
+  });
+});
+
+describe('readE2eWorkspaceRootOverride (bug #1298)', () => {
+  it('defaults to null when the param is absent', () => {
+    expect(readE2eWorkspaceRootOverride('')).toBeNull();
+    expect(readE2eWorkspaceRootOverride('?foo=bar')).toBeNull();
+  });
+
+  it('honours ?e2eWorkspaceRoot=<path>', () => {
+    expect(readE2eWorkspaceRootOverride('?e2eWorkspaceRoot=C%3A%5CLong%5CPath')).toBe(
+      'C:\\Long\\Path',
+    );
   });
 });
 

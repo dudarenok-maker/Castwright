@@ -292,7 +292,7 @@ function WorkspacePathRow({ info }: { info: WorkspaceInfo }) {
       className={`mt-2 inline-flex items-center gap-2 text-xs font-mono ${fromDefault ? 'text-amber-700' : 'text-ink/55'}`}
     >
       <IconFolder className={`w-3.5 h-3.5 ${fromDefault ? 'text-amber-600' : 'text-ink/45'}`} />
-      <span className="truncate max-w-[520px]">{info.root}</span>
+      <span className="truncate max-w-[calc(100vw-10rem)] sm:max-w-[520px]">{info.root}</span>
       <button
         onClick={onCopy}
         className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] uppercase tracking-wider font-semibold text-ink/55 hover:text-ink hover:bg-ink/5 transition-colors"
