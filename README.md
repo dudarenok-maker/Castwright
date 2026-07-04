@@ -94,6 +94,41 @@ Two ways to install:
 - ~6 GB free disk (TTS weights ~1.1 GB + PyTorch ~2.5 GB + deps)
 - A GPU is strongly recommended (TTS on CPU is far slower): NVIDIA on Windows/Linux (PyTorch `2.11.0` installs CUDA-bundled by default; for a specific toolkit like CUDA 12.8 see [INSTALL.md](INSTALL.md)), or Apple Silicon (M-series) on macOS — used automatically via Metal, no drivers or setup. **AMD GPUs are an experimental preview** (ROCm for Qwen/Coqui; Kokoro runs on CPU), auto-detected with a safe CPU fallback — see [INSTALL.md](INSTALL.md). No GPU? It still runs on CPU.
 
+## GPU & VRAM
+
+Castwright runs on the graphics card you already have. It's tuned for an **8 GB** card,
+runs on **6 GB**, and puts a second card to work if you have one. The numbers below are
+**run sizes** — VRAM in use while generating, not download size.
+
+**Voice engines**
+
+| Engine | What it's for | VRAM while generating | 6 GB | 8 GB | 12–16 GB |
+| --- | --- | --- | :---: | :---: | :---: |
+| Kokoro | Fast English, the default | ~1 GB | ✓ | ✓ | ✓ |
+| Qwen — Fast (0.6B) | Quick designed voices | ~3.7 GB | ✓ | ✓ | ✓ |
+| Qwen — Higher quality (1.7B) | Best expressive designed voices | ~4.7–5 GB | ✓ tight | ✓ | ✓ |
+| Qwen — Voice Design | Crafting a new character voice | ~3.7–4 GB (base auto-unloaded) | ✓ | ✓ | ✓ |
+| Coqui XTTS v2 | Pre-designed voices (cloning to come) | ~4 GB | ✓ | ✓ | ✓ |
+| _IndexTTS-2 (planned)_ | _Per-line emotion, one designed voice_ | _12 GB card (likely)_ | — | — | ◑ |
+| _Fish Audio S2-Pro (planned)_ | _Finest fidelity_ | _16 GB card_ | — | — | ◑ |
+
+**Analysis models** (who-said-what)
+
+| Option | Where it runs | VRAM while analysing | 6 GB | 8 GB | 12–16 GB |
+| --- | --- | --- | :---: | :---: | :---: |
+| Cloud (Gemini free tier) | Cloud | none on your GPU | ✓ | ✓ | ✓ |
+| CPU-only (local) | Your CPU + RAM | none on your GPU | ✓ | ✓ | ✓ |
+| Small local (e.g. qwen3.5:4b) | Your GPU | ~4 GB | ✓ | ✓ | ✓ |
+| Mid local (e.g. llama3.1:8b) | Your GPU | ~7 GB | — | ✓ | ✓ |
+| Large local (e.g. qwen3.5:9b) | Your GPU | ~8 GB | — | tight | ✓ |
+
+On cards below ~11 GB the analysis model and the voices **take turns** — the analyzer steps
+aside before speech, so their VRAM doesn't add up. Cloud or CPU analysis uses no GPU memory,
+leaving the whole card for voices. At 12–16 GB they stay resident together and run at once.
+
+> These figures are **run sizes** (VRAM in use while generating). They differ from the
+> load/weight sizes in `docs/local-llm.md` — reconcile that doc if you want the two to match.
+
 ## Companion app (Android)
 
 A native Flutter companion pairs to your running server over the home network
