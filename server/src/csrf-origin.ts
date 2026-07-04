@@ -17,13 +17,30 @@ function allowedOrigins(): Set<string> {
     `https://127.0.0.1:${port}`,
     `https://[::1]:${port}`,
   ];
+  /* castwright-local-port-cert — the friendly hostnames, plus a port-less
+     variant of every enumerated LAN IP. Both are needed: the port-443
+     forwarder (server/src/lan-port-forwarder.ts) is host-blind, so it makes
+     a bare `https://<lan-ip>` reachable in addition to
+     `https://castwright.local` — cookies aren't port-scoped, so a session
+     cookie minted on the :8443 origin would otherwise 403 on either bare
+     path. An unused entry here is inert (nobody's Origin will ever equal it
+     if that URL isn't actually served), so all of these are added
+     unconditionally rather than threading the forwarder's/dev:lan's
+     live/dead state into this module. */
+  const friendlyHostnames = [
+    `https://castwright.local:${port}`,
+    'https://castwright.local',
+    'https://castwright.dev.local:5173',
+  ];
   try {
     const { urls } = enumerateLanUrls(port, 'https'); // ['https://192.168.x.y:8443', ...]
-    return new Set<string>([...urls, ...loopback]);
+    const bareIps = urls.map((u) => u.replace(`:${port}`, ''));
+    return new Set<string>([...urls, ...bareIps, ...friendlyHostnames, ...loopback]);
   } catch {
-    // Fail closed: if NIC enumeration ever throws, still allow loopback only —
-    // never let an exception turn every cookie-bearing write into a 500.
-    return new Set<string>(loopback);
+    // Fail closed: if NIC enumeration ever throws, still allow loopback +
+    // the friendly hostnames — never let an exception turn every
+    // cookie-bearing write into a 500.
+    return new Set<string>([...friendlyHostnames, ...loopback]);
   }
 }
 
