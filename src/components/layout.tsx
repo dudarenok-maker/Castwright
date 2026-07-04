@@ -70,6 +70,7 @@ import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
 import { RegenerateModal } from '../modals/regenerate';
 import { StartGenerationModal } from '../modals/start-generation';
+import { VoiceReadinessGateModal } from '../modals/voice-readiness-gate';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
@@ -1767,8 +1768,9 @@ export function Layout() {
                 dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin })),
               );
               setStartGenBusy(false);
+              const fallbackConfirmed = ui.startGenPrompt?.fallbackConfirmed;
               dispatch(uiActions.closeStartGenPrompt());
-              dispatch(uiActions.requestStartGeneration());
+              dispatch(uiActions.requestStartGeneration({ fallbackConfirmed }));
             } catch {
               setStartGenBusy(false);
               dispatch(
@@ -1781,6 +1783,7 @@ export function Layout() {
           }}
         />
       )}
+      <VoiceReadinessGateModal />
       {ui.regenChapter && (
         <RegenerateModal
           chapter={ui.regenChapter}

@@ -10,7 +10,16 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
-import { tourSlice, tourActions, fetchTourStatus, completeTour, goToStep, nextStep, prevStep, startScreenTour } from './tour-slice';
+import {
+  tourSlice,
+  tourActions,
+  fetchTourStatus,
+  completeTour,
+  goToStep,
+  nextStep,
+  prevStep,
+  startScreenTour,
+} from './tour-slice';
 import { uiSlice, uiActions } from './ui-slice';
 import { configureStore } from '@reduxjs/toolkit';
 
@@ -73,21 +82,21 @@ describe('tour navigation thunks', () => {
     const store = mkStore();
     store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
     store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
-    await store.dispatch(goToStep(3)); // s4-line → manuscript
+    await store.dispatch(goToStep(6)); // s4-line → manuscript
     const stage = store.getState().ui.stage;
     expect(stage.kind).toBe('ready');
     if (stage.kind === 'ready') expect(stage.view).toBe('manuscript');
-    expect(store.getState().tour.stepIndex).toBe(3);
+    expect(store.getState().tour.stepIndex).toBe(6);
   });
 
   it('opensDrawer step sets openProfileId; stepping off it clears it', async () => {
     const store = mkStore();
     store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
     store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
-    await store.dispatch(goToStep(6)); // s7-drawer
+    await store.dispatch(goToStep(4)); // s7-drawer
     let stage = store.getState().ui.stage;
     if (stage.kind === 'ready') expect(stage.openProfileId).toBe('wren');
-    await store.dispatch(goToStep(5)); // s6-roster
+    await store.dispatch(goToStep(3)); // s6-roster
     stage = store.getState().ui.stage;
     if (stage.kind === 'ready') expect(stage.openProfileId).toBeNull();
   });
@@ -96,19 +105,19 @@ describe('tour navigation thunks', () => {
     const store = mkStore();
     store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
     await store.dispatch(startScreenTour('cast'));
-    expect(store.getState().tour.stepIndex).toBe(5); // s6-roster
+    expect(store.getState().tour.stepIndex).toBe(3); // s6-roster
     await store.dispatch(nextStep());
-    expect(store.getState().tour.stepIndex).toBe(6); // s7-drawer
+    expect(store.getState().tour.stepIndex).toBe(4); // s7-drawer
     await store.dispatch(nextStep());
-    expect(store.getState().tour.stepIndex).toBe(7); // s8-fullcast
+    expect(store.getState().tour.stepIndex).toBe(5); // s8-fullcast
   });
 
-  it('screen-mode nextStep ends the tour after the screen\'s last step', async () => {
+  it("screen-mode nextStep ends the tour after the screen's last step", async () => {
     const store = mkStore();
     store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
     await store.dispatch(startScreenTour('cast'));
-    await store.dispatch(nextStep()); // 6
-    await store.dispatch(nextStep()); // 7 (last cast step)
+    await store.dispatch(nextStep()); // 4
+    await store.dispatch(nextStep()); // 5 (last cast step)
     await store.dispatch(nextStep()); // past end → endTour
     expect(store.getState().tour.active).toBe(false);
   });
@@ -120,21 +129,21 @@ describe('tour navigation thunks', () => {
     const stage = store.getState().ui.stage;
     expect(stage.kind).toBe('ready');
     if (stage.kind === 'ready') {
-      expect(stage.bookId).toBe('mybook');          // did NOT switch to the sample
+      expect(stage.bookId).toBe('mybook'); // did NOT switch to the sample
       expect(stage.view).toBe('cast');
-      expect(stage.openProfileId).toBeNull();        // drawer not force-opened in screen mode
+      expect(stage.openProfileId).toBeNull(); // drawer not force-opened in screen mode
     }
   });
 
   it('screen-mode prevStep stays within the screen slice', async () => {
     const store = mkStore();
     store.dispatch(uiActions.openBook({ id: 'mybook', status: 'complete', manuscriptId: 'm' }));
-    await store.dispatch(startScreenTour('cast'));   // s6 (index 5)
-    await store.dispatch(nextStep());                // s7 (index 6)
-    expect(store.getState().tour.stepIndex).toBe(6);
-    await store.dispatch(prevStep());                // back to s6 (index 5) — NOT s5 manuscript
-    expect(store.getState().tour.stepIndex).toBe(5);
-    await store.dispatch(prevStep());                // already first in slice → no-op
-    expect(store.getState().tour.stepIndex).toBe(5);
+    await store.dispatch(startScreenTour('cast')); // s6 (index 3)
+    await store.dispatch(nextStep()); // s7 (index 4)
+    expect(store.getState().tour.stepIndex).toBe(4);
+    await store.dispatch(prevStep()); // back to s6 (index 3) — NOT s5 manuscript
+    expect(store.getState().tour.stepIndex).toBe(3);
+    await store.dispatch(prevStep()); // already first in slice → no-op
+    expect(store.getState().tour.stepIndex).toBe(3);
   });
 });

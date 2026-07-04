@@ -17,6 +17,7 @@ import {
   Pill,
   VoiceSwatch,
   CarriedBadge,
+  PrimaryButton,
 } from '../components/primitives';
 import { VariantGlyphStrip } from '../components/variant-glyph-strip';
 import {
@@ -65,6 +66,7 @@ import { api } from '../lib/api';
 import type { MergeSuggestion } from '../lib/api';
 import type { CastDesignScope } from '../store/cast-design-slice';
 import { buildVariantTasks, variantWorkCounts } from '../lib/variant-tasks';
+import { compareCastRows } from '../lib/cast-sort';
 
 interface Props {
   characters: Character[];
@@ -87,26 +89,16 @@ interface Props {
      (top-banner entry). When called with a characterId, scopes the
      modal to that character — pill click on a cast row. */
   onShowDrift: (characterId?: string) => void;
+  /** fe-46 — advances the flow to the manuscript view. Always visible, never
+      disabled — the voice-readiness gate lives at generation start, not at
+      this navigation step. */
+  onContinueToManuscript: () => void;
 }
 
-/* Cast table ordering (display only — sorts a filtered copy, never the store
-   order). Rows sort by line count descending so the most-spoken characters
-   lead; the two generic minor-cast buckets (`unknown-male` / `unknown-female`,
-   see server/src/analyzer/fold-minor-cast.ts) always sink to the bottom
-   regardless of their pooled line count. Ties break by name for stability. */
-const UNKNOWN_BUCKET_IDS = new Set(['unknown-male', 'unknown-female']);
 /* fe-16 — module-level stable empty map so the fallback selector returns the
    SAME reference across renders when the slice field is absent (pre-fe-16
    preloaded test stores), keeping the selector cheap. */
 const EMPTY_FALLBACK_MAP: Record<string, string> = {};
-export function compareCastRows(a: Character, b: Character): number {
-  const aBucket = UNKNOWN_BUCKET_IDS.has(a.id);
-  const bBucket = UNKNOWN_BUCKET_IDS.has(b.id);
-  if (aBucket !== bBucket) return aBucket ? 1 : -1;
-  const byLines = (b.lines ?? 0) - (a.lines ?? 0);
-  if (byLines !== 0) return byLines;
-  return a.name.localeCompare(b.name);
-}
 
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
@@ -146,6 +138,7 @@ export function CastView({
   onShowMatchDetail,
   driftEvents,
   onShowDrift,
+  onContinueToManuscript,
 }: Props) {
   /* fs-34 — index used emotions per character ONCE (not per row) for the
      "N tags need a variant" cast-row count. */
@@ -265,8 +258,7 @@ export function CastView({
     () => [...storedTiers.values()].some((mk) => mk === 'qwen3-tts-1.7b'),
     [storedTiers],
   );
-  const showProsodyHint =
-    !prosodyHintDismissed && prosodyEnabled === false && has1_7bMember;
+  const showProsodyHint = !prosodyHintDismissed && prosodyEnabled === false && has1_7bMember;
   const setRow = (id: string, patch: { loading?: boolean; error?: string } | null) =>
     setRowState((prev) => {
       const next = { ...prev };
@@ -299,7 +291,8 @@ export function CastView({
      splits the actionable-now total (`readyTasks`) from the work blocked behind
      a missing base voice (`blockedTasks`/`blockedChars`). */
   const isQwenForVariants = (c: Character): boolean =>
-    effectiveEngineFor(c) === 'qwen' || findVoiceForCharacter(c, library)?.ttsVoice?.provider === 'qwen';
+    effectiveEngineFor(c) === 'qwen' ||
+    findVoiceForCharacter(c, library)?.ttsVoice?.provider === 'qwen';
   const variantTasks = useMemo(
     () => buildVariantTasks(characters, usedEmotions, isQwenForVariants),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -311,7 +304,12 @@ export function CastView({
      StatusPill resolves its labels (matched library voice + effective engine)
      so the chips and the rows can't disagree. */
   const statusKeysFor = (c: Character): string[] =>
-    statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c), usedEmotions.get(c.id));
+    statusFilterKeys(
+      c,
+      findVoiceForCharacter(c, library),
+      effectiveEngineFor(c),
+      usedEmotions.get(c.id),
+    );
 
   /* "Design full cast" — every character whose lifecycle is "Needs voice" (a
      Qwen-effective character with no designed voice), most-spoken first. Built
@@ -345,8 +343,7 @@ export function CastView({
      to design, OR while a run for this book is active (so the Cancel control stays
      reachable even after the last row flips and the counts hit 0). */
   const showDesignFullCast =
-    (isQwenBook && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
-    designRunningHere;
+    (isQwenBook && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) || designRunningHere;
   /* A Qwen book whose roster is already fully designed: keep the button visible
      but disabled, so users (and the guided tour) can still see the feature exists
      rather than have it vanish entirely. */
@@ -383,7 +380,12 @@ export function CastView({
         dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' })),
       );
     } catch {
-      dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't pin quality tier. Please try again." }));
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: "Couldn't pin quality tier. Please try again.",
+        }),
+      );
     }
   }
 
@@ -397,7 +399,12 @@ export function CastView({
         dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null })),
       );
     } catch {
-      dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't reset quality tier. Please try again." }));
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: "Couldn't reset quality tier. Please try again.",
+        }),
+      );
     }
   }
 
@@ -434,7 +441,11 @@ export function CastView({
     for (const c of characters) {
       const effectiveEngine = c.ttsEngine ?? ttsEngine;
       const voice = findVoiceForCharacter(c, library);
-      const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(c, voice, effectiveEngine);
+      const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(
+        c,
+        voice,
+        effectiveEngine,
+      );
       const lifecycleKey = lifecycle?.label ?? 'Unset';
       const lifecycleColor: StatusPillColor = lifecycle?.color ?? 'neutral';
       tally.set(lifecycleKey, {
@@ -729,14 +740,19 @@ export function CastView({
                     <>
                       <IconSpinner className="w-4 h-4" />
                       <span>
-                        Design full cast{needsVoiceIds.length > 0 ? ` (${needsVoiceIds.length})` : ''}
+                        Design full cast
+                        {needsVoiceIds.length > 0 ? ` (${needsVoiceIds.length})` : ''}
                       </span>
                     </>
                   )}
                 </button>
                 {scopeOpen && !designRunningHere && !designRunningElsewhere && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setScopeOpen(false)} aria-hidden />
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setScopeOpen(false)}
+                      aria-hidden
+                    />
                     <DesignScopePicker
                       baseCount={needsVoiceIds.length}
                       variantTotal={variantWork.totalTasks}
@@ -781,6 +797,12 @@ export function CastView({
               <span className="hidden sm:inline">{showLibrary ? 'Hide' : 'Show'} library</span>
               <span className="sm:hidden">Library</span>
             </button>
+            {/* fe-46 — always visible, never disabled; the voice-readiness
+                gate lives at generation start, not at this navigation step. */}
+            <PrimaryButton variant="dark" icon={false} onClick={onContinueToManuscript}>
+              Continue to manuscript
+              <IconChevR className="w-4 h-4" />
+            </PrimaryButton>
           </div>
         </div>
 
@@ -870,10 +892,11 @@ export function CastView({
               <IconAlertTri className="w-5 h-5" />
             </span>
             <p className="flex-1 text-sm text-ink/80 leading-relaxed">
-              <span className="font-bold text-ink">Design a Qwen voice for the narrator and every
-              speaking character.</span>{' '}
-              This book isn't in English, so it renders through Qwen — undesigned characters can't be
-              generated.
+              <span className="font-bold text-ink">
+                Design a Qwen voice for the narrator and every speaking character.
+              </span>{' '}
+              This book isn't in English, so it renders through Qwen — undesigned characters can't
+              be generated.
             </p>
           </div>
         )}
@@ -1311,12 +1334,12 @@ export function CastView({
                 <div className="flex items-center justify-between gap-3">
                   <span>
                     <StatusPill
-                    c={c}
-                    voice={voice}
-                    projectEngine={ttsEngine}
-                    renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
-                    usedEmotionsForChar={usedEmotions.get(c.id)}
-                  />
+                      c={c}
+                      voice={voice}
+                      projectEngine={ttsEngine}
+                      renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
+                      usedEmotionsForChar={usedEmotions.get(c.id)}
+                    />
                   </span>
                   <button
                     type="button"
@@ -1540,7 +1563,9 @@ export function CastView({
         }
         confirmLabel="Pin to all cast"
         cancelLabel="Cancel"
-        onConfirm={() => { void onConfirmPin(); }}
+        onConfirm={() => {
+          void onConfirmPin();
+        }}
         onClose={() => setPinDialogOpen(false)}
       />
 
@@ -1555,7 +1580,9 @@ export function CastView({
         }
         confirmLabel="Reset to 0.6B"
         cancelLabel="Cancel"
-        onConfirm={() => { void onConfirmReset(); }}
+        onConfirm={() => {
+          void onConfirmReset();
+        }}
         onClose={() => setResetDialogOpen(false)}
       />
     </div>

@@ -198,7 +198,7 @@ describe('ConfirmCastView — library override toggle', () => {
     fireEvent.click(checkbox);
     expect(checkbox.checked).toBe(true);
 
-    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and review manuscript/ });
+    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and design voices/ });
     fireEvent.click(confirmBtn);
 
     /* handleConfirm awaits the override(s) before calling onConfirm; wait
@@ -218,7 +218,7 @@ describe('ConfirmCastView — library override toggle', () => {
     const onConfirm = vi.fn();
     renderView({ onOverrideLibrary, onConfirm });
 
-    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and review manuscript/ });
+    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and design voices/ });
     fireEvent.click(confirmBtn);
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
 
@@ -236,7 +236,7 @@ describe('ConfirmCastView — library override toggle', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Sync profile with Book One/i }));
     fireEvent.click(screen.getByRole('button', { name: /Generate fresh/ }));
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm cast and review manuscript/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Confirm cast and design voices/ }));
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
 
     expect(onOverrideLibrary).not.toHaveBeenCalled();
@@ -490,7 +490,7 @@ describe('ConfirmCastView — bulk apply pill', () => {
   /* Bug D — confidence-gated auto-tick. The Sync checkbox auto-ticks only
      when match confidence is < 0.9; high-confidence matches still flip the
      Reuse decision but their sync stays a per-card opt-in. */
-  it('Bug D: Apply All ticks the low-conf row\'s sync but leaves the high-conf row\'s sync untouched', () => {
+  it("Bug D: Apply All ticks the low-conf row's sync but leaves the high-conf row's sync untouched", () => {
     const lowConf = makeMatched('low', 'LowConf', 'sb', 'low_sb', 0.85);
     const highConf = makeMatched('high', 'HighConf', 'sb', 'high_sb', 0.95);
     renderBulkView([lowConf, highConf]);
@@ -560,7 +560,8 @@ describe('ConfirmCastView — bulk apply pill', () => {
       (within(lowRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
     ).toBe(true);
     expect(
-      (within(highRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
+      (within(highRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement)
+        .checked,
     ).toBe(true);
   });
 
@@ -585,7 +586,8 @@ describe('ConfirmCastView — bulk apply pill', () => {
       (within(lowRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
     ).toBe(false);
     expect(
-      (within(highRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement).checked,
+      (within(highRow).getByRole('checkbox', { name: /Sync profile/i }) as HTMLInputElement)
+        .checked,
     ).toBe(false);
     /* Continuity footers still render for both (decisions stayed at Reuse). */
     expect(screen.getAllByText(/Continuity preserved/)).toHaveLength(2);
@@ -653,9 +655,9 @@ describe('ConfirmCastView — mobile + tablet layout (plan 81 wave 3)', () => {
 
   it('confirm-action row stacks on phone (flex-col-reverse) and goes side-by-side on tablet+', () => {
     renderView();
-    /* The "Confirm cast and review manuscript" PrimaryButton lives in
+    /* The "Confirm cast and design voices" PrimaryButton lives in
        the row alongside the Re-analyse link. */
-    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and review manuscript/ });
+    const confirmBtn = screen.getByRole('button', { name: /Confirm cast and design voices/ });
     const actionRow = confirmBtn.parentElement!;
     expect(actionRow.className).toMatch(/flex-col-reverse/);
     expect(actionRow.className).toMatch(/sm:flex-row/);

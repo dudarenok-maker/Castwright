@@ -15,7 +15,7 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { voicesSlice } from '../store/voices-slice';
-import { CastView, compareCastRows } from './cast';
+import { CastView } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
 import type { Character, Voice, TtsModelKey, Sentence, DriftEvent } from '../lib/types';
@@ -128,8 +128,10 @@ function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) 
         library={library}
         title="The Northern Star"
         onOpenProfile={opts.onOpenProfile ?? (() => {})}
-        onShowMatchDetail={() => {}}        driftEvents={[]}
+        onShowMatchDetail={() => {}}
+        driftEvents={[]}
         onShowDrift={() => {}}
+        onContinueToManuscript={() => {}}
       />
     </Provider>,
   );
@@ -294,8 +296,12 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
      voiceId, and gate cleanly when no voice has been designed. */
   function renderChars(characters: Character[]) {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     return {
       store,
       ...render(
@@ -306,8 +312,10 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
             library={library}
             title="The Northern Star"
             onOpenProfile={() => {}}
-            onShowMatchDetail={() => {}}            driftEvents={[]}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
             onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
           />
         </Provider>,
       ),
@@ -399,8 +407,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
      Preset rows keep their `voiceState` pills. */
   function renderWithLibrary(characters: Character[], lib: Voice[]) {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     return render(
       <Provider store={store}>
         <CastView
@@ -412,6 +424,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -439,9 +452,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
   });
 
   it('shows "Generated" once the matched library voice is flagged generated', () => {
-    const generatedLib = library.map((v) =>
-      v.id === 'v_marrow' ? { ...v, generated: true } : v,
-    );
+    const generatedLib = library.map((v) => (v.id === 'v_marrow' ? { ...v, generated: true } : v));
     renderWithLibrary([marrowQwen], generatedLib);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Generated')).toBeInTheDocument();
@@ -460,7 +471,11 @@ describe('CastView Qwen status pill (plan 117)', () => {
        render time. The cast slice's renderedFallbackByCharacter map carries
        `'kokoro'` for its id; the Status pill reads it via the 4th arg. */
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
       preloadedState: {
         cast: {
           ...castSlice.getInitialState(),
@@ -479,6 +494,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -493,7 +509,11 @@ describe('CastView Qwen status pill (plan 117)', () => {
        with no renderedFallbackEngine → the map no longer carries the id, so
        the design lifecycle pill ("Designed") shows again. */
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
       preloadedState: {
         cast: { ...castSlice.getInitialState(), renderedFallbackByCharacter: {} },
       },
@@ -509,6 +529,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -545,6 +566,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -615,8 +637,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
        (c.ttsEngine ?? project engine), so flipping the project to Qwen flips
        the pill. */
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
     /* marrow: voiceState 'generated', no ttsEngine, no qwen override; empty
        library ⇒ no matched voice. */
@@ -631,6 +657,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -743,8 +770,12 @@ describe('CastView desktop drag-drop is intact', () => {
 
   it('a voice drag-and-drop onto a character row still rewrites the cast', () => {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     let castRef: Character[] = [narrator, marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
@@ -757,8 +788,10 @@ describe('CastView desktop drag-drop is intact', () => {
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}          driftEvents={[]}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -813,8 +846,12 @@ describe('CastView wave-4 tap-to-assign', () => {
 
   it('tapping a character row in assignment mode applies the voice', () => {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     let castRef: Character[] = [narrator, marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
@@ -827,8 +864,10 @@ describe('CastView wave-4 tap-to-assign', () => {
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}          driftEvents={[]}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -848,8 +887,12 @@ describe('CastView wave-4 tap-to-assign', () => {
   it('Cancel button on the banner exits assignment mode without applying', () => {
     const setCharacters = vi.fn();
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     render(
       <Provider store={store}>
         <CastView
@@ -858,8 +901,10 @@ describe('CastView wave-4 tap-to-assign', () => {
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}          driftEvents={[]}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -891,8 +936,12 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
   it('per-row drift pill click dispatches onShowDrift(characterId)', () => {
     const onShowDrift = vi.fn();
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     const driftedNarrator: Character = {
       ...narrator,
       id: 'narrator',
@@ -905,7 +954,8 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}          driftEvents={[
+          onShowMatchDetail={() => {}}
+          driftEvents={[
             {
               id: 'd1',
               bookId: 'b1',
@@ -922,6 +972,7 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
             } as unknown as never,
           ]}
           onShowDrift={onShowDrift}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -940,7 +991,11 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
        count = 2, but regenerating the chapter clears both, so the banner —
        and each character's row pill — must report 1 chapter, not 2. */
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
     });
     const mkDrift = (characterId: string, factor: string): DriftEvent =>
       ({
@@ -972,6 +1027,7 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
             mkDrift('marrow', 'voice'),
           ]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -982,59 +1038,15 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
   });
 });
 
-describe('compareCastRows — cast table ordering', () => {
-  const mk = (over: Partial<Character> & { id: string }): Character =>
-    ({ name: over.id, role: 'r', color: 'narrator', lines: 0, ...over }) as Character;
-
-  it('sorts by line count descending', () => {
-    const out = [mk({ id: 'a', lines: 5 }), mk({ id: 'b', lines: 100 }), mk({ id: 'c', lines: 42 })]
-      .sort(compareCastRows)
-      .map((c) => c.id);
-    expect(out).toEqual(['b', 'c', 'a']);
-  });
-
-  it('pins unknown-male and unknown-female last regardless of line count', () => {
-    const out = [
-      mk({ id: 'unknown-male', name: 'Unknown male', lines: 9999 }),
-      mk({ id: 'wren', name: 'Wren', lines: 10 }),
-      mk({ id: 'unknown-female', name: 'Unknown female', lines: 8888 }),
-      mk({ id: 'narrator', name: 'Narrator', lines: 5 }),
-    ]
-      .sort(compareCastRows)
-      .map((c) => c.id);
-    expect(out).toEqual(['wren', 'narrator', 'unknown-male', 'unknown-female']);
-  });
-
-  it('orders the two buckets between themselves by line count', () => {
-    const out = [
-      mk({ id: 'unknown-female', name: 'Unknown female', lines: 3 }),
-      mk({ id: 'unknown-male', name: 'Unknown male', lines: 7 }),
-    ]
-      .sort(compareCastRows)
-      .map((c) => c.id);
-    expect(out).toEqual(['unknown-male', 'unknown-female']);
-  });
-
-  it('breaks line-count ties by name ascending', () => {
-    const out = [mk({ id: 'z', name: 'Zed', lines: 10 }), mk({ id: 'a', name: 'Amy', lines: 10 })]
-      .sort(compareCastRows)
-      .map((c) => c.name);
-    expect(out).toEqual(['Amy', 'Zed']);
-  });
-
-  it('treats a missing line count as zero', () => {
-    const out = [mk({ id: 'has', name: 'Has', lines: 1 }), mk({ id: 'none', name: 'None' })]
-      .sort(compareCastRows)
-      .map((c) => c.id);
-    expect(out).toEqual(['has', 'none']);
-  });
-});
-
 describe('CastView row ordering — wired into render', () => {
   function renderCast(chars: Character[]) {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     return render(
       <Provider store={store}>
         <CastView
@@ -1046,6 +1058,7 @@ describe('CastView row ordering — wired into render', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1106,8 +1119,12 @@ describe('CastView status filter', () => {
 
   function renderFilterView() {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     return render(
       <Provider store={store}>
         <CastView
@@ -1119,6 +1136,7 @@ describe('CastView status filter', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1206,7 +1224,9 @@ describe('CastView status filter', () => {
     scenes: 1,
     attributes: [],
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-calm', variants: { angry: { name: 'qwen-calm-angry' } } } },
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-calm', variants: { angry: { name: 'qwen-calm-angry' } } },
+    },
   };
   const variantSentences: Sentence[] = [
     { id: 1, chapterId: 1, text: 'No!', characterId: 'fury', emotion: 'angry' },
@@ -1215,7 +1235,11 @@ describe('CastView status filter', () => {
 
   function renderVariantView() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
     });
     return render(
       <Provider store={store}>
@@ -1229,6 +1253,7 @@ describe('CastView status filter', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1258,8 +1283,12 @@ describe('CastView status filter', () => {
 describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
   function renderWithLanguage(bookLanguage: string) {
     const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
-  });
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
     return render(
       <Provider store={store}>
         <CastView
@@ -1272,6 +1301,7 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1286,7 +1316,9 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
     /* QwenStatusNotice (mounted in the cast view) independently probes
        /api/qwen/detect for its install nudge, so we don't assert on fetch
        itself — the auto-load is distinguished by api.loadSidecar NOT firing. */
-    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ installed: true }) });
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ installed: true }) });
     vi.stubGlobal('fetch', fetchSpy);
     renderWithLanguage('en');
     expect(screen.queryByTestId('cast-qwen-language-banner')).toBeNull();
@@ -1353,11 +1385,10 @@ describe('CastView — Design full cast button', () => {
     } = {},
   ) {
     const actions: Array<{ type: string; payload?: unknown }> = [];
-    const recorder =
-      () => (next: (a: unknown) => unknown) => (action: unknown) => {
-        actions.push(action as { type: string; payload?: unknown });
-        return next(action);
-      };
+    const recorder = () => (next: (a: unknown) => unknown) => (action: unknown) => {
+      actions.push(action as { type: string; payload?: unknown });
+      return next(action);
+    };
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -1380,6 +1411,7 @@ describe('CastView — Design full cast button', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1425,7 +1457,9 @@ describe('CastView — Design full cast button', () => {
     /* Picker must be visible now */
     expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
     /* No designAllRequested dispatched yet */
-    expect(actions.find((x) => x.type === castDesignActions.designAllRequested.type)).toBeUndefined();
+    expect(
+      actions.find((x) => x.type === castDesignActions.designAllRequested.type),
+    ).toBeUndefined();
   });
 
   it('picking "bases" from the scope picker dispatches designAllRequested with scope:bases', () => {
@@ -1460,13 +1494,16 @@ describe('CastView — Design full cast button', () => {
       { id: 10, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
     ];
     const actions2: Array<{ type: string; payload?: unknown }> = [];
-    const recorder2 =
-      () => (next: (a: unknown) => unknown) => (action: unknown) => {
-        actions2.push(action as { type: string; payload?: unknown });
-        return next(action);
-      };
+    const recorder2 = () => (next: (a: unknown) => unknown) => (action: unknown) => {
+      actions2.push(action as { type: string; payload?: unknown });
+      return next(action);
+    };
     const store2 = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
       middleware: (g) => g().concat(recorder2),
     });
     store2.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
@@ -1483,6 +1520,7 @@ describe('CastView — Design full cast button', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1557,13 +1595,16 @@ describe('CastView — Design full cast button', () => {
       { id: 20, chapterId: 1, text: 'I am furious!', characterId: 'with-base', emotion: 'angry' },
     ];
     const actionsBoth: Array<{ type: string; payload?: unknown }> = [];
-    const recorderBoth =
-      () => (next: (a: unknown) => unknown) => (action: unknown) => {
-        actionsBoth.push(action as { type: string; payload?: unknown });
-        return next(action);
-      };
+    const recorderBoth = () => (next: (a: unknown) => unknown) => (action: unknown) => {
+      actionsBoth.push(action as { type: string; payload?: unknown });
+      return next(action);
+    };
     const storeBoth = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
       middleware: (g) => g().concat(recorderBoth),
     });
     storeBoth.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
@@ -1580,6 +1621,7 @@ describe('CastView — Design full cast button', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1613,13 +1655,25 @@ describe('CastView — Design full cast button', () => {
        act on it (no base) so it must be dropped from the dispatch and a loud
        warning shown — the user designs its base via "Both" first. */
     const withBase: Character = {
-      id: 'with-base', name: 'With Base', role: 'Hero', color: 'mentor',
-      lines: 10, scenes: 3, attributes: [], ttsEngine: 'qwen',
+      id: 'with-base',
+      name: 'With Base',
+      role: 'Hero',
+      color: 'mentor',
+      lines: 10,
+      scenes: 3,
+      attributes: [],
+      ttsEngine: 'qwen',
       overrideTtsVoices: { qwen: { name: 'qwen-with-base', variants: {} } },
     };
     const baseless: Character = {
-      id: 'baseless', name: 'Baseless', role: 'Extra', color: 'mentor',
-      lines: 4, scenes: 1, attributes: [], ttsEngine: 'qwen',
+      id: 'baseless',
+      name: 'Baseless',
+      role: 'Extra',
+      color: 'mentor',
+      lines: 4,
+      scenes: 1,
+      attributes: [],
+      ttsEngine: 'qwen',
       overrideTtsVoices: undefined,
     };
     const sents: Sentence[] = [
@@ -1628,13 +1682,16 @@ describe('CastView — Design full cast button', () => {
       { id: 32, chapterId: 1, text: 'Yay!', characterId: 'baseless', emotion: 'excited' },
     ];
     const actions: Array<{ type: string; payload?: unknown }> = [];
-    const recorder =
-      () => (next: (a: unknown) => unknown) => (action: unknown) => {
-        actions.push(action as { type: string; payload?: unknown });
-        return next(action);
-      };
+    const recorder = () => (next: (a: unknown) => unknown) => (action: unknown) => {
+      actions.push(action as { type: string; payload?: unknown });
+      return next(action);
+    };
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
       middleware: (g) => g().concat(recorder),
     });
     store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
@@ -1651,6 +1708,7 @@ describe('CastView — Design full cast button', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1664,7 +1722,13 @@ describe('CastView — Design full cast button', () => {
     /* Variants-only dispatch carries ONLY the ready (has-base) task. */
     fireEvent.click(screen.getByTestId('scope-variants'));
     const a = actions.find((x) => x.type === castDesignActions.designAllRequested.type) as
-      | { payload: { scope: string; characterIds: string[]; variantTasks: Array<{ characterId: string; emotions: string[] }> } }
+      | {
+          payload: {
+            scope: string;
+            characterIds: string[];
+            variantTasks: Array<{ characterId: string; emotions: string[] }>;
+          };
+        }
       | undefined;
     expect(a?.payload.scope).toBe('variants');
     expect(a?.payload.characterIds).toEqual([]);
@@ -1698,7 +1762,11 @@ describe('CastView — variant glyph strip in the Status column', () => {
 
   function renderGlyphTest() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
     });
     return render(
       <Provider store={store}>
@@ -1712,6 +1780,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1723,8 +1792,14 @@ describe('CastView — variant glyph strip in the Status column', () => {
        to the desktop grid row (same strategy used by other CastView tests). */
     const row = rowFor('Wren');
     /* angry is designed → state=designed; excited is in-use but not in variants → state=needed */
-    expect(within(row).getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
-    expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');
+    expect(within(row).getByTestId('variant-glyph-angry')).toHaveAttribute(
+      'data-state',
+      'designed',
+    );
+    expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute(
+      'data-state',
+      'needed',
+    );
     expect(within(row).queryByTestId('variants-badge')).not.toBeInTheDocument();
     expect(within(row).queryByTestId('missing-variants-hint')).not.toBeInTheDocument();
   });
@@ -1774,7 +1849,11 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
 
   function setupTierTest(chars: Character[] = [qwenA, qwenB, kokoroC]) {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
     });
     store.dispatch(uiSlice.actions.openBook({ id: 'bTier', status: 'complete' }));
     store.dispatch(castSlice.actions.setCharacters(chars));
@@ -1789,6 +1868,7 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
           onShowMatchDetail={() => {}}
           driftEvents={[]}
           onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
         />
       </Provider>,
     );
@@ -1825,7 +1905,9 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
         'qwen3-tts-1.7b',
       ),
     );
-    expect(store.getState().cast.characters.find((c) => c.id === 'kokoroC')?.ttsModelKey).toBeUndefined();
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'kokoroC')?.ttsModelKey,
+    ).toBeUndefined();
   });
 
   it('shows the 1.7B badge on pinned Qwen rows and hides it on non-pinned / kokoro rows', async () => {
@@ -1859,7 +1941,9 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
     expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-wren', null);
     expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('bTier', 'vid-fen', null);
     await waitFor(() =>
-      expect(store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey).toBeNull(),
+      expect(
+        store.getState().cast.characters.find((c) => c.id === 'qwenA')?.ttsModelKey,
+      ).toBeNull(),
     );
     /* badge gone after reset */
     expect(screen.queryByTestId('tier-badge-qwenA')).toBeNull();

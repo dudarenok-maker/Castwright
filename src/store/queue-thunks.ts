@@ -51,6 +51,9 @@ export interface EnqueueInput {
       tier, e.g. Qwen 1.7B). Absent → the dispatcher uses `ui.ttsModelKey`. */
   modelKey?: TtsModelKey;
   addedAt?: string;
+  /** fe-46 — set on every fresh entry from a "Proceed anyway" run so the
+      per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for it. */
+  fallbackConfirmed?: boolean;
 }
 
 interface QueueSnapshotResponse {

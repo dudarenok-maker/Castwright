@@ -86,11 +86,13 @@ const emptyLibrary: Voice[] = [];
 
 /* ── store helpers ───────────────────────────────────────────────────────── */
 
-function makeStore(opts: {
-  prosodyEnabled?: boolean;
-  bookId?: string;
-  storeCharacters?: Character[];
-} = {}) {
+function makeStore(
+  opts: {
+    prosodyEnabled?: boolean;
+    bookId?: string;
+    storeCharacters?: Character[];
+  } = {},
+) {
   const { prosodyEnabled, bookId = BOOK_ID, storeCharacters = [char17b, char06b] } = opts;
   const store = configureStore({
     reducer: {
@@ -137,6 +139,7 @@ function renderCast(
         onShowMatchDetail={() => {}}
         driftEvents={[]}
         onShowDrift={() => {}}
+        onContinueToManuscript={() => {}}
       />
     </Provider>,
   );
@@ -152,38 +155,28 @@ beforeEach(() => {
 describe('CastView prosody opt-out hint (Task 13b / fs-65)', () => {
   it('renders the hint when prosodyEnabled===false AND a 1.7B cast member exists', () => {
     renderCast({ characters: [char17b, char06b], prosodyEnabled: false });
-    expect(
-      screen.getByText(/expressive directions are off for this book/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/expressive directions are off for this book/i)).toBeInTheDocument();
   });
 
   it('is absent when prosodyEnabled is undefined (eager default)', () => {
     renderCast({ characters: [char17b, char06b] }); // no prosodyEnabled override
-    expect(
-      screen.queryByText(/expressive directions are off/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/expressive directions are off/i)).not.toBeInTheDocument();
   });
 
   it('is absent when prosodyEnabled is true', () => {
     renderCast({ characters: [char17b, char06b], prosodyEnabled: true });
-    expect(
-      screen.queryByText(/expressive directions are off/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/expressive directions are off/i)).not.toBeInTheDocument();
   });
 
   it('is absent when prosodyEnabled===false but NO 1.7B cast member exists', () => {
     // char06b has no ttsModelKey (undefined), charKokoro has no Qwen engine
     renderCast({ characters: [char06b, charKokoro], prosodyEnabled: false });
-    expect(
-      screen.queryByText(/expressive directions are off/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/expressive directions are off/i)).not.toBeInTheDocument();
   });
 
   it('is absent when only the non-Qwen (Kokoro) cast member is present', () => {
     renderCast({ characters: [charKokoro], prosodyEnabled: false });
-    expect(
-      screen.queryByText(/expressive directions are off/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/expressive directions are off/i)).not.toBeInTheDocument();
   });
 
   it('[Turn on] dispatches setProsodyEnabled(true) and issues PUT with true', async () => {
@@ -213,9 +206,7 @@ describe('CastView prosody opt-out hint (Task 13b / fs-65)', () => {
     fireEvent.click(turnOnBtn);
 
     await waitFor(() => {
-      expect(
-        screen.queryByText(/expressive directions are off/i),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/expressive directions are off/i)).not.toBeInTheDocument();
     });
   });
 
@@ -228,9 +219,7 @@ describe('CastView prosody opt-out hint (Task 13b / fs-65)', () => {
     fireEvent.click(dismissBtn);
 
     await waitFor(() => {
-      expect(
-        screen.queryByText(/expressive directions are off/i),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/expressive directions are off/i)).not.toBeInTheDocument();
     });
 
     // Dismissing should NOT flip the prosodyEnabled flag or issue a PUT

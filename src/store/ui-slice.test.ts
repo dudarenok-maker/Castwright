@@ -31,7 +31,8 @@ const baseState = (stage: Stage): UiState => ({
   queueModalOpen: false,
   rebaselineModalOpen: false,
   rebaselineBookId: null,
-  startGenPrompt: false,
+  startGenPrompt: null,
+  voiceReadinessGate: null,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
@@ -119,7 +120,7 @@ describe('uiSlice — stage transition guards', () => {
     expect(fromConfirm.stage).toMatchObject({
       kind: 'ready',
       bookId: 'ns',
-      view: 'manuscript',
+      view: 'cast',
       currentChapterId: 3,
     });
 
@@ -128,6 +129,40 @@ describe('uiSlice — stage transition guards', () => {
       uiActions.confirmCast(),
     );
     expect(fromAnalysing.stage).toEqual({ kind: 'analysing', bookId: 'ns', manuscriptId: 'm1' });
+  });
+});
+
+describe('uiSlice — fe-46 startGenPrompt + voiceReadinessGate', () => {
+  it('openStartGenPrompt with no payload opens with fallbackConfirmed undefined', () => {
+    const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.openStartGenPrompt());
+    expect(s.startGenPrompt).toEqual({ fallbackConfirmed: undefined });
+  });
+
+  it('openStartGenPrompt({fallbackConfirmed:true}) persists on state', () => {
+    const s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openStartGenPrompt({ fallbackConfirmed: true }),
+    );
+    expect(s.startGenPrompt).toEqual({ fallbackConfirmed: true });
+  });
+
+  it('closeStartGenPrompt clears it back to null', () => {
+    let s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openStartGenPrompt({ fallbackConfirmed: true }),
+    );
+    s = uiSlice.reducer(s, uiActions.closeStartGenPrompt());
+    expect(s.startGenPrompt).toBeNull();
+  });
+
+  it('openVoiceReadinessGate / closeVoiceReadinessGate', () => {
+    let s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openVoiceReadinessGate({ bookId: 'b1' }),
+    );
+    expect(s.voiceReadinessGate).toEqual({ bookId: 'b1' });
+    s = uiSlice.reducer(s, uiActions.closeVoiceReadinessGate());
+    expect(s.voiceReadinessGate).toBeNull();
   });
 });
 
@@ -334,7 +369,6 @@ describe('uiSlice — regenerate-modal scope override', () => {
     expect(s.regenInitialScope).toBeNull();
   });
 });
-
 
 describe('uiSlice — openAbout', () => {
   it('openAbout sets stage.kind to about', () => {

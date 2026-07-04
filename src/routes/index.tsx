@@ -67,28 +67,20 @@ const AccountView = lazy(() =>
 const RestructureView = lazy(() =>
   import('../views/restructure').then((m) => ({ default: m.RestructureView })),
 );
-const AdminView = lazy(() =>
-  import('../views/admin').then((m) => ({ default: m.AdminView })),
-);
+const AdminView = lazy(() => import('../views/admin').then((m) => ({ default: m.AdminView })));
 const ModelManagerView = lazy(() =>
   import('../views/model-manager').then((m) => ({ default: m.ModelManagerView })),
 );
 const SetupView = lazy(() => import('../views/setup').then((m) => ({ default: m.SetupView })));
-const AboutView = lazy(() =>
-  import('../views/about').then((m) => ({ default: m.AboutView })),
-);
+const AboutView = lazy(() => import('../views/about').then((m) => ({ default: m.AboutView })));
 const AdvancedView = lazy(() =>
   import('../views/advanced').then((m) => ({ default: m.AdvancedView })),
 );
 const ReleaseNotesView = lazy(() =>
   import('../views/release-notes').then((m) => ({ default: m.ReleaseNotesView })),
 );
-const HelpView = lazy(() =>
-  import('../views/help').then((m) => ({ default: m.HelpView })),
-);
-const StatsView = lazy(() =>
-  import('../views/stats').then((m) => ({ default: m.StatsView })),
-);
+const HelpView = lazy(() => import('../views/help').then((m) => ({ default: m.HelpView })));
+const StatsView = lazy(() => import('../views/stats').then((m) => ({ default: m.StatsView })));
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { chapterSlug, FRONT_MATTER_WORD_THRESHOLD } from '../lib/chapter-heuristics';
@@ -420,18 +412,34 @@ function SetupRoute() {
   useHydrateStage({ kind: 'setup' }, []);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof api.getSetupReadiness>> | null>(null);
+  const [readiness, setReadiness] = useState<Awaited<
+    ReturnType<typeof api.getSetupReadiness>
+  > | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    api.getSetupReadiness().then((r) => { if (!cancelled) setReadiness(r); }).catch(() => {});
-    return () => { cancelled = true; };
+    api
+      .getSetupReadiness()
+      .then((r) => {
+        if (!cancelled) setReadiness(r);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const refetch = () => {
     let cancelled = false;
-    api.getSetupReadiness().then((r) => { if (!cancelled) setReadiness(r); }).catch(() => {});
-    return () => { cancelled = true; };
+    api
+      .getSetupReadiness()
+      .then((r) => {
+        if (!cancelled) setReadiness(r);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   };
 
   const mode: 'guided' | 'checklist' = readiness?.completedAt ? 'checklist' : 'guided';
@@ -450,12 +458,31 @@ function SetupRoute() {
       const result = await api.loadSample('the-coalfall-commission');
       const refreshed = await api.getLibrary().catch(() => null);
       if (refreshed) dispatch(libraryActions.hydrate(refreshed));
-      const book = refreshed?.authors.flatMap((a) => a.series.flatMap((s) => s.books)).find((b) => b.bookId === result.bookId);
-      if (book) dispatch(uiActions.openBook({ id: book.bookId, status: book.status, manuscriptId: book.manuscriptId }));
-    } catch { /* non-fatal */ }
+      const book = refreshed?.authors
+        .flatMap((a) => a.series.flatMap((s) => s.books))
+        .find((b) => b.bookId === result.bookId);
+      if (book)
+        dispatch(
+          uiActions.openBook({
+            id: book.bookId,
+            status: book.status,
+            manuscriptId: book.manuscriptId,
+          }),
+        );
+    } catch {
+      /* non-fatal */
+    }
   };
 
-  return <SetupView readiness={readiness} mode={mode} onRefetch={refetch} onFinish={onFinish} onTryDemoBook={onTryDemoBook} />;
+  return (
+    <SetupView
+      readiness={readiness}
+      mode={mode}
+      onRefetch={refetch}
+      onFinish={onFinish}
+      onTryDemoBook={onTryDemoBook}
+    />
+  );
 }
 
 /* Wave 3 — /about brand page, reached from the Admin view. */
@@ -813,6 +840,7 @@ function ReadyViewSwitch({
                 : uiActions.setShowDriftReport(true),
             )
           }
+          onContinueToManuscript={() => dispatch(uiActions.changeView('manuscript'))}
         />
       );
     case 'library':

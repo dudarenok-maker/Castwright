@@ -226,6 +226,67 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
     await Promise.resolve();
     expect(enqueueCalls().length).toBeGreaterThanOrEqual(1);
   });
+
+  it('fe-46 — stamps fallbackConfirmed on every fresh entry when the proceed-anyway payload is set', async () => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.requestStartGeneration({ fallbackConfirmed: true }));
+    await Promise.resolve();
+    const calls = enqueueCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(calls[calls.length - 1][1].body);
+    expect(body.entries).toHaveLength(2);
+    expect(body.entries.every((e: { fallbackConfirmed?: boolean }) => e.fallbackConfirmed === true)).toBe(
+      true,
+    );
+  });
+
+  it('fe-46 — omits fallbackConfirmed when requestStartGeneration has no payload', async () => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    const calls = enqueueCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(calls[calls.length - 1][1].body);
+    expect(body.entries[0].fallbackConfirmed).toBeUndefined();
+  });
+
+  it('fe-46 — an already-queued chapter is left unstamped even on a proceed-anyway trigger', async () => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(
+      queueSlice.actions.setSnapshot({
+        entries: [
+          {
+            id: 'existing-b1-1',
+            bookId: 'b1',
+            chapterId: 1,
+            scope: 'this',
+            status: 'queued',
+            order: 0,
+            addedAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+        paused: false,
+      }),
+    );
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    store.dispatch(
+      chaptersSlice.actions.setChapters([ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]),
+    );
+    store.dispatch(uiSlice.actions.requestStartGeneration({ fallbackConfirmed: true }));
+    await Promise.resolve();
+    const lastBody = enqueueCalls()
+      .map((c) => JSON.parse(c[1].body))
+      .pop();
+    /* Only chapter 2 is fresh — chapter 1 is already queued and stays untouched. */
+    expect(lastBody.entries).toHaveLength(1);
+    expect(lastBody.entries[0].chapterId).toBe(2);
+    expect(lastBody.entries[0].fallbackConfirmed).toBe(true);
+  });
 });
 
 /* Explicit-start enqueue gate (plan 137 — "opening a book auto-starts generation"
@@ -258,12 +319,12 @@ describe('generationStreamMiddleware — explicit-start enqueue gate', () => {
     expect(enqueueCalls()).toHaveLength(0);
   });
 
-  it('does NOT enqueue on cast confirmation (stage ready/manuscript review)', async () => {
+  it('does NOT enqueue on cast confirmation (stage ready/cast landing)', async () => {
     const { store } = makeStore();
     seedAnalysed(store, 'b1', [ch(1, { state: 'queued' })]);
     store.dispatch(uiSlice.actions.confirmCast());
     await Promise.resolve();
-    expect(store.getState().ui.stage).toMatchObject({ kind: 'ready', view: 'manuscript' });
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'ready', view: 'cast' });
     expect(enqueueCalls()).toHaveLength(0);
   });
 

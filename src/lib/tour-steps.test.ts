@@ -6,7 +6,7 @@ describe('tour-steps registry', () => {
     expect(TOUR_STEPS).toHaveLength(13);
     const order = TOUR_STEPS.map((s) => s.screen);
     const firstSeen = [...new Set(order)];
-    expect(firstSeen).toEqual(['library', 'manuscript', 'cast', 'generate', 'listen']);
+    expect(firstSeen).toEqual(['library', 'cast', 'manuscript', 'generate', 'listen']);
   });
 
   it('every step screen is a valid TourScreen', () => {
