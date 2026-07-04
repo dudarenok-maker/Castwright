@@ -408,6 +408,50 @@ describe('fs-2 never-cross-language generation gate', () => {
     expect(ch.generationRemediation).toBeTruthy();
   }, 10_000);
 
+  it('#1263: pluralizes correctly and comma-joins names when 2+ (non-narrator) characters are undesigned', async () => {
+    /* Add a third speaking character (kade) alongside sofiya — both undesigned
+       (baked English, invalid reuse) — while the narrator keeps its valid
+       Russian voice and doesn't speak in this chapter, so it's absent from
+       fallbackSet and "(and the narrator)" still applies. Exercises the
+       `plural` branch ('them' + comma-joined names) that the single-character
+       cases above never reach. Restores cast.json + the shared cache after. */
+    const cacheModule = await import('../store/analysis-cache.js');
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, RU_TITLE, '.audiobook', 'cast.json');
+    const originalCast = await readFile(castPath, 'utf8');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', voiceId: 'v_narr', overrideTtsVoices: { qwen: { name: 'qwen-v_narr' } } },
+          { id: 'sofiya', name: 'Sofiya', voiceId: 'v_sofiya', overrideTtsVoices: { qwen: { name: 'qwen-v_sofiya' } } },
+          { id: 'kade', name: 'Kade', voiceId: 'v_kade', overrideTtsVoices: { qwen: { name: 'qwen-v_kade' } } },
+        ],
+      }),
+    );
+    await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
+      chapters: {
+        1: [
+          { id: 1, chapterId: 1, characterId: 'sofiya', text: 'Привет.' },
+          { id: 2, chapterId: 1, characterId: 'kade', text: 'Да.' },
+        ],
+      },
+    });
+    try {
+      writeManifest('qwen-v_sofiya', 'English');
+      writeManifest('qwen-v_kade', 'English');
+      const body = await runRuStream();
+      expect(body).toContain('chapter_failed');
+      /* computeQwenKokoroFallbackSet sorts by character id — kade < sofiya. */
+      expect(body).toMatch(/no designed qwen voice for kade, sofiya/i);
+      expect(body).toMatch(/design them \(and the narrator\)/i);
+    } finally {
+      writeFileSync(castPath, originalCast);
+      await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
+        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'sofiya', text: 'Привет.' }] },
+      });
+    }
+  }, 10_000);
+
   it('#1263: omits the redundant "(and the narrator)" clause when the narrator itself is undesigned', async () => {
     /* Give the narrator an actual speaking line this time (the shared fixture
        only has sofiya speaking, so the narrator never enters fallbackSet) —
