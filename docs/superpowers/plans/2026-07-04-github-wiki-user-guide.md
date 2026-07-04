@@ -17,8 +17,9 @@
 - File convention: `docs/wiki/images/<page-slug>/NN-caption.png`, numbered in on-page order (spec "Screenshot workflow").
 - Desktop-viewport screenshots by default; add phone/tablet only where the mobile layout genuinely differs (spec "Screenshot workflow").
 - Waves 1–4 are pure `docs/**`/root `*.md` changes and get the **docs-only CI fast-path and code-review exemption**. **Wave 0 ships `scripts/sync-wiki.mjs`, a `chore`/`build`-shaped change** — it does NOT qualify for the exemption and gets a real (`low`-effort) `code-review` pass per CLAUDE.md's model-routing table.
-- One integration branch, `docs/docs-github-wiki`, off `main`. Every task below branches off that integration branch (not off `main` directly) and merges back into it via its own small PR. Rebase onto the latest `docs/docs-github-wiki` before opening each PR.
-- `fe-46` (issue #1262) is landing in parallel and touches pages 7, 11, and 12 — each of those tasks includes an explicit fe-46-status check immediately before screenshot capture (spec "fe-46 interaction").
+- One integration branch, `docs/docs-github-wiki`, off `main`, **pushed to origin** so every task branch can target it as a PR base. Every task below branches off that integration branch (not off `main` directly) and merges back into it via its own small PR. Rebase onto the latest `docs/docs-github-wiki` before opening each PR.
+- **`fe-46` (issue #1262) is a DEFERRED DRAFT, not in-flight work** — plan `docs/features/240-cast-first-landing-and-voice-readiness-gate.md` is `status: draft`, implementation has not started, and it's explicitly deferred until post-v1.10.0 (already cut). This corrects the spec's "landing in parallel" premise. Tasks 4 and 10 (pages 7, 11, 12) do NOT block or wait on it — both capture the current (pre-fe-46) flow now and file a re-shoot follow-up issue, re-checking fe-46's status at capture time in case it has since shipped.
+- **Image-path convention propagation:** the Wave-0 spike (Task 1) records its outcome in a committed file, `docs/wiki/.image-path-convention` (contents: literal string `relative` or `raw-main`). Every content task (2–10) reads this file before writing any image reference and substitutes the path form it specifies — this is a file check, not reliance on a human re-reading this plan's prose, so it holds even when each task is executed by a fresh subagent with no memory of Task 1.
 - Repo currently has `hasWikiEnabled: false` — enabling it is an admin-scoped repo-setting change; flag it to the user before running, per spec.
 
 ---
@@ -30,6 +31,8 @@ docs/wiki/
   Home.md                              — wiki landing page
   _Sidebar.md                          — persistent nav (3 grouped headings)
   _Footer.md                           — persistent footer
+  .image-path-convention               — literal "relative" or "raw-main", written by the Wave-0 spike;
+                                          every content task reads this before writing image references
   Getting-Started.md
   Installing-Castwright.md
   Uploading-a-Book.md
@@ -100,17 +103,20 @@ Page-file → spec-page-number mapping (for cross-reference while reading the sp
 - Create (spike, deleted by end of this task): `docs/wiki/_Spike.md`, `docs/wiki/images/_spike/01-test.png`
 
 **Interfaces:**
-- Produces: `copyWikiTree(srcDir, destDir)` and `buildCommitMessage(sourceSha)` (exported pure functions from `scripts/sync-wiki.mjs`), the `npm run wiki:sync` command, `docs/wiki/_Sidebar.md`'s 3-heading skeleton (Core journey / Cast & Voices / Full breadth) that every later task appends a page link into, and the confirmed image-path convention (relative `images/<slug>/NN-caption.png` OR `raw.githubusercontent.com` fallback — whichever the spike proves) that every content task (2–11) uses verbatim.
+- Produces: `copyWikiTree(srcDir, destDir)` and `buildCommitMessage(sourceSha)` (exported pure functions from `scripts/sync-wiki.mjs`), the `npm run wiki:sync` command, `docs/wiki/_Sidebar.md` pre-populated with all 19 page links across its 3 headings (Core journey / Cast & Voices / Full breadth) — links to pages not yet shipped by a later wave resolve as GitHub's built-in "create this page" prompt, not a broken link, so this is intentional, not a defect to fix incrementally — and `docs/wiki/.image-path-convention`, the committed file every content task (2–10) reads before writing any image reference.
 - Consumes: nothing (first task).
 
-- [ ] **Step 1: Cut the integration branch and this task's branch**
+- [ ] **Step 1: Cut the integration branch, push it, and cut this task's branch**
 
 ```bash
 git switch main
 git pull
 git switch -c docs/docs-github-wiki
+git push -u origin docs/docs-github-wiki
 git switch -c docs/docs-github-wiki-wave0-infra
 ```
+
+Pushing `docs/docs-github-wiki` now is required — every later task's `gh pr create --base docs/docs-github-wiki` and `git pull` on that branch fail if it only exists locally.
 
 - [ ] **Step 2: Write the failing test for `copyWikiTree`**
 
@@ -337,7 +343,9 @@ Create `docs/wiki/_Footer.md`:
 [Castwright](https://castwright.ai) · [GitHub](https://github.com/dudarenok-maker/Castwright) · [Release Notes](https://github.com/dudarenok-maker/Castwright/blob/main/RELEASE_NOTES.md)
 ```
 
-- [ ] **Step 11: First real sync**
+- [ ] **Step 11: First real sync (deliberate exception to the spec's "sync after merge to main" rule)**
+
+The wiki repo doesn't exist yet and the dual-render spike needs a live page to test against — both require syncing before this Wave-0 PR merges. This is a one-time bootstrap exception, not the standing operating rule; every later wave syncs post-merge as the spec specifies.
 
 ```bash
 npm run wiki:sync
@@ -363,13 +371,14 @@ npm run wiki:sync
 
 Load the live spike page in a browser (via claude-in-chrome or manually) and check whether the image renders.
 
-- [ ] **Step 13: Record the spike result**
+- [ ] **Step 13: Record the spike result in the committed convention file**
 
-If the image rendered: relative `images/<slug>/NN-caption.png` paths stand as written in every later task — no action needed.
+Write `docs/wiki/.image-path-convention`:
 
-If it did NOT render: every content task (2–11) below must instead use absolute
-`https://raw.githubusercontent.com/dudarenok-maker/Castwright/main/docs/wiki/images/<slug>/NN-caption.png`
-URLs in place of the relative path. **Stop here and update this plan's Tasks 2–11 image-path instructions accordingly before proceeding** — this is a load-bearing convention for all 21 pages.
+- If the image rendered: file contains the single line `relative`. Every content task's `images/<slug>/NN-caption.png` snippets stand as written.
+- If it did NOT render: file contains the single line `raw-main`. Every content task must substitute `https://raw.githubusercontent.com/dudarenok-maker/Castwright/main/docs/wiki/images/<slug>/NN-caption.png` for every relative path in its snippets.
+
+**Known limitation of the `raw-main` fallback:** those URLs only resolve once the referenced images actually exist on `main` — which, under this plan's branching model, doesn't happen until Task 11 Step 4 merges `docs/docs-github-wiki` into `main`. If `.image-path-convention` says `raw-main`, every content task's "verify the image renders on the live wiki" step (Tasks 2–10) can only confirm the file exists in the source repo and the markdown references it correctly — NOT that it actually renders live — until Task 11 Step 5 does the first real live-wiki check, once everything is on `main`.
 
 - [ ] **Step 14: Delete the spike and re-sync**
 
@@ -382,21 +391,21 @@ npm run wiki:sync
 - [ ] **Step 15: Commit the nav scaffold, open the PR**
 
 ```bash
-git add docs/wiki/Home.md docs/wiki/_Sidebar.md docs/wiki/_Footer.md
-git commit -m "docs(docs): scaffold wiki Home/Sidebar/Footer"
+git add docs/wiki/Home.md docs/wiki/_Sidebar.md docs/wiki/_Footer.md docs/wiki/.image-path-convention
+git commit -m "docs(docs): scaffold wiki Home/Sidebar/Footer + record image-path convention"
 git push -u origin docs/docs-github-wiki-wave0-infra
 gh pr create --base docs/docs-github-wiki --title "chore(scripts): wiki sync script + scaffold (Wave 0)" --body "$(cat <<'EOF'
 ## Summary
 - Adds scripts/sync-wiki.mjs + test, mirroring docs/wiki/* to the GitHub wiki repo.
 - Enables the repo wiki setting and scaffolds Home/_Sidebar/_Footer.
-- Runs the dual-render spike; relative image paths confirmed working (or: falls back to raw.githubusercontent.com — see plan Step 13).
+- Runs the dual-render spike; records the result in docs/wiki/.image-path-convention for every later content task to read.
 
 Refs #1276
 
 ## Test plan
 - [x] node --test scripts/tests/sync-wiki.test.mjs passes
 - [x] npm run wiki:sync pushes and the live wiki shows Home/Sidebar/Footer
-- [x] Spike page confirmed image render behavior; spike deleted before merge
+- [x] Spike page confirmed image render behavior; spike deleted before merge; outcome recorded in .image-path-convention
 EOF
 )"
 ```
@@ -413,7 +422,7 @@ This PR is `chore`/`build`-shaped, NOT docs-only — run the mandatory `low`-eff
 - Modify: `docs/wiki/_Sidebar.md` (no change needed — both links already scaffolded in Task 1)
 
 **Interfaces:**
-- Consumes: image-path convention confirmed in Task 1 Step 13; `_Sidebar.md` skeleton from Task 1.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1) — read before writing any image reference below; `_Sidebar.md` skeleton from Task 1.
 - Produces: nothing further tasks depend on (Wave 1 pages are leaves in the nav graph aside from cross-links).
 
 - [ ] **Step 1: Branch**
@@ -513,7 +522,7 @@ Pure `docs/**` change — docs-only CI fast-path and code-review exemption apply
 - Create: `docs/wiki/Reviewing-Low-Confidence-Speaker-Tags.md`, `docs/wiki/images/reviewing-low-confidence-speaker-tags/*.png`
 
 **Interfaces:**
-- Consumes: image-path convention from Task 1; views `src/views/upload.tsx`, `src/views/manuscript.tsx`, `src/views/restructure.tsx`, `src/views/confirm-metadata.tsx`, `src/views/analysing.tsx`, `src/views/low-confidence-nav.tsx` (all confirmed to exist).
+- Consumes: `docs/wiki/.image-path-convention` (Task 1) — read before writing any image reference below. Views: `src/views/upload.tsx`, `src/views/manuscript.tsx`, `src/views/restructure.tsx`, `src/views/confirm-metadata.tsx`, `src/views/analysing.tsx`. **Correction:** there is no standalone `low-confidence-nav.tsx` view — the low-confidence review UI is embedded inside `src/views/manuscript.tsx` (confirmed via `low-confidence-nav.test.tsx`, which imports `ManuscriptView from './manuscript'`). Drive it as part of the manuscript view, not as a separate route.
 
 - [ ] **Step 1: Branch**
 
@@ -565,6 +574,8 @@ Drive `analysing.tsx` through an analyzer run and capture:
 1. `01-analysing-progress.png` — the in-progress analysis screen.
 2. `02-analyzer-choice.png` — wherever the app exposes the Ollama / Gemini / pipelined two-model choice (settings or a picker on this screen).
 
+If the analysing screen itself has no visible engine-picker UI (the choice may live only in `.env`/settings rather than on this screen), capture the settings location instead and say so in the page text rather than implying a picker that isn't there.
+
 - [ ] **Step 5: Write `docs/wiki/Analysis-and-the-Analyzer.md`**
 
 ```markdown
@@ -587,10 +598,12 @@ Next: [Reviewing Low-Confidence Speaker Tags](Reviewing-Low-Confidence-Speaker-T
 
 - [ ] **Step 6: Capture Reviewing Low-Confidence Speaker Tags screenshots**
 
-Drive `low-confidence-nav.tsx` (find a manuscript with at least one low-confidence tag, or the demo book if it has one) and capture:
+Drive the low-confidence review UI embedded in `src/views/manuscript.tsx` and capture:
 
 1. `01-low-confidence-nav.png` — the low-confidence review navigator.
 2. `02-resolve-tag.png` — resolving one flagged line.
+
+**If the Coalfall demo book has no low-confidence-tagged line to photograph:** do not fabricate one. Use whichever manuscript in the test/demo fixtures does produce one (check `server/src/__fixtures__/`), or if none does, capture the navigator in its "nothing to review" state, say so explicitly in the page text instead of implying a flagged-line screenshot, and file a follow-up issue to add a low-confidence fixture case.
 
 - [ ] **Step 7: Write `docs/wiki/Reviewing-Low-Confidence-Speaker-Tags.md`**
 
@@ -627,7 +640,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Uploading a Book 
 - Create: `docs/wiki/The-Quality-Gate.md`, `docs/wiki/images/the-quality-gate/*.png`
 
 **Interfaces:**
-- Consumes: `src/views/generation.tsx`; fe-46 (#1262) merge status.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); `src/views/generation.tsx`; fe-46 (#1262) merge status (deferred draft as of this plan — see Global Constraints).
 
 - [ ] **Step 1: Branch**
 
@@ -640,9 +653,10 @@ git switch -c docs/docs-github-wiki-wave1c-generation-quality
 
 ```bash
 gh pr list --search "1262 in:body" --state all
+gh issue view 1262 --json state,labels
 ```
 
-If fe-46 has merged: capture its pre-flight voice-readiness gate modal as part of the generation-start flow below. If it has NOT merged (the likely case — Wave 1 runs before Wave 3): capture the current generation-start flow as-is and add a note to this page (Step 4 below) plus a follow-up marker; do not block this task on fe-46.
+`fe-46` is a **deferred draft** as of this plan's writing — plan `docs/features/240-cast-first-landing-and-voice-readiness-gate.md` is `status: draft`, implementation hasn't started, and it's explicitly pushed to post-v1.10.0. Re-check at capture time in case that's changed. If it has since merged: capture its pre-flight voice-readiness gate modal as part of the generation-start flow below. If it's still not merged (the expected case): capture the current generation-start flow as-is, note the discrepancy on the page (Step 4 below), and file a re-shoot follow-up issue. Do not block this task waiting on it.
 
 - [ ] **Step 3: Capture Generating Audio screenshots**
 
@@ -681,6 +695,8 @@ Capture whatever the app surfaces for the acoustic check / transcript verificati
 1. `01-quality-gate-flag.png` — a flagged line/chapter.
 2. `02-quality-gate-rerecord.png` — the automatic re-recording in progress or its result.
 
+If the Coalfall demo book generates cleanly with nothing flagged, don't fabricate a failure — capture the gate's "all clear" state for `01`, skip `02`, note in the page that a flagged/re-recorded example wasn't available from the demo book, and file a follow-up issue to capture it from a run that does trigger the gate.
+
 - [ ] **Step 6: Write `docs/wiki/The-Quality-Gate.md`**
 
 ```markdown
@@ -716,7 +732,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Generating Audio 
 - Create: `docs/wiki/Exporting.md`, `docs/wiki/images/exporting/*.png`
 
 **Interfaces:**
-- Consumes: `src/views/listen.tsx` + `src/components/listen/listen-header.tsx`, `listen-player-region.tsx`, `listen-download-section.tsx`.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); `src/views/listen.tsx` + `src/components/listen/listen-header.tsx`, `listen-player-region.tsx`, `listen-download-section.tsx`.
 
 - [ ] **Step 1: Branch**
 
@@ -806,7 +822,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Listening & Revis
 - Create: `docs/wiki/The-Model-Control-Pill.md`, `docs/wiki/images/the-model-control-pill/*.png`
 
 **Interfaces:**
-- Consumes: `src/components/ModelControlPill.tsx`.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); `src/components/ModelControlPill.tsx`.
 
 - [ ] **Step 1: Branch**
 
@@ -886,7 +902,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Voice Engines + M
 - Create: `docs/wiki/Mobile-Tablet-and-Companion-App.md`, `docs/wiki/images/mobile-tablet-and-companion-app/*.png`
 
 **Interfaces:**
-- Consumes: the Books/library view; LAN HTTPS pairing flow; Android companion app.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); the Books/library view; LAN HTTPS pairing flow; Android companion app.
 
 - [ ] **Step 1: Branch**
 
@@ -899,7 +915,7 @@ git switch -c docs/docs-github-wiki-wave2b-library-mobile
 
 1. `01-library-covers.png` — the library grid with covers/tags.
 2. `02-series-grouping.png` — series grouping.
-3. `03-book-bundle.png` — a book bundle, if one exists in the demo data.
+3. `03-book-bundle.png` — a book bundle, if one exists in the demo data. If not, skip this shot, omit the bundle sub-section from the page rather than describing a screenshot that doesn't exist, and file a follow-up issue.
 
 - [ ] **Step 3: Write `docs/wiki/Library-Management.md`**
 
@@ -962,7 +978,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Library Managemen
 - Create: `docs/wiki/Account-and-Settings.md`, `docs/wiki/images/account-and-settings/*.png`
 
 **Interfaces:**
-- Consumes: `src/views/admin.tsx`, `src/views/model-manager.tsx`, `src/views/advanced.tsx`, `src/views/account.tsx`.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); `src/views/admin.tsx`, `src/views/model-manager.tsx`, `src/views/advanced.tsx`, `src/views/account.tsx`.
 
 - [ ] **Step 1: Branch**
 
@@ -1023,7 +1039,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Admin/Model Manag
 - Create: `docs/wiki/Troubleshooting.md`, `docs/wiki/images/troubleshooting/*.png`
 
 **Interfaces:**
-- Consumes: `INSTALL.md`'s Troubleshooting section; `src/views/help.tsx`.
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); `INSTALL.md`'s Troubleshooting section; `src/views/help.tsx`.
 
 - [ ] **Step 1: Branch**
 
@@ -1069,15 +1085,16 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Multi-language Su
 - Create: `docs/wiki/Designing-a-Voice.md`, `docs/wiki/images/designing-a-voice/*.png`
 
 **Interfaces:**
-- Consumes: `src/views/cast.tsx`, `src/views/voices.tsx`, `src/views/confirm-cast.tsx`; fe-46 (#1262) merge status (this task is sequenced LAST specifically to wait on it).
+- Consumes: `docs/wiki/.image-path-convention` (Task 1); `src/views/cast.tsx`, `src/views/voices.tsx`, `src/views/confirm-cast.tsx`; fe-46 (#1262) status.
 
-- [ ] **Step 1: Check fe-46 merge status — this is why this task runs last**
+- [ ] **Step 1: Check fe-46 status — sequenced last to give it the best chance of having landed, but does not block on it**
 
 ```bash
 gh pr list --search "1262 in:body" --state all
+gh issue view 1262 --json state,labels
 ```
 
-If fe-46 has NOT merged yet, wait for it before starting this task (per spec — do not capture pages 11–12 against the pre-fe-46 flow).
+`fe-46` is a **deferred draft** as of this plan's writing (not "in progress in parallel" as the spec assumed) — implementation hasn't started and it's explicitly pushed to post-v1.10.0. This task runs last specifically to give it the best chance of having shipped by then, but **does not block indefinitely waiting for it** — the guide's Cast & Voices pages are too central to leave unshipped over an external, un-dated dependency. If it has merged: capture the post-fe-46 confirmCast → Cast → Manuscript → Generate flow and the readiness-gate modal. If it's still not merged (the expected case): capture the current pre-fe-46 flow, note the discrepancy on both pages, and file a re-shoot follow-up issue — the same treatment Task 4 applies to page 7.
 
 - [ ] **Step 2: Branch**
 
@@ -1162,7 +1179,7 @@ gh pr create --base docs/docs-github-wiki --title "docs(docs): Cast Review + Voi
 - `INSTALL.md` — **unchanged**, per Global Constraints
 
 **Interfaces:**
-- Consumes: every page from Tasks 1–10 (links to them); the confirmed final wiki sidebar structure.
+- Consumes: every page from Tasks 1–10 (links to them); `docs/wiki/.image-path-convention` (determines whether Step 5's live-render check is load-bearing); the confirmed final wiki sidebar structure.
 
 - [ ] **Step 1: Branch**
 
@@ -1196,17 +1213,25 @@ Confirm `README.md` still renders sensibly top to bottom and every link resolves
 git add README.md
 git commit -m "docs(docs): shrink README to a pitch + wiki/INSTALL links (Wave 4)"
 git push -u origin docs/docs-github-wiki-wave4-readme-migration
-gh pr create --base docs/docs-github-wiki --title "docs(docs): shrink README to pitch + links (Wave 4)" --body "Closes #1276"
+gh pr create --base docs/docs-github-wiki --title "docs(docs): shrink README to pitch + links (Wave 4)" --body "Refs #1276"
 ```
+
+`Refs`, not `Closes` — this PR targets the integration branch, not `main`, and GitHub only auto-closes an issue on a merge into the repo's default branch. Only the Step 4 PR below can close #1276.
 
 - [ ] **Step 4: After all wave PRs are merged into `docs/docs-github-wiki`, open the final integration PR into `main`**
 
 ```bash
 git switch docs/docs-github-wiki && git pull
-gh pr create --base main --title "docs(docs): GitHub wiki user guide (all waves)" --body "Closes #1276, closes #1277"
+gh pr create --base main --title "docs(docs): GitHub wiki user guide (all waves)" --body "Closes #1276"
 ```
 
+This PR's diff includes Wave 0's `scripts/sync-wiki.mjs`/`package.json` change, so by the doc-only file-set test it is technically not a pure-docs PR — but that diff already went through its own mandatory `low`-effort `code-review` pass in Task 1's PR. Don't re-run a full review here; just diff this PR against Task 1's already-reviewed PR to confirm no new non-docs changes crept in during integration, and merge via "Create a merge commit" per the repo's PR convention.
+
 Run `npm run wiki:sync` one final time after this merges to `main`, to publish the final README-linked state.
+
+- [ ] **Step 5: First real live-wiki verification (critical if `.image-path-convention` says `raw-main`)**
+
+Everything is now on `main` for the first time, which is the first point `raw-main`-fallback image URLs can actually resolve. Load every one of the 21 live wiki pages in a browser and confirm every image renders and every internal link resolves. File a follow-up issue for any page that fails this check — under the `raw-main` fallback, this step is the only point in the whole plan that catches a broken image before users see it.
 
 ---
 
@@ -1215,3 +1240,15 @@ Run `npm run wiki:sync` one final time after this merges to `main`, to publish t
 - **Spec coverage:** Every spec section maps to a task — Architecture/authoring model → Task 1; Wave 0 spike → Task 1 Steps 12–14; all 21 pages → Tasks 2–10; fe-46 interaction (pages 7, 11, 12) → Tasks 4 and 10; INSTALL.md relationship → Tasks 2 and 11; delivery waves → Tasks 1–11 branch/PR structure; testing/verification → each task's manual-verify step + Task 1's real unit test.
 - **Correction from spec draft:** the spec's Testing/verification section says `scripts/sync-wiki.mjs` "follows the existing convention of testing `scripts/lib/` helpers" (implying Vitest); the actual convention for `.mjs` scripts under `scripts/tests/*.test.mjs` is **`node:test`**, auto-discovered by `npm run test:hooks` (see `scripts/run-hooks-tests.mjs`), not Vitest. Task 1 uses `node:test` — this is what the repo actually does, confirmed against `scripts/tests/build-companion-apk.test.mjs`.
 - **Type/interface consistency:** `copyWikiTree(srcDir, destDir)` and `buildCommitMessage(sourceSha)` are the only two exported functions from `scripts/sync-wiki.mjs`, used identically in both the test (Task 1 Step 2) and no other task references them directly.
+
+### Assumption-checker pass (Opus 4.8) — findings and fixes applied
+
+A mandatory `assumption-checker` pass (CLAUDE.md review gate) found five load-bearing problems, all fixed in this revision:
+
+1. **Image-path convention never reached subagent-executed tasks.** Fixed by writing the spike's outcome to a committed file, `docs/wiki/.image-path-convention`, that every content task (2–10) now explicitly reads before writing image references — a mechanical check instead of relying on shared plan prose surviving across fresh subagent dispatches.
+2. **fe-46 (#1262) is a deferred draft, not "in progress in parallel" as the spec assumed** — confirmed against `docs/features/240-...md` (`status: draft`) and the absence of `src/modals/voice-readiness-gate.tsx` in the tree. Task 10's original "wait for it before starting" would have blocked Wave 3 indefinitely; both Task 4 and Task 10 now capture the current pre-fe-46 flow and file a re-shoot follow-up instead of blocking.
+3. **The integration branch `docs/docs-github-wiki` was never pushed to origin**, which would have broken the very first `gh pr create --base docs/docs-github-wiki` and every task's `git pull`. Fixed in Task 1 Step 1.
+4. **`low-confidence-nav.tsx` doesn't exist as a standalone view** — the low-confidence review UI is embedded in `src/views/manuscript.tsx`. Fixed in Task 3.
+5. **Several screenshot targets assumed unconfirmed demo-book states** (a low-confidence tag, a QA-gate failure, a book bundle, an analyzer-choice picker on the analysing screen). Each now has an explicit non-fabrication fallback: capture the nearest real state, say so on the page, file a follow-up — never invent a mocked state.
+
+Also fixed: `Closes #1276`/`#1277` misuse on non-`main`-base PRs (only the true final `main`-base PR in Task 11 Step 4 can auto-close); the `_Sidebar.md` "appended incrementally" description corrected to match Step 10's actual up-front population (intentional — dead links resolve to GitHub's own "create this page" prompt); the `raw-main` fallback's inherent limitation (URLs can't resolve until Task 11 merges to `main`) is now called out, with a new Task 11 Step 5 doing the first real live-wiki render check once everything is finally on `main`; and the final integration→main PR's review responsibility is now explicit (reuse Wave 0's already-completed code-review via a diff-against-Task-1 sanity check, not a second full pass).
