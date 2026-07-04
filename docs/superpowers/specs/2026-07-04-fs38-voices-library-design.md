@@ -69,9 +69,11 @@ audiobook-workspace/voice-library/
     master.wav          ← cloned/imported only: retained reference clip (durable master),
                           normalised WAV/PCM produced by the ingest stage (§3)
     xtts-latents.pt     ← XTTS conditioning-latents cache (regenerable from master)
-    preview-qwen.mp3    ← audition cache per engine
-    preview-xtts.mp3
 ```
+
+**Previews have ONE home: the shared sample cache** (`server/audio/voices/`, via
+`voice-sample-cache`) — the wizard's audition and the card's play button read the same
+entry (§3 keying). No `preview-*.mp3` files live in the library dir.
 
 **The Qwen `.pt` cache does NOT live here.** The sidecar resolves `.pt`s exclusively from
 the global `voices/qwen/qwen-<uuid>.pt` store (`main.py _voice_paths`), so the library's
@@ -102,6 +104,15 @@ deliberately NOT named `LibraryVoice`, which already exists in `voice-match.ts` 
   symmetrically.
 - **Origin:** `promotedFrom?: { bookId, characterId }` — breadcrumb only, no live link.
 
+**Cast-side additive change (declared here because §5/§6/§7 all key on it):** the
+per-engine override slot `overrideTtsVoices[engine]` gains optional
+`{ libraryUuid, provenance }` alongside `name` (and the existing `variants`). One field
+name everywhere: **`provenance`** (the server-side `VoiceKind` enum remains a separate,
+derived display concept). Threading it through is a known four-site change — `VoiceLike`,
+`CastCharacter`, and the three openapi `overrideTtsVoices` blocks — plus the
+`normaliseVoiceOverrides` spread; the legacy single-field `overrideTtsVoice` migration
+keeps emitting `{ name }`-only (a legacy voice is never a library voice).
+
 Baked-in decisions:
 
 1. **Master clip is source of truth; `.pt` is a cache.** Base-model upgrade → `stale` →
@@ -128,8 +139,8 @@ Baked-in decisions:
    library key (`qwen-<libUuid>` / `xtts-clone-<libUuid>`) — and requires explicit
    confirm; affected characters fall back to "needs a voice" (fe-46 gate surfaces it).
    Erasure then removes EVERY derived artifact, not only the library dir: `master.wav` +
-   latents + previews (library dir), the global `voices/qwen/qwen-<libUuid>.pt`, and the
-   voice's sample-cache MP3s — asserted by a unit test, since "local-only, never leaves
+   latents (library dir), the global `voices/qwen/qwen-<libUuid>.pt`, and the voice's
+   sample-cache preview MP3s — asserted by a unit test, since "local-only, never leaves
    the machine" (§6) is hollow if deletion leaves embeddings behind. Because promotion
    copies rather than aliases, deleting a library voice can never touch an origin
    character's own `.pt`. Already-rendered book audio persists (see consent note above).
@@ -184,26 +195,38 @@ param`. This seam is what makes engine #3 cheap. In v1:
   cached latents, NOT to a per-sentence `speaker_wav` (recomputing latents every sentence
   would be unusably slow — Coqui has no batch path). **This changes the Coqui synth call
   itself:** today `CoquiEngine` uses the high-level `tts()` API; latents-driven synthesis
-  calls the lower-level `tts_model.inference(...)` and must re-carry the fp16 autocast +
-  DeepSpeed wiring the high-level path owns — a sidecar test pins that the latents path
-  stays on GPU/fp16. Real Wave-3 work, not a cache add-on.
+  calls the lower-level `tts_model.inference(...)` and must re-carry the call-site fp16
+  autocast (DeepSpeed wiring is model-level and persists, but is best-effort — the
+  sidecar test asserts GPU + fp16 only, never DeepSpeed). **Clone keys bypass speaker
+  validation:** `CoquiEngine` validates inbound voice names against its speaker manifest
+  and silently substitutes unknown ones (`voiceSubstitutedFrom`) — a second substitution
+  vector. The clone-resolution branch (`xtts-clone-*` / `qwen-*` prefixes) must run AHEAD
+  of manifest validation; a sidecar test pins that a clone key never yields
+  `voiceSubstitutedFrom`. Real Wave-3 work, not a cache add-on.
 
 **Library-scoped design flow = an extraction, not a wrap.** Every layer of today's design
 machinery hard-requires a book/character: `withDesignLock` keys on `bookDir`,
 `ensureCharacterVoiceUuid` requires a cast.json row, routes mount under
 `/:bookId/cast/:characterId`, and the design-pill slice + `designRunningElsewhere` guard
-compare `bookId`s. Wave 1 therefore extracts the engine-facing core behind a scope
-abstraction: a `library` lock scope (synthetic key) that participates in the SAME
-single-owner design mutex as book jobs — so a library design and a book bulk-design can
-never co-run and re-trigger the 1.7B VoiceDesign↔Base co-residency OOM (the plan-155
-class) — uuids minted library-side without touching any cast.json, and the design
-pill/snapshot shape gaining an optional book-less variant so a running library design is
-visible (and excluded) everywhere `designRunningElsewhere` looks today.
+compare `bookId`s. Wave 1 therefore extracts the engine-facing core with: a
+library-scoped lock (serializes library design jobs among THEMSELVES — note the server's
+`withDesignLock`/`isDesignBusy` are per-`bookDir` maps and provide NO cross-scope
+serialization; the spec does not pretend otherwise), uuids minted library-side without
+touching any cast.json, and the design pill/snapshot shape gaining an optional book-less
+variant. **Cross-scope co-run protection is attributed honestly:** it comes from (1) the
+frontend's single `castDesign.active` slot — a running library design occupies it with a
+book-less id, so `designRunningElsewhere` correctly disables every book's Design buttons,
+same as today's cross-book guard — and (2) the sidecar's VRAM arbitration
+(gpuSemaphore + VoiceDesign co-residency handling), which is what actually prevents the
+plan-155 OOM class for book-vs-book today. No new global server-side design mutex is
+introduced (deliberate: it would duplicate protection that already lives at the two real
+choke points).
 
-**Sample/preview caching:** the library sample route reuses `voice-sample-cache`, but the
-cache key folds in a `master.wav`/persona content hash — otherwise a re-record under the
-same uuid serves the OLD preview forever (the known uuid-rekey stale-badge gotcha, in
-reverse). Re-derive also purges the voice's `preview-*.mp3`s.
+**Sample/preview caching:** previews live ONLY in the shared `voice-sample-cache`
+(`server/audio/voices/`) — wizard audition and card play read the same entry. The cache
+key folds in a `master.wav`/persona content hash — otherwise a re-record under the same
+uuid serves the OLD preview forever (the known uuid-rekey stale-badge gotcha, in
+reverse). Re-derive purges the voice's cached sample MP3s.
 
 **Assignment & resolution (real Node-side work, not a slot-write).** Today
 `pickVoiceForEngine` derives the Qwen key from the CHARACTER's `voiceUuid`, ignoring the
@@ -283,25 +306,38 @@ persists; re-attest only if the person name changes.
 
 ## 6. Guardrails (invariants, enforced at choke points)
 
-- **A personal voice NEVER silently becomes someone else's voice.** Today, when Qwen is
-  unavailable, `applyQwenFallback` substitutes a generic Kokoro preset — and the #1284
-  loud-fallback gate does NOT catch an assigned clone (its predicate parks only voices
-  resolving to empty; a clone resolves to `qwen-<libUuid>`). For characters whose
-  assignment carries `provenance: 'cloned' | 'imported'`: the loud-fallback parked-set
-  predicate is EXTENDED to include them, so generation pauses for explicit confirmation
-  that names the substitution ("Mum's voice is unavailable — render these chapters in a
-  standard voice instead?"); there is no silent path. The same rule covers
-  **engine-switch-after-assign**: selecting a render engine for which the assigned library
-  voice has no artifact marks the character not-ready in the fe-46 pre-flight gate rather
-  than substituting at render time. Kokoro can never carry a clone (preset-only) — the
-  gate is the only bridge.
+- **A personal voice NEVER silently becomes someone else's voice.** There are THREE
+  render-time states for a character whose assignment carries
+  `provenance: 'cloned' | 'imported'`, each with its own (correct) choke point — the
+  #1284 loud-fallback helper alone covers none of them (it runs only when Qwen is
+  HEALTHY, and only parks voices resolving to empty; a clone resolves non-empty):
+  1. **Engine healthy + artifact present** → renders normally. No gate, no parking —
+     the common case must stay friction-free.
+  2. **Engine unavailable** (Qwen down — the "Mum's voice is unavailable" case) → the
+     `qwen_unavailable` warning branch in `generation.ts` (~:676), which today warns and
+     falls through to a generic Kokoro substitute, is UPGRADED to the park-and-confirm
+     flow when any speaker's assignment is personal-provenance: generation pauses for
+     explicit confirmation naming the substitution ("Mum's voice is unavailable — render
+     these chapters in a standard voice instead?"). No silent path.
+  3. **Engine healthy + artifact MISSING on disk** (orphaned/never-derived `.pt` — a real,
+     documented state) → the parked-set predicate gains an **artifact-existence check**
+     for library-key assignments (does `qwen-<libUuid>.pt` / `xtts-latents.pt` exist for
+     the effective engine) — provenance alone can't catch this because the resolver is
+     pure and disk-blind.
+  **Engine-switch-after-assign** is caught BEFORE render: the fe-46 pre-flight gate is
+  Qwen-only today (`resolveVoiceStatus` has no per-engine artifact concept), so this is
+  net-new selector work — the frontend receives per-engine readiness from the manifest
+  (`engines.*.status`) and `resolveVoiceStatus` gains an
+  "assigned-library-voice-has-no-artifact-for-effective-engine → Needs voice" path
+  covering non-Qwen engines (incl. Kokoro, which can never carry a clone). A third
+  substitution vector — the sidecar's own speaker-manifest validation — is closed in §3.
 - **Matcher exclusion — assignment-level, not manifest-level.** The matcher scans book
   casts (`scanLibraryCharacters()` / `projectLibraryVoice()` — the single seam shared by
   the confirm-time matcher and the analysis-time auto-linker), so an unassigned library
   voice is invisible to it by construction. The invariant to enforce is about ASSIGNED
   voices: once a cloned voice is cast in a book, that character enters the scans — so
-  assignments carry their provenance (`voiceKind` stamped at assign time), and the scan
-  seam filters out cloned-provenance candidates. A person's voice is NEVER offered back by
+  assignments carry their `provenance` (the §2 override-slot field, stamped at assign
+  time), and the scan seam filters out cloned-provenance candidates. A person's voice is NEVER offered back by
   cross-book matching; explicit assignment only. Characters using `imported`/`designed`
   library voices remain matchable exactly as any designed character is today. Direct
   matching of unassigned library manifests is OUT of v1 (the matcher scores on character
@@ -348,9 +384,11 @@ persists; re-attest only if the person name changes.
   cloned-provenance ASSIGNMENT is never offered back; imported/designed-hosting
   characters are); stale detection on `baseModel`/coqui-version change; deletion usage
   report + **erasure completeness** (no `.pt`/latents/sample-MP3 survives a delete);
-  **loud-fallback parked-set includes personal-provenance assignments** (the §6
-  never-silent-substitution invariant, pinned as a regression test against
-  `qwen-fallback-set`).
+  **the §6 three-state never-silent-substitution invariant** pinned as regression tests:
+  the upgraded `qwen_unavailable` branch parks personal-provenance speakers (state 2),
+  the parked-set artifact-existence check catches a missing `.pt` (state 3), and a
+  healthy artifact-present clone does NOT park (state 1); plus the sidecar
+  no-`voiceSubstitutedFrom`-for-clone-keys test (§3).
 - *Unit (frontend):* `voice-library` slice; provenance-driven card rendering; wizard step
   gating (record unreachable before consent).
 - *Sidecar (pytest):* `/qwen/clone-voice` produces a `.pt` whose `generate_voice_clone`
@@ -374,17 +412,20 @@ persists; re-attest only if the person name changes.
 
 1. **Store + page skeleton** — manifest schema, CRUD routes, RTK slice, three-section
    restructure, Designed authoring. Includes the **design-flow extraction** (§3: `library`
-   lock scope in the shared single-owner mutex, book-less uuid minting, book-less design
-   pill/snapshot variant) — the biggest single item in this wave, NOT a wrap of existing
-   paths. No clone yet; immediately useful — this wave alone delivers fs-12.
+   library-scoped lock, book-less uuid minting, book-less design pill/snapshot variant,
+   honest cross-scope co-run attribution) — the biggest single item in this wave, NOT a
+   wrap of existing paths — plus the config-registry setting + route-gating middleware
+   (§6 reversibility). No clone yet; immediately useful — this wave alone delivers fs-12.
 2. **Catalogue rebuild** — engine filter + facets (small; may ride wave 1's train).
 3. **Clone pipeline** — the ffmpeg **audio ingest stage** (§3, first — everything else
    consumes its output), sidecar `/qwen/clone-voice` (extracted from `design_voice`),
    XTTS latents-cache derive + synthesize-from-latents, upload path + quality checks +
    Whisper `ref_text`, consent + imported attestation, two-phase wizard (upload-first),
-   ECAPA fidelity, and the **loud-fallback predicate extension + engine-switch readiness
-   rule** (§6 — must land before the first cloned voice can render). The largest wave —
-   sized as an extraction/re-plumb, not a switch-flip.
+   ECAPA fidelity, and the **three-state substitution protection** (§6: upgraded
+   `qwen_unavailable` park-and-confirm, artifact-existence predicate, per-engine
+   readiness selectors, sidecar clone-key validation bypass — must ALL land before the
+   first cloned voice can render). The largest wave — sized as an extraction/re-plumb,
+   not a switch-flip.
 4. **In-app recording** — MediaRecorder capture (webm/opus → ingest stage) + scripted
    reading cards + re-record-with-compare.
 5. **Polish** — matcher-exclusion hardening tests, `VoiceKind` `imported` label audit,
