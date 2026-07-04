@@ -5457,18 +5457,25 @@ async function realGetWorkspaceInfo(): Promise<WorkspaceInfo> {
   return res.json();
 }
 
-/* bug #1298 — e2e seam: `?e2eWorkspaceRoot=<path>` forces a realistic (long)
-   workspace path so the phone-viewport overflow regression has something to
-   actually overflow on — the default `(mock)` placeholder is too short to
-   ever trigger a max-width bug. Same shape as `readE2eUpdateOverride` (mock
-   mode is in-process, so page.route can't intercept). Pure + exported so
-   it's unit-tested directly. */
-export function readE2eWorkspaceRootOverride(search: string): string | null {
+/* Shared by every `?e2eXxx=` mock-override seam below (mock mode is
+   in-process, so page.route can't intercept) — a single URLSearchParams
+   read wrapped in try/catch, falling back to null on a malformed search
+   string rather than throwing during a mount. */
+function readE2eSearchParam(search: string, param: string): string | null {
   try {
-    return new URLSearchParams(search).get('e2eWorkspaceRoot');
+    return new URLSearchParams(search).get(param);
   } catch {
     return null;
   }
+}
+
+/* bug #1298 — e2e seam: `?e2eWorkspaceRoot=<path>` forces a realistic (long)
+   workspace path so the phone-viewport overflow regression has something to
+   actually overflow on — the default `(mock)` placeholder is too short to
+   ever trigger a max-width bug. Pure + exported so it's unit-tested
+   directly. */
+export function readE2eWorkspaceRootOverride(search: string): string | null {
+  return readE2eSearchParam(search, 'e2eWorkspaceRoot');
 }
 
 async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
