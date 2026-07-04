@@ -7,6 +7,7 @@ status: draft
 > Date: 2026-07-05
 > Key files: `server/src/gpu/engine-device-state.ts` (new), `server/src/gpu/engine-device.ts`,
 > `server/src/gpu/vram-state.ts`, `server/src/tts/engine-vram-cost.ts`, `server/src/tts/sidecar.ts`,
+> `server/src/routes/qwen-voice.ts` (VoiceDesign's own semaphore acquire, line 328/467),
 > `server/src/routes/sidecar-health.ts`, `server/tts-sidecar/main.py` (`CoquiEngine._resolve_runtime_options`)
 > Related: plan [108](../../features/108-qwen-coexistence.md) (Qwen/Coqui coexistence, the VRAM-weighted
 > semaphore), plan [204](../../features/204-side14-device-ground-truth.md) (side-14, the per-engine
@@ -87,30 +88,16 @@ health-check timeout mid-render must not change what a concurrent synth call get
 
 ### Wiring: `sidecar-health.ts`
 
-`probeSidecarHealth()` already computes `normaliseDevices(body.devices)` once (line 297) for the
-API response. Reuse that same value in a new call to `setLastKnownEngineDevices(...)` right next
-to the existing `setLastKnownVram(...)` call, so both caches update from the same reachable poll
-in the same place.
+`probeSidecarHealth()` currently computes `normaliseDevices(body.devices)` inline, once, inside the
+returned response object (line 297) — a different spot from the existing `setLastKnownVram(...)`
+call (line 263). Hoist `normaliseDevices(body.devices)` into a local `const` above line 263, call
+`setLastKnownEngineDevices(...)` with it there (next to `setLastKnownVram`), and reuse the same
+local in the return object at line 297 instead of recomputing it — one normalization, two
+consumers, both updated from the same reachable poll.
 
-### Fix 1 — `costForEngine` (concurrency)
+### Fix 1 (was Fix 2) — `engineDeviceIsGpu` ground-truth-first
 
-For `kokoro`/`qwen`/`coqui`, consult `getLastKnownEngineDevice(engine)` before returning the
-configured weight:
-
-- `'cpu'` or `'mps'` → **0**. No discrete VRAM pool to protect; charging a token here only forces
-  needless serialization against other engines/the analyzer.
-- `'cuda'` / `'rocm'` / `'directml'` → the configured weight, unchanged.
-- `'unknown'` (never polled, sidecar unreachable at boot, or an old sidecar without the side-14
-  field) → the configured weight, unchanged. Matches the analyzer's existing "unknown stays
-  charged" convention — conservative by default, never silently disables protection nobody asked
-  to turn off.
-
-This is a pure addition inside the existing `switch` in `costForEngine` — no signature change, no
-caller changes (`sidecar.ts` keeps calling `costForEngine(this.engine)` exactly as today).
-
-### Fix 2 — `engineDeviceIsGpu` (pre-load eviction guard)
-
-Ground truth first, config knob as fallback:
+Presented first because Fix 2 below depends on it. Ground truth first, config knob as fallback:
 
 ```ts
 export function engineDeviceIsGpu(engine: string): boolean {
@@ -124,14 +111,95 @@ export function engineDeviceIsGpu(engine: string): boolean {
 }
 ```
 
-Because every call site (`ensure-sidecar-loaded.ts:155`, `persona-gpu-plan.ts:61`,
-`qwen-voice.ts:469`) already threads `engineDeviceIsGpu(engine)` into `withGpuLoad`/
-`shouldEvictBeforeSidecarLoad` as the `engineOnGpu` param, this one change is sufficient — no
-edits needed in `residency.ts` or `gpu-load.ts` themselves.
+This directly fixes the pre-load **eviction guard**: every existing call site
+(`ensure-sidecar-loaded.ts:155`, `persona-gpu-plan.ts:61`, `qwen-voice.ts:469`) already threads
+`engineDeviceIsGpu(engine)` into `withGpuLoad`/`shouldEvictBeforeSidecarLoad` as the `engineOnGpu`
+param, so this one change is sufficient there — no edits needed in `residency.ts` or `gpu-load.ts`
+themselves.
 
 An engine not in `ENGINE_DEVICE_KEY` (e.g. `'gemini'`, a cloud engine) also isn't in
 `SidecarDeviceMap`, so `getLastKnownEngineDevice` returns `'unknown'` for it and behavior falls
 straight through to today's `!key → true` conservative default — unchanged.
+
+### Fix 2 (was Fix 1, corrected) — skip the semaphore acquire, not a `0` cost
+
+**This revises the original design after an adversarial review caught it as an inert no-op.**
+`GpuSemaphore.acquire()` runs every cost through `clampCost` (`semaphore.ts:71-76`), which floors
+anything `< 1` back up to `1`:
+
+```ts
+private clampCost(cost: number): number {
+  const c = Math.floor(cost);
+  if (!Number.isFinite(c) || c < 1) return 1;
+  ...
+}
+```
+
+So a `costForEngine` that returns `0` for `kokoro`/`qwen`/`coqui` on cpu/mps would still consume a
+full token once passed through `acquire()` — **the original Fix 1 changed nothing at runtime.**
+The codebase's real "don't cross-charge" convention is a **call-site skip**, not a zeroed cost:
+`ollama.ts:733` (`const release = onCpu ? null : await gpuSemaphore.acquire(...)`) and
+`transcribe-client.ts:77` (`asrRunsOnGpu() ? await ...acquire(...) : null`) bypass `acquire()`
+entirely rather than passing it a zero. `costForEngine` itself is **unchanged** by this design —
+it keeps returning the static configured weight for kokoro/qwen/coqui exactly as today.
+
+The fix gates **three** acquire call sites — every runtime consumer of
+`costForEngine('kokoro'|'qwen'|'coqui')` — behind `engineDeviceIsGpu(engine)` (Fix 1 above),
+mirroring the existing analyzer/ASR/spk pattern:
+
+- `server/src/tts/sidecar.ts` `synthesize()` (line 118) and `synthesizeBatch()` (line 194):
+
+  ```ts
+  const onGpu = engineDeviceIsGpu(this.engine);
+  const releaseGpu = onGpu ? await this.gpuSem.acquire(costForEngine(this.engine)) : null;
+  try {
+    /* ... unchanged ... */
+  } finally {
+    releaseGpu?.();
+  }
+  ```
+
+- `server/src/routes/qwen-voice.ts` (Qwen VoiceDesign, line 328/467) — an initial pass of this
+  design missed this third site; an adversarial review caught it. This function already computes
+  `engineDeviceIsGpu('qwen')` two lines below (line 469, passed to `withGpuLoad` for the eviction
+  guard) but never reused it for its own `gpuSemaphore.acquire(costForEngine('qwen'))` at line 328.
+  The fix hoists that computation once and reuses it for both:
+
+  ```ts
+  const onGpu = engineDeviceIsGpu('qwen'); // computed once, reused below
+  return withGpuLoad(async () => {
+    const releaseGpu = onGpu ? await gpuSemaphore.acquire(costForEngine('qwen')) : null;
+    // ...
+    try {
+      // ...
+    } finally {
+      releaseGpu?.();
+    }
+  }, onGpu); // was: engineDeviceIsGpu('qwen') recomputed inline
+  ```
+
+  The VoiceDesign model itself has no separate entry in the per-engine `devices` map (only Base's
+  device is reported under the `qwen` key) — but Base and VoiceDesign always run on the same
+  process-wide resolved torch device (there is one `QWEN_DEVICE` resolution per sidecar process),
+  so proxying the design call's device through `engineDeviceIsGpu('qwen')` is accurate, not an
+  approximation of a genuinely different value.
+
+`engineOnGpu === false` at any of these three sites means that call never enters the semaphore's
+FIFO at all — it can neither be blocked by, nor block, another engine's acquire.
+
+**What actually backstops CPU/MPS memory pressure once this token is gone.** This is not "no risk"
+— MPS is unified memory, a real finite shared pool, not a discrete VRAM pool with nothing to
+protect. Removing the semaphore token here does not add a new gap; it matches the tradeoff the
+codebase **already accepts** for the analyzer's CPU path and ASR/spk's CPU-default paths: the
+sidecar's own committed-host-RAM watchdog (`main.py`'s soft/hard recycle ceilings, cross-platform
+via `psutil`, already running today) is the actual backstop for CPU/unified-memory pressure, not
+the Node-side VRAM semaphore. This design shifts kokoro/qwen/coqui onto the same, already-relied-on
+backstop that analyzer/asr/spk use today — it does not invent a new one, and it does not add
+*proactive* per-op throttling for unified memory (that would require a system-RAM-shaped budget
+model, explicitly out of scope below). The per-engine synth semaphore
+(`engineSynthSem`, `sidecar.ts:37-46`, cap 1) still serializes same-engine calls regardless of
+device; only *cross-engine* concurrency (e.g. Qwen + Coqui at once) loses its token-based ceiling
+on cpu/mps.
 
 ### Fix 3 — Coqui `auto` → MPS (Python sidecar)
 
@@ -141,7 +209,17 @@ straight through to today's `!key → true` conservative default — unchanged.
 `cuda:0 → mps → cpu`, already guards `torch.backends.mps` with `getattr` so it's a no-op on a
 torch build without MPS support). Downstream code in the same method already treats any non-`cuda`
 family correctly (`_parse_device(device)[0] == "cuda"` gates fp16/deepspeed and `_use_half`), so no
-other change is needed — `tts.to("mps")` is a valid call today, it just never gets reached.
+other Python change is needed to make `tts.to("mps")` reachable.
+
+**Caveat this design does NOT resolve statically:** confirming the device string resolves to
+`"mps"` and confirming XTTS v2 *inference* actually produces correct audio on the MPS backend are
+different claims. XTTS has a documented history of unimplemented MPS ops in some `torch`/`TTS`
+version combinations. This fix is therefore gated on a **required manual acceptance step on real
+Apple Silicon hardware** (see Testing) before it ships — mirroring how this codebase already gates
+other engine-device changes (e.g. plan 108's Qwen3 wave shipped only after "ran the real model
+end-to-end" on real hardware). `COQUI_DEVICE=cpu` remains available as an explicit override, so if
+MPS inference proves broken in practice, an operator (or this fix's own rollout) can pin back to
+CPU without reverting the code change.
 
 ## Data flow
 
@@ -149,15 +227,31 @@ other change is needed — `tts.to("mps")` is a valid call today, it just never 
    `main.py`, unchanged by this design).
 2. `probeSidecarHealth()` normalizes it (existing `normaliseDevices`) and now also caches it via
    `setLastKnownEngineDevices`.
-3. Any TTS synth or design call → `costForEngine(engine)` / `engineDeviceIsGpu(engine)` reads the
-   cache synchronously — no new network calls, no added latency on the hot synth path.
+3. Every runtime consumer of `costForEngine('kokoro'|'qwen'|'coqui')` — the two `sidecar.ts` synth
+   sites and `qwen-voice.ts`'s VoiceDesign acquire — calls `engineDeviceIsGpu(engine)` first to
+   decide whether to enter the semaphore at all; `costForEngine(engine)` is only consulted (and
+   only ever returns its unchanged static weight) when it does. No new network calls, no added
+   latency on the hot synth path.
 4. The semaphore admits/evicts based on the actual per-platform reality instead of a fixed,
    NVIDIA-8GB-shaped assumption.
 
+**Cache-population timing — corrected.** The cache is *not* guaranteed warm before every
+generation call. In normal interactive use, the Generate screen's existing 30s health poll (the
+same `probeSidecarHealth()` function, via `sidecarHealthRouter`) has almost always populated the
+cache well before the user clicks Generate — no change needed there. But the generation hot path's
+*own* per-chapter check, `getSidecarRecyclePending()` (`generation.ts:179-192`), is a bare `fetch`
+that reads only `recycle_pending` and never calls `probeSidecarHealth()` — it does not feed this
+cache. The only call on the generation path that does is the **post-chapter, fire-and-forget**
+telemetry probe (`generation.ts` ~line 1677, `void (async () => { ... probeSidecarHealth() ...
+})()`). So a fully headless/API-driven render, with no frontend ever polling `/api/sidecar/health`,
+sees an `'unknown'` cache for chapter 1 — which fails safe to today's exact behavior (charged in
+full, evicted conservatively), not a correctness bug, but a real latency characteristic worth
+documenting rather than asserting away.
+
 ## Error handling / edge cases
 
-- **Before the first health poll** (e.g. a synth call races ahead of the 30s poll cadence at cold
-  start): cache is `'unknown'` for every engine → today's behavior, unchanged, no regression.
+- **Before the first health poll** (e.g. a headless render's first chapter, per the timing note
+  above): cache is `'unknown'` for every engine → today's behavior, unchanged, no regression.
 - **Old sidecar** (pre-side-14, omits `devices`): `normaliseDevices(undefined)` → `null` →
   `setLastKnownEngineDevices(null)` resets to `'unknown'` for all three engines → byte-identical to
   today.
@@ -172,12 +266,22 @@ other change is needed — `tts.to("mps")` is a valid call today, it just never 
 - New `server/src/gpu/engine-device-state.test.ts` (mirrors `analyzer-device-state.test.ts`):
   defaults to `'unknown'` for all three engines; `setLastKnownEngineDevices` sets/reads per engine;
   `null` resets to `'unknown'`; `undefined` (unreachable poll) is a no-op that preserves prior state.
-- Extend `server/src/tts/engine-vram-cost.test.ts`: kokoro/qwen/coqui charge `0` when the cached
-  device is `cpu` or `mps`; charge the configured weight when `cuda`/`rocm`/`directml`; charge the
-  configured weight when `unknown`.
 - Extend `server/src/gpu/engine-device.test.ts`: ground truth `mps`/`cpu` → `false` regardless of
   the configured knob; ground truth `cuda`/`rocm`/`directml` → `true` regardless of the knob;
   `unknown` → falls back to today's existing knob-based test cases unchanged.
+- **`sidecar.test.ts` (new/extended) — the test that actually catches the original defect.**
+  Mock `engineDeviceIsGpu` to return `false` for an engine and assert `this.gpuSem.acquire` is
+  **never called** for that engine's `synthesize`/`synthesizeBatch` (mirrors the existing pattern
+  in `embed-client.test.ts` for `spk`). A test that only checks a return value from
+  `costForEngine` would NOT catch a regression here — the value must be observed at the semaphore
+  call site, not the cost function.
+- Extend `server/src/routes/qwen-voice.test.ts`: with `engineDeviceIsGpu('qwen')` mocked `false`,
+  `gpuSemaphore.acquire` is never called for the design path either, and `withGpuLoad` still
+  receives the same (now hoisted, single) boolean it does today — this is the third call site an
+  earlier pass of this design missed.
+- New/extended semaphore-level test: acquire against a **real** `GpuSemaphore` instance for an
+  off-GPU engine and assert `usedTokens`/`inFlight` are unaffected by that acquire — verifies the
+  actual token accounting, not just an intermediate return value.
 - Extend `server/src/routes/sidecar-health.test.ts`: a reachable poll with a `devices` body
   populates the new cache (assert via the exported getter or a mocked setter); an unreachable poll
   leaves it untouched.
@@ -185,21 +289,35 @@ other change is needed — `tts.to("mps")` is a valid call today, it just never 
   `torch.cuda.is_available() == False` + a stubbed `torch.backends.mps.is_available() == True` →
   resolves to `"mps"`, mirroring whatever `test_qwen_device.py` already asserts for Qwen's
   equivalent case.
+- **Required manual acceptance (Fix 3, before shipping):** on real Apple Silicon hardware, run a
+  Coqui XTTS v2 synth with `COQUI_DEVICE` unset (`auto`) and confirm it resolves to `mps` in the
+  sidecar log AND produces correct, non-garbled audio — not just that `.to("mps")` doesn't throw.
+  If inference is broken or degraded, document the failure and ship Fix 3 gated behind an explicit
+  opt-in (or hold it) rather than flipping the default.
 
 ## Reversibility
 
 Every change is additive and defaults to today's exact behavior whenever the new cache is
 `'unknown'` (no health poll yet, or an old sidecar). Nothing here changes `ENGINE_VRAM_COST` values,
-`DEFAULT_GPU_VRAM_BUDGET`, or any existing config knob — a box that never triggers the `cpu`/`mps`
-branches (i.e. every existing NVIDIA install once at least one health poll has landed) sees
-byte-identical costing and eviction decisions to before this change.
+`DEFAULT_GPU_VRAM_BUDGET`, `costForEngine`'s return values, or any existing config knob — a box
+that never triggers the `cpu`/`mps` branches (i.e. every existing NVIDIA install once at least one
+health poll has landed) sees byte-identical costing and eviction decisions to before this change.
+Fix 3 additionally keeps `COQUI_DEVICE=cpu` as a live, explicit rollback if MPS inference proves
+broken in practice.
 
 ## Out of scope
 
 - Re-tuning `ENGINE_VRAM_COST` weights themselves (tracked separately, BACKLOG #39).
-- A unified-memory- or system-RAM-aware budget model (e.g. sizing `GPU_VRAM_BUDGET` differently
-  for Apple Silicon/CPU installs) — this design only stops *mischarging* CPU/MPS ops against a
-  GPU-shaped budget; it doesn't introduce a new budget concept for those platforms.
+- A unified-memory- or system-RAM-aware budget model (e.g. sizing a proactive throttle for Apple
+  Silicon/CPU installs based on system RAM rather than VRAM) — this design stops
+  *mischarging* CPU/MPS ops against a GPU-shaped VRAM budget by removing them from that budget
+  entirely; it does not introduce a replacement proactive-throttle concept for those platforms.
+  The existing host-RAM watchdog remains the only backstop there, same as it already is for the
+  analyzer/asr/spk CPU paths today.
+- Proactively warming the new device cache ahead of a headless/API-only render's first chapter
+  (e.g. an explicit `probeSidecarHealth()` call at generation start) — the cache-timing section
+  above documents the gap; closing it is a separate, small follow-up if it proves to matter in
+  practice, not required for this design to be correct (it fails safe).
 - AMD ROCm/DirectML-specific tuning — those families are charged exactly like CUDA today (real
   discrete/managed VRAM), unchanged by this design.
 
