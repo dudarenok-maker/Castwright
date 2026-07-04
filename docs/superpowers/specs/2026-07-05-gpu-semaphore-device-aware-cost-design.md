@@ -323,4 +323,32 @@ broken in practice.
 
 ## Ship notes
 
-_Not yet shipped._
+Shipped 2026-07-05 on branch `fix/server-gpu-vram-device-aware-cost`
+(PR [#1324](https://github.com/dudarenok-maker/Castwright/pull/1324),
+issue [#1323](https://github.com/dudarenok-maker/Castwright/issues/1323)).
+Implemented via `superpowers:subagent-driven-development` — 6 tasks, each with
+an independent implementer + task-scoped review; the implementation plan
+itself was adversarially reviewed once before execution (safe-to-execute
+verdict, two non-blocking hardening findings folded in).
+
+Tasks 1-5 (the Node-side device-aware semaphore gating — the new
+`engine-device-state.ts` cache, its wiring into `sidecar-health.ts`,
+`engineDeviceIsGpu`'s ground-truth-first rewrite, and gating all three
+runtime semaphore-acquire call sites in `sidecar.ts` and `qwen-voice.ts`)
+have full automated coverage, task-reviewed clean.
+
+Task 6 (Coqui MPS auto-resolution) has full automated coverage for the
+device-STRING resolution, including two pre-existing tests
+(`test_device_probe.py::test_predictions_apple_silicon`,
+`test_smoke.py::test_resolve_runtime_options_cuda_defaults_on`) that
+encoded the old CPU-only behavior as correct and were fixed as a
+deterministic consequence of the one-line change (verified: both call
+through `CoquiEngine._resolve_runtime_options`, the exact function this fix
+touches — not two independent code paths coincidentally needing the same
+edit). **Real Apple Silicon hardware confirmation that XTTS v2 inference
+actually produces correct audio under `auto`-resolved MPS was NOT performed
+in this environment** (no such hardware available) — this remains an open
+manual-acceptance item, tracked via the PR description, before this fix
+should be considered fully verified rather than device-string-correct only.
+`COQUI_DEVICE=cpu` stays available as an explicit rollback if that
+verification turns up a real inference problem.

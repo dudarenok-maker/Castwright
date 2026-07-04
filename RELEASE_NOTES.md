@@ -1,5 +1,6 @@
 # Castwright 1.11.0
 
+- **A Mac or a graphics-card-free machine no longer waits in line unnecessarily.** When a book uses more than one voice at once, Castwright used to queue engines cautiously — a habit that made sense for a small graphics card watching its memory, but made no sense on a Mac or a computer with no graphics card to protect. Those machines now perform multiple voices together at full speed.
 - **A more honest word on hardware.** The About page and the "Will it run on my machine?" panel now say a 6 GB graphics card gets you started, with 8 GB as the sweet spot — matching what you'll find on castwright.ai.
 - **Meet the cast before you read the manuscript.** Confirming a book's cast now takes you straight to their voices, not the page — design the cast first, then move on to the manuscript when you're ready. And if a speaking character still needs a voice when you go to generate, Castwright stops to ask: design them now, or proceed with a generic stand-in voice for an English book. A book in another language can't take that shortcut — every speaking character needs a voice of their own before it can perform.
 - **One address, no port to remember.** When you're listening from another device on your network, `castwright.local` now works exactly as typed — no `:8443` to type or mistype.
