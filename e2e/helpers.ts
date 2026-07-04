@@ -65,8 +65,22 @@ export async function goToConfirm(page: Page): Promise<void> {
   await expect(page).toHaveURL(/#\/books\/.+\/confirm$/, { timeout: 15_000 });
   await waitForRouteReady(page);
   await expect(
-    page.getByRole('button', { name: /Confirm cast and review manuscript/i }),
+    page.getByRole('button', { name: /Confirm cast and design voices/i }),
   ).toBeVisible({ timeout: 10_000 });
+}
+
+/* fe-46 — confirm lands on Cast first (voice design is a taught step of the
+ * flow), then "Continue to manuscript" advances to the manuscript route.
+ * Call this from `#/books/:id/confirm` once the confirm CTA is visible
+ * (e.g. right after `goToConfirm`) to reach `#/books/:id/manuscript`. */
+export async function confirmCastAndReachManuscript(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /Confirm cast and design voices/i }).click();
+  await expect(page).toHaveURL(/#\/books\/.+\/cast/, { timeout: 5_000 });
+  await waitForRouteReady(page);
+  const continueBtn = page.getByRole('button', { name: /Continue to manuscript/i });
+  await expect(continueBtn).toBeVisible({ timeout: 10_000 });
+  await continueBtn.click();
+  await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
 }
 
 /* Plan 89 C5 — DelayedSpinner paints at +150 ms while a React.lazy chunk

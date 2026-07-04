@@ -28,7 +28,7 @@
  * (Bug C + Bug D amends). */
 
 import { test, expect } from '@playwright/test';
-import { waitForRouteReady } from './helpers';
+import { waitForRouteReady, confirmCastAndReachManuscript } from './helpers';
 
 test.describe('bulk-sync library on confirm-cast', () => {
   test('pill renders, click ticks all matched checkboxes, Confirm advances stage', async ({
@@ -116,7 +116,6 @@ test.describe('bulk-sync library on confirm-cast', () => {
        batch (confirm-cast.tsx:94-121) fans out the per-character
        library-cast-override POSTs before navigating; awaiting the URL
        change implicitly waits for those promises to settle. */
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 10_000 });
+    await confirmCastAndReachManuscript(page);
   });
 });

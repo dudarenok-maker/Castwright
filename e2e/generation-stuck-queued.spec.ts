@@ -15,7 +15,7 @@
  * (the enqueue → dispatcher → stream wiring end-to-end). */
 
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 /* Serial mode: the cold-boot analysis walk is long; keep it in one worker so
    the mock SSE phase transitions don't miss their window under contention
@@ -58,8 +58,7 @@ test.describe('stuck-queued escape hatch (side: stuck-queued)', () => {
     test.setTimeout(60_000);
 
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     /* Plain nav to Generate — does NOT enqueue (plan 137), so the fixture's
        queued chapters stay queued with no active run. */

@@ -33,7 +33,7 @@ test.describe('voices view → rebaseline the series modal', () => {
 
     /* Confirm the cast → ready stage (the rebaseline trigger needs a loaded
        book; the cast slice stays hydrated across the transition). */
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await page.getByRole('button', { name: /Confirm cast and design voices/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/(manuscript|cast|generate|listen)$/, {
       timeout: 10_000,
     });

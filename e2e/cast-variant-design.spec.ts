@@ -37,7 +37,7 @@ test.describe('cast view → Design full cast → Emotion variants scope', () =>
     await waitForConfirmViewReady(page);
 
     /* Confirm the cast → ready stage. */
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await page.getByRole('button', { name: /Confirm cast and design voices/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/(manuscript|cast|generate|listen)$/, {
       timeout: 10_000,
     });

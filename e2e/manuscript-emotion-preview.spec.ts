@@ -10,7 +10,7 @@
  * Pairs with docs/features/179-fe31-emotion-chip-preview.md. */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 interface ManuscriptStore {
   getState: () => {
@@ -35,8 +35,7 @@ test.describe('manuscript chip — emotion variant preview', () => {
     });
 
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     /* Wait for the manuscript slice to hydrate, then flip the first dialogue
        (non-narrator) sentence's character to a Qwen voice with an `angry`

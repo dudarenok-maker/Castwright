@@ -37,7 +37,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm, waitForRouteReady } from './helpers';
+import { goToConfirm, waitForRouteReady, confirmCastAndReachManuscript } from './helpers';
 
 /* Deterministic ready-signal for the "Approve cast & start generating" click.
    The CTA routes through the `startGenerationFlow` thunk, which reads
@@ -73,8 +73,7 @@ async function waitForQwenCastHydrated(page: Page): Promise<void> {
    (waitForQwenCastHydrated) so the modal opens deterministically. */
 async function goToStartGenModal(page: Page): Promise<void> {
   await goToConfirm(page);
-  await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-  await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+  await confirmCastAndReachManuscript(page);
   await waitForRouteReady(page);
   await waitForQwenCastHydrated(page);
   await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();

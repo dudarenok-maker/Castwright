@@ -25,7 +25,7 @@ test.describe('cast view → diminutive merge-suggestion cards', () => {
     await waitForConfirmViewReady(page);
 
     /* Confirm the cast → navigate to the cast view. */
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await page.getByRole('button', { name: /Confirm cast and design voices/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/(manuscript|cast|generate|listen)$/, {
       timeout: 10_000,
     });

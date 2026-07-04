@@ -12,14 +12,13 @@
  * flow; this spec covers the combined Stage-3 extension. */
 
 import { test, expect } from '@playwright/test';
-import { goToConfirm } from './helpers';
+import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 test.describe('manuscript — Detect emotions + Stage 3 instruct (fs-57)', () => {
   test('confirm dialog mentions text-mutating reactions (gasp/sigh/laugh)', async ({ page }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     const button = page.getByTestId('detect-emotions-button');
     await expect(button).toBeVisible({ timeout: 5_000 });
@@ -34,8 +33,7 @@ test.describe('manuscript — Detect emotions + Stage 3 instruct (fs-57)', () =>
 
   test('PR3-Mi2 — one click runs both passes; done banner appears', async ({ page }) => {
     await goToConfirm(page);
-    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
-    await expect(page).toHaveURL(/#\/books\/.+\/manuscript$/, { timeout: 5_000 });
+    await confirmCastAndReachManuscript(page);
 
     const button = page.getByTestId('detect-emotions-button');
     await expect(button).toBeVisible({ timeout: 5_000 });
