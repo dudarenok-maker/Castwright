@@ -2,6 +2,7 @@
    produces. Hashes follow the verified router grammar (src/lib/router.ts):
    `#/`, `#/books/:bookId/<view>`, `#/books/:bookId/analysing`, `#/account`,
    `#/voices`. Adding a scene = one row here (see e2e/marketing/README.md). */
+import type { Page } from '@playwright/test';
 
 export type Viewport = 'desktop' | 'phone' | 'tablet';
 
@@ -19,6 +20,11 @@ export interface Scene {
   scrollTo?: string;
   /** Capture the full scrollable page instead of just the viewport. */
   fullPage?: boolean;
+  /** Optional interaction (e.g. open a modal) run after navigation + waitFor,
+      before the screenshot. Best-effort — a thrown action is caught and
+      logged, never aborts the run, so a selector drift degrades to "scene
+      captured pre-interaction" rather than failing the whole capture. */
+  action?: (page: Page) => Promise<void>;
 }
 
 export const SCENES: Scene[] = [
@@ -108,5 +114,98 @@ export const SCENES: Scene[] = [
     hash: '#/books/coalfall-commission/cast?profile=wren',
     viewports: ['desktop'],
     waitFor: '[data-testid="cast-row-wren"]',
+  },
+
+  /* ── Wiki wave: replace personal-account screenshots with the marketing
+     fixtures wiki-wide (docs/wiki/**). No personal display name, no single
+     sparse demo book — a real series + a finished standalone. ── */
+  {
+    id: 'setup-wizard',
+    hash: '#/setup',
+    viewports: ['desktop'],
+  },
+  {
+    id: 'help-getting-started',
+    hash: '#/help',
+    viewports: ['desktop'],
+    waitFor: 'text=Getting started',
+  },
+  {
+    id: 'upload',
+    hash: '#/new',
+    viewports: ['desktop'],
+  },
+  {
+    id: 'restructure',
+    hash: '#/books/coalfall-commission/restructure',
+    viewports: ['desktop'],
+  },
+  {
+    /* Chapter 3 carries a genuine sub-75% confidence sentence (id 26,
+       "Run, you fools", 0.65) — the low-confidence navigator and its badge
+       render for real here, no fixture needed. */
+    id: 'coalfall-manuscript-low-confidence',
+    hash: '#/books/coalfall-commission/manuscript?chapter=3',
+    viewports: ['desktop'],
+  },
+  {
+    id: 'admin',
+    hash: '#/admin',
+    viewports: ['desktop'],
+  },
+  {
+    id: 'model-manager',
+    hash: '#/models',
+    viewports: ['desktop'],
+  },
+  {
+    id: 'advanced-settings',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      // "Voice engine & device" also renders as the accordion section's own
+      // header button and (hidden on desktop) as a mobile <option> inside
+      // the lg:hidden dropdown — scope to the left-rail <nav
+      // aria-label="Settings sections"> so the match is unambiguous.
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Voice engine & device', { exact: true })
+        .click({ timeout: 5000 });
+    },
+  },
+  {
+    /* Saltgrave (hollow-tide-2) is mid-generation (7/11 done) — the Regenerate
+       action on a finished chapter opens the real per-chapter modal. The
+       per-chapter button's accessible name is its aria-label
+       ("Regenerate this chapter"), not its visible "Regenerate" text. */
+    id: 'regenerate-modal',
+    hash: '#/books/hollow-tide-2/generate',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Regenerate this chapter' }).first().click({ timeout: 5000 });
+    },
+  },
+  {
+    /* Audiobookshelf gets its own dedicated export-modal copy (folder root,
+       chaptered-vs-per-chapter choice) — opened from the Drowning Bell
+       (finished book) listener-app tile. */
+    id: 'export-audiobookshelf',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: /Audiobookshelf/i }).first().click({ timeout: 5000 });
+    },
+  },
+  {
+    /* Table view's series-grouping section, with real multi-book series
+       (The Hollow Tide, 3 books) instead of a lone standalone. */
+    id: 'library-table',
+    hash: '#/',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="book-cover-hollow-tide-1"]',
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Table', exact: true }).click({ timeout: 5000 });
+    },
+    fullPage: true,
   },
 ];

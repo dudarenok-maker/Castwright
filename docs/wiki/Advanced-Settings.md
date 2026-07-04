@@ -16,10 +16,13 @@ small warning glyph) start collapsed; the rest start open.
 
 ## Accelerator profile
 
-The **Voice engine & device** group is the one most people reach for first
-— it pins which GPU stack each engine runs on:
+The **Voice engine & device** group — flagged **high** risk in the side-nav
+— is the one most people reach for first: it pins which GPU stack each
+engine runs on. Below, that group expanded, with the **Text-to-speech**
+group (sample rate, re-record budget, ASR content-QA toggle) still open
+above it in the same accordion:
 
-![Accelerator profile](images/advanced-settings/01-accelerator-profile.png)
+![Advanced configuration accordion — Voice engine & device expanded](images/advanced-settings/01-accelerator-profile.png)
 
 **Accelerator profile** is the headline knob: `auto` (default) detects your
 hardware and picks NVIDIA/CUDA, AMD/ROCm-DirectML, Apple/Metal, or CPU;

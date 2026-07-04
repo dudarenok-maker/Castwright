@@ -1,15 +1,8 @@
 # Multi-language Support
 
-English, Russian, and Spanish are fully supported today, with the same
-full-cast craft as English — the manuscript is read in its own language,
-every character gets a voice that speaks it, and the cast's tone and
-descriptions stay written in the book's own tongue. French and German are
-dormant (built but not yet enabled). Language is auto-detected from the
-manuscript the moment you import it, and shown on the Confirm details
-screen before you commit — a language it can't perform yet falls back to
-English rather than guessing.
+Castwright isn't an English-only tool that happens to tolerate other languages — it performs **five languages today, with the same full-cast craft as English: English, Russian, Spanish, French, and German**. The manuscript is read in its own language, every character gets a voice that speaks it, and the cast's tone and descriptions stay written in the book's own tongue rather than flattened into something English-shaped.
 
-![Language detection](images/multi-language-support/01-language-detection.png)
+Language is auto-detected from the manuscript the moment you import it, and shown on the Confirm details screen before you commit to anything — a language Castwright can't perform yet falls back to English rather than guessing and getting it wrong silently.
 
 Pasting in the Russian variant of the Coalfall Commission fixture
 (`server/src/__fixtures__/the-coalfall-commission.ru.md`) auto-selects
@@ -17,13 +10,11 @@ Pasting in the Russian variant of the Coalfall Commission fixture
 verify" chip, plus a note that Russian books narrate with designed Qwen
 voices — you'll design a voice for the narrator and each speaking character
 in the cast view (Qwen is the engine behind every non-English cast; see
-[Voice Engines](Voice-Engines)).
+[Voice Engines](Voice-Engines)). Once analysis finishes, the cast
+confirmation screen shows the detected characters with their own-language
+names, each ready to design a Qwen voice for.
 
-Once analysis finishes, the cast confirmation screen shows the detected
-characters with their own-language names — here, Одуван, Мэйрин, and Рен
-alongside the Narrator — each ready to design a Qwen voice for:
-
-![Non-English cast](images/multi-language-support/02-non-english-cast.png)
+> Screenshots of language detection and a non-English cast confirmation are tracked as a follow-up.
 
 ## Casting a non-English book
 
@@ -33,6 +24,10 @@ up as an option. A small note under the list says how many are hidden and
 why ("N hidden · can't read Russian"); tap "show all" to bring them back if
 you want to browse anyway. English books are unaffected — every voice you
 own is available.
+
+## The rule that holds no matter which language
+
+A cast never crosses languages inside a single book — every character and the narrator perform in the manuscript's own language, always. It's the one hard rule the whole feature is built around, and it's why the fallback for an unsupported language is honest English rather than a mixed-language cast nobody asked for.
 
 See [Troubleshooting](Troubleshooting) for more on language detection and
 casting edge cases.
