@@ -7,32 +7,22 @@ a Load or Stop action on the right. It's the one place the app tells you
 what's actually resident in GPU memory right now, separate from what's
 merely installed on disk.
 
-The sequence below is a real load/unload cycle captured against **Qwen3-TTS
-Base (1.7B)** — the higher-quality Qwen tier, installed but not loaded at the
-time of capture.
-
-**Idle** — installed, not loaded. The pill reads "idle" and the action is
-**Load model**.
-
-![Unloaded](images/the-model-control-pill/01-pill-unloaded.png)
-
-**Loading** — clicking Load model fires the request; the pill switches to an
-amber "Loading …" state and the button disables so a second click can't fire
-mid-load.
-
-![Loading](images/the-model-control-pill/02-pill-loading.png)
-
-**Ready** — once the weights are resident, the pill turns green ("ready")
-and the action becomes **Stop**, so the same control unloads it again and
+Below, Kokoro's row in a **ready** state: the pill reads a green "Kokoro v1
+ready," with **DEFAULT**, **FALLBACK**, and **verified** badges, and the
+action is **Stop** — the same control that loaded it now unloads it and
 frees the VRAM.
 
-![Loaded](images/the-model-control-pill/03-pill-loaded.png)
+![Model Manager row — Kokoro loaded and ready](images/the-model-control-pill/03-pill-loaded.png)
 
-An engine without an installed package yet (e.g. Coqui before its `pip
-install` step) or without its weights fetched (e.g. Kokoro before its
-one-time download) shows an install/repair action instead of this pill —
-there's nothing to load until that step completes. See
-[Voice Engines](Voice-Engines) for what each engine's row looks like in
-those states.
+An engine still loading shows an amber "Loading …" pill with its button
+disabled, so a second click can't fire mid-load; one that's installed but not
+yet loaded reads "idle" with a **Load model** action instead. An engine
+without an installed package yet (e.g. Coqui before its `pip install` step)
+or without its weights fetched (e.g. Kokoro before its one-time download)
+shows an install/repair action instead of this pill — there's nothing to
+load until that step completes. See [Voice Engines](Voice-Engines) for what
+each engine's row looks like in those states.
+
+> Screenshots of the idle and loading states are tracked as a follow-up — the shot above is the real ready/loaded state from Model Manager.
 
 Next: [Library Management](Library-Management).

@@ -22,22 +22,15 @@ one) simply doesn't render the row, rather than showing it empty.
 Every book belongs to a series — or, if it's a standalone, to a synthetic
 **"Standalones"** group. The **table view** makes this grouping the most
 explicit: each series gets its own collapsible section (a chevron toggle plus
-a live book count), with a **"Standalones"** pseudo-section collecting every
-standalone book across every author into one place at the bottom.
+a live book count and its own status/runtime/characters/voices columns), with
+a **"Standalones"** pseudo-section collecting every standalone book across
+every author into one place at the bottom. Below, a three-book series —
+*The Hollow Tide*, by Marin Vale — shows exactly this: each entry numbered
+(`#1`, `#2`, `#3`) with its own status (Complete, Generating, Analysing), next
+to a single standalone in its own section underneath. The card view shows the
+same grouping as a plain section heading rather than a collapsible one.
 
 ![Series grouping — table view](images/library-management/02-series-grouping.png)
-
-> **About this screenshot:** this environment's demo workspace holds a single
-> standalone book (*The Coalfall Commission*), so the shot above shows one
-> "Standalones" section with a book count of 1 and nothing to collapse into.
-> The real behaviour, read from the component that renders this
-> (`src/components/library/library-table.tsx`), is richer: an author with a
-> real series (e.g. three books in a trilogy) gets its own named section
-> ("Author — Series name") showing each book's position (`#1`, `#2`, …), and
-> once you've listened across multiple books in a series, a **Series Memory**
-> chip appears next to the section header summarising which characters'
-> voices have carried through. The card view (above) shows the same grouping
-> as a plain section heading rather than a collapsible one.
 
 ## Book bundles
 

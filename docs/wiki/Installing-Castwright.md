@@ -10,11 +10,12 @@ This guide walks a deployer through bringing the app up on a clean Windows, macO
 
 After install you'll have a single command (`npm run start:prod`) that brings up the Node server (port 8080), the Python voice engine (port 9000), and the built frontend — all served from `http://localhost:8080`.
 
+> This page's OS-level screenshots (prerequisites, terminal install, configuration screen) are pending a re-capture from a clean install rather than a personal machine — tracked as a follow-up. The step-by-step commands below are accurate either way.
+
 ---
 
 ## Prerequisites
 
-![Prerequisites](images/installing-castwright/01-prerequisites.png)
 
 - **Node.js 20.19 or newer** (Vite 8 needs ≥20.19 / ≥22.12; the repo targets Node 24) — <https://nodejs.org>
 - **Python 3.12** (exactly — the sidecar bootstrap probes for 3.12 and refuses other versions)
@@ -89,7 +90,6 @@ copy server\.env.example server\.env
 npm run start:prod
 ```
 
-![Installing on Windows](images/installing-castwright/02-install-windows.png)
 
 Browser opens `http://localhost:8080`.
 
@@ -206,7 +206,6 @@ See [Troubleshooting](Troubleshooting) for the full symptom → fix table.
 The server reads `server/.env` (copied from `server/.env.example` in the install
 steps above). All knobs have safe defaults — set only what you need.
 
-![Configuration](images/installing-castwright/03-configuration.png)
 
 **Analyzer**
 

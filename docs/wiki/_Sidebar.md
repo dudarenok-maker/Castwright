@@ -3,6 +3,7 @@
 - [Getting Started](Getting-Started)
 - [Installing Castwright](Installing-Castwright)
 - [Uploading a Book](Uploading-a-Book)
+- [Manuscript Management](Manuscript-Management)
 - [Analysis & the Analyzer](Analysis-and-the-Analyzer)
 - [Reviewing Low-Confidence Speaker Tags](Reviewing-Low-Confidence-Speaker-Tags)
 - [Generating Audio](Generating-Audio)
