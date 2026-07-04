@@ -382,3 +382,109 @@ describe('SidecarTtsProvider error classification', () => {
     expect(result.voiceSubstitutedFrom).toBe('Nonexistent Voice');
   });
 });
+
+describe('device-aware GPU semaphore gating', () => {
+  /* The first two tests below vi.spyOn `engineDeviceIsGpu` with a fixed
+     mockReturnValue. Without restoring it, that spy leaks into later tests
+     in this describe block (vi.spyOn mocks persist until restored) — the
+     third test, which deliberately does NOT mock this module so it can
+     exercise the REAL ground-truth-first logic, would otherwise silently
+     inherit the second test's `mockReturnValue(true)` and pass for the
+     wrong reason. Scoped to this describe so it doesn't affect the mockFetch
+     module mock the rest of the file relies on. */
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('skips the GPU semaphore entirely when the engine is confirmed off-GPU', async () => {
+    const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
+    vi.spyOn(await import('../gpu/engine-device.js'), 'engineDeviceIsGpu').mockReturnValue(false);
+    const { GpuSemaphore } = await import('../gpu/semaphore.js');
+    const fakeGpuSem = new GpuSemaphore(4);
+    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
+
+    stubFetch(async () => {
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
+      });
+    });
+
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      gpuSem: fakeGpuSem,
+    });
+    await provider.synthesize(SYNTH_INPUT);
+
+    expect(acquireSpy).not.toHaveBeenCalled();
+    void engineDeviceIsGpu; // keep the import referenced for the mock above
+  });
+
+  it('still acquires a token when the engine is confirmed on-GPU', async () => {
+    vi.spyOn(await import('../gpu/engine-device.js'), 'engineDeviceIsGpu').mockReturnValue(true);
+    const { GpuSemaphore } = await import('../gpu/semaphore.js');
+    const fakeGpuSem = new GpuSemaphore(4);
+    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
+
+    stubFetch(async () => {
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
+      });
+    });
+
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      gpuSem: fakeGpuSem,
+    });
+    await provider.synthesize(SYNTH_INPUT);
+
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('end-to-end with the REAL engineDeviceIsGpu: ground truth mps wins over an auto knob that would say GPU', async () => {
+    /* No mocking of engine-device.js here — this proves Task 3's ground-truth-
+       first logic is what actually causes the skip, not just a spied return
+       value. Without Task 3 (i.e. engineDeviceIsGpu only reading the config
+       knob), this test would fail: COQUI_DEVICE is unset ('auto'), which the
+       knob-only logic treats as "assume GPU" — the real-world Apple Silicon
+       case this whole design exists to fix. */
+    const { setLastKnownEngineDevices, _resetEngineDevicesForTests } = await import(
+      '../gpu/engine-device-state.js'
+    );
+    _resetEngineDevicesForTests();
+    setLastKnownEngineDevices({ kokoro: 'mps', coqui: 'mps', qwen: 'mps' });
+    const prevDevice = process.env.COQUI_DEVICE;
+    delete process.env.COQUI_DEVICE; // unset → knob defaults to 'auto'
+
+    const { GpuSemaphore } = await import('../gpu/semaphore.js');
+    const fakeGpuSem = new GpuSemaphore(4);
+    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
+
+    stubFetch(async () => {
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
+      });
+    });
+
+    try {
+      const provider = new SidecarTtsProvider({
+        url: 'http://localhost:6006/',
+        engine: 'coqui',
+        gpuSem: fakeGpuSem,
+      });
+      await provider.synthesize(SYNTH_INPUT);
+      expect(acquireSpy).not.toHaveBeenCalled();
+    } finally {
+      _resetEngineDevicesForTests();
+      if (prevDevice === undefined) delete process.env.COQUI_DEVICE;
+      else process.env.COQUI_DEVICE = prevDevice;
+    }
+  });
+});
