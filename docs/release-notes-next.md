@@ -46,3 +46,7 @@ time. The previous release's body shipped with the v1.10.0 tag annotation.
   flag, stamped at enqueue by the proceed-anyway path so the per-chapter
   `awaiting_fallback_confirm` gate doesn't re-prompt for that run's fresh
   chapters (later enqueues still get the per-chapter backstop).
+
+## 🔧 Reliability
+
+- **Title-narration synth call now wrapped in per-call timeout** (#1247, srv-51) — matches the defensive timeout protection added to every other synth call site, closing a gap where a wedged title narration could stall a chapter. No user-visible change under normal operation; defensive only.
