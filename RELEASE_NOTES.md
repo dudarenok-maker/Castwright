@@ -2,6 +2,8 @@
 
 - **A more honest word on hardware.** The About page and the "Will it run on my machine?" panel now say a 6 GB graphics card gets you started, with 8 GB as the sweet spot — matching what you'll find on castwright.ai.
 - **Meet the cast before you read the manuscript.** Confirming a book's cast now takes you straight to their voices, not the page — design the cast first, then move on to the manuscript when you're ready. And if a speaking character still needs a voice when you go to generate, Castwright stops to ask: design them now, or proceed with a generic stand-in voice for an English book. A book in another language can't take that shortcut — every speaking character needs a voice of their own before it can perform.
+- **One address, no port to remember.** When you're listening from another device on your network, `castwright.local` now works exactly as typed — no `:8443` to type or mistype.
+- **Renew your network certificate without leaving the app.** A new button lets you refresh your computer's local certificate on the spot, so a new device or a new network trusts it right away.
 
 # Castwright 1.10.0
 

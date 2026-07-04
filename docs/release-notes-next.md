@@ -25,6 +25,7 @@ time. The previous release's body shipped with the v1.10.0 tag annotation.
 -->
 
 - **Hardware guidance reconciled with castwright.ai.** The About page and the "Will it run on my machine?" device panel now say a 6 GB GPU gets you started and 8 GB is the sweet spot, matching the FAQ on the website (#1274).
+- **`castwright.local` now works with no port typed, and the LAN certificate can be regenerated from inside the app.** A new port-443 forwarder relays to the existing `:8443` LAN HTTPS server; a "Regenerate certificate" button in the LAN Access card hot-swaps a fresh mkcert certificate into the running server with no restart. Also fixes a live CSRF-origin bug where mutating requests via `castwright.local`/`castwright.dev.local` 403'd (#PR_NUMBER).
 
 ## ✨ Headline features
 

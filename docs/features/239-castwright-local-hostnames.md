@@ -49,6 +49,15 @@ No e2e coverage — this is dev/LAN tooling, not shipped product behavior reacha
 5. Run `npm run build && npm run start:lan`. From the same phone/tablet, browse to `https://castwright.local:8443`. Expected: loads with no certificate warning.
 6. Stop `start:lan` (Ctrl+C or `npm run stop:prod`). Confirm the server process AND the spawned mDNS responder child both exit (no orphaned `node scripts/mdns-responder.mjs` process left running — check via Task Manager / `ps`).
 7. (Optional, confirms the non-fatal-degrade path) A real bind failure is hard to force on demand — `multicast-dns` binds with `reuseAddr:true`, so simply starting a second process on UDP :5353 does NOT reproduce a conflict (both coexist). Instead, temporarily edit `scripts/mdns-responder.mjs`'s `main()` to call `process.exit(0)` immediately after parsing `--name` (simulating the graceful bind-failure path without needing a real `EACCES`/blocked-multicast condition), then run `npm run dev:lan`. Expected: the `mdns` leg exits immediately with code 0; the `frontend` and `server` legs keep running unaffected (this is the exact behavior Task 6's `-k` → `--kill-others-on-fail` change exists to guarantee). Revert the temporary edit afterward.
+8. Run `npm run build && npm run start:lan`. From a real phone/tablet on the same LAN, browse
+   to `https://castwright.local` with **no port**. Expected: loads exactly like the explicit
+   `:8443` URL, with no certificate warning.
+9. From that same connection, perform a mutating action (e.g. rename a book, revoke a paired
+   device). Expected: succeeds — no 403 "Cross-origin request rejected".
+10. In the app's LAN Access card (desktop session), click "Regenerate certificate". Expected:
+    the app keeps serving uninterrupted throughout (no dropped requests), the button shows the
+    new host list on success, and a **fresh** browser tab opened afterward shows no certificate
+    warning — without restarting the app.
 
 ## Out of scope
 
