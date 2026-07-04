@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/09-voice-match-pipeline.md
 
 import { describe, expect, it } from 'vitest';
-import { castSlice, castActions } from './cast-slice';
+import { castSlice, castActions, selectCastTierByCharacterId } from './cast-slice';
 import type { AnalyseResponse, Character, VoiceMatchResponse } from '../lib/types';
 
 const makeChar = (id: string, overrides: Partial<Character> = {}): Character => ({
@@ -1009,5 +1009,24 @@ describe('castSlice — removeCharacterEmotionVariant (fs-34)', () => {
       castActions.removeCharacterEmotionVariant({ characterId: 'maerin', emotion: 'excited' }),
     );
     expect(Object.keys(absent.characters[0].overrideTtsVoices!.qwen!.variants!)).toHaveLength(2);
+  });
+});
+
+describe('selectCastTierByCharacterId (#1308)', () => {
+  it('maps characterId to its pinned ttsModelKey', () => {
+    const s = {
+      cast: baseState([
+        makeChar('marlow', { ttsModelKey: 'qwen3-tts-0.6b' } as Partial<Character>),
+        makeChar('oduvan', { ttsModelKey: 'kokoro-v1' } as Partial<Character>),
+      ]),
+    };
+    const tiers = selectCastTierByCharacterId(s);
+    expect(tiers.get('marlow')).toBe('qwen3-tts-0.6b');
+    expect(tiers.get('oduvan')).toBe('kokoro-v1');
+  });
+
+  it('returns a stable reference across calls with an unchanged characters array', () => {
+    const s = { cast: baseState([makeChar('marlow')]) };
+    expect(selectCastTierByCharacterId(s)).toBe(selectCastTierByCharacterId(s));
   });
 });

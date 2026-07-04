@@ -186,44 +186,54 @@ export interface ActiveGenerationView {
 /** A view of the in-flight generation run when the workspace queue has no
     real entries to show. Returns `null` when there ARE real entries (the real
     queue always wins) or when no stream is live. Same-book streams carry the
-    per-chapter rows; cross-book streams carry only the done/total summary. */
-export const selectActiveGenerationView = (
-  s: ActiveGenerationRootShape,
-): ActiveGenerationView | null => {
-  if (s.queue.entries.length > 0) return null;
-  const chapters = s.chapters;
-  if (!chapters) return null;
-  /* Prefer the stream for the currently-viewed book (so the overlay lists its
-     rows); else any open stream. With one stream this is exactly the prior
-     single-snapshot behaviour. */
-  const streams = Object.values(chapters.activeStreams);
-  const active =
-    (chapters.currentBookId ? chapters.activeStreams[chapters.currentBookId] : undefined) ??
-    streams[0] ??
-    null;
-  if (!active) return null;
-  const sameBook = chapters.currentBookId === active.bookId;
-  /* Excluded chapters never queue or synthesise — mirror the filter in the
-     runner's snapshotFromChapters + middleware hasWork so the row count agrees
-     with the pill's done/total. */
-  const rows: ActiveGenerationChapterRow[] | null = sameBook
-    ? chapters.chapters
-        .filter(
-          (c) =>
-            !c.excluded &&
-            !c.held &&
-            (c.state === 'in_progress' || c.state === 'queued'),
-        )
-        .map((c) => ({ id: c.id, state: c.state as 'in_progress' | 'queued' }))
-    : null;
-  return {
-    bookId: active.bookId,
-    done: active.done,
-    total: active.total,
-    inProgress: active.inProgress,
-    chapters: rows,
-  };
-};
+    per-chapter rows; cross-book streams carry only the done/total summary.
+
+    Memoised via createSelector (#1308) — an unmemoized version rebuilds the
+    `rows` array and the returned object literal on every call even when
+    nothing changed, which react-redux's dev-mode stability check flags as
+    "returned a different result when called with the same parameters" and
+    forces the queue modal to re-render on every store dispatch, not just
+    generation-relevant ones (the same defect class as #1284/#1285). */
+export const selectActiveGenerationView = createSelector(
+  [
+    (s: ActiveGenerationRootShape) => s.queue.entries,
+    (s: ActiveGenerationRootShape) => s.chapters?.activeStreams,
+    (s: ActiveGenerationRootShape) => s.chapters?.currentBookId,
+    (s: ActiveGenerationRootShape) => s.chapters?.chapters,
+  ],
+  (entries, activeStreams, currentBookId, chapterRows): ActiveGenerationView | null => {
+    if (entries.length > 0) return null;
+    if (!activeStreams || !chapterRows) return null;
+    /* Prefer the stream for the currently-viewed book (so the overlay lists
+       its rows); else any open stream. With one stream this is exactly the
+       prior single-snapshot behaviour. */
+    const streams = Object.values(activeStreams);
+    const active =
+      (currentBookId ? activeStreams[currentBookId] : undefined) ?? streams[0] ?? null;
+    if (!active) return null;
+    const sameBook = currentBookId === active.bookId;
+    /* Excluded chapters never queue or synthesise — mirror the filter in the
+       runner's snapshotFromChapters + middleware hasWork so the row count agrees
+       with the pill's done/total. */
+    const rows: ActiveGenerationChapterRow[] | null = sameBook
+      ? chapterRows
+          .filter(
+            (c) =>
+              !c.excluded &&
+              !c.held &&
+              (c.state === 'in_progress' || c.state === 'queued'),
+          )
+          .map((c) => ({ id: c.id, state: c.state as 'in_progress' | 'queued' }))
+      : null;
+    return {
+      bookId: active.bookId,
+      done: active.done,
+      total: active.total,
+      inProgress: active.inProgress,
+      chapters: rows,
+    };
+  },
+);
 
 /** Count for the "Queue · N" chip + "View queue · N" button. Real queue entries
     win; otherwise reflect the live run so the chip doesn't read 0 / disappear

@@ -156,12 +156,12 @@ describe('selectors', () => {
     ({ bookMeta: sliceState }) as unknown as RootState;
 
   it('selectEffectiveMeta returns null when no saved baseline', () => {
-    expect(selectEffectiveMeta('ns')(baseState(initial()))).toBeNull();
+    expect(selectEffectiveMeta(baseState(initial()), 'ns')).toBeNull();
   });
 
   it('selectEffectiveMeta returns saved snapshot when draft is empty', () => {
     const s = baseState({ draft: null, saved: { ns: fullMeta() }, prosodyEnabled: {} });
-    expect(selectEffectiveMeta('ns')(s)).toEqual(fullMeta());
+    expect(selectEffectiveMeta(s, 'ns')).toEqual(fullMeta());
   });
 
   it('selectEffectiveMeta overlays the draft on top of saved for live preview', () => {
@@ -170,7 +170,16 @@ describe('selectors', () => {
       saved: { ns: fullMeta() },
       prosodyEnabled: {},
     });
-    expect(selectEffectiveMeta('ns')(s)).toEqual(fullMeta({ title: 'Live Edit', genre: null }));
+    expect(selectEffectiveMeta(s, 'ns')).toEqual(fullMeta({ title: 'Live Edit', genre: null }));
+  });
+
+  it('selectEffectiveMeta returns a stable reference across calls with an unchanged draft (#1308)', () => {
+    const s = baseState({
+      draft: { title: 'Live Edit' },
+      saved: { ns: fullMeta() },
+      prosodyEnabled: {},
+    });
+    expect(selectEffectiveMeta(s, 'ns')).toBe(selectEffectiveMeta(s, 'ns'));
   });
 
   it('selectIsDirty is false on a pristine slice', () => {

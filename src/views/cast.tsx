@@ -39,7 +39,7 @@ import type {
 } from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
-import { castActions } from '../store/cast-slice';
+import { castActions, selectCastTierByCharacterId } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
@@ -212,9 +212,7 @@ export function CastView({
   /* PR4 — read pinned tiers from the store so the roster badge updates live
      after dispatch(castActions.updateCharacter). The store is the single
      source of truth for ttsModelKey after a bulk pin or reset. */
-  const storedTiers = useAppSelector(
-    (s) => new Map(s.cast.characters.map((c) => [c.id, c.ttsModelKey])),
-  );
+  const storedTiers = useAppSelector(selectCastTierByCharacterId);
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   /* Tier-2b diminutive merge-suggestions — fetched once when the book is ready,

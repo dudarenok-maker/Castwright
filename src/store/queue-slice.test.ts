@@ -301,4 +301,19 @@ describe('active-generation selectors', () => {
     expect(selectActiveGenerationView(s)).toBeNull();
     expect(selectGenerationActivityCount(s)).toBe(0);
   });
+
+  it('returns a stable reference across calls with unchanged queue entries + chapters state (#1308)', () => {
+    const s = {
+      queue: emptyQueue,
+      chapters: chaptersState({
+        activeStream: stream({ done: 2, total: 5, inProgress: 1 }),
+        currentBookId: 'book-A',
+        chapters: [
+          { id: 1, state: 'in_progress' },
+          { id: 2, state: 'queued' },
+        ],
+      }),
+    };
+    expect(selectActiveGenerationView(s)).toBe(selectActiveGenerationView(s));
+  });
 });

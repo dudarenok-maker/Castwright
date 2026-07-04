@@ -887,7 +887,7 @@ function ListenRoute({ bookId }: { bookId: string }) {
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const currentTrack = useAppSelector((s) => s.ui.currentTrack);
-  const bookMeta = useAppSelector(selectEffectiveMeta(bookId));
+  const bookMeta = useAppSelector((s) => selectEffectiveMeta(s, bookId));
   const isDirty = useAppSelector(selectIsDirty);
   const coverGradient = useAppSelector(
     (s) => s.library.books.find((b) => b.bookId === bookId)?.coverGradient ?? null,

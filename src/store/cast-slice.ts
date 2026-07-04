@@ -1,6 +1,6 @@
 /* Cast slice — characters + their voice assignments. */
 
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
 
 /* Union two alias lists (case-insensitive dedup, original casing, first-seen
@@ -470,3 +470,22 @@ export const castSlice = createSlice({
 });
 
 export const castActions = castSlice.actions;
+
+interface CastRootShape {
+  cast: CastState;
+}
+
+const selectCastCharacters = (s: CastRootShape): Character[] => s.cast.characters;
+
+/** characterId → its currently-pinned `ttsModelKey`, for the roster badge.
+    Memoised on the `characters` reference — an unmemoized `new Map(...)`
+    allocates a fresh Map on every call even when nothing changed, which
+    react-redux's dev-mode stability check flags as "returned a different
+    result when called with the same parameters" and forces the (large,
+    frequently-mounted) Cast view to re-render on every store dispatch, not
+    just cast-relevant ones (#1308). */
+export const selectCastTierByCharacterId = createSelector(
+  [selectCastCharacters],
+  (characters): Map<string, Character['ttsModelKey']> =>
+    new Map(characters.map((c) => [c.id, c.ttsModelKey])),
+);
