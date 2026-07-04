@@ -51,6 +51,12 @@
         consent: { $ref: '#/components/schemas/VoiceConsentRecord' }
         sourceAttestation: { $ref: '#/components/schemas/VoiceSourceAttestation' }
         sampleTranscript: { type: string }
+        sampleMeta:
+          type: object
+          properties:
+            durationSeconds: { type: number }
+            sampleRate: { type: number }
+            qualityChecks: { type: object, additionalProperties: true }
         engines: { $ref: '#/components/schemas/VoiceLibraryEngines' }
         promotedFrom:
           type: object
@@ -99,7 +105,7 @@
               provenance: { type: string, enum: [designed, cloned, imported] }
 ```
 
-- [ ] **Step 3: Add the nine paths** under a `Voice library` tag. Request bodies: `PATCH {voiceUuid}` takes `{ name?, tags?, pinned?, persona? }`; `design` takes `{ name, persona, languageCode? }` → `201 VoiceLibraryEntry`; `redesign` takes `{ persona }` → `{ previewToken }`; `promote` takes `{ bookId, characterId, name }` → `201 VoiceLibraryEntry`; `assign` takes `{ bookId, characterId }` → `200 { updated: number }`; `sample` takes `{ }` → `{ url }` (mirrors `POST /api/voices/{voiceId}/sample`); `DELETE` → `200 { deleted: true }` or `409 { usage: [{ bookId, bookTitle, characterId, characterName }] }` unless `?confirm=1`.
+- [ ] **Step 3: Add the nine paths** under a `Voice library` tag. Request bodies: `PATCH {voiceUuid}` takes `{ name?, tags?, pinned?, persona? }`; `design` takes `{ name, persona, languageCode? }` → `201 { entry: VoiceLibraryEntry, previewUrl: string }`; `redesign` takes `{ persona }` → `{ previewUrl: string }` (no `previewToken` anywhere — Tasks 9/12/15 all consume `previewUrl`, and openapi is the generated-type source of truth); `promote` takes `{ bookId, characterId, name }` → `201 VoiceLibraryEntry`; `assign` takes `{ bookId, characterId }` → `200 { updated: number }`; `sample` takes `{ }` → `{ url }` (mirrors `POST /api/voices/{voiceId}/sample`); `DELETE` → `200 { deleted: true }` or `409 { usage: [{ bookId, bookTitle, characterId, characterName }] }` unless `?confirm=1`.
 
 - [ ] **Step 4: Regenerate + typecheck**
 
@@ -219,7 +225,7 @@ export const requireVoiceLibraryEnabled: RequestHandler = (_req, res, next) => {
 - Test: `server/src/tts/voice-mapping.test.ts` (extend the existing file)
 
 **Interfaces:**
-- Produces: for engine `qwen`, when `voice.overrideTtsVoices?.qwen?.libraryUuid` is set, `pickVoiceForEngine` returns `` `qwen-${libraryUuid}` `` — BEFORE the existing `qwenStorageKey(voice, voice.id)` derivation; the per-engine slot type widens to `{ name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported'; variants?: … }` in ALL THREE server type sites: `VoiceLike`, `CastCharacter` (synthesise-chapter), `LibraryCastCharacter` (library-cast-scan) — Tasks 5/7/8 read/write these fields and will not typecheck otherwise. (Runtime pass-through already works: `toVoiceLike` at `synthesise-chapter.ts:760` copies slots by reference.)
+- Produces: for engine `qwen`, when `voice.overrideTtsVoices?.qwen?.libraryUuid` is set, `pickVoiceForEngine` returns `` `qwen-${libraryUuid}` `` — BEFORE the existing `qwenStorageKey(voice, voice.id)` derivation; the per-engine slot type widens to `{ name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported'; variants?: … }` in ALL THREE server type sites: `VoiceLike`, `CastCharacter` (synthesise-chapter), `LibraryCastCharacter` (library-cast-scan) — Tasks 5/7/8 read/write these fields and will not typecheck otherwise. (Runtime pass-through already works: `toVoiceLike` at `synthesise-chapter.ts:760` copies slots by reference.) Also **PIN the read-path pass-through with a test**: `normaliseCastCharacter` (`routes/voices.ts:144-157`) does not strip extra slot fields today — lock that in so a future "cleanup" can't silently drop `provenance` (spec §2; note the spec's earlier `normaliseVoiceOverrides` name was a phantom — `normaliseCastCharacter` is the real symbol).
 - Consumes: nothing new.
 - **Guard:** `pickEmotionVariantVoice` (~:36-54) MUST remain untouched for non-library voices — add a regression test that a character with its own designed voice and NO library slot resolves exactly as before.
 
@@ -265,6 +271,7 @@ if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`
 **Interfaces:**
 - Produces: any scanned character whose `overrideTtsVoices[*].provenance === 'cloned'` is EXCLUDED from the candidate records the scan returns. `imported`/`designed` provenance and provenance-less characters pass through unchanged.
 - Consumes: Task 6 slot shape.
+- **Scope note (intentional forward-wiring):** no clone endpoint exists in Wave 1, so this filter can't fire end-to-end until Wave 3 — it lands NOW, hand-seeded in tests, because the `provenance` field lands now and the guardrail must predate the first clonable voice (spec §6; spec §9 lists only the *hardening tests* under Wave 5).
 
 - [ ] **Step 1: Write failing test**: seed two books — book A has a character with a `provenance: 'cloned'` qwen slot, book B has one with `provenance: 'imported'` and one legacy character; scan returns the imported + legacy characters, never the cloned one.
 - [ ] **Step 2: Run — FAIL.**
@@ -328,7 +335,7 @@ if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`
 **Interfaces:**
 - Produces: `POST /api/voice-library/promote` `{ bookId, characterId, name }`:
   1. Resolve the character's TRUE source storage uuid — via the same resolution `pickVoiceForEngine`/`qwenStorageKey` uses (`voice-mapping.ts:277-286`), so a **reused/matched** character copies from the SOURCE voice's `.pt`, not a nonexistent character-keyed one (spec §2.2 edge rule).
-  2. Mint a NEW library uuid; if `voices/qwen/qwen-<sourceUuid>.pt` exists → byte-copy to `qwen-<libUuid>.pt` (+ sibling `.json`), `engines.qwen.status = 'ready'`; if not → copy persona only, `status = 'stale'` (on-demand derive later).
+  2. Mint a NEW library uuid; if `voices/qwen/qwen-<sourceUuid>.pt` exists → byte-copy to `qwen-<libUuid>.pt` (+ sibling `.json`), `engines.qwen = { status: 'ready', baseModel: currentQwenBaseModel() }` — the `baseModel` stamp is REQUIRED or Task 4's list-time comparison reads `undefined ≠ QWEN_BASE_MODEL` and marks every freshly-promoted voice `stale`; if no `.pt` → copy persona only, `status = 'stale'` (on-demand derive later).
   3. Write manifest: `provenance: 'designed'`, `persona` from the character's design record, `promotedFrom: { bookId, characterId }`.
   → `201` entry. The origin character is NOT modified.
 - Consumes: Tasks 3, 9.

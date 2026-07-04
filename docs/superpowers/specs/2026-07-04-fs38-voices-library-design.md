@@ -108,10 +108,14 @@ deliberately NOT named `LibraryVoice`, which already exists in `voice-match.ts` 
 per-engine override slot `overrideTtsVoices[engine]` gains optional
 `{ libraryUuid, provenance }` alongside `name` (and the existing `variants`). One field
 name everywhere: **`provenance`** (the server-side `VoiceKind` enum remains a separate,
-derived display concept). Threading it through is a known four-site change — `VoiceLike`,
-`CastCharacter`, and the three openapi `overrideTtsVoices` blocks — plus the
-`normaliseVoiceOverrides` spread; the legacy single-field `overrideTtsVoice` migration
-keeps emitting `{ name }`-only (a legacy voice is never a library voice).
+derived display concept). Threading it through: `VoiceLike`,
+`CastCharacter`, `LibraryCastCharacter` (which must gain the field — it has no
+`overrideTtsVoices` today), and the three openapi `overrideTtsVoices` blocks; plus a
+pass-through PIN on `normaliseCastCharacter` (`routes/voices.ts:144-157` — it does not
+strip extra slot fields today; a test locks that in) and on `aggregateVoices`' multi-book
+merge branch (which DOES rebuild slots and must carry the new fields). The legacy
+single-field `overrideTtsVoice` migration keeps emitting `{ name }`-only (a legacy voice
+is never a library voice).
 
 Baked-in decisions:
 
@@ -162,10 +166,10 @@ New route module `server/src/routes/voice-library.ts`:
 | `POST /api/voice-library/clone-sample` | **phase 1 (stateless):** multipart upload (multer; `manuscripts.ts`/`cover.ts` precedent) → ingest/decode → quality checks → Whisper transcript. Returns an ephemeral `sampleId` in a temp area (auto-pruned) + verdicts + editable transcript. No manifest yet — abandoning the wizard orphans nothing |
 | `POST /api/voice-library/clone` | **phase 2 (finalize):** `{sampleId, name, tags, consent/attestation}` → manifest + `master.wav` persisted → engine caches derived → previews. **Consent/attestation validated server-side — UI cannot bypass.** Derive failure after finalize = per-engine `failed` status (§7) |
 | `PATCH /api/voice-library/:uuid` | name / tags / pinned / persona edits |
-| `POST /api/voice-library/:uuid/redesign` | designed-only: new persona → preview → A/B → promote or discard |
-| `POST /api/voice-library/:uuid/rederive` | rebuild a `stale`/`failed` engine cache from master (clip or persona) |
+| `POST /api/voice-library/:uuid/redesign` | designed-only: new persona → preview (returns the audition `previewUrl`); the A/B resolves via explicit `…/redesign/promote` / `…/redesign/discard` sub-calls |
+| `POST /api/voice-library/:uuid/rederive` | rebuild a `stale`/`failed` engine cache from the master clip — **Wave 3 (clone-era)**: a designed voice has no master to re-derive from (re-running the generative 1.7B from a persona is a redesign, not a re-derivation) |
 | `POST /api/voice-library/:uuid/assign` | write a character's `overrideTtsVoices` slot(s) to reference this voice |
-| `POST /api/voice-library/promote` | `{bookId, characterId}` → library manifest under the character's existing `voiceUuid` |
+| `POST /api/voice-library/promote` | `{bookId, characterId, name}` → mints a NEW library `voiceUuid`, byte-copies the source `.pt` (§2.2 — sharing the origin uuid was rejected), → `201` entry |
 | `DELETE /api/voice-library/:uuid` | usage report + explicit confirm |
 
 **Audio ingest stage (new, load-bearing — nothing in the stack decodes containers
@@ -368,9 +372,10 @@ persists; re-attest only if the person name changes.
 - **Deletion in use:** usage report + confirm; casts fall back to "needs a voice" (fe-46
   gate surfaces it).
 - **Mic denied / absent:** record card degrades to upload with a clear message.
-- **Concurrency:** one derivation per voice at a time; library design jobs join the SAME
-  single-owner design mutex as book jobs via the `library` lock scope (§3), so the 1.7B
-  VoiceDesign is never double-loaded.
+- **Concurrency:** one derivation per voice at a time via a SEPARATE library-scoped
+  single-flight lock (the server's design lock is per-`bookDir` and is not shared across
+  scopes — §3); cross-scope 1.7B double-load is prevented by the sidecar's VRAM
+  arbitration plus the frontend's single design slot, not by a server mutex.
 - **Windows file locking (evict-before-replace):** the sidecar caches loaded `.pt`
   prompts in memory and holds files open — re-derive and delete must evict first
   (`/qwen/evict-voice` precedent) before unlinking/replacing `master.wav`, `.pt`, or
