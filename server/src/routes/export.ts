@@ -435,9 +435,26 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
         'Content-Disposition': `attachment; filename="${encodeURIComponent(job.filename)}"`,
         'Cache-Control': 'no-cache',
       },
+      /* `path` is fully server-computed from a validated bookId/exportId
+         lookup, never client input — so `send`'s dotfile guard (any
+         ancestor path segment starting with `.`, e.g. a workspace nested
+         under a `.claude/worktrees/...` checkout) is a false positive
+         here, not a real security boundary. Without this, the guard
+         silently turns a perfectly valid request into a 404-shaped
+         internal error that the catch-all below then flattens into an
+         opaque, unlogged 500 (bug #1290's pattern). */
+      dotfiles: 'allow',
     },
     (err) => {
-      if (err && !res.headersSent) res.status(500).end();
+      if (!err) return;
+      const status = (err as { status?: number }).status ?? 500;
+      console.error(
+        `[export] sendFile failed for ${path}${
+          res.headersSent ? ' (after headers sent)' : ''
+        }: ${err.message}`,
+        { status },
+      );
+      if (!res.headersSent) res.status(status).end();
     },
   );
 });
