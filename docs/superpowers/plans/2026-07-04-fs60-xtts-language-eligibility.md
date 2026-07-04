@@ -1129,7 +1129,10 @@ git commit -m "feat(server): Qwen to Coqui fallback branch in applyQwenFallback 
 - Consumes: `gpuSemaphore` (already imported), `resolveGroup` (already defined in this file), `synthGroupsBatched` (already defined in this file, Task 6's neighbor).
 - Produces: `evictQwenForCoquiPhase(): Promise<void>` and `synthGroupsSerialized(groupList, onDone?): Promise<Map<number, GroupResult>>` (both local to `synthesise-chapter.ts`) — not consumed elsewhere; this task is self-contained.
 
-**Additional accepted limitation, surfaced during plan review: `evictQwenForCoquiPhase` is a global unload, not scoped to this chapter's book.** It POSTs `/unload {engine:'qwen'}` to the one shared sidecar process. This app's concurrent multi-book workflow is a first-class invariant — if a *different* book is mid-Qwen-render on another worker when this chapter's Coqui phase evicts Qwen, that other book's in-flight Qwen synth gets evicted out from under it too, forcing an unplanned reload (not a correctness bug — Qwen reloads and that book's render continues — but a real, unbudgeted latency hit for an unrelated book). This is the same class of residual limitation the design spec's §4 already accepts for the VRAM-admission side of cross-book Qwen+Coqui concurrency; this plan extends that same acceptance to the eviction side-effect rather than building per-book-scoped eviction (which the sidecar's `/unload` endpoint doesn't support — it's process-wide by design). Flag this in Task 12's regression-plan doc as a named, accepted v1 limitation.
+**Two accepted limitations, surfaced during plan review — both to be named explicitly in Task 12's regression-plan doc, not silently shipped:**
+
+1. **`evictQwenForCoquiPhase` is a global unload, not scoped to this chapter's book.** It POSTs `/unload {engine:'qwen'}` to the one shared sidecar process. This app's concurrent multi-book workflow is a first-class invariant — if a *different* book is mid-Qwen-render on another worker when this chapter's Coqui phase evicts Qwen, that other book's in-flight Qwen synth gets evicted out from under it too, forcing an unplanned reload (not a correctness bug — Qwen reloads and that book's render continues — but a real, unbudgeted latency hit for an unrelated book). This is the same class of residual limitation the design spec's §4 already accepts for the VRAM-admission side of cross-book Qwen+Coqui concurrency; this plan extends that same acceptance to the eviction side-effect rather than building per-book-scoped eviction (which the sidecar's `/unload` endpoint doesn't support — it's process-wide by design).
+2. **The chapter's anchor group (the very first body group, rendered by a standalone `synthGroup` call at `synthesise-chapter.ts:1307-1314`, before `bodyStartIndex`) is never routed through `synthGroupsSerialized`.** It exists to fix the chapter's output sample rate deterministically (plan 107/113) — always a single, un-batched call, synthed before any pool dispatch begins. If the anchor happens to be a designed-Qwen character and *every other* group in the chapter falls back to Coqui, the body dispatch (`groups.slice(bodyStartIndex)`) is Coqui-only → `synthGroupsSerialized` takes its passthrough branch (no mixed engines *in that call*) → no evict ever happens → the anchor's still-resident Qwen and the body's Coqui co-reside for the whole chapter. This is a narrow case (needs the sole Qwen-routed speaker to land at sentence index 0) but real, and it isn't something this task engineers around — doing so would mean routing the anchor through the same serialization machinery, which would fight the sample-rate-determinism design the anchor exists to preserve (per the plan-107/113 header comment at `synthesise-chapter.ts:1274-1283`). Accepted as a v1 limitation alongside #1, not silently unmentioned.
 
 **This task's scope was corrected during plan review.** The first draft only wrapped the *initial* body dispatch (`groups.slice(bodyStartIndex)` at line 1482). But `synthesiseChapter` has **two more** dispatch sites that can re-synth a mixed Qwen+Coqui set — the segment-QA re-record loop (`synthGroupsBatched(pending)` at line 1546) and the ASR re-record loop (`synthGroupsBatched(pending)` at line 1653) — both of which run routinely in production whenever `maxSegmentRerecords > 0` or an `asr` option is supplied. Partitioning only the initial dispatch would let a re-record round reload Qwen while Coqui is still resident from the initial dispatch's second phase — exactly the co-residency this task exists to prevent, and invisible to a test that only exercises the initial-dispatch path. The fix: extract the partition-then-evict logic into one shared `synthGroupsSerialized` wrapper, and use it at **all three** dispatch sites instead of calling `synthGroupsBatched` directly at any of them.
 
@@ -1219,7 +1222,9 @@ import { gpuSemaphore } from '../gpu/semaphore.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 ```
 
-Add the helper function immediately before the `synthesiseChapter` export (before line 785):
+**Two separate insertion points — this was wrong in the previous draft of this task, which put both functions at module scope. `evictQwenForCoquiPhase` is genuinely module-scope-safe (only touches `gpuSemaphore` + `getResolvedSidecarUrl` + `fetch`), but `synthGroupsSerialized` is NOT — it calls `resolveGroup` (a `const` defined at `synthesise-chapter.ts:1031`), `synthGroupsBatched` (defined at line 1351), and is typed with `GroupResult` (a local `type` at line 1022) — all three exist only inside `synthesiseChapter`'s function body. Placing `synthGroupsSerialized` at module scope would fail to compile (`Cannot find name 'resolveGroup'` etc.).**
+
+Add `evictQwenForCoquiPhase` at module scope, immediately before the `synthesiseChapter` export (before line 785):
 
 ```ts
 /* fs-60 — Qwen and Coqui are both VRAM-heavy engines whose real footprints
@@ -1250,37 +1255,46 @@ async function evictQwenForCoquiPhase(): Promise<void> {
     release();
   }
 }
+```
 
-/* fs-60 — drop-in wrapper around synthGroupsBatched that adds the Qwen/Coqui
-   serialization guarantee, for use at EVERY dispatch site in this function,
-   not just the initial body dispatch. A re-record round (segment-QA or ASR)
-   can re-synth a mixed pending set exactly as easily as the initial dispatch
-   can — partitioning only the initial call would leave Coqui resident from
-   its own second phase while a re-record round reloads Qwen, which is the
-   exact co-residency this mechanism exists to prevent. Same signature as
-   synthGroupsBatched (groupList, optional onDone) => Map<index, result>, so
-   it's a drop-in replacement at every call site. When the group list doesn't
-   actually mix qwen+coqui, this is a zero-overhead passthrough to
-   synthGroupsBatched. Cost note: if MULTIPLE re-record rounds each mix
-   engines, this evicts+reloads Qwen once per such round — a real perf cost,
-   accepted deliberately in exchange for correctness; not optimized away in
-   this task (redundant-evict avoidance is a follow-up, not a v1 requirement). */
-async function synthGroupsSerialized(
-  groupList: SentenceGroup[],
-  onDone?: (group: SentenceGroup, result: GroupResult) => void,
-): Promise<Map<number, GroupResult>> {
-  const engines = new Set(groupList.map((g) => resolveGroup(g).route.engine));
-  if (!(engines.has('qwen') && engines.has('coqui'))) {
-    return synthGroupsBatched(groupList, onDone);
+Add `synthGroupsSerialized` **inside** `synthesiseChapter`, immediately after `synthGroupsBatched`'s closing brace (`synthesise-chapter.ts:1477`) and before the `/* Initial body dispatch */` comment (`:1479`) — i.e. it becomes a sibling nested function to `synthGroupsBatched`, sharing its closure:
+
+```ts
+  /* fs-60 — drop-in wrapper around synthGroupsBatched that adds the Qwen/Coqui
+     serialization guarantee, for use at EVERY dispatch site in this function,
+     not just the initial body dispatch. A re-record round (segment-QA or ASR)
+     can re-synth a mixed pending set exactly as easily as the initial dispatch
+     can — partitioning only the initial call would leave Coqui resident from
+     its own second phase while a re-record round reloads Qwen, which is the
+     exact co-residency this mechanism exists to prevent. Same signature as
+     synthGroupsBatched (groupList, optional onDone) => Map<index, result>, so
+     it's a drop-in replacement at every call site. When the group list doesn't
+     actually mix qwen+coqui, this is a zero-overhead passthrough to
+     synthGroupsBatched. Cost note: if MULTIPLE re-record rounds each mix
+     engines, this evicts+reloads Qwen once per such round — a real perf cost,
+     accepted deliberately in exchange for correctness; not optimized away in
+     this task (redundant-evict avoidance is a follow-up, not a v1 requirement).
+     NOT applied to the chapter's anchor group (the very first body group,
+     rendered by a standalone synthGroup call before this function is ever
+     reached, to fix the sample-rate anchor per plan 107/113) — see this
+     task's accepted-limitations note below for why that narrow gap is
+     accepted rather than engineered around. */
+  async function synthGroupsSerialized(
+    groupList: SentenceGroup[],
+    onDone?: (group: SentenceGroup, result: GroupResult) => void,
+  ): Promise<Map<number, GroupResult>> {
+    const engines = new Set(groupList.map((g) => resolveGroup(g).route.engine));
+    if (!(engines.has('qwen') && engines.has('coqui'))) {
+      return synthGroupsBatched(groupList, onDone);
+    }
+    const qwenGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'qwen');
+    const coquiGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'coqui');
+    const out = new Map<number, GroupResult>();
+    for (const [k, v] of await synthGroupsBatched(qwenGroups, onDone)) out.set(k, v);
+    await evictQwenForCoquiPhase();
+    for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
+    return out;
   }
-  const qwenGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'qwen');
-  const coquiGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'coqui');
-  const out = new Map<number, GroupResult>();
-  for (const [k, v] of await synthGroupsBatched(qwenGroups, onDone)) out.set(k, v);
-  await evictQwenForCoquiPhase();
-  for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
-  return out;
-}
 ```
 
 Replace the body-dispatch call site at `synthesise-chapter.ts:1482-1485`:
@@ -1320,16 +1334,22 @@ it('serializes a mixed Qwen+Coqui segment-QA re-record round too, not just the i
     async synthesize(): Promise<SynthesizeOutput> {
       qwenCallCount += 1;
       callOrder.push('qwen');
-      /* First call for each sentence renders silence (fails segment-QA and
-         triggers a re-record); the re-record call renders real audio. */
-      const silent = qwenCallCount <= 2;
+      /* Marlow is the chapter's anchor group (groups[0]) — its FIRST call
+         renders silence (fails segment-QA, triggers a re-record); the
+         re-record call renders real audio. */
+      const silent = qwenCallCount === 1;
       return { pcm: Buffer.alloc(silent ? 4 : 4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
     },
   };
+  let coquiCallCount = 0;
   const trackedCoqui: TtsProvider = {
     async synthesize(): Promise<SynthesizeOutput> {
+      coquiCallCount += 1;
       callOrder.push('coqui');
-      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+      /* Wren is the (coqui-only) body dispatch — its FIRST call also renders
+         silence, so it's suspect too and joins the same re-record round. */
+      const silent = coquiCallCount === 1;
+      return { pcm: Buffer.alloc(silent ? 4 : 4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
     },
   };
   const tracked = (e: string) =>
@@ -1337,6 +1357,24 @@ it('serializes a mixed Qwen+Coqui segment-QA re-record round too, not just the i
       ? { provider: trackedCoqui, modelKey: 'coqui-xtts-v2' as const }
       : { provider: trackedQwen, modelKey: 'qwen3-tts-0.6b' as const };
 
+  /* fetch is only ever called by evictQwenForCoquiPhase in this test (fully
+     mocked providers, no other network path) — track it in the SAME
+     callOrder sequence so the assertion below can see exactly where the
+     evict happened relative to the qwen/coqui calls. */
+  vi.spyOn(global, 'fetch').mockImplementation(async () => {
+    callOrder.push('evict');
+    return new Response(null, { status: 200 });
+  });
+
+  /* Marks the callOrder index where the re-record round's OWN dispatch
+     begins — fires once per pending group, all BEFORE synthGroupsSerialized
+     is invoked for that round (see synthesise-chapter.ts's re-record loop),
+     so the first call gives the exact boundary. Anchoring the assertion to
+     this boundary (rather than a global ordering across the whole test)
+     avoids the anchor group's own single, un-serialized synth call — which
+     can legitimately produce a 'coqui'/'qwen' entry before the re-record
+     round even starts — from making the assertion unsatisfiable. */
+  let rerecordStartIndex = -1;
   await synthesiseChapter({
     sentences: [sentence(1, 'marlow'), sentence(2, 'wren')],
     cast,
@@ -1348,20 +1386,21 @@ it('serializes a mixed Qwen+Coqui segment-QA re-record round too, not just the i
     coquiEligible: true,
     bookLanguage: 'ru',
     maxSegmentRerecords: 1,
+    onSegmentRerecord: () => {
+      if (rerecordStartIndex === -1) rerecordStartIndex = callOrder.length;
+    },
   });
 
-  /* The re-record round (attempt 2 of Marlow's line, plus Wren's Coqui line
-     already rendered in phase 1) must not interleave qwen after coqui has
-     started — every 'qwen' entry precedes every 'coqui' entry, even across
-     the initial dispatch AND the re-record round combined. */
-  const firstCoqui = callOrder.indexOf('coqui');
-  const lastQwen = callOrder.lastIndexOf('qwen');
-  expect(firstCoqui).toBeGreaterThan(-1);
-  expect(lastQwen).toBeLessThan(firstCoqui);
+  expect(rerecordStartIndex).toBeGreaterThan(-1);
+  /* Within the re-record round specifically: qwen renders, THEN an evict,
+     THEN coqui renders — never interleaved, never skipping the evict. This
+     is the exact sequence that only exists once the re-record loop is
+     routed through synthGroupsSerialized instead of synthGroupsBatched
+     directly; on the unfixed code this would read ['qwen', 'coqui'] with no
+     'evict' entry at all. */
+  expect(callOrder.slice(rerecordStartIndex)).toEqual(['qwen', 'evict', 'coqui']);
 });
 ```
-
-(This test's exact silence-then-real-audio sequencing depends on `evaluateSegmentPcm`'s actual suspect-detection thresholds — before implementing, run this test once against the CURRENT unfixed code to confirm the silent take is actually flagged `suspect` and a re-record round fires; if the default thresholds don't trigger on `Buffer.alloc(4, 0)`, adjust the fake's silence condition or pass an explicit `segmentQaThresholds` override until a re-record is reliably provoked — the mechanism under test is the *serialization*, not the QA gate's sensitivity, so tune the fixture rather than the assertion.)
 
 - [ ] **Step 5: Run both new tests to verify they fail**
 
@@ -1871,7 +1910,28 @@ function makeStore(opts: {
 }
 ```
 
-(This changes only the `opts` type and the `books` array's `eligibleTtsEngines` field — the rest of the function is unchanged.) Then add two tests immediately after the existing `'non-English book omits the proceed affordance entirely'` test (line 93-105):
+(This changes only the `opts` type and the `books` array's `eligibleTtsEngines` field — the rest of the function is unchanged.)
+
+**The existing `'non-English book omits the proceed affordance entirely'` test (lines 93-105) must be edited, not left as-is.** It calls `makeStore({ characters: [...], language: 'ru' })` with no `eligibleTtsEngines` — after this task's fix, that book now hits `selectHasNoFallbackEngine`'s permissive missing-field default (`['qwen','kokoro','coqui','gemini','piper']`, includes `coqui`) and resolves to the **soft-gate**, not the hard block this test asserts. Change its fixture's `language: 'ru'` to `language: 'zh'` and add `eligibleTtsEngines: ['qwen']`, so it now correctly represents "a still-unsupported language" rather than "any non-English language":
+
+```ts
+it('a still-unsupported non-English book (zh) omits the proceed affordance entirely', () => {
+  const store = makeStore({
+    characters: [qwenChar({ id: 'a', name: 'Alice', lines: 3 })],
+    language: 'zh',
+    eligibleTtsEngines: ['qwen'],
+  });
+  render(
+    <Provider store={store}>
+      <VoiceReadinessGateModal />
+    </Provider>,
+  );
+  expect(screen.queryByText(/Proceed anyway/)).not.toBeInTheDocument();
+  expect(screen.getByText(/can't fall back to a generic voice/)).toBeInTheDocument();
+});
+```
+
+Then add one new test immediately after it (not two — the still-unsupported case is now covered by the edited test above, so only the new Coqui-eligible soft-gate case is actually new):
 
 ```ts
 it('a Coqui-eligible non-English book (ru) shows Proceed anyway with Coqui-worded copy', () => {
@@ -1887,21 +1947,6 @@ it('a Coqui-eligible non-English book (ru) shows Proceed anyway with Coqui-worde
   );
   expect(screen.getByText(/Proceed anyway/)).toBeInTheDocument();
   expect(screen.getByText(/render with a Coqui fallback voice/)).toBeInTheDocument();
-});
-
-it('a still-unsupported non-English book (zh) still omits the proceed affordance', () => {
-  const store = makeStore({
-    characters: [qwenChar({ id: 'a', name: 'Alice', lines: 3 })],
-    language: 'zh',
-    eligibleTtsEngines: ['qwen'],
-  });
-  render(
-    <Provider store={store}>
-      <VoiceReadinessGateModal />
-    </Provider>,
-  );
-  expect(screen.queryByText(/Proceed anyway/)).not.toBeInTheDocument();
-  expect(screen.getByText(/can't fall back to a generic voice/)).toBeInTheDocument();
 });
 ```
 
@@ -2008,7 +2053,12 @@ git commit -m "test(e2e): Russian book Qwen-failure resolves via Coqui fallback 
 
 - [ ] **Step 1: Write the regression plan doc**
 
-Create `docs/features/241-fs60-xtts-language-eligibility.md` using `docs/features/TEMPLATE.md`'s structure, frontmatter `status: active` (code + automated tests land; Live-GPU acceptance owed — matches this plan's Task 11 e2e scope, not a full acceptance walkthrough). Summarize: the `ENGINE_LANGUAGE_SUPPORT`/`resolveEligibleEngines` model, the `eligibleTtsEngines` API field, per-synth Coqui language threading, the Qwen→Coqui fallback branch, the Qwen/Coqui chapter-level serialization + its residual cross-book VRAM risk (explicitly named, not silently accepted), `PRELOAD_KOKORO`'s default flip, and the frontend picker/readiness-gate changes. Link the design spec (`docs/superpowers/specs/2026-07-04-fs60-xtts-language-eligibility-design.md`) and cite `dudarenok-maker/Castwright#1005`, `#1302` (fs-69), `#1303` (fs-70), `#1304` (fs-71).
+Create `docs/features/241-fs60-xtts-language-eligibility.md` using `docs/features/TEMPLATE.md`'s structure, frontmatter `status: active` (code + automated tests land; Live-GPU acceptance owed — matches this plan's Task 11 e2e scope, not a full acceptance walkthrough). Summarize: the `ENGINE_LANGUAGE_SUPPORT`/`resolveEligibleEngines` model, the `eligibleTtsEngines` API field, per-synth Coqui language threading, the Qwen→Coqui fallback branch, and the Qwen/Coqui chapter-level serialization. Explicitly name **all three** accepted v1 limitations (don't silently omit any):
+1. The residual cross-book Qwen+Coqui VRAM-admission risk (design spec §4 — the existing budget semaphore would admit a concurrent Qwen+Coqui pair across two books as "fitting" when the measured numbers say it may not be).
+2. `evictQwenForCoquiPhase`'s global (not per-book) sidecar unload, which can evict a different concurrently-rendering book's resident Qwen (Task 7).
+3. The chapter anchor group's exemption from the Qwen/Coqui serialization guarantee — a narrow, accepted gap when the sole Qwen-routed speaker lands at sentence index 0 and everything else falls back to Coqui (Task 7).
+
+Also cover `PRELOAD_KOKORO`'s default flip and the frontend picker/readiness-gate changes. Link the design spec (`docs/superpowers/specs/2026-07-04-fs60-xtts-language-eligibility-design.md`) and cite `dudarenok-maker/Castwright#1005`, `#1302` (fs-69), `#1303` (fs-70), `#1304` (fs-71).
 
 - [ ] **Step 2: Add the INDEX.md entry**
 
