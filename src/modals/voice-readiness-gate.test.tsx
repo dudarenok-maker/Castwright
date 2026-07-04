@@ -135,6 +135,33 @@ describe('VoiceReadinessGateModal', () => {
     expect(store.getState().ui.startGenPrompt).toEqual({ fallbackConfirmed: true });
   });
 
+  it('warns and does not dispatch, navigate, or close when a design run is active for ANOTHER book', () => {
+    const store = makeStore({
+      bookId: 'b1',
+      characters: [qwenChar({ id: 'a', name: 'Alice', lines: 5 })],
+      designActive: { bookId: 'other-book', state: 'running' },
+    });
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
+    render(
+      <Provider store={store}>
+        <VoiceReadinessGateModal />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    expect(
+      dispatchSpy.mock.calls.some((c) => c[0]?.type === castDesignActions.designAllRequested.type),
+    ).toBe(false);
+    expect(
+      dispatchSpy.mock.calls.some((c) => {
+        const action = c[0] as { type?: string; payload?: { kind?: string } };
+        return action?.type === 'notifications/pushToast' && action.payload?.kind === 'warn';
+      }),
+    ).toBe(true);
+    /* Gate stays open and the view is untouched — the run belongs to another book. */
+    expect(store.getState().ui.voiceReadinessGate).toEqual({ bookId: 'b1' });
+    expect(store.getState().ui.stage).toMatchObject({ view: 'manuscript' });
+  });
+
   it('shows "View design progress" and skips re-dispatching designAllRequested while a run is active for this book', () => {
     const store = makeStore({
       characters: [qwenChar({ id: 'a', name: 'Alice', lines: 5 })],

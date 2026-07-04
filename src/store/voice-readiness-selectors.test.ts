@@ -146,7 +146,7 @@ describe('voiceReadinessGateMessage', () => {
       characters: [qwenChar({ id: 'a', name: 'Alice', lines: 1 })],
       books: [{ bookId: 'b1', language: 'en' }],
     });
-    expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/still need a designed voice/);
+    expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/haven't been designed yet/);
   });
 
   it('returns the hard-block copy for a non-English book', () => {

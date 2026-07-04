@@ -53,11 +53,13 @@ export function selectIsBookNonEnglish(state: RootState, bookId: string): boolea
 
 /** fe-46 — message-builder pair mirroring `analysisBusyMessage`
     (`analysis-substage-selectors.ts`): distinct copy for the English
-    soft-gate vs. the non-English hard block. Returns null when the gate
-    shouldn't fire at all. */
+    soft-gate vs. the non-English hard block, rendered verbatim by
+    `VoiceReadinessGateModal` — the single source of truth for this copy, so
+    the modal body text can never drift from what this selector promises.
+    Returns null when the gate shouldn't fire at all. */
 export function voiceReadinessGateMessage(state: RootState, bookId: string): string | null {
   if (!selectVoiceReadinessGateShouldFire(state, bookId)) return null;
   return selectIsBookNonEnglish(state, bookId)
     ? "This book can't fall back to a generic voice — every speaking character needs a designed voice."
-    : 'Some speaking characters still need a designed voice before generating.';
+    : "These speaking characters haven't been designed yet. Design them now, or proceed and they'll render with a generic Kokoro fallback voice.";
 }

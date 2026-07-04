@@ -11,9 +11,11 @@ import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import {
   selectUndesignedQwenCharacters,
   selectIsBookNonEnglish,
+  voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
 
@@ -26,14 +28,28 @@ export function VoiceReadinessGateModal() {
     gate ? selectUndesignedQwenCharacters(s, gate.bookId) : [],
   );
   const isNonEnglish = useAppSelector((s) => (gate ? selectIsBookNonEnglish(s, gate.bookId) : false));
+  const message = useAppSelector((s) => (gate ? voiceReadinessGateMessage(s, gate.bookId) : null));
 
   if (!gate) return null;
   const { bookId } = gate;
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
+  /* Mirrors cast.tsx's own guard: only one book's bulk design can run at a
+     time (cast-design-stream-middleware.ts ignores a second start), so
+     dispatching here while another book owns the run would silently no-op. */
+  const designRunningElsewhere = designActive?.state === 'running' && designActive.bookId !== bookId;
 
   const onClose = () => dispatch(uiActions.closeVoiceReadinessGate());
 
   const onDesignFullCast = () => {
+    if (designRunningElsewhere) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: 'A design run is already in progress for another book.',
+        }),
+      );
+      return;
+    }
     if (!designRunningHere) {
       dispatch(
         castDesignActions.designAllRequested({
@@ -73,7 +89,7 @@ export function VoiceReadinessGateModal() {
             </div>
             <button
               onClick={onClose}
-              className="p-2 rounded-full hover:bg-ink/5 text-ink/60"
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 grid place-items-center"
               aria-label="Close"
             >
               <IconClose className="w-4 h-4" />
@@ -81,17 +97,7 @@ export function VoiceReadinessGateModal() {
           </div>
 
           <div className="px-6 py-5 text-sm text-ink/75 leading-relaxed">
-            {isNonEnglish ? (
-              <p>
-                This book can't fall back to a generic voice — every speaking character needs a
-                designed voice.
-              </p>
-            ) : (
-              <p>
-                These speaking characters haven't been designed yet. Design them now, or proceed
-                and they'll render with a generic Kokoro fallback voice.
-              </p>
-            )}
+            {message && <p>{message}</p>}
             {undesigned.length > 0 && (
               <ul data-testid="voice-readiness-gate-list" className="mt-3 space-y-1.5">
                 {undesigned.map((c) => (
@@ -110,12 +116,15 @@ export function VoiceReadinessGateModal() {
             {!isNonEnglish ? (
               <button
                 onClick={onProceedAnyway}
-                className="text-sm font-medium text-ink/60 hover:text-ink"
+                className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0"
               >
                 Proceed anyway — generic Kokoro fallback voices
               </button>
             ) : (
-              <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">
+              <button
+                onClick={onClose}
+                className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0"
+              >
                 Cancel
               </button>
             )}
