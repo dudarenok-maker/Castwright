@@ -15,7 +15,7 @@
    disk — the persistence-middleware watches that action and PUTs a single
    `state` slice patch containing all six fields. */
 
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { BookStateJson } from '../lib/types';
 import type { RootState } from './index';
 
@@ -147,16 +147,26 @@ export const bookMetaReducer = bookMetaSlice.reducer;
 
 /** Resolves the currently-displayed metadata for a book by overlaying any
     in-flight draft on top of the saved snapshot. Returns null if the book
-    has not been hydrated. */
-export const selectEffectiveMeta =
-  (bookId: string | null) =>
-  (s: RootState): EditableBookMeta | null => {
-    if (!bookId) return null;
-    const saved = s.bookMeta.saved[bookId];
+    has not been hydrated.
+
+    Memoised via createSelector, mirroring `selectDriftForBook` (#1308) — an
+    unmemoized `{ ...saved, ...draft }` allocates a fresh object on every call
+    while a draft is in flight (i.e. while the user is actively editing),
+    which react-redux's dev-mode stability check flags as "returned a
+    different result when called with the same parameters" and forces
+    `ListenRoute` (this selector's caller) to re-render on every store
+    dispatch during that editing session, not just meta-relevant ones. */
+export const selectEffectiveMeta = createSelector(
+  [
+    (s: RootState, bookId: string | null) => (bookId ? s.bookMeta.saved[bookId] : undefined),
+    (s: RootState) => s.bookMeta.draft,
+  ],
+  (saved, draft): EditableBookMeta | null => {
     if (!saved) return null;
-    if (!s.bookMeta.draft || Object.keys(s.bookMeta.draft).length === 0) return saved;
-    return { ...saved, ...s.bookMeta.draft };
-  };
+    if (!draft || Object.keys(draft).length === 0) return saved;
+    return { ...saved, ...draft };
+  },
+);
 
 /** True when the user has made any unsaved edits. */
 export const selectIsDirty = (s: RootState): boolean =>
