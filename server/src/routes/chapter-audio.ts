@@ -317,10 +317,33 @@ function makeFileHandler(variant: AudioVariant = 'current') {
     res.sendFile(
       audio.path,
       {
+        /* `audio.path` is fully server-computed from a validated bookId/
+           chapterId lookup, never client input — so `send`'s dotfile guard
+           (any ancestor path segment starting with `.`, e.g. a workspace
+           nested under a `.claude/worktrees/...` checkout) is a false
+           positive here, not a real security boundary. Without this, the
+           guard silently turns a perfectly valid request into a 404-shaped
+           internal error that the catch-all below then flattens into an
+           opaque, unlogged 500 (bug #1290). */
+        dotfiles: 'allow',
         headers: { 'Content-Type': audio.mime, 'Cache-Control': 'no-cache' },
       },
       (err) => {
-        if (err && !res.headersSent) res.status(500).end();
+        if (!err) return;
+        /* `send`'s own errors (dotfile-deny, malformed path, a genuine
+           ENOENT if the file is deleted between the existence check above
+           and this call) carry a real `.status`; log unconditionally —
+           including the mid-stream case where headers are already sent and
+           the response itself can't be changed — so a future failure is
+           never silent again. */
+        const status = (err as { status?: number }).status ?? 500;
+        console.error(
+          `[chapter-audio] sendFile failed for ${audio.path}${
+            res.headersSent ? ' (after headers sent)' : ''
+          }: ${err.message}`,
+          { status },
+        );
+        if (!res.headersSent) res.status(status).end();
       },
     );
   };

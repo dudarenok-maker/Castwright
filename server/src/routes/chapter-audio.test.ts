@@ -630,3 +630,74 @@ describe('meta endpoint — per-segment QA issues (issue-waveform)', () => {
     expect(res.body.segments[0].reasons).toBeUndefined();
   });
 });
+
+/* Regression for bug #1290: a workspace nested under a dot-prefixed ancestor
+   directory (e.g. a `.claude/worktrees/<name>/castwright-workspace` checkout,
+   which is exactly how Claude Code's own parallel-agent worktrees are laid
+   out) tripped `send`'s dotfile guard, and the route's catch-all turned that
+   into a blank, unlogged 500 even though the file exists on disk and the
+   JSON metadata endpoint for the same chapter serves fine. WORKSPACE_DIR is
+   read once at module load (paths.ts), so this needs its own fresh module
+   graph + Express app rather than reusing the top-level fixture. */
+describe('workspace nested under a dot-prefixed directory (bug #1290)', () => {
+  it('GET audio.mp3 still returns 200, not a dotfile-guard 500', async () => {
+    const dottedRoot = mkdtempSync(join(tmpdir(), 'audiobook-dotfile-test-'));
+    /* Setup runs inside the try too — WORKSPACE_DIR must be unset and
+       dottedRoot deleted even if a setup step throws (e.g. mkdirSync /
+       writeFileSync failing partway through), or a leaked env var / temp
+       dir can poison a later test in the same worker process. */
+    try {
+      const workspaceRoot = join(dottedRoot, '.claude', 'worktrees', 'wiki-app-runner', 'castwright-workspace');
+      mkdirSync(workspaceRoot, { recursive: true });
+
+      vi.resetModules();
+      process.env.WORKSPACE_DIR = workspaceRoot;
+      const [{ chapterAudioRouter: dottedRouter }, { makeBookId: makeDottedBookId }] = await Promise.all([
+        import('./chapter-audio.js'),
+        import('../workspace/paths.js'),
+      ]);
+
+      const dottedBookId = makeDottedBookId(AUTHOR, SERIES, TITLE);
+      const dottedBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
+      const dottedAudioRoot = join(dottedBookDir, 'audio');
+      mkdirSync(dottedAudioRoot, { recursive: true });
+      mkdirSync(join(dottedBookDir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(dottedBookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: dottedBookId,
+          manuscriptId: 'm_test',
+          title: TITLE,
+          author: AUTHOR,
+          series: SERIES,
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG }],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(join(dottedBookDir, 'manuscript.txt'), 'placeholder');
+      const buf = Buffer.alloc(4096, 0);
+      buf[0] = 0xff;
+      buf[1] = 0xf3;
+      buf[2] = 0x40;
+      buf[3] = 0xc0;
+      writeFileSync(join(dottedAudioRoot, `${SLUG}.mp3`), buf);
+
+      const dottedApp = express();
+      dottedApp.use('/api/books', dottedRouter);
+
+      const res = await request(dottedApp).get(`/api/books/${dottedBookId}/chapters/1/audio.mp3`);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/audio\/mpeg/);
+    } finally {
+      delete process.env.WORKSPACE_DIR;
+      rmSync(dottedRoot, { recursive: true, force: true });
+      vi.resetModules();
+    }
+  });
+});
