@@ -83,6 +83,17 @@ for (const scene of SCENES) {
     }
     await waitForImages(page);
 
+    /* Optional interaction (open a modal, etc.) — best-effort, never aborts
+       the run. A selector drift just means the shot is pre-interaction. */
+    if (scene.action) {
+      try {
+        await scene.action(page);
+        await page.waitForTimeout(300); // let the modal's open transition settle
+      } catch (err) {
+        console.warn(`[capture] ${scene.id}: action failed — capturing pre-interaction:`, err);
+      }
+    }
+
     /* Frame a below-the-fold region (e.g. the continue-listening rail). Non-fatal
        — a missing target shouldn't abort the run. */
     if (scene.scrollTo) {
