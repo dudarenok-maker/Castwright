@@ -23,3 +23,5 @@ appends its own entry here (before-shipping checklist item 4), so the 1.11.0
 body accretes PR-by-PR rather than being reconstructed from git history at cut
 time. The previous release's body shipped with the v1.10.0 tag annotation.
 -->
+
+- **Hardware guidance reconciled with castwright.ai.** The About page and the "Will it run on my machine?" device panel now say a 6 GB GPU gets you started and 8 GB is the sweet spot, matching the FAQ on the website (#1274).

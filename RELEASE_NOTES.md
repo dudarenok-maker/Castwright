@@ -1,5 +1,7 @@
 # Castwright 1.11.0
 
+- **A more honest word on hardware.** The About page and the "Will it run on my machine?" panel now say a 6 GB graphics card gets you started, with 8 GB as the sweet spot — matching what you'll find on castwright.ai.
+
 # Castwright 1.10.0
 
 - **Three new languages take the stage: Spanish, French, and German.** After English and Russian, Castwright now performs Spanish-, French-, and German-language books with the same full-cast craft — it reads the manuscript in its own language, gives every character a voice that speaks it, and keeps the cast's tone and descriptions written in the book's own tongue. Five languages, one machine.
