@@ -38,6 +38,14 @@ tries the wrong port and fails. Separately, while diagnosing that, two more gaps
    session cookie minted on `https://<lan-ip>:8443` auto-attaches to that bare-IP request too.
    Without a matching fix, the forwarder would silently reopen the exact 403 class this spec
    sets out to close, just on the IP path instead of the hostname path. See Component 3.
+3. **Loopback-trust collision (found in adversarial review round 2, 2026-07-04)**: the
+   forwarder's upstream connection to the real server originates from the same box, so without
+   a specific countermeasure it would present as `127.0.0.1` to the app — which
+   `server/src/lan-auth.ts`'s `isLoopbackRequest()` treats as implicitly trusted, bypassing the
+   `LAN_AUTH_TOKEN` shared-secret/device-token gate (`requireLanToken`, srv-20/srv-33)
+   entirely. That gate exists specifically so a user can lock down LAN access; a forwarder that
+   silently defeats it for anyone reaching the app via the bare hostname/IP would be a real
+   regression, not a cosmetic gap. See Component 1's fix.
 
 ## Goals
 
@@ -52,6 +60,10 @@ tries the wrong port and fails. Separately, while diagnosing that, two more gaps
   forwarder makes that reachable too and the CSRF fix must cover both new paths symmetrically.
 - All of this is additive to the existing LAN-IP flow, which keeps working unchanged in every
   failure mode (port 443 taken, mkcert missing, etc.).
+- The forwarder must never cause the app to treat forwarded LAN traffic as loopback-trusted —
+  whatever security posture a user has configured (in particular `LAN_AUTH_TOKEN`) must apply
+  identically whether a client connects via `:8443` directly or via the bare-hostname/IP
+  forwarder on `:443`.
 
 ## Non-goals (out of scope for this spec)
 
@@ -110,11 +122,27 @@ Three independent pieces, each additive to what 239 already shipped:
   it doesn't advertise or own.
 - `startPortForwarder(targetPort: number, opts?): PortForwarderHandle | null` — creates a
   `net.createServer()` bound to `0.0.0.0:443`. On each `'connection'` event, opens
-  `net.connect({ port: targetPort, host: '127.0.0.1' })` and pipes both directions
-  (`socket.pipe(upstream); upstream.pipe(socket)`); on either side closing or erroring, destroy
-  both ends (no half-open leaks). Returns a handle with a `close()` method (mirrors
-  `MdnsResponderHandle`'s `kill()` shape, but this is an in-process `net.Server` — `close()`
-  is the standard Node API, no child-process teardown needed).
+  `net.connect({ port: targetPort, host: '127.0.0.1', localAddress: '127.0.0.2' })` and pipes
+  both directions (`socket.pipe(upstream); upstream.pipe(socket)`); on either side closing or
+  erroring, destroy both ends (no half-open leaks). Returns a handle with a `close()` method
+  (mirrors `MdnsResponderHandle`'s `kill()` shape, but this is an in-process `net.Server` —
+  `close()` is the standard Node API, no child-process teardown needed).
+- **`localAddress: '127.0.0.2'` is a required security invariant, not an incidental detail
+  (found in adversarial review round 2, 2026-07-04)**: without it, the upstream connection's
+  source address defaults to `127.0.0.1`, which `server/src/lan-auth.ts`'s `isLoopbackRequest()`
+  treats as implicitly trusted — silently bypassing the `LAN_AUTH_TOKEN` gate
+  (`requireLanToken`) for every client reaching the app through this forwarder, LAN or
+  otherwise. `127.0.0.0/8` is entirely loopback (RFC 5735), so `127.0.0.2` is just as
+  non-routable and local-only as `127.0.0.1` — it costs nothing functionally — but
+  `lan-auth.ts`'s `LOOPBACK` set (`server/src/lan-auth.ts:24`) is an exact-match `Set` containing
+  only `'127.0.0.1'`, `'::1'`, `'::ffff:127.0.0.1'`, so `127.0.0.2` correctly fails that check
+  while `isPrivateNetworkRequest()`'s `/^127\./` regex (`lan-auth.ts:54`) still matches it —
+  i.e. forwarded traffic is (correctly) still recognized as LAN-reachable, just no longer
+  misclassified as the trusted loopback caller itself. No change to `lan-auth.ts` is needed;
+  this is entirely a forwarder-side fix. (Windows 10/11 supports binding arbitrary addresses in
+  `127.0.0.0/8` on the loopback pseudo-interface without extra configuration — confirm this
+  during implementation with a real bind, not just inference, since it's the one platform-
+  specific assumption this fix rests on.)
 - Bind failure (`'error'` event on the server, e.g. `EADDRINUSE`/`EACCES`): `console.warn` once,
   do not throw, do not retry. The main app's :8443 listener is entirely unaffected — it was
   already up before this call runs.
@@ -164,11 +192,16 @@ adversarial-review note on why both are required, not just the hostname):
   - `'https://castwright.dev.local:5173'` — the `dev:lan` Vite port is a fixed literal in
     `package.json`'s `dev:lan` script, not derived from `LAN_HTTPS_PORT`, so it's its own
     fixed entry.
-- **A port-less variant of every enumerated LAN IP.** `allowedOrigins()` already loops over
-  `enumerateLanUrls(port, 'https')`'s results to build the existing `:8443`-suffixed entries;
-  extend that same loop to also emit the bare form (`` `https://${ip}` ``) for each address.
-  This has to be dynamic (re-derived per call, like the existing IP entries already are —
-  NICs change) rather than a static literal, unlike the three hostname entries above.
+- **A port-less variant of every enumerated LAN IP.** Today, `allowedOrigins()` builds its set
+  via `new Set([...urls, ...loopback])`, where `urls` is `enumerateLanUrls(port,
+  'https').urls` — already-assembled `` `https://${ip}:${port}` `` strings, not bare IPs
+  (`csrf-origin.ts:13-28`; `export-lan.ts:54-67`). There's no existing per-IP loop to "extend"
+  — the fix needs to either strip the `:${port}` suffix off each URL in `urls` to derive the
+  bare form, or call `enumerateLanIps()`-equivalent logic separately to get raw addresses and
+  build `` `https://${ip}` `` directly. Either way, the result must stay dynamic (re-derived
+  per call, like the existing IP entries already are — NICs change) rather than a static
+  literal, unlike the three hostname entries above. Exact implementation shape (string-strip
+  vs. separate enumeration) is a planning-time detail.
 
 An unused allow-list entry is inert (nobody's `Origin` header will ever equal it if that URL
 is never actually served), so all of these are added unconditionally rather than threading
@@ -269,6 +302,12 @@ the server). Behavior:
   port-less-IP-variant addition closes this the same way the bare-hostname entry closes the
   hostname case. Without it, this spec would ship a new 403 on the exact bare-IP access
   pattern it just made possible.
+- **Loopback-trust collision** (adversarial review round 2, 2026-07-04): the forwarder's
+  upstream connection would otherwise present as `127.0.0.1`, bypassing `LAN_AUTH_TOKEN` for
+  every forwarded request regardless of the real client's origin. Closed by binding the
+  upstream connection's local address to `127.0.0.2` (Component 1) rather than letting it
+  default to `127.0.0.1` — a distinct, still-non-routable loopback address that
+  `isLoopbackRequest()`'s exact-match check correctly does not trust.
 
 ## Testing
 
@@ -276,7 +315,18 @@ the server). Behavior:
   `shouldSpawnPortForwarder`'s `NODE_ENV` discriminator; an integration-style test spins up a
   dummy TCP echo server as the "upstream" and asserts bytes round-trip through the forwarder
   in both directions; asserts a bind failure (e.g. binding to an already-used port in the
-  test) triggers the warn path without throwing.
+  test) triggers the warn path without throwing; **and — the security-critical case found in
+  adversarial review round 2 — asserts the upstream connection's observed `remoteAddress` is
+  `127.0.0.2`, never `127.0.0.1`**, by having the dummy upstream server record
+  `socket.remoteAddress` on `'connection'` and asserting against it directly (this is the one
+  test in this spec that would fail loudly if the `localAddress` invariant in Component 1 were
+  ever accidentally dropped, e.g. during a refactor).
+- `server/src/lan-auth.test.ts` (extend, if such coverage doesn't already exist for this exact
+  scenario) — assert `isLoopbackRequest()` returns `false` for a request whose
+  `socket.remoteAddress` is `127.0.0.2` (as opposed to `127.0.0.1`), and that `requireLanToken`
+  therefore still enforces the token check for it when `LAN_AUTH_TOKEN` is configured — this
+  is the regression test for the auth-bypass round 2 caught, exercised from the auth-module
+  side rather than only the forwarder side above.
 - `server/src/csrf-origin.test.ts` — add cases: `https://castwright.local:8443` passes,
   `https://castwright.local` (no port) passes, `https://castwright.dev.local:5173` passes,
   **and `https://<enumerated-lan-ip>` (no port) passes** (the bare-IP case caught in
