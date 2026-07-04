@@ -32,28 +32,40 @@ function allowedOrigins(): Set<string> {
     `https://[::1]:${port}`,
   ];
   /* castwright-local-port-cert — the friendly hostnames, plus a port-less
-     variant of every enumerated LAN IP. Both are needed: the port-443
-     forwarder (server/src/lan-port-forwarder.ts) is host-blind, so it makes
-     a bare `https://<lan-ip>` reachable in addition to
+     variant of every enumerated LAN IP AND of loopback. All three are
+     needed: the port-443 forwarder (server/src/lan-port-forwarder.ts) is
+     host-blind, so it makes a bare `https://<lan-ip>`, `https://localhost`,
+     and `https://127.0.0.1` reachable in addition to
      `https://castwright.local` — cookies aren't port-scoped, so a session
-     cookie minted on the :8443 origin would otherwise 403 on either bare
-     path. An unused entry here is inert (nobody's Origin will ever equal it
-     if that URL isn't actually served), so all of these are added
-     unconditionally rather than threading the forwarder's/dev:lan's
+     cookie minted on the :8443 origin would otherwise 403 on any of those
+     bare paths. This matters especially for loopback because the forwarder
+     deliberately sources forwarded traffic from 127.0.0.2 (not 127.0.0.1),
+     specifically so it does NOT qualify for the isLoopbackRequest()
+     auth-exemption — meaning forwarded bare-loopback traffic MUST pass this
+     exact origin check. An unused entry here is inert (nobody's Origin will
+     ever equal it if that URL isn't actually served), so all of these are
+     added unconditionally rather than threading the forwarder's/dev:lan's
      live/dead state into this module. */
   const friendlyHostnames = [
     `https://castwright.local:${port}`,
     'https://castwright.local',
   ];
+  const bareLoopback = ['https://localhost', 'https://127.0.0.1', 'https://[::1]'];
   try {
     const { urls } = enumerateLanUrls(port, 'https'); // ['https://192.168.x.y:8443', ...]
     const bareIps = urls.map((u) => u.replace(`:${port}`, ''));
-    return new Set<string>([...urls, ...bareIps, ...friendlyHostnames, ...loopback]);
+    return new Set<string>([
+      ...urls,
+      ...bareIps,
+      ...friendlyHostnames,
+      ...loopback,
+      ...bareLoopback,
+    ]);
   } catch {
     // Fail closed: if NIC enumeration ever throws, still allow loopback +
     // the friendly hostnames — never let an exception turn every
     // cookie-bearing write into a 500.
-    return new Set<string>([...friendlyHostnames, ...loopback]);
+    return new Set<string>([...friendlyHostnames, ...loopback, ...bareLoopback]);
   }
 }
 

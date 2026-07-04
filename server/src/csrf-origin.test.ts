@@ -123,3 +123,23 @@ it('passes a cookie POST from a bare (no-port) LAN-IP origin — the host-blind 
   );
   expect(next).toHaveBeenCalled();
 });
+
+it('passes a cookie POST from the bare (no-port) localhost origin — the port-443 forwarder path', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://localhost' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('passes a cookie POST from the bare (no-port) 127.0.0.1 origin — the port-443 forwarder path', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://127.0.0.1' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});

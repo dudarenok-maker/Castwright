@@ -9,7 +9,24 @@
    termination, no per-hostname routing table), but it means every LAN IP
    also becomes reachable on :443 with no port, not just the friendly
    hostname (see server/src/csrf-origin.ts's port-less-IP allow-list entry,
-   which exists specifically to cover this). */
+   which exists specifically to cover this).
+
+   Rate-limit key collapse (round 3 observation, deliberately deferred —
+   tracked as ops-24 / #1309): because the forwarder is a raw TCP relay,
+   every forwarded client presents the same upstream source address
+   (127.0.0.2) to the app, including to IP-keyed rate limiters
+   (middleware/rate-limit.ts's apiLimiter, pairing.ts's redeemLimiter). All
+   bare-hostname/bare-IP clients therefore share one rate-limit bucket
+   instead of getting per-client ceilings. This is inherent to any TCP-level
+   forwarder that loses the original client IP (not specific to the
+   127.0.0.2 choice — 127.0.0.1 would have the identical effect). Most
+   ceilings (e.g. apiLimiter) are generous enough relative to a single-user
+   LAN tool's real traffic that the collapse is a non-issue, but
+   pairing.ts's redeemLimiter (5 requests/60s) is the sharper case: one
+   device's pairing attempts routed through this forwarder can lock out
+   every other LAN device's pairing attempts for up to a minute. Triaged and
+   explicitly deferred rather than fixed here — see ops-24 (#1309) for the
+   tracked follow-up. */
 
 import net from 'node:net';
 import { shouldSpawnMdnsResponder } from './mdns-owner.js';
