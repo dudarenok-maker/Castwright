@@ -127,8 +127,17 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
              the slot but do NOT /complete it and do NOT add it to `completed` —
              it must stay re-claimable once the user confirms it back to
              `queued`. (A /complete would be a server no-op anyway, but adding it
-             to `completed` would wedge the confirmed re-dispatch.) */
-          if (queue.entries.find((e) => e.id === entryId)?.status === 'awaiting_confirm') {
+             to `completed` would wedge the confirmed re-dispatch.)
+
+             Asked of the RUNNER, not the queue slice's `status` field (#1284):
+             nothing dispatches a queue-snapshot update off the park tick, so
+             `queue.entries` here can still show the entry's pre-park status
+             (`in_progress`) — reading that stale value routed a park down the
+             "real completion" branch below, /completed it (a server no-op, but
+             `completed.add(entryId)` isn't undone by that no-op), and
+             permanently blacklisted the entry from STEP 2's re-claim once the
+             user confirmed it back to `queued`. */
+          if (runner.takeChapterAwaitingConfirm(bookId, chapterId)) {
             continue;
           }
           /* Did this chapter FAIL? If so, complete it as `failed` so the entry
@@ -139,38 +148,45 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
           const failure = runner.takeChapterFailure(bookId, chapterId);
           if (failure != null) {
             void dispatch(
-              completeQueueEntry(entryId, { outcome: 'failed', errorReason: failure }),
+              completeQueueEntry(entryId, { outcome: 'failed', errorReason: failure.reason }),
             ).catch(() => {
               /* Best-effort — the next snapshot reconciles. */
             });
 
             /* srv-11 — track the consecutive-IDENTICAL-failure streak for this
                book. Only a repeated identical reason trips the breaker; a
-               differing reason resets the count to 1 + records the new reason. */
-            const streak = failureStreakByBook.get(bookId);
-            if (streak && streak.reason === failure) {
-              streak.count += 1;
-            } else {
-              failureStreakByBook.set(bookId, { reason: failure, count: 1 });
-            }
-            const current = failureStreakByBook.get(bookId)!;
-            if (current.count >= CONSECUTIVE_FAILURE_THRESHOLD) {
-              /* Trip: pause the queue (no per-book pause exists — the queue
-                 pause flag is global) and toast naming the book + the repeated
-                 error so the user knows which run wedged and why. Reset the
-                 streak so a Resume doesn't immediately re-trip on the same
-                 already-counted failures. */
-              failureStreakByBook.delete(bookId);
-              void dispatch(setQueuePaused(true)).catch(() => {
-                /* Best-effort — the toast still surfaces the problem. */
-              });
-              dispatch(
-                notificationsActions.pushToast({
-                  kind: 'error',
-                  message: `Paused the queue — book "${bookId}" failed ${CONSECUTIVE_FAILURE_THRESHOLD} times in a row: ${failure}`,
-                  dedupeKey: `queue-failure-breaker:${bookId}`,
-                }),
-              );
+               differing reason resets the count to 1 + records the new reason.
+               voice-not-designed is exempt: it's a deterministic per-book
+               cast-config issue (the #1263 fail-fast that replaced the
+               awaiting_confirm park, which was ALSO exempt from this streak),
+               not the "something's systemically wrong" signal the breaker
+               exists to catch — it shouldn't pause unrelated books' queues. */
+            if (failure.errorCode !== 'voice-not-designed') {
+              const streak = failureStreakByBook.get(bookId);
+              if (streak && streak.reason === failure.reason) {
+                streak.count += 1;
+              } else {
+                failureStreakByBook.set(bookId, { reason: failure.reason, count: 1 });
+              }
+              const current = failureStreakByBook.get(bookId)!;
+              if (current.count >= CONSECUTIVE_FAILURE_THRESHOLD) {
+                /* Trip: pause the queue (no per-book pause exists — the queue
+                   pause flag is global) and toast naming the book + the repeated
+                   error so the user knows which run wedged and why. Reset the
+                   streak so a Resume doesn't immediately re-trip on the same
+                   already-counted failures. */
+                failureStreakByBook.delete(bookId);
+                void dispatch(setQueuePaused(true)).catch(() => {
+                  /* Best-effort — the toast still surfaces the problem. */
+                });
+                dispatch(
+                  notificationsActions.pushToast({
+                    kind: 'error',
+                    message: `Paused the queue — book "${bookId}" failed ${CONSECUTIVE_FAILURE_THRESHOLD} times in a row: ${failure.reason}`,
+                    dedupeKey: `queue-failure-breaker:${bookId}`,
+                  }),
+                );
+              }
             }
           } else {
             /* Completion removal, NOT a user cancel: the entry is in_progress

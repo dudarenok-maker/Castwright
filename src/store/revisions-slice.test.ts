@@ -5,6 +5,7 @@ import {
   revisionsSlice,
   revisionsActions,
   selectDriftByBook,
+  selectDriftForBook,
   selectDriftGroupsByBook,
   distinctDriftChapterCount,
 } from './revisions-slice';
@@ -566,6 +567,27 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
     const first = selectDriftByBook({ revisions: s });
     const second = selectDriftByBook({ revisions: s });
     expect(second).toBe(first);
+  });
+
+  it('selectDriftForBook filters to one book and returns a stable reference (#1285)', () => {
+    const s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        drift: [
+          drift('d-A1', { bookId: 'book-A' }),
+          drift('d-B1', { bookId: 'book-B' }),
+          drift('d-A2', { bookId: 'book-A' }),
+        ],
+      }),
+    );
+    const forA = selectDriftForBook({ revisions: s }, 'book-A');
+    expect(forA.map((d) => d.id)).toEqual(['d-A1', 'd-A2']);
+    /* Unmemoized, an inline `.filter()` allocates a fresh array on every
+       call even for the identical (drift, bookId) pair — react-redux's
+       dev-mode stability check flags exactly this as "returned a different
+       result" and forces the calling component (ReadyViewSwitch, the direct
+       parent of GenerationView) to re-render on every store dispatch. */
+    expect(selectDriftForBook({ revisions: s }, 'book-A')).toBe(forA);
   });
 });
 

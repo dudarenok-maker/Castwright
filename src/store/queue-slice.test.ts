@@ -149,6 +149,15 @@ describe('selectors', () => {
     expect(grouped[1].entries.map((e) => e.id)).toEqual(['b1']);
   });
 
+  it('selectQueueByBook returns a stable reference across calls with an unchanged entries array (#1285)', () => {
+    /* Unmemoized, this allocated a fresh array (and fresh per-book arrays) on
+       every call even for the identical `entries` reference — react-redux's
+       dev-mode useSelector stability check flags exactly this shape as
+       "returned a different result when called with the same parameters" and
+       forces every subscribed component to re-render on every store dispatch. */
+    expect(selectQueueByBook(populated)).toBe(selectQueueByBook(populated));
+  });
+
   it('selectInFlightEntry returns the FIRST in_progress entry or null', () => {
     expect(selectInFlightEntry(populated)?.id).toBe('a1');
     const empty: { queue: QueueState } = {

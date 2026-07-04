@@ -306,6 +306,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'synth-timeout',
         'unknown',
         'vram-spill',
+        'voice-not-designed',
         'xtts-speaker-desync',
       ].sort(),
     );

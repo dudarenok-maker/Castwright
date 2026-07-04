@@ -121,12 +121,26 @@ export interface StreamRunner {
   /** Union of chapter ids across all open streams — so the dispatcher never
       claims a chapter that's already rendering. */
   openChapterIds(): number[];
-  /** Return + CLEAR the recorded synthesis-failure reason for a (book,
-      chapter), or null if it didn't fail. The dispatcher calls this during
-      reconcile to decide whether the entry is marked `failed` (lingers for
-      retry) or done-pruned. One-shot so a later success can't read a stale
-      failure. */
-  takeChapterFailure(bookId: string, chapterId: number): string | null;
+  /** Return + CLEAR the recorded synthesis-failure reason (+ optional fs-19
+      errorCode) for a (book, chapter), or null if it didn't fail. The
+      dispatcher calls this during reconcile to decide whether the entry is
+      marked `failed` (lingers for retry) or done-pruned. One-shot so a later
+      success can't read a stale failure. */
+  takeChapterFailure(
+    bookId: string,
+    chapterId: number,
+  ): { reason: string; errorCode?: GenerationTick['errorCode'] } | null;
+  /** Did this (book, chapter)'s stream just close because the worker PARKED
+      it on the loud-fallback gate (`chapter_awaiting_fallback_confirm`), as
+      opposed to a real completion or failure? The dispatcher's reconcile
+      calls this during STEP 1 instead of reading the queue slice's `status`
+      field — that Redux copy is NOT guaranteed to have caught up to
+      `awaiting_confirm` yet (nothing dispatches a queue-snapshot update off
+      this tick; the frontend only sees the flip via a later thunk's
+      response), so checking it here raced the reconcile into treating a park
+      as a completion (#1284). One-shot so a later real completion of a
+      re-claimed, re-confirmed entry can't misread a stale park flag. */
+  takeChapterAwaitingConfirm(bookId: string, chapterId: number): boolean;
 }
 
 function snapshotFromChapters(
@@ -165,7 +179,13 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
      reconcile (`takeChapterFailure`) so the queue entry is marked `failed`
      (lingers for retry) instead of done-pruned. Outlives the stream close that
      `idle` triggers — close() removes the handle, not this map. */
-  const chapterFailures = new Map<string, string>();
+  const chapterFailures = new Map<string, { reason: string; errorCode?: GenerationTick['errorCode'] }>();
+  /* Per-chapter loud-fallback-gate parks, keyed `${bookId}::${chapterId}`,
+     recorded on a `chapter_awaiting_fallback_confirm` tick and read+cleared
+     by the dispatcher (`takeChapterAwaitingConfirm`) during the reconcile
+     that follows the park's `idle` close — see that method's doc comment
+     for why this can't be read off the queue slice instead. */
+  const chapterAwaitingConfirm = new Set<string>();
   const dispatch = store.dispatch;
 
   const close = (key: string): void => {
@@ -338,10 +358,10 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
          a cross-book chapter's queue entry must still be marked `failed` even
          though its rows aren't in the viewed slice. The dispatcher reads this
          on the reconcile that follows the `idle` close. */
-      chapterFailures.set(
-        streamKey(bookId, ev.chapterId),
-        ev.errorReason ?? 'Synthesis failed.',
-      );
+      chapterFailures.set(streamKey(bookId, ev.chapterId), {
+        reason: ev.errorReason ?? 'Synthesis failed.',
+        errorCode: ev.errorCode,
+      });
       if (sliceMatchesHandle) {
         const ch = after.chapters.chapters.find((c) => c.id === ev.chapterId);
         if (ch) {
@@ -354,6 +374,21 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
             ),
           );
         }
+      }
+      /* voice-not-designed is a deterministic per-book cast-config issue, not
+         a stochastic infra failure — the old chapter_awaiting_fallback_confirm
+         park it replaces (#1263) always toasted immediately rather than
+         waiting for the srv-11 streak breaker to trip, so restore that same
+         visibility here. Deduped per chapter so a reconnect replay can't
+         stack duplicates. */
+      if (ev.errorCode === 'voice-not-designed') {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: `Chapter ${ev.chapterId} failed — ${ev.errorReason ?? 'no designed Qwen voice for a speaking character.'}`,
+            dedupeKey: `voice-not-designed:${bookId}:${ev.chapterId}`,
+          }),
+        );
       }
     } else if (ev.type === 'chapter_failed' && ev.chapterId == null && sliceMatchesHandle) {
       /* Stream-level halt (setup / sidecar / cast issue — chapter id absent). */
@@ -381,9 +416,13 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       /* Loud-fallback gate — the worker PARKED this chapter because one or more
          Qwen characters have no designed voice and would render in Kokoro. The
          chapter is held (queue entry → awaiting_confirm); the user confirms or
-         skips it from the queue modal. Surface a warn toast naming the chapter +
-         characters so the run doesn't look silently stalled. Deduped per entry
-         so a reconnect replay can't stack duplicates. */
+         skips it from the queue modal. Record the park so the dispatcher's
+         reconcile (which runs off the `idle` tick that follows) knows this
+         stream close was a park, not a completion — see takeChapterAwaitingConfirm. */
+      chapterAwaitingConfirm.add(streamKey(bookId, ev.chapterId));
+      /* Surface a warn toast naming the chapter + characters so the run doesn't
+         look silently stalled. Deduped per entry so a reconnect replay can't
+         stack duplicates. */
       const names = (ev.fallbackCharacters ?? [])
         .map((c) => c.name ?? c.id)
         .filter(Boolean)
@@ -420,10 +459,16 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     openChapterIds: () => [...handles.values()].flatMap((h) => h.chapterIds),
     takeChapterFailure: (bookId, chapterId) => {
       const key = streamKey(bookId, chapterId);
-      const reason = chapterFailures.get(key);
-      if (reason === undefined) return null;
+      const failure = chapterFailures.get(key);
+      if (failure === undefined) return null;
       chapterFailures.delete(key);
-      return reason;
+      return failure;
+    },
+    takeChapterAwaitingConfirm: (bookId, chapterId) => {
+      const key = streamKey(bookId, chapterId);
+      if (!chapterAwaitingConfirm.has(key)) return false;
+      chapterAwaitingConfirm.delete(key);
+      return true;
     },
   };
 }

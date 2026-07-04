@@ -18,6 +18,13 @@ import {
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import type { UndesignedCharacterRow } from '../store/voice-readiness-selectors';
+
+/* Stable fallback so the closed-gate case (the common one — this modal is a
+   global, always-mounted overlay) doesn't hand useSelector a fresh `[]` on
+   every call: react-redux's dev-mode stability check flags that as "returned
+   a different result" and forces a re-render on every store dispatch (#1285). */
+const NO_UNDESIGNED_CHARACTERS: UndesignedCharacterRow[] = [];
 
 export function VoiceReadinessGateModal() {
   const dispatch = useAppDispatch();
@@ -25,7 +32,7 @@ export function VoiceReadinessGateModal() {
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const designActive = useAppSelector((s) => s.castDesign.active);
   const undesigned = useAppSelector((s) =>
-    gate ? selectUndesignedQwenCharacters(s, gate.bookId) : [],
+    gate ? selectUndesignedQwenCharacters(s, gate.bookId) : NO_UNDESIGNED_CHARACTERS,
   );
   const isNonEnglish = useAppSelector((s) => (gate ? selectIsBookNonEnglish(s, gate.bookId) : false));
   const message = useAppSelector((s) => (gate ? voiceReadinessGateMessage(s, gate.bookId) : null));

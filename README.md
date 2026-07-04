@@ -30,149 +30,16 @@ or MP3.
 - **You own the files** — export standard M4B / MP3 / AAC / Opus and keep them.
   No lock-in.
 
-## Features
-
-- **Ingest** — paste or upload `.md`, `.txt`, `.epub`, `.pdf`, `.mobi`, or
-  `.azw3`. Chapters and character names are extracted automatically; low-confidence
-  speaker tags are surfaced for a quick review pass. DRM-protected files are
-  rejected up front. Re-uploading a book shows a sentence-level diff before
-  anything changes.
-- **Try a sample** — a ready-made demo book (an original full-cast story) loads
-  in one click with its whole cast already designed, so you can generate and hear
-  a full performance before importing anything of your own.
-- **Analyzer choice** — run a fully local model via Ollama (no API key, nothing
-  leaves your machine) or use the Gemini free tier. For long books, an optional
-  two-model pipeline runs cast detection and sentence attribution in parallel to
-  roughly double throughput.
-- **Voice & cast** — per-engine voice catalogues with family grouping, drag- or
-  tap-to-assign, per-character overrides, and sample playback. Audition candidate
-  voices in the profile drawer before committing, and compare two characters side
-  by side — even across books.
-- **Voice engines** — Kokoro (fast, English, runs on a modest GPU), Coqui XTTS v2
-  (zero-shot voice cloning, optional download), Qwen3-TTS (designs a unique voice
-  per character from a persona and reuses it across the series), and Gemini cloud.
-  A character keeps its voice when you switch engines.
-- **Generation** — per-chapter, resumable, and sticky across navigation; chapters
-  synthesise in a bounded parallel pool. Each chapter opens with its title spoken
-  in the narrator's voice. Open the same book in two tabs and progress stays in
-  sync.
-- **Revisions & drift** — pending-revision review, A/B audition with rollback, a
-  per-chapter revision timeline, and automatic detection (with one-click
-  regeneration) when a chapter's voices drift from the current cast.
-- **Listening** — a built-in player with speed control, markers, a sleep timer,
-  true waveform peaks, resume bookmarks, per-book notes, and one-tap sharing of a
-  30-second clip or the whole book.
-- **Library** — auto-fetched cover art with a manual cover picker (search /
-  upload / frame), title & author search, tag filters, series grouping, and a
-  portable book bundle for backup or transfer.
-- **Export** — M4B (with cover and chapter markers), AAC/M4A, Opus, MP3 (zip or
-  per-chapter folder), plus LAN download with a QR code. EBU R128 loudness
-  normalisation is on by default.
-- **Mobile, tablet & companion app** — every view is responsive across phone /
-  tablet / desktop and reachable over your home network via HTTPS, with a native
-  Android companion that syncs only what changed and plays offline (background,
-  lock-screen, Bluetooth, Android Auto).
-
-## Quickstart
-
-Two ways to install:
-
-- **One click, no terminal — [Pinokio](https://pinokio.computer).** Paste the repo URL
-  into the Pinokio browser and click **Install**. Pinokio provisions its own Python,
-  ffmpeg and voice engine, builds the latest release, and launches the app — nothing to
-  set up by hand. See [INSTALL.md → Pinokio](INSTALL.md#install--pinokio-one-click).
-- **Manual — the release zip.** Download the latest `castwright-vX.Y.Z.zip` from
-  [Releases](https://github.com/dudarenok-maker/Castwright/releases), extract it, and
-  follow **[INSTALL.md](INSTALL.md)**. You'll end up with a single `npm run start:prod`
-  that brings up the server, the voice engine, and the web UI at <http://localhost:8080>.
-
-**Prerequisites** (manual install only — Pinokio provisions these itself; full detail and per-OS steps in [INSTALL.md](INSTALL.md)):
-
-- Node.js 20.19+
-- Python 3.12 (exactly — for the voice engine)
-- ffmpeg on `PATH`
-- ~6 GB free disk (TTS weights ~1.1 GB + PyTorch ~2.5 GB + deps)
-- A GPU is strongly recommended (TTS on CPU is far slower): NVIDIA on Windows/Linux (PyTorch `2.11.0` installs CUDA-bundled by default; for a specific toolkit like CUDA 12.8 see [INSTALL.md](INSTALL.md)), or Apple Silicon (M-series) on macOS — used automatically via Metal, no drivers or setup. **AMD GPUs are an experimental preview** (ROCm for Qwen/Coqui; Kokoro runs on CPU), auto-detected with a safe CPU fallback — see [INSTALL.md](INSTALL.md). No GPU? It still runs on CPU.
-
-## GPU & VRAM
-
-Castwright runs on the graphics card you already have. It's tuned for an **8 GB** card,
-runs on **6 GB**, and puts a second card to work if you have one. The numbers below are
-**run sizes** — VRAM in use while generating, not download size.
-
-**Voice engines**
-
-| Engine | What it's for | VRAM while generating | 6 GB | 8 GB | 12–16 GB |
-| --- | --- | --- | :---: | :---: | :---: |
-| Kokoro | Fast English, the default | ~1 GB | ✓ | ✓ | ✓ |
-| Qwen — Fast (0.6B) | Quick designed voices | ~3.7 GB | ✓ | ✓ | ✓ |
-| Qwen — Higher quality (1.7B) | Best expressive designed voices | ~4.7–5 GB | ✓ tight | ✓ | ✓ |
-| Qwen — Voice Design | Crafting a new character voice | ~3.7–4 GB (base auto-unloaded) | ✓ | ✓ | ✓ |
-| Coqui XTTS v2 | Pre-designed voices (cloning to come) | ~4 GB | ✓ | ✓ | ✓ |
-| _IndexTTS-2 (planned)_ | _Per-line emotion, one designed voice_ | _12 GB card (likely)_ | — | — | ◑ |
-| _Fish Audio S2-Pro (planned)_ | _Finest fidelity_ | _16 GB card_ | — | — | ◑ |
-
-**Analysis models** (who-said-what)
-
-| Option | Where it runs | VRAM while analysing | 6 GB | 8 GB | 12–16 GB |
-| --- | --- | --- | :---: | :---: | :---: |
-| Cloud (Gemini free tier) | Cloud | none on your GPU | ✓ | ✓ | ✓ |
-| CPU-only (local) | Your CPU + RAM | none on your GPU | ✓ | ✓ | ✓ |
-| Small local (e.g. qwen3.5:4b) | Your GPU | ~4 GB | ✓ | ✓ | ✓ |
-| Mid local (e.g. llama3.1:8b) | Your GPU | ~7 GB | — | ✓ | ✓ |
-| Large local (e.g. qwen3.5:9b) | Your GPU | ~8 GB | — | tight | ✓ |
-
-On cards below ~11 GB the analysis model and the voices **take turns** — the analyzer steps
-aside before speech, so their VRAM doesn't add up. Cloud or CPU analysis uses no GPU memory,
-leaving the whole card for voices. At 12–16 GB they stay resident together and run at once.
-
-> These figures are **run sizes** (VRAM in use while generating). They differ from the
-> load/weight sizes in `docs/local-llm.md` — reconcile that doc if you want the two to match.
-
-## Companion app (Android)
-
-A native Flutter companion pairs to your running server over the home network
-(HTTPS, cert-pinned), delta-syncs only the chapters that changed, and plays them
-offline with background, lock-screen, Bluetooth, and Android Auto controls.
-Pairing is cryptographically self-verified, so **no certificate install is needed
-on the phone**.
-
-Each [GitHub Release](https://github.com/dudarenok-maker/Castwright/releases)
-attaches a ready-to-sideload `castwright-vX.Y.Z.apk`. Server-side pairing setup
-(LAN HTTPS + an access token) is in [INSTALL.md](INSTALL.md); the app's own build
-and usage notes are in [`apps/android/README.md`](apps/android/README.md).
-
-## Releases
-
-Tagged releases are published to
-[GitHub Releases](https://github.com/dudarenok-maker/Castwright/releases). Each
-attaches (all with `.sha256` checksums):
-
-- `castwright-vX.Y.Z.zip` — the platform-independent **server** bundle
-  (Windows / macOS / Linux); install via [INSTALL.md](INSTALL.md).
-- `castwright-vX.Y.Z.apk` — the sideloadable **Android companion** app.
-
-An iOS companion build isn't published yet — it lands with `app-12` (signed
-`.ipa`); the Flutter codebase already stays iOS-ready.
-
-After the first public release, upgrading is one click inside the app
-(**Account → Application updates**); see [INSTALL.md](INSTALL.md#updating).
-
-## How it's built
-
-Castwright is a Vite + React frontend, a Node/Express server, and a Python
-(FastAPI) voice engine, with a native Flutter companion app. Building from source,
-the branching model, and the commit convention are documented in
-**[CONTRIBUTING.md](CONTRIBUTING.md)**.
-
 ## Documentation
 
-- **[INSTALL.md](INSTALL.md)** — install, configure, and update the app.
-- **[`apps/android/README.md`](apps/android/README.md)** — the Android companion.
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — building from source, branching, and
-  the commit convention.
-- **[SECURITY.md](SECURITY.md)** — supported versions and how to report a
-  vulnerability privately.
+The full user guide — installing, uploading a book, casting, generating
+audio, listening, exporting, and every feature area — lives on the
+[wiki](https://github.com/dudarenok-maker/Castwright/wiki), illustrated
+with real screenshots.
+
+- New here? Start at [Getting Started](https://github.com/dudarenok-maker/Castwright/wiki/Getting-Started).
+- Installing from the release zip? See [INSTALL.md](./INSTALL.md).
+- Release history: [RELEASE_NOTES.md](./RELEASE_NOTES.md).
 
 ## License
 
