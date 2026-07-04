@@ -88,13 +88,18 @@ deliberately NOT named `LibraryVoice`, which already exists in `voice-match.ts` 
   `languageCode`.
 - **Designed-only:** `persona` (instruct text; editable → drives redesign-with-compare).
 - **Cloned-only:** `consent: { personName, relationship: 'self' | 'family-with-permission'
-  | 'guardian-of-minor', permittedUse: 'personal', attestedAt, attestedBy }`.
+  | 'guardian-of-minor', permittedUse: 'personal', attestedAt, attestedBy, revokedAt? }` —
+  a revoked consent blocks assignment and generation immediately and prompts deletion;
+  already-rendered chapter audio is NOT retroactively scrubbed (documented, honest limit).
 - **Imported-only:** `sourceAttestation: { source, rightsNote, attestedAt }`.
 - **Cloned + imported:** `sampleTranscript` (Whisper-derived `ref_text`, user-confirmable),
   `sampleMeta` (duration, sample rate, quality-check results).
 - **Per-engine readiness:** `engines: { qwen?: { status: 'ready' | 'deriving' | 'stale' |
-  'failed', baseModel }, xtts?: { status } }` — `stale` = derived under a different
-  `baseModel` than current.
+  'failed', baseModel }, xtts?: { status, coquiVersion, modelId } }` — `stale` = derived
+  under a different model/version than current. XTTS needs its own anchor because
+  coqui-tts is deliberately unpinned (`install-coqui.mjs`): the resolved package version +
+  model id are recorded at derive time, and the startup stale-scan covers BOTH engines
+  symmetrically.
 - **Origin:** `promotedFrom?: { bookId, characterId }` — breadcrumb only, no live link.
 
 Baked-in decisions:
@@ -111,15 +116,23 @@ Baked-in decisions:
    uuid, so aliasing means a later character-scoped redesign silently overwrites the
    library master.) `promotedFrom` stays a breadcrumb only. fs-12's "same voice across
    books via shared cached embedding" holds through the library entry: every ASSIGNMENT of
-   the library voice shares the single `qwen-<libUuid>.pt`.
+   the library voice shares the single `qwen-<libUuid>.pt`. Two edge rules: a
+   **reused/matched** character's `.pt` lives under the SOURCE voice's uuid, not the
+   character's — promotion resolves and copies from the true source key; and if no `.pt`
+   exists yet (voice never designed), promotion copies the persona only and marks
+   `engines.qwen: 'stale'` for on-demand derivation.
 3. **Consent lives in the manifest**, never in an engine cache dir — survives re-derivation,
    shown on the voice card forever.
-4. **Deletion never silently breaks casts:** `DELETE` returns current usage — computed by
-   scanning every cast.json for override slots referencing the library key (`qwen-<libUuid>`
-   / `xtts-clone-<libUuid>`) — and requires explicit confirm; affected characters fall back
-   to "needs a voice," surfacing via the fe-46 readiness gate. Because promotion copies
-   rather than aliases, deleting a library voice can never touch an origin character's own
-   `.pt`.
+4. **Deletion = multi-location ERASURE, not just cast integrity.** `DELETE` returns
+   current usage — computed by scanning every cast.json for override slots referencing the
+   library key (`qwen-<libUuid>` / `xtts-clone-<libUuid>`) — and requires explicit
+   confirm; affected characters fall back to "needs a voice" (fe-46 gate surfaces it).
+   Erasure then removes EVERY derived artifact, not only the library dir: `master.wav` +
+   latents + previews (library dir), the global `voices/qwen/qwen-<libUuid>.pt`, and the
+   voice's sample-cache MP3s — asserted by a unit test, since "local-only, never leaves
+   the machine" (§6) is hollow if deletion leaves embeddings behind. Because promotion
+   copies rather than aliases, deleting a library voice can never touch an origin
+   character's own `.pt`. Already-rendered book audio persists (see consent note above).
 
 Migration: purely additive. No existing file changes shape; the store starts empty; the
 dormant `VoiceKind.cloned` branch (`server/src/workspace/voice-kind.ts`) finally gets set,
@@ -134,8 +147,9 @@ New route module `server/src/routes/voice-library.ts`:
 | Endpoint | Does |
 |---|---|
 | `GET /api/voice-library` | list manifests (My-voices sections read this, not the derived aggregation) |
-| `POST /api/voice-library/design` | persona → designed library voice; wraps the existing 1.7B→`.pt` design flow library-scoped; preview-then-promote (plan 161) |
-| `POST /api/voice-library/clone` | multipart upload (multer; `manuscripts.ts`/`cover.ts` precedent): audio + consent/attestation fields → quality checks → Whisper `ref_text` → manifest + `master.wav` → derive engine caches → previews. **Consent/attestation validated server-side — UI cannot bypass** |
+| `POST /api/voice-library/design` | persona → designed library voice; the design flow **extracted from its book/character scoping** (see below) ; preview-then-promote (plan 161 pattern generalised to library uuids) |
+| `POST /api/voice-library/clone-sample` | **phase 1 (stateless):** multipart upload (multer; `manuscripts.ts`/`cover.ts` precedent) → ingest/decode → quality checks → Whisper transcript. Returns an ephemeral `sampleId` in a temp area (auto-pruned) + verdicts + editable transcript. No manifest yet — abandoning the wizard orphans nothing |
+| `POST /api/voice-library/clone` | **phase 2 (finalize):** `{sampleId, name, tags, consent/attestation}` → manifest + `master.wav` persisted → engine caches derived → previews. **Consent/attestation validated server-side — UI cannot bypass.** Derive failure after finalize = per-engine `failed` status (§7) |
 | `PATCH /api/voice-library/:uuid` | name / tags / pinned / persona edits |
 | `POST /api/voice-library/:uuid/redesign` | designed-only: new persona → preview → A/B → promote or discard |
 | `POST /api/voice-library/:uuid/rederive` | rebuild a `stale`/`failed` engine cache from master (clip or persona) |
@@ -165,10 +179,31 @@ param`. This seam is what makes engine #3 cheap. In v1:
   is unchanged and proven.
 - **XTTS:** derive = **compute conditioning latents once and cache them** — load
   `master.wav` via `soundfile` (never `torchaudio.load`; a guardrail test forbids it),
-  run `get_conditioning_latents`, persist `xtts-latents.pt` in the library dir. Synthesis
-  resolves `xtts-clone-<libUuid>` to the cached latents, NOT to a per-sentence
-  `speaker_wav` (recomputing latents every sentence would be unusably slow — Coqui has no
-  batch path). Net-new in `CoquiEngine`: latent-cache load + synthesize-from-latents.
+  run `get_conditioning_latents`, persist `xtts-latents.pt` in the library dir (stamped
+  with coqui version + model id, §2). Synthesis resolves `xtts-clone-<libUuid>` to the
+  cached latents, NOT to a per-sentence `speaker_wav` (recomputing latents every sentence
+  would be unusably slow — Coqui has no batch path). **This changes the Coqui synth call
+  itself:** today `CoquiEngine` uses the high-level `tts()` API; latents-driven synthesis
+  calls the lower-level `tts_model.inference(...)` and must re-carry the fp16 autocast +
+  DeepSpeed wiring the high-level path owns — a sidecar test pins that the latents path
+  stays on GPU/fp16. Real Wave-3 work, not a cache add-on.
+
+**Library-scoped design flow = an extraction, not a wrap.** Every layer of today's design
+machinery hard-requires a book/character: `withDesignLock` keys on `bookDir`,
+`ensureCharacterVoiceUuid` requires a cast.json row, routes mount under
+`/:bookId/cast/:characterId`, and the design-pill slice + `designRunningElsewhere` guard
+compare `bookId`s. Wave 1 therefore extracts the engine-facing core behind a scope
+abstraction: a `library` lock scope (synthetic key) that participates in the SAME
+single-owner design mutex as book jobs — so a library design and a book bulk-design can
+never co-run and re-trigger the 1.7B VoiceDesign↔Base co-residency OOM (the plan-155
+class) — uuids minted library-side without touching any cast.json, and the design
+pill/snapshot shape gaining an optional book-less variant so a running library design is
+visible (and excluded) everywhere `designRunningElsewhere` looks today.
+
+**Sample/preview caching:** the library sample route reuses `voice-sample-cache`, but the
+cache key folds in a `master.wav`/persona content hash — otherwise a re-record under the
+same uuid serves the OLD preview forever (the known uuid-rekey stale-badge gotcha, in
+reverse). Re-derive also purges the voice's `preview-*.mp3`s.
 
 **Assignment & resolution (real Node-side work, not a slot-write).** Today
 `pickVoiceForEngine` derives the Qwen key from the CHARACTER's `voiceUuid`, ignoring the
@@ -235,12 +270,31 @@ persists; re-attest only if the person name changes.
   tap-to-assign/drag affordances + eligibility filtering); profile drawer voice picker
   likewise; profile drawer also gains **Save to my voices** on any designed character
   voice. Assigning writes an explicit library key into `overrideTtsVoices` per engine
-  (resolver pass-through semantics, §3) — downstream (series consistency, readiness gate,
-  generation) a cloned voice behaves exactly like a designed one because it IS the same
-  `.pt`/reference machinery.
+  (resolver pass-through semantics, §3) **and stamps the assignment's provenance** — the
+  override slot gains an optional `{ libraryUuid, provenance }` alongside `name` (additive
+  openapi change; slots are `{ name }`-only today) — which is what the matcher filtering
+  (§6) and the fallback protection (§7) key on. The pass-through change must leave the
+  emotion-variant key derivation (`pickEmotionVariantVoice`, also `voiceUuid`-derived)
+  untouched for non-library voices.
+- **Cross-tab consistency (explicit v1 decision):** the `voice-library` slice does NOT
+  join `broadcast-middleware` (which deliberately syncs only ephemeral stream state, never
+  entity lists); it refetches on tab focus/visibility and after every local mutation.
+  Cheap, consistent-enough for a personal library; revisit if stale-tab reports appear.
 
 ## 6. Guardrails (invariants, enforced at choke points)
 
+- **A personal voice NEVER silently becomes someone else's voice.** Today, when Qwen is
+  unavailable, `applyQwenFallback` substitutes a generic Kokoro preset — and the #1284
+  loud-fallback gate does NOT catch an assigned clone (its predicate parks only voices
+  resolving to empty; a clone resolves to `qwen-<libUuid>`). For characters whose
+  assignment carries `provenance: 'cloned' | 'imported'`: the loud-fallback parked-set
+  predicate is EXTENDED to include them, so generation pauses for explicit confirmation
+  that names the substitution ("Mum's voice is unavailable — render these chapters in a
+  standard voice instead?"); there is no silent path. The same rule covers
+  **engine-switch-after-assign**: selecting a render engine for which the assigned library
+  voice has no artifact marks the character not-ready in the fe-46 pre-flight gate rather
+  than substituting at render time. Kokoro can never carry a clone (preset-only) — the
+  gate is the only bridge.
 - **Matcher exclusion — assignment-level, not manifest-level.** The matcher scans book
   casts (`scanLibraryCharacters()` / `projectLibraryVoice()` — the single seam shared by
   the confirm-time matcher and the analysis-time auto-linker), so an unassigned library
@@ -261,10 +315,12 @@ persists; re-attest only if the person name changes.
   record (400 with field errors).
 - **Reversibility (scoped honestly — no feature-flag infra exists today):** the My-voices
   section, wizard, and clone endpoints sit behind a new user-setting in the existing
-  server config registry (`server/src/config/registry.ts`, the `autoPreloadKokoro`
-  pattern); off = section hidden, clone routes 404. The In-use provenance badges and the
-  Catalogue rebuild ship unconditionally — they are presentation-only and don't need the
-  net.
+  server config registry (`server/src/config/registry.ts`; the `tts.preload.kokoro`
+  setting is the shape precedent — note the registry has never gated an Express route
+  before, so the settings-checking middleware that 404s the clone routes is small
+  net-new wiring, not an existing pattern). Off = section hidden, clone routes 404. The
+  In-use provenance badges and the Catalogue rebuild ship unconditionally — they are
+  presentation-only and don't need the net.
 
 ## 7. Error handling & edge cases
 
@@ -276,22 +332,39 @@ persists; re-attest only if the person name changes.
 - **Deletion in use:** usage report + confirm; casts fall back to "needs a voice" (fe-46
   gate surfaces it).
 - **Mic denied / absent:** record card degrades to upload with a clear message.
-- **Concurrency:** reuse design-lock/bulk-design mutex conventions — one derivation per
-  voice at a time; library ops don't fight character-scoped design jobs.
+- **Concurrency:** one derivation per voice at a time; library design jobs join the SAME
+  single-owner design mutex as book jobs via the `library` lock scope (§3), so the 1.7B
+  VoiceDesign is never double-loaded.
+- **Windows file locking (evict-before-replace):** the sidecar caches loaded `.pt`
+  prompts in memory and holds files open — re-derive and delete must evict first
+  (`/qwen/evict-voice` precedent) before unlinking/replacing `master.wav`, `.pt`, or
+  latents, or Windows sharing violations corrupt the operation midway.
+- **Abandoned wizard:** phase 1 (`clone-sample`) writes only to a temp area, auto-pruned
+  on a TTL — closing the modal mid-flow orphans no manifest (two-phase design, §3).
 
 ## 8. Testing
 
-- *Unit (server):* manifest CRUD + consent-gate rejection; matcher exclusion (`cloned`
-  never returned; `imported`/`designed` are); stale detection on `baseModel` change;
-  deletion usage report.
+- *Unit (server):* manifest CRUD + consent-gate rejection; matcher exclusion (a
+  cloned-provenance ASSIGNMENT is never offered back; imported/designed-hosting
+  characters are); stale detection on `baseModel`/coqui-version change; deletion usage
+  report + **erasure completeness** (no `.pt`/latents/sample-MP3 survives a delete);
+  **loud-fallback parked-set includes personal-provenance assignments** (the §6
+  never-silent-substitution invariant, pinned as a regression test against
+  `qwen-fallback-set`).
 - *Unit (frontend):* `voice-library` slice; provenance-driven card rendering; wizard step
   gating (record unreachable before consent).
 - *Sidecar (pytest):* `/qwen/clone-voice` produces a `.pt` whose `generate_voice_clone`
   output is stable across calls; XTTS `speaker_wav` synthesizes; both join the concurrency
   battery.
-- *E2E (Playwright):* upload→consent→clone→appears only in Cloned→assign→cast row shows
-  cloned badge; create-designed→save→reuse in a second book; three-section page at all
-  three viewports (mobile protocol).
+- *E2E (Playwright — split honestly by harness capability):* the **upload** path is
+  mockable today (blob-URL upload precedent): consent→upload→clone→appears only in
+  Cloned→assign→cast row shows cloned badge; create-designed→save→reuse in a second book;
+  three-section page at all three viewports (mobile protocol). The **record** path (Wave
+  4) is greenfield in the harness: needs chromium fake-media launch flags
+  (`--use-fake-device-for-media-stream` / `--use-file-for-fake-audio-capture`) or a
+  `MediaRecorder` stub — sized as its own e2e work item, not assumed free. Every new
+  endpoint lands as a PAIRED `real*` + `mock*` implementation in `api.ts` plus
+  `src/mocks/` fixtures (components only ever import `api.*`).
 - *Golden-audio:* out of v1 gates (clone output depends on user samples); ECAPA fidelity
   is the runtime stand-in.
 - *Live-GPU acceptance:* real sample → chapter render recognisably in that voice,
@@ -300,14 +373,18 @@ persists; re-attest only if the person name changes.
 ## 9. Delivery waves (independently shippable PR trains, behind the flag)
 
 1. **Store + page skeleton** — manifest schema, CRUD routes, RTK slice, three-section
-   restructure, Designed authoring (design/redesign/promote on existing engine paths).
-   No clone yet; immediately useful — this wave alone delivers fs-12.
+   restructure, Designed authoring. Includes the **design-flow extraction** (§3: `library`
+   lock scope in the shared single-owner mutex, book-less uuid minting, book-less design
+   pill/snapshot variant) — the biggest single item in this wave, NOT a wrap of existing
+   paths. No clone yet; immediately useful — this wave alone delivers fs-12.
 2. **Catalogue rebuild** — engine filter + facets (small; may ride wave 1's train).
 3. **Clone pipeline** — the ffmpeg **audio ingest stage** (§3, first — everything else
    consumes its output), sidecar `/qwen/clone-voice` (extracted from `design_voice`),
    XTTS latents-cache derive + synthesize-from-latents, upload path + quality checks +
-   Whisper `ref_text`, consent + imported attestation, wizard (upload-first), ECAPA
-   fidelity. The largest wave — sized as an extraction/re-plumb, not a switch-flip.
+   Whisper `ref_text`, consent + imported attestation, two-phase wizard (upload-first),
+   ECAPA fidelity, and the **loud-fallback predicate extension + engine-switch readiness
+   rule** (§6 — must land before the first cloned voice can render). The largest wave —
+   sized as an extraction/re-plumb, not a switch-flip.
 4. **In-app recording** — MediaRecorder capture (webm/opus → ingest stage) + scripted
    reading cards + re-record-with-compare.
 5. **Polish** — matcher-exclusion hardening tests, `VoiceKind` `imported` label audit,
