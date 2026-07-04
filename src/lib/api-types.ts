@@ -1874,6 +1874,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/lan/cert/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Regenerate the LAN mkcert certificate and hot-swap it into the live server
+         * @description Shells out to scripts/setup-lan-certs.mjs to regenerate the mkcert LAN
+         *     certificate (covering localhost, castwright.local, castwright.dev.local,
+         *     and every detected LAN IP), then hot-swaps it into the already-running
+         *     HTTPS server via setSecureContext() -- no restart needed. Desktop-only
+         *     in practice (the LAN Access card gates this button behind the same
+         *     check that hides device management from a paired phone/tablet).
+         */
+        post: operations["regenerateLanCert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/state": {
         parameters: {
             query?: never;
@@ -7010,6 +7035,51 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    regenerateLanCert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Regenerated successfully */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The hostnames/IPs the new certificate covers. */
+                        hosts: string[];
+                    };
+                };
+            };
+            /** @description A regeneration is already in progress */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+            /** @description mkcert failed (not installed, generation error, etc.) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };

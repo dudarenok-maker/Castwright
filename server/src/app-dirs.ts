@@ -19,3 +19,16 @@ export function resolveLogDir(repoRoot: string): string {
 export function resolveRunDir(repoRoot: string): string {
   return process.env.APP_RUN_DIR ? resolve(process.env.APP_RUN_DIR) : resolve(repoRoot, '.run');
 }
+
+/** Single source of truth for the LAN cert/key file paths — shared by
+    index.ts (serves them) and routes/lan-cert.ts (regenerates + hot-swaps
+    them), so a future change to one location can't silently drift from the
+    other and leave the route's existsSync() check looking in the wrong
+    place. */
+export function resolveLanCertPaths(repoRoot: string): { certFile: string; keyFile: string } {
+  const certsDir = resolve(resolveRunDir(repoRoot), 'certs');
+  return {
+    certFile: resolve(certsDir, 'lan-cert.pem'),
+    keyFile: resolve(certsDir, 'lan-key.pem'),
+  };
+}

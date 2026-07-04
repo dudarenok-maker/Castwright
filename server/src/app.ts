@@ -50,6 +50,7 @@ import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
 import { exportLanRouter } from './routes/export-lan.js';
 import { certRootRouter } from './routes/cert-root.js';
+import { lanCertRouter } from './routes/lan-cert.js';
 import { devicesRouter } from './routes/devices.js';
 import { pairSessionRouter, pairRedeemRouter } from './routes/pairing.js';
 import { designProgressRelayRouter } from './routes/design-progress-relay.js';
@@ -179,6 +180,7 @@ app.use('/api/books', portableExportRouter); // plan 75 — mounts /:bookId/expo
 app.use('/api/import', portableImportRouter); // plan 75 — mounts POST /portable (multipart bundle)
 app.use('/api/export', exportLanRouter); // mounts /lan (LAN URL enumeration for the export modal)
 app.use('/cert', certRootRouter); // plan 81 — mounts /root.crt (mkcert root CA download for mobile LAN HTTPS)
+app.use('/api/lan', lanCertRouter); // castwright-local-port-cert — mounts POST /cert/regenerate (in-app mkcert LAN cert regeneration + hot-swap)
 app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a slugged share URL — plan 67)
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)

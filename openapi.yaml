@@ -2420,6 +2420,49 @@ paths:
                 properties: { ok: { type: boolean } }
         '404': { description: Unknown device }
 
+  /api/lan/cert/regenerate:
+    post:
+      summary: Regenerate the LAN mkcert certificate and hot-swap it into the live server
+      operationId: regenerateLanCert
+      description: |
+        Shells out to scripts/setup-lan-certs.mjs to regenerate the mkcert LAN
+        certificate (covering localhost, castwright.local, castwright.dev.local,
+        and every detected LAN IP), then hot-swaps it into the already-running
+        HTTPS server via setSecureContext() -- no restart needed. Desktop-only
+        in practice (the LAN Access card gates this button behind the same
+        check that hides device management from a paired phone/tablet).
+      responses:
+        '200':
+          description: Regenerated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hosts]
+                properties:
+                  hosts:
+                    type: array
+                    items: { type: string }
+                    description: 'The hostnames/IPs the new certificate covers.'
+        '409':
+          description: A regeneration is already in progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+        '500':
+          description: mkcert failed (not installed, generation error, etc.)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
   /api/books/{bookId}/state:
     get:
       summary: Book-open hydrate composite (state + cast + manuscript meta + revisions + …)

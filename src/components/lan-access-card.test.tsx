@@ -11,6 +11,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       listDevices: vi.fn(),
       createDevicePairSession: vi.fn(),
       revokeDevice: vi.fn(),
+      regenerateLanCert: vi.fn(),
     },
   };
 });
@@ -113,5 +114,45 @@ describe('LanAccessCard', () => {
     await waitFor(() =>
       expect(screen.getByText(/manage devices from the desktop/i)).toBeInTheDocument(),
     );
+  });
+
+  it('Regenerate certificate: click -> success shows the returned host list', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.regenerateLanCert).mockResolvedValue({
+      hosts: ['localhost', 'castwright.local', '192.168.1.42'],
+    });
+
+    render(<LanAccessCard />);
+    await waitFor(() => screen.getByText('LAN access'));
+
+    const btn = screen.getByRole('button', { name: /regenerate certificate/i });
+    fireEvent.click(btn);
+
+    await waitFor(() => expect(api.regenerateLanCert).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByText(/localhost, castwright\.local, 192\.168\.1\.42/i)).toBeInTheDocument(),
+    );
+  });
+
+  it('Regenerate certificate: click -> failure shows the server error message', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.regenerateLanCert).mockRejectedValue(new Error('mkcert is not installed'));
+
+    render(<LanAccessCard />);
+    await waitFor(() => screen.getByText('LAN access'));
+
+    fireEvent.click(screen.getByRole('button', { name: /regenerate certificate/i }));
+
+    await waitFor(() => expect(screen.getByText('mkcert is not installed')).toBeInTheDocument());
+  });
+
+  it('Regenerate certificate button is hidden when viewing from a paired phone (401 on listDevices)', async () => {
+    vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
+
+    render(<LanAccessCard />);
+    await waitFor(() =>
+      expect(screen.getByText(/manage devices from the desktop/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /regenerate certificate/i })).not.toBeInTheDocument();
   });
 });

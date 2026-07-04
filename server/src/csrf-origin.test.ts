@@ -1,5 +1,6 @@
 import { it, expect, vi, beforeEach } from 'vitest';
 import { requireSameOrigin } from './csrf-origin.js';
+import { enumerateLanUrls } from './routes/export-lan.js';
 
 function mk(method: string, headers: Record<string, string>, ip = '192.168.1.9') {
   return { method, headers, ip, socket: { remoteAddress: ip } } as any;
@@ -47,4 +48,116 @@ it('still gates a cookie that cookie.parse accepts but a naive regex might miss'
   requireSameOrigin(mk('POST', { cookie: 'foo=bar; __Host-cw_lan=x', origin: 'https://evil.example:8443' }), r, next);
   expect(next).not.toHaveBeenCalled();
   expect(r.statusCode).toBe(403);
+});
+
+it('passes a cookie POST from the explicit-port castwright.local origin', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.local:8443' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('passes a cookie POST from the bare (no-port) castwright.local origin — the port-443 forwarder path', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.local' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('passes a cookie POST from the dev:lan castwright.dev.local origin', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local:5173' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('passes a cookie POST from castwright.dev.local on a DIFFERENT port (per-worktree VITE_PORT)', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local:5199' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('403s a cookie POST from a lookalike hostname masquerading as castwright.dev.local', () => {
+  const next = vi.fn();
+  const r1 = res();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://evil-castwright.dev.local:5173' }),
+    r1,
+    next,
+  );
+  expect(next).not.toHaveBeenCalled();
+  expect(r1.statusCode).toBe(403);
+
+  const r2 = res();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local.evil.com:5173' }),
+    r2,
+    next,
+  );
+  expect(next).not.toHaveBeenCalled();
+  expect(r2.statusCode).toBe(403);
+});
+
+it('passes a cookie POST from a bare (no-port) LAN-IP origin — the host-blind forwarder makes this reachable too', () => {
+  const { urls } = enumerateLanUrls(8443, 'https');
+  if (urls.length === 0) return; // sandboxed runner with no LAN interface — nothing to assert
+  const bareIp = urls[0].replace(':8443', '');
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: bareIp }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('passes a cookie POST from the bare (no-port) localhost origin — the port-443 forwarder path', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://localhost' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('passes a cookie POST from the bare (no-port) 127.0.0.1 origin — the port-443 forwarder path', () => {
+  const next = vi.fn();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://127.0.0.1' }),
+    res(),
+    next,
+  );
+  expect(next).toHaveBeenCalled();
+});
+
+it('403s a cookie POST from castwright.dev.local when NODE_ENV=production (round 5: dev-only leniency must not apply in prod)', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    const next = vi.fn();
+    const r = res();
+    requireSameOrigin(
+      mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local:5173' }),
+      r,
+      next,
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(r.statusCode).toBe(403);
+  } finally {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
 });
