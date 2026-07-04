@@ -7,6 +7,7 @@
 - **A clearer stop for a non-English book missing a voice.** If a chapter in another language reaches generation with a character who still needs a voice, Castwright now tells you plainly and by name right away, rather than offering a "render anyway" that could never actually work for that language.
 - **A chapter you confirmed past a voice check now actually starts.** Rendering a chapter anyway after a design gap could sometimes leave it stuck at the very start, never moving, even after you'd said to proceed. That's fixed — confirming now reliably picks the chapter back up.
 - **A chapter's audio failing to load, fixed.** If your library folder happened to sit inside a hidden folder, a finished chapter's audio could refuse to play even though the file was right there. It now plays.
+- **The Books page no longer scrolls sideways on a phone.** A long library folder path could push the page wider than your screen; it now tucks in neatly with an ellipsis instead.
 
 # Castwright 1.10.0
 
