@@ -142,7 +142,23 @@ Three independent pieces, each additive to what 239 already shipped:
   this is entirely a forwarder-side fix. (Windows 10/11 supports binding arbitrary addresses in
   `127.0.0.0/8` on the loopback pseudo-interface without extra configuration — confirm this
   during implementation with a real bind, not just inference, since it's the one platform-
-  specific assumption this fix rests on.)
+  specific assumption this fix rests on. If the bind ever fails at runtime, the failure is
+  per-connection, not a server-level bind error: `:443` still accepts the incoming TCP
+  connection fine, then the *upstream* `net.connect()` call errors — "connects then drops" is
+  a more confusing symptom than "connection refused," since the whole feature's viability
+  rests on this one bind succeeding. The implementation should destroy the client socket
+  cleanly on that specific connect-error and log it distinctly from the listener-level
+  bind-failure warn above, so the two failure modes aren't conflated in the logs.)
+- **Rate-limit key collapse (round 3 observation, non-blocking)**: because the forwarder is a
+  raw TCP relay, every forwarded client's request presents the same upstream source address
+  (`127.0.0.2`) to the app — including to IP-keyed rate limiters (`middleware/rate-limit.ts`'s
+  `apiLimiter`, `pairing.ts`'s `redeemLimiter`). All bare-hostname/bare-IP clients therefore
+  share one rate-limit bucket rather than getting per-client ceilings. This is inherent to any
+  TCP-level forwarder losing the original client IP (not specific to the `127.0.0.2` choice —
+  `127.0.0.1` would have had the identical effect), and the existing ceilings are generous
+  relative to a single-user LAN tool's real traffic, so it's not a blocking concern — just
+  worth knowing if a future bug report describes one LAN device's activity affecting another's
+  rate limit.
 - Bind failure (`'error'` event on the server, e.g. `EADDRINUSE`/`EACCES`): `console.warn` once,
   do not throw, do not retry. The main app's :8443 listener is entirely unaffected — it was
   already up before this call runs.
