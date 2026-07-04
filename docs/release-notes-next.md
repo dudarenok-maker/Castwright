@@ -50,3 +50,4 @@ time. The previous release's body shipped with the v1.10.0 tag annotation.
 ## 🔧 Reliability
 
 - **Title-narration synth call now wrapped in per-call timeout** (#1247, srv-51) — matches the defensive timeout protection added to every other synth call site, closing a gap where a wedged title narration could stall a chapter. No user-visible change under normal operation; defensive only.
+- **`openapi.yaml`'s `QueueEnqueueRequest` now matches the real `/api/queue/enqueue` request shape** (#1264, srv-55) — was documented as `{ bookId, chapterIds[] }`; the route actually takes a per-entry `entries[]` array (new `QueueEnqueueEntry` schema: `id`, `bookId`, `chapterId`, `scope`, optional `characterId`/`modelKey`/`addedAt`/`fallbackConfirmed`). `src/lib/api-types.ts` regenerated to match. Docs/contract fix only — no runtime behaviour change.
