@@ -184,7 +184,7 @@ This task fixes two real bugs discovered while mapping the code, both present in
 
 - [ ] **Step 1: Write the failing test for the force-loop fix**
 
-In `server/src/routes/generation-fallback-gate.test.ts`, add a new sibling `describe` block immediately after the existing `describe('fs-2 never-cross-language generation gate', ...)` block (after its closing `});` around line 390) — this reuses the file's shared top-level `workspaceRoot`/`app`/`baseUrl`/`queuePath`/`readQueueFile`/`writeQueueFile` from the outer `beforeAll`, exactly like the block it follows, but seeds its own distinct book so it can't interfere with the other describe block's shared `ruBookId` fixture:
+In `server/src/routes/generation-fallback-gate.test.ts`, add a new sibling `describe` block immediately after the existing `describe('fs-2 never-cross-language generation gate', ...)` block. **That block's real closing `});` is at line 493** (it has five more tests after the one at line 365 — `#1263: persists the failure…` at 391, `#1263: pluralizes…` at 411, `#1263: omits the redundant…` at 455, and `is FATAL (no synth, no park)…` at 485 — not line 390, which only closes the `#1263: fails fast` *it-block* inside it). Insert after line 493, not 390 — inserting at 390 would nest the new block inside the fs-2 one instead of alongside it. This reuses the file's shared top-level `workspaceRoot`/`app`/`baseUrl`/`queuePath`/`readQueueFile`/`writeQueueFile` from the outer `beforeAll`, exactly like the block it follows, but seeds its own distinct book so it can't interfere with the other describe block's shared `ruBookId` fixture:
 
 ```ts
 /* fs-60 — the force-to-qwen loop must honor an already-eligible manual engine
@@ -450,17 +450,132 @@ Replace `chapter-qa-repair.ts:303-305`:
 
 Add the same two imports to the top of `chapter-qa-repair.ts`. Then at `chapter-qa-repair.ts:415-428` (the `synthesiseChapter({...})` call), add `coquiEligible,` after `forbidKokoroFallback: nonEnglishBook,`.
 
-- [ ] **Step 7: Run the test to verify it passes**
+- [ ] **Step 7: Fix the existing test that pins the OLD whole-book-abort behavior for a Coqui-eligible language**
 
-Run: `cd server && npx vitest run src/routes/generation-fallback-gate.test.ts -t "does not stomp"`
-Expected: PASS
+**This is a real pre-existing test the Step 3 fix breaks, found on final plan review — it must be edited, not left as-is.** `generation-fallback-gate.test.ts:485-492`, `'is FATAL (no synth, no park) when Qwen is unavailable on a Russian book'`, asserts that a `ru` book with Qwen `not-installed` emits `chapter_failed`, matches `/requires Qwen/i`, and never calls synth. Since `ru` is now Coqui-eligible (`coquiEligible = true`), Step 3's fix takes the NEW branch instead — it emits a `qwen_unavailable_coqui_fallback` *warning* and lets the run proceed (synth mocked, so `synthCalled` becomes `true`). All three of that test's assertions now fail. Replace it with two tests: one pinning the NEW `ru` behavior (warn + proceed), one pinning that the OLD fatal-abort behavior is UNCHANGED for a still-unsupported language (no Coqui fallback):
 
-- [ ] **Step 8: Run the full route test suites to check for regressions**
+```ts
+it('warns and proceeds (does not abort) when Qwen is unavailable on a Coqui-eligible Russian book', async () => {
+  setQwenState('not-installed');
+  const body = await runRuStream();
+  expect(body).toContain('qwen_unavailable_coqui_fallback');
+  expect(body).not.toContain('chapter_failed');
+  expect(body).not.toContain('chapter_awaiting_fallback_confirm');
+  expect(synthCalled).toBe(true);
+}, 10_000);
+```
+
+(This replaces the old `'is FATAL (no synth, no park) when Qwen is unavailable on a Russian book'` test in place — same `ruBookId` fixture, same `setQwenState`/`runRuStream` helpers, only the assertions change to match the new behavior.)
+
+Then add a **new, separate** describe block after this one (own `beforeAll`, own book, own `afterAll` is not needed since this file has no per-describe teardown beyond what the outer one already does — mirror the `beforeAll` structure of the `'fs-60 force-engine loop…'` describe block added in Step 1, but for a still-unsupported language):
+
+```ts
+/* fs-60 — a language with NO fallback engine (still-unsupported, e.g. zh)
+   must keep today's fatal-abort behavior unchanged when Qwen is unavailable
+   — only Coqui-eligible languages (en/ru/es/fr/de) get the new warn-and-proceed
+   path (see the 'ru' test above). */
+describe('fs-60 whole-book abort stays fatal for a still-unsupported language', () => {
+  const ZH_TITLE = 'Chinese Fatal Abort Gate Test';
+  const ZH_MANUSCRIPT = 'm_zh_fatal_gate_test';
+  const ZH_ENTRY = 'zh-fatal-gate-entry-1';
+  let zhBookId: string;
+  /* `setQwenState` in the 'fs-2 never-cross-language generation gate' describe
+     block above is a `let` local to THAT block's closure — not visible here.
+     This block needs its own reference, via its own dynamic import.
+     `QwenInstallState` is already imported at module scope (line 18). */
+  let setQwenState: (s: QwenInstallState) => void;
+
+  beforeAll(async () => {
+    const [{ makeBookId }, cacheModule, settings] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../store/analysis-cache.js'),
+      import('../workspace/user-settings.js'),
+    ]);
+    setQwenState = settings.setLastKnownQwenInstallState;
+    zhBookId = makeBookId(AUTHOR, SERIES, ZH_TITLE);
+    const zhDir = join(workspaceRoot, 'books', AUTHOR, SERIES, ZH_TITLE);
+    mkdirSync(join(zhDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(zhDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(zhDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: zhBookId,
+        manuscriptId: ZH_MANUSCRIPT,
+        author: AUTHOR,
+        title: ZH_TITLE,
+        series: SERIES,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        schema: 1,
+        language: 'zh',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-1' }],
+      }),
+    );
+    writeFileSync(
+      join(zhDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'narrator', name: 'Narrator' }] }),
+    );
+    await cacheModule.saveAnalysisCache(ZH_MANUSCRIPT, {
+      chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: '你好。' }] },
+    });
+  });
+
+  beforeEach(async () => {
+    setQwenState('not-installed');
+    await writeQueueFile(queuePath, {
+      entries: [
+        {
+          id: ZH_ENTRY,
+          bookId: zhBookId,
+          chapterId: 1,
+          scope: 'this',
+          addedAt: '2026-06-01T00:00:00.000Z',
+          status: 'in_progress',
+          order: 0,
+        },
+      ],
+      paused: false,
+    });
+  });
+
+  afterEach(() => setQwenState('loaded'));
+
+  it('is still FATAL (no synth, no park) when Qwen is unavailable on a still-unsupported-language book', async () => {
+    const res = await fetch(`${baseUrl}/api/books/${zhBookId}/generation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        modelKey: 'gemini-2.5-flash',
+        chapterIds: [1],
+        force: true,
+        queueEntryId: ZH_ENTRY,
+      }),
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    expect(text).toContain('chapter_failed');
+    expect(text).not.toContain('chapter_awaiting_fallback_confirm');
+    expect(synthCalled).toBe(false);
+  }, 10_000);
+});
+```
+
+- [ ] **Step 8: Run the tests to verify they behave as expected**
+
+Run: `cd server && npx vitest run src/routes/generation-fallback-gate.test.ts -t "does not stomp|Coqui-eligible Russian|still-unsupported-language"`
+Expected: the `'does not stomp'` test PASSes (Task 2 Step 1's target); the `'warns and proceeds'` test FAILs against pre-Step-3 code (old code still aborts fatally for `ru`); the `'is still FATAL'` test PASSes both before and after (its behavior is genuinely unchanged — `zh` has no fallback either way).
+
+- [ ] **Step 9: Run the full route test suites to check for regressions**
 
 Run: `cd server && npx vitest run src/routes/generation-fallback-gate.test.ts src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts`
-Expected: PASS — the existing "forces every character onto Qwen and threads forbidKokoroFallback + bookLanguage" / "fails fast for a cross-language reused voice" tests in `generation-fallback-gate.test.ts` must still pass unchanged (that describe block's fixtures never set an explicit `ttsEngine`, so `coquiEligible` being newly computed doesn't change their outcome). If `chapter-splice.test.ts` / `chapter-qa-repair.test.ts` have their own equivalent force-Qwen coverage, confirm those pass too for a still-unsupported language.
+Expected: PASS — every OTHER existing test in `generation-fallback-gate.test.ts` (the `#1263` undesigned-voice tests, the cross-language-reused-voice test) is unaffected, since none of them sets `qwenUnavailable`/`setQwenState('not-installed')` — only the two FATAL-path tests touched in Step 7 exercise that branch. If `chapter-splice.test.ts` / `chapter-qa-repair.test.ts` have their own equivalent force-Qwen coverage, confirm those pass too for a still-unsupported language (neither of those two routes has a whole-book-abort branch — that's `generation.ts`-only — so they need no equivalent Step 7 fix).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add server/src/routes/generation.ts server/src/routes/chapter-splice.ts server/src/routes/chapter-qa-repair.ts server/src/routes/generation-fallback-gate.test.ts
