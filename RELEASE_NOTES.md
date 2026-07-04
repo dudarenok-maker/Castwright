@@ -2,6 +2,7 @@
 
 - **A more honest word on hardware.** The About page and the "Will it run on my machine?" panel now say a 6 GB graphics card gets you started, with 8 GB as the sweet spot — matching what you'll find on castwright.ai.
 - **Meet the cast before you read the manuscript.** Confirming a book's cast now takes you straight to their voices, not the page — design the cast first, then move on to the manuscript when you're ready. And if a speaking character still needs a voice when you go to generate, Castwright stops to ask: design them now, or proceed with a generic stand-in voice for an English book. A book in another language can't take that shortcut — every speaking character needs a voice of their own before it can perform.
+- **A clearer stop for a non-English book missing a voice.** If a chapter in another language reaches generation with a character who still needs a voice, Castwright now tells you plainly and by name right away, rather than offering a "render anyway" that could never actually work for that language.
 
 # Castwright 1.10.0
 
