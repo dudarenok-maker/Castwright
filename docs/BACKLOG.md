@@ -154,6 +154,14 @@ _Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright
 
 _(fs-15 + fs-16 shipped — cross-book "Continue listening" rail + `#/stats` dashboard; see [plan 212](features/212-fs15-fs16-listening-stats.md). Companion reporter = Wave H follow-up.)_
 
+### Documentation
+
+#### `fs-68` — Wiki: Release Notes section, one page per release ([#1280](https://github.com/dudarenok-maker/Castwright/issues/1280))
+
+- _What:_ Add a Release Notes section to the GitHub wiki (alongside the #1276 user guide) — one page per shipped release, content copied verbatim from that release's **GitHub Release body** (`gh release view <tag>`), not `RELEASE_NOTES.md`'s in-app summary. Sequenced after #1276, which shipped the `docs/wiki/*` + `scripts/sync-wiki.mjs` authoring model this reuses.
+- _Benefit (user / technical):_ browse full detailed release history in the wiki without GitHub-release-list spelunking; gives the app a stable, linkable per-release URL without duplicating release-note authoring.
+_Full detail + acceptance:_ [#1280](https://github.com/dudarenok-maker/Castwright/issues/1280).
+
 ### Voice & cast
 
 #### `fs-24` — Per-character pronunciation lexicon ([#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478))
