@@ -16,8 +16,9 @@ a features bullet list.
 
 Build a comprehensive GitHub wiki that becomes the **primary documentation
 home** for Castwright: every pipeline stage and every feature area, each
-illustrated with real screenshots from the running app. `README.md` and
-`INSTALL.md`'s content migrates into the wiki rather than being duplicated.
+illustrated with real screenshots from the running app. `README.md` shrinks
+to a pitch + links. `INSTALL.md` stays intact (see "INSTALL.md relationship"
+below) — its content is *duplicated*, not migrated, into the wiki.
 
 ## Non-goals
 
@@ -43,29 +44,65 @@ repo**:
 - `docs/wiki/_Sidebar.md` / `docs/wiki/_Footer.md` — wiki-wide nav chrome
   (GitHub's wiki convention for a persistent sidebar/footer).
 
-Pages are authored on normal feature branches, reviewed via PR (the
-`docs-only` CI fast-path and code-review exemption apply per the existing
-convention — this is a docs-only change-type), and merged to `main` like any
-other change.
+Pages are authored on normal feature branches and reviewed via PR. **Only
+the pure-content waves (1–4, all under `docs/**`/root `*.md`) get the
+`docs-only` CI fast-path and code-review exemption.** Wave 0 adds an
+executable script (`scripts/sync-wiki.mjs`), its test, and a `package.json`
+entry — that's a `chore`/`build`-shaped change outside the doc-only glob, so
+it does **not** qualify for the exemption and gets a real (`low`-effort)
+`code-review` pass like any other non-doc PR.
 
 A new script, `scripts/sync-wiki.mjs`, mirrors `docs/wiki/*` into
 `Castwright.wiki.git`:
 
-1. Clone (or `git -C` pull, if cached) `https://github.com/dudarenok-maker/Castwright.wiki.git`
-   into a scratch/cache location.
-2. Copy `docs/wiki/*` over the clone's working tree (excluding the clone's own
-   `.git/`).
+1. Attempt `git clone https://github.com/dudarenok-maker/Castwright.wiki.git`
+   into a scratch/cache location. **A GitHub wiki's git repo does not exist
+   until at least one page exists** — enabling the `has_wiki` setting alone
+   doesn't create it, so this clone fails on a never-touched wiki. On clone
+   failure, fall back to `git init` + `git remote add origin <url>` +
+   `git push -u origin HEAD:master` to create the wiki repo from scratch
+   (this is the actual bootstrap mechanism, exercised once in the Wave 0
+   spike below — not a hypothetical).
+2. Copy `docs/wiki/*` over the clone's (or freshly-initialized) working tree
+   (excluding `.git/`).
 3. Commit (message references the source commit SHA in the main repo) and
    push.
-4. Exposed as `npm run wiki:sync`, run manually after a merge to `main`
-   touches `docs/wiki/**`. Not wired into any automated hook — a deliberate
-   manual step, since it pushes to a repo outside the normal branch-protection
-   perimeter.
+4. Exposed as `npm run wiki:sync`, run manually by the operator after a merge
+   to `main` touches `docs/wiki/**`, using the operator's own `gh`/git
+   credentials. This is intentionally a manual, human-run step with no CI
+   identity behind it — the wiki repo sits outside `main`'s branch protection
+   by design (GitHub wikis have no PR mechanism to gate on), so there is
+   nothing for automation to gate against; a human running it locally is the
+   actual safeguard, not an accident of scope.
 
 **Repo setting change required:** the repo currently has `hasWikiEnabled:
 false`. Enabling it (`gh api -X PATCH repos/dudarenok-maker/Castwright
 -f has_wiki=true`, needs admin) is a Wave 0 task — call this out to the user
 before running it, since it's a repo-visibility-adjacent setting change.
+
+### Wave 0 spike: prove the authoring model before building content
+
+The dual-render premise — a page + subdirectory image under `docs/wiki/`
+rendering correctly both as a main-repo blob (for PR review) and after
+`sync-wiki.mjs` flattens `docs/wiki/*` to the wiki repo's root (for the
+published wiki) — is unverified and load-bearing for all 21 pages. Before
+any content wave starts, Wave 0 includes a spike:
+
+1. Enable the wiki, run the bootstrap path above once for real.
+2. Commit one throwaway page (`docs/wiki/_Spike.md`) with one image at
+   `docs/wiki/images/_spike/01-test.png`, referenced as
+   `![](images/_spike/01-test.png)`.
+3. Sync it, then check the **live wiki page** in a browser: does the image
+   render?
+4. **If yes:** the page-relative convention in "Screenshot workflow" below
+   stands as written.
+5. **If no:** fall back to absolute `raw.githubusercontent.com/<owner>/<repo>/main/docs/wiki/images/...`
+   URLs. This trades the "self-contained mirror" property for a working
+   render (the wiki page's images point back at `main` in the source repo)
+   — an explicit, accepted tradeoff if the relative-path approach fails,
+   not a silent one.
+6. Delete the spike page/image once the answer is confirmed, before Wave 1
+   starts.
 
 ## Screenshot workflow
 
@@ -133,37 +170,77 @@ file's content.)
 
 `fe-46` (Cast-first landing + pre-flight voice-readiness gate, issue #1262,
 plan `docs/features/240-cast-first-landing-and-voice-readiness-gate.md`) is
-**in progress in parallel** with this wiki work and changes exactly the flow
-pages 11–12 document (confirm → Cast → Manuscript → Generate re-sequencing,
-the pre-flight voice-readiness gate before generation, the "Design full
-cast" / "Proceed anyway" affordances).
+**in progress in parallel** with this wiki work. It touches **three** pages,
+not two:
 
-Mitigation: pages 11 and 12 are captured **last**, in Wave 3, with an
-explicit check of `fe-46`'s merge status immediately before capture. If
-`fe-46` has landed by then, pages 11–12 document the new flow; if not, they
-document the current flow and get a follow-up issue filed for a re-shoot
-once `fe-46` ships (same pattern as any other doc-drift follow-up).
+- Pages 11–12 (Reviewing Cast & Assigning Voices, Designing a Voice) — the
+  `confirmCast` → Cast → Manuscript → Generate re-sequencing and the
+  "Design full cast" / "Proceed anyway" affordances live here.
+- **Page 7 (Generating Audio)** — fe-46's pre-flight voice-readiness gate
+  modal fires at generation start, so it lands squarely on this page too.
+  This page sits in Wave 1 (core journey), captured well before Wave 3.
+
+Mitigation:
+
+- Pages 11–12 are captured **last**, in Wave 3, with an explicit check of
+  `fe-46`'s merge status immediately before capture — same as before.
+- Page 7, captured earlier in Wave 1, gets the **same flag**: at Wave 1
+  capture time, check `fe-46`'s status; if it hasn't landed yet (the likely
+  case, since Wave 1 runs first), page 7 documents the current
+  generation-start flow and picks up an explicit follow-up note (and, once
+  `fe-46` ships, a re-shoot issue) rather than being silently left stale —
+  the same "flagged, not silent" treatment pages 11–12 get, applied to the
+  one Wave-1 page fe-46 actually reaches.
+
+## INSTALL.md relationship
+
+`INSTALL.md` ships inside the offline release zip
+(`castwright-vX.Y.Z.zip`) and is the install contract for a deployer who has
+extracted that zip and may not have a browser open on GitHub yet. It **stays
+fully intact, unchanged** — not stubbed, not retired. The wiki's "Installing
+Castwright" page (page 3) is a **parallel, screenshot-illustrated duplicate**
+for online readers, not a migration target. This means install steps have
+two places to update going forward — a deliberate, scoped exception to the
+"migrate, don't duplicate" decision for `README.md`, made specifically
+because `INSTALL.md` has an offline audience `README.md` doesn't.
+
+`README.md` still shrinks to a pitch + links (to both the wiki and
+`INSTALL.md`) — it isn't shipped as a deployer's only install reference the
+way `INSTALL.md` is, so migrating it away carries no equivalent offline-gap
+risk.
 
 ## Delivery: waves
 
-One integration branch, `docs/docs-github-wiki`, with each wave landing as
-its own PR (normal branch → PR → review → merge flow) rather than one
-all-at-once PR:
+One integration branch, `docs/docs-github-wiki`, off of which every PR below
+branches — each is its own small, independently-reviewable PR (not one
+all-at-once PR, and not one PR per wave — a 9-page wave is too large for a
+single reviewable diff):
 
-- **Wave 0 — infra.** `docs/wiki/` scaffold, `scripts/sync-wiki.mjs` +
-  `npm run wiki:sync`, enable the GitHub wiki setting, `_Sidebar.md` /
-  `_Footer.md`, empty Home page.
-- **Wave 1 — core journey.** Pages 2–10, screenshotted and written.
-- **Wave 2 — full breadth.** Pages 13–21.
-- **Wave 3 — cast & voices.** Pages 11–12, captured last per the fe-46
-  mitigation above.
-- **Wave 4 — migration.** Shrink `README.md` to a pitch + wiki link;
-  retire `INSTALL.md`'s content into page 3, leaving a short redirect stub
-  (`INSTALL.md` becomes "moved to the wiki, see <link>") rather than deleting
-  the file outright (external links to it stay resolvable).
+- **Wave 0 — infra + spike.** One PR: `docs/wiki/` scaffold,
+  `scripts/sync-wiki.mjs` + `npm run wiki:sync` + its test
+  (`scripts/tests/sync-wiki.test.mjs`, Vitest — matching the actual
+  precedent for `.mjs` scripts, not the PowerShell/Pester convention used
+  for `scripts/lib/`), enabling the GitHub wiki setting, `_Sidebar.md` /
+  `_Footer.md`, the render-model spike (above), empty Home page. **This PR
+  is a `chore`/`build` change, not docs-only — it gets the mandatory
+  `low`-effort `code-review` pass**, unlike every other wave below.
+- **Wave 1 — core journey**, split into ~4 small PRs of 2–3 pages each
+  rather than one 9-page PR, e.g.: (a) Getting Started + Installing
+  Castwright; (b) Uploading a Book + Analysis & the Analyzer + Reviewing
+  Low-Confidence Speaker Tags; (c) Generating Audio (with the fe-46 flag
+  above) + The Quality Gate; (d) Listening & Revising + Exporting.
+- **Wave 2 — full breadth**, similarly split into ~3–4 small PRs of 2–3
+  pages each (e.g. engines + pill; library + mobile/companion; admin +
+  advanced + account; multi-language + troubleshooting).
+- **Wave 3 — cast & voices.** One PR, pages 11–12, captured last per the
+  fe-46 mitigation above.
+- **Wave 4 — migration.** One PR: shrink `README.md` to a pitch + links;
+  add the "Installing Castwright" wiki page as `INSTALL.md`'s duplicate per
+  the section above (`INSTALL.md` itself is untouched).
 
-Each wave PR runs `npm run wiki:sync` after merge to publish that wave's
-pages live.
+Waves 1–4's PRs are pure `docs/**`/root `*.md` and qualify for the
+docs-only CI fast-path and code-review exemption; Wave 0 does not (above).
+Each PR runs `npm run wiki:sync` after merge to publish its pages live.
 
 ## Testing / verification
 
