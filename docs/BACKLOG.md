@@ -90,12 +90,6 @@ deployers). `ops-2` leads because it's the only one with **no licensing/cert
 dependency**; `ops-1`/`ops-15`/`app-12` wait on cert + Apple-account procurement
 (the long pole, tracked privately)._
 
-#### `fe-46` — Cast-first landing + pre-flight voice-readiness gate ([#1262](https://github.com/dudarenok-maker/Castwright/issues/1262))
-
-- _What:_ Put voice design ON the pipeline path: confirm-cast lands on the Cast view (new "Continue to manuscript" CTA; flow becomes confirm → Cast → Manuscript → Generate), and a pre-flight gate at generation start lists speaking Qwen characters without a designed voice — "Design full cast" primary, "Proceed anyway (generic Kokoro fallback)" for English only, hard block for non-English. Proceed-anyway stamps the per-entry `fallbackConfirmed` flag at enqueue so the per-chapter gate doesn't double-prompt.
-- _Benefit (user / technical):_ no more silently generic (or per-chapter-failing) first renders — the flow teaches the step and the gate enforces it; one reusable voice-readiness selector replaces three ad-hoc "has a designed voice" checks.
-_Full detail + acceptance:_ [#1262](https://github.com/dudarenok-maker/Castwright/issues/1262) · spec `docs/superpowers/specs/2026-07-04-voice-design-generation-flow-design.md` · plan [`240-cast-first-landing-and-voice-readiness-gate.md`](features/240-cast-first-landing-and-voice-readiness-gate.md) (approved, awaiting implementation).
-
 #### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
 
 - _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/castwright:vX.Y.Z` on tag push.
@@ -269,6 +263,12 @@ _Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/AudioBook-
 
 ### Voice & cast
 
+#### `fe-47` — Converge the tier modal's ad-hoc 1.7B `hasDesignedVoice` check onto `voice-readiness-selectors` ([#1292](https://github.com/dudarenok-maker/Castwright/issues/1292))
+
+- _What:_ The StartGenerationModal confirm path (`src/components/layout.tsx` ~1734-1766) still carries its own inline "has a designed Qwen voice" check — the last duplicate alongside fe-46's `selectUndesignedQwenCharacters`. Rewrite it to derive from the shared selector; pure refactor, behaviour unchanged. Flagged as a fast-follow in the fe-46 plan but never filed at ship time.
+- _Benefit (technical):_ one definition of voice-designedness — a future change to "Needs voice" semantics propagates everywhere at once instead of silently diverging in the tier guard.
+_Full detail + acceptance:_ [#1292](https://github.com/dudarenok-maker/Castwright/issues/1292).
+
 #### `fe-12` — Bulk pin / bulk delete in voice library ([#420](https://github.com/dudarenok-maker/AudioBook-Generator/issues/420))
 
 - _What:_ Multi-select in the voice library with bulk actions — pin/unpin and delete across the selection (with a confirm + count). Deletion respects in-use voices (warn or block when a voice is assigned to a character in any book).
@@ -352,12 +352,6 @@ _Full detail + acceptance:_ [#979](https://github.com/dudarenok-maker/Castwright
 - _What:_ Run the local (Ollama) analyzer **CPU-only** (`num_gpu:0`, system RAM) per-model, so a large model (e.g. **Gemma 4 12B**, which doesn't fit the 8 GB GPU) can be used without touching the GPU. A CPU model **skips the GPU semaphore**, so CPU analysis and GPU TTS run **concurrently** instead of evicting each other. Phase 0 (small GPU model) + Phase 1 (big CPU model) run side-by-side. Server-authoritative device resolver + CPU knobs (`ANALYZER_CPU_*`); required wiring so `/api/ollama/load` matches the device and the TTS auto-evict skips CPU models. Gemma 4 12B entry gated behind env until validated (brand-new).
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
-
-#### `srv-55` — openapi.yaml `QueueEnqueueRequest` schema doesn't match the real `/api/queue/enqueue` `entries[]` shape ([#1264](https://github.com/dudarenok-maker/Castwright/issues/1264))
-
-- _What:_ The spec describes a `bookId + chapterIds[]` request; the real route takes a per-entry `entries[]` array (bookId, chapterId, optional `requiredEngines`/`multiTts`/`modelKey`, and `fallbackConfirmed` once fe-46 lands). Update the request schema + regen `api-types.ts` in its own tiny PR.
-- _Benefit (technical):_ OpenAPI stays the honest type source of truth; nobody "fixes" the drift mid-PR as scope creep. Found while planning fe-46.
-_Full detail + acceptance:_ [#1264](https://github.com/dudarenok-maker/Castwright/issues/1264).
 
 #### `fs-45` — VRAM MB-accounting policy (Wave 4, beta 12/16 GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
 

@@ -245,10 +245,14 @@ Mock mode (`VITE_USE_MOCKS=true`):
 
 ## Ship notes
 
-Shipped 2026-07-04 on `feat/frontend-voice-design-flow` (PR link to be added
-once opened). Behaviour matches the plan above; no deltas at implementation
-time. Work order followed exactly (2a → 2b → 1 → 3 → 4 → new e2e → docs →
-`npm run verify`).
+Shipped 2026-07-04 on `feat/frontend-voice-design-flow` via
+[PR #1278](https://github.com/dudarenok-maker/Castwright/pull/1278) (merge
+commit `b4e06941`), closing [#1262](https://github.com/dudarenok-maker/Castwright/issues/1262).
+Behaviour matches the plan above; no deltas at implementation time. Work order
+followed exactly (2a → 2b → 1 → 3 → 4 → new e2e → docs → `npm run verify`).
+The §3 fast-follow (converge `layout.tsx`'s ad-hoc 1.7B `hasDesignedVoice`
+check onto the new selector) is filed as fe-47
+([#1292](https://github.com/dudarenok-maker/Castwright/issues/1292)).
 
 Coverage at ship: `src/lib/cast-sort.test.ts` (new, extracted comparator),
 `src/store/voice-readiness-selectors.test.ts` (new, 15 cases),
