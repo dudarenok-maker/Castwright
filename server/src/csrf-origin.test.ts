@@ -143,3 +143,21 @@ it('passes a cookie POST from the bare (no-port) 127.0.0.1 origin — the port-4
   );
   expect(next).toHaveBeenCalled();
 });
+
+it('403s a cookie POST from castwright.dev.local when NODE_ENV=production (round 5: dev-only leniency must not apply in prod)', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    const next = vi.fn();
+    const r = res();
+    requireSameOrigin(
+      mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://castwright.dev.local:5173' }),
+      r,
+      next,
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(r.statusCode).toBe(403);
+  } finally {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});

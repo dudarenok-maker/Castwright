@@ -90,7 +90,17 @@ export function requireSameOrigin(req: Request, res: Response, next: NextFunctio
   if (!MUTATING.has((req.method ?? 'GET').toUpperCase())) return next();
   if (!hasCwLanCookie(req)) return next(); // header/Bearer or loopback: not cookie-CSRF-able
   const origin = originOf(req);
-  if (origin !== undefined && (allowedOrigins().has(origin) || DEV_LAN_HOSTNAME_ORIGIN.test(origin))) {
+  if (
+    origin !== undefined &&
+    (allowedOrigins().has(origin) ||
+      // castwright.dev.local is only ever advertised by dev:lan's own mDNS
+      // responder (never in a production start:lan deployment) — gate the
+      // leniency to non-production so a LAN device that wins an mDNS-spoofing
+      // race for that hostname can't get CSRF-approved against a PRODUCTION
+      // instance. Mirrors shouldSpawnMdnsResponder/shouldSpawnPortForwarder's
+      // identical NODE_ENV===production discriminator for this feature area.
+      (process.env.NODE_ENV !== 'production' && DEV_LAN_HOSTNAME_ORIGIN.test(origin)))
+  ) {
     return next();
   }
   res.status(403).json({ error: 'Cross-origin request rejected.' });

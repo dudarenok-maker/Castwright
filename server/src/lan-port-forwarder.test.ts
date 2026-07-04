@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import net from 'node:net';
+import { EventEmitter } from 'node:events';
 import { shouldSpawnPortForwarder, startPortForwarder } from './lan-port-forwarder.js';
 
 describe('shouldSpawnPortForwarder', () => {
@@ -131,5 +132,94 @@ describe('startPortForwarder', () => {
 
     await handle.close();
     blocker.close();
+  });
+
+  it('round 5 (Finding 1): survives and still warns on a SECOND error event on the same server (net.Server can emit "error" more than once)', async () => {
+    // No real bind is needed here — this proves the listener itself
+    // (server.on vs server.once) stays attached, independent of what
+    // triggers the error. A .once() listener would leave the second
+    // emit()'d 'error' with no handler, which Node treats as an uncaught
+    // exception and crashes the whole process — exactly the regression
+    // this guards against.
+    const warn = vi.fn();
+    const handle = startPortForwarder(9999, { listenPort: 0, warn });
+    await new Promise<void>((resolve) => handle.server.once('listening', () => resolve()));
+
+    handle.server.emit('error', new Error('first transient error'));
+    handle.server.emit('error', new Error('second transient error'));
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0]?.[0]).toContain('first transient error');
+    expect(warn.mock.calls[1]?.[0]).toContain('second transient error');
+
+    await handle.close();
+  });
+
+  /* Minimal fake upstream socket: an EventEmitter with the handful of
+     stream-ish methods startPortForwarder actually calls (pipe/write/end/
+     destroy). Driving 'connect' and 'error' on it directly (rather than via
+     a real socket + real network timing) makes both the pre-connect and
+     post-connect log-message variants deterministic. */
+  class FakeUpstreamSocket extends EventEmitter {
+    pipe() {
+      return this;
+    }
+    write() {
+      return true;
+    }
+    end() {
+      return this;
+    }
+    destroy() {
+      this.emit('close');
+    }
+  }
+
+  it('round 5 (Finding 2): logs "upstream connect failed" for an error BEFORE any successful connect', async () => {
+    const fakeUpstream = new FakeUpstreamSocket();
+    const warn = vi.fn();
+    const handle = startPortForwarder(9999, {
+      listenPort: 0,
+      warn,
+      connectFn: () => fakeUpstream as unknown as net.Socket,
+    });
+    const forwarderPort = await listenAndGetPort(handle.server);
+
+    const client = net.connect({ port: forwarderPort, host: '127.0.0.1' });
+    await new Promise<void>((resolve) => client.once('connect', () => resolve()));
+
+    fakeUpstream.emit('error', new Error('ECONNREFUSED'));
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('upstream connect failed');
+    expect(warn.mock.calls[0]?.[0]).not.toContain('upstream connection dropped');
+
+    client.destroy();
+    await handle.close();
+  });
+
+  it('round 5 (Finding 2): logs "upstream connection dropped" (not "upstream connect failed") for an error AFTER a successful connect', async () => {
+    const fakeUpstream = new FakeUpstreamSocket();
+    const warn = vi.fn();
+    const handle = startPortForwarder(9999, {
+      listenPort: 0,
+      warn,
+      connectFn: () => fakeUpstream as unknown as net.Socket,
+    });
+    const forwarderPort = await listenAndGetPort(handle.server);
+
+    const client = net.connect({ port: forwarderPort, host: '127.0.0.1' });
+    await new Promise<void>((resolve) => client.once('connect', () => resolve()));
+
+    // Simulate a successful connect, then a mid-relay drop (e.g. ECONNRESET).
+    fakeUpstream.emit('connect');
+    fakeUpstream.emit('error', new Error('ECONNRESET'));
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('upstream connection dropped');
+    expect(warn.mock.calls[0]?.[0]).not.toContain('upstream connect failed');
+
+    client.destroy();
+    await handle.close();
   });
 });

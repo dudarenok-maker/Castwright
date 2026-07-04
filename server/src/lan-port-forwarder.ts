@@ -97,15 +97,28 @@ export function startPortForwarder(
       openClientSockets.delete(client);
     };
 
+    let upstreamConnected = false;
+    upstream.once('connect', () => {
+      upstreamConnected = true;
+    });
+
     client.pipe(upstream);
     upstream.pipe(client);
     /* If the bind above ever fails at runtime (e.g. Windows refuses an
        unassigned 127.x local address), the failure is per-connection, not a
        server-level bind error: :443 still accepts the client fine, then
        THIS connect errors. Distinct log line from the listener-level warn
-       below so the two failure modes aren't conflated. */
+       below so the two failure modes aren't conflated. This same listener
+       also fires for errors AFTER a successful connect (e.g. a mid-relay
+       ECONNRESET/EPIPE once piping has started) — the upstreamConnected flag
+       distinguishes the two so the log doesn't mislead a reader into
+       troubleshooting a connect/bind issue when the real cause was a
+       mid-session drop. */
     upstream.once('error', (err) => {
-      warn(`[lan-port-forwarder] upstream connect failed: ${(err as Error).message}`);
+      const message = upstreamConnected
+        ? `upstream connection dropped`
+        : `upstream connect failed`;
+      warn(`[lan-port-forwarder] ${message}: ${(err as Error).message}`);
       destroyBoth();
     });
     client.once('error', destroyBoth);
@@ -113,7 +126,16 @@ export function startPortForwarder(
     upstream.once('close', destroyBoth);
   });
 
-  server.once('error', (err) => {
+  /* .on (not .once): net.Server can emit 'error' more than once over its
+     lifetime — not just at initial bind time (e.g. a transient EMFILE/resource
+     -exhaustion error while accepting a burst of connections, without the
+     server actually closing). A .once() listener deregisters after the first
+     firing, so any SECOND 'error' event later in the process's life would have
+     no listener attached — Node treats an unhandled 'error' event on an
+     EventEmitter as an uncaught exception, crashing the entire process, not
+     just this convenience forwarder. Matches crash-logging.ts's
+     attachListenErrorHandler, which uses .on for the identical reason. */
+  server.on('error', (err) => {
     warn(
       `[lan-port-forwarder] could not bind :${listenPort} (port already in use, or ` +
         `permission denied): ${(err as Error).message}. The bare-hostname/bare-IP ` +
