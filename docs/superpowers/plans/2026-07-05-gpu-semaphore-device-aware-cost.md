@@ -301,14 +301,21 @@ git commit -m "feat(server): feed the per-engine device cache from sidecar healt
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `server/src/gpu/engine-device.test.ts`, inside the existing `describe('engineDeviceIsGpu', ...)` block:
+Add a shared reset to the existing `describe('engineDeviceIsGpu', ...)` block's `beforeEach` (currently just `vi.clearAllMocks()`), so the new cache can't leak state between the tests below regardless of execution order:
+
+```ts
+beforeEach(async () => {
+  vi.clearAllMocks();
+  const { _resetEngineDevicesForTests } = await import('./engine-device-state.js');
+  _resetEngineDevicesForTests();
+});
+```
+
+Then add to `server/src/gpu/engine-device.test.ts`, inside that same `describe` block:
 
 ```ts
   it('ground truth cpu/mps wins over a GPU-looking knob', async () => {
-    const { setLastKnownEngineDevices, _resetEngineDevicesForTests } = await import(
-      './engine-device-state.js'
-    );
-    _resetEngineDevicesForTests();
+    const { setLastKnownEngineDevices } = await import('./engine-device-state.js');
     setLastKnownEngineDevices({ kokoro: 'mps', coqui: 'cpu', qwen: 'cuda' });
     (configValue as any).mockReturnValue('cuda'); // knob would say "GPU" if consulted
     expect(engineDeviceIsGpu('kokoro')).toBe(false);
@@ -317,10 +324,7 @@ Add to `server/src/gpu/engine-device.test.ts`, inside the existing `describe('en
   });
 
   it('ground truth cuda/rocm/directml wins over a cpu-pinned knob', async () => {
-    const { setLastKnownEngineDevices, _resetEngineDevicesForTests } = await import(
-      './engine-device-state.js'
-    );
-    _resetEngineDevicesForTests();
+    const { setLastKnownEngineDevices } = await import('./engine-device-state.js');
     setLastKnownEngineDevices({ kokoro: 'rocm', coqui: 'directml', qwen: 'cuda' });
     (configValue as any).mockReturnValue('cpu'); // knob would say "not GPU" if consulted
     expect(engineDeviceIsGpu('kokoro')).toBe(true);
@@ -329,8 +333,6 @@ Add to `server/src/gpu/engine-device.test.ts`, inside the existing `describe('en
   });
 
   it('falls back to the knob when ground truth is unknown (never probed)', async () => {
-    const { _resetEngineDevicesForTests } = await import('./engine-device-state.js');
-    _resetEngineDevicesForTests();
     (configValue as any).mockReturnValue('cpu');
     expect(engineDeviceIsGpu('kokoro')).toBe(false);
     (configValue as any).mockReturnValue('cuda:1');
@@ -413,6 +415,8 @@ git commit -m "fix(server): engineDeviceIsGpu reads real device ground truth fir
 - Consumes: `engineDeviceIsGpu` from Task 3 (`server/src/gpu/engine-device.ts`).
 - Produces: no change to `SidecarTtsProvider`'s public interface (`synthesize`/`synthesizeBatch` signatures unchanged); the existing test-only `gpuSem` constructor injection seam (`SidecarOptions.gpuSem`) is what the new test uses.
 
+**A note on the test mocking approach below, before you start:** the first two tests use `vi.spyOn` on the `engine-device.js` module namespace to override `engineDeviceIsGpu`'s return value. This pattern isn't used anywhere else in this codebase today (the closest analogue, `transcribe-client.test.ts`'s `asrRunsOnGpu` coverage, drives the real function via an env var instead) — it should work under Vitest's ESM handling, but if Step 2 shows the mock isn't actually intercepting `sidecar.ts`'s call (i.e. the "skip" test still shows `acquire` called), don't fight it: switch that test to the same real-cache approach the third test below already uses (`setLastKnownEngineDevices` + the unmocked `engineDeviceIsGpu`), which is proven to work (it's exactly Task 3's own test pattern).
+
 - [ ] **Step 1: Write the failing test**
 
 Add to `server/src/tts/sidecar.test.ts` (new top-level `describe`, after the existing ones):
@@ -468,6 +472,48 @@ describe('device-aware GPU semaphore gating', () => {
 
     expect(acquireSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('end-to-end with the REAL engineDeviceIsGpu: ground truth mps wins over an auto knob that would say GPU', async () => {
+    /* No mocking of engine-device.js here — this proves Task 3's ground-truth-
+       first logic is what actually causes the skip, not just a spied return
+       value. Without Task 3 (i.e. engineDeviceIsGpu only reading the config
+       knob), this test would fail: COQUI_DEVICE is unset ('auto'), which the
+       knob-only logic treats as "assume GPU" — the real-world Apple Silicon
+       case this whole design exists to fix. */
+    const { setLastKnownEngineDevices, _resetEngineDevicesForTests } = await import(
+      '../gpu/engine-device-state.js'
+    );
+    _resetEngineDevicesForTests();
+    setLastKnownEngineDevices({ kokoro: 'mps', coqui: 'mps', qwen: 'mps' });
+    const prevDevice = process.env.COQUI_DEVICE;
+    delete process.env.COQUI_DEVICE; // unset → knob defaults to 'auto'
+
+    const { GpuSemaphore } = await import('../gpu/semaphore.js');
+    const fakeGpuSem = new GpuSemaphore(4);
+    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
+
+    stubFetch(async () => {
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
+      });
+    });
+
+    try {
+      const provider = new SidecarTtsProvider({
+        url: 'http://localhost:6006/',
+        engine: 'coqui',
+        gpuSem: fakeGpuSem,
+      });
+      await provider.synthesize(SYNTH_INPUT);
+      expect(acquireSpy).not.toHaveBeenCalled();
+    } finally {
+      _resetEngineDevicesForTests();
+      if (prevDevice === undefined) delete process.env.COQUI_DEVICE;
+      else process.env.COQUI_DEVICE = prevDevice;
+    }
+  });
 });
 ```
 
@@ -476,7 +522,7 @@ Note: this test file already mocks the `undici` module's `fetch` export (see the
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd server && npx vitest run src/tts/sidecar.test.ts -t "device-aware GPU semaphore gating"`
-Expected: FAIL — the first test's `acquireSpy` WAS called once (today's code always calls `this.gpuSem.acquire(...)` regardless of `engineDeviceIsGpu`).
+Expected: FAIL — the first and third tests' `acquireSpy` WAS called once each (today's code always calls `this.gpuSem.acquire(...)` regardless of `engineDeviceIsGpu`).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -590,7 +636,7 @@ with:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd server && npx vitest run src/tts/sidecar.test.ts`
-Expected: PASS (all existing tests + 2 new ones)
+Expected: PASS (all existing tests + 3 new ones)
 
 - [ ] **Step 5: Run the full server test suite to check for ripple effects**
 
