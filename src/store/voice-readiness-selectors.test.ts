@@ -89,6 +89,15 @@ describe('selectUndesignedQwenCharacters', () => {
     });
     expect(selectUndesignedQwenCharacters(s, 'b1').map((c) => c.id)).toEqual(['b', 'a']);
   });
+
+  it('returns a stable reference across calls with unchanged state (#1285)', () => {
+    /* Unmemoized, this allocated a fresh array on every call — react-redux's
+       dev-mode stability check flags exactly this as "returned a different
+       result", and `VoiceReadinessGateModal` (a global, always-mounted
+       overlay) called this on every render. */
+    const s = mk({ characters: [qwenChar({ id: 'a', name: 'Alice', lines: 3 })] });
+    expect(selectUndesignedQwenCharacters(s, 'b1')).toBe(selectUndesignedQwenCharacters(s, 'b1'));
+  });
 });
 
 describe('selectVoiceReadinessGateShouldFire', () => {

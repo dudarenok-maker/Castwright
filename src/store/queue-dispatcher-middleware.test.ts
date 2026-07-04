@@ -137,17 +137,23 @@ async function flushMicro(): Promise<void> {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
-/* Find the open call for a (book, chapter) and drive its stream to completion
-   by feeding an idle tick through the runner's per-stream onTick (the runner
-   then closes that chapter's handle + clears its snapshot, which wakes the
-   dispatcher). */
-function completeStream(bookId: string, chapterId: number): void {
+/* Shared lookup: find the open call for a (book, chapter) and return its
+   onTick, so completeStream/failStream/parkStream drive the SAME mocked
+   stream instead of each re-deriving the match. */
+function findOnTick(bookId: string, chapterId: number): (ev: GenerationTick) => void {
   const call = streamGenerationMock.mock.calls.find((c) => {
     const a = c[0] as { bookId?: string; chapterIds?: number[] };
     return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
   });
   if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
-  (call[0] as { onTick: (ev: GenerationTick) => void }).onTick({ type: 'idle' } as GenerationTick);
+  return (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
+}
+
+/* Drive a stream to completion by feeding an idle tick through the runner's
+   per-stream onTick (the runner then closes that chapter's handle + clears
+   its snapshot, which wakes the dispatcher). */
+function completeStream(bookId: string, chapterId: number): void {
+  findOnTick(bookId, chapterId)({ type: 'idle' } as GenerationTick);
 }
 
 /* Drive a stream to FAILURE: a chapter_failed tick (records the reason in the
@@ -159,12 +165,7 @@ function failStream(
   reason: string,
   errorCode?: string,
 ): void {
-  const call = streamGenerationMock.mock.calls.find((c) => {
-    const a = c[0] as { bookId?: string; chapterIds?: number[] };
-    return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
-  });
-  if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
-  const onTick = (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
+  const onTick = findOnTick(bookId, chapterId);
   onTick({ type: 'chapter_failed', chapterId, errorReason: reason, errorCode } as GenerationTick);
   onTick({ type: 'idle' } as GenerationTick);
 }
@@ -181,12 +182,7 @@ function parkStream(
   chapterId: number,
   fallbackCharacters: Array<{ id: string; name?: string }> = [],
 ): void {
-  const call = streamGenerationMock.mock.calls.find((c) => {
-    const a = c[0] as { bookId?: string; chapterIds?: number[] };
-    return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
-  });
-  if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
-  const onTick = (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
+  const onTick = findOnTick(bookId, chapterId);
   onTick({ type: 'chapter_awaiting_fallback_confirm', chapterId, fallbackCharacters } as GenerationTick);
   onTick({ type: 'idle' } as GenerationTick);
 }
