@@ -1122,12 +1122,18 @@ git commit -m "feat(server): Qwen to Coqui fallback branch in applyQwenFallback 
 ## Task 7: Qwen/Coqui chapter-level partition + evict serialization
 
 **Files:**
-- Modify: `server/src/tts/synthesise-chapter.ts:1, 1482-1485` (imports + the body-dispatch call site)
+- Modify: `server/src/tts/synthesise-chapter.ts:1, 1482-1485, 1546, 1653` (imports + all THREE dispatch call sites — not just the initial body dispatch)
 - Test: `server/src/tts/synthesise-chapter-coqui-fallback.test.ts` (extend from Task 6)
 
 **Interfaces:**
 - Consumes: `gpuSemaphore` (already imported), `resolveGroup` (already defined in this file), `synthGroupsBatched` (already defined in this file, Task 6's neighbor).
-- Produces: `evictQwenForCoquiPhase(): Promise<void>` (local to `synthesise-chapter.ts`) — not consumed elsewhere; this task is self-contained.
+- Produces: `evictQwenForCoquiPhase(): Promise<void>` and `synthGroupsSerialized(groupList, onDone?): Promise<Map<number, GroupResult>>` (both local to `synthesise-chapter.ts`) — not consumed elsewhere; this task is self-contained.
+
+**Additional accepted limitation, surfaced during plan review: `evictQwenForCoquiPhase` is a global unload, not scoped to this chapter's book.** It POSTs `/unload {engine:'qwen'}` to the one shared sidecar process. This app's concurrent multi-book workflow is a first-class invariant — if a *different* book is mid-Qwen-render on another worker when this chapter's Coqui phase evicts Qwen, that other book's in-flight Qwen synth gets evicted out from under it too, forcing an unplanned reload (not a correctness bug — Qwen reloads and that book's render continues — but a real, unbudgeted latency hit for an unrelated book). This is the same class of residual limitation the design spec's §4 already accepts for the VRAM-admission side of cross-book Qwen+Coqui concurrency; this plan extends that same acceptance to the eviction side-effect rather than building per-book-scoped eviction (which the sidecar's `/unload` endpoint doesn't support — it's process-wide by design). Flag this in Task 12's regression-plan doc as a named, accepted v1 limitation.
+
+**This task's scope was corrected during plan review.** The first draft only wrapped the *initial* body dispatch (`groups.slice(bodyStartIndex)` at line 1482). But `synthesiseChapter` has **two more** dispatch sites that can re-synth a mixed Qwen+Coqui set — the segment-QA re-record loop (`synthGroupsBatched(pending)` at line 1546) and the ASR re-record loop (`synthGroupsBatched(pending)` at line 1653) — both of which run routinely in production whenever `maxSegmentRerecords > 0` or an `asr` option is supplied. Partitioning only the initial dispatch would let a re-record round reload Qwen while Coqui is still resident from the initial dispatch's second phase — exactly the co-residency this task exists to prevent, and invisible to a test that only exercises the initial-dispatch path. The fix: extract the partition-then-evict logic into one shared `synthGroupsSerialized` wrapper, and use it at **all three** dispatch sites instead of calling `synthGroupsBatched` directly at any of them.
+
+**Also confirmed (resolves a plan-review "Unverifiable" flag):** `resolveForEngine('coqui')` does NOT require any character to be pre-configured on Coqui. `generation.ts`'s `resolveForEngine` (and the equivalent in `chapter-splice.ts`/`chapter-qa-repair.ts`) calls `canonicalModelKeyForEngine('coqui', modelKey)` → the static string `'coqui-xtts-v2'` (`model-keys.ts:90-91`), then `selectTtsProvider('coqui-xtts-v2')` (`tts/index.ts:106-121`) — a **stateless factory** that just constructs `new SidecarTtsProvider({ url, engine: 'coqui' })`. This is exactly how today's Kokoro fallback already works when no character is configured on Kokoro either. No character needs to be "configured" for Coqui — the fallback provider is built on demand, same as Kokoro's.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1244,43 +1250,135 @@ async function evictQwenForCoquiPhase(): Promise<void> {
     release();
   }
 }
+
+/* fs-60 — drop-in wrapper around synthGroupsBatched that adds the Qwen/Coqui
+   serialization guarantee, for use at EVERY dispatch site in this function,
+   not just the initial body dispatch. A re-record round (segment-QA or ASR)
+   can re-synth a mixed pending set exactly as easily as the initial dispatch
+   can — partitioning only the initial call would leave Coqui resident from
+   its own second phase while a re-record round reloads Qwen, which is the
+   exact co-residency this mechanism exists to prevent. Same signature as
+   synthGroupsBatched (groupList, optional onDone) => Map<index, result>, so
+   it's a drop-in replacement at every call site. When the group list doesn't
+   actually mix qwen+coqui, this is a zero-overhead passthrough to
+   synthGroupsBatched. Cost note: if MULTIPLE re-record rounds each mix
+   engines, this evicts+reloads Qwen once per such round — a real perf cost,
+   accepted deliberately in exchange for correctness; not optimized away in
+   this task (redundant-evict avoidance is a follow-up, not a v1 requirement). */
+async function synthGroupsSerialized(
+  groupList: SentenceGroup[],
+  onDone?: (group: SentenceGroup, result: GroupResult) => void,
+): Promise<Map<number, GroupResult>> {
+  const engines = new Set(groupList.map((g) => resolveGroup(g).route.engine));
+  if (!(engines.has('qwen') && engines.has('coqui'))) {
+    return synthGroupsBatched(groupList, onDone);
+  }
+  const qwenGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'qwen');
+  const coquiGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'coqui');
+  const out = new Map<number, GroupResult>();
+  for (const [k, v] of await synthGroupsBatched(qwenGroups, onDone)) out.set(k, v);
+  await evictQwenForCoquiPhase();
+  for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
+  return out;
+}
 ```
 
 Replace the body-dispatch call site at `synthesise-chapter.ts:1482-1485`:
 
 ```ts
-  const bodyGroups = groups.slice(bodyStartIndex);
-  const onBodyGroupDone = (group: SentenceGroup, result: GroupResult): void => {
+  await synthGroupsSerialized(groups.slice(bodyStartIndex), (group, result) => {
     results[group.index] = result;
     fireComplete(group);
-  };
-  const bodyEngines = new Set(bodyGroups.map((g) => resolveGroup(g).route.engine));
-  if (bodyEngines.has('qwen') && bodyEngines.has('coqui')) {
-    /* fs-60 — never let Qwen and Coqui be resident together (see the helper
-       doc comment above). Render every Qwen-routed segment first, evict,
-       then render the Coqui-routed remainder. Final index-order reassembly
-       (below, unchanged) doesn't care which phase produced which result. */
-    const qwenGroups = bodyGroups.filter((g) => resolveGroup(g).route.engine === 'qwen');
-    const coquiGroups = bodyGroups.filter((g) => resolveGroup(g).route.engine === 'coqui');
-    await synthGroupsBatched(qwenGroups, onBodyGroupDone);
-    await evictQwenForCoquiPhase();
-    await synthGroupsBatched(coquiGroups, onBodyGroupDone);
-  } else {
-    await synthGroupsBatched(bodyGroups, onBodyGroupDone);
-  }
+  });
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+Replace the segment-QA re-record call site at `synthesise-chapter.ts:1546` — change only the function name, the `timed(() => ...)` wrapper and everything else stays identical:
+
+```ts
+      const { value: fresh, ms: reMs } = await timed(() => synthGroupsSerialized(pending));
+```
+
+Replace the ASR re-record call site at `synthesise-chapter.ts:1653` — same, function name only:
+
+```ts
+      const { value: fresh, ms: asrReMs } = await timed(() => synthGroupsSerialized(pending));
+```
+
+- [ ] **Step 4: Write the failing test for the re-record gap**
+
+Add to `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`, alongside the previous test:
+
+```ts
+it('serializes a mixed Qwen+Coqui segment-QA re-record round too, not just the initial dispatch', async () => {
+  const cast: CastCharacter[] = [
+    { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
+    { id: 'wren', name: 'Wren', gender: 'female' }, // undesigned -> falls back to Coqui
+  ];
+  const callOrder: string[] = [];
+  let qwenCallCount = 0;
+  const trackedQwen: TtsProvider = {
+    async synthesize(): Promise<SynthesizeOutput> {
+      qwenCallCount += 1;
+      callOrder.push('qwen');
+      /* First call for each sentence renders silence (fails segment-QA and
+         triggers a re-record); the re-record call renders real audio. */
+      const silent = qwenCallCount <= 2;
+      return { pcm: Buffer.alloc(silent ? 4 : 4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    },
+  };
+  const trackedCoqui: TtsProvider = {
+    async synthesize(): Promise<SynthesizeOutput> {
+      callOrder.push('coqui');
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    },
+  };
+  const tracked = (e: string) =>
+    e === 'coqui'
+      ? { provider: trackedCoqui, modelKey: 'coqui-xtts-v2' as const }
+      : { provider: trackedQwen, modelKey: 'qwen3-tts-0.6b' as const };
+
+  await synthesiseChapter({
+    sentences: [sentence(1, 'marlow'), sentence(2, 'wren')],
+    cast,
+    provider: trackedQwen,
+    modelKey: 'qwen3-tts-0.6b',
+    engine: 'qwen',
+    resolveForEngine: tracked,
+    forbidKokoroFallback: true,
+    coquiEligible: true,
+    bookLanguage: 'ru',
+    maxSegmentRerecords: 1,
+  });
+
+  /* The re-record round (attempt 2 of Marlow's line, plus Wren's Coqui line
+     already rendered in phase 1) must not interleave qwen after coqui has
+     started — every 'qwen' entry precedes every 'coqui' entry, even across
+     the initial dispatch AND the re-record round combined. */
+  const firstCoqui = callOrder.indexOf('coqui');
+  const lastQwen = callOrder.lastIndexOf('qwen');
+  expect(firstCoqui).toBeGreaterThan(-1);
+  expect(lastQwen).toBeLessThan(firstCoqui);
+});
+```
+
+(This test's exact silence-then-real-audio sequencing depends on `evaluateSegmentPcm`'s actual suspect-detection thresholds — before implementing, run this test once against the CURRENT unfixed code to confirm the silent take is actually flagged `suspect` and a re-record round fires; if the default thresholds don't trigger on `Buffer.alloc(4, 0)`, adjust the fake's silence condition or pass an explicit `segmentQaThresholds` override until a re-record is reliably provoked — the mechanism under test is the *serialization*, not the QA gate's sensitivity, so tune the fixture rather than the assertion.)
+
+- [ ] **Step 5: Run both new tests to verify they fail**
 
 Run: `cd server && npx vitest run src/tts/synthesise-chapter-coqui-fallback.test.ts -t "serializes a mixed"`
-Expected: PASS
+Expected: FAIL — both tests fail. The initial-dispatch test fails because `synthGroupsBatched` is still called directly (no partitioning exists yet). The re-record test fails because even after Step 3 lands the initial-dispatch partition alone, the re-record loop still calls `synthGroupsBatched(pending)` directly on a mixed set.
 
-- [ ] **Step 5: Run the full synthesise-chapter suite to check for regressions**
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `cd server && npx vitest run src/tts/synthesise-chapter-coqui-fallback.test.ts -t "serializes a mixed"`
+Expected: PASS (both tests)
+
+- [ ] **Step 7: Run the full synthesise-chapter suite to check for regressions**
 
 Run: `cd server && npx vitest run src/tts/synthesise-chapter.test.ts src/tts/synthesise-chapter-coqui-fallback.test.ts`
-Expected: PASS — every English/single-engine/Kokoro+Qwen-mixed chapter takes the unchanged `else` branch (`bodyEngines` never contains both `qwen` and `coqui` for those cases), so their dispatch order and timing are untouched.
+Expected: PASS — every English/single-engine/Kokoro+Qwen-mixed chapter's `groupList` never contains both `qwen` and `coqui` at any of the three dispatch sites, so `synthGroupsSerialized` takes the zero-overhead passthrough branch and behavior is byte-identical to calling `synthGroupsBatched` directly, at all three sites, for every existing test.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add server/src/tts/synthesise-chapter.ts server/src/tts/synthesise-chapter-coqui-fallback.test.ts
@@ -1464,6 +1562,7 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
     title: 'Russian Test Book',
     author: 'Test Author',
     series: 'Standalones',
+    seriesPosition: null,
     isStandalone: true,
     status: 'cast_pending',
     chapterCount: 1,
@@ -1472,6 +1571,7 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
     voiceCount: 0,
     lastWorkedOn: 'today',
     coverGradient: ['#000', '#fff'],
+    tags: [],
     language: 'ru',
     eligibleTtsEngines: ['qwen', 'coqui'],
   };
@@ -1658,7 +1758,7 @@ describe('selectHasNoFallbackEngine', () => {
 });
 ```
 
-Update the import at the top of the file (line 5) from `selectIsBookNonEnglish` to `selectHasNoFallbackEngine`. Also update the two `voiceReadinessGateMessage` tests (lines 161-167) that assert on a `'ru'` book's copy — the existing "hard-block copy for a non-English book" test needs its fixture to include `eligibleTtsEngines: ['qwen']` (still-unsupported) to keep asserting the hard-block copy, since a bare `language: 'ru'` book (no `eligibleTtsEngines` set) now defaults to the fallback array in Step 3's `selectHasNoFallbackEngine` body (`book?.eligibleTtsEngines ?? ['qwen']`), which coincidentally also hits the hard-block path — but add the explicit field anyway so the test doesn't rely on that default's behavior silently:
+Update the import at the top of the file (line 5) from `selectIsBookNonEnglish` to `selectHasNoFallbackEngine`. Also update the `voiceReadinessGateMessage` describe block (lines 147-167) — its existing "hard-block copy for a non-English book" test (lines 161-167) uses a bare `{ bookId: 'b1', language: 'ru' }` fixture with no `eligibleTtsEngines` set. **This must change**: `selectHasNoFallbackEngine`'s missing-field default is now "assume every engine eligible" (Step 3's fix above, `?? ['qwen','kokoro','coqui','gemini','piper']`) — so a bare `language: 'ru'` book with no `eligibleTtsEngines` would now resolve to the **soft-gate** copy, not the hard-block copy, breaking this existing test. Replace it with the two tests below (still-unsupported hard-block + Coqui-eligible soft-gate), both with `eligibleTtsEngines` set explicitly so neither test relies on the missing-field default's behavior:
 
 ```ts
 it('returns the hard-block copy for a still-unsupported non-English book', () => {
