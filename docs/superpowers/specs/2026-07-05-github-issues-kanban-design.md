@@ -69,11 +69,15 @@ MoSCoW-prioritized. They move to a separate "just get done" track — do
 whenever, no ranking. `moscow:*` labels remain meaningful only for
 `type:feature` issues.
 
-**This is a real reclassification, not cosmetic cleanup.** The
-assumption-checker review confirmed three `type:chore` issues
-(`side-23`/#1228, `ops-17`/#790, `srv-4`/#431) currently carry `moscow:should`
-and are ranked in `docs/BACKLOG.md`'s Should bucket today. Two of the three
-(`side-23`, `srv-4`) already carry `tracking` — upstream-blocked watchdogs
+**This is a real reclassification, not cosmetic cleanup.** Live-querying the
+repo during review found roughly 15 `type:chore` issues currently carrying a
+`moscow:*` label (1 `must` — `ops-16`/#822 —, 3 `should`, 11 `could`) — step
+3's label-strip and the `docs/BACKLOG.md` generator both apply to this full
+set, not just a couple of examples. Three of these are the sharpest
+illustration of what's at stake: `side-23`/#1228, `ops-17`/#790, and
+`srv-4`/#431 all carry `moscow:should` and are ranked in `docs/BACKLOG.md`'s
+Should bucket today. Two of the three (`side-23`, `srv-4`) already carry
+`tracking` — upstream-blocked watchdogs
 ("wake when X ships"), not do-whenever busywork. `ops-17` matches the exact
 same semantic (its body: "Blocked upstream... re-check periodically and bump
 when upstream ships") but doesn't yet carry the `tracking` label — rollout
@@ -205,18 +209,21 @@ releases — not built now.
    setting an initial Status by heuristic (open + no recent activity →
    `Backlog`; linked to an open PR or recent commits → `In Progress`), then
    a manual pass to correct/fill in `Next` and `Parked`.
-3. Strip `moscow:*` labels off all existing `type:chore` issues, including
-   the `tracking` ones (confirmed: `side-23`/#1228, `ops-17`/#790,
-   `srv-4`/#431). Find the full set with three separate queries — one per
-   moscow tier, since `gh issue list --label` AND-combines multiple labels
-   rather than OR-ing them: `gh issue list --label type:chore --label
-   moscow:must`, then `--label moscow:should`, then `--label moscow:could`.
-   This is a real reprioritization, not cleanup — flag it in the PR
-   description as such. Add `tracking` to `ops-17`/#790 (matches the same
-   upstream-blocked-watchdog semantic as the other two but doesn't carry the
-   label yet), then set all three (and any other `tracking` chores the
-   queries surface) to Status = `Waiting/Blocked` on the board as part of
-   this same pass, so nothing silently loses visibility mid-rollout.
+3. Strip `moscow:*` labels off all existing `type:chore` issues — the full
+   ~15-issue set (1 `must`, 3 `should`, 11 `could`), not just the three
+   `tracking` examples cited in §A. Find the set with three separate
+   queries — one per moscow tier, since `gh issue list --label` AND-combines
+   multiple labels rather than OR-ing them: `gh issue list --label
+   type:chore --label moscow:must`, then `--label moscow:should`, then
+   `--label moscow:could`. This is a real reprioritization, not cleanup —
+   flag it in the PR description as such. Separately, cross-reference the
+   surfaced issues against the `tracking` label (`gh issue list --label
+   type:chore --label tracking`) to find the ones needing a `Waiting/Blocked`
+   home — the moscow-tier queries themselves don't filter by `tracking`.
+   Add `tracking` to `ops-17`/#790 (matches the same upstream-blocked-watchdog
+   semantic as `side-23`/`srv-4` but doesn't carry the label yet), then set
+   all `tracking` chores to Status = `Waiting/Blocked` on the board as part
+   of this same pass, so nothing silently loses visibility mid-rollout.
 4. **Initiative retrofit:** identify existing multi-issue efforts (language
    support work, the LAN cert broker, voice cloning, etc.), create a parent
    tracking issue per initiative, link existing issues as sub-issues.
