@@ -42,19 +42,19 @@ After editing `server/.env`, click **Try again** in the app — it resumes from 
 
 When a render goes wrong, Castwright names the failure instead of shrugging. Every failure it can name is listed here — what you saw, and what to do about it.
 
-### Voice synthesis timed out for this chapter
+### Chapter synthesis timed out
 
 **What you saw:** Voice synthesis timed out for this chapter — the local engine stalled (often the voice engine reclaiming memory mid-render). Skipped so the queue advances; click Retry to re-render.
 
 **What to do:** Click Retry on this chapter. If it times out repeatedly, restart the voice engine to clear a wedged GPU state, then retry.
 
-### Local voice engine not running
+### Voice engine not running
 
 **What you saw:** Local voice engine not running — start it and resume.
 
 **What to do:** Start the voice engine (npm start launches it automatically), wait for the voice engine pill to go green, then resume the run.
 
-### The voice engine kept restarting
+### Voice engine keeps restarting
 
 **What you saw:** The voice engine kept restarting while rendering this chapter.
 
@@ -90,7 +90,7 @@ When a render goes wrong, Castwright names the failure instead of shrugging. Eve
 
 **What to do:** Check that Ollama is running (ollama serve), or switch the analyzer in server/.env (ANALYZER=gemini with a GEMINI_API_KEY). Then retry the chapter or resume the run.
 
-When `GEMINI_API_KEY` is set, an unreachable Ollama silently retries against Gemini, so this error usually means no fallback was configured — or both engines failed.
+When GEMINI_API_KEY is set, an unreachable Ollama silently retries against Gemini, so this error usually means no fallback was configured — or both engines failed.
 
 ### Gemini blocked the chapter (copyright filter)
 
@@ -138,9 +138,9 @@ The block is deterministic — retrying the same model on the same text fails id
 
 ### Running on CPU (GPU acceleration unavailable)
 
-**What you saw:** GPU acceleration is unavailable, so the voice engine is running on the CPU (slower, but it still works). Common on AMD: the GPU driver is too old, the GPU model isn't in the supported set, or a DirectML operation isn't supported and Kokoro fell back to CPU.
+**What you saw:** GPU acceleration is unavailable, so the voice engine is running on the CPU (slower, but it still works). Common on AMD: the GPU driver is too old, the GPU model isn’t in the supported set, or a DirectML operation isn’t supported and Kokoro fell back to CPU.
 
-**What to do:** Update your GPU driver (AMD: the latest Adrenalin). Confirm your GPU is supported for ROCm/DirectML — some integrated/older cards are not. AMD support is an experimental preview; if it won't accelerate, set the Accelerator to CPU in Advanced settings to silence this, or switch back to a supported NVIDIA/Apple machine for full speed.
+**What to do:** Update your GPU driver (AMD: the latest Adrenalin). Confirm your GPU is supported for ROCm/DirectML — some integrated/older cards are not. AMD support is an experimental preview; if it won’t accelerate, set the Accelerator to CPU in Advanced settings to silence this, or switch back to a supported NVIDIA/Apple machine for full speed.
 
 ### Voice engine not loaded yet
 
