@@ -91,6 +91,27 @@ describe('startPortForwarder', () => {
     upstream.close();
   });
 
+  it('close() resolves even when a connection is still open through the forwarder (does not hang)', async () => {
+    const upstream = net.createServer(() => {
+      // Deliberately never close this socket, simulating an open keep-alive connection.
+    });
+    upstream.listen(0, '127.0.0.1');
+    const upstreamPort = await listenAndGetPort(upstream);
+
+    const handle = startPortForwarder(upstreamPort, { listenPort: 0 });
+    const forwarderPort = await listenAndGetPort(handle.server);
+
+    const client = net.connect({ port: forwarderPort, host: '127.0.0.1' });
+    await new Promise<void>((resolve) => client.once('connect', () => resolve()));
+
+    // Without closeAllConnections(), this would hang forever (Vitest's default
+    // test timeout would eventually fail it) — with the fix, it resolves promptly.
+    await handle.close();
+
+    client.destroy();
+    upstream.close();
+  });
+
   it('warns (does not throw) when the listen port is already in use', async () => {
     const blocker = net.createServer();
     /* Bind 0.0.0.0 explicitly, matching the family startPortForwarder itself

@@ -10,7 +10,7 @@
    Mirrors how server/src/mdns-owner.ts and scripts/start-app-prod.mjs
    already cross this same scripts/-vs-server module boundary. */
 
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,14 +61,38 @@ export function parseHostsFromOutput(stdout: string): string[] {
   return match[1].split(',').map((h) => h.trim());
 }
 
-lanCertRouter.post('/cert/regenerate', (req: Request, res: Response) => {
+/** Async wrapper around node:child_process's callback-based execFile.
+    Deliberately NOT util.promisify(execFile): Node's real execFile has a
+    built-in custom promisify symbol that resolves to {stdout, stderr}, but a
+    test that mocks the node:child_process module won't have that custom
+    symbol — util.promisify's generic fallback would then resolve differently
+    (an array, not {stdout, stderr}), a silent mismatch between tests and
+    production. This explicit wrapper avoids that entirely. */
+function execFileAsync(
+  command: string,
+  args: string[],
+  options: { timeout: number; windowsHide: boolean; encoding: BufferEncoding },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        (error as NodeJS.ErrnoException & { stderr?: string }).stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout: stdout as string, stderr: stderr as string });
+    });
+  });
+}
+
+lanCertRouter.post('/cert/regenerate', async (req: Request, res: Response) => {
   let stdout: string;
   try {
-    stdout = execFileSync(process.execPath, [scriptPath], {
+    ({ stdout } = await execFileAsync(process.execPath, [scriptPath], {
       timeout: 90_000,
       windowsHide: true,
       encoding: 'utf8',
-    });
+    }));
   } catch (err) {
     const stderr = (err as { stderr?: Buffer | string } | undefined)?.stderr;
     const message = stderr ? stderr.toString() : (err as Error).message;

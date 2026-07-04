@@ -102,6 +102,18 @@ export function LanAccessCard() {
               <p className="mt-2 text-rose-700">{certState.message}</p>
             )}
           </div>
+          <details className="mt-5 text-xs text-ink/55">
+            <summary className="cursor-pointer text-ink/70">Phone shows "Not secure" / certificate warning?</summary>
+            <p className="mt-2 leading-relaxed">
+              The phone's browser must trust this computer's local certificate (one-time). Run{' '}
+              <code className="px-1 py-0.5 rounded bg-ink/5">npm run install:cert-mobile</code> on this
+              computer — it prints a QR + per-OS steps to download and install the root certificate
+              (served at <code className="px-1 py-0.5 rounded bg-ink/5">/cert/root.crt</code>). On
+              Android: Settings → Security → Install a certificate → CA certificate; on iOS: install
+              the profile, then General → About → Certificate Trust Settings → enable it. The companion
+              app trusts it automatically (cert pinning) — only browsers need this step.
+            </p>
+          </details>
         </>
       )}
     </section>

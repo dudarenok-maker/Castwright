@@ -48,7 +48,16 @@ export function startPortForwarder(
     warn = console.warn,
   } = opts;
 
+  /* Tracks every currently-accepted client socket so close() can force-evict
+     them. net.Server (unlike http.Server) has no closeAllConnections() — that
+     method only exists on http.Server — so net.Server.close()'s callback only
+     fires once every accepted connection has ended NATURALLY. A phone with an
+     open keep-alive HTTPS connection through this forwarder would otherwise
+     hang close() (and index.ts's shutdown() Promise.all) indefinitely. */
+  const openClientSockets = new Set<net.Socket>();
+
   const server = createServerFn((client) => {
+    openClientSockets.add(client);
     /* localAddress: '127.0.0.2' (NOT the default 127.0.0.1) is a required
        security invariant, not an incidental detail (adversarial review
        round 2). Without it, this connection would present as trusted
@@ -66,6 +75,7 @@ export function startPortForwarder(
     const destroyBoth = () => {
       client.destroy();
       upstream.destroy();
+      openClientSockets.delete(client);
     };
 
     client.pipe(upstream);
@@ -99,6 +109,10 @@ export function startPortForwarder(
     close: () =>
       new Promise<void>((resolvePromise) => {
         server.close(() => resolvePromise());
+        // Force-evict any still-open client sockets (see openClientSockets'
+        // own comment above) so the close() callback above can fire promptly
+        // instead of waiting on a connection that may never end naturally.
+        for (const socket of openClientSockets) socket.destroy();
       }),
   };
 }

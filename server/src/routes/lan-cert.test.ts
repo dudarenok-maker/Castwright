@@ -1,6 +1,6 @@
 /* castwright-local-port-cert — POST /api/lan/cert/regenerate.
  *
- * Mocks node:child_process's execFileSync so no real mkcert install runs in
+ * Mocks node:child_process's execFile so no real mkcert install runs in
  * CI. Mirrors cert-root.test.ts's makeApp() isolation pattern — mount just
  * this router in a fresh express() app via supertest, no full app.ts needed. */
 
@@ -12,10 +12,10 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 vi.mock('node:child_process', () => ({
-  execFileSync: vi.fn(),
+  execFile: vi.fn(),
 }));
 
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { lanCertRouter, __setCertPathsForTest } from './lan-cert.js';
 
 function makeApp(lanHttpsServer?: { setSecureContext: (...args: unknown[]) => void }): Express {
@@ -39,16 +39,21 @@ describe('POST /api/lan/cert/regenerate', () => {
   afterEach(() => {
     rmSync(certDir, { recursive: true, force: true });
     __setCertPathsForTest(null);
-    vi.mocked(execFileSync).mockReset();
+    vi.mocked(execFile).mockReset();
   });
 
   it('on success: hot-swaps the live server and returns 200 with the host list', async () => {
     writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
     writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
-    vi.mocked(execFileSync).mockReturnValue(
-      '[setup-lan-certs] generating cert for hosts: localhost, 127.0.0.1, castwright.local, castwright.dev.local, 192.168.1.42\n' +
-        '[setup-lan-certs] cert: ...\n',
-    );
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        null,
+        '[setup-lan-certs] generating cert for hosts: localhost, 127.0.0.1, castwright.local, castwright.dev.local, 192.168.1.42\n' +
+          '[setup-lan-certs] cert: ...\n',
+        '',
+      );
+      return {} as ReturnType<typeof execFile>;
+    });
     const setSecureContext = vi.fn();
 
     const res = await request(makeApp({ setSecureContext })).post('/api/lan/cert/regenerate');
@@ -68,11 +73,14 @@ describe('POST /api/lan/cert/regenerate', () => {
   });
 
   it('on failure: returns 500 with the captured stderr and does NOT call setSecureContext', async () => {
-    const err = Object.assign(new Error('mkcert exited 1'), {
-      stderr: Buffer.from('[setup-lan-certs] [FAIL] mkcert is not on PATH.'),
-    });
-    vi.mocked(execFileSync).mockImplementation(() => {
-      throw err;
+    const err = new Error('mkcert exited 1');
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        err,
+        '',
+        '[setup-lan-certs] [FAIL] mkcert is not on PATH.',
+      );
+      return {} as ReturnType<typeof execFile>;
     });
     const setSecureContext = vi.fn();
 
@@ -86,9 +94,14 @@ describe('POST /api/lan/cert/regenerate', () => {
   it('when no live HTTPS server is registered, skips the hot-swap without erroring', async () => {
     writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
     writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
-    vi.mocked(execFileSync).mockReturnValue(
-      '[setup-lan-certs] generating cert for hosts: localhost, castwright.local\n',
-    );
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        null,
+        '[setup-lan-certs] generating cert for hosts: localhost, castwright.local\n',
+        '',
+      );
+      return {} as ReturnType<typeof execFile>;
+    });
 
     const res = await request(makeApp(undefined)).post('/api/lan/cert/regenerate');
 
@@ -96,17 +109,25 @@ describe('POST /api/lan/cert/regenerate', () => {
     expect(res.body.hosts).toEqual(['localhost', 'castwright.local']);
   });
 
-  it('passes the 90s timeout and windowsHide:true to execFileSync', async () => {
+  it('passes the 90s timeout and windowsHide:true to execFile', async () => {
     writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
     writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
-    vi.mocked(execFileSync).mockReturnValue('[setup-lan-certs] generating cert for hosts: localhost\n');
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        null,
+        '[setup-lan-certs] generating cert for hosts: localhost\n',
+        '',
+      );
+      return {} as ReturnType<typeof execFile>;
+    });
 
     await request(makeApp()).post('/api/lan/cert/regenerate');
 
-    expect(execFileSync).toHaveBeenCalledWith(
+    expect(execFile).toHaveBeenCalledWith(
       process.execPath,
       expect.arrayContaining([expect.stringContaining('setup-lan-certs.mjs')]),
       expect.objectContaining({ timeout: 90_000, windowsHide: true }),
+      expect.any(Function),
     );
   });
 });
