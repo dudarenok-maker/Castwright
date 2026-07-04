@@ -55,11 +55,29 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 - _Benefit (user / strategic):_ the two highest-population CJK languages — breadth Latin alone can't reach. Deferred until the `fs-50` Latin framework lands.
 _Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwright/issues/1004).
 
-#### `fs-60` — Kokoro/XTTS per-language engine eligibility (gap-fill beyond Qwen) ([#1005](https://github.com/dudarenok-maker/Castwright/issues/1005))
+#### `fs-60` — Coqui XTTS per-language engine eligibility (gap-fill beyond Qwen) ([#1005](https://github.com/dudarenok-maker/Castwright/issues/1005))
 
-- _What:_ Let non-English books use Kokoro-native / Coqui-XTTS voices instead of forced Qwen — the gap-fill tail. Owns the Kokoro non-English G2P deps, per-language default voices, the 3-engine VRAM constraint, Coqui per-synth language threading, and a cross-language voice-identity check (srv-36 ECAPA).
-- _Benefit (user / strategic):_ languages + voice variety beyond Qwen's reach; same engine choice for non-English books. Lowest strategic priority.
+- _What:_ Let en/ru/es/fr/de books use Coqui XTTS voices — manually or as an automatic fallback — instead of being forced onto a designed Qwen voice with no recovery path. Narrowed on design (2026-07-04, [spec](superpowers/specs/2026-07-04-fs60-xtts-language-eligibility-design.md)) to XTTS only: per-engine `ENGINE_LANGUAGE_SUPPORT` eligibility table, per-synth Coqui language threading, a Qwen→Coqui fallback branch, Qwen/Coqui chapter-level serialization (VRAM), and Kokoro's `autoPreloadKokoro` default flipping off. Kokoro non-English, XTTS languages beyond this five, and a cross-book identity check split out to `fs-69`/`fs-70`/`fs-71`.
+- _Benefit (user / strategic):_ resilience for non-English generation (no more hard-fail when Qwen is unavailable) and unblocks fs-38 voice cloning's XTTS path for non-English books. Lowest strategic priority.
 _Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwright/issues/1005).
+
+#### `fs-69` — Kokoro non-English support (G2P backend + non-English voice packs) ([#1302](https://github.com/dudarenok-maker/Castwright/issues/1302))
+
+- _What:_ Split from `fs-60` — Kokoro has no non-English G2P backend (`misaki[ja,zh]`/`fugashi`/`unidic`/`jieba`/`pypinyin`/`espeak-ng`, all absent) and its shipped voices are English-only by construction. Real new-dependency + voice-pack-sourcing work, not a gap-fill.
+- _Benefit (user / strategic):_ gives non-English books Kokoro's cheap always-available fallback tier, matching what English books already have. Lowest strategic priority; depends on `fs-60`.
+_Full detail + acceptance:_ [#1302](https://github.com/dudarenok-maker/Castwright/issues/1302).
+
+#### `fs-70` — XTTS languages beyond Qwen's five ([#1303](https://github.com/dudarenok-maker/Castwright/issues/1303))
+
+- _What:_ Split from `fs-60` — open the XTTS-capable languages the analyze pipeline doesn't support yet (zh-cn, ja, ko, ar, hi, nl, pl, tr, cs, hu, it, pt) as new XTTS-only book languages. Real analyze-side scope (prompts, attribution, CJK segmentation for zh-cn/ja overlapping `fs-59`), not just an engine-eligibility change.
+- _Benefit (user / strategic):_ extends language reach past Qwen's five without waiting on Qwen design support for each one. Lowest strategic priority; depends on `fs-60` and overlaps `fs-59`.
+_Full detail + acceptance:_ [#1303](https://github.com/dudarenok-maker/Castwright/issues/1303).
+
+#### `fs-71` — Cross-book/cross-language voice-identity check (srv-36 extension) ([#1304](https://github.com/dudarenok-maker/Castwright/issues/1304))
+
+- _What:_ Split from `fs-60` — extend srv-36's render-integrity ECAPA pipeline to compare a character's Coqui-voice centroid across sibling series books in different languages (e.g. the `fs-61` per-language demo books), non-blocking QA flag only. No real trigger until a multi-language series or `fs-38` voice cloning exists.
+- _Benefit (user / technical):_ catches identity drift across a series' translated editions; builds the comparison primitive `fs-38` will need anyway. Lowest strategic priority; depends on `fs-60`.
+_Full detail + acceptance:_ [#1304](https://github.com/dudarenok-maker/Castwright/issues/1304).
 
 #### `fs-61` — Per-language sample books in the demo pack ([#1027](https://github.com/dudarenok-maker/Castwright/issues/1027))
 
