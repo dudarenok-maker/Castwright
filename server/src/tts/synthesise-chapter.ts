@@ -979,15 +979,17 @@ export async function synthesiseChapter(
     onTitleStart?.();
 
     const titleResult = await withRecycleRecovery(titleRoute.engine, () =>
-      withTtsRetry(
-        () =>
-          titleRoute.provider.synthesize({
-            text: normaliseForTts(titleText, langCode),
-            voiceName: narratorVoice,
-            modelKey: titleRoute.modelKey,
-            signal,
-          }),
-        { signal },
+      withCallTimeout('title', (sig) =>
+        withTtsRetry(
+          () =>
+            titleRoute.provider.synthesize({
+              text: normaliseForTts(titleText, langCode),
+              voiceName: narratorVoice,
+              modelKey: titleRoute.modelKey,
+              signal: sig,
+            }),
+          { signal: sig },
+        ),
       ),
     );
 

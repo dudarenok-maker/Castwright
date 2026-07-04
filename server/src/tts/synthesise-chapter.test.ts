@@ -2675,6 +2675,34 @@ describe('synthesiseChapter per-call timeout (plan 148)', () => {
     });
     expect(provider.calls.length).toBe(1);
   });
+
+  it('fails with ChapterSynthTimeoutError and aborts the title call when title-narration synth never returns', async () => {
+    let captured: AbortSignal | undefined;
+    const provider: TtsProvider = {
+      synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        captured = input.signal;
+        /* Never settles — mimics a runaway/hung provider call on the title beat.
+           Without the timeout this would hang the chapter (and, in prod, the queue). */
+        return new Promise<SynthesizeOutput>(() => {});
+      },
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator')],
+        cast: soloCast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        chapterTitleNarration: 'Chapter One.',
+        callTimeoutMs: 40,
+        groupHeartbeatMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(ChapterSynthTimeoutError);
+
+    // The derived signal was aborted, so the provider cancels its call.
+    expect(captured?.aborted).toBe(true);
+  });
 });
 
 /* Pre-assembly per-sentence QA gate: a sentence whose rendered PCM fails the
