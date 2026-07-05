@@ -767,4 +767,91 @@ export const SCENES: Scene[] = [
     scrollTo: '[data-testid="model-row-qwen-base"]',
     strict: true,
   },
+  {
+    /* fs-1318 Tier F (hardest scene) — the preview + A/B revision diff player.
+       ADAPTED from the brief's guess on two counts:
+
+       1. Trigger sequence. The per-CHAPTER "Regenerate this chapter" button
+          (RegenerateModal, already captured above as 'regenerate-modal') has
+          no preview mode at all. Preview-mode regen is a per-CHARACTER flow:
+          open a character's profile drawer → "Regenerate {name}'s lines
+          across the book" → CharacterRegenerateModal
+          (src/modals/character-regenerate.tsx) → its own "Preview CH## first"
+          button (data-testid="regen-character-preview") → onConfirm wiring in
+          src/components/layout.tsx:1848-1911 dispatches
+          uiActions.setPreviewRegen(...) and enqueues just the first affected
+          chapter. This exact flow already has real browser coverage at
+          e2e/profile-regen-preview.spec.ts (fe-15/plan-114) — this scene
+          mirrors its proven sequence rather than the brief's checkbox guess
+          (there is no checkbox; the modal has two distinct submit buttons).
+
+       2. Reaching chapter_complete. Per Step 1 of this task: src/lib/api.ts's
+          mockStreamGeneration has a DEMO_CAPTURE-only early return
+          (api.ts:1517-1530) that emits ONE static "progress" tick for
+          HOLLOW_TIDE_POSED.generating and returns a no-op unsubscribe — NO
+          setInterval is ever created in marketing-capture mode ("Task B4
+          emits these once, then hangs", per the comment above
+          HOLLOW_TIDE_POSED in src/mocks/marketing/hollow-tide.ts). So
+          chapter_complete never fires through the real mock stream here at
+          all — this rules out both the Tasks 9/11 fake-clock technique
+          (nothing to fast-forward; there's no timer) and the real e2e spec's
+          `chapters/setChapters` progress-bump trick (nothing ever reads it
+          back; no interval ever ticks again). Modifying api.ts/hollow-tide.ts
+          is out of scope for this task (scenes.ts + docs only), so this scene
+          reaches the exact same end state — the middleware's
+          `revisions/markRevisionPlayable` handler,
+          generation-stream-middleware.ts:165-183 — via the `window.__store__`
+          test hook already wired for e2e (src/main.tsx:56-58; live under
+          `--mode marketing` too, since Vite's DEV flag is command-based, not
+          mode-based). It dispatches the exact action a real completed tick
+          would have dispatched, once the real click flow has genuinely set
+          `ui.previewRegen`. The phantom mock revision the 30s per-book poll
+          seeds for every book is cleared first (same reason
+          profile-regen-preview.spec.ts clears it) so pending[0] is genuinely
+          our stub, not a stray one; the profile drawer is also dismissed
+          first since its sticky footer overlaps the modal's Preview button
+          at this viewport (same fix that real spec uses). */
+    id: 'generating-revision-diff',
+    hash: '#/books/hollow-tide-2/cast?profile=insp-cray',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="cast-row-insp-cray"]',
+    action: async (page) => {
+      await page
+        .getByRole('button', { name: /Regenerate .*'s lines across the book/i })
+        .click({ timeout: 5000 });
+      await page.getByTestId('regen-character-preview').waitFor({ state: 'visible', timeout: 5000 });
+      await page.evaluate(() => {
+        const s = (
+          window as unknown as {
+            __store__?: { dispatch: (a: unknown) => void };
+          }
+        ).__store__;
+        // Dismiss the (overlapping) profile drawer and clear any phantom
+        // pending revision before Preview fires — mirrors
+        // e2e/profile-regen-preview.spec.ts's openPreviewPlayer helper.
+        s?.dispatch({ type: 'ui/setOpenProfileId', payload: null });
+        s?.dispatch({ type: 'revisions/rejectAllPending' });
+      });
+      await page.getByTestId('regen-character-preview').click({ timeout: 5000 });
+      await page.evaluate(() => {
+        const s = (
+          window as unknown as {
+            __store__?: {
+              getState: () => { ui: { previewRegen: { previewChapterId: number } | null } };
+              dispatch: (a: unknown) => void;
+            };
+          }
+        ).__store__;
+        const chapterId = s?.getState().ui.previewRegen?.previewChapterId;
+        // Stand in for the chapter_complete tick that would normally arrive
+        // via the mock generation stream — dead code in DEMO_CAPTURE mode
+        // (see the comment above), so we dispatch what it would have fired.
+        if (chapterId != null) {
+          s?.dispatch({ type: 'revisions/markRevisionPlayable', payload: { chapterId } });
+        }
+      });
+    },
+    waitForAfterAction: '[data-testid="revision-diff-player"]',
+    strict: true,
+  },
 ];

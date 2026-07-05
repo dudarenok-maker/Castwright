@@ -34,6 +34,8 @@ Confirming flips that chapter from done back to in-progress and re-queues it.
 
 **Per character, with a preview-first option.** From the character's profile in the Cast tab, "Regenerate across the book" lists every chapter they speak in and lets you re-render all of them at once — or choose **Preview** instead, which renders only the first affected chapter and stops there. That preview opens the same A/B revision player used throughout the app: the old take and the new one, side by side, playable segment by segment. Accept it and the rest of that character's chapters fan out to regenerate on the same settings; reject it and nothing else is touched, so you can adjust and try again before committing to a full re-render. Selecting several characters at once in the Cast table's multi-select runs the same flow across all of them together.
 
-> A screenshot of the preview/A-B revision player in action is tracked as a follow-up (#1318).
+Below, Insp. Cray's voice change previewed on *Saltgrave* Chapter 1 — the A/current and B/new-draft takes side by side, ready to accept (fanning the rest of his chapters out to regenerate) or reject and re-adjust:
+
+![Preview A/B revision player — voice change on Chapter 1](images/generating-audio/preview-ab-revision-player.png)
 
 Next: every rendered line — regenerated or not — still has to clear [The Quality Gate](The-Quality-Gate) before it counts as done.
