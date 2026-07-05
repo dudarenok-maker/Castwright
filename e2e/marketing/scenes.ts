@@ -229,10 +229,12 @@ export const SCENES: Scene[] = [
     /* The segment strip (amber bands + caption) renders at the BOTTOM of the
        expanded row, below chapter 3's per-speaker breakdown — well below the
        fold at a fixed viewport since chapters 1+2 sit above it uncollapsed.
-       scrollTo centers the caption itself (not just #chapter-3) so the shot
-       reliably frames the waveform + caption rather than depending on how
-       tall the expanded row happens to be relative to the viewport. */
-    scrollTo: 'text=issues to review',
+       fullPage captures the whole scrollable page instead of scrolling to a
+       single target, so both the row header (with the Suspect badge, up top)
+       and the expanded caption/waveform (further down) land in the same
+       shot — scrollIntoView-ing the caption alone risks pushing the badge
+       off the top of a fixed-height viewport frame. */
+    fullPage: true,
   },
   {
     /* Drift-report modal — two severity-tiered flags (Severe with Auto-regen,
