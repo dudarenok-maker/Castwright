@@ -29,16 +29,126 @@ export function formatDate(iso) {
   return iso.slice(0, 10);
 }
 
+// No leading H1 here: GitHub's wiki UI already renders a page-title header
+// derived from the filename, and the release body itself often carries its
+// own "# Castwright X.Y.Z" H1 — a template header here stacked a third,
+// redundant heading on top of both.
 export function renderReleasePage({ tagName, publishedAt, body }) {
   const url = `https://github.com/${REPO_SLUG}/releases/tag/${tagName}`;
-  return `# Castwright ${tagName}
-
-Released ${formatDate(publishedAt)}. [View on GitHub](${url}).
+  return `Released ${formatDate(publishedAt)}. [View on GitHub](${url}).
 
 ---
 
-${body.trim()}
+${reflowHardWrappedMarkdown(body.trim())}
 `;
+}
+
+// Older release bodies were hand-wrapped at ~70-80 columns (a soft-break
+// newline mid-paragraph or mid-list-item). GitHub's Releases page reflows
+// that back into normal paragraphs, but the wiki renders each wrapped line
+// as its own visible line — joins wrapped continuation lines back into one
+// logical line per paragraph/list-item/blockquote. Code fences, headings,
+// list-item start lines, table rows, and horizontal rules pass through
+// untouched; blank lines reset the joining. A no-op on already-unwrapped
+// bodies (nothing to join), so safe to apply uniformly to every release.
+export function reflowHardWrappedMarkdown(markdown) {
+  // Some fetched release bodies use CRLF. A trailing \r defeats the
+  // blockquote regex's `(.*)$` anchor below (`.` excludes line terminators,
+  // so it can never reach `$` past a stray \r) — the match then silently
+  // fails and falls through to the plain-paragraph join path, which leaks a
+  // literal "> " into the joined text instead of stripping it. Normalize
+  // once up front so every check below works on a single line-ending style.
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let inFence = false;
+  let inComment = false;
+  let mode = null; // null | 'listItem' | 'para' | 'blockquote'
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      out.push(line);
+      inFence = !inFence;
+      mode = null;
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    if (inComment) {
+      out.push(line);
+      if (line.includes('-->')) inComment = false;
+      continue;
+    }
+    if (line.includes('<!--')) {
+      out.push(line);
+      if (!line.includes('-->')) inComment = true;
+      mode = null;
+      continue;
+    }
+    if (line.trim() === '') {
+      out.push(line);
+      mode = null;
+      continue;
+    }
+    if (
+      /^#{1,6}\s/.test(line) ||
+      /^\s*(\*\*\*+|---+|___+|===+)\s*$/.test(line) ||
+      /^\s*\|/.test(line)
+    ) {
+      out.push(line);
+      mode = null;
+      continue;
+    }
+    // A 4+ space indent is CommonMark's indented-code-block trigger — never
+    // reflow it (this project's list-item continuations only ever use a
+    // 2-space hanging indent, so this can't misfire on real content here).
+    if (/^ {4,}\S/.test(line)) {
+      out.push(line);
+      mode = null;
+      continue;
+    }
+
+    const blockquoteMatch = line.match(/^>\s?(.*)$/);
+    if (blockquoteMatch) {
+      const content = blockquoteMatch[1].trim();
+      if (content === '') {
+        // A bare "> " line is a paragraph break *within* the blockquote —
+        // not continuable content, so it must reset mode like a blank line
+        // does, or the next quoted paragraph would silently merge into
+        // this one and lose its own "> " marker.
+        out.push(line);
+        mode = null;
+        continue;
+      }
+      if (mode === 'blockquote' && out.length) {
+        out[out.length - 1] = `${out[out.length - 1]} ${content}`;
+      } else {
+        out.push(line);
+        mode = 'blockquote';
+      }
+      continue;
+    }
+
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      out.push(line);
+      mode = 'listItem';
+      continue;
+    }
+
+    // Lazy continuation: a plain-text line directly under a list item (no
+    // blank line) is CommonMark/GFM's own lazy-continuation rule — it
+    // already renders as part of that item's paragraph, so joining it here
+    // matches, not changes, real rendering.
+    if ((mode === 'listItem' || mode === 'para') && out.length) {
+      out[out.length - 1] = `${out[out.length - 1]} ${line.trim()}`;
+      mode = 'para';
+    } else {
+      out.push(line.trim());
+      mode = 'para';
+    }
+  }
+  return out.join('\n');
 }
 
 export function renderIndexPage(releases) {
