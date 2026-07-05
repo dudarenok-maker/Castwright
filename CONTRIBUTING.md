@@ -105,6 +105,7 @@ merge tooling. Two parallel branches should have near-disjoint file sets:
 | `docs`     | `docs/`, `CLAUDE.md`, `README.md`, `CONTRIBUTING.md`  |
 | `deps`     | `package.json`, lockfile, sub-package `package.json`s |
 | `ci`       | `.husky/`, future GH Actions workflows                |
+| `ops`      | Cross-cutting maintainer/process tooling and its docs (issue-tracker/backlog rollout scripts, installer config, release-process tooling) — the `ops-N` backlog-ID / `area:ops` label equivalent for commits |
 
 Two agents in the same scope = serialize them. Two agents in different scopes
 = run them in parallel.
@@ -243,7 +244,7 @@ feat(server)!: drop legacy field
 ### Allowed scopes
 
 `frontend` · `server` · `sidecar` · `app` · `scripts` · `e2e` · `mocks` · `openapi` ·
-`docs` · `deps` · `ci`
+`docs` · `deps` · `ci` · `ops`
 
 Mapped to file sets in the [table above](#scope-discipline--merge-magic).
 Adding a new scope requires updating BOTH this file AND
@@ -301,8 +302,10 @@ and the bypassed commit will need fixing before any PR is reviewed.
 
 GitHub issues hold the **detail** for tracked work and are the home for **bug
 tracking**. [`docs/BACKLOG.md`](docs/BACKLOG.md) stays the thin, prioritized
-MoSCoW planning view; the issue is where the spec, discussion, and PR-linking
-live. Regression plan: [docs/features/166-github-issues-backlog-integration.md](docs/features/166-github-issues-backlog-integration.md).
+MoSCoW planning view, generated from the board (see "The board" below); the
+issue is where the spec, discussion, and PR-linking live. Regression plan:
+[docs/features/archive/241-github-projects-kanban-board.md](docs/features/archive/241-github-projects-kanban-board.md)
+(supersedes [docs/features/archive/166-github-issues-backlog-integration.md](docs/features/archive/166-github-issues-backlog-integration.md)).
 
 ### Backlog items ↔ issues
 
@@ -331,6 +334,36 @@ Three axes + two helpers, version-controlled in `scripts/gh-labels.mjs` (run
 - `moscow:must` · `moscow:should` · `moscow:could` · `moscow:wont`
 - `type:feature` · `type:chore` · `bug`
 - `needs-plan` (owes a `docs/features/NN-*.md`) · `tracking` (watchdog, no direct fix)
+
+### The board
+
+Day-to-day triage happens on the GitHub Projects (v2) **Castwright Kanban**
+board, not the flat issue list. Two saved views over one `Status` field
+(`Backlog`/`Next`/`In Progress`/`Parked`/`Waiting/Blocked`/`Done`):
+
+- **Backlog** — `type:feature` only, grouped by Status (`Waiting/Blocked`
+  hidden — a feature expresses "blocked" via `Parked` + its comment).
+  `moscow:*` labels are meaningful **only** here. A numeric `Priority`
+  field ranks items within a MoSCoW tier (lower number = higher priority);
+  set it via the board UI or `gh project item-edit --number <n>`.
+- **Bugs & Chores** — `bug` OR `type:chore`, grouped by Status (`Next`
+  hidden — this track isn't priority-queued, just do-whenever). A
+  `tracking`-labeled chore (upstream-blocked watchdog) lives in
+  `Waiting/Blocked`.
+
+Moving a card to `Parked` **requires** a comment on the issue explaining the
+overhang or blocker — process-mandatory, not bot-enforced.
+
+Multi-issue initiatives get one parent tracking issue with the related
+issues linked as native GitHub sub-issues (`gh api graphql` `addSubIssue` —
+see `scripts/link-sub-issues.mjs`).
+
+`docs/BACKLOG.md` is **generated** from the board's Backlog view
+(`npm run backlog:sync`, open `type:feature` issues only, Status ≠ `Done`) —
+don't hand-edit it; edit the linked issue and re-run the sync.
+
+Design: [docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md](superpowers/specs/2026-07-05-github-issues-kanban-design.md).
+Regression plan: [docs/features/archive/241-github-projects-kanban-board.md](features/archive/241-github-projects-kanban-board.md).
 
 ### Plan vs. no-plan
 
@@ -725,3 +758,6 @@ still hold:
    (`node scripts/bump-version.mjs --notes-file <path>`); the release workflow
    publishes it verbatim. (Releases predating this format were refreshed
    directly via `gh release edit`.)
+8. After the tag is pushed and the release is published, clear the board's
+   `Done` lane: `node scripts/clear-done-project-items.mjs --apply`
+   (dry-run first without `--apply` to review what would archive).

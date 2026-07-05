@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-07-05
 owner: null
 ---
 
@@ -53,6 +53,10 @@ owner: null
 ## Out of scope
 
 - A GitHub Projects (v2) board — labels + `docs/BACKLOG.md` are the planning surface by decision (less overhead, single source of priority).
+  **Superseded 2026-07-05** by
+  [docs/features/241-github-projects-kanban-board.md](241-github-projects-kanban-board.md)
+  (ops-25) — issue volume outgrew the labels-only surface; see that plan's
+  spec for the rationale.
 - Migrating away from the `<prefix>-<n>` scheme to issue numbers — the prefix ID stays canonical.
 - Server-side label/field enforcement (Free plan, no Actions budget) — the forms + `blank_issues_enabled: false` are the soft gate.
 - Auto-syncing `docs/BACKLOG.md` ⇄ issues on an ongoing basis — the thinning is a one-shot cutover; from then on humans keep the thin row + issue in step per the CONTRIBUTING.md "Issues" convention.
