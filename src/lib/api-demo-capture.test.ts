@@ -8,7 +8,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     const { api } = await import('./api');
 
     const audio = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 3 });
-    const suspects = audio.segments.filter((s) => s.suspect);
+    const suspects = audio.segments!.filter((s) => s.suspect);
 
     expect(suspects).toHaveLength(2);
     expect(suspects.map((s) => s.characterId)).toEqual(['dockhand-remy', 'narrator']);
@@ -32,12 +32,12 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
 
     const otherChapter = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 4 });
     expect(
-      otherChapter.segments.filter((s) => s.suspect).map((s) => s.characterId),
+      otherChapter.segments!.filter((s) => s.suspect).map((s) => s.characterId),
     ).toEqual(['halloran', 'narrator']);
 
     const otherBook = await api.getChapterAudio({ bookId: 'coalfall-commission', chapterId: 3 });
     expect(
-      otherBook.segments.filter((s) => s.suspect).map((s) => s.characterId),
+      otherBook.segments!.filter((s) => s.suspect).map((s) => s.characterId),
     ).toEqual(['halloran', 'narrator']);
   });
 
@@ -49,7 +49,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
 
     const audio = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 3 });
     expect(
-      audio.segments.filter((s) => s.suspect).map((s) => s.characterId),
+      audio.segments!.filter((s) => s.suspect).map((s) => s.characterId),
     ).toEqual(['halloran', 'narrator']);
   });
 
@@ -69,7 +69,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
       duration: '00:00',
     });
     expect(audio.durationSec).toBe(600);
-    expect(audio.segments.filter((s) => s.suspect)).toHaveLength(2);
+    expect(audio.segments!.filter((s) => s.suspect)).toHaveLength(2);
   });
 
   it('mockPollRevisions: hollow-tide-2 gets HOLLOW_TIDE_DRIFT_EVENTS and pending: [] under DEMO_CAPTURE', async () => {
@@ -83,7 +83,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     // Exact-equality is safe here: VOICE_DRIFT_EVENTS (src/data/drift.ts) only
     // seeds bookId 'sb' (x6) and 'cc' (x1) — confirmed zero 'hollow-tide-2'
     // events during plan review — so the merged array is exactly these two.
-    expect(res.drift.map((d) => d.id)).toEqual([
+    expect(res.drift!.map((d) => d.id)).toEqual([
       'drift:hollow-tide-2:2:insp-cray:register',
       'drift:hollow-tide-2:5:dr-wren:warmth',
     ]);
@@ -110,7 +110,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     const { api } = await import('./api');
 
     const res = await api.pollRevisions({ bookId: 'sb' });
-    expect(res.pending.length).toBeGreaterThan(0);
-    expect(res.drift.some((d) => d.bookId === 'sb')).toBe(true);
+    expect(res.pending!.length).toBeGreaterThan(0);
+    expect(res.drift!.some((d) => d.bookId === 'sb')).toBe(true);
   });
 });
