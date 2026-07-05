@@ -545,11 +545,13 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
                  the one marketing book with a genuinely undesigned voice
                  (harbor-clerk), which opens the voice-readiness gate from
                  the Manuscript view's "Approve cast & start generating".
-                 voiceCount reflects reality (2 of 3 characters designed);
-                 voiceIds still runs through the shared voiceIdsOf helper,
-                 whose `voiceId ?? id` fallback pads in harbor-clerk's own
-                 id for the undesigned slot — a pre-existing helper quirk,
-                 not something this book needs to work around. */
+                 voiceCount matches voiceIds.length (3) exactly — voiceIds
+                 runs through the shared voiceIdsOf helper, whose
+                 `voiceId ?? id` fallback pads in harbor-clerk's own id for
+                 the undesigned slot, so voiceCount counts that placeholder
+                 too rather than the 2 characters with a real voice. A
+                 pre-existing helper quirk, not something this book needs
+                 to work around. */
               bookId: 'hollow-tide-4',
               title: 'The Harborlight Ledger',
               author: 'Marin Vale',
