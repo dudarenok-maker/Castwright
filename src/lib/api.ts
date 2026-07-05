@@ -70,6 +70,7 @@ import {
   HOLLOW_TIDE_POSED,
   HOLLOW_TIDE_VOICES,
   HOLLOW_TIDE_CONTINUE,
+  HOLLOW_TIDE_LISTEN_PROGRESS,
   COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -1199,6 +1200,7 @@ const MOCK_LISTEN_PROGRESS = new Map<string, ListenProgress>();
 
 export async function mockGetListenProgress(bookId: string): Promise<ListenProgress | null> {
   await wait(15);
+  if (DEMO_CAPTURE) return HOLLOW_TIDE_LISTEN_PROGRESS.get(bookId) ?? null;
   const fromMap = MOCK_LISTEN_PROGRESS.get(bookId);
   if (fromMap) return fromMap;
   /* e2e seam: a spec can prime a bookmark via `page.addInitScript` BEFORE

@@ -26,6 +26,8 @@ Nothing here locks you in — six listener apps get one-tap tiles, each opening 
 
 Every export you start is tracked here — queued, running, done, or failed, filterable by status with live counts — and it survives a reload, so kicking off a long export and closing the tab doesn't lose it. Each row carries **Download**, **Copy link**, **Remove**, and **Retry** (for a failed export, without starting over from the format picker).
 
+![Export queue — filterable by status, with a running export mid-progress](images/exporting/export-queue.png)
+
 ## Download over LAN
 
 Switch the export picker to "Download to phone" for a LAN URL plus a QR code — scan it with your phone's camera, no cable and no separate app required, and the file lands straight in its Downloads folder.
@@ -34,6 +36,6 @@ Switch the export picker to "Download to phone" for a LAN URL plus a QR code —
 
 Below, the same export picker switched to "Download to phone": a format row (M4B, MP3.ZIP, AAC, Opus), the LAN URL, and its QR code side by side, ready to scan.
 
-> Screenshots of the format-tile row and the export queue are tracked as a follow-up (Refs #1289).
+> A screenshot of the top-level format-tile row (M4B / MP3 ZIP / streaming link / portable bundle) is tracked as a follow-up (Refs #1289).
 
 Next: [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices).

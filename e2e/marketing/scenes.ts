@@ -43,6 +43,25 @@ export interface Scene {
   strict?: boolean;
 }
 
+/* fs-1318 Tier D — real Cyrillic text (ported from
+   server/src/__fixtures__/the-coalfall-commission.ru.md) fed through the
+   Upload view's "Paste text" flow, so the mock's own language-detection
+   heuristic (api.ts mockImportManuscript — Cyrillic ratio >= 30% => 'ru')
+   drives the confirm-metadata screen's real "Auto-detected Russian —
+   verify" chip. See the language-detect-russian scene below for why this
+   replaces the brief's original (nonexistent) "Detecting language" phase. */
+const RUSSIAN_PASTE_TEXT = `# Дело о Коалфолле
+
+## Глава первая — Стук
+
+Горн остыл до цвета подёрнутого пеплом заката, и Рен выскребала последнюю окалину, когда раздался стук.
+
+«Оставь, — сказал мастер Одуван, не поднимая глаз. Семьдесят зим стёрли его голос до гравия и терпения. — Кто бы это ни был, пусть стучит».
+
+«Может, заказчик».
+
+«В такой час это либо пьяный, либо долг. Ни тот ни другой не заплатит больше оттого, что его впустят быстрее».`;
+
 export const SCENES: Scene[] = [
   {
     id: 'library-shelf',
@@ -159,18 +178,18 @@ export const SCENES: Scene[] = [
     strict: true,
   },
   {
-    /* NOTE (Task 8 capture run): every marketing fixture book reachable under
-       VITE_DEMO_CAPTURE=1 (hollow-tide-1, hollow-tide-2, coalfall-commission)
-       is already fully cast-designed — "Design full cast" renders disabled
-       ("Every character already has a voice.") on all three, so this scene
-       can't actually be captured without adding a genuinely-undesigned
-       character to fixture data, which is out of scope for this task. Left
-       here (selectors verified correct against live DOM) for whichever task
-       adds that fixture data. */
+    /* RETARGETED (Task 11, fs-1318 Tier D): hollow-tide-4 (The Harborlight
+       Ledger) carries the one genuinely-undesigned character (harbor-clerk),
+       so "Design full cast" is enabled there — unlike every other marketing
+       fixture book (hollow-tide-1/2, coalfall-commission), which are fully
+       cast-designed and render the button disabled ("Every character already
+       has a voice."). Originally blocked in Task 8's capture run; unblocked
+       once hollow-tide-4 landed. */
     id: 'voice-design-scope-picker',
-    hash: '#/books/hollow-tide-2/cast',
+    hash: '#/books/hollow-tide-4/cast',
     viewports: ['desktop'],
     action: async (page) => {
+      await page.setViewportSize({ width: 1920, height: 1080 });
       await page.getByRole('button', { name: 'Design full cast' }).click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="design-scope-picker"]',
@@ -561,22 +580,50 @@ export const SCENES: Scene[] = [
     fullPage: true,
   },
   {
-    /* NOTE (Task 9 capture run): blocked for the same reason as
-       voice-design-scope-picker above — every marketing fixture book
-       (hollow-tide-1, hollow-tide-2, coalfall-commission) is already fully
-       cast-designed, so "Design full cast" renders disabled ("Every
-       character already has a voice.") and the click never reaches the
-       Confirm/Start-design step, so `design-waveform` never mounts. Left
-       here (selectors verified correct against live DOM) for whichever task
-       adds a genuinely-undesigned character to fixture data. */
+    /* RETARGETED (Task 11, fs-1318 Tier D) — same unblock as
+       voice-design-scope-picker above: hollow-tide-4 has the one genuinely
+       undesigned character, so "Design full cast" is enabled and picking a
+       scope actually starts a design, mounting `design-waveform`.
+       Originally blocked in Task 9's capture run.
+
+       ADAPTED second click: the brief's `/Confirm|Start design/i` button
+       doesn't exist on this path — DesignScopePicker
+       (src/components/design-scope-picker.tsx) has no separate confirm
+       step; each scope row (data-testid="scope-bases"/"scope-variants"/
+       "scope-both", role="menuitem") starts the design directly on click.
+       Harbor Clerk needs only a base voice, so "Base voices" is the live
+       (non-"all done") row here.
+
+       ADAPTED again, twice over:
+       1) With only 1 character to design, the mock's synth delay resolved
+          before the harness's fixed post-action settle even ran — same
+          class of problem the existing `model-pill-loading` scene (below)
+          solves. Reusing its fix: freeze the fake clock right before the
+          triggering click so the in-browser setTimeout backing the mock
+          delay never fires, holding the design in flight for the shot.
+       2) `design-waveform` (src/components/design-progress.tsx) doesn't
+          render on the bulk cast-list row at all — it lives inside
+          VoiceEnginePicker, which only mounts inside an OPEN profile
+          drawer (confirmed: profile-drawer.test.tsx is the only other
+          reference). The bulk "Design full cast" flow instead shows a
+          top-bar "Designing · N%" pill + a row-level "Cancel design"
+          state, with no waveform of its own. So the actual "design in
+          progress" waveform shot needs the drawer open for the character
+          currently being designed — open Harbor Clerk's profile (its cast
+          row, same `onOpenProfile` used by the 'profile-drawer' scene)
+          while the frozen-clock design is still in flight. */
     id: 'voice-design-in-progress',
-    hash: '#/books/hollow-tide-2/cast',
+    hash: '#/books/hollow-tide-4/cast',
     viewports: ['desktop'],
     action: async (page) => {
       await page.getByRole('button', { name: 'Design full cast' }).click({ timeout: 5000 });
-      await page.getByRole('button', { name: /Confirm|Start design/i }).click({ timeout: 5000 });
+      await page.clock.install();
+      await page.clock.pauseAt(Date.now());
+      await page.getByTestId('scope-bases').click({ timeout: 5000 });
+      await page.getByTestId('cast-row-harbor-clerk').click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="design-waveform"]',
+    scrollTo: '[data-testid="design-waveform"]',
     strict: true,
   },
   {
@@ -625,6 +672,83 @@ export const SCENES: Scene[] = [
       await page.mouse.move(x, y + 40, { steps: 10 });
       // Deliberately no mouse.up() — the screenshot must land mid-drag.
     },
+    strict: true,
+  },
+
+  /* ── fs-1318 Tier D — new marketing-only fixture data (Task 11) ── */
+  {
+    /* hollow-tide-4 is the only marketing book with a genuinely undesigned
+       character (harbor-clerk), so it's the one book where "Approve cast &
+       start generating" actually opens the voice-readiness gate instead of
+       proceeding straight through. */
+    id: 'generating-voice-readiness',
+    hash: '#/books/hollow-tide-4/manuscript',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Approve cast & start generating' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="voice-readiness-gate"]',
+    strict: true,
+  },
+  {
+    id: 'listen-markers-rerecord',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="listen-markers-panel"]',
+    scrollTo: '[data-testid="listen-markers-panel"]',
+    strict: true,
+  },
+  {
+    id: 'export-queue',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="export-queue-rail"]',
+    scrollTo: '[data-testid="export-queue-rail"]',
+    strict: true,
+  },
+  {
+    /* ADAPTED from the brief's original spec, which targeted
+       `#/books/<russian-book-id>/analysing` with `waitFor: 'text=Detecting
+       language'`. That text doesn't exist anywhere in the app (checked
+       src/data/analysis-phases.ts's 3 phase labels and every string in
+       src/views/analysing.tsx — no language-specific phase exists; the
+       analysing view's DEMO_CAPTURE pose is a single frozen
+       HOLLOW_TIDE_POSED.analysing object, not book-specific). Language
+       detection is a confirm-metadata-view concept instead — the real
+       "Auto-detected {label} — verify" chip (src/views/confirm-metadata.tsx:303),
+       which is exactly what docs/wiki/Multi-language-Support.md already
+       describes ("Pasting in the Russian variant ... shows the
+       'Auto-detected Russian — verify' chip"). This scene drives that real
+       flow: paste real Cyrillic text (RUSSIAN_PASTE_TEXT, above), let the
+       mock's own language-detection heuristic classify it, and land on the
+       chip it actually renders. */
+    id: 'language-detect-russian',
+    hash: '#/new',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Paste text' }).click({ timeout: 5000 });
+      await page.locator('textarea').fill(RUSSIAN_PASTE_TEXT);
+      await page.getByRole('button', { name: 'Upload pasted text' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Auto-detected Russian — verify',
+    strict: true,
+  },
+  {
+    /* der-bernsteinturm — new German-language standalone (hollow-tide.ts) —
+       non-English cast confirmation, names shown in their own language.
+       ADAPTED from the brief's `[data-testid^="cast-row-"]` — that testid
+       belongs to src/views/cast.tsx (the post-confirm cast VIEW, used by
+       e.g. the 'cast-reuse'/'coalfall-cast' scenes' `#/books/:id/cast`
+       hash), not src/views/confirm-cast.tsx (this `#/books/:id/confirm`
+       CAST-CONFIRMATION screen, which has no per-row testid at all —
+       confirmed against a live capture). Each row's real, unique selector
+       is the `aria-label="Open profile for {name}"` button
+       (confirm-cast.tsx:419), which also happens to double-confirm the
+       row is showing the character's own-language name. */
+    id: 'language-cast-confirm-german',
+    hash: '#/books/der-bernsteinturm/confirm',
+    viewports: ['desktop'],
+    waitFor: '[aria-label^="Open profile for"]',
     strict: true,
   },
 ];

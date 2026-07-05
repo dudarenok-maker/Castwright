@@ -8,6 +8,10 @@ Starting generation opens a pre-flight check, not a render. Any speaking charact
 
 An English book gets a "Proceed anyway — generic Kokoro fallback voices" escape hatch alongside "Design full cast." A non-English book doesn't: every speaking character needs a designed voice before the book can generate at all — there's no generic fallback across languages. If you're rendering on Qwen, you'll also see a "Choose the voice model" tier prompt — the leaner 0.6B model or the higher-quality, slightly slower 1.7B — before the first chapter starts.
 
+Below, *The Harborlight Ledger* hits "Approve cast & start generating" with one character — Harbor Clerk — still undesigned. The gate lists exactly who's missing a voice and offers both paths: design them now, or proceed anyway on the generic Kokoro fallback.
+
+![Voice-readiness gate — one character still needs a voice](images/generating-audio/voice-readiness-gate.png)
+
 ## While it's rendering
 
 Chapters list down the left; the whole run's overall progress, a completed/in-progress/queued/failed breakdown, and an activity feed sit at the top.
@@ -30,6 +34,6 @@ Confirming flips that chapter from done back to in-progress and re-queues it.
 
 **Per character, with a preview-first option.** From the character's profile in the Cast tab, "Regenerate across the book" lists every chapter they speak in and lets you re-render all of them at once — or choose **Preview** instead, which renders only the first affected chapter and stops there. That preview opens the same A/B revision player used throughout the app: the old take and the new one, side by side, playable segment by segment. Accept it and the rest of that character's chapters fan out to regenerate on the same settings; reject it and nothing else is touched, so you can adjust and try again before committing to a full re-render. Selecting several characters at once in the Cast table's multi-select runs the same flow across all of them together.
 
-> Screenshots of the voice-readiness gate and the preview/A-B revision player in action are tracked as a follow-up (#1318).
+> A screenshot of the preview/A-B revision player in action is tracked as a follow-up (#1318).
 
 Next: every rendered line — regenerated or not — still has to clear [The Quality Gate](The-Quality-Gate) before it counts as done.
