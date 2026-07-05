@@ -4,15 +4,62 @@
 //
 //   npm run wiki:sync
 //
-// Run manually after a merge to main touches docs/wiki/**.
+// Run manually after a merge to main touches docs/wiki/**. Refuses to push a
+// sync that would delete more than DELETE_THRESHOLD pages — re-run with
+// `-- --allow-deletes` to confirm an intentional bulk removal (#1343).
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runCommand } from './lib/run-command.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_REMOTE = 'https://github.com/dudarenok-maker/Castwright.wiki.git';
+
+// #1343 — refuse an unattended mass-deletion. copyWikiTree mirrors by wiping
+// every pre-existing dest entry, so a page removed from docs/wiki/ (correctly,
+// or by a bug in a generator script) is otherwise silently and permanently
+// gone from the live wiki on the next sync — GitHub wikis have no PR review/CI
+// of their own to catch it first.
+export const DELETE_THRESHOLD = 3;
+
+function listWikiFiles(dir) {
+  const out = new Set();
+  if (!existsSync(dir)) return out;
+  const walk = (current, rel) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.name === '.git') continue;
+      const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(entryPath, entryRel);
+      else out.add(entryRel);
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
+// Diffs the incoming docs/wiki/ tree against the current wiki clone BEFORE
+// copyWikiTree mutates anything, so the caller can gate the push on it.
+export function diffWikiTree(srcDir, destDir) {
+  const srcFiles = listWikiFiles(srcDir);
+  const destFiles = listWikiFiles(destDir);
+  const added = [...srcFiles].filter((f) => !destFiles.has(f)).sort();
+  const removed = [...destFiles].filter((f) => !srcFiles.has(f)).sort();
+  const changed = [...srcFiles]
+    .filter((f) => destFiles.has(f))
+    .filter(
+      (f) =>
+        !readFileSync(path.join(srcDir, f)).equals(readFileSync(path.join(destDir, f))),
+    )
+    .sort();
+  return { added, removed, changed };
+}
+
+// True when the sync should be refused pending an explicit --allow-deletes.
+export function exceedsDeleteThreshold(removedCount, allowDeletes) {
+  return removedCount > DELETE_THRESHOLD && !allowDeletes;
+}
 
 export function copyWikiTree(srcDir, destDir) {
   if (!existsSync(srcDir)) {
@@ -62,8 +109,24 @@ function cloneOrInitWikiRepo(cacheDir) {
 async function main() {
   const cacheDir = path.join(REPO_ROOT, '.wiki-sync-cache');
   const srcDir = path.join(REPO_ROOT, 'docs', 'wiki');
+  const allowDeletes = process.argv.includes('--allow-deletes');
 
   const { fresh } = cloneOrInitWikiRepo(cacheDir);
+
+  const { added, removed, changed } = diffWikiTree(srcDir, cacheDir);
+  process.stdout.write(
+    `sync-wiki: ${added.length} added, ${changed.length} changed, ${removed.length} removed\n`,
+  );
+  if (exceedsDeleteThreshold(removed.length, allowDeletes)) {
+    throw new Error(
+      [
+        `sync-wiki: refusing to push — this sync would delete ${removed.length} page(s):`,
+        ...removed.map((f) => `  - ${f}`),
+        'Re-run with --allow-deletes to confirm.',
+      ].join('\n'),
+    );
+  }
+
   copyWikiTree(srcDir, cacheDir);
 
   run('git', ['add', '-A'], cacheDir);
