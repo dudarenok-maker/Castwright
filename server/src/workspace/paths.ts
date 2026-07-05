@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { unicodeKebab } from '../util/safe-id.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { stripEdges } from '../util/text-match.js';
+import { USER_SETTINGS_PATH } from './user-settings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -21,7 +22,9 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
    anywhere — absolute paths are honoured as-is.
 
    Resolution precedence (boot-time only — restart required to change):
-     1. user-settings.json `workspaceDirOverride` (synchronous best-effort read)
+     1. `workspaceDirOverride` from the resolved USER_SETTINGS_PATH (plan 122
+        shared-settings location, honouring a USER_SETTINGS_FILE test/ops
+        override — synchronous best-effort read)
      2. WORKSPACE_DIR env var
      3. built-in `../castwright-workspace` default
    This is read once at module load — `WORKSPACE_ROOT` is a const export
@@ -41,15 +44,20 @@ export const WORKSPACE_SOURCE: 'env' | 'default' | 'override' = OVERRIDE_DIR
 
 /* Sync best-effort read of user-settings.json so the boot-time workspace
    resolution can honour an override without an async dance. A missing or
-   malformed file falls through to env/default — never blocks startup. */
-function readBootOverride(): string | null {
+   malformed file falls through to env/default — never blocks startup.
+   Reads USER_SETTINGS_PATH (not a hardcoded per-checkout path) so this stays
+   in sync with plan 122's shared-settings location and so a test/ops
+   USER_SETTINGS_FILE override is actually honoured here too — pre-fix this
+   read a stale hardcoded `<SERVER_ROOT>/user-settings.json` path unrelated to
+   USER_SETTINGS_FILE, so a stray legacy file on disk silently overrode every
+   test's WORKSPACE_DIR isolation (#1337). */
+export function readBootOverride(): string | null {
   try {
     /* Synchronous read so this can run inline during module load without
        blocking ESM hoisting on a top-level await. The file is small
        (a few hundred bytes); missing or malformed falls through silently. */
-    const path = join(SERVER_ROOT, 'user-settings.json');
-    if (!existsSync(path)) return null;
-    const raw = readFileSync(path, 'utf8');
+    if (!existsSync(USER_SETTINGS_PATH)) return null;
+    const raw = readFileSync(USER_SETTINGS_PATH, 'utf8');
     const parsed = JSON.parse(raw) as { workspaceDirOverride?: unknown };
     const override = parsed?.workspaceDirOverride;
     return typeof override === 'string' && override.trim().length > 0 ? override.trim() : null;

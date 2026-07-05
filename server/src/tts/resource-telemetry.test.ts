@@ -70,17 +70,30 @@ describe('resource-telemetry', () => {
     expect(limited.map((r) => r.chapterId)).toEqual([5, 4]);
   });
 
-  it('rotates: trims oldest lines when the cap is exceeded', async () => {
-    /* Write CAP + 3 lines; only the newest CAP should survive. */
-    const cap = mod.TELEMETRY_MAX_LINES;
-    for (let i = 1; i <= cap + 3; i++) await mod.appendTelemetry(rec({ chapterId: i }));
-    const all = await mod.readTelemetry(cap + 10);
-    expect(all.length).toBe(cap);
-    /* Newest-first: the very first record (chapterId 1, 2, 3) should be gone. */
-    expect(all[0].chapterId).toBe(cap + 3);
-    expect(all.some((r) => r.chapterId === 1)).toBe(false);
-    expect(all.some((r) => r.chapterId === 4)).toBe(true);
-  });
+  it(
+    'rotates: trims oldest lines when the cap is exceeded',
+    async () => {
+      /* Write CAP + 3 lines; only the newest CAP should survive. Each append
+         does a full read-trim-rewrite once past the cap (by design — see
+         trimIfNeeded's header comment), so CAP+3 real appends is a
+         legitimately heavier fs round-trip than the suite's default 15s
+         budget affords under full-suite pool contention (#1337 — this test
+         alone was the one that time out, and its abandoned background
+         loop kept appending after vitest gave up waiting, corrupting the
+         two tests that ran next since they share this file's on-disk
+         state). Mirrors the hookTimeout bump in vitest.config.ts for the
+         same class of "slow under contention" problem. */
+      const cap = mod.TELEMETRY_MAX_LINES;
+      for (let i = 1; i <= cap + 3; i++) await mod.appendTelemetry(rec({ chapterId: i }));
+      const all = await mod.readTelemetry(cap + 10);
+      expect(all.length).toBe(cap);
+      /* Newest-first: the very first record (chapterId 1, 2, 3) should be gone. */
+      expect(all[0].chapterId).toBe(cap + 3);
+      expect(all.some((r) => r.chapterId === 1)).toBe(false);
+      expect(all.some((r) => r.chapterId === 4)).toBe(true);
+    },
+    30_000,
+  );
 
   it('skips a corrupt trailing line rather than throwing', async () => {
     await mod.appendTelemetry(rec({ chapterId: 11 }));
