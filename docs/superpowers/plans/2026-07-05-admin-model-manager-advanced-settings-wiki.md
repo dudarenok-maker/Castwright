@@ -1256,9 +1256,9 @@ scene fail before the click even runs.
     viewports: ['desktop'],
     action: async (page) => {
       await page.getByRole('button', { name: 'Export audiobook', exact: true }).first().click({ timeout: 5000 });
-      await page.getByRole('tab', { name: 'Download' }).click({ timeout: 5000 });
+      await page.getByTestId('export-tab-download').click({ timeout: 5000 });
     },
-    waitForAfterAction: '[data-testid="export-tab-download"]',
+    waitForAfterAction: 'img[alt="LAN URL QR code"]',
     strict: true,
   },
 ```
@@ -1270,13 +1270,28 @@ scene fail before the click even runs.
 > `export-lan-qr`'s button name was `'Export'` (doesn't match anything —
 > the real control reads **"Export audiobook"**, `listen-header.tsx:289`),
 > and its tab testid was `export-download-tab` (real: `export-tab-download`,
-> built as `` `export-tab-${t.id}` `` at `export-audiobook.tsx:394`).
+> built as `` `export-tab-${t.id}` `` at `export-audiobook.tsx:394`). A
+> second review round caught that the tab click itself also used
+> `getByRole('tab', ...)` — **the export modal's tabs are plain `<button>`
+> elements, not `role="tab"`**, and the visible label is "Download to
+> phone," not "Download" — so the click has to target the testid directly
+> (`getByTestId('export-tab-download')`), and the confirmation target
+> should be the tab's *content* (the QR image, `img[alt="LAN URL QR code"]`
+> at `export-audiobook.tsx:587`), not the tab button itself, since the
+> button exists regardless of which tab is selected.
 > `manuscript-review-script`'s target was `script-review-diff` (doesn't
 > exist) — `apply-button` (`script-review-diff.tsx:538`) only renders when
 > there's a real diff to apply, which chapter 3's queued ops guarantee.
 > `cast-ab-compare`'s target was `voice-compare-modal` (the modal root has
 > no testid) — `voice-compare-persona` (`voice-compare-modal.tsx:282`) is a
 > real child element that only renders once the modal opens.
+>
+> **Unresolved minor risk, flagged rather than guessed at**: `mobile-lan-qr`
+> clicks "Authorize a device" and waits for the QR image, but
+> `lan-access-card.test.tsx:90` hints a device label may need to be typed
+> into a field before the pairing session (and its QR) actually starts. If
+> the scene times out on `pair-qr-image`, check that test for the exact
+> pre-click step and add it to the `action`.
 
 - [ ] **Step 2: Add a click to the existing `coalfall-manuscript-low-confidence` scene**
 
@@ -1520,7 +1535,26 @@ const undesignedExtra = (): Character => ({
 });
 ```
 
-Add `undesignedExtra()` to whichever book's cast array is used by the `generating` scene (`hollow-tide-2`, per `scenes.ts:56`) — find that book's cast array in `HOLLOW_TIDE_BOOK_STATES` and append this character to it.
+**Do not add this to `hollow-tide-2`** — that book is deliberately posed
+mid-generation (7/11 chapters done, per the existing `generating` scene's
+own comment), and the voice-readiness gate only opens via the **"Approve
+cast & start generating"** button on the **Manuscript** view
+(`src/views/manuscript.tsx:910-916`, which calls `onStartGenerating` →
+`routes/index.tsx:773-775`'s `dispatch(startGenerationFlow())`) — a button
+gated on the book not having started generation yet. A book already
+mid-generation won't show it. Add `undesignedExtra()` instead to whichever
+Hollow Tide book is posed at the **manuscript** stage, pre-generation (check
+`HOLLOW_TIDE_BOOK_STATES` for a book whose stage/status isn't yet
+`generating` — `hollow-tide-3`, posed for the `analysing` scene, is a
+candidate only if its fixture has already progressed past analysis into a
+manuscript-ready state by the time this task runs; verify directly rather
+than assuming, and use whichever book is genuinely pre-generation). Adding
+this character to that book's cast will also appear in any *other* existing
+scene that screenshots the same book's cast/manuscript views (e.g. if it's
+`hollow-tide-3`, the `analysing` scene is unaffected since it's a different
+view, but double-check no other existing scene captures that book's cast
+list before/after this change — a new cast row is cosmetic and expected,
+just worth a quick look during Step 3's review pass, not a re-shoot.
 
 - [ ] **Step 2: Seed markers and a re-record marker**
 
@@ -1586,9 +1620,12 @@ Follow the exact pattern of `COALFALL_CHAPTERS`/`HOLLOW_TIDE_BOOK_STATES`/`HOLLO
 ```ts
   {
     id: 'generating-voice-readiness',
-    hash: '#/books/hollow-tide-2/generate',
+    hash: '#/books/<pre-generation-book-id>/manuscript',
     viewports: ['desktop'],
-    waitFor: '[data-testid="voice-readiness-gate"]',
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Approve cast & start generating' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="voice-readiness-gate"]',
     strict: true,
   },
   {
@@ -1623,7 +1660,15 @@ Follow the exact pattern of `COALFALL_CHAPTERS`/`HOLLOW_TIDE_BOOK_STATES`/`HOLLO
   },
 ```
 
-(Replace `<russian-book-id>`/`<german-book-id>` with the actual ids chosen in Step 4.)
+(Replace `<russian-book-id>`/`<german-book-id>` with the actual ids chosen in Step 4, and `<pre-generation-book-id>` with the book chosen in Step 1 for `undesignedExtra()`.)
+
+> **Fixed from an earlier draft**: this scene originally targeted
+> `#/books/hollow-tide-2/generate` with no `action`, assuming the gate would
+> just appear on navigation. It doesn't — `startGenerationFlow()` only
+> dispatches from the Manuscript view's "Approve cast & start generating"
+> button (verified against `manuscript.tsx:910-916` and
+> `routes/index.tsx:773-775`), so the scene needs to be on the manuscript
+> route and actually click it.
 
 > **Fixed from an earlier draft**: `markers-panel` and `export-queue-row`
 > were both invented testids. The real ones, confirmed against source:
@@ -1669,17 +1714,17 @@ git commit -m "docs(docs): close 1318's Tier D screenshots (new fixture data)"
 
 **Files:**
 - Modify: `src/lib/api.ts:6636` (qwen-base), `src/lib/api.ts:6658-6673` (coqui)
-- Modify: `e2e/model-manager-health.spec.ts`, `e2e/model-manager-inventory.spec.ts`, `e2e/model-manager-models.spec.ts`, `e2e/model-manager-ollama-load.spec.ts`, `e2e/model-manager-dual-model.spec.ts`, `e2e/kokoro-stop-pill.spec.ts` (fix the assertions this flip breaks in whichever of these actually reference the pre-flip Coqui/Qwen-base state)
+- Modify: `e2e/model-manager-health.spec.ts`, `e2e/model-manager-inventory.spec.ts`, `e2e/model-manager-dual-model.spec.ts` (fix the assertions this flip breaks — see below for why only these 3, not all 6 specs that mention Coqui/Qwen-base by name)
 - Modify: `e2e/marketing/scenes.ts` (append 2 scenes)
 - Modify: `docs/wiki/Voice-Engines.md`
 
 **Interfaces:** none beyond the existing `ModelInventoryItem` shape — this only changes field values, not types.
 
-This is the one change with regression risk beyond the marketing harness — `mockGetModelInventory` is shared by every mock consumer, not just `model-manager-health.spec.ts`. **This plan's own assumption-checker review found the blast radius was under-scoped in an earlier draft**: six e2e specs reference `model-row-coqui`/`model-row-qwen-base`, not one — `model-manager-health`, `model-manager-inventory`, `model-manager-models`, `model-manager-ollama-load`, `model-manager-dual-model`, and `kokoro-stop-pill`. `model-manager-dual-model.spec.ts` is confirmed to specifically open the Coqui and Qwen-base installers from their not-installed/package-missing rows — both premised on the exact state this flip removes. (`src/views/model-manager.test.tsx`'s own unit tests are unaffected — they use a fully local `INVENTORY` fixture with the whole `api` module mocked, not the real `mockGetModelInventory`.)
+This is the one change with regression risk beyond the marketing harness — `mockGetModelInventory` is shared by every mock consumer, not just `model-manager-health.spec.ts`. **This plan went through two review rounds on the exact blast radius**: round 1 caught that the original draft only checked 1 spec; a broader sweep then over-corrected to 6 specs; round 2 re-verified each of the 6 directly and found only **3 actually reference the flipped rows** — `model-manager-health`, `model-manager-inventory`, and `model-manager-dual-model` (confirmed to open both the Coqui and Qwen-base installers via `model-install-toggle-qwen-base`/`model-install-toggle-coqui`, both premised on the not-installed/package-missing state this flip removes). `model-manager-models.spec.ts` and `model-manager-ollama-load.spec.ts` have zero Coqui/Qwen-base references; `kokoro-stop-pill.spec.ts`'s only Coqui reference asserts it's absent on a *book* view unrelated to the inventory flip. (`src/views/model-manager.test.tsx`'s own unit tests are unaffected — they use a fully local `INVENTORY` fixture with the whole `api` module mocked, not the real `mockGetModelInventory`.)
 
-- [ ] **Step 1: Read all 6 e2e specs in full to understand exactly what each pins**
+- [ ] **Step 1: Read all 3 affected e2e specs in full to understand exactly what each pins**
 
-Run: read `e2e/model-manager-health.spec.ts`, `e2e/model-manager-inventory.spec.ts`, `e2e/model-manager-models.spec.ts`, `e2e/model-manager-ollama-load.spec.ts`, `e2e/model-manager-dual-model.spec.ts`, and `e2e/kokoro-stop-pill.spec.ts`. Note every assertion referencing Coqui's "Not installed"/"Install" state and Qwen-base's "Needs repair"/"Repair"/no-Load-pill state — you will need to update these in Step 4. Pay particular attention to `model-manager-dual-model.spec.ts`'s installer-opening tests (they click into the Coqui/Qwen-base installer specifically because those rows are not-yet-installed today).
+Run: read `e2e/model-manager-health.spec.ts`, `e2e/model-manager-inventory.spec.ts`, and `e2e/model-manager-dual-model.spec.ts`. Note every assertion referencing Coqui's "Not installed"/"Install" state and Qwen-base's "Needs repair"/"Repair"/no-Load-pill state — you will need to update these in Step 4. Pay particular attention to `model-manager-dual-model.spec.ts`'s installer-opening tests (they click into the Coqui/Qwen-base installer specifically because those rows are not-yet-installed today).
 
 - [ ] **Step 2: Flip the Qwen-base install state**
 
@@ -1721,9 +1766,9 @@ In `src/lib/api.ts`, change the `coqui` entry (currently `present: false`, `inst
     },
 ```
 
-- [ ] **Step 4: Fix all 6 e2e specs' broken assertions**
+- [ ] **Step 4: Fix the 3 e2e specs' broken assertions**
 
-Update every assertion from Step 1 (across all 6 files) that expected Coqui "Not installed"/"Install" or Qwen "Needs repair"/"Repair"/no-Load-pill — these should now assert the "ready"/installed state with a Load pill for both rows. For `model-manager-dual-model.spec.ts` specifically, its installer-opening tests need to either target a still-genuinely-uninstalled model instead (if one exists in the inventory after this flip) or be rewritten to open the installer from a different entry point — read that spec's actual test bodies at implementation time to decide which. Write the exact assertion changes based on what Step 1 found (this plan can't predict the exact line numbers without re-reading each file at implementation time, but the change is mechanical: swap the expected badge/button text for the new state).
+Update every assertion from Step 1 (across `model-manager-health`, `model-manager-inventory`, `model-manager-dual-model`) that expected Coqui "Not installed"/"Install" or Qwen "Needs repair"/"Repair"/no-Load-pill — these should now assert the "ready"/installed state with a Load pill for both rows. For `model-manager-dual-model.spec.ts` specifically, its installer-opening tests (`model-install-toggle-qwen-base`, `model-install-toggle-coqui`) need to either target a still-genuinely-uninstalled model instead (if one exists in the inventory after this flip) or be rewritten to open the installer from a different entry point — read that spec's actual test bodies at implementation time to decide which. Write the exact assertion changes based on what Step 1 found (this plan can't predict the exact line numbers without re-reading each file at implementation time, but the change is mechanical: swap the expected badge/button text for the new state).
 
 - [ ] **Step 5: Add the 2 new scenes**
 
@@ -1746,10 +1791,10 @@ Update every assertion from Step 1 (across all 6 files) that expected Coqui "Not
   },
 ```
 
-- [ ] **Step 6: Run all 6 affected e2e specs and confirm they're green after your fixes**
+- [ ] **Step 6: Run the 3 affected e2e specs and confirm they're green after your fixes**
 
-Run: `npx playwright test e2e/model-manager-health.spec.ts e2e/model-manager-inventory.spec.ts e2e/model-manager-models.spec.ts e2e/model-manager-ollama-load.spec.ts e2e/model-manager-dual-model.spec.ts e2e/kokoro-stop-pill.spec.ts`
-Expected: PASS (after Step 4's fixes). Don't declare this task done on `model-manager-health.spec.ts` alone — that was an earlier draft's mistake, caught by this plan's own assumption-checker review.
+Run: `npx playwright test e2e/model-manager-health.spec.ts e2e/model-manager-inventory.spec.ts e2e/model-manager-dual-model.spec.ts`
+Expected: PASS (after Step 4's fixes). Don't declare this task done on `model-manager-health.spec.ts` alone — that was an earlier draft's mistake, caught by this plan's own assumption-checker review, which also correctly narrowed the fix from an initially-over-scoped 6 specs down to these 3 real ones.
 
 - [ ] **Step 7: Run the frontend unit suite to confirm nothing else broke**
 
@@ -1771,7 +1816,7 @@ Update `Voice-Engines.md`, replacing its "tracked as a follow-up" note.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/lib/api.ts e2e/model-manager-health.spec.ts e2e/model-manager-inventory.spec.ts e2e/model-manager-models.spec.ts e2e/model-manager-ollama-load.spec.ts e2e/model-manager-dual-model.spec.ts e2e/kokoro-stop-pill.spec.ts e2e/marketing/scenes.ts docs/wiki/
+git add src/lib/api.ts e2e/model-manager-health.spec.ts e2e/model-manager-inventory.spec.ts e2e/model-manager-dual-model.spec.ts e2e/marketing/scenes.ts docs/wiki/
 git commit -m "fix(e2e): flip Coqui/Qwen-base mock inventory to installed for Voice Engines wiki screenshots"
 ```
 
