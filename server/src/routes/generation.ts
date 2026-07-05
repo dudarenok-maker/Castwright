@@ -1688,6 +1688,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             /* leave nulls — the probe is best-effort observability. */
           }
         }
+        /* Mirrors recordChapterThroughput's rerecordRtf calc above — same
+           oneWorker gate (null under real multi-worker interleaving, since
+           the summed per-block wall over-counts there). */
+        const rerecordRtf =
+          oneWorker && audioSec > 0 && result.rerecordMs != null
+            ? result.rerecordMs / 1000 / audioSec
+            : null;
         await appendTelemetry({
           at: new Date().toISOString(),
           bookId: job.bookId,
@@ -1696,6 +1703,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           title: chapter.title ?? null,
           modelKey,
           rtf: audioSec > 0 ? chapterRtf : null,
+          rerecordRtf,
           audioSec,
           wallSec: synthSec,
           vramReservedMb,
