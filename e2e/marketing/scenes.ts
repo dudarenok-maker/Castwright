@@ -170,9 +170,84 @@ export const SCENES: Scene[] = [
     viewports: ['desktop'],
   },
   {
-    id: 'model-manager',
+    id: 'model-manager-installed',
     hash: '#/models',
     viewports: ['desktop'],
+    waitFor: '[data-testid^="model-row-"]',
+    strict: true,
+  },
+  {
+    id: 'model-manager-device',
+    hash: '#/models',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="device-panel"]',
+    scrollTo: '[data-testid="device-panel"]',
+    strict: true,
+  },
+  {
+    id: 'model-manager-defaults',
+    hash: '#/models',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Defaults for new books', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="account-generation-workers"]',
+    strict: true,
+  },
+  {
+    id: 'model-manager-analyzer-split',
+    hash: '#/models',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Two-model analyzer split (advanced)', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="account-analyzer-phase1-min-lag"]',
+    strict: true,
+  },
+  {
+    id: 'model-manager-voice-engine',
+    hash: '#/models',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Voice engine', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="account-generation-workers"]',
+    strict: true,
+  },
+  {
+    id: 'model-manager-server-config',
+    hash: '#/models',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Server configuration', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="account-sidecar-url"]',
+    strict: true,
+  },
+  {
+    id: 'model-manager-install-ollama',
+    hash: '#/models',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Install / update analyzer (Ollama)', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="account-models-card"]',
+    strict: true,
   },
   {
     id: 'advanced-settings',
