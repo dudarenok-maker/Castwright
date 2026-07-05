@@ -183,7 +183,9 @@ git commit -m "feat(frontend): flag Saltgrave chapter 3 + add drift fixture for 
 
 **Interfaces:**
 - Consumes: nothing new from Task 1 directly (this task doesn't touch chapter 3's `audioQa`, only its per-line audio segments — a separate data path, per the spec's "Fixture changes" section).
-- Produces: `api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 3 })` (under `DEMO_CAPTURE`) returns 4 segments where the 2 suspect ones carry `characterId: 'dockhand-remy'`/`'narrator'` and the two gate-flavor reason strings, at the *same* timings (`start`/`end`) as the generic path. Every other `(bookId, chapterId)` pair is unaffected.
+- Produces: `api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 3 })` (under `DEMO_CAPTURE`) returns 4 segments where the 2 suspect ones carry `characterId: 'dockhand-remy'`/`'narrator'` and the two gate-flavor reason strings, at **fixed** timings (`start`/`end`) — see the duration bug below — regardless of what `duration` argument the caller passes. Every other `(bookId, chapterId)` pair is unaffected.
+
+**Bug found during plan review, fixed in this task:** `src/components/mini-player.tsx:228` calls `api.getChapterAudio({ bookId, chapterId, duration: chapter.duration })` — unlike `ChapterSegmentStrip` (Task 4's `chapter-suspect` scene), it explicitly forwards `chapter.duration`. Saltgrave's chapters carry no `duration` field (`BOOK2_CHAPTERS = makeChapters(11)` without `{ withDuration: true }`), so `chapters-slice.ts`'s hydrate defaults it to `'00:00'` (`duration: c.duration ?? '00:00'`). `'00:00' || '10:00'` evaluates to `'00:00'` (a non-empty string is truthy), so `parseDuration('00:00')` would make `totalSec = 0` — and `deriveIssues` in `src/lib/chapter-issues.ts` explicitly guards `if (!dur || dur <= 0 || ...) return [];`. Without a fix, Task 4's `preview-flagged` scene (which goes through the mini-player) would silently render **zero** issues and no amber band, while Task 4's `chapter-suspect` scene (which goes through `ChapterSegmentStrip`, passing no `duration`) would work fine — a scene-dependent, silent break. Fix: the override forces `totalSec = 600` unconditionally for the flagged chapter, ignoring whatever `duration` was passed.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -244,15 +246,36 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
       audio.segments.filter((s) => s.suspect).map((s) => s.characterId),
     ).toEqual(['halloran', 'narrator']);
   });
+
+  it('mockGetChapterAudio: the override ignores a passed duration:"00:00" (the mini-player Preview bug)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { api } = await import('./api');
+
+    // Mirrors mini-player.tsx:228's call shape for a chapter whose hydrated
+    // duration defaulted to '00:00' (Saltgrave's chapters carry no duration
+    // field). Without the totalSec-forcing fix this would collapse
+    // durationSec to 0 and deriveIssues would find no issues at all.
+    const audio = await api.getChapterAudio({
+      bookId: 'hollow-tide-2',
+      chapterId: 3,
+      duration: '00:00',
+    });
+    expect(audio.durationSec).toBe(600);
+    expect(audio.segments.filter((s) => s.suspect)).toHaveLength(2);
+  });
 });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `npm test -- api-demo-capture --run`
-Expected: FAIL — first test's `characterId`s are `['halloran', 'narrator']` (override doesn't exist yet), so the `toEqual(['dockhand-remy', 'narrator'])` assertion fails.
+Expected: FAIL — all 4 tests fail (the override doesn't exist, so `characterId`s are `['halloran', 'narrator']` and `durationSec` is `0` for the `'00:00'` case instead of `600`).
 
 - [ ] **Step 3: Implement the `mockGetChapterAudio` override**
+
+**This step's Find blocks are copied byte-for-byte from the real file** (confirmed during plan review — the first draft of this step omitted two existing comment blocks, which would have made a literal find-and-replace fail to match).
 
 Find (in `src/lib/api.ts`, ~line 1657):
 
@@ -263,19 +286,42 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
   const peakCount = 240;
 ```
 
-Change the signature to destructure `bookId` too:
+Replace with (destructure `bookId` too, and force a fixed duration for the flagged chapter — see "Bug found during plan review" above):
 
 ```ts
 async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
   await wait(120);
-  const totalSec = parseDuration(duration || '10:00');
+  /* Quality Gate marketing/wiki screenshots (#1286) — force totalSec=600 for
+     Saltgrave chapter 3 regardless of what `duration` the caller passes.
+     Saltgrave's chapters carry no `duration` field, so chapters-slice
+     hydrates it to '00:00' — and the mini-player's Preview action (unlike
+     ChapterSegmentStrip) explicitly forwards `chapter.duration`, which would
+     otherwise collapse totalSec to 0 and make deriveIssues return no issues
+     at all (its own guard: `!dur || dur <= 0 → return []`), silently
+     breaking the preview-flagged scene's amber band. */
+  const isFlaggedDemoChapter = DEMO_CAPTURE && bookId === 'hollow-tide-2' && chapterId === 3;
+  const totalSec = isFlaggedDemoChapter ? 600 : parseDuration(duration || '10:00');
   const peakCount = 240;
 ```
 
-Find the `return` block (segments array) further down:
+Find the `return` block (segments array) further down — this is the exact current content, including the existing comments (do not drop them):
 
 ```ts
+  /* Deterministic per-character segment layout so the Listen-view per-line
+     re-record resolver (fs-26) has something to bite on in mock mode: split
+     the chapter into four contiguous spans (narrator / halloran / narrator /
+     narrator-late-suspect).  The two suspect segments are non-adjacent so
+     deriveIssues produces TWO distinct IssueRegions rather than merging them
+     — the e2e jump-to-issue test needs a "before" region (issue-1, halloran)
+     and an "after" region (issue-2, late narrator) to prove the Next-issue
+     button actually advances the playhead. */
   const third = totalSec / 3;
+  /* issue-1: halloran at [third, third*2]; padded seekSec = third − 2.
+     issue-2: late narrator at [third*2 + 88, totalSec]; padded seekSec =
+     third*2 + 86.  Gap between padded end of issue-1 (third*2 + 2) and
+     padded start of issue-2 (third*2 + 86) = 84 s → will NOT merge.
+     For chapter 1 (duration '38:24' = 2304 s): third=768, lateStart=1624,
+     seekSec-1=766 (33.2%), seekSec-2=1622 (70.4%). */
   const lateStart = third * 2 + 88;
   return {
     url: stubAudioB,
@@ -306,17 +352,30 @@ Find the `return` block (segments array) further down:
 }
 ```
 
-Replace with:
+Replace with (same comments preserved, only the two suspect segments' `characterId`/`reasons` branch on `isFlaggedDemoChapter`):
 
 ```ts
+  /* Deterministic per-character segment layout so the Listen-view per-line
+     re-record resolver (fs-26) has something to bite on in mock mode: split
+     the chapter into four contiguous spans (narrator / halloran / narrator /
+     narrator-late-suspect).  The two suspect segments are non-adjacent so
+     deriveIssues produces TWO distinct IssueRegions rather than merging them
+     — the e2e jump-to-issue test needs a "before" region (issue-1, halloran)
+     and an "after" region (issue-2, late narrator) to prove the Next-issue
+     button actually advances the playhead. */
   const third = totalSec / 3;
+  /* issue-1: halloran at [third, third*2]; padded seekSec = third − 2.
+     issue-2: late narrator at [third*2 + 88, totalSec]; padded seekSec =
+     third*2 + 86.  Gap between padded end of issue-1 (third*2 + 2) and
+     padded start of issue-2 (third*2 + 86) = 84 s → will NOT merge.
+     For chapter 1 (duration '38:24' = 2304 s): third=768, lateStart=1624,
+     seekSec-1=766 (33.2%), seekSec-2=1622 (70.4%). */
   const lateStart = third * 2 + 88;
-  /* Quality Gate marketing/wiki screenshots (#1286) — Saltgrave chapter 3 gets
-     real cast ids and reason text for the two gate flavors that actually
-     share this surface (acoustic + ASR content-QA), reusing this function's
-     already-correct non-adjacent spacing rather than reinventing timings
-     (spec's adversarial review round 2 flagged that risk explicitly). */
-  const isFlaggedDemoChapter = DEMO_CAPTURE && bookId === 'hollow-tide-2' && chapterId === 3;
+  /* Quality Gate marketing/wiki screenshots (#1286) — Saltgrave chapter 3
+     gets real cast ids and reason text for the two gate flavors that
+     actually share this surface (acoustic + ASR content-QA), reusing this
+     function's already-correct non-adjacent spacing rather than reinventing
+     timings (spec's adversarial review round 2 flagged that risk explicitly). */
   return {
     url: stubAudioB,
     durationSec: totalSec,
@@ -353,7 +412,7 @@ Replace with:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npm test -- api-demo-capture --run`
-Expected: PASS (all 3 tests so far)
+Expected: PASS (all 4 tests so far)
 
 - [ ] **Step 5: Commit**
 
@@ -440,11 +499,22 @@ import {
 
 (the import statement's closing `} from '../mocks/marketing/hollow-tide';` line and the rest of the list stay as-is.)
 
-Find `mockPollRevisions` (~line 1759):
+Find `mockPollRevisions` (~line 1759) — this is the exact current content, including the existing NOTE comment (do not drop it):
 
 ```ts
 async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
+  /* Filter drift to the requested book so the mock mirrors the server's
+     per-book endpoint shape. The dev fixture seeds events for two
+     books — the modal's multi-book grouping only renders if the slice
+     accumulates entries from each book separately, which is what
+     happens when `applyPoll` is called once per book.
+
+     NOTE: `pending` is returned for every book (the slice's `applyPoll`
+     replaces `pending` wholesale regardless of bookId, so scoping it here
+     would let a background poll of an empty book wipe the active book's
+     pending). The fe-15 profile-regen-preview spec clears `pending` itself
+     before opening its preview stub to avoid the phantom-revision collision. */
   return {
     pending: PENDING_REVISIONS,
     drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
@@ -452,11 +522,22 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
 }
 ```
 
-Replace with:
+Replace with (the existing comment is preserved as historical context for the dev-mode path; the new comment explains the added `DEMO_CAPTURE` branch):
 
 ```ts
 async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
+  /* Filter drift to the requested book so the mock mirrors the server's
+     per-book endpoint shape. The dev fixture seeds events for two
+     books — the modal's multi-book grouping only renders if the slice
+     accumulates entries from each book separately, which is what
+     happens when `applyPoll` is called once per book.
+
+     NOTE: `pending` is returned for every book (the slice's `applyPoll`
+     replaces `pending` wholesale regardless of bookId, so scoping it here
+     would let a background poll of an empty book wipe the active book's
+     pending). The fe-15 profile-regen-preview spec clears `pending` itself
+     before opening its preview stub to avoid the phantom-revision collision. */
   /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
      stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
      with no bookId field, so it always matched every book before) from
@@ -577,14 +658,16 @@ Append to the `SCENES` array in `e2e/marketing/scenes.ts`, before the closing `]
 Run: `npx playwright test --config=playwright.marketing.config.ts --project=desktop -g "capture chapter-suspect|capture voice-drift-report|capture preview-flagged"`
 Expected: 3 scenes captured (both light + dark = 6 screenshots total) into `mockups/marketing-screens/`; no "duplicate scene id" or "hash must start with #/" registry-guard errors from the top of `capture.spec.ts`.
 
-- [ ] **Step 3: Visually confirm each screenshot**
+**A green run here proves nothing about correctness — read this before Step 3.** `capture.spec.ts:88-94` wraps every scene's `action` in a `try/catch` that only `console.warn`s on failure ("capturing pre-interaction"), and every `waitFor` is non-fatal too. This means: if chapter 3's row never actually expands, if the drift modal never actually opens, or if the mini-player never actually picks up an issue, **the test still passes and still writes a PNG** — just the wrong one, silently. Playwright's own exit code cannot be trusted as evidence these three screenshots are correct. Step 3 is not a formality; it is the only check that catches a wrong screenshot before it ships to a public wiki.
 
-Open (or use the Read tool to view as images):
-- `mockups/marketing-screens/chapter-suspect.desktop.light.png` — confirm the Suspect badge is visible on chapter 3's row and two amber bands + "2 issues to review" show in the expanded strip.
-- `mockups/marketing-screens/voice-drift-report.desktop.light.png` — confirm both Cray (Severe, Auto-regen pill) and Wren (Moderate, Regenerate pill) show in the modal.
-- `mockups/marketing-screens/preview-flagged.desktop.light.png` — confirm the mini-player's scrubber shows an amber issue band.
+- [ ] **Step 3: Visually confirm each screenshot — a real gate, not a rubber stamp**
 
-If any is wrong (e.g., a selector matched the wrong element, or the amber band isn't visible), fix the scene definition and re-run Step 2 before proceeding — do not embed a wrong screenshot into the wiki.
+Read each PNG with the Read tool (it supports images) and confirm the specific claim, not just "a screenshot exists":
+- `mockups/marketing-screens/chapter-suspect.desktop.light.png` — the Suspect badge is visible on chapter 3's row; the expanded strip shows **two distinct amber bands** (not one merged band, not zero) and the caption reads **"2 issues to review"** (plural — confirms `deriveIssues` didn't collapse the two suspect spans into one region).
+- `mockups/marketing-screens/voice-drift-report.desktop.light.png` — **both** Cray (Severe, with an "Auto-regen" pill — not the manual "Regenerate" pill) and Wren (Moderate, "Regenerate" pill) are visible in the modal.
+- `mockups/marketing-screens/preview-flagged.desktop.light.png` — the mini-player's scrubber shows a visible amber issue band. If this one is blank/band-less, the most likely cause is the duration-forcing fix in Task 2 not having landed correctly (re-check `isFlaggedDemoChapter` fires for this call) — do not assume it's a Playwright timing fluke without checking that first.
+
+If any check fails, fix the scene definition or the underlying fixture (do not just re-run and hope) and repeat Step 2 before proceeding. Do not embed a screenshot into the wiki until all three checks above are individually confirmed.
 
 - [ ] **Step 4: Commit**
 
@@ -692,7 +775,7 @@ git commit -m "docs(docs): ship real Quality Gate screenshots + comprehensive wi
 - [ ] **Step 1: Run the full verify battery**
 
 Run: `npm run verify`
-Expected: typecheck + all tests + e2e + build all green (same pass counts as Task 1's baseline plus the new tests from Tasks 2/3; the e2e battery includes `e2e/marketing/**` only if it's wired into `test:e2e` — confirm via `grep -n "marketing" playwright.config.ts`; if marketing capture isn't part of the default `test:e2e` project list, that's expected — it's excluded by design, see Global Constraints).
+Expected: typecheck + all tests + e2e + build all green (same pass counts as Task 1's baseline plus the new tests from Tasks 2/3). `e2e/marketing/capture.spec.ts` IS collected by `playwright.config.ts`'s default `chromium` project (there's no marketing-specific exclusion in that config), but every capture test self-skips there: `capture.spec.ts:61-62` does `test.skip(!viewports.includes(vp))` where `vp = testInfo.project.name` (`'chromium'` under `test:e2e`, never a member of any scene's `viewports: ['desktop']`/etc.), so the leg stays green without actually running the marketing suite. This was confirmed by reading `capture.spec.ts` during plan review — an earlier draft of this step assumed the exclusion came from the config file, which isn't where it actually lives.
 
 - [ ] **Step 2: Push and open the PR**
 
