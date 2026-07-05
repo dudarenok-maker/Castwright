@@ -40,6 +40,12 @@ unit tests (`npm run test:hooks`).
   (spec, rollout step 5).
 - No new CI job. No bot-enforced automation beyond GitHub's built-in
   Project workflows (item-added, item-closed, reopened).
+- **Intra-tier ordering uses a numeric `Priority` field on the board** (a
+  judgment call the design spec left as an open risk, resolved during
+  planning: rather than accept losing the hand-curated ranking, the board
+  gains a real `Priority` field). Lower number = higher priority (appears
+  first); the field is seeded from today's `docs/BACKLOG.md` row order
+  during rollout (Task 4) and re-generation always sorts by it (Task 3).
 - Source spec: [`docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md`](../specs/2026-07-05-github-issues-kanban-design.md).
   Tracking issue: `ops-25` / **#1321**.
 
@@ -49,16 +55,17 @@ unit tests (`npm run test:hooks`).
 
 - `docs/backlog-project-config.json` — **create.** `{ projectNumber,
 projectId, statusFieldId, statusOptions: { Backlog, Next, "In Progress",
-Parked, "Waiting/Blocked", Done } }`. The single source every later script
-  reads instead of re-querying field/option IDs each run — mirrors
-  `docs/backlog-issue-map.json` from plan 166.
+Parked, "Waiting/Blocked", Done }, priorityFieldId }`. The single source
+  every later script reads instead of re-querying field/option IDs each run
+  — mirrors `docs/backlog-issue-map.json` from plan 166.
 - `scripts/backlog-sync.mjs` — **create.** The ongoing generator (`npm run
 backlog:sync`). Exports pure `parseWhatBenefit`, `groupByMoscow`,
   `renderBacklogMd`.
 - `scripts/tests/backlog-sync.test.mjs` — **create.** node:test coverage
   for the three pure exports above.
 - `scripts/bulk-add-project-items.mjs` — **create.** One-off rollout tool
-  (step 2). Exports pure `heuristicStatus`.
+  (step 2). Exports pure `heuristicStatus`, `parseBacklogOrder` (seeds the
+  new `Priority` field from today's `docs/BACKLOG.md` row order).
 - `scripts/strip-chore-moscow-labels.mjs` — **create.** One-off rollout
   tool (step 3).
 - `scripts/link-sub-issues.mjs` — **create.** Reusable rollout tool (step
@@ -91,8 +98,8 @@ scripts/backlog-sync.mjs"`.
 
 **Interfaces:**
 - Produces: `docs/backlog-project-config.json` shape `{ projectNumber:
-number, projectId: string, statusFieldId: string, statusOptions: Record<string, string> }` — every later task reads this file rather than
-  re-deriving IDs.
+number, projectId: string, statusFieldId: string, statusOptions: Record<string, string>, priorityFieldId: string }` — every later task reads this
+  file rather than re-deriving IDs.
 
 This task is mostly GitHub-hosted configuration (Project fields are
 scriptable via `gh`; saved views and built-in workflows are not — no `gh
@@ -117,15 +124,27 @@ gh project field-create <N> --owner dudarenok-maker --name "Status" \
 
 (A project always ships with a default `Status` field from the "Board" view template — if `field-create` errors with "a field named Status already exists", instead run `gh project field-list <N> --owner dudarenok-maker --format json` to inspect the existing default field, and either edit its options via the web UI to match the 6 values above, or delete it first with `gh project field-delete --id <field-id>` before re-running `field-create`. Either path is fine as long as the end state is one single-select `Status` field with exactly these 6 options.)
 
-- [ ] **Step 3: Capture field + option IDs**
+- [ ] **Step 3: Create the numeric Priority field**
+
+Resolves the spec's §D open risk on intra-tier ordering: rather than fall
+back to issue-number ordering, a real `Priority` field carries the
+hand-curated rank forward. Lower number = higher priority (appears first
+within its MoSCoW tier).
+
+```bash
+gh project field-create <N> --owner dudarenok-maker --name "Priority" --data-type NUMBER
+```
+
+- [ ] **Step 4: Capture field + option IDs**
 
 ```bash
 gh project field-list <N> --owner dudarenok-maker --format json
 ```
 
-Find the `Status` field in the output; note its `id` and each option's `{name, id}` pair.
+Find the `Status` field in the output; note its `id` and each option's
+`{name, id}` pair. Find the `Priority` field; note its `id`.
 
-- [ ] **Step 4: Write `docs/backlog-project-config.json`**
+- [ ] **Step 5: Write `docs/backlog-project-config.json`**
 
 ```json
 {
@@ -139,13 +158,14 @@ Find the `Status` field in the output; note its `id` and each option's `{name, i
     "Parked": "OPT_REPLACE_ME",
     "Waiting/Blocked": "OPT_REPLACE_ME",
     "Done": "OPT_REPLACE_ME"
-  }
+  },
+  "priorityFieldId": "PVTF_REPLACE_ME"
 }
 ```
 
-Replace every `REPLACE_ME` with the real values captured in Steps 1 & 3.
+Replace every `REPLACE_ME` with the real values captured in Steps 1, 3 & 4.
 
-- [ ] **Step 5: Create the two saved views (manual, web UI)**
+- [ ] **Step 6: Create the two saved views (manual, web UI)**
 
 Open `https://github.com/users/dudarenok-maker/projects/<N>`.
 
@@ -159,7 +179,7 @@ Create a second view, **"Bugs & Chores"** (`+` next to the view tabs):
 - Layout: Board, grouped by `Status`
 - Visible columns: `Backlog`, `In Progress`, `Waiting/Blocked`, `Done` (hide `Next`)
 
-- [ ] **Step 6: Enable the built-in workflows (manual, web UI)**
+- [ ] **Step 7: Enable the built-in workflows (manual, web UI)**
 
 Project → `⋯` menu → **Workflows**:
 - **Item added to project** → enable, set Status = `Backlog`.
@@ -170,17 +190,17 @@ Project → `⋯` menu → **Workflows**:
   card (only `Closes #NN` on merge, which closes the issue and fires "Item
   closed", should).
 
-- [ ] **Step 7: Verify**
+- [ ] **Step 8: Verify**
 
 ```bash
 gh project view <N> --owner dudarenok-maker
 ```
 
-Expected: prints the project title, URL, and the `Status` field with 6
-options. Manually confirm both views render with the right filters/columns
-in the browser.
+Expected: prints the project title, URL, and the `Status`/`Priority` fields.
+Manually confirm both views render with the right filters/columns in the
+browser.
 
-- [ ] **Step 8: Commit the config file**
+- [ ] **Step 9: Commit the config file**
 
 ```bash
 git add docs/backlog-project-config.json
@@ -198,7 +218,9 @@ git commit -m "chore(ops): record GitHub Projects board config (ops-25)"
 **Interfaces:**
 - Consumes: nothing from earlier tasks (pure functions, no `gh`/GraphQL).
 - Produces: `parseWhatBenefit(body: string): { what: string|null, benefit:
-string|null }`, `groupByMoscow(issues: Array<{id,number,title,url,moscow,body}>): { must: [...], should: [...], could: [...] }`,
+string|null }`, `groupByMoscow(issues: Array<{id,number,title,url,moscow,body,priority:number|null}>): { must: [...], should: [...], could: [...] }`
+  (sorted by `priority` ascending — lower number = higher priority — with a
+  missing `priority` sorting last, tiebroken by issue `number`),
   `renderBacklogMd({ groups, wontIssues }): string`. Task 3's GraphQL glue
   calls these three directly.
 
@@ -237,17 +259,29 @@ test('parseWhatBenefit returns nulls when a bullet is missing', () => {
   });
 });
 
-test('groupByMoscow buckets by tier, ignoring wont/unlabeled, sorted by issue number', () => {
+test('groupByMoscow buckets by tier, ignoring wont/unlabeled, sorted by Priority ascending', () => {
   const issues = [
-    { id: 'fs-9', number: 50, moscow: 'could', body: '' },
-    { id: 'fs-1', number: 10, moscow: 'must', body: '' },
-    { id: 'fs-5', number: 30, moscow: 'wont', body: '' },
-    { id: 'fs-2', number: 20, moscow: 'must', body: '' },
+    { id: 'fs-9', number: 50, moscow: 'could', body: '', priority: null },
+    { id: 'fs-1', number: 10, moscow: 'must', body: '', priority: 20 },
+    { id: 'fs-5', number: 30, moscow: 'wont', body: '', priority: 5 },
+    { id: 'fs-2', number: 20, moscow: 'must', body: '', priority: 10 },
   ];
   const groups = groupByMoscow(issues);
-  assert.deepEqual(groups.must.map((i) => i.id), ['fs-1', 'fs-2']);
+  // fs-2 (priority 10) ranks ABOVE fs-1 (priority 20) despite its higher
+  // issue number — this is the whole point of the Priority field.
+  assert.deepEqual(groups.must.map((i) => i.id), ['fs-2', 'fs-1']);
   assert.deepEqual(groups.should, []);
   assert.deepEqual(groups.could.map((i) => i.id), ['fs-9']);
+});
+
+test('groupByMoscow sorts a missing Priority last, tiebroken by issue number', () => {
+  const issues = [
+    { id: 'fs-3', number: 30, moscow: 'must', body: '', priority: null },
+    { id: 'fs-1', number: 10, moscow: 'must', body: '', priority: 100 },
+    { id: 'fs-4', number: 40, moscow: 'must', body: '', priority: null },
+  ];
+  const groups = groupByMoscow(issues);
+  assert.deepEqual(groups.must.map((i) => i.id), ['fs-1', 'fs-3', 'fs-4']);
 });
 
 test('renderBacklogMd produces the row shape with issue link + What/Benefit', () => {
@@ -344,9 +378,26 @@ export function parseWhatBenefit(body) {
   return { what: strip(whatLine), benefit: strip(benefitLine) };
 }
 
-// Group open, non-Done type:feature issues by moscow:* tier. Ignores
-// 'wont' (rendered separately, regardless of Status) and any issue with no
-// recognized tier (surfaced by the parseability audit, scripts/audit-issue-parseability.mjs — never silently dropped in the real query path, see Task 3).
+// Order two issues by their board Priority field (lower number = higher
+// priority, appears first); an issue with no Priority set sorts after every
+// prioritized issue; two un-prioritized issues tiebreak by issue number.
+// This is the resolution to the spec's §D open risk on intra-tier
+// ordering — a real Priority field, not a fallback to issue-number-only
+// sort (see the plan's Global Constraints).
+function compareByPriority(a, b) {
+  const ap = a.priority ?? null;
+  const bp = b.priority ?? null;
+  if (ap !== null && bp !== null && ap !== bp) return ap - bp;
+  if (ap !== null && bp === null) return -1;
+  if (ap === null && bp !== null) return 1;
+  return a.number - b.number;
+}
+
+// Group open, non-Done type:feature issues by moscow:* tier, each tier
+// sorted by Priority. Ignores 'wont' (rendered separately, regardless of
+// Status) and any issue with no recognized tier (surfaced by the
+// parseability audit, scripts/audit-issue-parseability.mjs — never
+// silently dropped in the real query path, see Task 3).
 export function groupByMoscow(issues) {
   const groups = { must: [], should: [], could: [] };
   for (const issue of issues) {
@@ -354,7 +405,7 @@ export function groupByMoscow(issues) {
     groups[issue.moscow].push(issue);
   }
   for (const tier of Object.keys(groups)) {
-    groups[tier].sort((a, b) => a.number - b.number);
+    groups[tier].sort(compareByPriority);
   }
   return groups;
 }
@@ -381,9 +432,12 @@ view instead and never appear here. See
 dev-tooling), \`fs\` (full-stack), or \`app\` (Android companion app). IDs are
 assigned once and **never reused or renumbered**; gaps are expected.
 
-**Priority = position.** Ordering within a tier mirrors the board's manual
-drag order (or, if the Projects API doesn't expose that, an explicit
-\`Priority\` field maintained on the board — see the generator's open risks).`;
+**Priority = position.** Ordering within a tier follows each issue's numeric
+\`Priority\` field on the board (lower number = higher priority, appears
+first) — set it via the board UI or \`gh project item-edit --field-id
+<priorityFieldId> --number <n>\` to reprioritize, then re-run \`npm run
+backlog:sync\`. An issue with no \`Priority\` set sorts after every
+prioritized issue in its tier.\`;
 
 const RETIRED_NUMBERING = `## Retired numbering
 
@@ -440,7 +494,7 @@ export function renderBacklogMd({ groups, wontIssues }) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `node --test scripts/tests/backlog-sync.test.mjs`
-Expected: PASS (6 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -509,9 +563,11 @@ function idAndTitleFromTitle(title) {
   return m ? { id: `${m[1]}-${m[2]}`, title: m[3] } : null;
 }
 
-// Page through every type:feature item on the Project via GraphQL, reading
-// back the Status field value + moscow:*/type:feature/wont labels — fields
-// `gh project item-list` does NOT expose (it only prints title/type/url).
+// Page through EVERY item on the Project via GraphQL (Projects v2 has no
+// server-side label filter on the items connection, so type:feature
+// filtering happens client-side in toBacklogIssues below), reading back the
+// Status field value + labels — fields `gh project item-list` does NOT
+// expose (it only prints id/content title/number/url, not custom fields).
 async function fetchFeatureIssues(config) {
   const query = `
     query($login: String!, $number: Int!, $after: String) {
@@ -522,6 +578,9 @@ async function fetchFeatureIssues(config) {
             nodes {
               status: fieldValueByName(name: "Status") {
                 ... on ProjectV2ItemFieldSingleSelectValue { name }
+              }
+              priority: fieldValueByName(name: "Priority") {
+                ... on ProjectV2ItemFieldNumberValue { number }
               }
               content {
                 ... on Issue {
@@ -558,17 +617,32 @@ async function fetchFeatureIssues(config) {
   return results;
 }
 
-// Reduce raw GraphQL item nodes down to what groupByMoscow/renderBacklogMd need.
+// Reduce raw GraphQL item nodes down to what groupByMoscow/renderBacklogMd
+// need. Done-filtering reads the board's own Status field (node.status) —
+// NOT issue open/closed — because that's what "Status != Done" means per
+// spec §D; a closed issue whose card missed the "Item closed -> Done"
+// automation, or an OPEN issue manually dragged to Done, must both be
+// judged by the field, not by GitHub's issue state. We additionally require
+// state === 'OPEN' as a belt-and-suspenders guard against a *stale* Status
+// value on an issue that's actually closed (matches the existing "BACKLOG.md
+// is forward-looking, not a changelog" convention, spec §D). moscow:wont
+// issues are the one exception: spec §D says they render "regardless of
+// board Status" — so no state/status gate applies to them at all.
 function toBacklogIssues(nodes) {
   const featureIssues = [];
   const wontIssues = [];
   for (const node of nodes) {
     const content = node.content;
-    if (!content || content.state !== 'OPEN') continue; // Done items are closed issues
+    if (!content) continue;
     const labels = content.labels.nodes.map((l) => l.name);
     if (!labels.includes('type:feature')) continue;
     const parsed = idAndTitleFromTitle(content.title);
-    if (!parsed) continue; // shouldn't happen for a type:feature issue; audited by Task 12
+    // Malformed title (no leading <prefix>-<n> — shouldn't happen for a
+    // type:feature issue filed via the backlog-item.yml form, but a hand-
+    // edited title could drift). Flagged by scripts/audit-issue-parseability.mjs
+    // (Task 9), which checks this exact shape — never silently dropped
+    // without a paper trail.
+    if (!parsed) continue;
     const moscowLabel = labels.find((l) => l.startsWith('moscow:'));
     const moscow = moscowLabel ? moscowLabel.slice('moscow:'.length) : null;
     const issue = {
@@ -578,9 +652,15 @@ function toBacklogIssues(nodes) {
       url: content.url,
       body: content.body,
       moscow,
+      priority: node.priority?.number ?? null,
     };
-    if (moscow === 'wont') wontIssues.push(issue);
-    else if (moscow) featureIssues.push(issue);
+    if (moscow === 'wont') {
+      wontIssues.push(issue);
+      continue;
+    }
+    if (!moscow) continue; // no moscow:* tier yet — not ready for either list
+    const status = node.status?.name ?? null;
+    if (content.state === 'OPEN' && status !== 'Done') featureIssues.push(issue);
   }
   return { featureIssues, wontIssues };
 }
@@ -657,7 +737,7 @@ entries (e.g. right after `"stats": "node scripts/code-stats.mjs",`):
 - [ ] **Step 3: Run the existing unit tests to confirm the append didn't break imports**
 
 Run: `node --test scripts/tests/backlog-sync.test.mjs`
-Expected: PASS (still 6 tests — the glue code doesn't change the pure exports).
+Expected: PASS (still 7 tests — the glue code doesn't change the pure exports).
 
 - [ ] **Step 4: Manual dry-run against the live board (after Task 1 is done and at least a few issues are on the board — safe to run any time after Task 1; it only reads)**
 
@@ -667,7 +747,7 @@ npm run backlog:sync
 
 Expected: prints a `git diff --no-index` style diff (empty/near-empty until
 Task 4's bulk-add populates the board) with no thrown errors. A thrown
-GraphQL error here (e.g. a wrong field name) must be fixed before Task 8
+GraphQL error here (e.g. a wrong field name) must be fixed before Task 10
 depends on this working end-to-end — treat this as the integration
 checkpoint for the query shape.
 
@@ -686,21 +766,27 @@ git commit -m "feat(ops): wire backlog-sync GraphQL query + npm script (ops-25)"
 - Create: `scripts/bulk-add-project-items.mjs`
 
 **Interfaces:**
-- Consumes: `docs/backlog-project-config.json` (Task 1).
+- Consumes: `docs/backlog-project-config.json` (Task 1); the CURRENT
+  (still hand-maintained) `docs/BACKLOG.md` — this task MUST run before
+  Task 10 overwrites that file, since it's the only remaining source of the
+  hand-curated row order that seeds the new `Priority` field.
 - Produces: none consumed by later tasks in-repo (this populates live
   GitHub state); Task 3's generator and every later rollout script assume
   the board is populated after this task runs `--apply`.
 
-- [ ] **Step 1: Write the pure heuristic-status helper + its test inline**
+- [ ] **Step 1: Write the pure heuristic-status helper**
 
 ```javascript
 // scripts/bulk-add-project-items.mjs
 #!/usr/bin/env node
 // One-off rollout tool (ops-25 rollout step 2): add every currently-open
-// issue to the Project board, setting an initial Status by heuristic. Not
-// idempotent-safe to re-run blindly against issues already placed by hand —
-// see the --skip-existing note below. Throwaway rollout tooling: reviewed by
-// hand, not unit tested (spec's Testing section).
+// issue to the Project board, setting an initial Status by heuristic. This
+// is a single, one-time bulk-add — GitHub Projects doesn't document
+// item-add as dedup-safe against re-adding the same issue twice, so don't
+// re-run this against a board that already has items on it; use the
+// per-issue `gh project item-add` manually for anything added later.
+// Throwaway rollout tooling: reviewed by hand, not unit tested (spec's
+// Testing section).
 //
 // Usage:
 //   node scripts/bulk-add-project-items.mjs            (dry-run — prints the manifest)
@@ -714,8 +800,15 @@ import { fileURLToPath, pathToFileURL, realpathSync } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 const CONFIG_PATH = resolve(repoRoot, 'docs', 'backlog-project-config.json');
+const BACKLOG_PATH = resolve(repoRoot, 'docs', 'BACKLOG.md');
 const PROJECT_OWNER = 'dudarenok-maker';
 const STALE_DAYS = 14; // no activity in this window -> Backlog; otherwise -> In Progress
+const TIER_FROM_SECTION = { Must: 'must', Should: 'should', Could: 'could' };
+// Deliberately includes 'app' — migrate-backlog-to-issues.mjs's LEADING_ID
+// predates the Android companion area and doesn't; this is a fresh, local
+// copy scoped to just extracting row order, not full item parsing, so it's
+// simpler to keep it self-contained than to reuse that script's parser.
+const LEADING_ID = /^`(fe|srv|side|ops|fs|app)-(\d+)`/;
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exit(1); }
@@ -728,13 +821,55 @@ function ghAvailable() {
 }
 
 // Pure: given an issue's updatedAt and whether an open PR references it,
-// pick the initial board Status. Exported so a future test can cover it
-// without `gh` — kept inline here (not a separate module) since this script
-// is throwaway rollout tooling per the spec's Testing section.
+// pick the initial board Status. Exported for readability/REPL exercise,
+// not unit-tested — this script is throwaway rollout tooling per the
+// spec's Testing section (reviewed by hand during rollout, like every
+// other one-off script in this plan).
 export function heuristicStatus(issue, { now }) {
   if (issue.linkedOpenPr) return 'In Progress';
   const ageDays = (now - new Date(issue.updatedAt).getTime()) / 86_400_000;
   return ageDays <= STALE_DAYS ? 'In Progress' : 'Backlog';
+}
+
+// Parse the CURRENT (still hand-maintained) docs/BACKLOG.md to capture each
+// item's row order within its MoSCoW tier — this becomes the initial
+// numeric Priority seed (resolves the spec's §D open risk on intra-tier
+// ordering: the user chose a real Priority field over accepting
+// issue-number ordering). Returns { "<prefix>-<n>": <priority number> },
+// gapped by 10 so later manual reordering has room to insert between items
+// without renumbering everything. Pure — no `gh`, takes the markdown string.
+export function parseBacklogOrder(markdown) {
+  const lines = String(markdown).split(/\r?\n/);
+  const order = {};
+  let tier = null;
+  let position = 0;
+  for (const line of lines) {
+    const section = /^##\s+(Must|Should|Could)\b/.exec(line);
+    if (section) {
+      tier = TIER_FROM_SECTION[section[1]];
+      position = 0;
+      continue;
+    }
+    if (/^##\s+(Won't|Retired numbering)\b/.test(line)) {
+      tier = null;
+      continue;
+    }
+    const heading = /^#{3,4}\s+(.*\S)\s*$/.exec(line);
+    if (!heading || !tier) continue;
+    const idMatch = LEADING_ID.exec(heading[1]);
+    if (!idMatch) continue; // sub-group title (e.g. "### Audio & playback") — not an item
+    position += 10;
+    order[`${idMatch[1]}-${idMatch[2]}`] = position;
+  }
+  return order;
+}
+
+// Pull the <prefix>-<n> id out of an issue title, matching backlog-sync.mjs's
+// own idAndTitleFromTitle — a local copy, since that function isn't part of
+// backlog-sync.mjs's exported (tested) surface.
+function idFromTitle(title) {
+  const m = /^(fe|srv|side|ops|fs|app)-(\d+)\s*—/.exec(String(title).trim());
+  return m ? `${m[1]}-${m[2]}` : null;
 }
 
 function parseArgs(argv) {
@@ -772,14 +907,20 @@ async function main() {
   const issues = listOpenIssues();
   const prBodies = listOpenPrBodies();
   const now = Date.now();
+  const priorityOrder = existsSync(BACKLOG_PATH) ? parseBacklogOrder(readFileSync(BACKLOG_PATH, 'utf8')) : {};
 
   const plan = issues.map((issue) => {
     const linkedOpenPr = prBodies.some((b) => new RegExp(`#${issue.number}\\b`).test(b));
-    return { ...issue, status: heuristicStatus({ ...issue, linkedOpenPr }, { now }) };
+    const id = idFromTitle(issue.title);
+    const priority = id ? (priorityOrder[id] ?? null) : null;
+    return { ...issue, status: heuristicStatus({ ...issue, linkedOpenPr }, { now }), priority };
   });
 
   info(`${plan.length} open issue(s):`);
-  for (const p of plan) info(`  #${p.number.toString().padEnd(5)} -> ${p.status.padEnd(12)} ${p.title}`);
+  for (const p of plan) {
+    const prio = p.priority == null ? '(no priority — bug/chore/new feature)' : `priority=${p.priority}`;
+    info(`  #${p.number.toString().padEnd(5)} -> ${p.status.padEnd(12)} ${prio.padEnd(38)} ${p.title}`);
+  }
 
   if (!args.apply) {
     info('\n[DRY-RUN] Nothing added. Re-run with --apply to add these to the board.');
@@ -797,8 +938,17 @@ async function main() {
       '--field-id', config.statusFieldId,
       '--single-select-option-id', config.statusOptions[p.status],
     ]);
+    if (p.priority != null) {
+      gh([
+        'project', 'item-edit',
+        '--id', itemId,
+        '--project-id', config.projectId,
+        '--field-id', config.priorityFieldId,
+        '--number', String(p.priority),
+      ]);
+    }
   }
-  info(`\n[OK] added ${plan.length} item(s). Now do the manual pass: open the board and move anything that should be Next or Parked.`);
+  info(`\n[OK] added ${plan.length} item(s), seeding Priority from today's docs/BACKLOG.md row order for every type:feature issue. Now do the manual pass: open the board and move anything that should be Next or Parked.`);
 }
 
 const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
@@ -813,9 +963,12 @@ if (invokedHref && import.meta.url === invokedHref) {
 node scripts/bulk-add-project-items.mjs
 ```
 
-Expected: prints all ~85 open issues with a heuristic Status each, no
-mutation. Eyeball a handful you know the real state of (e.g. an issue you
-know is genuinely stalled) — if the heuristic looks obviously wrong for many
+Expected: prints all ~85 open issues with a heuristic Status each, plus a
+seeded Priority for every `type:feature` issue currently in
+`docs/BACKLOG.md` (bugs/chores/brand-new features print "no priority" —
+expected, they were never on the hand-maintained list). No mutation.
+Eyeball a handful you know the real state of (e.g. an issue you know is
+genuinely stalled) — if the heuristic looks obviously wrong for many
 issues, adjust `STALE_DAYS` before `--apply`, don't just fix it by hand
 after (the point is a reasonable starting point for the manual pass, not
 perfection).
@@ -826,14 +979,16 @@ perfection).
 node scripts/bulk-add-project-items.mjs --apply
 ```
 
-Expected: `[OK] added 85 item(s).` (or however many are open at run time).
-Spot-check 3-4 items on the board in the browser to confirm Status landed.
+Expected: `[OK] added 85 item(s), seeding Priority from today's
+docs/BACKLOG.md row order...`. Spot-check 3-4 items on the board in the
+browser to confirm both Status and Priority landed — a Must-tier item that
+was near the top of today's file should show a low Priority number.
 
 - [ ] **Step 4: Manual correction pass**
 
 Open the Backlog view. For each item that's actually `Next` (queued, about
-to start) or `Parked` (has a known overhang — see Task 9's branch/worktree
-audit and Task 10's memory audit for concrete candidates), drag it to the
+to start) or `Parked` (has a known overhang — see Task 7's branch/worktree
+audit and Task 8's memory audit for concrete candidates), drag it to the
 right column. This is a judgment pass — don't try to script it.
 
 - [ ] **Step 5: Commit the script**
@@ -854,7 +1009,7 @@ git commit -m "chore(ops): add bulk-add-project-items rollout tool (ops-25)"
 - Consumes: `docs/backlog-project-config.json` (Task 1) for the
   Waiting/Blocked status set.
 - Produces: none consumed in-repo; mutates live label/board state that
-  Task 8 (backlog-sync's real run) depends on being correct (a `type:chore`
+  Task 10 (backlog-sync's real run) depends on being correct (a `type:chore`
   issue that still carries `moscow:*` would otherwise be miscounted if the
   generator's label logic ever changed — today it's a `type:feature` gate so
   chores never mix in regardless, but the reclassification is real
@@ -964,10 +1119,13 @@ async function main() {
   }
 
   // Re-list tracking chores (includes ops-17 now) and set each to Waiting/Blocked.
+  // Fetch the board item list ONCE (not per-issue) with an explicit --limit —
+  // the command defaults to 30 items, well under this board's 85+.
   const finalTracking = listTrackingChores();
+  const findOut = gh(['project', 'item-list', String(config.projectNumber), '--owner', PROJECT_OWNER, '--limit', '500', '--format', 'json']);
+  const boardItems = JSON.parse(findOut).items;
   for (const issue of finalTracking) {
-    const findOut = gh(['project', 'item-list', String(config.projectNumber), '--owner', PROJECT_OWNER, '--format', 'json']);
-    const item = JSON.parse(findOut).items.find((i) => i.content?.number === issue.number);
+    const item = boardItems.find((i) => i.content?.number === issue.number);
     if (!item) {
       info(`  ! #${issue.number} not found on the board — run bulk-add-project-items.mjs first.`);
       continue;
@@ -1384,13 +1542,20 @@ state, not repo files.
 // scripts/audit-issue-parseability.mjs
 #!/usr/bin/env node
 // Read-only rollout tool (ops-25 rollout step 7): spot-check every open
-// type:feature issue body for a cleanly parseable _What:_/_Benefit:_ bullet
-// pair before backlog-sync.mjs is trusted to run unattended (spec §D open
-// risk #2). Reuses the exact parser backlog-sync.mjs will use at generation
-// time, so "parses here" == "will render correctly there."
+// type:feature issue for (a) a cleanly parseable _What:_/_Benefit:_ bullet
+// pair and (b) a title that leads with the <prefix>-<n> ID token — both are
+// things backlog-sync.mjs depends on to render a real row instead of a
+// placeholder or a silent skip (spec §D open risk #2). Reuses the exact
+// parser/regex backlog-sync.mjs uses at generation time, so "parses here"
+// == "will render correctly there."
 
 import { execFileSync } from 'node:child_process';
 import { parseWhatBenefit } from './backlog-sync.mjs';
+
+// Mirrors backlog-sync.mjs's private LEADING_ID/idAndTitleFromTitle — kept
+// as a local copy rather than an import since that regex isn't part of
+// backlog-sync.mjs's exported (tested) surface.
+const LEADING_ID = /^(fe|srv|side|ops|fs|app)-(\d+)\s*—\s*(.*)$/;
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 
@@ -1401,20 +1566,27 @@ function listOpenFeatureIssues() {
 
 function main() {
   const issues = listOpenFeatureIssues();
-  const problems = issues.filter((i) => {
+  const idProblems = issues.filter((i) => !LEADING_ID.test(i.title.trim()));
+  const bulletProblems = issues.filter((i) => {
     const { what, benefit } = parseWhatBenefit(i.body);
     return !what || !benefit;
   });
 
   info(`${issues.length} open type:feature issue(s) checked.`);
-  if (!problems.length) {
-    info('[OK] every issue body has a parseable _What:_ and _Benefit:_ bullet.');
-    return;
+
+  if (idProblems.length) {
+    info(`\n${idProblems.length} issue(s) have a title that doesn't lead with <prefix>-<n> — backlog-sync.mjs silently SKIPS these (they'll just be missing from docs/BACKLOG.md, no placeholder):`);
+    for (const p of idProblems) info(`  #${p.number} "${p.title}"`);
   }
-  info(`${problems.length} issue(s) need a hand fix before trusting backlog:sync unattended:`);
-  for (const p of problems) {
-    const { what, benefit } = parseWhatBenefit(p.body);
-    info(`  #${p.number} "${p.title}"  missing: ${!what ? 'What ' : ''}${!benefit ? 'Benefit' : ''}`);
+  if (bulletProblems.length) {
+    info(`\n${bulletProblems.length} issue(s) are missing a _What:_/_Benefit:_ bullet — backlog-sync.mjs renders a visible placeholder for these:`);
+    for (const p of bulletProblems) {
+      const { what, benefit } = parseWhatBenefit(p.body);
+      info(`  #${p.number} "${p.title}"  missing: ${!what ? 'What ' : ''}${!benefit ? 'Benefit' : ''}`);
+    }
+  }
+  if (!idProblems.length && !bulletProblems.length) {
+    info('[OK] every issue has a parseable <prefix>-<n> title and a _What:_/_Benefit:_ bullet pair.');
   }
 }
 
@@ -1427,17 +1599,22 @@ main();
 node scripts/audit-issue-parseability.mjs
 ```
 
-Expected: either `[OK]`, or a list of issue numbers missing a `_What:_` or
-`_Benefit:_` bullet.
+Expected: either `[OK]`, or two possible problem lists — issues whose
+title doesn't lead with `<prefix>-<n>` (these get silently skipped from
+`docs/BACKLOG.md` with no placeholder), and issues missing a `_What:_`/
+`_Benefit:_` bullet (these render a visible placeholder instead).
 
-- [ ] **Step 3: Hand-fix every flagged issue body**
+- [ ] **Step 3: Hand-fix every flagged issue**
 
-For each flagged issue, edit its body (`gh issue edit <n> --body-file
-<path>` or via the web UI) to add a `- _What:_ ...` and/or `- _Benefit:_
-...` bullet matching the existing convention (see any issue filed via the
-`backlog-item.yml` form for the shape). This matches the existing
-convention that the issue body is canonical — fix the source, not the
-generator.
+For a title problem: `gh issue edit <n> --title "<prefix>-<n> — <one-line
+what>"` to add the missing ID prefix (pick the next free number for that
+prefix — check `docs/BACKLOG.md`'s "Retired numbering" note and the highest
+existing `<prefix>-<n>` for that area). For a bullet problem: edit the body
+(`gh issue edit <n> --body-file <path>` or via the web UI) to add a `- _What:_
+...` and/or `- _Benefit:_ ...` bullet matching the existing convention (see
+any issue filed via the `backlog-item.yml` form for the shape). Both match
+the existing convention that the issue body/title is canonical — fix the
+source, not the generator.
 
 - [ ] **Step 4: Re-run to confirm clean**
 
@@ -1445,8 +1622,8 @@ generator.
 node scripts/audit-issue-parseability.mjs
 ```
 
-Expected: `[OK] every issue body has a parseable _What:_ and _Benefit:_
-bullet.`
+Expected: `[OK] every issue has a parseable <prefix>-<n> title and a
+_What:_/_Benefit:_ bullet pair.`
 
 - [ ] **Step 5: Commit the script**
 
@@ -1538,10 +1715,11 @@ function ghAvailable() {
 
 function listDoneItems(config) {
   const query = `
-    query($login: String!, $number: Int!) {
+    query($login: String!, $number: Int!, $after: String) {
       user(login: $login) {
         projectV2(number: $number) {
-          items(first: 100) {
+          items(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id
               status: fieldValueByName(name: "Status") {
@@ -1553,9 +1731,21 @@ function listDoneItems(config) {
         }
       }
     }`;
-  const raw = gh(['api', 'graphql', '-f', `query=${query}`, '-f', `login=${PROJECT_OWNER}`, '-F', `number=${config.projectNumber}`]);
-  const nodes = JSON.parse(raw).data.user.projectV2.items.nodes;
-  return nodes.filter((n) => n.status?.name === 'Done' && n.content);
+  // Paginate — a single items(first: 100) page silently misses Done items
+  // once the board grows past 100 total items (85 issues + initiative
+  // parents + whatever accumulates in Done between releases).
+  const results = [];
+  let after = null;
+  for (;;) {
+    const args = ['api', 'graphql', '-f', `query=${query}`, '-f', `login=${PROJECT_OWNER}`, '-F', `number=${config.projectNumber}`];
+    if (after) args.push('-f', `after=${after}`);
+    const raw = gh(args);
+    const data = JSON.parse(raw).data.user.projectV2.items;
+    results.push(...data.nodes);
+    if (!data.pageInfo.hasNextPage) break;
+    after = data.pageInfo.endCursor;
+  }
+  return results.filter((n) => n.status?.name === 'Done' && n.content);
 }
 
 function parseArgs(argv) {
@@ -1654,7 +1844,9 @@ board, not the flat issue list. Two saved views over one `Status` field
 
 - **Backlog** — `type:feature` only, grouped by Status (`Waiting/Blocked`
   hidden — a feature expresses "blocked" via `Parked` + its comment).
-  `moscow:*` labels are meaningful **only** here.
+  `moscow:*` labels are meaningful **only** here. A numeric `Priority`
+  field ranks items within a MoSCoW tier (lower number = higher priority);
+  set it via the board UI or `gh project item-edit --number <n>`.
 - **Bugs & Chores** — `bug` OR `type:chore`, grouped by Status (`Next`
   hidden — this track isn't priority-queued, just do-whenever). A
   `tracking`-labeled chore (upstream-blocked watchdog) lives in
@@ -1745,8 +1937,10 @@ per `INDEX.md`'s "Writing a new plan": frontmatter (`status: stable`,
 impact**, **Invariants to preserve** (the 6 Status values are fixed; the
 Backlog view's `type:feature`-only filter; the Bugs & Chores view's `bug`
 OR `type:chore` filter; `docs/BACKLOG.md` is generated, never hand-edited;
-`moscow:*` is meaningless off `type:feature`), and **Test plan** (automated
-= `scripts/tests/backlog-sync.test.mjs` via `npm run test:hooks`; manual =
+`moscow:*` is meaningless off `type:feature`; intra-tier ordering is driven
+by the numeric `Priority` field — lower number = higher priority — not by
+issue number or MoSCoW label alone), and **Test plan** (automated =
+`scripts/tests/backlog-sync.test.mjs` via `npm run test:hooks`; manual =
 the Task 1-12 walkthrough above, re-run in full whenever the board's field
 or view config changes). Link back to the design spec and to issue #1321.
 Ship notes: fill in this PR's merge commit SHA once known.
@@ -1797,11 +1991,11 @@ gh pr create --title "feat(ops): stand up GitHub Projects kanban board (ops-25)"
 Release notes: skipped (internal maintainer tooling, no user/operator-visible effect — see the plan's "Release notes" section).
 
 ## Test plan
-- [x] `npm run test:hooks` — new `backlog-sync.test.mjs` (6 cases)
+- [x] `npm run test:hooks` — new `backlog-sync.test.mjs` (7 cases)
 - [x] `npm run verify` — full battery green
-- [x] Manual: board created with 6-value Status field + 2 views + 3 workflows (Task 1)
-- [x] Manual: 85 issues bulk-added with heuristic Status + corrected by hand (Task 4)
-- [x] Manual: `npm run backlog:sync -- --apply` produces a clean, reviewed `docs/BACKLOG.md` (Task 10)
+- [x] Manual: board created with 6-value Status field + numeric Priority field + 2 views + 3 workflows (Task 1)
+- [x] Manual: 85 issues bulk-added with heuristic Status + Priority seeded from today's BACKLOG.md row order, corrected by hand (Task 4)
+- [x] Manual: `npm run backlog:sync -- --apply` produces a clean, reviewed `docs/BACKLOG.md` ordered by Priority within each tier (Task 10)
 
 Closes #1321
 EOF
