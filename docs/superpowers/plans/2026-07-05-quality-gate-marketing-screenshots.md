@@ -446,6 +446,9 @@ Append to `src/lib/api-demo-capture.test.ts` (inside the same `describe` block, 
 
     const res = await api.pollRevisions({ bookId: 'hollow-tide-2' });
     expect(res.pending).toEqual([]);
+    // Exact-equality is safe here: VOICE_DRIFT_EVENTS (src/data/drift.ts) only
+    // seeds bookId 'sb' (x6) and 'cc' (x1) — confirmed zero 'hollow-tide-2'
+    // events during plan review — so the merged array is exactly these two.
     expect(res.drift.map((d) => d.id)).toEqual([
       'drift:hollow-tide-2:2:insp-cray:register',
       'drift:hollow-tide-2:5:dr-wren:warmth',
@@ -658,7 +661,9 @@ Append to the `SCENES` array in `e2e/marketing/scenes.ts`, before the closing `]
 Run: `npx playwright test --config=playwright.marketing.config.ts --project=desktop -g "capture chapter-suspect|capture voice-drift-report|capture preview-flagged"`
 Expected: 3 scenes captured (both light + dark = 6 screenshots total) into `mockups/marketing-screens/`; no "duplicate scene id" or "hash must start with #/" registry-guard errors from the top of `capture.spec.ts`.
 
-**A green run here proves nothing about correctness — read this before Step 3.** `capture.spec.ts:88-94` wraps every scene's `action` in a `try/catch` that only `console.warn`s on failure ("capturing pre-interaction"), and every `waitFor` is non-fatal too. This means: if chapter 3's row never actually expands, if the drift modal never actually opens, or if the mini-player never actually picks up an issue, **the test still passes and still writes a PNG** — just the wrong one, silently. Playwright's own exit code cannot be trusted as evidence these three screenshots are correct. Step 3 is not a formality; it is the only check that catches a wrong screenshot before it ships to a public wiki.
+**A green run here proves nothing about correctness — read this before Step 3.** `capture.spec.ts:88-94` wraps every scene's `action` in a `try/catch` that only `console.warn`s on failure ("capturing pre-interaction"), and every `waitFor` is non-fatal too. This means: if chapter 3's row never actually expands, if the drift modal never actually opens, or if the mini-player never actually picks up an issue, **the test still passes and still writes a PNG** — just the wrong one, silently. Playwright's own exit code cannot be trusted as evidence these three screenshots are correct.
+
+**One partial mechanical check, before the manual one:** `chapter-suspect`'s action waits for `text=issues to review` — a *plural* substring. If only one segment's issue actually derived (e.g. the two spans merged into one `IssueRegion`), the real caption would read "1 issue to review" (singular), the substring wouldn't match, the `waitFor` would time out, and the console would print `[capture] chapter-suspect: action failed — capturing pre-interaction`. **Check the terminal output of this run for that exact warning line for any of the three scene ids** — its absence is a real (if partial) signal, not a guess. Its presence means don't even bother with Step 3 — go fix the underlying issue first. But its absence does NOT clear `voice-drift-report` or `preview-flagged` on its own (their waits check for *presence* of an element, not a specific count/state), so Step 3 is still required for all three.
 
 - [ ] **Step 3: Visually confirm each screenshot — a real gate, not a rubber stamp**
 
@@ -785,7 +790,6 @@ gh pr create --title "docs(docs): real Quality Gate screenshots + comprehensive 
 ## Summary
 - Wires additive `DEMO_CAPTURE`-gated fixtures (Saltgrave chapter 3 flagged Suspect, two drift events) so the marketing-capture harness can produce real screenshots instead of a placeholder.
 - Adds three new capture scenes and rewrites `docs/wiki/The-Quality-Gate.md` to document the ASR content-QA gate for the first time, alongside the existing acoustic gate and voice-drift detector.
-- Includes an unrelated one-line `.gitignore` addition (`/.worktrees/`) needed to unblock this session's isolated-worktree workflow.
 
 ## Test plan
 - [ ] `npm run verify` green
