@@ -136,7 +136,11 @@ Settings' registry-driven knobs do — those are Advanced-Settings-specific,
 per the research above — so this table is narrower than the Advanced
 Settings tables below.)
 
-### Knob reference (source: `src/components/model-settings-form.tsx`)
+### Knob reference (controls: `src/components/model-settings-form.tsx`;
+defaults verified against `server/src/workspace/user-settings.ts` /
+`server/src/config/registry.ts` — see the callout after "Server
+configuration" below for two cases where these disagree with the form's
+own displayed text)
 
 **Defaults for new books**
 | Knob | What it does | Default | Range |
@@ -172,18 +176,25 @@ default analysis model)
 described in prose (no knob table — it's an action panel, not settings).
 
 > **Pre-existing UI-copy bug found while verifying these two defaults (out
-> of scope, flagged only):** the Model Manager form's own field text claims
-> the opposite for both. `model-settings-form.tsx:489` labels the Gemini
-> option "(default — direct)" and its sublabel says "Default — Gemini API
-> sends every chapter straight to Google" — but the registry's actual
-> shipped default (`server/.env.example` line 14, `registry.ts:850`) is
-> `local`. Similarly `model-settings-form.tsx:435`'s sublabel claims
-> "1–4, default 2" for Generation workers, but `getResolvedGenerationWorkers()`
-> is tested to default to `1` (`server/src/workspace/user-settings.test.ts:174`,
-> commented "shipped default" in the registry). The wiki documents the
-> **true** registry/tested defaults above, not the UI copy — this doc PR
-> does not touch the UI text itself (no product-code change), but the
-> discrepancy is real and worth its own follow-up bug issue.
+> of scope, flagged only) — confirmed cosmetic, not behavioral:**
+> `model-settings-form.tsx:489` labels the Gemini option "(default —
+> direct)" and its sublabel (line 481) says "Default — Gemini API sends
+> every chapter straight to Google," and `model-settings-form.tsx:435`'s
+> sublabel claims "1–4, default 2" for Generation workers. Both are stale
+> **text**, not stale **behavior**: the form's actual state is
+> `useState(account.analysisEngine)` (line 111) and
+> `useState(account.generationWorkers ?? 1)` (line 128) — both fields read
+> the server-resolved value (`getResolvedAnalysisEngine()` /
+> `getResolvedGenerationWorkers()`, `server/src/workspace/user-settings.ts`),
+> which for an untouched install returns `local` (raw resolution: cached
+> setting → `ANALYZER` env → `'local'` fallback,
+> `user-settings.ts:589-591`) and `1` (`DEFAULT_USER_SETTINGS.generationWorkers`,
+> confirmed by `user-settings.test.ts:174`) respectively. So a fresh
+> install's dropdown/input genuinely shows `local`/`1` — only the static
+> label/sublabel copy lies about what's selected. The wiki documents the
+> **true**, verified-behavioral default above; this doc PR doesn't touch
+> the UI copy itself (no product-code change), but the stale text is real
+> and worth its own follow-up bug issue.
 
 ### Page 3: `Advanced-Settings.md` rewrite (same file, full rewrite)
 
@@ -331,14 +342,29 @@ Fix: add an optional `strict?: boolean` field to the `Scene` type. When
 `true`, a `waitFor` timeout or `action` throw is re-thrown instead of
 caught, failing that scene's Playwright test outright instead of degrading
 to a warning. Every scene added or renamed by this PR sets `strict: true`
-and pairs its `action()` with a `waitFor` targeting a selector that only
-exists in the *target* state (an `aria-expanded="true"` on the specific
-section, a `role="dialog"` on the opened modal, a class/attribute unique to
-mid-drag, etc.) — not just the click itself. Existing scenes this PR
-doesn't touch stay non-strict, unchanged. This turns "capture ran green"
-into an actual signal that every new scene reached its intended state,
-rather than "capture ran green" meaning nothing more than "no scene threw
-an uncaught exception."
+and pairs it with a `waitFor` targeting a selector that only exists in the
+*target* state (an `aria-expanded="true"` on the specific section, a
+`role="dialog"` on the opened modal, a class/attribute unique to mid-drag,
+etc.) — not just the click itself.
+
+**This `waitFor` requirement applies to every new/renamed scene, including
+the ones with no `action()` at all** — a correction made after a re-review
+round caught that `scrollTo`-only scenes are not covered by the
+`action`-focused framing above, and `scrollTo` failures are *also* silently
+swallowed today (`capture.spec.ts`'s `.catch(() => {})` around the frame
+step). The scrollTo-only new scenes — `model-pill-idle`,
+`export-format-companion`, and, highest-risk, both Tier E scenes
+(`voice-engines-coqui`/`voice-engines-qwen`, whose entire point is
+confirming the mock-inventory flip landed) — each get a `waitFor` on their
+specific target-row/element selector (e.g. the Coqui/Qwen row's own
+testid) in addition to the `scrollTo`, so a selector drift or a flip that
+didn't take effect fails the capture instead of silently screenshotting
+the wrong part of the page.
+
+Existing scenes this PR doesn't touch stay non-strict, unchanged. This
+turns "capture ran green" into an actual signal that every new scene
+reached its intended state, rather than "capture ran green" meaning
+nothing more than "no scene threw an uncaught exception."
 
 ### Image reorganization
 
@@ -457,16 +483,23 @@ Isolated to the marketing capture path — no shared-mock risk.
   just marketing scenes. Run the full frontend suite (`npm run test`) after
   the flip and fix (not skip) anything that asserted the old
   not-installed/package-missing state.
-  **Second flip required, found during review**: Qwen's install state has
-  a *second* source of truth — the module-level
+  **Correction from an earlier draft of this spec**: Qwen's install state
+  has a second source of truth — the module-level
   `MOCK_SIDECAR_QWEN_INSTALL_STATE` const (`src/lib/api.ts:6749`), consumed
   by `qwenInstallState`/`qwenPackageInstalled` and, transitively,
-  `getSidecarHealth`. Flipping only the inline literal inside
-  `mockGetModelInventory` leaves this second const at its old value, so the
-  Model Manager row would show "ready" while health/promo-banner UI still
-  reports Qwen as not installed. Both consts need to flip together, and the
-  `npm run test` verification pass must explicitly exercise the
-  sidecar-health/promo path, not just the Model Manager row's own tests.
+  `getSidecarHealth` — but that const is **already `'ready'`**, not stale.
+  The only literal that needs flipping is the inline one inside
+  `mockGetModelInventory` at `api.ts:6636` (`installState: 'package-missing'`
+  → `'ready'`), which currently disagrees with the health const. That inline
+  value is a **deliberate** fixture choice — a comment at `api.ts:6633-6635`
+  states it exists specifically to exercise the Needs-repair/Repair/
+  no-Load-pill states pinned by `model-manager-health.spec.ts` (name
+  verified against the current test file at PR time). Flipping it to
+  `'ready'` should be expected to break that spec's assertions; fix (not
+  skip) them as part of this change, and the `npm run test` verification
+  pass must explicitly exercise the sidecar-health/promo path (not just
+  the Model Manager row's own tests) to confirm the inventory row and the
+  health const now agree, rather than assuming a second flip is needed.
 
 ### Tier F — hardest: needs new fixture data + mock-stream timing
 
