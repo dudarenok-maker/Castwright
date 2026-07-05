@@ -103,6 +103,16 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: choco install ffmpeg -y --no-progress
 
+      # macOS only aliases 127.0.0.1 on lo0 by default (unlike Linux/Windows,
+      # which treat the whole 127.0.0.0/8 range as loopback out of the box).
+      # server/src/lan-port-forwarder.ts binds its upstream connection's
+      # localAddress to 127.0.0.2 (a deliberate security invariant, see that
+      # file's comments) — without this alias the bind fails with
+      # EADDRNOTAVAIL and lan-port-forwarder.test.ts fails/times out.
+      - name: Alias 127.0.0.2 on loopback (macOS)
+        if: matrix.os == 'macos-latest'
+        run: sudo ifconfig lo0 alias 127.0.0.2 up
+
       # `verify:quick` is `test:all` (hooks + frontend + server + scripts +
       # sidecar; sidecar/Pester skip with a banner on a fresh runner).
       - name: Verify
