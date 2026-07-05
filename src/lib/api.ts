@@ -9143,6 +9143,13 @@ export function _resetMockConfig(): void {
       locked: false,
       overridden: false,
     },
+    'tts.qwen.device': {
+      key: 'tts.qwen.device',
+      effective: 'auto',
+      source: 'default',
+      locked: false,
+      overridden: false,
+    },
     'analyzer.ollama.temperature': {
       key: 'analyzer.ollama.temperature',
       effective: 0.2,
