@@ -16,6 +16,7 @@ import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
 import { setLastKnownEngineDevices } from '../gpu/engine-device-state.js';
+import { TRACKED_ENGINES, type TrackedEngine } from '../gpu/tracked-engines.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -117,10 +118,7 @@ interface SidecarHealthBody {
    imported in the background, 'ready', or 'error' when torch is missing/broken).
    rocm/directml are the AMD families (phase 2). Absent on an older sidecar → null. */
 export type SidecarDeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu';
-export type SidecarDeviceMap = Record<
-  'kokoro' | 'coqui' | 'qwen',
-  SidecarDeviceFamily | null
->;
+export type SidecarDeviceMap = Record<TrackedEngine, SidecarDeviceFamily | null>;
 export type SidecarDevicesState = 'pending' | 'ready' | 'error';
 
 const DEVICE_FAMILIES: readonly SidecarDeviceFamily[] = [
@@ -131,7 +129,6 @@ const DEVICE_FAMILIES: readonly SidecarDeviceFamily[] = [
   'cpu',
 ];
 const DEVICES_STATES: readonly SidecarDevicesState[] = ['pending', 'ready', 'error'];
-const DEVICE_ENGINES = ['kokoro', 'coqui', 'qwen'] as const;
 
 /* side-14 — normalise the sidecar's devices map. Old sidecar omits it → null;
    junk values per-slot → null (never forward an unknown string to the UI). */
@@ -139,7 +136,7 @@ export function normaliseDevices(raw: unknown): SidecarDeviceMap | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   const out = {} as SidecarDeviceMap;
-  for (const engine of DEVICE_ENGINES) {
+  for (const engine of TRACKED_ENGINES) {
     const v = rec[engine];
     out[engine] = DEVICE_FAMILIES.includes(v as SidecarDeviceFamily)
       ? (v as SidecarDeviceFamily)
