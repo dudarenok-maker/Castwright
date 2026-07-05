@@ -38,8 +38,8 @@ import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
-import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
+import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { forEachMatchingCastCharacter } from './voices.js';
@@ -330,7 +330,7 @@ export async function designQwenVoiceForCharacter(
        unconditional, still charging a token for VoiceDesign on cpu/mps. */
     const onGpu = engineDeviceIsGpu('qwen');
     return withGpuLoad(async () => {
-      const releaseGpu = onGpu ? await gpuSemaphore.acquire(costForEngine('qwen')) : null;
+      const releaseGpu = await acquireGpuTokenIfOnGpu(onGpu, costForEngine('qwen'));
       const sidecarUrl = getResolvedSidecarUrl();
 
       const postDesignAndCache = async (

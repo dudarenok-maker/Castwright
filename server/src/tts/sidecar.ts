@@ -28,6 +28,7 @@ import { sidecarModelId } from './model-keys.js';
 import { gpuSemaphore, GpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
 import { engineDeviceIsGpu } from '../gpu/engine-device.js';
+import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 
 /* Per-engine serialisation: at most ONE synth call per engine in-flight at a
    time, mirroring the sidecar's own _synth_lock.  With a VRAM budget > 1, two
@@ -117,12 +118,12 @@ export class SidecarTtsProvider implements TtsProvider {
          VRAM weight (engine-vram-cost.ts) so a heavy engine takes more of the
          budget than a light one. See server/src/gpu/semaphore.ts. */
       /* Skipped entirely (releaseGpu = null) when this.engine is confirmed
-         running off-GPU (cpu/mps) — mirrors the analyzer/ASR/spk convention
-         (see server/src/gpu/engine-device.ts). A returned cost of 0 would NOT
-         achieve this: GpuSemaphore.acquire()'s clampCost floors any cost
-         below 1 back up to 1, so the call site itself must skip acquire(). */
-      const onGpu = engineDeviceIsGpu(this.engine);
-      const releaseGpu = onGpu ? await this.gpuSem.acquire(costForEngine(this.engine)) : null;
+         running off-GPU (cpu/mps) — see server/src/gpu/gpu-semaphore-gate.ts. */
+      const releaseGpu = await acquireGpuTokenIfOnGpu(
+        engineDeviceIsGpu(this.engine),
+        costForEngine(this.engine),
+        this.gpuSem,
+      );
 
       try {
         const response = await this.post('/synthesize', body, signal);
@@ -198,8 +199,11 @@ export class SidecarTtsProvider implements TtsProvider {
     /* Per-engine serialisation — outer gate, same rationale as synthesize(). */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const onGpu = engineDeviceIsGpu(this.engine);
-      const releaseGpu = onGpu ? await this.gpuSem.acquire(costForEngine(this.engine)) : null;
+      const releaseGpu = await acquireGpuTokenIfOnGpu(
+        engineDeviceIsGpu(this.engine),
+        costForEngine(this.engine),
+        this.gpuSem,
+      );
       try {
         const response = await this.post('/synthesize-batch', body, signal);
         if (!response.ok) await throwForResponse(response);
