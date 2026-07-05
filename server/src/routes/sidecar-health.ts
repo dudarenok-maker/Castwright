@@ -15,6 +15,7 @@ import {
 import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
+import { setLastKnownEngineDevices } from '../gpu/engine-device-state.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -263,6 +264,8 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
     setLastKnownVram({
       totalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
     });
+    const devices = normaliseDevices(body.devices);
+    setLastKnownEngineDevices(devices);
     return {
       status: 'reachable',
       url,
@@ -294,7 +297,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
-      devices: normaliseDevices(body.devices),
+      devices,
       devicesState: normaliseDevicesState(body.devices_state),
     };
   } catch (e) {

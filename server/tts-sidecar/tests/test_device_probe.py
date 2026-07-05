@@ -111,9 +111,12 @@ def test_predictions_amd_rocm_box() -> None:
 
 
 def test_predictions_apple_silicon() -> None:
-    """The headline case: Qwen rides Metal, Coqui/Kokoro honestly report CPU."""
+    """The headline case: Qwen and Coqui both ride Metal (Coqui's 'auto' now
+    routes through the same _resolve_torch_device MPS detection as Qwen — see
+    the Coqui-MPS fix, test_coqui_device.py); Kokoro (ONNX Runtime) honestly
+    reports CPU since it has no MPS execution provider."""
     out = main._compute_device_predictions(_StubTorch(mps=True), _StubOrt(["CPUExecutionProvider"]))
-    assert out == {"kokoro": "cpu", "coqui": "cpu", "qwen": "mps"}
+    assert out == {"kokoro": "cpu", "coqui": "mps", "qwen": "mps"}
 
 
 def test_predictions_cpu_only() -> None:

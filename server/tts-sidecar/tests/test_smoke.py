@@ -319,15 +319,19 @@ def test_resolve_runtime_options_cpu_default(monkeypatch):
 
 
 def test_resolve_runtime_options_cuda_defaults_on(monkeypatch):
-    """CUDA available, no env overrides → device=cuda, half=True, deepspeed=True.
+    """CUDA available, no env overrides → device=cuda:0, half=True, deepspeed=True.
     The whole point of the GPU install path is that the speedup knobs default
-    on; users shouldn't have to know about them to get the win."""
+    on; users shouldn't have to know about them to get the win. 'auto' now
+    routes through _resolve_torch_device (the Coqui-MPS fix), which resolves
+    to the explicit-index 'cuda:0' rather than the old bare 'cuda' string —
+    same physical device; see test_coqui_device.py for dedicated coverage of
+    that accepted side effect."""
     monkeypatch.delenv("COQUI_DEVICE", raising=False)
     monkeypatch.delenv("COQUI_HALF", raising=False)
     monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
     engine = main.CoquiEngine()
     opts = engine._resolve_runtime_options(_FakeTorch(cuda_available=True))
-    assert opts == {"device": "cuda", "half": True, "deepspeed": True}
+    assert opts == {"device": "cuda:0", "half": True, "deepspeed": True}
 
 
 def test_resolve_runtime_options_env_overrides_off(monkeypatch):

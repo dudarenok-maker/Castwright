@@ -735,7 +735,7 @@ class CoquiEngine(Engine):
         inject a torch stub that controls `cuda.is_available()`."""
         device = self._device
         if device == "auto":
-            device = "cuda" if torch_module.cuda.is_available() else "cpu"
+            device = _resolve_torch_device(device, torch_module)
         # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
         # (the whole point of the GPU path). On CPU, force them OFF: torch raises
         # on fp16 ops on CPU, and deepspeed-inference is a CUDA-only runtime.

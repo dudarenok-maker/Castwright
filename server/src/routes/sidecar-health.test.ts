@@ -862,4 +862,39 @@ describe('GET /api/sidecar/health — side-14 device fields', () => {
     const res = await request(makeApp()).get('/api/sidecar/health');
     expect(res.body.devices).toEqual({ kokoro: 'directml', coqui: 'rocm', qwen: 'rocm' });
   });
+
+  it('feeds the last-known engine-device cache on a reachable poll', async () => {
+    const { getLastKnownEngineDevice, _resetEngineDevicesForTests } = await import(
+      '../gpu/engine-device-state.js'
+    );
+    _resetEngineDevicesForTests();
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro'],
+          devices: { kokoro: 'cpu', coqui: 'cuda', qwen: 'mps' },
+          devices_state: 'ready',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownEngineDevice('kokoro')).toBe('cpu');
+    expect(getLastKnownEngineDevice('coqui')).toBe('cuda');
+    expect(getLastKnownEngineDevice('qwen')).toBe('mps');
+  });
+
+  it('leaves the engine-device cache untouched on an unreachable poll', async () => {
+    const { getLastKnownEngineDevice, _resetEngineDevicesForTests, setLastKnownEngineDevices } =
+      await import('../gpu/engine-device-state.js');
+    _resetEngineDevicesForTests();
+    setLastKnownEngineDevices({ kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' });
+
+    fetchMock.mockResolvedValue(new Response('', { status: 503 }));
+    await request(makeApp()).get('/api/sidecar/health');
+
+    expect(getLastKnownEngineDevice('kokoro')).toBe('cuda'); // unchanged
+  });
 });

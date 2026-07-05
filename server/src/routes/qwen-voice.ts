@@ -324,8 +324,13 @@ export async function designQwenVoiceForCharacter(
   return withDesignLock(p.bookDir, async () => {
     const { withGpuLoad } = await import('../gpu/gpu-load.js');
     const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
+    /* Computed once, reused both as withGpuLoad's eviction-guard hint AND to
+       gate this function's own semaphore acquire below — an earlier pass of
+       this design only wired the eviction guard and left this acquire
+       unconditional, still charging a token for VoiceDesign on cpu/mps. */
+    const onGpu = engineDeviceIsGpu('qwen');
     return withGpuLoad(async () => {
-      const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
+      const releaseGpu = onGpu ? await gpuSemaphore.acquire(costForEngine('qwen')) : null;
       const sidecarUrl = getResolvedSidecarUrl();
 
       const postDesignAndCache = async (
@@ -464,9 +469,9 @@ export async function designQwenVoiceForCharacter(
           return { ...out, fellBackToDesignVoice: true, fallbackReason: reason };
         }
       } finally {
-        releaseGpu();
+        releaseGpu?.();
       }
-    }, engineDeviceIsGpu('qwen'));
+    }, onGpu);
   });
 }
 
