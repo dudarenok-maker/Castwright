@@ -58,6 +58,15 @@ export function startPortForwarder(
     createServerFn?: typeof net.createServer;
     connectFn?: typeof net.connect;
     warn?: (...args: unknown[]) => void;
+    /** Test-only hook: invoked synchronously once per accepted connection,
+        after all of this handler's listeners are attached to `client`/
+        `upstream`. Exists so tests can await the moment it's actually safe
+        to drive `upstream`'s events, instead of using the client socket's
+        own 'connect' event as a synchronization proxy — the client-connect
+        and server-accept callbacks are independently-scheduled reactions to
+        the same TCP handshake, so their relative order isn't guaranteed
+        (see lan-port-forwarder.test.ts's "round 5 (Finding 2)" tests). */
+    onConnection?: () => void;
   } = {},
 ): PortForwarderHandle {
   const {
@@ -65,6 +74,7 @@ export function startPortForwarder(
     createServerFn = net.createServer,
     connectFn = net.connect,
     warn = console.warn,
+    onConnection,
   } = opts;
 
   /* Tracks every currently-accepted client socket so close() can force-evict
@@ -124,6 +134,7 @@ export function startPortForwarder(
     client.once('error', destroyBoth);
     client.once('close', destroyBoth);
     upstream.once('close', destroyBoth);
+    onConnection?.();
   });
 
   /* .on (not .once): net.Server can emit 'error' more than once over its

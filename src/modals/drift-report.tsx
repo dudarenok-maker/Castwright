@@ -339,7 +339,7 @@ const DriftGroupCard = memo(function DriftGroupCard({
           {group.factors.length > 0 && (
             <p
               className="text-[11px] uppercase tracking-wider font-bold mb-2 flex flex-wrap gap-x-2"
-              style={{ color: CHAR_COLORS[colorKey].hex }}
+              style={{ color: (CHAR_COLORS[colorKey] ?? CHAR_COLORS.narrator).hex }}
               data-testid={`drift-group-factors-${group.groupId}`}
             >
               {group.factors.map((f) => (

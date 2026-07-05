@@ -10,40 +10,24 @@
    PUT validator silently drops any `geminiApiKey`-shaped field. */
 
 import { z } from 'zod';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
+import {
+  resolveUserSettingsPath,
+  USER_SETTINGS_PATH,
+  LEGACY_USER_SETTINGS_PATH,
+} from './user-settings-path.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SERVER_ROOT = resolve(__dirname, '..', '..');
+/* Path resolution itself lives in the dependency-free user-settings-path.ts
+   (shared with paths.ts's boot-time workspace-override read — see that
+   module's header comment for why it needs to stay leaf-only) — re-exported
+   here so existing imports of these three names from user-settings.js keep
+   working unchanged. */
+export { resolveUserSettingsPath, USER_SETTINGS_PATH, LEGACY_USER_SETTINGS_PATH };
 
-/* Account defaults are USER-scoped, not checkout-scoped — so they live in
-   one per-user file OUTSIDE any git checkout. Before plan 122 the file lived
-   at `<SERVER_ROOT>/user-settings.json`, which meant every git worktree
-   carried its own copy: a save in one tree silently "reverted" when the app
-   was next launched from another tree (or the same setting was changed in
-   N trees independently). Resolving to a shared `~/.castwright/`
-   path makes main, every worktree, and the packaged app read ONE file.
-
-   `USER_SETTINGS_FILE` overrides the location: the server test bootstrap
-   points it at a throwaway temp file (so tests never touch real settings),
-   and ops can pin a custom path. Exported as a pure function so the
-   resolution is unit-testable without re-importing the module. */
-export function resolveUserSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.USER_SETTINGS_FILE?.trim();
-  if (override) return override;
-  return join(homedir(), '.castwright', 'user-settings.json');
-}
-
-export const USER_SETTINGS_PATH = resolveUserSettingsPath();
-
-/* Pre-plan-122 per-checkout location — kept ONLY as the one-time migration
-   source so an upgrade carries the user's existing settings forward. */
-export const LEGACY_USER_SETTINGS_PATH = join(SERVER_ROOT, 'user-settings.json');
 const SETTINGS_PATH_OVERRIDDEN = !!process.env.USER_SETTINGS_FILE?.trim();
 
 /* One-time migration: copy the legacy per-checkout file to the shared

@@ -33,6 +33,8 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock } from '../workspace/file-lock.js';
+import { z } from 'zod';
+import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
@@ -573,6 +575,27 @@ bookStateRouter.get('/:bookId/dropped-quotes', async (req: Request, res: Respons
   }
 });
 
+/* manuscript-edits.json is written verbatim from this patch with no merge —
+   a client that computes a bad `sentences` array (e.g. stale/placeholder
+   state sent back before the real analysis hydrated) silently clobbers the
+   real file. Shape-validate before writing, and refuse a patch that would
+   wipe out a manuscript that currently has content: it's never legitimate
+   for an edit action to reduce a book to zero sentences.
+
+   Each sentence uses `.passthrough()`, not the analyzer's bare `.strict()`
+   sentenceSchema: manuscript-edits.json rows are documented (restructure.ts's
+   RestructureSentence) to carry additive fields — startMs/endMs are already
+   part of the OpenAPI Sentence contract — that "aren't structural and
+   shouldn't be lost". A strict per-sentence schema would 400 the whole patch
+   the first time such a field is ever populated, and the client-side autosave
+   only console.errors a failed PUT — silently dropping the user's edit. */
+const manuscriptPatchSchema = z
+  .object({
+    sentences: z.array(sentenceSchema.passthrough()),
+    mergedAwayKeys: z.array(z.string()).optional(),
+  })
+  .strict();
+
 bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);
@@ -593,9 +616,26 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(guarded));
         break;
       }
-      case 'manuscript':
-        await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), body.patch);
+      case 'manuscript': {
+        const parsed = manuscriptPatchSchema.safeParse(body.patch);
+        if (!parsed.success) {
+          return res.status(400).json({ error: `Malformed manuscript patch: ${parsed.error.message}` });
+        }
+        const editsPath = manuscriptEditsJsonPath(bookDir);
+        /* readJson itself already returns null for a missing file — do NOT
+           additionally catch here. A JSON.parse failure on a corrupt/truncated
+           file must propagate to the route's outer catch (500), not collapse
+           to the same "no existing content" null the wipe-guard below relies
+           on to decide whether it's safe to accept an empty sentence list. */
+        const existing = await readJson<{ sentences?: unknown[] }>(editsPath);
+        if (existing?.sentences?.length && parsed.data.sentences.length === 0) {
+          return res.status(409).json({
+            error: 'Refusing to overwrite an analysed manuscript with an empty sentence list.',
+          });
+        }
+        await writeJsonAtomic(editsPath, parsed.data);
         break;
+      }
       case 'revisions':
         await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);
         break;

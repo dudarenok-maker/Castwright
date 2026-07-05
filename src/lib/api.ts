@@ -61,6 +61,7 @@ import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
+import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
 import { MOCK_SERIES_MEMORY } from '../mocks/series-memory';
@@ -71,6 +72,7 @@ import {
   HOLLOW_TIDE_VOICES,
   HOLLOW_TIDE_CONTINUE,
   HOLLOW_TIDE_LISTEN_PROGRESS,
+  HOLLOW_TIDE_DRIFT_EVENTS,
   COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -925,7 +927,13 @@ function buildSolwayBayMockState(): BookStateResponse {
        render the chapter playlist. */
     cast: null,
     manuscript: { wordCount: 82_400, format: 'epub' },
-    manuscriptEdits: null,
+    /* Several manuscript-view e2e specs (script-review, detect-emotions,
+       excluded-line, prosody-auto-trigger-guard) drive `sb`'s manuscript
+       view and need real seeded sentences to select/reassign/exclude —
+       reuse the same fixture the fresh-analysis flow (`ns`) serves via
+       ANALYSIS_NORTHERN_STAR, so it goes through the normal
+       hydrateFromBookState path rather than an empty manuscript. */
+    manuscriptEdits: { sentences: initialSentences, mergedAwayKeys: [] },
     revisions: null,
     /* Every chapter is rendered (matches the library card's
        completedChapters: 18). hydrateFromBookState then flips each
@@ -1656,9 +1664,18 @@ async function mockStreamSplice({
   });
 }
 
-async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
+async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
   await wait(120);
-  const totalSec = parseDuration(duration || '10:00');
+  /* Quality Gate marketing/wiki screenshots (#1286) — force totalSec=600 for
+     Saltgrave chapter 7 regardless of what `duration` the caller passes.
+     Saltgrave's chapters carry no `duration` field, so chapters-slice
+     hydrates it to '00:00' — and the mini-player's Preview action (unlike
+     ChapterSegmentStrip) explicitly forwards `chapter.duration`, which would
+     otherwise collapse totalSec to 0 and make deriveIssues return no issues
+     at all (its own guard: `!dur || dur <= 0 → return []`), silently
+     breaking the preview-flagged scene's amber band. */
+  const isFlaggedDemoChapter = DEMO_CAPTURE && bookId === 'hollow-tide-2' && chapterId === 7;
+  const totalSec = isFlaggedDemoChapter ? 600 : parseDuration(duration || '10:00');
   const peakCount = 240;
   /* Deterministic per-chapter envelope: seed a tiny LCG from chapterId so each
      chapter has a stable-but-distinct waveform. (Was Math.random() — fine when
@@ -1689,6 +1706,11 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
      For chapter 1 (duration '38:24' = 2304 s): third=768, lateStart=1624,
      seekSec-1=766 (33.2%), seekSec-2=1622 (70.4%). */
   const lateStart = third * 2 + 88;
+  /* Quality Gate marketing/wiki screenshots (#1286) — Saltgrave chapter 7
+     gets real cast ids and reason text for the two gate flavors that
+     actually share this surface (acoustic + ASR content-QA), reusing this
+     function's already-correct non-adjacent spacing rather than reinventing
+     timings (spec's adversarial review round 2 flagged that risk explicitly). */
   return {
     url: stubAudioB,
     durationSec: totalSec,
@@ -1699,10 +1721,12 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
       {
         start: third,
         end: third * 2,
-        characterId: 'halloran',
+        characterId: isFlaggedDemoChapter ? 'dockhand-remy' : 'halloran',
         sentenceId: 2,
         suspect: true,
-        reasons: ['Long sentence — possible truncation'],
+        reasons: isFlaggedDemoChapter
+          ? ['Content drift — heard "the ropes" where the script says "the ledger."']
+          : ['Long sentence — possible truncation'],
       },
       { start: third * 2, end: lateStart, characterId: 'narrator', sentenceId: 3 },
       {
@@ -1711,7 +1735,9 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
         characterId: 'narrator',
         sentenceId: 4,
         suspect: true,
-        reasons: ['Pacing anomaly — possible mispronunciation'],
+        reasons: isFlaggedDemoChapter
+          ? ['Near-silent — dead air detected before this line.']
+          : ['Pacing anomaly — possible mispronunciation'],
       },
     ],
   };
@@ -1771,6 +1797,24 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      would let a background poll of an empty book wipe the active book's
      pending). The fe-15 profile-regen-preview spec clears `pending` itself
      before opening its preview stub to avoid the phantom-revision collision. */
+  /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
+     stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
+     with no bookId field, so it always matched every book before) from
+     bleeding into the marketing books' poll response. Scoped to the
+     DEMO_CAPTURE flag for EVERY book, not specific book ids — the background
+     bulk poll (layout.tsx) reaches every non-active marketing book, and
+     applyPoll replaces `pending` wholesale regardless of bookId, so a
+     partial scope wouldn't fully close the bleed (adversarial review round
+     2 caught this when an earlier fix scoped it to hollow-tide-* only). */
+  if (DEMO_CAPTURE) {
+    return {
+      pending: [],
+      drift: [
+        ...VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
+        ...HOLLOW_TIDE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
+      ],
+    };
+  }
   return {
     pending: PENDING_REVISIONS,
     drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),

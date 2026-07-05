@@ -26,3 +26,18 @@
 - [Account & Settings](Account-and-Settings)
 - [Multi-language Support](Multi-language-Support)
 - [Troubleshooting](Troubleshooting)
+
+### Release Notes
+- [All releases](Release-Notes)
+- [v1.10.0](Release-Notes-v1.10.0)
+- [v1.9.0](Release-Notes-v1.9.0)
+- [v1.8.0](Release-Notes-v1.8.0)
+- [v1.7.0](Release-Notes-v1.7.0)
+- [v1.6.0](Release-Notes-v1.6.0)
+- [v1.5.1](Release-Notes-v1.5.1)
+- [v1.5.0](Release-Notes-v1.5.0)
+- [v1.4.0](Release-Notes-v1.4.0)
+- [v1.3.1](Release-Notes-v1.3.1)
+- [v1.2.2](Release-Notes-v1.2.2)
+- [v1.1.0](Release-Notes-v1.1.0)
+- [v1.0.0](Release-Notes-v1.0.0)
