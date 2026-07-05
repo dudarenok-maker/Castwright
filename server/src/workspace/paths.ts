@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { unicodeKebab } from '../util/safe-id.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { stripEdges } from '../util/text-match.js';
-import { USER_SETTINGS_PATH } from './user-settings.js';
+import { USER_SETTINGS_PATH, LEGACY_USER_SETTINGS_PATH } from './user-settings-path.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -24,7 +24,9 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
    Resolution precedence (boot-time only — restart required to change):
      1. `workspaceDirOverride` from the resolved USER_SETTINGS_PATH (plan 122
         shared-settings location, honouring a USER_SETTINGS_FILE test/ops
-        override — synchronous best-effort read)
+        override — synchronous best-effort read), falling back to the legacy
+        pre-plan-122 path when the shared file hasn't been migrated yet and
+        no USER_SETTINGS_FILE override is active (see readBootOverride)
      2. WORKSPACE_DIR env var
      3. built-in `../castwright-workspace` default
    This is read once at module load — `WORKSPACE_ROOT` is a const export
@@ -42,28 +44,57 @@ export const WORKSPACE_SOURCE: 'env' | 'default' | 'override' = OVERRIDE_DIR
     ? 'env'
     : 'default';
 
-/* Sync best-effort read of user-settings.json so the boot-time workspace
-   resolution can honour an override without an async dance. A missing or
-   malformed file falls through to env/default — never blocks startup.
-   Reads USER_SETTINGS_PATH (not a hardcoded per-checkout path) so this stays
-   in sync with plan 122's shared-settings location and so a test/ops
-   USER_SETTINGS_FILE override is actually honoured here too — pre-fix this
-   read a stale hardcoded `<SERVER_ROOT>/user-settings.json` path unrelated to
-   USER_SETTINGS_FILE, so a stray legacy file on disk silently overrode every
-   test's WORKSPACE_DIR isolation (#1337). */
-export function readBootOverride(): string | null {
+function readWorkspaceOverrideFrom(path: string): string | null {
   try {
     /* Synchronous read so this can run inline during module load without
        blocking ESM hoisting on a top-level await. The file is small
        (a few hundred bytes); missing or malformed falls through silently. */
-    if (!existsSync(USER_SETTINGS_PATH)) return null;
-    const raw = readFileSync(USER_SETTINGS_PATH, 'utf8');
+    if (!existsSync(path)) return null;
+    const raw = readFileSync(path, 'utf8');
     const parsed = JSON.parse(raw) as { workspaceDirOverride?: unknown };
     const override = parsed?.workspaceDirOverride;
     return typeof override === 'string' && override.trim().length > 0 ? override.trim() : null;
   } catch {
     return null;
   }
+}
+
+/* Sync best-effort read of user-settings.json so the boot-time workspace
+   resolution can honour an override without an async dance. A missing or
+   malformed file falls through to env/default — never blocks startup.
+   Reads USER_SETTINGS_PATH first (not a hardcoded per-checkout path) so this
+   stays in sync with plan 122's shared-settings location and so a test/ops
+   USER_SETTINGS_FILE override is actually honoured here too — pre-fix this
+   read a stale hardcoded `<SERVER_ROOT>/user-settings.json` path unrelated to
+   USER_SETTINGS_FILE, so a stray legacy file on disk silently overrode every
+   test's WORKSPACE_DIR isolation (#1337).
+
+   Falls back to the legacy path when USER_SETTINGS_PATH has no override AND
+   no USER_SETTINGS_FILE test/ops override is active. This matters because
+   `migrateLegacyUserSettings` (user-settings.ts) only copies the legacy file
+   across the first time `readUserSettings()` runs — which is async and, for
+   the server's own boot (index.ts imports `./workspace/paths.js` before ever
+   calling `readUserSettings()`), strictly LATER than this synchronous
+   module-eval-time read. Without this fallback, a user whose override still
+   lives only in the legacy file would have it silently ignored for an entire
+   process lifetime (needing a second restart before migration catches up) —
+   a real regression the #1337 fix would otherwise have introduced. The
+   `!USER_SETTINGS_FILE` gate keeps this fallback out of the test path
+   (test-setup.ts always sets that var), so a stray real legacy file on a dev
+   machine still can't defeat a test's WORKSPACE_DIR isolation.
+
+   Paths/env are injectable (mirrors resolveUserSettingsPath's `env` param in
+   user-settings.ts) so this is unit-testable against temp files without
+   touching the real shared/legacy locations on disk. */
+export function readBootOverride(
+  sharedPath: string = USER_SETTINGS_PATH,
+  legacyPath: string = LEGACY_USER_SETTINGS_PATH,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const fromShared = readWorkspaceOverrideFrom(sharedPath);
+  if (fromShared) return fromShared;
+  if (env.USER_SETTINGS_FILE?.trim()) return null;
+  return readWorkspaceOverrideFrom(legacyPath);
 }
 
 export function ensureWorkspace(): void {

@@ -5,9 +5,9 @@
    trailing line is skipped rather than thrown. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 let workspaceRoot: string;
 let mod: typeof import('./resource-telemetry.js');
@@ -70,30 +70,35 @@ describe('resource-telemetry', () => {
     expect(limited.map((r) => r.chapterId)).toEqual([5, 4]);
   });
 
-  it(
-    'rotates: trims oldest lines when the cap is exceeded',
-    async () => {
-      /* Write CAP + 3 lines; only the newest CAP should survive. Each append
-         does a full read-trim-rewrite once past the cap (by design — see
-         trimIfNeeded's header comment), so CAP+3 real appends is a
-         legitimately heavier fs round-trip than the suite's default 15s
-         budget affords under full-suite pool contention (#1337 — this test
-         alone was the one that time out, and its abandoned background
-         loop kept appending after vitest gave up waiting, corrupting the
-         two tests that ran next since they share this file's on-disk
-         state). Mirrors the hookTimeout bump in vitest.config.ts for the
-         same class of "slow under contention" problem. */
-      const cap = mod.TELEMETRY_MAX_LINES;
-      for (let i = 1; i <= cap + 3; i++) await mod.appendTelemetry(rec({ chapterId: i }));
-      const all = await mod.readTelemetry(cap + 10);
-      expect(all.length).toBe(cap);
-      /* Newest-first: the very first record (chapterId 1, 2, 3) should be gone. */
-      expect(all[0].chapterId).toBe(cap + 3);
-      expect(all.some((r) => r.chapterId === 1)).toBe(false);
-      expect(all.some((r) => r.chapterId === 4)).toBe(true);
-    },
-    30_000,
-  );
+  it('rotates: trims oldest lines when the cap is exceeded', async () => {
+    /* Only the newest CAP of CAP+3 lines should survive. Pre-seed CAP+2 lines
+       directly (writeFileSync — trimIfNeeded only ever fires past the cap,
+       so a direct pre-seed exercises no less real logic than getting there
+       via CAP+2 individual appends) and make exactly ONE real appendTelemetry
+       call — the CAP+3rd — to run the actual trim path. Driving all CAP+3
+       appends through appendTelemetry (each doing a full read-trim-rewrite
+       once past the cap, by design) turned this test into ~30s of real fs
+       round-trips under full-suite pool contention (#1337): long enough to
+       blow the default test timeout, and since Node can't cancel the
+       abandoned in-flight loop on a vitest timeout, it kept appending in the
+       background afterwards and corrupted the next two tests sharing this
+       file's on-disk state. */
+    const cap = mod.TELEMETRY_MAX_LINES;
+    mkdirSync(dirname(telemetryFilePath()), { recursive: true });
+    const seeded = Array.from({ length: cap + 2 }, (_, i) =>
+      JSON.stringify(rec({ chapterId: i + 1 })),
+    );
+    writeFileSync(telemetryFilePath(), `${seeded.join('\n')}\n`);
+
+    await mod.appendTelemetry(rec({ chapterId: cap + 3 }));
+
+    const all = await mod.readTelemetry(cap + 10);
+    expect(all.length).toBe(cap);
+    /* Newest-first: the very first record (chapterId 1, 2, 3) should be gone. */
+    expect(all[0].chapterId).toBe(cap + 3);
+    expect(all.some((r) => r.chapterId === 1)).toBe(false);
+    expect(all.some((r) => r.chapterId === 4)).toBe(true);
+  });
 
   it('skips a corrupt trailing line rather than throwing', async () => {
     await mod.appendTelemetry(rec({ chapterId: 11 }));

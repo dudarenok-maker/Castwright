@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readBootOverride } from './paths.js';
 
 describe('readBootOverride (#1337)', () => {
   let dir: string;
@@ -61,5 +62,43 @@ describe('readBootOverride (#1337)', () => {
 
     const mod = await import('./paths.js');
     expect(mod.readBootOverride()).toBeNull();
+  });
+
+  /* Regression for a boot-timing gap introduced by the #1337 fix above (code
+     review, PR #1353): migrateLegacyUserSettings only copies the legacy file
+     to the shared USER_SETTINGS_PATH the first time readUserSettings() runs
+     — async, and for the server's own boot, strictly LATER than paths.ts's
+     synchronous module-eval-time read (index.ts imports ./workspace/paths.js
+     before ever calling readUserSettings()). Without a legacy fallback, a
+     user whose override lives only in the legacy file would have it silently
+     ignored for a whole process lifetime post-fix — pre-fix this worked on
+     the very first boot. These use the injectable-path form directly (no
+     module reload needed — no module-level state is involved). */
+  it('falls back to the legacy path when the shared file has no override and no USER_SETTINGS_FILE override is active', () => {
+    const sharedPath = join(dir, 'shared-user-settings.json');
+    const legacyPath = join(dir, 'legacy-user-settings.json');
+    writeFileSync(legacyPath, JSON.stringify({ workspaceDirOverride: 'D:/legacy/workspace' }));
+    // sharedPath deliberately does not exist — the not-yet-migrated case.
+
+    expect(readBootOverride(sharedPath, legacyPath, {})).toBe('D:/legacy/workspace');
+  });
+
+  it('does not fall back to the legacy path when a USER_SETTINGS_FILE override is active (test isolation)', () => {
+    const sharedPath = join(dir, 'shared-user-settings.json');
+    const legacyPath = join(dir, 'legacy-user-settings.json');
+    writeFileSync(legacyPath, JSON.stringify({ workspaceDirOverride: 'D:/legacy/workspace' }));
+
+    expect(
+      readBootOverride(sharedPath, legacyPath, { USER_SETTINGS_FILE: sharedPath }),
+    ).toBeNull();
+  });
+
+  it('prefers the shared path over the legacy path when both carry an override', () => {
+    const sharedPath = join(dir, 'shared-user-settings.json');
+    const legacyPath = join(dir, 'legacy-user-settings.json');
+    writeFileSync(sharedPath, JSON.stringify({ workspaceDirOverride: 'D:/shared/workspace' }));
+    writeFileSync(legacyPath, JSON.stringify({ workspaceDirOverride: 'D:/legacy/workspace' }));
+
+    expect(readBootOverride(sharedPath, legacyPath, {})).toBe('D:/shared/workspace');
   });
 });
