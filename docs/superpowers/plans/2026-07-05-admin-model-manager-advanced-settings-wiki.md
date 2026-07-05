@@ -1507,16 +1507,16 @@ git commit -m "docs(docs): close 1318's Tier C boundary-drag screenshot"
 ## Task 11: #1318 Tier D — new marketing-only fixture data
 
 **Files:**
-- Modify: `src/mocks/marketing/hollow-tide.ts` (add an undesigned character, a new `HOLLOW_TIDE_LISTEN_PROGRESS` map with markers, and Russian + German books)
+- Modify: `src/mocks/marketing/hollow-tide.ts` (add a new pre-generation book `hollow-tide-4` with an undesigned character, a new `HOLLOW_TIDE_LISTEN_PROGRESS` map with markers, and Russian + German books)
 - Modify: `src/lib/api.ts` (add a `DEMO_CAPTURE` branch to `mockGetListenProgress`, ~line 1200)
 - Modify: `e2e/marketing/scenes.ts` (append 5 scenes)
 - Modify: `docs/wiki/Generating-Audio.md`, `docs/wiki/Listening-and-Revising.md`, `docs/wiki/Exporting.md`, `docs/wiki/Multi-language-Support.md`
 
 **Interfaces:**
-- Consumes: `Character`, `BookStateResponse`, `LibraryResponse`, `ListenProgress`, `ListenProgressMarker` types (`src/lib/types.ts` / `src/lib/api.ts`), the existing `HOLLOW_TIDE_BOOK_STATES` Map and `HOLLOW_TIDE_LIBRARY` object in `hollow-tide.ts`, and the existing `EXPORT_QUEUE` fixture (`src/data/export-queue.ts`, unmodified — already has an in-progress row).
+- Consumes: `Character`, `BookStateResponse`, `LibraryResponse`, `ListenProgress`, `ListenProgressMarker` types (`src/lib/types.ts` / `src/lib/api.ts`), the existing `bookState(...)`/`makeChapters(...)` helpers, `reusedFromBook1(...)`, `voiceIdsOf(...)`, `COVER(...)`, the existing `HOLLOW_TIDE_BOOK_STATES` Map and `HOLLOW_TIDE_LIBRARY` object in `hollow-tide.ts`, and the existing `EXPORT_QUEUE` fixture (`src/data/export-queue.ts`, unmodified — already has an in-progress row).
 - Produces: scene ids `generating-voice-readiness`, `listen-markers-rerecord`, `export-queue`, `language-detect-russian`, `language-cast-confirm-german`; new export `HOLLOW_TIDE_LISTEN_PROGRESS` from `hollow-tide.ts`.
 
-- [ ] **Step 1: Add an undesigned Qwen-engine character**
+- [ ] **Step 1: Add a new pre-generation book with an undesigned Qwen-engine character**
 
 The gate fires only for a character where `resolveVoiceStatus(...).lifecycle?.label === 'Needs voice'` **and** `lines > 0` (`src/store/voice-readiness-selectors.ts:26-40` — a 0-line undesigned character can never trigger it). Per `src/lib/voice-status.ts:94-112`, "Needs voice" requires the character to be Qwen-effective (`ttsEngine: 'qwen'`) with `!c.overrideTtsVoices?.qwen?.name` and no matched library voice — i.e. `voiceId`/`voiceState` should be **omitted entirely**, not set to a placeholder value.
 
@@ -1535,26 +1535,54 @@ const undesignedExtra = (): Character => ({
 });
 ```
 
-**Do not add this to `hollow-tide-2`** — that book is deliberately posed
-mid-generation (7/11 chapters done, per the existing `generating` scene's
-own comment), and the voice-readiness gate only opens via the **"Approve
-cast & start generating"** button on the **Manuscript** view
-(`src/views/manuscript.tsx:910-916`, which calls `onStartGenerating` →
-`routes/index.tsx:773-775`'s `dispatch(startGenerationFlow())`) — a button
-gated on the book not having started generation yet. A book already
-mid-generation won't show it. Add `undesignedExtra()` instead to whichever
-Hollow Tide book is posed at the **manuscript** stage, pre-generation (check
-`HOLLOW_TIDE_BOOK_STATES` for a book whose stage/status isn't yet
-`generating` — `hollow-tide-3`, posed for the `analysing` scene, is a
-candidate only if its fixture has already progressed past analysis into a
-manuscript-ready state by the time this task runs; verify directly rather
-than assuming, and use whichever book is genuinely pre-generation). Adding
-this character to that book's cast will also appear in any *other* existing
-scene that screenshots the same book's cast/manuscript views (e.g. if it's
-`hollow-tide-3`, the `analysing` scene is unaffected since it's a different
-view, but double-check no other existing scene captures that book's cast
-list before/after this change — a new cast row is cosmetic and expected,
-just worth a quick look during Step 3's review pass, not a re-shoot.
+**None of the 4 existing books qualify as a target** — confirmed directly
+against `HOLLOW_TIDE_BOOK_STATES` (`hollow-tide.ts:151-310`): `hollow-tide-1`
+and `coalfall-commission` are `complete`; `hollow-tide-2` is mid-generation
+(7/11 done — the voice-readiness gate only opens via the **"Approve cast &
+start generating"** button on the **Manuscript** view,
+`src/views/manuscript.tsx:910-916` → `onStartGenerating` →
+`routes/index.tsx:771-776`'s `dispatch(startGenerationFlow())`, which is
+gated on the book not having started generation); `hollow-tide-3` has
+`castConfirmed: false` (cast still forming, only 2 characters) — not
+manuscript-ready either. Re-posing `hollow-tide-3` to be cast-confirmed
+would break the existing `analysing` scene (`#/books/hollow-tide-3/analysing`),
+which depends on it being mid-analysis.
+
+So this step adds a **5th, new, additive book** — `hollow-tide-4`, cast-
+confirmed, zero chapters completed (genuinely pre-generation), following
+the exact `bookState(...)` helper pattern used by the 4 existing books
+(`hollow-tide.ts:151-310`) and reusing an existing cover asset (no new
+image dependency):
+
+```ts
+const BOOK4_CHAPTERS = makeChapters(6);
+
+const harborlight = bookState({
+  bookId: 'hollow-tide-4',
+  title: 'The Harborlight Ledger',
+  author: 'Marin Vale',
+  series: 'The Hollow Tide',
+  seriesPosition: 4,
+  isStandalone: false,
+  coverGradient: ['#2B4C57', '#101D22'],
+  castConfirmed: true,
+  chapters: BOOK4_CHAPTERS,
+  cast: [reusedFromBook1(narrator()), reusedFromBook1(inspCray()), undesignedExtra()],
+  completedSlugs: [],
+});
+```
+
+Register it in `HOLLOW_TIDE_BOOK_STATES` (add `['hollow-tide-4', harborlight],`
+after the `hollow-tide-3` entry, `hollow-tide.ts:314`) and add a matching
+entry to `HOLLOW_TIDE_LIBRARY`'s Hollow Tide series `books` array (following
+the `hollow-tide-2`/`hollow-tide-3` entries' exact shape, `hollow-tide.ts:349-395`
+— `status: 'confirmed'` or whatever the library schema's pre-generation
+status value is, confirm against `src/lib/types.ts`'s `LibraryResponse`
+book-status enum at implementation time; `chapterCount: 6`,
+`completedChapters: 0`, `characterCount: 3`, `voiceCount: 2` since
+`undesignedExtra()` has no voice yet, `voiceIds: voiceIdsOf(harborlight)`,
+`progress: 0`, reuse `COVER('hollow-tide-2')` and its `coverGradient` for
+the image so no new cover asset is needed).
 
 - [ ] **Step 2: Seed markers and a re-record marker**
 
@@ -1620,7 +1648,7 @@ Follow the exact pattern of `COALFALL_CHAPTERS`/`HOLLOW_TIDE_BOOK_STATES`/`HOLLO
 ```ts
   {
     id: 'generating-voice-readiness',
-    hash: '#/books/<pre-generation-book-id>/manuscript',
+    hash: '#/books/hollow-tide-4/manuscript',
     viewports: ['desktop'],
     action: async (page) => {
       await page.getByRole('button', { name: 'Approve cast & start generating' }).click({ timeout: 5000 });
@@ -1660,7 +1688,7 @@ Follow the exact pattern of `COALFALL_CHAPTERS`/`HOLLOW_TIDE_BOOK_STATES`/`HOLLO
   },
 ```
 
-(Replace `<russian-book-id>`/`<german-book-id>` with the actual ids chosen in Step 4, and `<pre-generation-book-id>` with the book chosen in Step 1 for `undesignedExtra()`.)
+(Replace `<russian-book-id>`/`<german-book-id>` with the actual ids chosen in Step 4 — `hollow-tide-4` from Step 1 is already hard-coded into the `generating-voice-readiness` scene above.)
 
 > **Fixed from an earlier draft**: this scene originally targeted
 > `#/books/hollow-tide-2/generate` with no `action`, assuming the gate would
