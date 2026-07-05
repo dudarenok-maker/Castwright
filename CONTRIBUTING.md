@@ -725,3 +725,6 @@ still hold:
    (`node scripts/bump-version.mjs --notes-file <path>`); the release workflow
    publishes it verbatim. (Releases predating this format were refreshed
    directly via `gh release edit`.)
+8. After the tag is pushed and the release is published, clear the board's
+   `Done` lane: `node scripts/clear-done-project-items.mjs --apply`
+   (dry-run first without `--apply` to review what would archive).
