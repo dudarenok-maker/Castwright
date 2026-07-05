@@ -7,15 +7,19 @@
 //
 // Run manually after cutting a release (see CONTRIBUTING.md "Releasing"),
 // then `npm run wiki:sync` to publish docs/wiki -> the wiki repo.
-import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { runCommand } from './lib/run-command.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_DIR = path.join(REPO_ROOT, 'docs', 'wiki');
 const REPO_SLUG = 'dudarenok-maker/Castwright';
-const RELEASE_PAGE_RE = /^Release-Notes-.+\.md$/;
+// Only matches pages this script itself generates (Release-Notes-v1.2.3.md
+// etc.) — deliberately narrower than "any Release-Notes-*.md" so a future
+// hand-authored page (e.g. Release-Notes-FAQ.md) in that namespace survives
+// the stale-page sweep below instead of being silently deleted.
+export const RELEASE_PAGE_RE = /^Release-Notes-v\d[\w.-]*\.md$/;
 
 export function releasePageFilename(tagName) {
   return `Release-Notes-${tagName}.md`;
@@ -74,15 +78,23 @@ export function upsertSidebarSection(sidebarText, heading, bodyLines) {
   const before = lines.slice(0, startIdx);
   const after = lines.slice(endIdx);
   const merged = [...before, ...newSection, ...(after.length ? ['', ...after] : [])];
-  return merged.join('\n').replace(/\n{3,}/g, '\n\n');
+  const joined = merged.join('\n');
+  // When the replaced section is last in the file (no `after`), `merged`
+  // has no trailing "" element to preserve a final newline — add one so
+  // re-running this against its own prior output stays idempotent.
+  return joined.endsWith('\n') ? joined : `${joined}\n`;
 }
 
 function run(cmd, args) {
-  const result = spawnSync(cmd, args, { encoding: 'utf8' });
-  if (result.status !== 0) {
-    throw new Error(`generate-release-notes-wiki: ${cmd} ${args.join(' ')} failed: ${result.stderr}`);
-  }
-  return result.stdout;
+  return runCommand('generate-release-notes-wiki', cmd, args);
+}
+
+// Newest-first; equal timestamps sort as equal (ties keep gh's own
+// already-newest-first list order, since Array#sort is stable) rather than
+// arbitrarily flipping depending on comparator-call order.
+export function compareReleasesNewestFirst(a, b) {
+  if (a.publishedAt === b.publishedAt) return 0;
+  return a.publishedAt < b.publishedAt ? 1 : -1;
 }
 
 function fetchReleases() {
@@ -98,7 +110,7 @@ function fetchReleases() {
   ]);
   return JSON.parse(out)
     .filter((r) => !r.isDraft)
-    .sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1));
+    .sort(compareReleasesNewestFirst);
 }
 
 function fetchReleaseBody(tagName) {

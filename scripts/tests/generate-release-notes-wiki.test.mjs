@@ -6,6 +6,8 @@ import {
   renderReleasePage,
   renderIndexPage,
   upsertSidebarSection,
+  compareReleasesNewestFirst,
+  RELEASE_PAGE_RE,
 } from '../generate-release-notes-wiki.mjs';
 
 test('formatDate truncates an ISO timestamp to YYYY-MM-DD', () => {
@@ -84,4 +86,56 @@ test('upsertSidebarSection handles a section that runs to end-of-file (no traili
   const updated = upsertSidebarSection(sidebar, 'Release Notes', ['- [new](New)']);
 
   assert.equal(updated.trim(), '### Release Notes\n- [new](New)');
+});
+
+test('upsertSidebarSection does not collapse a pre-existing double-blank-line elsewhere in the file', () => {
+  const sidebar = [
+    '### Core journey',
+    '- [Home](Home)',
+    '',
+    '',
+    '### Release Notes',
+    '- [stale link](Stale)',
+    '',
+    '### Full breadth',
+    '- [Voice Engines](Voice-Engines)',
+    '',
+  ].join('\n');
+
+  const updated = upsertSidebarSection(sidebar, 'Release Notes', ['- [new](New)']);
+
+  // The intentional double-blank between Core journey and Release Notes
+  // (untouched, pre-existing content) survives — only the spliced section
+  // itself is replaced.
+  assert.match(updated, /- \[Home\]\(Home\)\n\n\n### Release Notes/);
+});
+
+test('upsertSidebarSection is idempotent (re-running against its own output is a no-op) when the section is last in the file', () => {
+  const sidebar = ['### Full breadth', '- [Voice Engines](Voice-Engines)', ''].join('\n');
+  const bodyLines = ['- [All releases](Release-Notes)', '- [v1.10.0](Release-Notes-v1.10.0)'];
+
+  const first = upsertSidebarSection(sidebar, 'Release Notes', bodyLines);
+  const second = upsertSidebarSection(first, 'Release Notes', bodyLines);
+
+  assert.equal(second, first);
+  assert.ok(first.endsWith('\n'), 'result should end with a trailing newline');
+});
+
+test('RELEASE_PAGE_RE matches generated version pages but not hand-authored ones sharing the prefix', () => {
+  assert.match('Release-Notes-v1.10.0.md', RELEASE_PAGE_RE);
+  assert.match('Release-Notes-v1.2.2.md', RELEASE_PAGE_RE);
+  assert.doesNotMatch('Release-Notes-FAQ.md', RELEASE_PAGE_RE);
+  assert.doesNotMatch('Release-Notes.md', RELEASE_PAGE_RE);
+});
+
+test('compareReleasesNewestFirst sorts newest-first and is antisymmetric on ties', () => {
+  const a = { tagName: 'v1.1.0', publishedAt: '2026-05-17T22:36:24Z' };
+  const b = { tagName: 'v1.0.0', publishedAt: '2026-05-17T05:02:16Z' };
+  assert.equal(compareReleasesNewestFirst(a, b), -1);
+  assert.equal(compareReleasesNewestFirst(b, a), 1);
+
+  const tie1 = { tagName: 'v1.0.0', publishedAt: '2026-05-17T05:02:16Z' };
+  const tie2 = { tagName: 'v1.0.1', publishedAt: '2026-05-17T05:02:16Z' };
+  assert.equal(compareReleasesNewestFirst(tie1, tie2), 0);
+  assert.equal(compareReleasesNewestFirst(tie2, tie1), 0);
 });

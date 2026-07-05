@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, cpSync, rmSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { runCommand } from './lib/run-command.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_REMOTE = 'https://github.com/dudarenok-maker/Castwright.wiki.git';
@@ -37,11 +38,7 @@ export function buildCommitMessage(sourceSha) {
 }
 
 function run(cmd, args, cwd) {
-  const result = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
-  if (result.status !== 0) {
-    throw new Error(`sync-wiki: ${cmd} ${args.join(' ')} failed: ${result.stderr}`);
-  }
-  return result.stdout;
+  return runCommand('sync-wiki', cmd, args, { cwd });
 }
 
 function getSourceSha() {
