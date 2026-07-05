@@ -208,4 +208,73 @@ export const SCENES: Scene[] = [
     },
     fullPage: true,
   },
+  {
+    /* Quality Gate marketing/wiki screenshot #1286 — Saltgrave chapter 7's
+       row expanded, showing the Suspect badge + amber waveform bands + "N
+       issues to review" caption. `waitFor` targets the chapter's stable
+       `#chapter-<id>` container (chapters-slice.ts/generation.tsx) so the
+       click has something real to act on; the action's own waitFor (not a
+       fixed delay) waits for "issues to review" text, which only renders
+       once ChapterSegmentStrip's async getChapterAudio fetch resolves — and
+       doubles as an assertion that both flagged segments produced distinct
+       issue regions (the plural "issues", not singular "issue"). */
+    id: 'chapter-suspect',
+    hash: '#/books/hollow-tide-2/generate',
+    viewports: ['desktop'],
+    waitFor: '#chapter-7',
+    action: async (page) => {
+      await page.locator('#chapter-7').getByRole('button').first().click({ timeout: 5000 });
+      await page.waitForSelector('text=issues to review', { timeout: 5000 });
+    },
+    /* The segment strip (amber bands + caption) renders at the BOTTOM of the
+       expanded row, below chapter 7's per-speaker breakdown — well below the
+       fold at a fixed viewport since chapters 1-6 sit above it uncollapsed.
+       fullPage captures the whole scrollable page instead of scrolling to a
+       single target, so both the row header (with the Suspect badge, up top)
+       and the expanded caption/waveform (further down) land in the same
+       shot — scrollIntoView-ing the caption alone risks pushing the badge
+       off the top of a fixed-height viewport frame. */
+    fullPage: true,
+  },
+  {
+    /* Drift-report modal — two severity-tiered flags (Severe with Auto-regen,
+       Moderate). The drift events arrive via the active-book poll
+       (api.pollRevisions, layout.tsx ~line 949, fires immediately on mount
+       when the book is `ready`) rather than the background bulk poll, so no
+       extra settle beyond the action's own content-aware waits is needed.
+       The modal caps itself at max-h-[90vh] with its own internal scroll —
+       at the stock 1280x720 desktop viewport only the first (Severe/Cray)
+       card fits before the overflow clips it, so Moderate/Wren never makes
+       the shot. Grow the viewport height before opening the modal so 90vh
+       comfortably exceeds both cards' combined height and nothing scrolls
+       out of frame. */
+    id: 'voice-drift-report',
+    hash: '#/books/hollow-tide-2/cast',
+    viewports: ['desktop'],
+    waitFor: '[data-testid^="cast-row-"]',
+    action: async (page) => {
+      await page.setViewportSize({ width: 1280, height: 1800 });
+      await page.waitForSelector('text=Voice drift detected in', { timeout: 5000 });
+      await page.getByText(/Voice drift detected in/).click({ timeout: 5000 });
+      await page.waitForSelector('[data-testid^="drift-event-"]', { timeout: 5000 });
+    },
+  },
+  {
+    /* The "a flag follows you" preview surface — the mini-player's amber
+       issue band persists once you hit Preview on the flagged chapter. The
+       Preview button lives in the chapter row's always-visible action strip
+       (not gated on the row being expanded), so no expand-click is needed
+       here — only the click-then-wait-for-content pattern. */
+    id: 'preview-flagged',
+    hash: '#/books/hollow-tide-2/generate',
+    viewports: ['desktop'],
+    waitFor: '#chapter-7',
+    action: async (page) => {
+      await page
+        .locator('#chapter-7')
+        .getByRole('button', { name: 'Preview' })
+        .click({ timeout: 5000 });
+      await page.waitForSelector('[data-testid="mini-player-next-issue"]', { timeout: 5000 });
+    },
+  },
 ];
