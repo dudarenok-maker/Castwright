@@ -1658,14 +1658,14 @@ async function mockStreamSplice({
 async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
   await wait(120);
   /* Quality Gate marketing/wiki screenshots (#1286) — force totalSec=600 for
-     Saltgrave chapter 3 regardless of what `duration` the caller passes.
+     Saltgrave chapter 7 regardless of what `duration` the caller passes.
      Saltgrave's chapters carry no `duration` field, so chapters-slice
      hydrates it to '00:00' — and the mini-player's Preview action (unlike
      ChapterSegmentStrip) explicitly forwards `chapter.duration`, which would
      otherwise collapse totalSec to 0 and make deriveIssues return no issues
      at all (its own guard: `!dur || dur <= 0 → return []`), silently
      breaking the preview-flagged scene's amber band. */
-  const isFlaggedDemoChapter = DEMO_CAPTURE && bookId === 'hollow-tide-2' && chapterId === 3;
+  const isFlaggedDemoChapter = DEMO_CAPTURE && bookId === 'hollow-tide-2' && chapterId === 7;
   const totalSec = isFlaggedDemoChapter ? 600 : parseDuration(duration || '10:00');
   const peakCount = 240;
   /* Deterministic per-chapter envelope: seed a tiny LCG from chapterId so each
@@ -1697,7 +1697,7 @@ async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): 
      For chapter 1 (duration '38:24' = 2304 s): third=768, lateStart=1624,
      seekSec-1=766 (33.2%), seekSec-2=1622 (70.4%). */
   const lateStart = third * 2 + 88;
-  /* Quality Gate marketing/wiki screenshots (#1286) — Saltgrave chapter 3
+  /* Quality Gate marketing/wiki screenshots (#1286) — Saltgrave chapter 7
      gets real cast ids and reason text for the two gate flavors that
      actually share this surface (acoustic + ASR content-QA), reusing this
      function's already-correct non-adjacent spacing rather than reinventing

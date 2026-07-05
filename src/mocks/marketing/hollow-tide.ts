@@ -220,13 +220,16 @@ const drowningBell = bookState({
 });
 
 /* ── Book 2 — Saltgrave — GENERATING (11 chapters, 7 done) ── */
-/* Quality Gate marketing/wiki screenshots (#1286) — chapter 3 (already `done`,
-   within the first 7 of 11 completedSlugs below) carries the advisory QA
-   verdict the top-level "Suspect" pill checks (chapters-slice.ts:335). Ordered
-   to match the segment override's chronological order added in api.ts (ASR
-   content flag at [200,400), acoustic flag at [488,600)). */
+/* Quality Gate marketing/wiki screenshots (#1286) — chapter 7 (already `done`,
+   the LAST of the first 7 of 11 completedSlugs below — placed there rather
+   than earlier so its row sits below the fold in the two pre-existing
+   `generating`/`regenerate-modal` marketing scenes' default unscrolled
+   viewport) carries the advisory QA verdict the top-level "Suspect" pill
+   checks (chapters-slice.ts:335). Ordered to match the segment override's
+   chronological order added in api.ts (ASR content flag at [200,400),
+   acoustic flag at [488,600)). */
 const BOOK2_CHAPTERS = makeChapters(11).map((c) =>
-  c.id === 3
+  c.id === 7
     ? {
         ...c,
         audioQa: {

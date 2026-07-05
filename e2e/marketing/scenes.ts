@@ -209,7 +209,7 @@ export const SCENES: Scene[] = [
     fullPage: true,
   },
   {
-    /* Quality Gate marketing/wiki screenshot #1286 — Saltgrave chapter 3's
+    /* Quality Gate marketing/wiki screenshot #1286 — Saltgrave chapter 7's
        row expanded, showing the Suspect badge + amber waveform bands + "N
        issues to review" caption. `waitFor` targets the chapter's stable
        `#chapter-<id>` container (chapters-slice.ts/generation.tsx) so the
@@ -221,14 +221,14 @@ export const SCENES: Scene[] = [
     id: 'chapter-suspect',
     hash: '#/books/hollow-tide-2/generate',
     viewports: ['desktop'],
-    waitFor: '#chapter-3',
+    waitFor: '#chapter-7',
     action: async (page) => {
-      await page.locator('#chapter-3').getByRole('button').first().click({ timeout: 5000 });
+      await page.locator('#chapter-7').getByRole('button').first().click({ timeout: 5000 });
       await page.waitForSelector('text=issues to review', { timeout: 5000 });
     },
     /* The segment strip (amber bands + caption) renders at the BOTTOM of the
-       expanded row, below chapter 3's per-speaker breakdown — well below the
-       fold at a fixed viewport since chapters 1+2 sit above it uncollapsed.
+       expanded row, below chapter 7's per-speaker breakdown — well below the
+       fold at a fixed viewport since chapters 1-6 sit above it uncollapsed.
        fullPage captures the whole scrollable page instead of scrolling to a
        single target, so both the row header (with the Suspect badge, up top)
        and the expanded caption/waveform (further down) land in the same
@@ -268,10 +268,10 @@ export const SCENES: Scene[] = [
     id: 'preview-flagged',
     hash: '#/books/hollow-tide-2/generate',
     viewports: ['desktop'],
-    waitFor: '#chapter-3',
+    waitFor: '#chapter-7',
     action: async (page) => {
       await page
-        .locator('#chapter-3')
+        .locator('#chapter-7')
         .getByRole('button', { name: 'Preview' })
         .click({ timeout: 5000 });
       await page.waitForSelector('[data-testid="mini-player-next-issue"]', { timeout: 5000 });

@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 
 describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screenshots)', () => {
-  it('mockGetChapterAudio: hollow-tide-2 chapter 3 gets the acoustic+ASR segment override, same timings', async () => {
+  it('mockGetChapterAudio: hollow-tide-2 chapter 7 gets the acoustic+ASR segment override, same timings', async () => {
     vi.resetModules();
     vi.stubEnv('VITE_USE_MOCKS', 'true');
     vi.stubEnv('VITE_DEMO_CAPTURE', '1');
     const { api } = await import('./api');
 
-    const audio = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 3 });
+    const audio = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 7 });
     const suspects = audio.segments!.filter((s) => s.suspect);
 
     expect(suspects).toHaveLength(2);
@@ -47,7 +47,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     vi.stubEnv('VITE_DEMO_CAPTURE', '0');
     const { api } = await import('./api');
 
-    const audio = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 3 });
+    const audio = await api.getChapterAudio({ bookId: 'hollow-tide-2', chapterId: 7 });
     expect(
       audio.segments!.filter((s) => s.suspect).map((s) => s.characterId),
     ).toEqual(['halloran', 'narrator']);
@@ -65,7 +65,7 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     // durationSec to 0 and deriveIssues would find no issues at all.
     const audio = await api.getChapterAudio({
       bookId: 'hollow-tide-2',
-      chapterId: 3,
+      chapterId: 7,
       duration: '00:00',
     });
     expect(audio.durationSec).toBe(600);
