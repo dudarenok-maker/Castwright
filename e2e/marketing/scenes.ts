@@ -810,7 +810,24 @@ export const SCENES: Scene[] = [
           profile-regen-preview.spec.ts clears it) so pending[0] is genuinely
           our stub, not a stray one; the profile drawer is also dismissed
           first since its sticky footer overlaps the modal's Preview button
-          at this viewport (same fix that real spec uses). */
+          at this viewport (same fix that real spec uses).
+
+       3. Duration side effect. Code review on this task flagged that
+          skipping the tick pipeline entirely also skips
+          chapters-slice.ts's `applyGenerationTick` `chapter_complete`
+          branch (~line 498), which is what stamps `ch.duration` from
+          `ev.durationSec` on a real render. Without it, `chapter.duration`
+          is still its seeded '00:00', and build-pending-revision.ts:45-46
+          reads that SAME field into both `oldDuration` and `newDuration` —
+          so the screenshot would show "00:00" on both A and B cards (both
+          fields deriving from one still-unset value, not two
+          independently-wrong ones). So this scene dispatches a minimal
+          `chapters/applyGenerationTick` `chapter_complete` event (just
+          `chapterId` + a realistic `durationSec`) BEFORE
+          `revisions/markRevisionPlayable`, mirroring what the real tick
+          would have done first. Same "stand in for the tick the dead mock
+          stream can't fire" workaround as point 2 above, just for the
+          reducer that runs one step earlier in the real pipeline. */
     id: 'generating-revision-diff',
     hash: '#/books/hollow-tide-2/cast?profile=insp-cray',
     viewports: ['desktop'],
@@ -847,6 +864,16 @@ export const SCENES: Scene[] = [
         // via the mock generation stream — dead code in DEMO_CAPTURE mode
         // (see the comment above), so we dispatch what it would have fired.
         if (chapterId != null) {
+          // Also stand in for the chapter_complete tick's OWN upstream
+          // effect (chapters-slice.ts's applyGenerationTick, which the real
+          // stream would have run first) — it stamps `chapter.duration`
+          // from `durationSec`, which the revision stub below reads for
+          // both its A and B card durations. Skipping this would leave the
+          // screenshot showing "00:00" on both cards (see comment above).
+          s?.dispatch({
+            type: 'chapters/applyGenerationTick',
+            payload: { type: 'chapter_complete', chapterId, durationSec: 680 },
+          });
           s?.dispatch({ type: 'revisions/markRevisionPlayable', payload: { chapterId } });
         }
       });
