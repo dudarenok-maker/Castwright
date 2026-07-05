@@ -195,6 +195,7 @@ export const SCENES: Scene[] = [
         .click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="account-generation-workers"]',
+    scrollTo: '[data-testid="account-generation-workers"]',
     strict: true,
   },
   {
@@ -208,6 +209,7 @@ export const SCENES: Scene[] = [
         .click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="account-analyzer-phase1-min-lag"]',
+    scrollTo: '[data-testid="account-analyzer-phase1-min-lag"]',
     strict: true,
   },
   {
@@ -221,6 +223,7 @@ export const SCENES: Scene[] = [
         .click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="account-generation-workers"]',
+    scrollTo: '[data-testid="account-generation-workers"]',
     strict: true,
   },
   {
@@ -234,6 +237,7 @@ export const SCENES: Scene[] = [
         .click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="account-sidecar-url"]',
+    scrollTo: '[data-testid="account-sidecar-url"]',
     strict: true,
   },
   {
@@ -247,6 +251,7 @@ export const SCENES: Scene[] = [
         .click({ timeout: 5000 });
     },
     waitForAfterAction: '[data-testid="account-models-card"]',
+    scrollTo: '[data-testid="account-models-card"]',
     strict: true,
   },
   {
