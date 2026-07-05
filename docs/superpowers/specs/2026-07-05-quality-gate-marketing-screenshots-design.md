@@ -1,6 +1,7 @@
-status: draft
-
 # Quality Gate — real screenshots + comprehensive wiki coverage
+
+Status: draft
+Date: 2026-07-05
 
 ## Context
 
@@ -118,11 +119,10 @@ Saltgrave's cast and only demonstrates the acoustic flavor. Add a
 
 **New `HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[]`** (shape mirrors
 `src/data/drift.ts`), two events on Saltgrave (`hollow-tide-2`):
-- Severe — Insp. Cray, chapter 2 (done), factor `register` or `pace`,
-  description in-story ("manuscript edits sharpened his dialogue after this
-  chapter rendered" style, matching the existing dev fixture's narrative
-  device), `suggestedAction: 'regenerate_chapter'` (Auto-regen shows for
-  Severe).
+- Severe — Insp. Cray, chapter 2 (done), factor `register` (mirrors the
+  existing dev fixture's Eliza events — "manuscript edits propagated the
+  change" narrative device), `suggestedAction: 'regenerate_chapter'`
+  (Auto-regen shows for Severe).
 - Moderate — Dr. Wren, chapter 5 (done), factor `warmth`.
 
 **Wire into `mockPollRevisions` / `pollRevisionsBulk`** (`src/lib/api.ts`):
