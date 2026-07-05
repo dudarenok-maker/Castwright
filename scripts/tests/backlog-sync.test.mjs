@@ -29,6 +29,59 @@ test('parseWhatBenefit returns nulls when a bullet is missing', () => {
   });
 });
 
+test('parseWhatBenefit extracts a ## heading block (backlog-item.yml issue-form shape)', () => {
+  const body = [
+    '## What',
+    'Turn the gate into a visible report.',
+    '',
+    '## Acceptance',
+    '- Some acceptance bullet.',
+    '',
+    '## Benefit (user / strategic)',
+    'Proof, not promises.',
+  ].join('\n');
+  assert.deepEqual(parseWhatBenefit(body), {
+    what: 'Turn the gate into a visible report.',
+    benefit: 'Proof, not promises.',
+  });
+});
+
+test('parseWhatBenefit extracts a **What** bold-heading block and **Benefit (axis):** inline line', () => {
+  const body = [
+    '**What**',
+    '- In-app voice-sample capture with quality guidance.',
+    '- Explicit consent on the record.',
+    '',
+    '**Benefit (user):** the strongest consumer hook.',
+  ].join('\n');
+  assert.deepEqual(parseWhatBenefit(body), {
+    what: 'In-app voice-sample capture with quality guidance. Explicit consent on the record.',
+    benefit: 'the strongest consumer hook.',
+  });
+});
+
+test('parseWhatBenefit returns nulls for a body with no recognizable What/Benefit section', () => {
+  const body = '@-';
+  assert.deepEqual(parseWhatBenefit(body), { what: null, benefit: null });
+});
+
+test('parseWhatBenefit does not truncate a Benefit block whose content merely opens with bold emphasis', () => {
+  // Regression: content like "**Proof, not promises.** epub2tts now does..."
+  // must NOT be mistaken for the start of a new labeled section — only a
+  // recognized label keyword (What/Benefit/Acceptance/...) ends the block.
+  const body = [
+    '## What',
+    'Turn the gate into a report.',
+    '',
+    '## Benefit (user / strategic)',
+    '**Proof, not promises.** Making ours legibly more defends the QA moat.',
+  ].join('\n');
+  assert.deepEqual(parseWhatBenefit(body), {
+    what: 'Turn the gate into a report.',
+    benefit: '**Proof, not promises.** Making ours legibly more defends the QA moat.',
+  });
+});
+
 test('groupByMoscow buckets by tier, ignoring wont/unlabeled, sorted by Priority ascending', () => {
   const issues = [
     { id: 'fs-9', number: 50, moscow: 'could', body: '', priority: null },
@@ -84,8 +137,8 @@ test('renderBacklogMd flags an issue body missing a What or Benefit bullet', () 
     could: [],
   };
   const md = renderBacklogMd({ groups, wontIssues: [] });
-  assert.match(md, /no _What:_ bullet found in #5/);
-  assert.match(md, /no _Benefit:_ bullet found in #5/);
+  assert.match(md, /no What section found in #5/);
+  assert.match(md, /no Benefit section found in #5/);
 });
 
 test('renderBacklogMd lists Won\'t issues as one-liners, sorted by number', () => {

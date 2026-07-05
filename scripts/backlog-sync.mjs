@@ -24,15 +24,62 @@
 // Pure helpers (exported for unit tests — no `gh`, no network).
 // ---------------------------------------------------------------------------
 
-// Parse the '- _What:_ ...' / '- _Benefit...:_ ...' bullets out of an issue
-// body — the same bullet shape scripts/thin-backlog.mjs already parses.
+// Extract a single-line inline value: a line matching `re` whose capture
+// group 1 holds the value on the same line — e.g. the legacy
+// `- _What:_ text` bullet, or a `**What:** text` / `**Benefit (user):** text`
+// bold-inline label.
+function extractInline(text, re) {
+  const m = re.exec(text);
+  return m ? m[1].trim() : null;
+}
+
+// Recognized section-label keywords across the issue corpus's several body
+// conventions (backlog-item.yml fields, thin-backlog.mjs's bullet shape, and
+// hand-written Won't-item bullets) — used to tell a genuine NEXT section
+// label apart from ordinary content that merely opens with bold emphasis
+// (e.g. "**Proof, not promises.** epub2tts now does ASR-matching...").
+const KNOWN_LABELS = 'What|Benefit|Acceptance|Key files?|Depends on|Source|Regression plan|Why parked|Wake when|Lens|Size';
+const NEXT_LABEL_RE = new RegExp(`^\\*\\*(${KNOWN_LABELS})\\b[^*]*\\*\\*`, 'i');
+
+// Extract a block value: find the line that IS the section label (a `##`
+// heading or a standalone `**Label**` line), then join every non-empty line
+// after it up to the next heading / recognized bold-label line / `---` rule
+// / end of text into one paragraph.
+function extractBlock(text, labelLineRe) {
+  const lines = text.split(/\r?\n/);
+  const idx = lines.findIndex((l) => labelLineRe.test(l.trim()));
+  if (idx === -1) return null;
+  const out = [];
+  for (let i = idx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (/^#{1,6}\s/.test(line) || NEXT_LABEL_RE.test(line) || /^---\s*$/.test(line)) break;
+    if (line) out.push(line.replace(/^[-*]\s+/, ''));
+  }
+  const joined = out.join(' ').trim();
+  return joined || null;
+}
+
+// Parse the What/Benefit content out of an issue body. The real issue corpus
+// uses several shapes (the legacy `- _What:_ ...` bullet from
+// scripts/thin-backlog.mjs's convention; a `## What` / `## Benefit (axis)`
+// markdown heading followed by a paragraph — the dominant shape for issues
+// filed via `.github/ISSUE_TEMPLATE/backlog-item.yml` or `gh issue create`;
+// and a `**What**` bold-heading block or `**Benefit (axis):** inline text`
+// bold-inline line for hand-written issues) — tries each in order, first
+// match wins.
 export function parseWhatBenefit(body) {
-  const lines = String(body ?? '').split(/\r?\n/);
-  const strip = (line) =>
-    line ? line.trim().replace(/^- _[^:]*:_\s*/, '').trim() : null;
-  const whatLine = lines.find((l) => /^- _What\b/.test(l.trim()));
-  const benefitLine = lines.find((l) => /^- _Benefit\b/.test(l.trim()));
-  return { what: strip(whatLine), benefit: strip(benefitLine) };
+  const text = String(body ?? '');
+  const what =
+    extractInline(text, /^-\s*_What\b[^:]*:_\s*(.+)$/m) ??
+    extractInline(text, /^\*\*What\b[^*]*:\*\*\s*(.+)$/m) ??
+    extractBlock(text, /^#{1,6}\s*What\b/i) ??
+    extractBlock(text, /^\*\*What\*\*$/i);
+  const benefit =
+    extractInline(text, /^-\s*_Benefit\b[^:]*:_\s*(.+)$/m) ??
+    extractInline(text, /^\*\*Benefit\b[^*]*:\*\*\s*(.+)$/m) ??
+    extractBlock(text, /^#{1,6}\s*Benefit\b/i) ??
+    extractBlock(text, /^\*\*Benefit\*\*$/i);
+  return { what, benefit };
 }
 
 // Order two issues by their board Priority field (lower number = higher
@@ -116,12 +163,12 @@ function renderItem(issue) {
   lines.push(
     what
       ? `- _What:_ ${what}`
-      : `- _What:_ _(no _What:_ bullet found in #${issue.number} — fix the issue body, see the parseability audit)_`,
+      : `- _What:_ _(no What section found in #${issue.number} — fix the issue body, see the parseability audit)_`,
   );
   lines.push(
     benefit
       ? `- _Benefit:_ ${benefit}`
-      : `- _Benefit:_ _(no _Benefit:_ bullet found in #${issue.number} — fix the issue body, see the parseability audit)_`,
+      : `- _Benefit:_ _(no Benefit section found in #${issue.number} — fix the issue body, see the parseability audit)_`,
   );
   lines.push(`_Full detail + acceptance:_ [#${issue.number}](${issue.url}).`, '');
   return lines.join('\n');
