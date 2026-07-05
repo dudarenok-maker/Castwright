@@ -12,7 +12,7 @@
    itself, the analysing pill rehydration, or any of the other side-
    effects the layout runs alongside. Those have their own paired tests. */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -127,6 +127,8 @@ vi.mock('../lib/api', () => ({
       currentSec: 0,
       updatedAt: new Date().toISOString(),
     })),
+    /* fe-47 tier-modal test — the "apply tier to cast" sink. */
+    setCastTier: vi.fn(async () => ({ updated: 0 })),
   },
   AnalysisError: class extends Error {},
   ExportIncompleteError: class extends Error {
@@ -156,7 +158,12 @@ import { revisionsActions } from '../store/revisions-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
 import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
-import type { Chapter } from '../lib/types';
+import type { Chapter, Character, Voice } from '../lib/types';
+import {
+  selectUndesignedQwenCharacters,
+  selectVoiceReadinessGateShouldFire,
+} from '../store/voice-readiness-selectors';
+import type { RootState } from '../store';
 
 function makeStore() {
   return configureStore({
@@ -1120,5 +1127,143 @@ describe('Layout — auto-finish on reaching the final listenable chapter (Task 
     await new Promise((r) => setTimeout(r, 50));
     expect(vi.mocked(api.setShelfStatus)).not.toHaveBeenCalled();
     expect(store.getState().continueListening.dismissedIds).not.toContain('b1');
+  });
+});
+
+/* fe-47 — the tier modal's 1.7B guard used to carry its OWN inline
+   "has a designed voice" check (`hasDesignedVoice`/`eligibleQwenMembers` in
+   layout.tsx), a third parallel definition alongside the cast view's
+   `needsVoiceIds` and fe-46's `selectUndesignedQwenCharacters`. This pins that
+   the modal's eligibility now derives from that same shared selector: for a
+   mixed cast (some designed, some not), the characters the modal actually
+   applies the 1.7B pin to are exactly the complement of what
+   `selectUndesignedQwenCharacters` reports as undesigned, and
+   `selectVoiceReadinessGateShouldFire` agrees the cast isn't fully designed. */
+describe('Layout — tier-modal 1.7B eligibility converges on the shared voice-readiness selector (fe-47)', () => {
+  const mixedCast: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Observer', color: 'narrator', lines: 0 } as Character,
+    {
+      id: 'overrideDesigned',
+      name: 'Odessa',
+      role: 'Lead',
+      color: 'lead',
+      lines: 10,
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'odessa-v1' } },
+    } as Character,
+    {
+      id: 'linkedDesigned',
+      name: 'Linh',
+      role: 'Support',
+      color: 'support',
+      lines: 8,
+      ttsEngine: 'qwen',
+      voiceId: 'vid-linh',
+    } as Character,
+    {
+      id: 'undesigned',
+      name: 'Uma',
+      role: 'Rival',
+      color: 'rival',
+      lines: 5,
+      ttsEngine: 'qwen',
+    } as Character,
+  ];
+
+  const libraryVoices: Voice[] = [
+    {
+      id: 'vid-linh',
+      name: 'Linh',
+      gradient: ['#111111', '#222222'],
+      ttsVoice: { provider: 'qwen', name: 'linh-v1' },
+    } as unknown as Voice,
+  ];
+
+  afterEach(() => {
+    /* This describe block overrides two mocks shared with the rest of the
+       file — restore their defaults so later tests aren't affected. */
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: [], dropped: [] } as never);
+    vi.mocked(api.setCastTier).mockReset();
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 0 });
+  });
+
+  it('pins the tier onto exactly the characters the shared selector marks as designed', async () => {
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: false,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: mixedCast },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    });
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: libraryVoices, dropped: [] } as never);
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(store.getState().cast.characters.map((c) => c.id)).toContain('undesigned');
+      expect(store.getState().voices.voices.map((v) => v.id)).toContain('vid-linh');
+    });
+
+    /* The shared selector's verdict: only 'undesigned' lacks a designed
+       Qwen voice, and the readiness gate agrees the cast isn't fully ready. */
+    const state = store.getState() as unknown as RootState;
+    const undesigned = selectUndesignedQwenCharacters(state, 'b1');
+    expect(undesigned.map((c) => c.id)).toEqual(['undesigned']);
+    expect(selectVoiceReadinessGateShouldFire(state, 'b1')).toBe(true);
+
+    act(() => {
+      store.dispatch(uiActions.openStartGenPrompt());
+    });
+
+    fireEvent.click(await screen.findByTestId('start-gen-tier-qwen3-tts-1.7b'));
+    fireEvent.click(screen.getByRole('button', { name: /Start generating/i }));
+
+    /* No refusal toast — at least one Qwen member is eligible. */
+    expect(screen.queryByText(/No Qwen voice has been designed yet/i)).toBeNull();
+
+    /* Exactly the two DESIGNED members get the 1.7B pin — via their own id
+       (no voiceId) or their linked voiceId — matching the selector's verdict
+       above 1:1. The undesigned member is excluded. */
+    await waitFor(() => expect(vi.mocked(api.setCastTier)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith(
+      'b1',
+      'overrideDesigned',
+      'qwen3-tts-1.7b',
+    );
+    expect(vi.mocked(api.setCastTier)).toHaveBeenCalledWith('b1', 'vid-linh', 'qwen3-tts-1.7b');
+    expect(vi.mocked(api.setCastTier)).not.toHaveBeenCalledWith(
+      'b1',
+      'undesigned',
+      'qwen3-tts-1.7b',
+    );
   });
 });
