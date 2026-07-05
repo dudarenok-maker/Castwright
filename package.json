@@ -56,6 +56,7 @@
     "verify:fast:scoped": "node scripts/verify-cache.mjs --steps test:hooks,test,test:server --scope-staged",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "stats": "node scripts/code-stats.mjs",
+    "backlog:sync": "node scripts/backlog-sync.mjs",
     "audit:stage2-coverage": "npx tsx scripts/audit-stage2-coverage.mts",
     "audit:missing-speakers": "npx tsx scripts/audit-missing-speakers.mts",
     "repair:missing-speakers": "npx tsx scripts/repair-missing-speakers.mts",

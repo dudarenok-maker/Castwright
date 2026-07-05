@@ -146,3 +146,206 @@ export function renderBacklogMd({ groups, wontIssues }) {
   out.push(RETIRED_NUMBERING, '');
   return `${out.join('\n').replace(/\n{3,}/g, '\n\n')}\n`;
 }
+
+// ---------------------------------------------------------------------------
+// Side-effecting glue (gh CLI + GraphQL). Mirrors scripts/thin-backlog.mjs /
+// scripts/migrate-backlog-to-issues.mjs. Throwaway-tested by hand, not
+// node:test — see the plan's Task 3 dry-run walkthrough.
+// ---------------------------------------------------------------------------
+
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(__dirname, '..');
+const BACKLOG_PATH = resolve(repoRoot, 'docs', 'BACKLOG.md');
+const CONFIG_PATH = resolve(repoRoot, 'docs', 'backlog-project-config.json');
+const PROJECT_OWNER = 'dudarenok-maker';
+
+const LEADING_ID = /^(fe|srv|side|ops|fs|app)-(\d+)\s*—\s*(.*)$/;
+
+function info(msg) {
+  process.stdout.write(`${msg}\n`);
+}
+function die(msg) {
+  process.stderr.write(`[FAIL] ${msg}\n`);
+  process.exit(1);
+}
+function ghAvailable() {
+  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  return !r.error && r.status === 0;
+}
+
+// Split an issue title "fs-1 — In-app upgrade pathway" into { id, title }.
+// Returns null for a title with no leading <prefix>-<n> token (non-backlog
+// issue — bugs/chores never carry this shape and are filtered out upstream
+// by the `type:feature` label anyway, but this is a second, cheap guard).
+function idAndTitleFromTitle(title) {
+  const m = LEADING_ID.exec(String(title).trim());
+  return m ? { id: `${m[1]}-${m[2]}`, title: m[3] } : null;
+}
+
+// Page through EVERY item on the Project via GraphQL (Projects v2 has no
+// server-side label filter on the items connection, so type:feature
+// filtering happens client-side in toBacklogIssues below), reading back the
+// Status field value + labels — fields `gh project item-list` does NOT
+// expose (it only prints id/content title/number/url, not custom fields).
+async function fetchFeatureIssues(config) {
+  const query = `
+    query($login: String!, $number: Int!, $after: String) {
+      user(login: $login) {
+        projectV2(number: $number) {
+          items(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              status: fieldValueByName(name: "Status") {
+                ... on ProjectV2ItemFieldSingleSelectValue { name }
+              }
+              priority: fieldValueByName(name: "Priority") {
+                ... on ProjectV2ItemFieldNumberValue { number }
+              }
+              content {
+                ... on Issue {
+                  number
+                  title
+                  url
+                  body
+                  state
+                  labels(first: 20) { nodes { name } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }`;
+
+  const results = [];
+  let after = null;
+  for (;;) {
+    const args = [
+      'api', 'graphql',
+      '-f', `query=${query}`,
+      '-f', `login=${PROJECT_OWNER}`,
+      '-F', `number=${config.projectNumber}`,
+    ];
+    if (after) args.push('-f', `after=${after}`);
+    const raw = execFileSync('gh', args, { cwd: repoRoot, encoding: 'utf8' });
+    const data = JSON.parse(raw).data.user.projectV2.items;
+    results.push(...data.nodes);
+    if (!data.pageInfo.hasNextPage) break;
+    after = data.pageInfo.endCursor;
+  }
+  return results;
+}
+
+// Reduce raw GraphQL item nodes down to what groupByMoscow/renderBacklogMd
+// need. Done-filtering reads the board's own Status field (node.status) —
+// NOT issue open/closed — because that's what "Status != Done" means per
+// spec §D; a closed issue whose card missed the "Item closed -> Done"
+// automation, or an OPEN issue manually dragged to Done, must both be
+// judged by the field, not by GitHub's issue state. We additionally require
+// state === 'OPEN' as a belt-and-suspenders guard against a *stale* Status
+// value on an issue that's actually closed (matches the existing "BACKLOG.md
+// is forward-looking, not a changelog" convention, spec §D). moscow:wont
+// issues are the one exception: spec §D says they render "regardless of
+// board Status" — so no state/status gate applies to them at all.
+function toBacklogIssues(nodes) {
+  const featureIssues = [];
+  const wontIssues = [];
+  for (const node of nodes) {
+    const content = node.content;
+    if (!content) continue;
+    const labels = content.labels.nodes.map((l) => l.name);
+    if (!labels.includes('type:feature')) continue;
+    const parsed = idAndTitleFromTitle(content.title);
+    // Malformed title (no leading <prefix>-<n> — shouldn't happen for a
+    // type:feature issue filed via the backlog-item.yml form, but a hand-
+    // edited title could drift). Flagged by scripts/audit-issue-parseability.mjs
+    // (Task 9), which checks this exact shape — never silently dropped
+    // without a paper trail.
+    if (!parsed) continue;
+    const moscowLabel = labels.find((l) => l.startsWith('moscow:'));
+    const moscow = moscowLabel ? moscowLabel.slice('moscow:'.length) : null;
+    const issue = {
+      id: parsed.id,
+      number: content.number,
+      title: parsed.title,
+      url: content.url,
+      body: content.body,
+      moscow,
+      priority: node.priority?.number ?? null,
+    };
+    if (moscow === 'wont') {
+      wontIssues.push(issue);
+      continue;
+    }
+    if (!moscow) continue; // no moscow:* tier yet — not ready for either list
+    const status = node.status?.name ?? null;
+    if (content.state === 'OPEN' && status !== 'Done') featureIssues.push(issue);
+  }
+  return { featureIssues, wontIssues };
+}
+
+function printUnifiedDiff(original, proposed) {
+  const dir = mkdtempSync(join(tmpdir(), 'backlog-sync-'));
+  const tmp = join(dir, 'BACKLOG.proposed.md');
+  try {
+    writeFileSync(tmp, proposed, 'utf8');
+    try {
+      execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', BACKLOG_PATH, tmp], {
+        stdio: 'inherit',
+      });
+    } catch {
+      // git diff --no-index exits 1 when files differ — expected, already streamed.
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function parseArgs(argv) {
+  const out = { apply: false };
+  for (const a of argv) {
+    if (a === '--apply') out.apply = true;
+    else if (a === '--help' || a === '-h') {
+      info('Usage: node scripts/backlog-sync.mjs [--apply]');
+      process.exit(0);
+    } else die(`Unknown argument: ${a}`);
+  }
+  return out;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (!existsSync(CONFIG_PATH)) die(`Not found: ${CONFIG_PATH} — run the Task 1 board setup first.`);
+  if (!ghAvailable()) die('`gh` not found. Install the GitHub CLI + `gh auth login`.');
+
+  const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  info('Querying the Project board via GraphQL…');
+  const nodes = await fetchFeatureIssues(config);
+  const { featureIssues, wontIssues } = toBacklogIssues(nodes);
+  const groups = groupByMoscow(featureIssues);
+  const proposed = renderBacklogMd({ groups, wontIssues });
+
+  info(`Found ${featureIssues.length} open type:feature issue(s) (must=${groups.must.length}, should=${groups.should.length}, could=${groups.could.length}) + ${wontIssues.length} won't issue(s).`);
+
+  const original = existsSync(BACKLOG_PATH) ? readFileSync(BACKLOG_PATH, 'utf8') : '';
+  if (!args.apply) {
+    printUnifiedDiff(original, proposed);
+    info('\n[DRY-RUN] docs/BACKLOG.md not modified. Re-run with --apply to write it.');
+    process.exit(0);
+  }
+
+  writeFileSync(BACKLOG_PATH, proposed, 'utf8');
+  info(`\n[OK] rewrote docs/BACKLOG.md. Review: git diff docs/BACKLOG.md`);
+}
+
+const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
+if (invokedHref && import.meta.url === invokedHref) {
+  await main();
+}
