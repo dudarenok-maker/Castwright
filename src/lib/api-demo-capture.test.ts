@@ -71,4 +71,46 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     expect(audio.durationSec).toBe(600);
     expect(audio.segments.filter((s) => s.suspect)).toHaveLength(2);
   });
+
+  it('mockPollRevisions: hollow-tide-2 gets HOLLOW_TIDE_DRIFT_EVENTS and pending: [] under DEMO_CAPTURE', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { api } = await import('./api');
+
+    const res = await api.pollRevisions({ bookId: 'hollow-tide-2' });
+    expect(res.pending).toEqual([]);
+    // Exact-equality is safe here: VOICE_DRIFT_EVENTS (src/data/drift.ts) only
+    // seeds bookId 'sb' (x6) and 'cc' (x1) — confirmed zero 'hollow-tide-2'
+    // events during plan review — so the merged array is exactly these two.
+    expect(res.drift.map((d) => d.id)).toEqual([
+      'drift:hollow-tide-2:2:insp-cray:register',
+      'drift:hollow-tide-2:5:dr-wren:warmth',
+    ]);
+  });
+
+  it('mockPollRevisions/pollRevisionsBulk: pending stays [] for every book id under DEMO_CAPTURE (round-2 fix — not just Hollow Tide)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { api } = await import('./api');
+
+    const coalfall = await api.pollRevisions({ bookId: 'coalfall-commission' });
+    expect(coalfall.pending).toEqual([]);
+
+    const bulk = await api.pollRevisionsBulk({ bookIds: ['hollow-tide-1', 'coalfall-commission'] });
+    expect(bulk.byBookId['hollow-tide-1'].pending).toEqual([]);
+    expect(bulk.byBookId['coalfall-commission'].pending).toEqual([]);
+  });
+
+  it('non-demo-capture mode is unaffected: dev pending/drift fixtures still serve for sb/cc', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '0');
+    const { api } = await import('./api');
+
+    const res = await api.pollRevisions({ bookId: 'sb' });
+    expect(res.pending.length).toBeGreaterThan(0);
+    expect(res.drift.some((d) => d.bookId === 'sb')).toBe(true);
+  });
 });

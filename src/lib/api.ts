@@ -70,6 +70,7 @@ import {
   HOLLOW_TIDE_POSED,
   HOLLOW_TIDE_VOICES,
   HOLLOW_TIDE_CONTINUE,
+  HOLLOW_TIDE_DRIFT_EVENTS,
   COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -1787,6 +1788,24 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      would let a background poll of an empty book wipe the active book's
      pending). The fe-15 profile-regen-preview spec clears `pending` itself
      before opening its preview stub to avoid the phantom-revision collision. */
+  /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
+     stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
+     with no bookId field, so it always matched every book before) from
+     bleeding into the marketing books' poll response. Scoped to the
+     DEMO_CAPTURE flag for EVERY book, not specific book ids — the background
+     bulk poll (layout.tsx) reaches every non-active marketing book, and
+     applyPoll replaces `pending` wholesale regardless of bookId, so a
+     partial scope wouldn't fully close the bleed (adversarial review round
+     2 caught this when an earlier fix scoped it to hollow-tide-* only). */
+  if (DEMO_CAPTURE) {
+    return {
+      pending: [],
+      drift: [
+        ...VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
+        ...HOLLOW_TIDE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
+      ],
+    };
+  }
   return {
     pending: PENDING_REVISIONS,
     drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
