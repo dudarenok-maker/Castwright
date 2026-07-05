@@ -18,6 +18,9 @@ dist/
 
 # Env
 .env
+
+# Agent-created git worktrees (superpowers:using-git-worktrees)
+/.worktrees/
 .env.local
 .env.*.local
 !.env.example
