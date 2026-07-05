@@ -25,6 +25,22 @@ export interface Scene {
       logged, never aborts the run, so a selector drift degrades to "scene
       captured pre-interaction" rather than failing the whole capture. */
   action?: (page: Page) => Promise<void>;
+  /** Optional selector to await AFTER `action` runs (not before, unlike
+      `waitFor` — see the ordering note below). This is how a scene confirms
+      its action actually reached its target state (a modal opened, a
+      section expanded), since `waitFor` runs before `action` and can only
+      ever confirm PRE-action page state. */
+  waitForAfterAction?: string;
+  /** When true, a `waitFor`/`waitForAfterAction` timeout or `action` throw is
+      re-thrown instead of caught — failing this scene's test outright.
+      Every scene this repo adds going forward that has an `action` should
+      set this and use `waitForAfterAction` (not `waitFor`) to confirm the
+      action's target state, so "capture ran green" means the scene actually
+      reached that state, not merely that nothing threw. `waitFor` alone is
+      only for confirming pre-action page/navigation state (e.g. the page
+      loaded before any click happens). Existing/legacy scenes stay
+      non-strict. */
+  strict?: boolean;
 }
 
 export const SCENES: Scene[] = [

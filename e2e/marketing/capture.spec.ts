@@ -73,24 +73,41 @@ for (const scene of SCENES) {
 
     await page.goto('/' + scene.hash);
     if (scene.waitFor) {
-      // Non-fatal: if a view never reaches its content selector we still want a
-      // screenshot (plus a console note) rather than an aborted run.
+      // Non-fatal by default: if a view never reaches its content selector we
+      // still want a screenshot (plus a console note) rather than an aborted
+      // run. `strict: true` scenes re-throw instead.
       try {
         await page.waitForSelector(scene.waitFor, { timeout: 20_000 });
-      } catch {
+      } catch (err) {
+        if (scene.strict) throw err;
         console.warn(`[capture] ${scene.id}: waitFor "${scene.waitFor}" timed out — capturing anyway`);
       }
     }
     await waitForImages(page);
 
-    /* Optional interaction (open a modal, etc.) — best-effort, never aborts
-       the run. A selector drift just means the shot is pre-interaction. */
     if (scene.action) {
       try {
         await scene.action(page);
         await page.waitForTimeout(300); // let the modal's open transition settle
       } catch (err) {
+        if (scene.strict) throw err;
         console.warn(`[capture] ${scene.id}: action failed — capturing pre-interaction:`, err);
+      }
+    }
+
+    /* Confirms the action actually reached its target state (unlike
+       `waitFor` above, which runs BEFORE `action` and can only ever confirm
+       pre-action page state). This is the field every interaction scene in
+       this repo's screenshot plan uses to verify a modal opened / a section
+       expanded, rather than merely that a click didn't throw. */
+    if (scene.waitForAfterAction) {
+      try {
+        await page.waitForSelector(scene.waitForAfterAction, { timeout: 20_000 });
+      } catch (err) {
+        if (scene.strict) throw err;
+        console.warn(
+          `[capture] ${scene.id}: waitForAfterAction "${scene.waitForAfterAction}" timed out — capturing anyway`,
+        );
       }
     }
 
