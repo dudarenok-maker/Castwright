@@ -21,23 +21,37 @@ revised: |
   2026-07-05 round 2 (adversarial pass on the round-1 revision). Round 1's
   fix was itself Contradicted: a single `qaGatesUsed` object "stamped at
   finalize" can't reflect render-time config on the two *post-render*
-  writers of `segments.json` (`chapter-splice.ts`, `chapter-qa-repair.ts`)
-  because `finalizeChapterAudioWrite` reads config *live* and rebuilds the
-  segments file from scratch — reintroducing the exact false-clean risk the
-  design exists to prevent. Also: `chaptersEligible` can't be sourced from
-  `deriveBookOutline` (it reads only verdict files, never `segments.json`,
-  where engine/eligibility data lives) — conflated with a different function
-  (`scoreBook`) that has no return value at all. And the voice-match
-  headline ("N characters checked") had no defined source, so an
-  all-too-short-reference book could still read as a clean pass. Round 2's
-  fix: moved coverage-stamping to the point where each gate's ground truth
-  is actually known (per-segment inside the render/re-record loops, and
-  inside `aggregate.ts`/`scoreBook` for voice-drift) instead of a shared
-  downstream writer; moved eligibility computation into the report's own
-  aggregation code; added an explicit `charactersChecked` field and put the
-  coverage caveat in the headline, not a footnote; added a legacy-book
-  attribution state for pre-existing `render-integrity.json` files written
-  before `chapterId` existed.
+  writers of `segments.json` (`chapter-splice.ts`, `chapter-qa-repair.ts`).
+  Also: `chaptersEligible` can't be sourced from `deriveBookOutline` (it
+  reads only verdict files, never `segments.json`), and the voice-match
+  headline ("N characters checked") had no defined source. Round 2's fix:
+  moved coverage-stamping into `aggregate.ts`/`scoreBook` (per chapter) and
+  `synthesise-chapter.ts`/`chapter-qa-repair.ts` (per segment) — the code
+  that already knows each gate's ground truth, rather than a shared
+  downstream writer.
+
+  2026-07-05 round 3 (adversarial pass, final automated round per the
+  review-gate cap). Found the round-2 fix still didn't work: `scoreBook`
+  has book-level early returns (`chapterData.length === 0`,
+  `stochasticChars.size === 0`) that fire *before* any per-chapter
+  recording loop, so an all-Kokoro book, a never-run book, and a legacy
+  book all produce zero coverage records — indistinguishable. Also found
+  splice/QA-repair spread a segment's *pre-re-record* `qa`/`asr`/`suspect`
+  verdict forward via `{ ...segments[j] }` rather than writing a fresh one,
+  and `charactersOnRoster` had no defined population. Per the review-gate
+  cap (initial + 2 re-reviews = 3 total), this round did not get another
+  automated pass — the user was shown the findings directly and asked how
+  to proceed; they asked for the fixes to be applied manually. This
+  revision does that: eligibility is now computed directly by the report's
+  own aggregation (reading `segments.json`'s character/engine snapshots via
+  the same `STOCHASTIC_ENGINES` classification `aggregate.ts` already uses)
+  instead of being routed through `scoreBook`'s control flow, which
+  resolves the coverage ambiguity without needing scoreBook to change its
+  early-return behaviour at all. `charactersOnRoster` is now defined as the
+  same stochastic-character population used to compute eligibility — tied
+  to rendered content, not live cast.json. Splice and QA-repair are now
+  required to write a fresh per-segment verdict from the newly-rendered
+  audio instead of spreading the prior one forward.
 ---
 
 # fs-51 — Per-book performance-QA report
@@ -62,9 +76,10 @@ aid.
 **The report must never show a false pass.** Because its entire reason to
 exist is "proof, not promises," a receipt that reads clean for a check that
 either never ran, had nothing to check, or was checked incompletely is worse
-than no receipt at all. Two rounds of adversarial review against this exact
+than no receipt at all. Three rounds of adversarial review against this exact
 constraint reshaped the coverage-tracking design below — see the `revised:`
-frontmatter for what each round found and fixed.
+frontmatter for what each round found and fixed, including the round-3
+findings that were resolved manually after the review-gate cap was reached.
 
 **Correcting the srv-36 dependency.** The GitHub issue says fs-51 "depends on
 srv-36 (drift-threshold calibration)." That framing is stale: it was written
@@ -86,65 +101,110 @@ nothing new is persisted as a running summary:
 GET /api/books/:bookId/qa-report → BookQaReport
 ```
 
-### Design principle: each gate stamps its own coverage, at its own point of truth
+### Design principle: each gate stamps its own coverage, at its own point of truth — except where that point of truth has an early exit
 
-Round 2 found that a single coverage flag stamped generically at
-`finalizeChapterAudioWrite` (a function shared by three callers — the
-generation path, `chapter-splice.ts`, and `chapter-qa-repair.ts`) can't be
-trusted: that function reads config *live* and rebuilds the segments file
-from scratch on every call, so a post-render splice or repair would
-re-stamp (or lose) the original render-time coverage fact for content it
-didn't even touch. The fix is architectural: **coverage is recorded by the
-code that already knows it firsthand, at the moment it runs** — never
-reconstructed downstream from a shared writer that wasn't there when the
-gate actually fired.
+Round 2 established that coverage must be recorded by the code that already
+knows it firsthand, not reconstructed downstream. Round 3 found the one
+place that principle breaks: `aggregate.ts`'s `scoreBook` has **book-level**
+early returns (zero rendered chapters; zero stochastic-engine characters
+anywhere in the book) that fire *before* the per-chapter loop that would
+record a coverage fact — so for exactly the cases where honesty matters most
+(an all-Kokoro book, or a book where the gate never ran), scoreBook never
+gets far enough to say which one happened.
 
-1. **Signal-QA + SEG-ASR** — stamped **per segment**, inside whichever
-   render/re-record loop actually (re)synthesizes that segment:
-   `synthesise-chapter.ts`'s loop for generation, and
-   `chapter-qa-repair.ts`'s own re-record loop for repairs (confirmed as a
-   *separate* implementation from `synthesise-chapter.ts`'s, not a shared
-   call — see the retry-counter note below). Each segment record gets its
-   existing gate-config flags recorded at the exact moment it was rendered,
-   alongside the `qaRetries`/`asrRetries` counters (same write, same
-   reasoning). A segment that isn't touched by a later splice/repair simply
-   keeps its prior record unchanged — there is nothing to "carry forward"
-   because nothing rewrote it. **Whether `chapter-splice.ts`'s "re-record"
-   segments are produced by re-invoking `synthesise-chapter.ts`'s loop or
-   by some other path is not confirmed by this spec — verify at
-   implementation time; if splice has its own separate synthesis call, it
-   needs the same per-segment stamp as the repair path does.**
-2. **Voice drift (srv-36)** — stamped **per chapter, inside
-   `aggregate.ts`'s `scoreBook`**, the single existing choke point for this
-   gate. Today, `scoreBook` silently `continue`s when a chapter has zero
-   stochastic-engine characters or produces zero verdict rows — this spec
-   requires it to also record a small coverage fact for *every* chapter it
-   processes, even in those empty cases: `{ chapterId, eligible: boolean,
-   scored: boolean }`, alongside the file(s) it already writes. This is an
-   additive change to code that already has the answer at hand, not a
-   reconstruction after the fact — it avoids duplicating the
-   `STOCHASTIC_ENGINES` eligibility filter anywhere else (a real risk the
-   round-2 review flagged: computing eligibility a second time, in the
-   report's own code, from `segments.json`, would diverge from
-   `aggregate.ts`'s own filter over time).
-3. **Config drift** — unchanged; always-on, no coverage question. Different
-   time axis from the other three rows (see below).
+**The fix: don't ask scoreBook to answer a question its control flow can't
+reach.** Eligibility — "does this book have any stochastic-engine
+characters at all" — is computed **directly by the report's own
+aggregation code**, reading each chapter's `segments.json` character/engine
+snapshot through the same `STOCHASTIC_ENGINES` classification `aggregate.ts`
+already uses (imported, not reimplemented, so there is exactly one
+definition of "stochastic," not two that can drift apart). This fully
+decouples the eligibility signal from whether `scoreBook` happened to run:
 
-`deriveBookOutline()`
-(`server/src/audio/render-integrity/verdicts-io.ts`) gets one small,
-additive change: `chapterId` on `VerdictRow` (the chapter id is already in
-scope where `scoreBook` writes these rows — confirmed low-risk). It stays a
-pure reader of `render-integrity.json`/the new per-chapter coverage
-records; it does **not** grow a dependency on `segments.json` or the
-eligibility filter, which stays owned by `aggregate.ts` alone.
+- `voiceDrift.chaptersEligible === 0` (computed independently, from
+  `segments.json`) → **"No stochastic-voiced characters in this book —
+  nothing for this check to do."** Its own honest state, shown regardless
+  of whether the gate is on or off, because it's moot either way — this is
+  not a "not run" claim, it's a "there was nothing to check" fact.
+- `chaptersEligible > 0` — there *was* something to check, so if the gate
+  was on, `scoreBook` (which only book-level-returns when
+  `stochasticChars.size === 0`, which is false here) will have entered its
+  per-chapter loop and produced verdict files for at least some chapters.
+  `voiceDrift.chaptersScored` (from `deriveBookOutline`, reading actual
+  `render-integrity.json` files with the added `chapterId`) being `0` here
+  genuinely means "the gate was off" — the ambiguity is gone, because the
+  zero-eligible case is no longer folded into the same `0/0` reading.
+- A narrower, legitimate residual case remains: a chapter can be eligible
+  but skipped by `scoreBook`'s per-chapter (not book-level) check for a
+  missing embeddings sibling (a transient/failed embed, not a config
+  question). This surfaces as its own small `chaptersEmbedFailed` count
+  rather than being folded into either "not run" or "clean" — see schema.
 
-**Legacy books.** Books rendered before this ships have `render-integrity.json`
-files with no `chapterId` and no coverage records. The report detects this
-(`chapterId` absent on any row, or no coverage record for a chapter with
-existing verdict data) and sets `voiceDrift.attribution: 'legacy-unattributed'`
-rather than guessing — the UI shows severity counts and a flat mismatch list
-without per-chapter linking, plus a note that re-rendering or repairing a
-chapter restores full attribution for it.
+`voiceDrift.charactersOnRoster` uses the **same population** this
+eligibility computation already establishes: distinct stochastic-engine
+characters present in the book's rendered chapters. Not live `cast.json`
+(which would inflate the denominator with Kokoro-voiced or cut characters
+that can't drift in the first place, or drift out of sync with what was
+actually rendered) and not scoreBook's internal-only bookkeeping — the
+report's own independently-computed set, reused for both `chaptersEligible`
+and `charactersOnRoster` so they can never disagree with each other.
+
+`deriveBookOutline()` (`server/src/audio/render-integrity/verdicts-io.ts`)
+still gets its one small additive change: `chapterId` on `VerdictRow` (the
+existing per-chapter processing loop in `aggregate.ts` needs the chapter id
+threaded from `ChapterData` — today that struct carries only `slug`, so
+this is a small, real edit, not a zero-touch one). It stays a pure reader of
+`render-integrity.json`; the eligibility computation is not part of it.
+
+### Segments must carry a fresh verdict after any re-record, not a spread-forward one
+
+Round 3 found that both `chapter-splice.ts` and `chapter-qa-repair.ts`
+re-record a segment's audio but then either discard the fresh verdict
+(`splice` calls `synthesiseChapter` per segment but takes only the PCM,
+rebuilding segment metadata via `{ ...segments[j], ... }` — spreading the
+**pre-re-record** segment's `qa`/`asr`/`suspect`/`asrSuspect` fields
+forward) or never compute one at all (`chapter-qa-repair.ts` patches
+`render-integrity.json`'s voice-drift verdict in place but never touches
+the segment's own `qa`/`asr`/`suspect` fields in `segments.json`). Left
+alone, this doesn't just poison coverage bookkeeping — it poisons the
+*result* rows: a chapter successfully repaired can still report `suspect:
+true` and drag down `acoustic.chaptersFlagged` / `asr.linesFlaggedDrift`
+after the fix already landed. That's a "we claimed to catch it and did,
+but we're still showing it as broken" failure — a smaller credibility
+problem than a false pass, but still a real one for a "proof, not promises"
+surface, and one this work should close rather than carry forward.
+
+**Requirement, in scope for this work, not deferred to the report layer:**
+- `chapter-splice.ts`'s per-segment re-record call must pass through the
+  same signal-QA/ASR gate options used at generation time and use the
+  **returned** segment's fresh `qa`/`asr` fields for the spliced-in record,
+  instead of spreading the original segment's verdict forward.
+- `chapter-qa-repair.ts` must, after selecting a winning re-recorded take,
+  write that take's fresh `qa`/`asr`/`suspect`/`asrSuspect` verdict onto the
+  segment record in `segments.json` — today it only patches
+  `render-integrity.json`'s voice-drift row and pushes to the repair
+  route's own SSE `repaired[]`/`stillSuspect[]` arrays, never the
+  segment's own QA fields.
+
+Both routes already have the "new audio + the winning take" in hand at the
+point this needs to happen; this is writing down a verdict that's already
+computed, not adding new QA logic.
+
+### Retry counters
+
+An integer `qaRetries` / `asrRetries` field on each segment record in
+`segments.json`, incremented wherever a segment is actually re-recorded:
+`synthesise-chapter.ts`'s loop for generation, and `chapter-qa-repair.ts`'s
+own re-record loop for repairs — confirmed-separate code paths, so both
+need their own increment. `chapter-splice.ts` needs no extra increment
+logic beyond the fresh-verdict fix above: once it's writing a real,
+freshly-computed segment record instead of a spread of the original, that
+record's own `qaRetries` (from whatever synthesis path produced it) already
+reflects that segment's own history correctly.
+
+This is what makes "N lines re-recorded" an honest attempt-count instead of
+a "still flagged" proxy — without it, only the final verdict survives and a
+retry that *fixed* a line would be invisible.
 
 ### Config drift's own time axis
 
@@ -154,21 +214,17 @@ right now — it answers "has anything changed since this book was rendered,"
 not "did anything go wrong during the render." The report keeps this row
 visually and structurally separate from the other three for that reason.
 
-### Retry counters
+### Legacy books
 
-An integer `qaRetries` / `asrRetries` field on each segment record in
-`segments.json`, incremented at the same two points that now stamp gate
-coverage (above): `synthesise-chapter.ts`'s re-record loop, **and**
-`chapter-qa-repair.ts`'s own re-record loop — these are confirmed-separate
-code paths, so both need their own increment, not one shared increment
-with a "carry-forward" concern. `chapter-splice.ts` needs no extra work
-here: it assembles a chapter's segment array via object-spread
-(`{ ...segments[j], ... }`) for kept/gain/re-record segments, so an
-existing `qaRetries` value on a spread-from segment survives automatically.
-
-This is what makes "N lines re-recorded" an honest attempt-count instead of
-a "still flagged" proxy — without it, only the final verdict survives and a
-retry that *fixed* a line would be invisible.
+Books rendered before this ships have `render-integrity.json` files with no
+`chapterId`. The report detects this (verdict data exists but carries no
+`chapterId`) and sets `voiceDrift.attribution: 'legacy-unattributed'` —
+severity counts and a flat mismatch list still show, without per-chapter
+linking, plus a note that re-rendering or repairing a chapter restores full
+attribution for it. This is a distinct signal from `chaptersEligible`/
+`chaptersScored` (which are computed fresh from `segments.json` regardless
+of file vintage), so a legacy book's coverage numbers are still accurate —
+only the per-mismatch chapter linkage is unavailable until touched.
 
 The endpoint is the single source of truth for both display and export — no
 separate export endpoint. Both the Listen-view card and the live
@@ -188,9 +244,9 @@ BookQaReport {
   },
   voiceDrift: {
     attribution: 'full' | 'legacy-unattributed',
-    chaptersEligible, chaptersScored,
+    chaptersEligible, chaptersScored, chaptersEmbedFailed,
     charactersOnRoster, charactersChecked,
-    mismatches: [{ characterId, chapterId, severity, fixable }],
+    mismatches: [{ characterId, chapterId, severity: 'severe', fixable }],
     inconclusiveCount, uncheckedCharacterIds: string[]
   },
   configDrift: { counts: { mild, moderate, severe }, events: DriftEvent[] },
@@ -202,43 +258,52 @@ BookQaReport {
   rendered chapter; the denominator for the acoustic/ASR coverage fractions
   below. **Known limitation**: pre-108 (legacy) segment records can carry
   absent/empty `sentenceIds`, which silently undercounts rather than
-  overcounts — a "0 of 0" quiet gap on old books, not a false pass. Worth a
-  follow-up if it turns out to matter in practice; not blocking for v1.
+  overcounts — a "0 of 0" quiet gap on old books, not a false pass. Not
+  blocking for v1.
 - `acoustic.linesChecked` / `linesRerecorded` — sums of `sentenceIds.length`
-  (not segment-group counts) across segments whose per-segment coverage
-  stamp shows the signal-QA gate was on. Comparing `linesChecked` against
-  `totalLines` is the acoustic coverage fraction — a partial number here
-  (e.g. `290 of 342`) means the gate was off for part of the book, without
-  needing a separate chapter-level on/off flag.
+  across segments where `seg.qa != null` (present only when the signal-QA
+  gate actually ran for that segment — an existing field, not a new stamp;
+  see the "segments must carry a fresh verdict" requirement above for why
+  this is trustworthy after a splice/repair). `linesChecked` vs. `totalLines`
+  is the acoustic coverage fraction.
 - `acoustic.chaptersFlagged` — chapters containing at least one segment
-  still `suspect` after every retry attempt was exhausted.
+  still `suspect` after every retry attempt was exhausted **and** after any
+  splice/repair has written its fresh verdict.
 - `asr.linesVerified` / `linesFlaggedDrift` — same sentence-sum convention,
-  gated on the per-segment ASR coverage stamp; `linesVerified` vs.
-  `totalLines` is this row's coverage fraction.
-- `voiceDrift.chaptersEligible` — chapters (from `aggregate.ts`'s own
-  per-chapter coverage record) containing at least one stochastic-engine
-  (Qwen/Coqui) character. A chapter voiced entirely by Kokoro is not
-  eligible — this is what distinguishes "nothing to check here" from "not
-  run."
-- `voiceDrift.chaptersScored` — eligible chapters whose coverage record
-  shows `scored: true`. In practice this should equal `chaptersEligible`;
-  tracked separately so a shortfall is visible rather than silently
-  absorbed. `chaptersEligible === 0` and `chaptersScored === 0` together
-  mean "not run for this book" (the gate never produced a coverage record
-  at all); `chaptersEligible > 0` with `chaptersScored < chaptersEligible`
-  means partial coverage.
-- `voiceDrift.charactersOnRoster` / `charactersChecked` — roster size vs.
-  roster minus `uncheckedCharacterIds` (too-short reference audio). The UI
-  headline always states both when they differ (see UX section) — never a
-  bare "N characters checked" that could be roster size in disguise.
-- `voiceDrift.mismatches` — rows where `verdict === 'voice-mismatch'` and
-  `severity === 'severe'`. **Not the same severity scale as `configDrift`**:
-  voice-drift severity is `'severe' | 'inconclusive' | null` (from
-  `VerdictRow`), config-drift severity is `'mild' | 'moderate' | 'severe'`
-  — the UI renders each with its own colour mapping, never a shared legend.
-- `voiceDrift.inconclusiveCount` — verdicts in the inconclusive band
-  (typically short quotes below the minimum-duration gate) — its own line,
-  never folded into "mismatch" or "clean."
+  gated on `seg.asr != null`; `linesVerified` vs. `totalLines` is this
+  row's coverage fraction.
+- `voiceDrift.chaptersEligible` — chapters containing at least one
+  stochastic-engine (Qwen/Coqui) character, computed by the report's own
+  aggregation directly from `segments.json` (the `STOCHASTIC_ENGINES`
+  classification, imported from `aggregate.ts`), independent of whether
+  `scoreBook` ran. `0` means "no stochastic-voiced characters in this
+  book" — its own honest state, not a "not run" claim.
+- `voiceDrift.chaptersScored` — of the eligible chapters, those with actual
+  verdict rows in `render-integrity.json` (via the `chapterId`-extended
+  `deriveBookOutline`). With eligibility computed independently (above),
+  `chaptersEligible > 0` and `chaptersScored === 0` unambiguously means
+  "the gate was off for this book."
+- `voiceDrift.chaptersEmbedFailed` — eligible chapters `scoreBook` skipped
+  for a missing/failed embeddings sibling — a narrow, legitimate residual
+  case distinct from both "off" and "clean," surfaced rather than folded
+  into either.
+- `voiceDrift.charactersOnRoster` / `charactersChecked` — the same
+  stochastic-character population used for `chaptersEligible`, and that
+  population minus `uncheckedCharacterIds` (too-short reference audio).
+  Tied to what was actually rendered, not live `cast.json` — a Kokoro-only
+  character is correctly absent from this denominator (it cannot drift),
+  not an undercount.
+- `voiceDrift.mismatches` — rows where `verdict === 'voice-mismatch'`
+  (severity is always `'severe'` by construction of that filter — not a
+  meaningful third value here). **Not the same severity scale as
+  `configDrift`**: voice-drift's underlying `VerdictRow.severity` is
+  `'severe' | 'inconclusive' | null`, config-drift's is `'mild' |
+  'moderate' | 'severe'` — the UI renders each with its own colour mapping,
+  never a shared legend.
+- `voiceDrift.inconclusiveCount` — a **chapter** count (matching the UX
+  copy's "N chapters inconclusive"), not a raw verdict-row count: chapters
+  containing at least one inconclusive verdict (typically short quotes
+  below the minimum-duration gate).
 - `voiceDrift.uncheckedCharacterIds` — characters excluded from scoring
   because their reference audio was too short to embed
   (`referenceKind === 'too-short'`).
@@ -274,12 +339,12 @@ never an apology, matching the brand's own empty-state example (*"No books
 yet. Drop in an EPUB, PDF, or paste a chapter — we'll find the cast."* —
 `brand-guidelines.md`):
 
-| Row | Full coverage | Partial coverage | Not run |
-|---|---|---|---|
-| Acoustic | "342 lines checked, 0 needed a second take." | "290 of 342 lines checked — the rest were rendered before this pass was on." | "Not run for this book." |
-| Transcript (SEG-ASR) | "342 lines verified against what Whisper heard, 0 flagged." | Same fraction pattern as above. | "Not run for this book — turn on transcript verification before your next render." |
-| Voice match (SEG-SPK) | "18 of 18 characters checked against their own reference take, 0 mismatches." | Leads with the fraction whenever `charactersChecked < charactersOnRoster` or `chaptersScored < chaptersEligible`: e.g. "12 of 18 characters checked — 6 had too little reference audio to check, 0 mismatches among the rest." Plus, when nonzero: "N chapters inconclusive — usually short quotes." | "Not run for this book — flip on render-integrity checking to catch mismatches automatically." |
-| Cast continuity | Severity-coded counts, framed as *"since this book was rendered"* (not a render-time result like the other three). Reuses the `Pill` component with its own `severe→danger, moderate→warning, mild→neutral` mapping — a different severity vocabulary from voice-match, never conflated. A flagged line deep-links into the existing `drift-report.tsx` modal. | *(always on — no coverage question)* | *(always on)* |
+| Row | Full coverage | Partial coverage | Not run | Other honest states |
+|---|---|---|---|---|
+| Acoustic | "342 lines checked, 0 needed a second take." | "290 of 342 lines checked — the rest were rendered before this pass was on." | "Not run for this book." | — |
+| Transcript (SEG-ASR) | "342 lines verified against what Whisper heard, 0 flagged." | Same fraction pattern as above. | "Not run for this book — turn on transcript verification before your next render." | — |
+| Voice match (SEG-SPK) | "18 of 18 characters checked against their own reference take, 0 mismatches." | Leads with the fraction whenever `charactersChecked < charactersOnRoster` or `chaptersScored < chaptersEligible`: "12 of 18 characters checked — 6 had too little reference audio to check, 0 mismatches among the rest." Plus, when nonzero: "N chapters inconclusive — usually short quotes." | "Not run for this book — flip on render-integrity checking to catch mismatches automatically." (Only shown when `chaptersEligible > 0`.) | `chaptersEligible === 0`: **"No stochastic-voiced characters in this book — nothing for this check to do."** Distinct from "not run"; never phrased as a shortfall. |
+| Cast continuity | Severity-coded counts, framed as *"since this book was rendered"* (not a render-time result like the other three). Reuses the `Pill` component with its own `severe→danger, moderate→warning, mild→neutral` mapping — a different severity vocabulary from voice-match, never conflated. A flagged line deep-links into the existing `drift-report.tsx` modal. | *(always on — no coverage question)* | *(always on)* | — |
 
 A legacy-unattributed voice-drift result still shows severity counts, plus:
 *"Chapter detail isn't available for this render — re-rendering or
@@ -346,63 +411,57 @@ identical by construction.
   own coverage fraction.
 - A gate toggled mid-book, or a chapter regenerated after a setting change
   → reported as a partial coverage fraction, never silently rounded to "on"
-  or "off," because coverage is tracked per segment/chapter rather than as
-  one book-level flag.
+  or "off," because coverage is tracked per line/chapter rather than as one
+  book-level flag.
+- A book with no stochastic-engine characters at all → `chaptersEligible
+  === 0`, its own honest state, never conflated with "not run."
 - Mixed-engine chapters and Kokoro-voiced characters are already excluded
-  from voice-drift scoring upstream (`STOCHASTIC_ENGINES` filter in
-  `aggregate.ts`); the report reflects that via `chaptersEligible`, computed
-  once, inside the same code that owns that filter.
+  from voice-drift scoring upstream; the report computes the same
+  exclusion itself (via the shared `STOCHASTIC_ENGINES` constant) rather
+  than depending on `scoreBook` having reached a particular chapter.
 - Legacy books (rendered before this ships) get `attribution:
-  'legacy-unattributed'` for voice-drift rather than a guess at chapter
-  linkage.
+  'legacy-unattributed'` for per-mismatch chapter linking; their coverage
+  counts remain accurate regardless, since those are computed fresh.
 - No staleness/re-fetch logic beyond "derive on read" — a regenerated
-  chapter's files are simply the new ground truth on the next call.
+  chapter's files are simply the new ground truth on the next call, and are
+  trustworthy ground truth per the fresh-verdict requirement above.
 
 ## Testing
 
 - **Server**: unit tests for the aggregation function against fixture
   combinations — all gates on, all off, partial coverage (gate toggled
-  mid-book), an all-Kokoro book (voice-drift on, zero eligible chapters), a
-  book with `inconclusive`/too-short-reference characters, and a legacy
-  book with no `chapterId`/coverage records. A route test for the endpoint.
-  A regression test that both `synthesise-chapter.ts`'s and
-  `chapter-qa-repair.ts`'s re-record loops independently increment
-  `qaRetries`/`asrRetries`, and that a splice preserves existing values via
-  its spread-based assembly. A test that `aggregate.ts`/`scoreBook` writes
-  a coverage record for a chapter even when it has zero stochastic
-  characters or zero verdict rows.
+  mid-book), an all-Kokoro book (`chaptersEligible === 0`), a book with
+  `inconclusive`/too-short-reference characters, a book with an
+  embeddings-failure chapter, and a legacy book with no `chapterId`. A
+  route test for the endpoint. A regression test that both
+  `synthesise-chapter.ts`'s and `chapter-qa-repair.ts`'s re-record loops
+  independently increment `qaRetries`/`asrRetries`. **A regression test
+  that a chapter successfully repaired (or spliced) no longer reports
+  `suspect`/`asrSuspect` from the pre-fix take** — this is the fresh-verdict
+  requirement's own paired test, not optional polish. A test confirming
+  `chaptersEligible`/`charactersOnRoster` are computed identically
+  regardless of whether `scoreBook` ran, early-returned, or was never
+  triggered.
 - **Frontend**: component tests for `QaReportCard` across the full-coverage/
-  partial-coverage/not-run/legacy-unattributed/no-data/mid-generation
-  permutations for each row independently, including the voice-match
-  "roster vs. checked vs. unchecked" headline.
+  partial-coverage/not-run/no-stochastic-characters/legacy-unattributed/
+  no-data/mid-generation permutations for each row independently, including
+  the voice-match "roster vs. checked vs. unchecked" headline.
 - **E2E**: one Playwright spec covering the Listen-view card and both export
   buttons, backed by a new mock `BookQaReport` fixture in `src/data/`
   (mocks are the default e2e mode).
-
-## Open implementation-time questions (not resolved by this spec)
-
-- Whether `chapter-splice.ts`'s "re-record" segments are produced via
-  `synthesise-chapter.ts`'s loop (in which case per-segment coverage
-  stamping there covers splice for free) or a separate synthesis call (in
-  which case that call needs its own stamp, mirroring `chapter-qa-repair.ts`).
-- Whether `chapter-qa-repair.ts`'s repair action re-triggers
-  `aggregate.ts`'s `scoreBook` for voice-drift re-scoring after a repair, or
-  only reads the existing `render-integrity.json` — affects whether a
-  repaired chapter's voice-drift coverage record updates or stays stale
-  until the next full re-render.
-
-These are flagged rather than guessed at, per this spec's own "no false
-pass" rule — the implementation plan should resolve them against the actual
-call graph before writing the stamping code.
 
 ## Out of scope
 
 - srv-36 Phase 2 (cross-book/series voice consistency) — still `status:
   draft`, no production code exists. No consistency row until it ships.
 - Any change to when/whether the underlying gates run — this report only
-  aggregates and presents existing signals.
+  aggregates and presents existing signals (the one exception being the
+  fresh-verdict-on-re-record fix above, which corrects an existing
+  correctness gap the report's own honesty requirement surfaces, not a
+  behavioural change to the gates themselves).
 - A dedicated "QA history over time" view (trend across regenerations) —
   the report reflects the book's current render state only.
-- Backfilling `chapterId`/coverage records onto already-rendered books'
-  existing `render-integrity.json` files — they stay
-  `legacy-unattributed` until next touched.
+- Backfilling `chapterId` onto already-rendered books' existing
+  `render-integrity.json` files — they stay `legacy-unattributed` for
+  per-mismatch chapter linking until next touched. Their coverage counts
+  are unaffected, since those are computed fresh from `segments.json`.
