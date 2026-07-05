@@ -9,6 +9,7 @@
 - **A chapter you confirmed past a voice check now actually starts.** Rendering a chapter anyway after a design gap could sometimes leave it stuck at the very start, never moving, even after you'd said to proceed. That's fixed — confirming now reliably picks the chapter back up.
 - **A chapter's audio failing to load, fixed.** If your library folder happened to sit inside a hidden folder, a finished chapter's audio could refuse to play even though the file was right there. It now plays.
 - **The Books page no longer scrolls sideways on a phone.** A long library folder path could push the page wider than your screen; it now tucks in neatly with an ellipsis instead.
+- **A last sliver of sideways scroll on the Books page, gone.** Even with a short folder path, the page could still creep a couple of pixels past the edge of a phone screen; it now sits flush.
 
 # Castwright 1.10.0
 
