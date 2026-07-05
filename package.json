@@ -21,6 +21,7 @@
     "tts:sidecar": "node scripts/launch-sidecar.mjs",
     "apk:companion": "node scripts/build-companion-apk.mjs",
     "wiki:sync": "node scripts/sync-wiki.mjs",
+    "wiki:release-notes": "node scripts/generate-release-notes-wiki.mjs",
     "prebuild": "node scripts/sync-docs-to-public.mjs",
     "build": "tsc -b && vite build && npm --prefix server run build",
     "preview": "vite preview",

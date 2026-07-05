@@ -143,12 +143,6 @@ _Full detail + acceptance:_ [#412](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Resilience for non-English generation (no hard-fail when Qwen is unavailable); unblocks fs-38 voice cloning's XTTS path for non-English books. Lowest strategic priority.
 _Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwright/issues/1005).
 
-#### `fs-68` — Wiki: Release Notes section, one page per release ([#1280](https://github.com/dudarenok-maker/Castwright/issues/1280))
-
-- _What:_ Add a **Release Notes** section to the GitHub wiki (alongside the guide built by #1276): one wiki page per shipped release, each page's content copied from that release's **actual GitHub Release page** (`gh release view vX.Y.Z` — the detailed, PR-refed technical notes), not from the user-facing summary in `RELEASE_NOTES.md`. The GitHub release body is the more detailed and useful source for wiki readers digging into specifics; `RELEASE_NOTES.md` stays the brand-voice summary surfaced in-app. Gives readers a way to browse full release history and detail without leaving the wiki or paging through GitHub's release list, and gives the app itself (or docs) an easy stable link target per release.
-- _Benefit:_ *Benefit (user):* browse full, detailed release history directly in the wiki, no GitHub-release-list spelunking, more detail than the in-app summary. *Benefit (technical):* app and docs get a stable, linkable per-release URL without duplicating release-note authoring — pulls the existing GitHub Release body verbatim. Refs #1276
-_Full detail + acceptance:_ [#1280](https://github.com/dudarenok-maker/Castwright/issues/1280).
-
 #### `fs-9` — Configurable chapter-title silence durations ([#411](https://github.com/dudarenok-maker/Castwright/issues/411))
 
 - _What:_ Promote the two hard-coded constants `CHAPTER_LEAD_SILENCE_SEC = 1.5` and `CHAPTER_POST_TITLE_SILENCE_SEC = 1.5` in `server/src/tts/synthesise-chapter.ts` to a per-book setting on `state.json`. Surface in the Listen view's metadata editor (the same panel that already edits narratorCredit / genre / etc.) as a "Chapter break duration" slider with a small preset list (e.g. 0.5/1/1.5/2/3 s) for the leading + post-title legs. Generation route reads the per-book values and forwards into `synthesiseChapter` opts.

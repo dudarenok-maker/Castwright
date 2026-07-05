@@ -37,5 +37,5 @@ See the sidebar for the full breadth — voice engines, multi-language support, 
 Castwright is a solo, source-available project — public repo, open beta, a fresh release most weeks. It runs end to end on Windows, Linux, and macOS with Apple Silicon acceleration picked up automatically. A fresh install ships with a sample book already cast, so there's something to hear in the first minute. It's in alpha: we'd love more testers, especially on Apple Silicon Macs and non-NVIDIA GPUs, where the fewest miles have been driven so far.
 
 - **License:** source-available under the [Functional Source License](https://fsl.software/) (FSL-1.1-Apache-2.0) — it converts to plain Apache-2.0 two years after each release.
-- **Release notes:** [RELEASE_NOTES.md](https://github.com/dudarenok-maker/Castwright/blob/main/RELEASE_NOTES.md)
+- **Release notes:** the brand-voice summary lives in [RELEASE_NOTES.md](https://github.com/dudarenok-maker/Castwright/blob/main/RELEASE_NOTES.md); the full technical detail for every shipped version is in the wiki's [Release Notes](Release-Notes) section.
 - **About & credits:** the in-app `/about` page names the voice engines Castwright builds on — Kokoro, Coqui XTTS, and Qwen3-TTS. Open source is kin, not competition.
