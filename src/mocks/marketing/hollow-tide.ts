@@ -6,6 +6,7 @@ import type {
   Character,
   Sentence,
   ContinueListeningItem,
+  DriftEvent,
 } from '../../lib/types';
 import type { CoverFraming } from '../../lib/cover-framing';
 import coalfallCastJson from './coalfall-cast.json';
@@ -219,7 +220,30 @@ const drowningBell = bookState({
 });
 
 /* ── Book 2 — Saltgrave — GENERATING (11 chapters, 7 done) ── */
-const BOOK2_CHAPTERS = makeChapters(11);
+/* Quality Gate marketing/wiki screenshots (#1286) — chapter 3 (already `done`,
+   within the first 7 of 11 completedSlugs below) carries the advisory QA
+   verdict the top-level "Suspect" pill checks (chapters-slice.ts:335). Ordered
+   to match the segment override's chronological order added in api.ts (ASR
+   content flag at [200,400), acoustic flag at [488,600)). */
+const BOOK2_CHAPTERS = makeChapters(11).map((c) =>
+  c.id === 3
+    ? {
+        ...c,
+        audioQa: {
+          status: 'suspect' as const,
+          reasons: [
+            'Word substitution against the script',
+            'Near-silent stretch before a line',
+          ],
+          measuredLufs: -19.2,
+          truePeakDb: -1.4,
+          durationSec: 600,
+          expectedSec: 580,
+          checkedAt: now,
+        },
+      }
+    : c,
+);
 
 const saltgrave = bookState({
   bookId: 'hollow-tide-2',
@@ -667,3 +691,70 @@ export const HOLLOW_TIDE_POSED = {
     inProgress: 1,
   },
 };
+
+/* ── Voice-drift fixture for Saltgrave (served under VITE_DEMO_CAPTURE=1) ──
+   Quality Gate marketing/wiki screenshots (#1286). Two severities so the
+   drift-report modal's severity grouping and Auto-regen control both show.
+   Both chapters (2, 5) are within Saltgrave's 7 done chapters (see
+   `completedSlugs` above). `autoQueueable` is a SERVER-set field
+   (api-types.ts:3454 — "today: severity === 'severe'"), not client-derived,
+   so the severe event must set it explicitly or the modal falls back to
+   manual Regenerate. `onAutoQueueRegenerate` is already unconditionally
+   wired to DriftReportModal in real app code (layout.tsx:1966) — no
+   additional wiring needed for the Auto-regen control to render. */
+export const HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[] = [
+  {
+    id: 'drift:hollow-tide-2:2:insp-cray:register',
+    bookId: 'hollow-tide-2',
+    characterId: 'insp-cray',
+    chapterId: 2,
+    chapterTitle: 'Chapter 2',
+    severity: 'severe',
+    factor: 'register',
+    factorLabel: 'Vocabulary register',
+    description:
+      "Cray's register here reads far more formal than his established " +
+      "dogged, plainspoken voice from Book 1 — likely a manuscript edit " +
+      'sharpening his dialogue after this chapter rendered.',
+    metrics: { current: 70, expected: 35, unit: 'formality' },
+    snapshot: {
+      voiceId: 'v_marin_cray', gender: 'male', ageRange: 'adult',
+      tone: { warmth: 40, pace: 45, authority: 85, emotion: 50 },
+      attributes: ['Male', 'Baritone', 'Northern English', '50s', 'Dogged'],
+    },
+    current: {
+      name: 'Insp. Cray', voiceId: 'v_marin_cray', gender: 'male', ageRange: 'adult',
+      tone: { warmth: 40, pace: 30, authority: 85, emotion: 30 },
+      attributes: ['Male', 'Baritone', 'Northern English', '50s', 'Dogged'],
+    },
+    detected: '2 hr ago',
+    suggestedAction: 'regenerate_chapter',
+    autoQueueable: true,
+  },
+  {
+    id: 'drift:hollow-tide-2:5:dr-wren:warmth',
+    bookId: 'hollow-tide-2',
+    characterId: 'dr-wren',
+    chapterId: 5,
+    chapterTitle: 'Chapter 5',
+    severity: 'moderate',
+    factor: 'warmth',
+    factorLabel: 'Warmth',
+    description:
+      "Wren reads cooler here than her established precise-but-humane " +
+      'profile — worth a listen before shipping.',
+    metrics: { current: 40, expected: 58, unit: 'warmth score' },
+    snapshot: {
+      voiceId: 'v_marin_wren', gender: 'female', ageRange: 'adult',
+      tone: { warmth: 58, pace: 40, authority: 60, emotion: 45 },
+      attributes: ['Female', 'Mezzo', 'RP English', '40s', 'Precise'],
+    },
+    current: {
+      name: 'Dr. Wren', voiceId: 'v_marin_wren', gender: 'female', ageRange: 'adult',
+      tone: { warmth: 40, pace: 40, authority: 60, emotion: 45 },
+      attributes: ['Female', 'Mezzo', 'RP English', '40s', 'Precise'],
+    },
+    detected: '1 hr ago',
+    suggestedAction: 'review',
+  },
+];
