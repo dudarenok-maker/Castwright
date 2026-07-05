@@ -245,16 +245,20 @@ e2e run rather than inventing fresh fixtures. See
 
 ## The backlog
 
-`docs/BACKLOG.md` is the thin, MoSCoW-bucketed **prioritized planning view**.
-Each item maps to exactly one GitHub issue (title `<prefix>-<n> — <what>`),
+`docs/BACKLOG.md` is the thin, MoSCoW-bucketed **prioritized planning view**,
+**generated from the GitHub Projects (v2) "Castwright Kanban" board**
+(`npm run backlog:sync` — see CONTRIBUTING.md "The board") — don't hand-edit
+it. Each item maps to exactly one GitHub issue (title `<prefix>-<n> — <what>`),
 which is the **canonical detail home** — What / Acceptance / Key files /
 Depends on / Benefit live in the issue, not in BACKLOG.md. The `<prefix>-<n>`
 ID stays the durable cross-reference for code/commits/plans; the issue `#NN`
-is the GitHub-native auto-close hook. **Bugs are GitHub issues with the `bug`
+is the GitHub-native auto-close hook. A numeric `Priority` field on the board
+drives intra-tier ordering. **Bugs are GitHub issues with the `bug`
 label and stay off `docs/BACKLOG.md`** (still out-of-band — the user files
 them as they hit them). The label taxonomy, issue forms, and the full
 convention live in [CONTRIBUTING.md "Issues"](CONTRIBUTING.md#issues); plan
-[166](docs/features/166-github-issues-backlog-integration.md) is the rationale.
+[241](docs/features/241-github-projects-kanban-board.md) is the rationale
+(supersedes [166](docs/features/archive/166-github-issues-backlog-integration.md)).
 
 When you ship a backlog item:
 
