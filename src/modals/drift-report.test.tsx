@@ -742,50 +742,6 @@ describe('DriftReportModal — consolidated (book × character × snapshot) grou
   });
 });
 
-describe('DriftReportModal — character color fallback (raw hex, not a CHAR_COLORS slot)', () => {
-  /* Regression: some fixtures (e.g. the Quality Gate marketing mock cast in
-     src/mocks/marketing/hollow-tide.ts) set Character.color to a literal hex
-     string ('#264653') rather than a CHAR_COLORS slot key ('halloran',
-     'slot-4', ...) — Character.color is typed as a plain string, so this is
-     a valid value. The factor-label strip's `CHAR_COLORS[colorKey].hex`
-     lookup had no fallback for a miss, unlike Avatar/ColorDot which both
-     guard with `?? CHAR_COLORS.narrator` — a miss threw
-     "Cannot read properties of undefined (reading 'hex')" and crashed the
-     whole modal (caught by the app's top-level ErrorBoundary, replacing the
-     page). Must render safely instead. */
-  it('renders the factor-label strip without throwing when the character color is a raw hex string', () => {
-    const hexColoredCast: Character[] = [
-      { id: 'insp-cray', name: 'Insp. Cray', role: 'Detective', color: '#264653' } as Character,
-    ];
-    render(
-      <DriftReportModal
-        groupsByBook={[
-          {
-            bookId: 'hollow-tide-2',
-            bookTitle: 'Saltgrave',
-            characters: hexColoredCast,
-            groups: groupDriftEvents([
-              makeEvent({
-                id: 'drift:hollow-tide-2:2:insp-cray:register',
-                characterId: 'insp-cray',
-                factor: 'register',
-                factorLabel: 'Vocabulary register',
-              }),
-            ]),
-          },
-        ]}
-        onClose={vi.fn()}
-        onRegenerateChapter={vi.fn()}
-        onDismiss={vi.fn()}
-      />,
-    );
-    expect(screen.getByText('Vocabulary register')).toBeInTheDocument();
-    expect(
-      screen.getByTestId('drift-event-drift:hollow-tide-2:2:insp-cray:register'),
-    ).toBeInTheDocument();
-  });
-});
-
 describe('DriftReportModal — per-character filter (pill-click entry)', () => {
   /* Two characters in the same book, each with drift on a different
      chapter. Filter on Eliza → only Eliza's card renders; Sten's card
@@ -867,5 +823,24 @@ describe('DriftReportModal — per-character filter (pill-click entry)', () => {
       />,
     );
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe('DriftReportModal — raw hex character color (#1344)', () => {
+  it('renders without throwing when a character\'s color is a raw hex string, not a CHAR_COLORS slot key', () => {
+    const hexCharacters: Character[] = [
+      { id: 'eliza', name: 'Eliza', role: 'Lead', color: '#264653', voiceId: 'voice-eliza' } as Character,
+    ];
+    expect(() =>
+      render(
+        <DriftReportModal
+          groupsByBook={[group([makeEvent({})], { characters: hexCharacters })]}
+          onClose={vi.fn()}
+          onRegenerateChapter={vi.fn()}
+          onDismiss={vi.fn()}
+        />,
+      ),
+    ).not.toThrow();
+    expect(screen.getByTestId('drift-event-drift:book-A:1:eliza:voice')).toBeInTheDocument();
   });
 });
