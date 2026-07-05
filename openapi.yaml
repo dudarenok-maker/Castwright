@@ -5315,7 +5315,7 @@ components:
     ResourceTelemetryRecord:
       type: object
       required:
-        [at, bookId, bookTitle, chapterId, title, modelKey, rtf, audioSec, wallSec, vramReservedMb, vramTotalMb, committedHostMb]
+        [at, bookId, bookTitle, chapterId, title, modelKey, rtf, rerecordRtf, audioSec, wallSec, vramReservedMb, vramTotalMb, committedHostMb]
       description: |
         One per-chapter telemetry sample captured right after a chapter
         rendered: throughput (RTF, audio/wall seconds) + GPU and host-RAM
@@ -5332,6 +5332,10 @@ components:
         title: { type: string, nullable: true }
         modelKey: { type: string, nullable: true }
         rtf: { type: number, nullable: true, description: 'synth wall ÷ audio (< 1 = faster than realtime).' }
+        rerecordRtf:
+          type: number
+          nullable: true
+          description: QA-driven re-record wall ÷ audio for this chapter; null for multi-worker runs.
         audioSec: { type: number }
         wallSec: { type: number }
         vramReservedMb: { type: number, nullable: true }
