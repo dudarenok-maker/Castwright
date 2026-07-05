@@ -71,7 +71,14 @@ Replace with:
    within the first 7 of 11 completedSlugs below) carries the advisory QA
    verdict the top-level "Suspect" pill checks (chapters-slice.ts:335). Ordered
    to match the segment override's chronological order added in api.ts (ASR
-   content flag at [200,400), acoustic flag at [488,600)). */
+   content flag at [200,400), acoustic flag at [488,600)).
+
+   `ChapterQaVerdict` (api-types.ts:3637-3651, generated from openapi.yaml)
+   requires `measuredLufs`/`truePeakDb`/`durationSec`/`expectedSec`/`checkedAt`
+   in addition to `status`/`reasons` — none are optional. `durationSec: 600`
+   matches Task 2's forced totalSec for this chapter's audio; `checkedAt`
+   reuses the file's existing `now` constant for internal consistency with
+   every other stamped-at-generation-time field in this fixture. */
 const BOOK2_CHAPTERS = makeChapters(11).map((c) =>
   c.id === 3
     ? {
@@ -82,6 +89,11 @@ const BOOK2_CHAPTERS = makeChapters(11).map((c) =>
             'Word substitution against the script',
             'Near-silent stretch before a line',
           ],
+          measuredLufs: -19.2,
+          truePeakDb: -1.4,
+          durationSec: 600,
+          expectedSec: 580,
+          checkedAt: now,
         },
       }
     : c,
