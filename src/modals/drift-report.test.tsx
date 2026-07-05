@@ -825,3 +825,22 @@ describe('DriftReportModal — per-character filter (pill-click entry)', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+describe('DriftReportModal — raw hex character color (#1344)', () => {
+  it('renders without throwing when a character\'s color is a raw hex string, not a CHAR_COLORS slot key', () => {
+    const hexCharacters: Character[] = [
+      { id: 'eliza', name: 'Eliza', role: 'Lead', color: '#264653', voiceId: 'voice-eliza' } as Character,
+    ];
+    expect(() =>
+      render(
+        <DriftReportModal
+          groupsByBook={[group([makeEvent({})], { characters: hexCharacters })]}
+          onClose={vi.fn()}
+          onRegenerateChapter={vi.fn()}
+          onDismiss={vi.fn()}
+        />,
+      ),
+    ).not.toThrow();
+    expect(screen.getByTestId('drift-event-drift:book-A:1:eliza:voice')).toBeInTheDocument();
+  });
+});
