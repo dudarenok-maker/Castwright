@@ -257,7 +257,7 @@ drives intra-tier ordering. **Bugs are GitHub issues with the `bug`
 label and stay off `docs/BACKLOG.md`** (still out-of-band — the user files
 them as they hit them). The label taxonomy, issue forms, and the full
 convention live in [CONTRIBUTING.md "Issues"](CONTRIBUTING.md#issues); plan
-[241](docs/features/241-github-projects-kanban-board.md) is the rationale
+[241](docs/features/archive/241-github-projects-kanban-board.md) is the rationale
 (supersedes [166](docs/features/archive/166-github-issues-backlog-integration.md)).
 
 When you ship a backlog item:

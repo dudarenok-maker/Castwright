@@ -105,6 +105,7 @@ merge tooling. Two parallel branches should have near-disjoint file sets:
 | `docs`     | `docs/`, `CLAUDE.md`, `README.md`, `CONTRIBUTING.md`  |
 | `deps`     | `package.json`, lockfile, sub-package `package.json`s |
 | `ci`       | `.husky/`, future GH Actions workflows                |
+| `ops`      | Cross-cutting maintainer/process tooling and its docs (issue-tracker/backlog rollout scripts, installer config, release-process tooling) — the `ops-N` backlog-ID / `area:ops` label equivalent for commits |
 
 Two agents in the same scope = serialize them. Two agents in different scopes
 = run them in parallel.
@@ -243,7 +244,7 @@ feat(server)!: drop legacy field
 ### Allowed scopes
 
 `frontend` · `server` · `sidecar` · `app` · `scripts` · `e2e` · `mocks` · `openapi` ·
-`docs` · `deps` · `ci`
+`docs` · `deps` · `ci` · `ops`
 
 Mapped to file sets in the [table above](#scope-discipline--merge-magic).
 Adding a new scope requires updating BOTH this file AND
@@ -303,7 +304,7 @@ GitHub issues hold the **detail** for tracked work and are the home for **bug
 tracking**. [`docs/BACKLOG.md`](docs/BACKLOG.md) stays the thin, prioritized
 MoSCoW planning view, generated from the board (see "The board" below); the
 issue is where the spec, discussion, and PR-linking live. Regression plan:
-[docs/features/241-github-projects-kanban-board.md](docs/features/241-github-projects-kanban-board.md)
+[docs/features/archive/241-github-projects-kanban-board.md](docs/features/archive/241-github-projects-kanban-board.md)
 (supersedes [docs/features/archive/166-github-issues-backlog-integration.md](docs/features/archive/166-github-issues-backlog-integration.md)).
 
 ### Backlog items ↔ issues
@@ -362,7 +363,7 @@ see `scripts/link-sub-issues.mjs`).
 don't hand-edit it; edit the linked issue and re-run the sync.
 
 Design: [docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md](superpowers/specs/2026-07-05-github-issues-kanban-design.md).
-Regression plan: [docs/features/241-github-projects-kanban-board.md](features/241-github-projects-kanban-board.md).
+Regression plan: [docs/features/archive/241-github-projects-kanban-board.md](features/archive/241-github-projects-kanban-board.md).
 
 ### Plan vs. no-plan
 
