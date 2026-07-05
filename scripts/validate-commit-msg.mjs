@@ -18,6 +18,7 @@ export const SCOPES = [
   'docs',
   'deps',
   'ci',
+  'ops',
 ];
 
 const SCOPE_GROUP = `(?:${SCOPES.join('|')})`;

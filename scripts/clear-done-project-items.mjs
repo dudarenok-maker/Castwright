@@ -25,6 +25,19 @@ function ghAvailable() {
   return !r.error && r.status === 0;
 }
 
+// Pure: a Done board item is archivable UNLESS it's moscow:wont — the spec
+// requires moscow:wont issues to render in docs/BACKLOG.md's Won't section
+// "regardless of board Status" (see backlog-sync.mjs's toBacklogIssues), and
+// an archived item drops out of the GraphQL items() connection entirely, so
+// archiving a wont issue whose card auto-flipped to Done (a normal lifecycle
+// event — closing a decided-not-to-do issue) would permanently and silently
+// remove it from every future generation.
+export function isArchivable(node) {
+  if (!node.content || node.status?.name !== 'Done') return false;
+  const labels = node.content.labels?.nodes?.map((l) => l.name) ?? [];
+  return !labels.includes('moscow:wont');
+}
+
 function listDoneItems(config) {
   const query = `
     query($login: String!, $number: Int!, $after: String) {
@@ -37,7 +50,7 @@ function listDoneItems(config) {
               status: fieldValueByName(name: "Status") {
                 ... on ProjectV2ItemFieldSingleSelectValue { name }
               }
-              content { ... on Issue { number title } }
+              content { ... on Issue { number title labels(first: 20) { nodes { name } } } }
             }
           }
         }
@@ -57,7 +70,7 @@ function listDoneItems(config) {
     if (!data.pageInfo.hasNextPage) break;
     after = data.pageInfo.endCursor;
   }
-  return results.filter((n) => n.status?.name === 'Done' && n.content);
+  return results.filter(isArchivable);
 }
 
 function parseArgs(argv) {

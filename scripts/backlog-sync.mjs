@@ -340,11 +340,16 @@ function toBacklogIssues(nodes) {
 
 function printUnifiedDiff(original, proposed) {
   const dir = mkdtempSync(join(tmpdir(), 'backlog-sync-'));
-  const tmp = join(dir, 'BACKLOG.proposed.md');
+  const before = join(dir, 'BACKLOG.before.md');
+  const after = join(dir, 'BACKLOG.proposed.md');
   try {
-    writeFileSync(tmp, proposed, 'utf8');
+    // Diff the caller's captured `original` snapshot, not a fresh re-read of
+    // BACKLOG_PATH — the file on disk could have changed between main()'s
+    // read and this call (e.g. during the multi-page GraphQL fetch).
+    writeFileSync(before, original, 'utf8');
+    writeFileSync(after, proposed, 'utf8');
     try {
-      execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', BACKLOG_PATH, tmp], {
+      execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', before, after], {
         stdio: 'inherit',
       });
     } catch {

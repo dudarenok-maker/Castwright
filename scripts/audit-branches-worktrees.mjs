@@ -45,7 +45,7 @@ function isMergedToMain(branch) {
 }
 
 function openIssueTitles() {
-  const raw = execFileSync('gh', ['issue', 'list', '--state', 'open', '--limit', '200', '--json', 'number,title'], { encoding: 'utf8' });
+  const raw = execFileSync('gh', ['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title'], { encoding: 'utf8' });
   return JSON.parse(raw);
 }
 

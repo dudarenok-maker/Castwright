@@ -110,11 +110,11 @@ function parseArgs(argv) {
 // as linked — cheap and good enough for a one-time heuristic seed (the
 // rollout's manual correction pass, spec rollout step 2, fixes any misses).
 function listOpenIssues() {
-  const json = gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', 'number,title,url,updatedAt']);
+  const json = gh(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,url,updatedAt']);
   return JSON.parse(json);
 }
 function listOpenPrBodies() {
-  const json = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'body']);
+  const json = gh(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'body']);
   return JSON.parse(json).map((pr) => pr.body ?? '');
 }
 
