@@ -52,6 +52,8 @@ design covers all three together rather than as separate passes.
 
 - No changes to real (non-mock) application behavior. Touched source is
   limited to: `e2e/marketing/scenes.ts` (new scenes/actions, test-only),
+  `e2e/marketing/capture.spec.ts` (adds an opt-in `strict` failure mode,
+  test-only — see "Harness reliability" below),
   `src/mocks/marketing/hollow-tide.ts` (new marketing-only fixture data —
   an undesigned character, seeded markers/export-queue items, a Russian and
   a German book+cast), and `src/lib/api.ts`'s shared
@@ -156,18 +158,32 @@ default analysis model)
 |---|---|---|---|
 | Auto-start with server | Starts the TTS sidecar automatically with the server (needs server restart) | `true` | boolean |
 | Keep both voice engines loaded | Dual-model mode — both engines resident at once | `false` | boolean |
-| Generation workers | Chapters synthesized concurrently | 2 | integer, 1–4 |
+| Generation workers | Chapters synthesized concurrently | **1** | integer, 1–4 |
 
 **Server configuration**
 | Knob | What it does | Default | Range |
 |---|---|---|---|
 | Voice engine URL | Base URL of the TTS sidecar | `http://localhost:9000` | string, private/loopback host only |
-| Analyzer engine | Routes analysis through Gemini vs local Ollama | `gemini` | gemini / local |
+| Analyzer engine | Routes analysis through local Ollama vs. Gemini direct | **`local`** | local / gemini |
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string |
 | Gemini API key | API key for Gemini analyzer/persona calls | (unset) | string |
 
 **Install / update analyzer (Ollama)** — install/pull-tag UI + health probe,
 described in prose (no knob table — it's an action panel, not settings).
+
+> **Pre-existing UI-copy bug found while verifying these two defaults (out
+> of scope, flagged only):** the Model Manager form's own field text claims
+> the opposite for both. `model-settings-form.tsx:489` labels the Gemini
+> option "(default — direct)" and its sublabel says "Default — Gemini API
+> sends every chapter straight to Google" — but the registry's actual
+> shipped default (`server/.env.example` line 14, `registry.ts:850`) is
+> `local`. Similarly `model-settings-form.tsx:435`'s sublabel claims
+> "1–4, default 2" for Generation workers, but `getResolvedGenerationWorkers()`
+> is tested to default to `1` (`server/src/workspace/user-settings.test.ts:174`,
+> commented "shipped default" in the registry). The wiki documents the
+> **true** registry/tested defaults above, not the UI copy — this doc PR
+> does not touch the UI text itself (no product-code change), but the
+> discrepancy is real and worth its own follow-up bug issue.
 
 ### Page 3: `Advanced-Settings.md` rewrite (same file, full rewrite)
 
@@ -255,10 +271,15 @@ Total: 97 registry knobs + 1 synthetic read-only row, across 11 groups.
 
 ### Screenshot / scene plan (`e2e/marketing/scenes.ts`)
 
-All new scenes reuse the established `action()` pattern — click the group's
-label inside `getByRole('navigation', { name: 'Settings sections' })` — the
-same mechanism already used for `regenerate-modal`, `export-audiobookshelf`,
-and the existing single `advanced-settings` scene.
+All new scenes reuse the `action()` mechanism already established in the
+harness — a Playwright step run after navigation, before the screenshot.
+The Model Manager and Advanced Settings scenes specifically reuse the
+nav-click pattern already proven in the existing single `advanced-settings`
+scene: click the group's label inside
+`getByRole('navigation', { name: 'Settings sections' })`. (This is distinct
+from `regenerate-modal`/`export-audiobookshelf`, which click a plain
+`getByRole('button')` — same `action()` mechanism, different selector
+shape, since those open modals rather than expand an accordion section.)
 
 **Model Manager** (7 scenes total):
 - Rename existing `model-manager` → `model-manager-installed` (no behavior
@@ -289,6 +310,35 @@ Screenshots land in `mockups/marketing-screens/<id>.<viewport>.<theme>.png`
 (harness output, git-ignored) and get manually curated into
 `docs/wiki/images/<page>/NN-caption.png` the same way the existing hero
 shots were produced.
+
+### Harness reliability: `strict` mode for new scenes
+
+**Added in response to the mandatory assumption-checker review's top
+finding.** Today, both `scene.waitFor` and `scene.action` failures in
+`e2e/marketing/capture.spec.ts` are caught, `console.warn`'d, and the
+capture proceeds anyway (lines 75-95 of that file) — a deliberate design so
+one broken scene can't abort a whole capture run. But this PR's entire
+value in ~39 new/renamed scenes (18 in Part 1, 21 in Part 2) is the
+*post-interaction* state — a section expanded, a modal open, a drag
+mid-flight. Under the current non-fatal contract, a selector drift doesn't
+fail anything: it silently produces a screenshot of the *pre-interaction*
+state, which then gets hand-curated into the wiki as if it were correct.
+Manual review of ~39 images is the only backstop, and it already missed
+one case while this spec was being drafted (the boundary-drag selector
+correction above).
+
+Fix: add an optional `strict?: boolean` field to the `Scene` type. When
+`true`, a `waitFor` timeout or `action` throw is re-thrown instead of
+caught, failing that scene's Playwright test outright instead of degrading
+to a warning. Every scene added or renamed by this PR sets `strict: true`
+and pairs its `action()` with a `waitFor` targeting a selector that only
+exists in the *target* state (an `aria-expanded="true"` on the specific
+section, a `role="dialog"` on the opened modal, a class/attribute unique to
+mid-drag, etc.) — not just the click itself. Existing scenes this PR
+doesn't touch stay non-strict, unchanged. This turns "capture ran green"
+into an actual signal that every new scene reached its intended state,
+rather than "capture ran green" meaning nothing more than "no scene threw
+an uncaught exception."
 
 ### Image reorganization
 
@@ -365,9 +415,15 @@ most of this is mechanical.
 ### Tier C — needs drag simulation
 
 - **Manuscript Management** — boundary-drag interaction: simulate
-  `pointerdown` → `pointermove` → hold (screenshot) → `pointerup` on a
-  `[data-boundary-idx]` handle in `src/views/manuscript.tsx`, since this is
-  a pointer-event state machine, not a clickable control.
+  `pointerdown` → `pointermove` → hold (screenshot) → `pointerup` on the
+  boundary handle carrying `data-tour-id="chapter-boundary"`
+  (`src/views/manuscript.tsx:1663` — this attribute is only emitted for the
+  first boundary, `boundaryIdx === 1`, which is fine since the scene just
+  needs *a* boundary to drag, not a specific one). **Correction from an
+  earlier draft of this spec**, which named a `[data-boundary-idx]`
+  attribute that doesn't exist in the DOM — `boundaryIdx` is a React prop,
+  not a rendered data-attribute; verified by reading the component directly
+  rather than trusting the prop name.
 
 ### Tier D — new marketing-only fixture data (`src/mocks/marketing/hollow-tide.ts`)
 
@@ -401,6 +457,16 @@ Isolated to the marketing capture path — no shared-mock risk.
   just marketing scenes. Run the full frontend suite (`npm run test`) after
   the flip and fix (not skip) anything that asserted the old
   not-installed/package-missing state.
+  **Second flip required, found during review**: Qwen's install state has
+  a *second* source of truth — the module-level
+  `MOCK_SIDECAR_QWEN_INSTALL_STATE` const (`src/lib/api.ts:6749`), consumed
+  by `qwenInstallState`/`qwenPackageInstalled` and, transitively,
+  `getSidecarHealth`. Flipping only the inline literal inside
+  `mockGetModelInventory` leaves this second const at its old value, so the
+  Model Manager row would show "ready" while health/promo-banner UI still
+  reports Qwen as not installed. Both consts need to flip together, and the
+  `npm run test` verification pass must explicitly exercise the
+  sidecar-health/promo path, not just the Model Manager row's own tests.
 
 ### Tier F — hardest: needs new fixture data + mock-stream timing
 
@@ -435,16 +501,22 @@ test/fixture code (Parts 1 & 2) + one shared-mock behavior change (Part 2
 Tier E), it's a multi-scope PR → **high** effort per the model-routing
 table, not the `low`/`medium` a single-scope docs or fix PR would get.
 
+- `npx playwright test e2e/marketing/capture.spec.ts` must pass green with
+  every new/renamed scene's `strict: true` — this is now the primary
+  automated backstop that a scene actually reached its target state (see
+  "Harness reliability" above), not merely that the run didn't crash.
 - Scripted check that every `docs/wiki/**/*.md` image reference resolves to
   an existing file, and no orphaned image files remain after the
   `admin-and-model-manager` → `admin` + `model-manager` split.
 - Manual review of every new/re-captured screenshot against its caption for
-  content accuracy (especially the 3 high-risk collapsed Advanced Settings
-  groups, where the screenshot must show the section actually expanded, not
-  mid-animation; and the two Tier B timing-sensitive captures).
+  content accuracy — now a secondary check (strict mode catches a missed
+  interaction; this catches a *correct* interaction with wrong/misleading
+  framing) — especially the 3 high-risk collapsed Advanced Settings groups
+  and the two Tier B timing-sensitive captures.
 - `npm run test` (frontend) run explicitly after the Tier E mock-inventory
-  flip, to catch anything that asserted Coqui/Qwen-base's old
-  not-installed/package-missing state.
+  flip, covering both `mockGetModelInventory` consumers AND the
+  `MOCK_SIDECAR_QWEN_INSTALL_STATE`-derived health/promo path (see Tier E
+  above) — not just the Model Manager row's own tests.
 - `npm run verify` full battery before merge (not exempt — see above).
 
 ## Out of scope
