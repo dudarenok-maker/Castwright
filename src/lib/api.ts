@@ -1654,9 +1654,18 @@ async function mockStreamSplice({
   });
 }
 
-async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
+async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
   await wait(120);
-  const totalSec = parseDuration(duration || '10:00');
+  /* Quality Gate marketing/wiki screenshots (#1286) — force totalSec=600 for
+     Saltgrave chapter 3 regardless of what `duration` the caller passes.
+     Saltgrave's chapters carry no `duration` field, so chapters-slice
+     hydrates it to '00:00' — and the mini-player's Preview action (unlike
+     ChapterSegmentStrip) explicitly forwards `chapter.duration`, which would
+     otherwise collapse totalSec to 0 and make deriveIssues return no issues
+     at all (its own guard: `!dur || dur <= 0 → return []`), silently
+     breaking the preview-flagged scene's amber band. */
+  const isFlaggedDemoChapter = DEMO_CAPTURE && bookId === 'hollow-tide-2' && chapterId === 3;
+  const totalSec = isFlaggedDemoChapter ? 600 : parseDuration(duration || '10:00');
   const peakCount = 240;
   /* Deterministic per-chapter envelope: seed a tiny LCG from chapterId so each
      chapter has a stable-but-distinct waveform. (Was Math.random() — fine when
@@ -1687,6 +1696,11 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
      For chapter 1 (duration '38:24' = 2304 s): third=768, lateStart=1624,
      seekSec-1=766 (33.2%), seekSec-2=1622 (70.4%). */
   const lateStart = third * 2 + 88;
+  /* Quality Gate marketing/wiki screenshots (#1286) — Saltgrave chapter 3
+     gets real cast ids and reason text for the two gate flavors that
+     actually share this surface (acoustic + ASR content-QA), reusing this
+     function's already-correct non-adjacent spacing rather than reinventing
+     timings (spec's adversarial review round 2 flagged that risk explicitly). */
   return {
     url: stubAudioB,
     durationSec: totalSec,
@@ -1697,10 +1711,12 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
       {
         start: third,
         end: third * 2,
-        characterId: 'halloran',
+        characterId: isFlaggedDemoChapter ? 'dockhand-remy' : 'halloran',
         sentenceId: 2,
         suspect: true,
-        reasons: ['Long sentence — possible truncation'],
+        reasons: isFlaggedDemoChapter
+          ? ['Content drift — heard "the ropes" where the script says "the ledger."']
+          : ['Long sentence — possible truncation'],
       },
       { start: third * 2, end: lateStart, characterId: 'narrator', sentenceId: 3 },
       {
@@ -1709,7 +1725,9 @@ async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<
         characterId: 'narrator',
         sentenceId: 4,
         suspect: true,
-        reasons: ['Pacing anomaly — possible mispronunciation'],
+        reasons: isFlaggedDemoChapter
+          ? ['Near-silent — dead air detected before this line.']
+          : ['Pacing anomaly — possible mispronunciation'],
       },
     ],
   };
