@@ -10,6 +10,10 @@ Four top-level ways to get a finished book out: a single chaptered **M4B**, a **
 
 This screen leads with Castwright's own companion app — **Android today, iOS at launch** — above the listener-app list. Pair a device here with a QR code (or the manual code behind it) and it syncs your library over the home network, downloads books for offline listening, and remembers exactly where you left off, in a real native player with lock-screen controls and a sleep timer. If the maintainer's build has an APK ready to hand out, a **Download .apk** button appears right here too.
 
+![Castwright Companion banner — Google Play / App Store buttons and Pair a device, above the listener-app list](images/exporting/format-tiles-companion-banner.png)
+
+Below, the banner as it sits today — the stores are still **SOON**, so **Pair a device** is the only live action, right where the listener-app tiles begin underneath it.
+
 ## Sending it to the app you already use
 
 Nothing here locks you in — six listener apps get one-tap tiles, each opening the same export picker pre-filled with the right format and a few pointers for that app specifically: **Audiobookshelf**, BookPlayer, Smart AudioBook Player, Apple Books, PocketBook, and Voice. Any other MP3.ZIP- or chaptered-M4B-capable player works too via a manual download — you're never limited to this list.
@@ -26,6 +30,10 @@ Every export you start is tracked here — queued, running, done, or failed, fil
 
 Switch the export picker to "Download to phone" for a LAN URL plus a QR code — scan it with your phone's camera, no cable and no separate app required, and the file lands straight in its Downloads folder.
 
-> Screenshots of the format-tile row, the Companion banner, the export queue, and the LAN/QR tab are tracked as a follow-up (Refs #1289) — this page currently shows the Audiobookshelf dialog only, captured against the real app rather than left as a placeholder.
+![Export audiobook modal — Download to phone tab with LAN URL and QR code](images/exporting/lan-qr-download-tab.png)
+
+Below, the same export picker switched to "Download to phone": a format row (M4B, MP3.ZIP, AAC, Opus), the LAN URL, and its QR code side by side, ready to scan.
+
+> Screenshots of the format-tile row and the export queue are tracked as a follow-up (Refs #1289).
 
 Next: [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices).

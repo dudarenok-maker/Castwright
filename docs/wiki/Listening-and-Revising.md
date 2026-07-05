@@ -16,6 +16,10 @@ A plain bookmark is just a note to yourself. Flip one to a re-record marker — 
 
 Pick up to 60 seconds of a chapter and download it as a standalone MP3 — no re-encoding, so the quality matches the source exactly. It's the fastest way to hand someone thirty seconds of proof that the apprentice really does sound thirteen.
 
-> Screenshots of the marker panel, the re-record flow, and the share-clip picker are tracked as a follow-up (Refs #1289) — the shot above is the real Listen header.
+![Share clip picker — start/end range over Chapter 1, clip length 0:30](images/listening-and-revising/share-clip-picker.png)
+
+Drag either handle to set the start and end, and the clip-length readout updates live so you can dial in exactly 60 seconds or less before downloading.
+
+> Screenshots of the marker panel and the re-record flow are tracked as a follow-up (Refs #1289).
 
 Next: [Exporting](Exporting).

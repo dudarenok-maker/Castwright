@@ -23,6 +23,10 @@ shows an install/repair action instead of this pill — there's nothing to
 load until that step completes. See [Voice Engines](Voice-Engines) for what
 each engine's row looks like in those states.
 
-> Screenshots of the idle and loading states are tracked as a follow-up — the shot above is the real ready/loaded state from Model Manager.
+![Model Manager row — llama3.1:8b idle with a Load model action](images/the-model-control-pill/idle-state.png)
+
+Below, `llama3.1:8b`: installed on disk but not resident in GPU memory, so the pill reads a neutral "llama3.1:8b idle" and the action is **Load model** rather than Stop.
+
+> A screenshot of the loading state is tracked as a follow-up — it's a transient state the current capture harness doesn't pose yet.
 
 Next: [Library Management](Library-Management).

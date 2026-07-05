@@ -27,6 +27,10 @@ Every reassignment writes an entry to the **Log** tab, so nothing here is a sile
 
 Beyond fixing lines one at a time, **Review Script** sends a chapter (or the whole book) to a second LLM pass that reads back over the attribution the way a careful editor would — catching a stray speaker tag, a line split between two people, dialogue buried inside a paragraph of narration, or an emotion that doesn't fit. It surfaces every proposed fix in a diff view you accept or wave off line by line, rather than applying anything silently.
 
+![Review Script diff — grouped strip-tag, reassign, and exclude suggestions with per-row checkboxes](images/manuscript-management/review-script-diff.png)
+
+Below, Chapter 3's suggestions grouped by kind — strip a stray dialogue tag, reassign a line to a speaker outside the detected cast, or exclude a page-number artefact — with **Select all** per group and a running count of what's checked, so you accept exactly the fixes you want in one **Apply** click.
+
 ## Two more editing tools in the same header
 
 - **Detect Emotions** re-runs the emotion pass that decides how a line should land (furious, deadpan, broken) across a chapter, without re-running the full analysis.
@@ -34,6 +38,6 @@ Beyond fixing lines one at a time, **Review Script** sends a chapter (or the who
 
 Need to merge or split chapters instead of fixing attribution? That's **Restructure**, covered in [Uploading a Book](Uploading-a-Book) — it's one click away from the same screen.
 
-> Screenshots of the boundary-drag interaction and the Review Script diff view are tracked as a follow-up — both are mid-interaction states the current capture harness doesn't pose yet.
+> A screenshot of the boundary-drag interaction is tracked as a follow-up — it's a mid-drag state the current capture harness doesn't pose yet.
 
 Next: with the cast confirmed and the manuscript in good shape, head to [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices).

@@ -131,6 +131,108 @@ export const SCENES: Scene[] = [
     viewports: ['desktop'],
     waitFor: '[data-testid="cast-row-wren"]',
   },
+  {
+    id: 'manuscript-review-script',
+    hash: '#/books/coalfall-commission/manuscript?chapter=3',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByTestId('review-script-chapter').click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="apply-button"]',
+    strict: true,
+  },
+  {
+    /* The two-cast-member A/B compare (select exactly 2 rows' checkboxes,
+       click "Compare") — NOT the Profile drawer's single-character "Design &
+       compare" (that's VoiceCompareModal, the current-vs-proposed flow shown
+       on Designing-a-Voice.md instead). Insp. Cray + Dr. Wren, both carried
+       into Saltgrave from The Drowning Bell. */
+    id: 'cast-ab-compare',
+    hash: '#/books/hollow-tide-2/cast',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByTestId('cast-row-insp-cray').locator('span').first().click({ timeout: 5000 });
+      await page.getByTestId('cast-row-dr-wren').locator('span').first().click({ timeout: 5000 });
+      await page.getByRole('button', { name: 'Compare', exact: true }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[aria-label="Compare cast members"]',
+    strict: true,
+  },
+  {
+    /* NOTE (Task 8 capture run): every marketing fixture book reachable under
+       VITE_DEMO_CAPTURE=1 (hollow-tide-1, hollow-tide-2, coalfall-commission)
+       is already fully cast-designed — "Design full cast" renders disabled
+       ("Every character already has a voice.") on all three, so this scene
+       can't actually be captured without adding a genuinely-undesigned
+       character to fixture data, which is out of scope for this task. Left
+       here (selectors verified correct against live DOM) for whichever task
+       adds that fixture data. */
+    id: 'voice-design-scope-picker',
+    hash: '#/books/hollow-tide-2/cast',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Design full cast' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="design-scope-picker"]',
+    strict: true,
+  },
+  {
+    id: 'model-pill-idle',
+    hash: '#/models',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="model-row-ollama:llama3.1:8b"]',
+    scrollTo: '[data-testid="model-row-ollama:llama3.1:8b"]',
+    strict: true,
+  },
+  {
+    id: 'listen-share-clip',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: /Share clip of chapter/i }).first().click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="share-clip-modal"]',
+    strict: true,
+  },
+  {
+    id: 'export-format-companion',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="companion-app-banner"]',
+    scrollTo: '[data-testid="companion-app-banner"]',
+    strict: true,
+  },
+  {
+    id: 'mobile-lan-qr',
+    hash: '#/admin',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Authorize a device' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="pair-qr-image"]',
+    strict: true,
+  },
+  {
+    id: 'mobile-pair-device',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Pair a device with the Castwright Companion' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="pair-device-modal"]',
+    strict: true,
+  },
+  {
+    id: 'export-lan-qr',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Export audiobook', exact: true }).first().click({ timeout: 5000 });
+      await page.getByTestId('export-tab-download').click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'img[alt="LAN URL QR code"]',
+    strict: true,
+  },
 
   /* ── Wiki wave: replace personal-account screenshots with the marketing
      fixtures wiki-wide (docs/wiki/**). No personal display name, no single
@@ -163,6 +265,11 @@ export const SCENES: Scene[] = [
     id: 'coalfall-manuscript-low-confidence',
     hash: '#/books/coalfall-commission/manuscript?chapter=3',
     viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Next low-confidence sentence' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[aria-label="Close inspector"]',
+    strict: true,
   },
   {
     id: 'admin',

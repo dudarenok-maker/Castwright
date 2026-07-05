@@ -22,12 +22,14 @@ Two rows above flag "These look like the same person" — a possible-duplicate p
 
 Torn between two takes on a character? Select exactly two cast members (their row checkboxes) and click "Compare" to open them side by side — tune gender, age range, and tone on either side, re-sample to hear the difference, and save only the one you actually like.
 
+![Compare cast members — Insp. Cray and Dr. Wren side by side, tone sliders and resolved voice both visible](images/reviewing-cast-and-assigning-voices/ab-compare.png)
+
+Below, Insp. Cray and Dr. Wren — both carried into *Saltgrave* from *The Drowning Bell* — compared side by side: each side shows its resolved voice and profile bucket with a `≠` marker on anything that differs, and the same gender/age/tone controls as the single-character drawer, so you can nudge one side and re-sample without leaving the comparison.
+
 ## Confirming the cast
 
 Before you ever reach the cast table above, the confirmation screen — the first thing you see right after analysis finishes — lists every detected character with a matched-or-generate decision. Below is *The Drowning Bell*, book one of its series: "7 speaking characters detected · 0 matched from your library · 7 new to generate" — there's no earlier book yet, so every voice generates fresh. Once a series has a book behind it, a returning character is offered back here with its provenance instead (exactly what "Matched" and "Carried" mean on *Saltgrave*'s cast table above), so continuity across a series is a decision you confirm once, not a redesign you repeat book after book.
 
 ![Confirm cast screen — book one, nothing to match yet](images/reviewing-cast-and-assigning-voices/05-confirm-cast.png)
-
-> A screenshot of the A/B compare screen is tracked as a follow-up.
 
 Next: [Designing a Voice](Designing-a-Voice).

@@ -14,6 +14,10 @@ trusted certificate, so a phone's browser doesn't show a security warning.
 **Admin → LAN access** is where you authorize a browser device once that
 mode is running — see the LAN access card on the [Admin](Admin) page.
 
+![Admin page — LAN access card with Authorize a device and the resulting pairing QR](images/mobile-tablet-and-companion-app/lan-access-qr.png)
+
+Click **Authorize a device** (a device name is optional — it defaults to "Device") and a pairing QR appears right below the card, ready for a phone's camera.
+
 The one-time root-certificate step is
 `npm run install:cert-mobile` — it generates a per-LAN-IP certificate, prints
 the LAN URLs for both the Vite dev server and the production bundle, and
@@ -49,6 +53,8 @@ Once paired, the companion app mirrors your library for offline listening,
 tracks finished books in its own shelf, and keeps that shelf and your
 listening position in sync across every paired device.
 
-> Screenshots of the LAN-access QR card and the Pair-a-device modal are tracked as a follow-up.
+![Pair a device modal — QR code, expiry countdown, and the manual-code fallback](images/mobile-tablet-and-companion-app/pair-a-device-modal.png)
+
+The Listen view's Companion banner opens the same pairing flow: **Pair a device → Scan QR** in the app, pointed at this code — it expires after a few minutes, with **Regenerate code** and a manual-entry fallback if scanning isn't an option.
 
 Next: [Admin](Admin).
