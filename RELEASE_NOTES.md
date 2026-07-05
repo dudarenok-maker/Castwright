@@ -13,6 +13,7 @@
 - **The Books page no longer scrolls sideways on a phone.** A long library folder path could push the page wider than your screen; it now tucks in neatly with an ellipsis instead.
 - **A last sliver of sideways scroll on the Books page, gone.** Even with a short folder path, the page could still creep a couple of pixels past the edge of a phone screen; it now sits flush.
 - **The Quality Gate wiki page finally shows its work.** Real pictures of a flagged line, a voice-drift flag, and the amber warning following you into the mini-player, plus the word-check pass documented for the first time.
+- **Your manuscript can no longer be quietly overwritten with sample text.** A rare timing gap while a chapter was still loading could, on the next edit, bake Castwright's own demo story into your real book's saved manuscript. That gap is closed, and a save can no longer wipe an already-read chapter down to nothing.
 
 # Castwright 1.10.0
 
