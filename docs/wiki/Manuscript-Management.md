@@ -38,6 +38,8 @@ Below, Chapter 3's suggestions grouped by kind — strip a stray dialogue tag, r
 
 Need to merge or split chapters instead of fixing attribution? That's **Restructure**, covered in [Uploading a Book](Uploading-a-Book) — it's one click away from the same screen.
 
-> A screenshot of the boundary-drag interaction is tracked as a follow-up — it's a mid-drag state the current capture harness doesn't pose yet.
+Mid-drag, the boundary handle highlights peach and swaps its label to "drop on a sentence," so you always know a reassignment is live before you let go:
+
+![Boundary handle mid-drag, showing the peach highlight and "drop on a sentence" label](images/manuscript-management/boundary-drag.png)
 
 Next: with the cast confirmed and the manuscript in good shape, head to [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices).

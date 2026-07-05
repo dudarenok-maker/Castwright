@@ -599,4 +599,32 @@ export const SCENES: Scene[] = [
     waitForAfterAction: 'text=Loading…',
     strict: true,
   },
+  {
+    /* Mid-drag simulation for the chapter-boundary handle (Task 10, #1318).
+       `data-tour-id="chapter-boundary"` is only emitted for the first
+       boundary handle (boundaryIdx === 1, src/views/manuscript.tsx:1663) —
+       fine here, since the scene just needs *a* boundary to drag, not a
+       specific one. Uses raw page.mouse events (not the `action` click
+       helpers) so the drag lands mid-gesture: the boundary handler listens
+       for PointerEvent (onPointerDown/pointermove/pointerup), but Chromium
+       synthesizes real pointer events for mouse input, so page.mouse still
+       drives it. Deliberately no mouse.up() — the screenshot must land
+       mid-drag, before the gesture resolves. */
+    id: 'manuscript-boundary-drag',
+    hash: '#/books/coalfall-commission/manuscript?chapter=3',
+    viewports: ['desktop'],
+    waitFor: '[data-tour-id="chapter-boundary"]',
+    action: async (page) => {
+      const handle = page.locator('[data-tour-id="chapter-boundary"]');
+      const box = await handle.boundingBox();
+      if (!box) throw new Error('boundary handle not found');
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x, y + 40, { steps: 10 });
+      // Deliberately no mouse.up() — the screenshot must land mid-drag.
+    },
+    strict: true,
+  },
 ];
