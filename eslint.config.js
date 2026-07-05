@@ -36,6 +36,10 @@ export default tseslint.config(
       // worktrees that carry their own built `dist/` output. Without this, lint
       // walks into `.claude/worktrees/<agent>/server/dist/` and floods errors.
       '.claude/',
+      // Ad-hoc worktree checkouts outside the `.claude/worktrees/` convention
+      // (e.g. `.worktrees/<name>`) carry their own `node_modules`/`dist` too —
+      // same failure mode as above, different root.
+      '.worktrees/',
       'server/dist/',
       'server/tts-sidecar/.venv/',
       'server/handoff/',
