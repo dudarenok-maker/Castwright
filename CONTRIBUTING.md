@@ -578,6 +578,11 @@ git push origin main
 git push origin vX.Y.Z
 
 # 5. Watch:  gh run watch   (or the Actions tab in the browser)
+
+# 6. Once the release is published, refresh the wiki's Release Notes section
+#    (fs-68) with the new version's body, then publish docs/wiki -> the wiki repo.
+npm run wiki:release-notes
+npm run wiki:sync
 ```
 
 Step 3's cross-OS gate (plan 127) is the macOS + Windows verify/build + mobile-e2e
