@@ -397,12 +397,6 @@ _Full detail + acceptance:_ [#893](https://github.com/dudarenok-maker/Castwright
 - _Benefit (technical):_ closes the one open verification gap from PR #1324 before relying on the MPS path in production; `COQUI_DEVICE=cpu` stays available as an explicit rollback if inference proves broken.
 _Full detail + acceptance:_ [#1326](https://github.com/dudarenok-maker/Castwright/issues/1326).
 
-#### `srv-56` — Centralize the off-GPU semaphore-gating idiom + shared engine-list constant ([#1327](https://github.com/dudarenok-maker/Castwright/issues/1327))
-
-- _What:_ PR #1324's device-aware GPU semaphore gating duplicated the same "skip acquire when off-GPU" idiom across 3 new call sites, on top of 3 pre-existing, differently-shaped copies elsewhere — and duplicated a 3-element engine-list constant between `engine-device-state.ts` and `sidecar-health.ts`. A code review flagged both as real but non-blocking (fixing them in #1324 would have expanded that PR into unrelated files).
-- _Benefit (technical):_ a shared helper would have caught (rather than merely fixed after the fact) the exact "qwen-voice.ts's acquire left ungated" mistake PR #1324's own adversarial review needed to catch by hand; removes a duplicated constant two files must otherwise keep in sync by convention alone.
-_Full detail + acceptance:_ [#1327](https://github.com/dudarenok-maker/Castwright/issues/1327).
-
 #### `side-21` — FA2: fix the stale pin + conditional auto-enable on the real stack ([#1000](https://github.com/dudarenok-maker/Castwright/issues/1000))
 
 - _What:_ `install-qwen3.mjs` pins a cp311/torch2.6/cu124 FlashAttention-2 wheel, but the venv is **cp312/torch2.11/cu128** — so FA2 silently skips (SDPA in use). Fix the gate to the real stack; auto-install+activate only when a matching wheel exists; SDPA fallback otherwise. Do NOT downgrade torch for FA2 (modest win on short TTS decode).
