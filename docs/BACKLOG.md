@@ -107,6 +107,12 @@ _Full detail + acceptance:_ [#1230](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit:_ Immersion / accessibility / pronunciation learning — a differentiating feature. _Owes a `docs/features/NN-*.md` regression plan (substantial)._ _Net-new from the 2026-06-02 backlog brainstorm (Listener / Reliability / Distribution / Net-new / Sharing lenses). MoSCoW `should` is a placeholder — to be re-bucketed in the upcoming whole-backlog priority pass._
 _Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/Castwright/issues/464).
 
+#### `fs-41` — Auto-detect manuscript language on ingest (filter voice library + auto-load engine) ([#666](https://github.com/dudarenok-maker/Castwright/issues/666))
+
+- _What:_ Complete the multi-language "second half": on book ingest, **auto-detect the manuscript language**, **filter the voice library** to that language, and **auto-load the right engine** (e.g. Qwen3-TTS for Russian, Kokoro for English) — keeping the existing hard invariant that a cast never crosses languages within a book. Today the language path works end-to-end (fs-2) but the user drives engine/voice selection manually.
+- _Benefit:_ Removes the most error-prone manual step for non-English books; one of the most-requested multi-language directions. Pairs with fs-2 (language engine half, shipped) and fs-14 (Russian UI localization).
+_Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/Castwright/issues/666).
+
 #### `fs-27` — Chapter recaps / previously summaries ([#481](https://github.com/dudarenok-maker/Castwright/issues/481))
 
 - _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front (quota/GPU).
