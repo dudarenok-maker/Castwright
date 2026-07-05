@@ -9,6 +9,7 @@ import type {
   DriftEvent,
 } from '../../lib/types';
 import type { CoverFraming } from '../../lib/cover-framing';
+import type { ListenProgress } from '../../lib/api';
 import coalfallCastJson from './coalfall-cast.json';
 import coalfallManuscriptJson from './coalfall-manuscript.json';
 
@@ -162,6 +163,9 @@ function bookState(args: {
   cast: Character[] | null;
   completedSlugs: string[];
   sentences?: Sentence[];
+  /** fs-2 — BCP-47 book language. Omitted defaults to 'en' (unset on the
+      wire), matching the 4 original English-language books. */
+  language?: string;
 }): BookStateResponse {
   return {
     state: {
@@ -179,6 +183,7 @@ function bookState(args: {
       createdAt: now,
       updatedAt: now,
       narratorCredit: null,
+      language: args.language,
     },
     cast: args.cast ? { characters: args.cast } : null,
     manuscript: { wordCount: 84_000, format: 'epub' },
@@ -284,6 +289,41 @@ const tidewatcher = bookState({
   completedSlugs: [],
 });
 
+/* ── Book 4 — The Harborlight Ledger — CAST-CONFIRMED, PRE-GENERATION ──
+   fs-1318 Tier D: the only marketing fixture book with a genuinely
+   undesigned character (harbor-clerk, below) — every other book is fully
+   cast-designed, so "Design full cast" renders disabled everywhere else.
+   `voiceId`/`voiceState` are OMITTED (not `null`/`'unassigned'` — both are
+   type errors, see src/lib/api-types.ts:3533,3537) so the character reads
+   as Qwen-effective with no matched voice, which is what
+   `resolveVoiceStatus` needs to label it "Needs voice". */
+const undesignedExtra = (): Character => ({
+  id: 'harbor-clerk',
+  name: 'Harbor Clerk',
+  role: 'Minor',
+  color: '#9C8B6A',
+  lines: 12,
+  tone: { warmth: 0.5, pace: 0.5, authority: 0.3, emotion: 0.3 },
+  description: 'Brief dockside functionary, one scene.',
+  ttsEngine: 'qwen',
+});
+
+const BOOK4_CHAPTERS = makeChapters(6);
+
+const harborlight = bookState({
+  bookId: 'hollow-tide-4',
+  title: 'The Harborlight Ledger',
+  author: 'Marin Vale',
+  series: 'The Hollow Tide',
+  seriesPosition: 4,
+  isStandalone: false,
+  coverGradient: ['#2B4C57', '#101D22'],
+  castConfirmed: true,
+  chapters: BOOK4_CHAPTERS,
+  cast: [reusedFromBook1(narrator()), reusedFromBook1(inspCray()), undesignedExtra()],
+  completedSlugs: [],
+});
+
 /* ── Coalfall Commission — Standalone ── */
 const COALFALL_CHAPTERS: BookStateResponse['state']['chapters'] = [
   { id: 1, title: 'The Coalfall Commission', slug: '01-title', excluded: true },
@@ -335,11 +375,117 @@ const coalfallCommission = bookState({
   completedSlugs: COALFALL_CHAPTERS.map((c) => c.slug),
 });
 
+/* ── The Coalfall Commission, Russian edition — fs-1318 Tier D ──
+   Ports Chapter One from the real language-detection fixture
+   (server/src/__fixtures__/the-coalfall-commission.ru.md) — same story,
+   same two leads, translated. Both cast members are fully Qwen-designed
+   (non-English books narrate on Qwen — see Voice Engines), so this book
+   demonstrates a finished non-English cast, not the undesigned-voice gate
+   (that's hollow-tide-4's job). */
+const COALFALL_RU_CHAPTERS: BookStateResponse['state']['chapters'] = [
+  { id: 1, title: 'Глава первая — Стук', slug: '01-glava-pervaya', duration: '39:20' },
+];
+
+const coalfallRuCast: Character[] = [
+  {
+    id: 'narrator-ru',
+    name: 'Рассказчик',
+    role: 'Narrator',
+    color: '#5B3A29',
+    voiceId: 'v_ru_narrator',
+    voiceState: 'generated',
+    tone: { warmth: 0.6, pace: 0.5, authority: 0.6, emotion: 0.4 },
+    description: 'Спокойный голос, ведущий читателя сквозь холодную ночь Коалфолла.',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-narrator-ru' } },
+  },
+  {
+    id: 'ren-ru',
+    name: 'Рен',
+    role: 'Blacksmith apprentice',
+    color: '#264653',
+    voiceId: 'v_ru_ren',
+    voiceState: 'generated',
+    tone: { warmth: 0.55, pace: 0.5, authority: 0.4, emotion: 0.6 },
+    description: 'Подмастерье кузнеца, называемая Воробушком.',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-ren-ru' } },
+  },
+];
+
+const coalfallRu = bookState({
+  bookId: 'coalfall-commission-ru',
+  title: 'Дело о Коалфолле',
+  author: 'Castwright',
+  series: 'Standalones',
+  seriesPosition: null,
+  isStandalone: true,
+  coverGradient: ['#3C194F', '#0F0E0D'],
+  castConfirmed: true,
+  chapters: COALFALL_RU_CHAPTERS,
+  cast: coalfallRuCast,
+  completedSlugs: COALFALL_RU_CHAPTERS.map((c) => c.slug),
+  language: 'ru',
+});
+
+/* ── Der Bernsteinturm — original German-language standalone — fs-1318 Tier D ──
+   Authored fresh (no existing German fixture to port), short single-chapter
+   shape matching the Coalfall fixture's length. Fully Qwen-designed cast,
+   same reasoning as the Russian edition above. */
+const BERNSTEINTURM_CHAPTERS: BookStateResponse['state']['chapters'] = [
+  { id: 1, title: 'Kapitel Eins — Der Ruf', slug: '01-der-ruf', duration: '36:05' },
+];
+
+const bernsteinturmCast: Character[] = [
+  {
+    id: 'erzaehlerin',
+    name: 'Erzählerin',
+    role: 'Narrator',
+    color: '#3D3D5C',
+    voiceId: 'v_de_erzaehlerin',
+    voiceState: 'generated',
+    tone: { warmth: 0.55, pace: 0.5, authority: 0.55, emotion: 0.4 },
+    description: 'Ruhige Stimme, die durch den Bernsteinturm führt.',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-erzaehlerin' } },
+  },
+  {
+    id: 'wachtmeister-brandt',
+    name: 'Wachtmeister Brandt',
+    role: 'Tower warden',
+    color: '#7B5A26',
+    voiceId: 'v_de_brandt',
+    voiceState: 'generated',
+    tone: { warmth: 0.4, pace: 0.45, authority: 0.75, emotion: 0.35 },
+    description: 'Wortkarger Wärter des alten Bernsteinturms.',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-brandt' } },
+  },
+];
+
+const bernsteinturm = bookState({
+  bookId: 'der-bernsteinturm',
+  title: 'Der Bernsteinturm',
+  author: 'Castwright',
+  series: 'Standalones',
+  seriesPosition: null,
+  isStandalone: true,
+  coverGradient: ['#4A3728', '#100D09'],
+  castConfirmed: true,
+  chapters: BERNSTEINTURM_CHAPTERS,
+  cast: bernsteinturmCast,
+  completedSlugs: BERNSTEINTURM_CHAPTERS.map((c) => c.slug),
+  language: 'de',
+});
+
 export const HOLLOW_TIDE_BOOK_STATES = new Map<string, BookStateResponse>([
   ['hollow-tide-1', drowningBell],
   ['hollow-tide-2', saltgrave],
   ['hollow-tide-3', tidewatcher],
+  ['hollow-tide-4', harborlight],
   ['coalfall-commission', coalfallCommission],
+  ['coalfall-commission-ru', coalfallRu],
+  ['der-bernsteinturm', bernsteinturm],
 ]);
 
 /* Distinct voice ids behind a book's voiceCount (voiceId ?? id), mirroring the
@@ -421,6 +567,37 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               coverFraming: TITLE_TOP_FRAME,
               tags: ['series-1'],
             },
+            {
+              /* fs-1318 Tier D — cast-confirmed, zero chapters rendered:
+                 the one marketing book with a genuinely undesigned voice
+                 (harbor-clerk), which opens the voice-readiness gate from
+                 the Manuscript view's "Approve cast & start generating".
+                 voiceCount matches voiceIds.length (3) exactly — voiceIds
+                 runs through the shared voiceIdsOf helper, whose
+                 `voiceId ?? id` fallback pads in harbor-clerk's own id for
+                 the undesigned slot, so voiceCount counts that placeholder
+                 too rather than the 2 characters with a real voice. A
+                 pre-existing helper quirk, not something this book needs
+                 to work around. */
+              bookId: 'hollow-tide-4',
+              title: 'The Harborlight Ledger',
+              author: 'Marin Vale',
+              series: 'The Hollow Tide',
+              seriesPosition: 4,
+              isStandalone: false,
+              status: 'cast_pending',
+              chapterCount: 6,
+              completedChapters: 0,
+              characterCount: 3,
+              voiceCount: 3,
+              voiceIds: voiceIdsOf(harborlight),
+              progress: 0,
+              lastWorkedOn: 'Just now',
+              coverGradient: ['#2B4C57', '#101D22'],
+              coverImageUrl: COVER('hollow-tide-2'),
+              coverFraming: TITLE_TOP_FRAME,
+              tags: ['series-1'],
+            },
           ],
         },
       ],
@@ -451,6 +628,54 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               coverImageUrl: COVER('coalfall-commission'),
               coverFraming: TITLE_TOP_FRAME,
               tags: [],
+            },
+            {
+              /* fs-1318 Tier D — non-English library entries for the
+                 language-detection + non-English cast-confirmation
+                 screenshots. Reuses the Coalfall cover asset (no new
+                 image dependency), per the same convention as hollow-tide-4. */
+              bookId: 'coalfall-commission-ru',
+              title: 'Дело о Коалфолле',
+              author: 'Castwright',
+              series: 'Standalones',
+              seriesPosition: null,
+              isStandalone: true,
+              status: 'complete',
+              chapterCount: 1,
+              completedChapters: 1,
+              characterCount: 2,
+              voiceCount: 2,
+              voiceIds: voiceIdsOf(coalfallRu),
+              progress: 1,
+              runtime: '39m',
+              lastWorkedOn: 'Last week',
+              coverGradient: ['#3C194F', '#0F0E0D'],
+              coverImageUrl: COVER('coalfall-commission'),
+              coverFraming: TITLE_TOP_FRAME,
+              tags: [],
+              language: 'ru',
+            },
+            {
+              bookId: 'der-bernsteinturm',
+              title: 'Der Bernsteinturm',
+              author: 'Castwright',
+              series: 'Standalones',
+              seriesPosition: null,
+              isStandalone: true,
+              status: 'complete',
+              chapterCount: 1,
+              completedChapters: 1,
+              characterCount: 2,
+              voiceCount: 2,
+              voiceIds: voiceIdsOf(bernsteinturm),
+              progress: 1,
+              runtime: '36m',
+              lastWorkedOn: 'Last week',
+              coverGradient: ['#4A3728', '#100D09'],
+              coverImageUrl: COVER('coalfall-commission'),
+              coverFraming: TITLE_TOP_FRAME,
+              tags: [],
+              language: 'de',
             },
           ],
         },
@@ -499,6 +724,38 @@ export const HOLLOW_TIDE_CONTINUE: ContinueListeningItem[] = [
     updatedAt: '2026-06-11T20:00:00.000Z',
   },
 ];
+
+/* ── Listen-progress + markers fixture (fs-1318 Tier D, served under
+   VITE_DEMO_CAPTURE=1) — powers the markers panel + a re-record marker on
+   the Drowning Bell's listen view. */
+export const HOLLOW_TIDE_LISTEN_PROGRESS = new Map<string, ListenProgress>([
+  [
+    'hollow-tide-1',
+    {
+      chapterId: 1,
+      currentSec: 83.5,
+      updatedAt: '2026-07-01T10:00:00.000Z',
+      markers: [
+        {
+          id: 'mk-1',
+          chapterId: 1,
+          sec: 42,
+          label: 'Great line reading',
+          kind: 'note',
+          createdAt: '2026-07-01T09:55:00.000Z',
+        },
+        {
+          id: 'mk-2',
+          chapterId: 1,
+          sec: 118,
+          label: 'Mispronounced name — needs a re-record',
+          kind: 'rerecord',
+          createdAt: '2026-07-01T09:58:00.000Z',
+        },
+      ],
+    },
+  ],
+]);
 
 /* ── Voice-library fixture (served under VITE_DEMO_CAPTURE=1) ──────────── */
 import type { VoiceLibraryResponse, Voice } from '../../lib/types';

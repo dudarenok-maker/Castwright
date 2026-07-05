@@ -100,6 +100,20 @@ describe('mockResetConfig round-trip', () => {
   });
 });
 
+describe('_resetMockConfig', () => {
+  it('resets tts.qwen.device back to its default after an override', async () => {
+    await mockPutConfig({ 'tts.qwen.device': 'cuda' });
+    const afterPut = await mockGetConfig();
+    expect(afterPut.values['tts.qwen.device'].effective).toBe('cuda');
+
+    _resetMockConfig();
+    const afterReset = await mockGetConfig();
+    expect(afterReset.values['tts.qwen.device'].effective).toBe('auto');
+    expect(afterReset.values['tts.qwen.device'].overridden).toBe(false);
+    expect(afterReset.values['tts.qwen.device'].source).toBe('default');
+  });
+});
+
 describe('mockGetPrompt / mockPutPrompt / mockResetPrompt', () => {
   it('getPrompt returns the default state for a known prompt', async () => {
     const prompt = await mockGetPrompt('ANALYZER_STAGE1_PROMPT');

@@ -1,14 +1,14 @@
 /* Task 12 — Model Manager health-state e2e.
  *
- * Pins the browser-level rendering of three health states that the
- * mock inventory (mockGetModelInventory in api.ts) now emits:
+ * Pins the browser-level rendering of health states that the
+ * mock inventory (mockGetModelInventory in api.ts) emits:
  *
- *   1. package-missing (qwen-base)  → "Needs repair" badge + "Repair" toggle,
- *                                      no Load pill (engine not usable).
+ *   1. ready + not loaded (qwen-base) → "Installed" badge + "Update" toggle,
+ *                                        Load pill visible (engine usable).
  *   2. verified integrity (kokoro)  → integrity chip labelled "verified".
  *   3. unpinned integrity (qwen-base)→ integrity chip labelled "unpinned".
- *   4. not-installed + secondary tier (coqui) → "Install" toggle, "Not installed"
- *                                               badge, rendered under "Optional add-ons".
+ *   4. ready + secondary tier (coqui) → "Update" toggle, "Installed"
+ *                                       badge, rendered under "Optional add-ons".
  *   5. Tier subheadings — "Standard" and "Optional add-ons" — appear when at
  *      least one TTS item carries a `tier` field.
  *
@@ -22,9 +22,7 @@ import { waitForRouteReady } from './helpers';
 test.describe.configure({ mode: 'serial' });
 
 test.describe('Model Manager — health states', () => {
-  test('package-missing row shows "Needs repair", "Repair" toggle, no Load pill', async ({
-    page,
-  }) => {
+  test('ready row shows "Installed", "Update" toggle, and a Load pill', async ({ page }) => {
     await page.goto('/#/models');
     await waitForRouteReady(page);
 
@@ -36,14 +34,14 @@ test.describe('Model Manager — health states', () => {
     const qwenRow = page.getByTestId('model-row-qwen-base');
     await expect(qwenRow).toBeVisible();
 
-    /* 1a — residency badge reads "Needs repair". */
-    await expect(qwenRow.getByText('Needs repair', { exact: true })).toBeVisible();
+    /* 1a — residency badge reads "Installed" (present, not loaded). */
+    await expect(qwenRow.getByText('Installed', { exact: true })).toBeVisible();
 
-    /* 1b — installer toggle is labelled "Repair" (not "Install" / "Update"). */
-    await expect(qwenRow.getByTestId('model-install-toggle-qwen-base')).toContainText(/Repair/i);
+    /* 1b — installer toggle is labelled "Update" (not "Install" / "Repair"). */
+    await expect(qwenRow.getByTestId('model-install-toggle-qwen-base')).toContainText(/Update/i);
 
-    /* 1c — no Load pill (engine is not usable while package is missing). */
-    await expect(qwenRow.getByRole('button', { name: /load model/i })).not.toBeVisible();
+    /* 1c — Load pill is visible (engine is usable once package/weights are ready). */
+    await expect(qwenRow.getByRole('button', { name: /load model/i })).toBeVisible();
   });
 
   test('integrity chips render — kokoro: verified, qwen-base: unpinned', async ({ page }) => {
@@ -60,9 +58,7 @@ test.describe('Model Manager — health states', () => {
     await expect(qwenRow.getByLabel('integrity: unpinned')).toBeVisible();
   });
 
-  test('secondary (coqui) row shows "Not installed" badge and "Install" toggle', async ({
-    page,
-  }) => {
+  test('secondary (coqui) row shows "Installed" badge and "Update" toggle', async ({ page }) => {
     await page.goto('/#/models');
     await waitForRouteReady(page);
     await expect(page.getByTestId('model-inventory')).toBeVisible({ timeout: 10_000 });
@@ -70,11 +66,11 @@ test.describe('Model Manager — health states', () => {
     const coquiRow = page.getByTestId('model-row-coqui');
     await expect(coquiRow).toBeVisible();
 
-    /* Not installed → badge reads "Not installed". */
-    await expect(coquiRow.getByText('Not installed', { exact: true })).toBeVisible();
+    /* Installed, not loaded → badge reads "Installed". */
+    await expect(coquiRow.getByText('Installed', { exact: true })).toBeVisible();
 
-    /* Installer toggle labelled "Install" (not "Repair" / "Update"). */
-    await expect(coquiRow.getByTestId('model-install-toggle-coqui')).toContainText(/Install/i);
+    /* Installer toggle labelled "Update" (not "Install" / "Repair"). */
+    await expect(coquiRow.getByTestId('model-install-toggle-coqui')).toContainText(/Update/i);
   });
 
   test('"Standard" and "Optional add-ons" tier subheadings are present', async ({ page }) => {

@@ -12,7 +12,7 @@ At the top, the **Application updates** card shows your installed app +
 sidecar version, whether you're up to date, a **See what's new** link, and
 **Apply a package manually…** for sideloading a release `.zip`. Below it is
 the same side-nav accordion pattern as
-[Model Manager](Admin-and-Model-Manager) and
+[Model Manager](Model-Manager) and
 [Advanced Settings](Advanced-Settings), with these sections:
 
 - **Profile** — your display name, shown in the top bar and the change log.
@@ -45,7 +45,7 @@ the same side-nav accordion pattern as
   scale (Normal/Large/Larger), and the autosave debounce (how long edits to
   cast/manuscript/notes wait before writing to disk).
 - **Models & engines** and **Advanced configuration** — thin pointer cards
-  into [Model Manager](Admin-and-Model-Manager) and
+  into [Model Manager](Model-Manager) and
   [Advanced Settings](Advanced-Settings) respectively; model setup and
   low-level tuning both live on those dedicated pages now, not here.
 - **Help & troubleshooting**, **Listening stats**, and **First-run setup** —

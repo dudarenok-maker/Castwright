@@ -10,12 +10,18 @@ Click any chapter row to play it in the mini-player pinned to the bottom of the 
 
 ## Flagging a line for revision
 
-A plain bookmark is just a note to yourself. Flip one to a re-record marker — the refresh icon next to it — and it grows a **"Fix this line"** button that jumps straight into the per-line re-record flow for that exact moment. You never have to regenerate a whole chapter to fix one reading that didn't land.
+A plain bookmark is just a note to yourself. Flip one to a re-record marker — the refresh icon next to it — and it grows a **"Fix this line"** button that jumps straight into the per-line re-record flow for that exact moment. You never have to regenerate a whole chapter to fix one reading that didn't land. Below, *The Drowning Bell*'s Markers panel with both kinds side by side — a plain note ("Great line reading") and a re-record marker ("Mispronounced name — needs a re-record") carrying the "re-record" pill and its "Fix this line" button:
+
+![Markers panel — a plain note and a re-record marker with "Fix this line"](images/listening-and-revising/markers-and-rerecord.png)
 
 ## Sharing a clip
 
 Pick up to 60 seconds of a chapter and download it as a standalone MP3 — no re-encoding, so the quality matches the source exactly. It's the fastest way to hand someone thirty seconds of proof that the apprentice really does sound thirteen.
 
-> Screenshots of the marker panel, the re-record flow, and the share-clip picker are tracked as a follow-up (Refs #1289) — the shot above is the real Listen header.
+![Share clip picker — start/end range over Chapter 1, clip length 0:30](images/listening-and-revising/share-clip-picker.png)
+
+Drag either handle to set the start and end, and the clip-length readout updates live so you can dial in exactly 60 seconds or less before downloading.
+
+> A screenshot of the per-line re-record flow itself (once "Fix this line" is clicked) is tracked as a follow-up (Refs #1289).
 
 Next: [Exporting](Exporting).

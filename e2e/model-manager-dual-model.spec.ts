@@ -93,7 +93,7 @@ test.describe('Model Manager — Coqui install (per-row)', () => {
     await page.goto('/#/models');
     await waitForRouteReady(page);
 
-    /* fs-23 follow-up: expand the Coqui row's Install toggle. The
+    /* fs-23 follow-up: expand the Coqui row's Install/Update toggle. The
        /api/coqui/detect probe is stubbed weights-missing
        (stubAccountModelProbes), so the "Install Coqui XTTS v2" card renders. */
     const row = page.getByTestId('model-row-coqui');
