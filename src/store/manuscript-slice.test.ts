@@ -690,6 +690,22 @@ describe('manuscriptSlice — bookId anchoring', () => {
   });
 });
 
+/* ── #1356 — demo fixture must never leak into a real book's sentences ── */
+
+describe('manuscriptSlice — mock-fixture-leak regression (#1356)', () => {
+  it('defaults sentences to [] in the slice initial state, not the demo fixture', () => {
+    expect(manuscriptSlice.getInitialState().sentences).toEqual([]);
+  });
+
+  it('reset() clears sentences to [], not the demo fixture', () => {
+    const start = baseState(
+      sentences([{ id: 1, text: 'Real analysed content.', characterId: 'narrator' }]),
+    );
+    const next = manuscriptSlice.reducer(start, manuscriptActions.reset());
+    expect(next.sentences).toEqual([]);
+  });
+});
+
 /* ── Plan 74 — re-upload diff state transitions ─────────────────────── */
 
 describe('manuscriptSlice — previewReuploadDiff', () => {

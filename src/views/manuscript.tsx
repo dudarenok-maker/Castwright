@@ -28,7 +28,6 @@ import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { SentenceInstructControl } from '../components/sentence-instruct-control';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
-import { initialSentences } from '../data/sentences';
 import { useAppDispatch, useAppSelector } from '../store';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
@@ -56,6 +55,11 @@ import type { SeriesRosterEntry } from '../lib/api';
    Unit A; a per-run local-model option is deferred to srv-48. Used both for
    the per-run `model` opt and to compute the whole-book RPD warning. */
 const REVIEW_MODEL = 'gemma-4-31b-it';
+
+/* Stable fallback for when sentencesFromStore is momentarily null (e.g.
+   mid-hydration) — a literal `[]` would be a fresh array every render and
+   defeat the useMemo hooks keyed on `sentences` below. */
+const EMPTY_SENTENCES: Sentence[] = [];
 
 interface Props {
   characters: Character[];
@@ -141,7 +145,7 @@ export function ManuscriptView({
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
-  const sentences: Sentence[] = sentencesFromStore ?? initialSentences;
+  const sentences: Sentence[] = sentencesFromStore ?? EMPTY_SENTENCES;
   /* Keep a ref so async handlers (e.g. handleReviewScript) always read
      the LIVE sentences even after an await, without depending on a
      potentially stale closure. */

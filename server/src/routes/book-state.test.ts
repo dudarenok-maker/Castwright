@@ -144,6 +144,93 @@ describe('book-state router — changeLog slice', () => {
   });
 });
 
+describe('book-state router — manuscript slice validation (#1356 mock-fixture-leak fix)', () => {
+  const validSentence = {
+    id: 1,
+    chapterId: 1,
+    characterId: 'narrator',
+    text: 'A real sentence.',
+  };
+
+  it('PUT slice=manuscript 400s on a malformed patch (sentences missing)', async () => {
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'manuscript', patch: { mergedAwayKeys: [] } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Malformed manuscript patch/);
+  });
+
+  it('PUT slice=manuscript writes a valid non-empty patch to manuscript-edits.json', async () => {
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'manuscript', patch: { sentences: [validSentence] } });
+    expect(res.status).toBe(204);
+
+    const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    expect(existsSync(onDisk)).toBe(true);
+    const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
+    expect(parsed.sentences).toHaveLength(1);
+    expect(parsed.sentences[0].text).toBe('A real sentence.');
+  });
+
+  it('PUT slice=manuscript 409s on a patch that would wipe an already-analysed manuscript to zero sentences', async () => {
+    /* Depends on the previous case having seeded manuscript-edits.json with a
+       non-empty sentence list — mirrors the live-book scenario from #1356: a
+       stale/momentarily-null client state must never be allowed to overwrite
+       real content with []. */
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'manuscript', patch: { sentences: [] } });
+    expect(res.status).toBe(409);
+
+    const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
+    expect(parsed.sentences).toHaveLength(1);
+  });
+
+  it('PUT slice=manuscript accepts additive sentence fields (startMs/endMs) instead of 400ing the whole patch', async () => {
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'manuscript',
+        patch: { sentences: [{ ...validSentence, startMs: 1000, endMs: 2500 }] },
+      });
+    expect(res.status).toBe(204);
+
+    const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
+    expect(parsed.sentences[0].startMs).toBe(1000);
+    expect(parsed.sentences[0].endMs).toBe(2500);
+  });
+
+  it('PUT slice=manuscript 500s (does not silently wipe) when manuscript-edits.json on disk is corrupt', async () => {
+    const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const validContent = readFileSync(onDisk, 'utf8');
+    writeFileSync(onDisk, '{not valid json');
+
+    try {
+      const res = await request(app)
+        .put(`/api/books/${bookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({ slice: 'manuscript', patch: { sentences: [] } });
+      expect(res.status).toBe(500);
+
+      /* The corrupt file must be left untouched, not silently overwritten
+         with an empty sentence list — a corrupt file must never be treated
+         the same as "no existing content" by the wipe-guard. */
+      expect(readFileSync(onDisk, 'utf8')).toBe('{not valid json');
+    } finally {
+      /* This file is shared across every test in this suite (same bookDir),
+         so leaving it corrupt would break every later GET /state test. */
+      writeFileSync(onDisk, validContent);
+    }
+  });
+});
+
 describe('book-state router — chapterLufs hydration (plan 77)', () => {
   /* Plan 77 surfaces per-chapter EBU R128 sidecar payloads (plan 71's
      `<slug>.lufs.json`) in the book-state response so the listen-view

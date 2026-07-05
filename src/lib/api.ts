@@ -61,6 +61,7 @@ import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
+import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
 import { MOCK_SERIES_MEMORY } from '../mocks/series-memory';
@@ -925,7 +926,13 @@ function buildSolwayBayMockState(): BookStateResponse {
        render the chapter playlist. */
     cast: null,
     manuscript: { wordCount: 82_400, format: 'epub' },
-    manuscriptEdits: null,
+    /* Several manuscript-view e2e specs (script-review, detect-emotions,
+       excluded-line, prosody-auto-trigger-guard) drive `sb`'s manuscript
+       view and need real seeded sentences to select/reassign/exclude —
+       reuse the same fixture the fresh-analysis flow (`ns`) serves via
+       ANALYSIS_NORTHERN_STAR, so it goes through the normal
+       hydrateFromBookState path rather than an empty manuscript. */
+    manuscriptEdits: { sentences: initialSentences, mergedAwayKeys: [] },
     revisions: null,
     /* Every chapter is rendered (matches the library card's
        completedChapters: 18). hydrateFromBookState then flips each
