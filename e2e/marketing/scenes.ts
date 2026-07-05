@@ -194,8 +194,8 @@ export const SCENES: Scene[] = [
         .getByText('Defaults for new books', { exact: true })
         .click({ timeout: 5000 });
     },
-    waitForAfterAction: '[data-testid="account-generation-workers"]',
-    scrollTo: '[data-testid="account-generation-workers"]',
+    waitForAfterAction: '#cfg-section-model-defaults',
+    scrollTo: '#cfg-section-model-defaults',
     strict: true,
   },
   {
