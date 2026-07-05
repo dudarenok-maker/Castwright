@@ -29,11 +29,13 @@ export function formatDate(iso) {
   return iso.slice(0, 10);
 }
 
+// No leading H1 here: GitHub's wiki UI already renders a page-title header
+// derived from the filename, and the release body itself often carries its
+// own "# Castwright X.Y.Z" H1 — a template header here stacked a third,
+// redundant heading on top of both.
 export function renderReleasePage({ tagName, publishedAt, body }) {
   const url = `https://github.com/${REPO_SLUG}/releases/tag/${tagName}`;
-  return `# Castwright ${tagName}
-
-Released ${formatDate(publishedAt)}. [View on GitHub](${url}).
+  return `Released ${formatDate(publishedAt)}. [View on GitHub](${url}).
 
 ---
 

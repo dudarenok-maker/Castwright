@@ -24,8 +24,8 @@ test('renderReleasePage embeds the tag, date, GitHub link, and verbatim body', (
     publishedAt: '2026-07-04T00:23:51Z',
     body: 'Some **release** body.\n',
   });
-  assert.match(page, /^# Castwright v1\.10\.0/);
-  assert.match(page, /Released 2026-07-04/);
+  assert.match(page, /^Released 2026-07-04/);
+  assert.doesNotMatch(page, /^# /);
   assert.match(
     page,
     /\[View on GitHub\]\(https:\/\/github\.com\/dudarenok-maker\/Castwright\/releases\/tag\/v1\.10\.0\)/,

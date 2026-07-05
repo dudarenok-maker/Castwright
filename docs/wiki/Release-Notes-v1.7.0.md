@@ -1,5 +1,3 @@
-# Castwright v1.7.0
-
 Released 2026-06-14. [View on GitHub](https://github.com/dudarenok-maker/Castwright/releases/tag/v1.7.0).
 
 ---
