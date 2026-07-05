@@ -150,18 +150,13 @@ describe('Hollow Tide marketing fixtures', () => {
       for (const b of allBooks) expect(Array.isArray(b.voiceIds)).toBe(true);
     });
 
-    it('per-book voiceIds length matches voiceCount, except hollow-tide-4', () => {
-      // hollow-tide-4 is the deliberate exception: voiceIdsOf's `voiceId ?? id`
-      // fallback pads in harbor-clerk's own id for its undesigned slot, so
-      // voiceIds.length (3) outcounts voiceCount (2, the true "designed"
-      // count) by exactly one. Every other book has a real voiceId on every
-      // character, so the two numbers agree there.
+    it('per-book voiceIds length matches voiceCount', () => {
+      // voiceIds and voiceCount should agree for all books now.
+      // voiceIdsOf's `voiceId ?? id` fallback pads in harbor-clerk's own id
+      // for its undesigned slot, so voiceIds.length (3) counts the fallback id
+      // correctly. voiceCount is also 3 to match.
       for (const b of allBooks) {
-        if (b.bookId === 'hollow-tide-4') {
-          expect(b.voiceIds!.length).toBe(b.voiceCount + 1);
-        } else {
-          expect(b.voiceIds!.length).toBe(b.voiceCount);
-        }
+        expect(b.voiceIds!.length).toBe(b.voiceCount);
       }
     });
 

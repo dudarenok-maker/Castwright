@@ -560,7 +560,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               chapterCount: 6,
               completedChapters: 0,
               characterCount: 3,
-              voiceCount: 2,
+              voiceCount: 3,
               voiceIds: voiceIdsOf(harborlight),
               progress: 0,
               lastWorkedOn: 'Just now',
