@@ -2,15 +2,26 @@ Released 2026-07-04. [View on GitHub](https://github.com/dudarenok-maker/Castwri
 
 ---
 
-<!-- Draft release notes for the NEXT version (technical register — this IS the GitHub release body). bump-version.mjs feeds this file verbatim as the annotated-tag message → release.yml, and now uses it by DEFAULT (no --notes-file needed). Everything in this HTML comment is invisible in the rendered release, so it never leaks into the body.
+<!--
+Draft release notes for the NEXT version (technical register — this IS the
+GitHub release body). bump-version.mjs feeds this file verbatim as the
+annotated-tag message → release.yml, and now uses it by DEFAULT (no
+--notes-file needed). Everything in this HTML comment is invisible in the
+rendered release, so it never leaks into the body.
 
 Keep it current for each release:
   1. Update the version marker below.
-  2. Rewrite the body (theme paragraph → ## ✨ Headline features with ### … (new) subsections → emoji-themed sections → bold-lead bullets with (#PR) refs → **Full changelog:** vPREV...vNEW footer). v1.7.0 is the canonical example; see CONTRIBUTING.md "Release notes".
+  2. Rewrite the body (theme paragraph → ## ✨ Headline features with
+     ### … (new) subsections → emoji-themed sections → bold-lead bullets with
+     (#PR) refs → **Full changelog:** vPREV...vNEW footer). v1.7.0 is the
+     canonical example; see CONTRIBUTING.md "Release notes".
 
-The marker is what bump-version checks: if it doesn't match the version being cut, the bump refuses (so a stale file can't ship as the body). The user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
+The marker is what bump-version checks: if it doesn't match the version being
+cut, the bump refuses (so a stale file can't ship as the body). The
+user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.10.0 -->
+release-notes-next-version: 1.10.0
+-->
 
 **A craft, reach, and trust release.** Castwright gains three more performed languages — Spanish, French and German, after English and Russian (five in all) — and recognises a manuscript's language the moment you import it. Performances get more expressive *and* more correct: characters gasp, sigh and laugh with line-by-line direction that's now *detected by default*, you can pin a whole book to the higher-quality voice model in one action, numbers/dates/currency are spoken the way you'd read them aloud, and a new LLM Script Review proposes — and now even *reassigns* — who-said-what, reaching across a chapter boundary to settle a tagless opening line. See the cast you've carried across a whole series and lift a card worth sharing, and switch on a new acoustic check that catches a voice drifting *out of character* even when the words are right. A second graphics card can now share the load — each voice engine placed on the card you choose — and a manuscript-analysis pill shows every analysis pass as it runs while holding Generate until it's done — all on the usual hardened footing.
 

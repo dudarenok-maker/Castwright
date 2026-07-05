@@ -2,15 +2,26 @@ Released 2026-06-20. [View on GitHub](https://github.com/dudarenok-maker/Castwri
 
 ---
 
-<!-- Draft release notes for the NEXT version (technical register — this IS the GitHub release body). bump-version.mjs feeds this file verbatim as the annotated-tag message → release.yml, and now uses it by DEFAULT (no --notes-file needed). Everything in this HTML comment is invisible in the rendered release, so it never leaks into the body.
+<!--
+Draft release notes for the NEXT version (technical register — this IS the
+GitHub release body). bump-version.mjs feeds this file verbatim as the
+annotated-tag message → release.yml, and now uses it by DEFAULT (no
+--notes-file needed). Everything in this HTML comment is invisible in the
+rendered release, so it never leaks into the body.
 
 Keep it current for each release:
   1. Update the version marker below.
-  2. Rewrite the body (theme paragraph → ## ✨ Headline features with ### … (new) subsections → emoji-themed sections → bold-lead bullets with (#PR) refs → **Full changelog:** vPREV...vNEW footer). v1.7.0 is the canonical example; see CONTRIBUTING.md "Release notes".
+  2. Rewrite the body (theme paragraph → ## ✨ Headline features with
+     ### … (new) subsections → emoji-themed sections → bold-lead bullets with
+     (#PR) refs → **Full changelog:** vPREV...vNEW footer). v1.7.0 is the
+     canonical example; see CONTRIBUTING.md "Release notes".
 
-The marker is what bump-version checks: if it doesn't match the version being cut, the bump refuses (so a stale file can't ship as the body). The user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
+The marker is what bump-version checks: if it doesn't match the version being
+cut, the bump refuses (so a stale file can't ship as the body). The
+user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.9.0 -->
+release-notes-next-version: 1.9.0
+-->
 
 **A polish-and-reach release.** Listen from any browser on your home network, know the moment a new build lands, ride a steadier companion player whose finished books follow you across devices, catch a bad take right on the waveform, and meet a cast that reads truer — Russian books included — all on a foundation hardened by a full security pass (torch CVE, a maximal CodeQL remediation, and a fourth round of dependency hygiene).
 

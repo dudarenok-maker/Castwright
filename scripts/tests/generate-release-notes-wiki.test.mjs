@@ -196,6 +196,48 @@ test('reflowHardWrappedMarkdown strips the > marker on a CRLF-terminated blockqu
   );
 });
 
+test('reflowHardWrappedMarkdown keeps a multi-paragraph blockquote as two paragraphs, each keeping its own > marker', () => {
+  const input = [
+    '> First para of quote continues',
+    '> across two lines.',
+    '>',
+    '> Second para of quote, should stay separate.',
+  ].join('\n');
+  const expected = [
+    '> First para of quote continues across two lines.',
+    '>',
+    '> Second para of quote, should stay separate.',
+  ].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), expected);
+});
+
+test('reflowHardWrappedMarkdown does not glue a setext heading underline onto the heading text', () => {
+  const input = ['Some Heading', '==='].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), input);
+});
+
+test('reflowHardWrappedMarkdown does not reflow an indented (unfenced) code block into prose', () => {
+  const input = ['Some paragraph.', '', '    line one of code', '    line two of code'].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), input);
+});
+
+test('reflowHardWrappedMarkdown leaves a multi-line HTML comment untouched', () => {
+  const input = [
+    '<!--',
+    'Draft release notes for the NEXT version.',
+    'Keep it current for each release:',
+    '-->',
+    '',
+    'Real visible content.',
+  ].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), input);
+});
+
+test('reflowHardWrappedMarkdown leaves a single-line HTML comment untouched', () => {
+  const input = ['<!-- a single-line comment -->', '', 'Real visible content.'].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), input);
+});
+
 test('reflowHardWrappedMarkdown is a no-op on an already-unwrapped body', () => {
   const input = '**A theme paragraph.** Already a single flowing line, no wrapping.';
   assert.equal(reflowHardWrappedMarkdown(input), input);
