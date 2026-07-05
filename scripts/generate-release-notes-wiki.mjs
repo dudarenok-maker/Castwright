@@ -39,8 +39,77 @@ export function renderReleasePage({ tagName, publishedAt, body }) {
 
 ---
 
-${body.trim()}
+${reflowHardWrappedMarkdown(body.trim())}
 `;
+}
+
+// Older release bodies were hand-wrapped at ~70-80 columns (a soft-break
+// newline mid-paragraph or mid-list-item). GitHub's Releases page reflows
+// that back into normal paragraphs, but the wiki renders each wrapped line
+// as its own visible line — joins wrapped continuation lines back into one
+// logical line per paragraph/list-item/blockquote. Code fences, headings,
+// list-item start lines, table rows, and horizontal rules pass through
+// untouched; blank lines reset the joining. A no-op on already-unwrapped
+// bodies (nothing to join), so safe to apply uniformly to every release.
+export function reflowHardWrappedMarkdown(markdown) {
+  // Some fetched release bodies use CRLF. A trailing \r defeats the
+  // blockquote regex's `(.*)$` anchor below (`.` excludes line terminators,
+  // so it can never reach `$` past a stray \r) — the match then silently
+  // fails and falls through to the plain-paragraph join path, which leaks a
+  // literal "> " into the joined text instead of stripping it. Normalize
+  // once up front so every check below works on a single line-ending style.
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let inFence = false;
+  let mode = null; // null | 'para' | 'blockquote'
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      out.push(line);
+      inFence = !inFence;
+      mode = null;
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    if (line.trim() === '') {
+      out.push(line);
+      mode = null;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(line) || /^\s*(\*\*\*+|---+|___+)\s*$/.test(line) || /^\s*\|/.test(line)) {
+      out.push(line);
+      mode = null;
+      continue;
+    }
+
+    const blockquoteMatch = line.match(/^>\s?(.*)$/);
+    if (blockquoteMatch) {
+      if (mode === 'blockquote' && out.length) {
+        out[out.length - 1] = `${out[out.length - 1]} ${blockquoteMatch[1].trim()}`;
+      } else {
+        out.push(line);
+        mode = 'blockquote';
+      }
+      continue;
+    }
+
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      out.push(line);
+      mode = 'para';
+      continue;
+    }
+
+    if (mode === 'para' && out.length) {
+      out[out.length - 1] = `${out[out.length - 1]} ${line.trim()}`;
+    } else {
+      out.push(line.trim());
+      mode = 'para';
+    }
+  }
+  return out.join('\n');
 }
 
 export function renderIndexPage(releases) {

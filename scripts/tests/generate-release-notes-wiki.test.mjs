@@ -7,6 +7,7 @@ import {
   renderIndexPage,
   upsertSidebarSection,
   compareReleasesNewestFirst,
+  reflowHardWrappedMarkdown,
   RELEASE_PAGE_RE,
 } from '../generate-release-notes-wiki.mjs';
 
@@ -126,6 +127,78 @@ test('RELEASE_PAGE_RE matches generated version pages but not hand-authored ones
   assert.match('Release-Notes-v1.2.2.md', RELEASE_PAGE_RE);
   assert.doesNotMatch('Release-Notes-FAQ.md', RELEASE_PAGE_RE);
   assert.doesNotMatch('Release-Notes.md', RELEASE_PAGE_RE);
+});
+
+test('reflowHardWrappedMarkdown joins a hand-wrapped plain paragraph into one line', () => {
+  const input = [
+    '**MOBI/AZW3 ingest, chapter restructure, listening progress, and',
+    'release-packaging end-to-end.** User-visible features, fixes and infrastructure',
+    'since v1.1.0.',
+  ].join('\n');
+  const expected =
+    '**MOBI/AZW3 ingest, chapter restructure, listening progress, and release-packaging end-to-end.** User-visible features, fixes and infrastructure since v1.1.0.';
+  assert.equal(reflowHardWrappedMarkdown(input), expected);
+});
+
+test('reflowHardWrappedMarkdown joins a hand-wrapped blockquote into one line, preserving the > prefix', () => {
+  const input = [
+    '> ⚠️ **Upgrade note:** v1.2.0 and v1.2.1 were tagged but never published — the',
+    '> release workflow surfaced cross-platform CI gaps that this release closes.',
+  ].join('\n');
+  const expected =
+    '> ⚠️ **Upgrade note:** v1.2.0 and v1.2.1 were tagged but never published — the release workflow surfaced cross-platform CI gaps that this release closes.';
+  assert.equal(reflowHardWrappedMarkdown(input), expected);
+});
+
+test('reflowHardWrappedMarkdown joins a hand-wrapped list item without merging into the next item', () => {
+  const input = [
+    '- **MOBI / AZW3 upload** — Kindle / Calibre files drop directly into the upload',
+    '  screen; DRM-protected files are rejected up-front with a clear message rather',
+    '  than failing deep inside the parser (plan 52).',
+    '- **Chapter restructure panel** — merge, split and reorder chapters post-import',
+    '  without re-uploading or re-running analysis.',
+  ].join('\n');
+  const expected = [
+    '- **MOBI / AZW3 upload** — Kindle / Calibre files drop directly into the upload screen; DRM-protected files are rejected up-front with a clear message rather than failing deep inside the parser (plan 52).',
+    '- **Chapter restructure panel** — merge, split and reorder chapters post-import without re-uploading or re-running analysis.',
+  ].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), expected);
+});
+
+test('reflowHardWrappedMarkdown leaves headings, code fences, tables, and horizontal rules untouched', () => {
+  const input = [
+    '## ✨ Headline features',
+    '',
+    '```',
+    'a line',
+    'another line',
+    '```',
+    '',
+    '| a | b |',
+    '| - | - |',
+    '| 1 | 2 |',
+    '',
+    '---',
+  ].join('\n');
+  assert.equal(reflowHardWrappedMarkdown(input), input);
+});
+
+test('reflowHardWrappedMarkdown strips the > marker on a CRLF-terminated blockquote instead of leaking it mid-sentence', () => {
+  const input = [
+    '> ⚠️ **Upgrade note:** v1.2.0 and v1.2.1 were tagged but never published — the',
+    '> release workflow surfaced cross-platform CI gaps that this release closes.',
+  ].join('\r\n');
+  const result = reflowHardWrappedMarkdown(input);
+  assert.doesNotMatch(result, /the > release/);
+  assert.equal(
+    result,
+    '> ⚠️ **Upgrade note:** v1.2.0 and v1.2.1 were tagged but never published — the release workflow surfaced cross-platform CI gaps that this release closes.',
+  );
+});
+
+test('reflowHardWrappedMarkdown is a no-op on an already-unwrapped body', () => {
+  const input = '**A theme paragraph.** Already a single flowing line, no wrapping.';
+  assert.equal(reflowHardWrappedMarkdown(input), input);
 });
 
 test('compareReleasesNewestFirst sorts newest-first and is antisymmetric on ties', () => {
