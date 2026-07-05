@@ -255,7 +255,7 @@ export const SCENES: Scene[] = [
     strict: true,
   },
   {
-    id: 'advanced-settings',
+    id: 'adv-tts-engine',
     hash: '#/advanced',
     viewports: ['desktop'],
     action: async (page) => {
@@ -268,6 +268,155 @@ export const SCENES: Scene[] = [
         .getByText('Voice engine & device', { exact: true })
         .click({ timeout: 5000 });
     },
+    waitForAfterAction: 'text=Accelerator profile',
+    scrollTo: 'text=Accelerator profile',
+    strict: true,
+  },
+  {
+    id: 'adv-analyzer-sampling',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('LLM sampling parameters', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Ollama temperature',
+    scrollTo: 'text=Ollama temperature',
+    strict: true,
+  },
+  {
+    id: 'adv-analyzer-chunking',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Analyzer chunking & truncation guards', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Stage-2 chunk char budget',
+    scrollTo: 'text=Stage-2 chunk char budget',
+    strict: true,
+  },
+  {
+    id: 'adv-analyzer-prompts',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Analyzer prompts & skills', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Cast detection prompt',
+    scrollTo: 'text=Cast detection prompt',
+    strict: true,
+  },
+  {
+    id: 'adv-analyzer-models',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Analyzer models & endpoints', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Analyzer keep-alive',
+    scrollTo: 'text=Analyzer keep-alive',
+    strict: true,
+  },
+  {
+    id: 'adv-tts-batching',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Voice batching & throughput', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Qwen batch length bucketing',
+    scrollTo: 'text=Qwen batch length bucketing',
+    strict: true,
+  },
+  {
+    id: 'adv-qa-gates',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Per-sentence QA gates', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Signal QA max re-records',
+    scrollTo: 'text=Signal QA max re-records',
+    strict: true,
+  },
+  {
+    id: 'adv-audio-loudness',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Audio loudness targets', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Target LUFS',
+    scrollTo: 'text=Target LUFS',
+    strict: true,
+  },
+  {
+    id: 'adv-gpu-lifecycle',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('GPU arbitration, memory & lifecycle', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    // Not "GPU concurrency" — this group's own `help` text ("GPU concurrency,
+    // VRAM budgets, and sidecar recycling. Footguns live here.") contains that
+    // exact phrase too, so `text=GPU concurrency` strict-mode-matches 2
+    // elements and silently fails to scroll (caught by the harness's
+    // best-effort `.catch()`), landing the shot on whatever section happened
+    // to be in view instead. "GPU VRAM token budget" is unique on the page.
+    waitForAfterAction: 'text=GPU VRAM token budget',
+    scrollTo: 'text=GPU VRAM token budget',
+    strict: true,
+  },
+  {
+    id: 'adv-rate-limits',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Gemini rate limits', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Gemma 4 31B RPM',
+    scrollTo: 'text=Gemma 4 31B RPM',
+    strict: true,
+  },
+  {
+    id: 'adv-lan-access',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('LAN access & device tokens', { exact: true })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Device authorization lifetime',
+    scrollTo: 'text=Device authorization lifetime',
+    strict: true,
   },
   {
     /* Saltgrave (hollow-tide-2) is mid-generation (7/11 done) — the Regenerate
