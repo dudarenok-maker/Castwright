@@ -84,7 +84,13 @@ written only at chapter completion) looked stalled when it was fine.
   ((transcribeMs + embedMs) ÷ audioSec) — both `number | null`. The admin
   throughput table (`GenerationThroughput` in `src/views/admin.tsx`) renders
   `rerecordRtf` as a new "QA" column; `verifyRtf` is plumbed end-to-end but not
-  yet rendered. **Gated on ACTUAL concurrency, not a config read:** the split
+  yet rendered. **2026-07-06:** `rerecordRtf` was also threaded into
+  `ResourceTelemetryRecord` (`server/src/tts/resource-telemetry.ts`,
+  `server/src/routes/generation.ts`'s `appendTelemetry` call, `openapi.yaml`)
+  so the **Resource trends** panel (fs-20, see
+  [175-resource-telemetry](175-resource-telemetry.md)) renders the same "QA"
+  column, immediately before RTF — the PR-2 plan's deferred option (b) for
+  that table. **Gated on ACTUAL concurrency, not a config read:** the split
   is only meaningful when this chapter's render never overlapped another job's
   wall-clock — summing per-block time under real interleaving over-counts. The
   gate is `RunningJob.hadSibling` in `server/src/routes/generation.ts`,
@@ -93,6 +99,18 @@ written only at chapter completion) looked stalled when it was fine.
   concurrent chapter jobs) — NOT `getResolvedGenerationWorkers() === 1`, which
   can't see two single-worker books rendering simultaneously or a mid-run
   worker-count change and would mislabel genuinely contended data as clean.
+- **Column-alignment fix (2026-07-06):** both admin tables' `THROUGHPUT_COLS`/
+  `TRENDS_COLS` grid templates (`src/views/admin.tsx`) ended their last column
+  in `auto`. Each table's sticky header and every data row are separate
+  `<div className={..._COLS}>` grid containers, so an `auto` track sizes
+  independently per container — the header's short label (e.g. "VRAM") vs. a
+  row's much wider value ("23.9 / 24.0 GB") — which changes how much space is
+  left for the adjacent `1fr` column and visibly shifts every later column out
+  of line with its header (most visible on the Resource trends VRAM column,
+  a ~60px drift). Fixed by giving every column an explicit rem width; a real
+  jsdom string-equality test can't catch this (the class name is identical
+  either way), so the regression lives in the Playwright e2e spec instead
+  (`e2e/admin.spec.ts`, "column headers stay aligned with their data cells").
 - **Reversibility:** delete the endpoint mount + the pill swap; the accumulator
   is inert if nothing calls `recordChapterThroughput`.
 
@@ -162,7 +180,19 @@ written only at chapter completion) looked stalled when it was fine.
   passthrough") — a lone chapter render reports non-null `rerecordRtf`/
   `verifyRtf`; two chapters driven through GENUINE concurrent overlap (a gated
   synth mock, no `generationWorkers` config touched) both report `null` —
-  pins the gate to actual concurrency, not the config value.
+  pins the gate to actual concurrency, not the config value. The same test
+  also polls (`vi.waitFor`) the fire-and-forget `resource-telemetry.jsonl`
+  record for the matching `rerecordRtf`.
+- Vitest server (`server/src/tts/resource-telemetry.test.ts`) — a non-null and
+  a null `rerecordRtf` both round-trip through the JSONL append/read.
+- Vitest frontend (`src/views/admin.test.tsx`) — the Resource trends "QA"
+  column renders `rerecordRtf` distinct from the RTF column, and a null value
+  renders a dash.
+- Playwright e2e (`e2e/admin.spec.ts`) — the Resource trends table shows the
+  "QA" column with the mock's value; a real-layout assertion (`column headers
+  stay aligned with their data cells in both tables`) compares each visible
+  header cell's right edge against its data-row counterpart for both admin
+  tables — the regression test for the column-alignment fix above.
 - Vitest frontend (`src/components/worktrees-rtf-pill.test.tsx`) — idle shows
   just "wt"; generating shows the live per-batch RTF; the live per-batch figure
   is preferred over the per-chapter rollup; falls back to per-chapter when no
