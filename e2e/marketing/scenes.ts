@@ -560,4 +560,43 @@ export const SCENES: Scene[] = [
     },
     fullPage: true,
   },
+  {
+    /* NOTE (Task 9 capture run): blocked for the same reason as
+       voice-design-scope-picker above — every marketing fixture book
+       (hollow-tide-1, hollow-tide-2, coalfall-commission) is already fully
+       cast-designed, so "Design full cast" renders disabled ("Every
+       character already has a voice.") and the click never reaches the
+       Confirm/Start-design step, so `design-waveform` never mounts. Left
+       here (selectors verified correct against live DOM) for whichever task
+       adds a genuinely-undesigned character to fixture data. */
+    id: 'voice-design-in-progress',
+    hash: '#/books/hollow-tide-2/cast',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'Design full cast' }).click({ timeout: 5000 });
+      await page.getByRole('button', { name: /Confirm|Start design/i }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="design-waveform"]',
+    strict: true,
+  },
+  {
+    /* The mock's own load delay (60ms, api.ts mockLoadSidecar/mockLoadAnalyzer)
+       resolves well inside the harness's fixed 300ms post-action settle +
+       400ms theme settle, so without help the loading pill is always gone by
+       the time the screenshot fires. Freeze the page's fake clock right
+       before the click so the in-browser setTimeout backing that delay never
+       fires — the loading state holds indefinitely for the shot, entirely
+       within this scene's own action (no change to the harness or the mock
+       needed). */
+    id: 'model-pill-loading',
+    hash: '#/models',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.clock.install();
+      await page.clock.pauseAt(Date.now());
+      await page.getByRole('button', { name: 'Load model' }).first().click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Loading…',
+    strict: true,
+  },
 ];

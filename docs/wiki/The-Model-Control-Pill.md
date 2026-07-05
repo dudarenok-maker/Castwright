@@ -27,6 +27,8 @@ each engine's row looks like in those states.
 
 Below, `llama3.1:8b`: installed on disk but not resident in GPU memory, so the pill reads a neutral "llama3.1:8b idle" and the action is **Load model** rather than Stop.
 
-> A screenshot of the loading state is tracked as a follow-up — it's a transient state the current capture harness doesn't pose yet.
+Click **Load model** and that same row flips to an amber "Loading llama3.1:8b…" pill with its button disabled and relabeled **Loading…**, so a second click can't fire mid-load.
+
+![Model Manager row — llama3.1:8b loading, with a disabled Loading… button](images/the-model-control-pill/loading-state.png)
 
 Next: [Library Management](Library-Management).
