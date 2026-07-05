@@ -1452,6 +1452,7 @@ export function CastView({
             }}
             onTapAssign={handleTapAssignToggle}
             assigningVoiceId={assigningVoice?.id ?? null}
+            bookLanguage={bookLanguage}
           />
         </aside>
       )}
@@ -1519,6 +1520,7 @@ export function CastView({
                   }
                 }}
                 assigningVoiceId={assigningVoice?.id ?? null}
+                bookLanguage={bookLanguage}
               />
             </div>
           </div>

@@ -10,6 +10,7 @@
 - **A chapter's audio failing to load, fixed.** If your library folder happened to sit inside a hidden folder, a finished chapter's audio could refuse to play even though the file was right there. It now plays.
 - **The Books page no longer scrolls sideways on a phone.** A long library folder path could push the page wider than your screen; it now tucks in neatly with an ellipsis instead.
 - **A last sliver of sideways scroll on the Books page, gone.** Even with a short folder path, the page could still creep a couple of pixels past the edge of a phone screen; it now sits flush.
+- **The voice library actually steps voices aside now, for a non-English book.** We told you it did this already — and the library screen really does — but the Cast view itself was quietly ignoring the setting, so a Russian or French book's cast panel kept showing every English voice too. It now hides the ones that can't read the part, right where you're casting.
 
 # Castwright 1.10.0
 
