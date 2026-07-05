@@ -8,11 +8,9 @@
    ground truth. */
 
 import type { SidecarDeviceMap } from '../routes/sidecar-health.js';
+import { TRACKED_ENGINES, type TrackedEngine } from './tracked-engines.js';
 
 export type EngineDeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu' | 'unknown';
-
-const TRACKED_ENGINES = ['kokoro', 'coqui', 'qwen'] as const;
-type TrackedEngine = (typeof TRACKED_ENGINES)[number];
 
 function emptyState(): Record<TrackedEngine, EngineDeviceFamily> {
   return { kokoro: 'unknown', coqui: 'unknown', qwen: 'unknown' };

@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
+import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
@@ -730,7 +731,7 @@ export async function generatePersonaViaOllama(
     },
   };
 
-  const release = onCpu ? null : await gpuSemaphore.acquire(costForEngine('analyzer'));
+  const release = await acquireGpuTokenIfOnGpu(!onCpu, costForEngine('analyzer'));
   try {
     let response: Response;
     try {

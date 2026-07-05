@@ -18,9 +18,9 @@
    we skip the semaphore entirely there. */
 
 import { fetch as undiciFetch, Agent } from 'undici';
-import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 
 export interface TranscribeResult {
   text: string;
@@ -74,7 +74,7 @@ export async function transcribeSegment(
   const lang = normalizeWhisperLanguage(opts.language);
   if (lang) headers['x-language'] = lang;
 
-  const release = asrRunsOnGpu() ? await gpuSemaphore.acquire(costForEngine('asr')) : null;
+  const release = await acquireGpuTokenIfOnGpu(asrRunsOnGpu(), costForEngine('asr'));
   try {
     let response: Response;
     try {

@@ -1,0 +1,14 @@
+{
+  "projectNumber": 1,
+  "projectId": "PVT_kwHOEOX6_c4Bcf9a",
+  "statusFieldId": "PVTSSF_lAHOEOX6_c4Bcf9azhXISes",
+  "statusOptions": {
+    "Backlog": "f75ad846",
+    "Next": "7eb99e9d",
+    "In Progress": "47fc9ee4",
+    "Parked": "8b4093cf",
+    "Waiting/Blocked": "6bc12037",
+    "Done": "98236657"
+  },
+  "priorityFieldId": "PVTF_lAHOEOX6_c4Bcf9azhXISnM"
+}

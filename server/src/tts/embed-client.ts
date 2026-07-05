@@ -18,6 +18,7 @@ import { fetch as undiciFetch, Agent } from 'undici';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 
 export interface EmbedOptions {
   signal?: AbortSignal;
@@ -66,7 +67,7 @@ export async function embedSegment(
 
   const onGpu = spkRunsOnGpu();
   if (onGpu) warnIfBudgetTooLow();
-  const release = onGpu ? await gpuSemaphore.acquire(costForEngine('spk')) : null;
+  const release = await acquireGpuTokenIfOnGpu(onGpu, costForEngine('spk'));
   try {
     let response: Response;
     try {
