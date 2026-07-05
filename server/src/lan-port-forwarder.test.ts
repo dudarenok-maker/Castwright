@@ -178,15 +178,24 @@ describe('startPortForwarder', () => {
   it('round 5 (Finding 2): logs "upstream connect failed" for an error BEFORE any successful connect', async () => {
     const fakeUpstream = new FakeUpstreamSocket();
     const warn = vi.fn();
+    let resolveConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
     const handle = startPortForwarder(9999, {
       listenPort: 0,
       warn,
       connectFn: () => fakeUpstream as unknown as net.Socket,
+      // Synchronize on the server's own listener-attach point, not on the
+      // client socket's 'connect' event — see round 5 (Finding 2) below,
+      // and the comment on the `onConnection` opt in lan-port-forwarder.ts,
+      // for why the latter is a race (ECONNRESET flake, issue #1351).
+      onConnection: () => resolveConnected(),
     });
     const forwarderPort = await listenAndGetPort(handle.server);
 
     const client = net.connect({ port: forwarderPort, host: '127.0.0.1' });
-    await new Promise<void>((resolve) => client.once('connect', () => resolve()));
+    await connected;
 
     fakeUpstream.emit('error', new Error('ECONNREFUSED'));
 
@@ -201,15 +210,28 @@ describe('startPortForwarder', () => {
   it('round 5 (Finding 2): logs "upstream connection dropped" (not "upstream connect failed") for an error AFTER a successful connect', async () => {
     const fakeUpstream = new FakeUpstreamSocket();
     const warn = vi.fn();
+    let resolveConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
     const handle = startPortForwarder(9999, {
       listenPort: 0,
       warn,
       connectFn: () => fakeUpstream as unknown as net.Socket,
+      // Synchronize on the server's own listener-attach point, not on the
+      // client socket's 'connect' event. The client-connect and server-accept
+      // callbacks are independently-scheduled reactions to the same TCP
+      // handshake, so their relative order isn't guaranteed by Node — on an
+      // adverse ordering, this test's synchronous emit('error') below would
+      // fire before upstream.once('error', ...) was attached, and Node
+      // treats an unhandled 'error' event as an uncaught exception (observed
+      // as an ECONNRESET crash on macOS CI, issue #1351).
+      onConnection: () => resolveConnected(),
     });
     const forwarderPort = await listenAndGetPort(handle.server);
 
     const client = net.connect({ port: forwarderPort, host: '127.0.0.1' });
-    await new Promise<void>((resolve) => client.once('connect', () => resolve()));
+    await connected;
 
     // Simulate a successful connect, then a mid-relay drop (e.g. ECONNRESET).
     fakeUpstream.emit('connect');

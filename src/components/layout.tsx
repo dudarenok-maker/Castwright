@@ -19,6 +19,7 @@ import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-slice';
+import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
@@ -1725,18 +1726,18 @@ export function Layout() {
                modal in `busy=true` on re-open (Finding 1). */
             const pin: 'qwen3-tts-1.7b' | null = tier === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null;
             const qwenMembers = characters.filter((c) => (c.ttsEngine ?? ttsEngine) === 'qwen');
-            /* "Has a designed voice" mirrors `voice-status.ts`'s
-               resolveLifecyclePill (line ~107): the character's own Qwen
-               override OR a matched library Voice that actually carries a
-               non-empty name. Undesigned characters would have no audio on
-               1.7B — the guard rail below nudges the user toward designing
-               voices first. */
-            const hasDesignedVoice = (c: Character): boolean => {
-              if (c.overrideTtsVoices?.qwen?.name) return true;
-              const voice = voices.find((v) => v.id === c.voiceId);
-              return !!(voice?.ttsVoice?.provider === 'qwen' && voice.ttsVoice.name);
-            };
-            const eligibleQwenMembers = qwenMembers.filter(hasDesignedVoice);
+            /* fe-47 — "has a designed voice" derives from the shared
+               `selectUndesignedQwenCharacters` selector (the same one the
+               voice-readiness gate and the cast view's `needsVoiceIds` use)
+               instead of a fourth ad-hoc definition. Undesigned characters
+               would have no audio on 1.7B — the guard rail below nudges the
+               user toward designing voices first. */
+            const undesignedQwenCharacterIds = new Set(
+              selectUndesignedQwenCharacters(store.getState(), bookId ?? '').map((c) => c.id),
+            );
+            const eligibleQwenMembers = qwenMembers.filter(
+              (c) => !undesignedQwenCharacterIds.has(c.id),
+            );
             if (tier === 'qwen3-tts-1.7b' && eligibleQwenMembers.length === 0) {
               dispatch(
                 notificationsActions.pushToast({
