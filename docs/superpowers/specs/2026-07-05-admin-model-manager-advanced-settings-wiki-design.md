@@ -137,10 +137,9 @@ per the research above — so this table is narrower than the Advanced
 Settings tables below.)
 
 ### Knob reference (controls: `src/components/model-settings-form.tsx`;
-defaults verified against `server/src/workspace/user-settings.ts` /
-`server/src/config/registry.ts` — see the callout after "Server
-configuration" below for two cases where these disagree with the form's
-own displayed text)
+defaults verified against `server/src/workspace/user-settings.ts` — see the
+callout after "Server configuration" below for the one case where the
+form's displayed text is stale)
 
 **Defaults for new books**
 | Knob | What it does | Default | Range |
@@ -168,33 +167,41 @@ default analysis model)
 | Knob | What it does | Default | Range |
 |---|---|---|---|
 | Voice engine URL | Base URL of the TTS sidecar | `http://localhost:9000` | string, private/loopback host only |
-| Analyzer engine | Routes analysis through local Ollama vs. Gemini direct | **`local`** | local / gemini |
+| Analyzer engine | Routes analysis through local Ollama vs. Gemini direct | **`gemini`** | local / gemini |
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string |
 | Gemini API key | API key for Gemini analyzer/persona calls | (unset) | string |
 
 **Install / update analyzer (Ollama)** — install/pull-tag UI + health probe,
 described in prose (no knob table — it's an action panel, not settings).
 
-> **Pre-existing UI-copy bug found while verifying these two defaults (out
-> of scope, flagged only) — confirmed cosmetic, not behavioral:**
-> `model-settings-form.tsx:489` labels the Gemini option "(default —
-> direct)" and its sublabel (line 481) says "Default — Gemini API sends
-> every chapter straight to Google," and `model-settings-form.tsx:435`'s
-> sublabel claims "1–4, default 2" for Generation workers. Both are stale
-> **text**, not stale **behavior**: the form's actual state is
-> `useState(account.analysisEngine)` (line 111) and
-> `useState(account.generationWorkers ?? 1)` (line 128) — both fields read
-> the server-resolved value (`getResolvedAnalysisEngine()` /
-> `getResolvedGenerationWorkers()`, `server/src/workspace/user-settings.ts`),
-> which for an untouched install returns `local` (raw resolution: cached
-> setting → `ANALYZER` env → `'local'` fallback,
-> `user-settings.ts:589-591`) and `1` (`DEFAULT_USER_SETTINGS.generationWorkers`,
-> confirmed by `user-settings.test.ts:174`) respectively. So a fresh
-> install's dropdown/input genuinely shows `local`/`1` — only the static
-> label/sublabel copy lies about what's selected. The wiki documents the
-> **true**, verified-behavioral default above; this doc PR doesn't touch
-> the UI copy itself (no product-code change), but the stale text is real
-> and worth its own follow-up bug issue.
+> **Correction from an earlier draft of this spec.** Two review rounds in a
+> row got the Analyzer engine default wrong before landing on the right
+> answer, so it's worth being explicit about what's actually true, verified
+> directly against source:
+>
+> - **Analyzer engine (this table, Model Manager) genuinely defaults to
+>   `gemini`**, both server- and frontend-side:
+>   `DEFAULT_USER_SETTINGS.analysisEngine` (`user-settings.ts:279`) and
+>   `FRONTEND_ACCOUNT_DEFAULTS.analysisEngine` (`src/lib/account-defaults.ts`)
+>   both hard-code `'gemini'`, and the settings GET route serves it raw
+>   (`envDerived()`, `routes/user-settings.ts:44-53` — no resolver overlay,
+>   unlike `generationWorkers` just below it). `model-settings-form.tsx:489`'s
+>   "(default — direct)" label is **accurate**, not a bug — an earlier
+>   version of this spec wrongly "corrected" it to `local` by conflating
+>   this per-account setting with the *different*, registry-driven
+>   `analyzer.engine` knob documented on the Advanced Settings page below
+>   (which really does default to `local` — see that page's group 4). Same
+>   English label, two distinct settings with two genuinely different
+>   defaults; not a documentation bug to reconcile, just worth a one-line
+>   cross-reference so a reader doesn't assume they're the same control.
+> - **Generation workers genuinely defaults to `1`**, and *this* one's UI
+>   text really is stale: `model-settings-form.tsx:435`'s sublabel claims
+>   "1–4, default 2," but `DEFAULT_USER_SETTINGS.generationWorkers` is `1`
+>   (confirmed by `user-settings.test.ts:174`'s "shipped default" assertion)
+>   and the form's own state — `useState(account.generationWorkers ?? 1)`
+>   (`model-settings-form.tsx:128`) — reflects that. Worth its own follow-up
+>   bug issue; this doc PR documents the true default without touching the
+>   UI copy itself (no product-code change).
 
 ### Page 3: `Advanced-Settings.md` rewrite (same file, full rewrite)
 
@@ -236,7 +243,11 @@ table shape every time:
    Emotion annotation, Script review, Instruct-annotation, Voice-style —
    each defaulting to its shipped `skills/audiobook-*.md` file.
 4. **Analyzer models & endpoints** (`analyzer-models`, medium, open) — 11
-   knobs: Analyzer engine (local/gemini, default local), Ollama URL
+   knobs: Analyzer engine (local/gemini, default **local** —
+   `registry.ts:850`/`server/.env.example`; this is the server/env-level
+   knob, a *different* setting from Model Manager's per-account "Analyzer
+   engine" default of `gemini` documented on that page — a one-line
+   cross-reference note explains the distinction on both pages), Ollama URL
    (`localhost:11434`), Ollama model (`qwen3.5:4b`), Gemini analyzer model
    (`gemma-4-31b-it`), Voice-style model (`gemini-3.1-flash-lite`), Persona
    generation engine (gemini/local, default gemini), Persona local model
@@ -480,9 +491,7 @@ Isolated to the marketing capture path — no shared-mock risk.
   hash with a `scrollTo` to the relevant row.
   **This is the one change with regression risk beyond the marketing
   harness** — `mockGetModelInventory` is shared by every mock consumer, not
-  just marketing scenes. Run the full frontend suite (`npm run test`) after
-  the flip and fix (not skip) anything that asserted the old
-  not-installed/package-missing state.
+  just marketing scenes.
   **Correction from an earlier draft of this spec**: Qwen's install state
   has a second source of truth — the module-level
   `MOCK_SIDECAR_QWEN_INSTALL_STATE` const (`src/lib/api.ts:6749`), consumed
@@ -493,13 +502,18 @@ Isolated to the marketing capture path — no shared-mock risk.
   → `'ready'`), which currently disagrees with the health const. That inline
   value is a **deliberate** fixture choice — a comment at `api.ts:6633-6635`
   states it exists specifically to exercise the Needs-repair/Repair/
-  no-Load-pill states pinned by `model-manager-health.spec.ts` (name
-  verified against the current test file at PR time). Flipping it to
-  `'ready'` should be expected to break that spec's assertions; fix (not
-  skip) them as part of this change, and the `npm run test` verification
-  pass must explicitly exercise the sidecar-health/promo path (not just
-  the Model Manager row's own tests) to confirm the inventory row and the
-  health const now agree, rather than assuming a second flip is needed.
+  no-Load-pill states pinned by `e2e/model-manager-health.spec.ts` (path
+  and comment verified directly against the current test file). Both flips
+  are expected to break that spec: the Qwen change breaks its
+  Needs-repair/Repair-pill assertions (the ones the comment names), and the
+  **Coqui** change separately breaks its "Not installed"/"Install" button
+  assertions — both need fixing (not skipping), not just the Qwen half.
+  **`model-manager-health.spec.ts` is a Playwright e2e spec, not a Vitest
+  unit test** — its breakage surfaces under `npm run test:e2e` /
+  `npm run verify`, not the frontend `npm run test` (an earlier draft named
+  the wrong command). The verification pass must run the e2e suite and
+  confirm the inventory rows and the health const now agree, not just that
+  the Model Manager row's own (non-e2e) tests pass.
 
 ### Tier F — hardest: needs new fixture data + mock-stream timing
 
@@ -546,11 +560,14 @@ table, not the `low`/`medium` a single-scope docs or fix PR would get.
   interaction; this catches a *correct* interaction with wrong/misleading
   framing) — especially the 3 high-risk collapsed Advanced Settings groups
   and the two Tier B timing-sensitive captures.
-- `npm run test` (frontend) run explicitly after the Tier E mock-inventory
-  flip, covering both `mockGetModelInventory` consumers AND the
-  `MOCK_SIDECAR_QWEN_INSTALL_STATE`-derived health/promo path (see Tier E
-  above) — not just the Model Manager row's own tests.
-- `npm run verify` full battery before merge (not exempt — see above).
+- `npm run test:e2e` (specifically `e2e/model-manager-health.spec.ts`) run
+  explicitly after the Tier E mock-inventory flip — that spec pins the
+  pre-flip Coqui "Not installed"/Qwen "Needs repair" states directly (it's
+  a Playwright e2e spec, not covered by the frontend `npm run test`/Vitest
+  suite), and both the Coqui and Qwen flips are expected to need fixes
+  there.
+- `npm run verify` full battery before merge (not exempt — see above; this
+  also re-covers the e2e fix from the prior bullet).
 
 ## Out of scope
 
