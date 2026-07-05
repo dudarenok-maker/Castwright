@@ -1349,6 +1349,29 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     expect(api.loadSidecar).not.toHaveBeenCalled();
   });
+
+  /* fs-41 — the voice-library panel's own language filter (seam 4a) is
+     unit-tested in isolation, but `bookLanguage` never reached it from
+     CastView: neither of the two <VoiceLibraryPanel> render sites (desktop
+     aside + mobile sheet) passed the prop through, so a Russian book's
+     library still showed English-only voices unfiltered. */
+  it('filters the voice library panel to the book language for a non-English book', () => {
+    renderWithLanguage('ru');
+    // Neither fixture voice carries a `languageCode`, so it's ineligible
+    // once the filter is actually wired up — the panel's own "N hidden"
+    // toggle button appears (its accessible name spans several text nodes).
+    // Both the desktop aside AND the mobile sheet render the panel in jsdom
+    // (Tailwind's responsive `hidden`/`lg:block` classes don't hide anything
+    // here), so there are two matching buttons, not one.
+    expect(
+      screen.getAllByRole('button', { name: /hidden.*can.t read russian/i }),
+    ).toHaveLength(2);
+  });
+
+  it('does not filter the voice library panel for an English book', () => {
+    renderWithLanguage('en');
+    expect(screen.queryByRole('button', { name: /hidden/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('CastView — Design full cast button', () => {
