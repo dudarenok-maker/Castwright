@@ -17,13 +17,16 @@ feature differentiators (`brand/project-narrative.md`'s own description leads
 with it — "the honest worry with any AI voice is a line that comes out fluent
 but wrong"), and the current wiki page under-documents it.
 
-**Revision note (post-adversarial-review):** the first draft of this spec
-claimed three segment-level QA gates all fed the same Suspect badge/waveform
-surface. An Opus-tier `assumption-checker` pass (round 1) read the actual
-publish path (`server/src/routes/chapter-audio.ts`'s `publishSegment`,
-`server/src/tts/synthesise-chapter.ts`'s embed-pass code, and
-`server/src/audio/render-integrity/aggregate.ts`) and found that claim
-contradicted for the third gate. Corrected below — see "The QA mechanisms."
+**Revision note (post-adversarial-review, 2 rounds):** round 1 found the
+"three segment-level gates share one surface" claim contradicted (speaker-
+verification doesn't) — fixed below, see "The QA mechanisms." Round 2 read
+the round-1 fix itself and found the `pending: []` scoping still incomplete
+(missed `coalfall-commission`, reachable via the background bulk poll — see
+"`PENDING_REVISIONS` bleed" below), the "DriftEvent fields are all mandatory"
+claim factually wrong (only 7 of the type's fields are required; it's a
+generated OpenAPI type, not defined in `drift.ts`), and a segment-spacing
+risk in scene 1's override (two adjacent suspect spans would merge into one
+"issue region," undercutting the two-flavor story). All three fixed below.
 
 ## The QA mechanisms (ground truth, for the prose rewrite)
 
@@ -126,17 +129,32 @@ This flows through the existing hydrate path (`chapters-slice.ts:335`) with no
 code change — it's what the top-level Suspect pill checks.
 
 **Segment data for chapter 3** — `mockGetChapterAudio` in `src/lib/api.ts`
-currently returns the same two generic canned suspect segments
-(`halloran`/`narrator`) for literally any chapter, which is fine for ordinary
-mock-mode testing but uses a character id (`halloran`) that doesn't exist in
-Saltgrave's cast. Add a `DEMO_CAPTURE`-gated branch: when `bookId ===
-'hollow-tide-2' && chapterId === 3`, return two segments using real Saltgrave
-cast ids, one per gate flavor that actually shares this surface:
+currently returns four generic canned segments for literally any chapter (two
+clean `narrator` spans plus two non-adjacent suspect spans — `halloran` at
+`[third, third*2)` and `narrator` at `[lateStart, totalSec)`, where `third =
+totalSec/3` and `lateStart = third*2 + 88`; with no `duration` passed by the
+caller this defaults to `'10:00'` → `totalSec = 600`, so `third = 200`,
+`lateStart = 488`). The function's own comment explains the two suspect spans
+are deliberately spaced 84s apart (padded gap `third*2+2` to `lateStart-2`)
+specifically so `deriveIssues` produces **two distinct** `IssueRegion`s instead
+of merging them — an existing, already-tested invariant (`chapter-issues.ts`,
+the jump-to-issue e2e spec) that round 2 of the adversarial review flagged as
+at risk if the override reinvents its own timings.
 
-| Character | Flavor | Reason text |
-|---|---|---|
-| narrator | acoustic | "Near-silent — dead air detected before this line." |
-| dockhand-remy | ASR content | 'Content drift — heard "the ropes" where the script says "the ledger."' |
+**Fix: don't reinvent the layout — remap labels on the existing one.** Add a
+`DEMO_CAPTURE`-gated branch that returns the *same* four segments, same
+timings, only changing: the `halloran` segment's `characterId` to
+`dockhand-remy` (a real Saltgrave cast id; `halloran` doesn't exist in
+Saltgrave's cast) and both suspect segments' `reasons` text to the two gate
+flavors that actually share this surface:
+
+| Segment (unchanged timing) | Character | Flavor | Reason text |
+|---|---|---|---|
+| `[third, third*2)` = `[200, 400)` | dockhand-remy | ASR content | 'Content drift — heard "the ropes" where the script says "the ledger."' |
+| `[lateStart, totalSec)` = `[488, 600)` | narrator | acoustic | "Near-silent — dead air detected before this line." |
+
+Reusing the existing spacing (already proven to yield two distinct issue
+regions, not one) is the whole fix — no new timing math to get wrong.
 
 **Implementation note:** `mockGetChapterAudio` currently destructures only
 `{ chapterId, duration }` from its `AudioArgs` parameter (`api.ts:1657`);
@@ -145,10 +163,17 @@ passed by the caller (`ChapterSegmentStrip` in `generation.tsx` calls
 `api.getChapterAudio({ bookId, chapterId: chapter.id })`), so this is a
 one-line destructure widening, not a caller change.
 
-**New `HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[]`** (full shape required by
-`DriftEvent` in `src/data/drift.ts` — `chapterTitle`, `factorLabel`,
-`description`, `snapshot`, `current`, `detected`, `suggestedAction` are all
-mandatory; spelled out here so nothing is left for an implementer to invent):
+**New `HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[]`** — `DriftEvent` is a
+*generated* OpenAPI type (`src/lib/types.ts` re-exports
+`components['schemas']['DriftEvent']` from `openapi.yaml`; `src/data/drift.ts`
+only imports it, it isn't defined there). Round 2 of the adversarial review
+caught the earlier draft's claim that `chapterTitle`/`factorLabel`/
+`description`/`snapshot`/`current`/`detected`/`suggestedAction` are all
+mandatory — they're not; only `id`, `bookId`, `characterId`, `chapterId`,
+`chapterTitle`, `severity`, `factor` are required (`api-types.ts:3440-3496`).
+The two events below still spell out every optional field anyway, so nothing
+is left sparse or for an implementer to invent — that's a legibility choice,
+not a type requirement:
 
 ```ts
 export const HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[] = [
@@ -182,6 +207,9 @@ export const HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[] = [
     // it's a field the SERVER sets (api-types.ts:3454's "today: severity ===
     // 'severe'"), not something the client derives, so a hand-authored mock
     // event must set it explicitly or the modal falls back to manual Regenerate.
+    // (The other half of the gate — `onAutoQueueRegenerate` being wired to
+    // DriftReportModal at all — is confirmed already unconditional in real
+    // app code, layout.tsx:1966; no demo-capture-specific wiring needed.)
   },
   {
     id: 'drift:hollow-tide-2:5:dr-wren:warmth',
@@ -227,13 +255,22 @@ spec over-specified this and risked a double-merge).
 `pending: PENDING_REVISIONS` (`src/data/revisions.ts`'s dev fixture, an
 Eliza/Book-`sb` revision-diff with no `bookId` field) unconditionally for
 *every* book (`api.ts:1773`), and `pending.length > 0` is one of the triggers
-for the top-bar Status pill (`layout.tsx` line ~1521). Today this doesn't
-visibly matter for Hollow Tide because nothing else populates the poll
-response for those book ids; once `HOLLOW_TIDE_DRIFT_EVENTS` makes the
-response non-trivial, an unrelated Eliza pending-revision surface could bleed
-into the `voice-drift-report` and `preview-flagged` scenes. Fix: under
-`DEMO_CAPTURE`, return `pending: []` for Hollow Tide book ids in
-`mockPollRevisions` (dev-mode `sb`/`cc` behavior unaffected).
+for the top-bar Status pill (`layout.tsx` line ~1521).
+
+**Round-2 correction:** an earlier version of this fix scoped `pending: []`
+to only `hollow-tide-*` book ids. That's incomplete — `layout.tsx`'s
+background poll (`api.pollRevisionsBulk({ bookIds: bgBookIds })`, ~line 983)
+fans out over every non-active pollable book, and with `hollow-tide-2`
+active as the capture target, `bgBookIds` resolves to `['hollow-tide-1',
+'coalfall-commission']` (both `status: 'complete'`). `coalfall-commission`
+isn't a `hollow-tide-*` id, so it would still return the Eliza `pending`
+array — and since `applyPoll` replaces `pending` **wholesale regardless of
+bookId** (the file's own comment, confirmed at `api.ts:1767-1771`), that
+stray response can clobber the just-cleaned `pending` back to non-empty,
+racily, right as the drift/preview scenes capture. **Fix: return `pending:
+[]` under `DEMO_CAPTURE` for every book, not just Hollow Tide ones** — dev
+mode (non-`DEMO_CAPTURE`) behavior for `sb`/`cc` is unaffected either way,
+since the guard is on the `DEMO_CAPTURE` flag, not the book id.
 
 ## Capture + embed steps
 
@@ -261,12 +298,14 @@ Marketing capture is explicitly a tool, not a regression gate (excluded from
 `npm run verify`). The new `DEMO_CAPTURE` branches in `mockGetChapterAudio` and
 `mockPollRevisions` are new logic and get a small Vitest unit test each:
 asserting the flagged-chapter segment override returns the two expected
-reason flavors (and only for `hollow-tide-2` chapter 3 — every other
-chapter/book keeps the existing generic canned segments), and that
-`pollRevisions`/`pollRevisionsBulk` return `HOLLOW_TIDE_DRIFT_EVENTS` with
-`pending: []` for `hollow-tide-2` under `DEMO_CAPTURE`, while non-demo-capture
-mode is unaffected. The scene registry's existing guard in `capture.spec.ts`
-(dup-id / hash-prefix check) covers the three new rows for free.
+reason flavors, unchanged timings, and only for `hollow-tide-2` chapter 3
+(every other chapter/book keeps the existing generic canned segments); and
+that `pollRevisions`/`pollRevisionsBulk` return `HOLLOW_TIDE_DRIFT_EVENTS` for
+`hollow-tide-2`, **and `pending: []` for every book id** (not just Hollow
+Tide ones — covering the `coalfall-commission` background-poll case round 2
+caught), under `DEMO_CAPTURE`, while non-demo-capture mode is unaffected. The
+scene registry's existing guard in `capture.spec.ts` (dup-id / hash-prefix
+check) covers the three new rows for free.
 
 ## Mechanics
 
