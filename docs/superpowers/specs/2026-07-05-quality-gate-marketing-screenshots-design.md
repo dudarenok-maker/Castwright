@@ -120,13 +120,16 @@ All in `src/mocks/marketing/hollow-tide.ts` unless noted.
 audioQa: {
   status: 'suspect',
   reasons: [
-    'Near-silent stretch before a line',
     'Word substitution against the script',
+    'Near-silent stretch before a line',
   ],
 }
 ```
-This flows through the existing hydrate path (`chapters-slice.ts:335`) with no
-code change — it's what the top-level Suspect pill checks.
+Ordered to match the segment override's chronological order (round 3 caught
+the first draft ordering these backwards from the segments below — cosmetic,
+but both surfaces render in the same screenshot). This flows through the
+existing hydrate path (`chapters-slice.ts:335`) with no code change — it's
+what the top-level Suspect pill checks.
 
 **Segment data for chapter 3** — `mockGetChapterAudio` in `src/lib/api.ts`
 currently returns four generic canned segments for literally any chapter (two
@@ -134,7 +137,10 @@ clean `narrator` spans plus two non-adjacent suspect spans — `halloran` at
 `[third, third*2)` and `narrator` at `[lateStart, totalSec)`, where `third =
 totalSec/3` and `lateStart = third*2 + 88`; with no `duration` passed by the
 caller this defaults to `'10:00'` → `totalSec = 600`, so `third = 200`,
-`lateStart = 488`). The function's own comment explains the two suspect spans
+`lateStart = 488` — confirmed against the actual caller, not assumed:
+`ChapterSegmentStrip` in `generation.tsx` calls `api.getChapterAudio({ bookId,
+chapterId: chapter.id })` with no `duration` argument today, so these are the
+real numbers, not illustrative ones). The function's own comment explains the two suspect spans
 are deliberately spaced 84s apart (padded gap `third*2+2` to `lateStart-2`)
 specifically so `deriveIssues` produces **two distinct** `IssueRegion`s instead
 of merging them — an existing, already-tested invariant (`chapter-issues.ts`,
@@ -272,7 +278,36 @@ racily, right as the drift/preview scenes capture. **Fix: return `pending:
 mode (non-`DEMO_CAPTURE`) behavior for `sb`/`cc` is unaffected either way,
 since the guard is on the `DEMO_CAPTURE` flag, not the book id.
 
+**Delivery path for `hollow-tide-2`'s own drift events** (round 3 named this
+gap): `bgBookIds` explicitly excludes the *active* book, so the two
+`HOLLOW_TIDE_DRIFT_EVENTS` don't arrive via the background bulk path this
+section is about — they arrive via the separate active-book poll
+(`api.pollRevisions({ bookId })`, `layout.tsx` ~line 949, gated on
+`stageKind === 'ready'`). Both paths route through the same
+`mockPollRevisions`, so the `pending: []` fix and the drift-event merge apply
+to both uniformly — worth stating explicitly so the two paths aren't
+conflated during implementation.
+
 ## Capture + embed steps
+
+**Settle timing (flagged by round 3, unresolved by this spec — carry into
+the implementation plan):** all three new scenes depend on async state —
+`mockPollRevisions`'s `await wait(200)` for scene 2's drift events, and
+whatever the active-book poll's own timing is for scenes 2/3's `pending`
+clear. The existing scene registry already has the right mechanism for this
+(`Scene.waitFor`, a selector awaited before the shot — e.g. `analysing` waits
+on `text=Detecting characters`), so each new scene must specify a `waitFor`
+tied to the real content, not a fixed delay:
+- `chapter-suspect`: `waitFor` the Suspect badge/pill selector on chapter 3's
+  row (not just the row being expanded).
+- `voice-drift-report`: `waitFor` the drift banner text ("Voice drift
+  detected…") before the `action` click, not just the cast view's generic
+  chapter-row selector.
+- `preview-flagged`: `waitFor` the mini-player's amber issue-region marker
+  after the Preview click, not just the player being mounted.
+This is a scene-authoring detail, not a fixture/data-model question, so it's
+left for the implementation plan to nail down against the real DOM rather
+than speculated here.
 
 1. `CAPTURE_SCENE=chapter-suspect npm run capture:marketing`,
    `CAPTURE_SCENE=voice-drift-report npm run capture:marketing`,
