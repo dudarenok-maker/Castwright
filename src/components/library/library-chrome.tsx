@@ -222,7 +222,10 @@ export function LibraryChrome({
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+      {/* `ml-auto` on the toggle (not `justify-between` on this row) keeps it
+          right-anchored even once `flex-wrap` puts it alone on its own line —
+          `justify-between` would left-align a lone wrapped item instead. */}
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
         <div className="flex items-center gap-1">
           {filters.map((f) => (
             <button
@@ -238,7 +241,7 @@ export function LibraryChrome({
           data-testid="library-view-mode-toggle"
           role="group"
           aria-label="Library view mode"
-          className="inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/4 border border-ink/10"
+          className="ml-auto inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/4 border border-ink/10"
         >
           <button
             type="button"
