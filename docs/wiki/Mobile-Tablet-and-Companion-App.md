@@ -12,8 +12,7 @@ The desktop app doesn't listen on plain HTTP for other devices — it needs
 **LAN HTTPS mode** (`npm run dev:lan` or `npm run start:lan`) plus a locally
 trusted certificate, so a phone's browser doesn't show a security warning.
 **Admin → LAN access** is where you authorize a browser device once that
-mode is running — see the LAN access card on the [Admin & Model
-Manager](Admin-and-Model-Manager) page.
+mode is running — see the LAN access card on the [Admin](Admin) page.
 
 The one-time root-certificate step is
 `npm run install:cert-mobile` — it generates a per-LAN-IP certificate, prints
@@ -52,4 +51,4 @@ listening position in sync across every paired device.
 
 > Screenshots of the LAN-access QR card and the Pair-a-device modal are tracked as a follow-up.
 
-Next: [Admin & Model Manager](Admin-and-Model-Manager).
+Next: [Admin](Admin).
