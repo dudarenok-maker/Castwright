@@ -16,6 +16,8 @@
 - **The Quality Gate wiki page finally shows its work.** Real pictures of a flagged line, a voice-drift flag, and the amber warning following you into the mini-player, plus the word-check pass documented for the first time.
 - **Your manuscript can no longer be quietly overwritten with sample text.** A rare timing gap while a chapter was still loading could, on the next edit, bake Castwright's own demo story into your real book's saved manuscript. That gap is closed, and a save can no longer wipe an already-read chapter down to nothing.
 
+- **A chapter with a full cast of speaking voices is less likely to stall after a background hiccup.** If the narration engine had to restart partway through your book, it was quietly redoing setup work for every voice in the next chapter instead of picking up where it had already left off — the more characters speaking in that chapter, the more likely it was to stumble. It now reuses what it already prepared.
+
 # Castwright 1.10.0
 
 - **Three new languages take the stage: Spanish, French, and German.** After English and Russian, Castwright now performs Spanish-, French-, and German-language books with the same full-cast craft — it reads the manuscript in its own language, gives every character a voice that speaks it, and keeps the cast's tone and descriptions written in the book's own tongue. Five languages, one machine.

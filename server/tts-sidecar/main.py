@@ -2878,6 +2878,20 @@ class QwenEngine(Engine):
         base_items = base_items if isinstance(base_items, list) else [base_items]
         base_item = base_items[0]
 
+        pt_path, _json_path = self._voice_paths(cache_key)
+
+        # A prior process may already have derived and persisted this voice's
+        # 1.7B-native prompt (e.g. before a sidecar restart wiped the
+        # in-memory cache) — load it instead of re-deriving, which is an
+        # expensive GPU decode + create_voice_clone_prompt call (side-11:
+        # every restart was forcing full re-derivation for every voice
+        # touched again, regardless of an existing on-disk .pt).
+        if os.path.isfile(pt_path):
+            prompt = torch.load(pt_path, weights_only=False)
+            with self._cache_lock:
+                self._prompt_cache[cache_key] = (prompt, lang)
+            return prompt, lang, True
+
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
         rc = base_item.ref_code
@@ -2890,7 +2904,6 @@ class QwenEngine(Engine):
         )
 
         # Persist to disk so re-runs and restarts skip the derivation step.
-        pt_path, _json_path = self._voice_paths(cache_key)
         os.makedirs(self._voices_dir, exist_ok=True)
         torch.save(prompt, pt_path)
         with self._cache_lock:

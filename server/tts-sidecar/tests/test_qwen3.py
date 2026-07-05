@@ -1300,6 +1300,54 @@ def test_synth_17b_calls_ensure_base17_and_derives_native_prompt(
     assert isinstance(res2.pcm, bytes) and len(res2.pcm) > 0
 
 
+def test_synth_17b_reuses_disk_cached_prompt_after_restart(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """A sidecar restart wipes the in-memory _prompt_cache, but the on-disk
+    <voice>__1.7b.pt written by a prior process must still be honoured.
+    synthesize('1.7b') must NOT re-derive via create_voice_clone_prompt when
+    the .pt file already exists on disk (side-11: every restart was forcing a
+    full GPU re-derivation for every 1.7B voice touched again, ballooning
+    memory — a chapter with several speakers right after a restart could
+    trigger back-to-back recycles)."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    os.makedirs(str(vdir), exist_ok=True)
+
+    eng.design_voice("nadia", "A calm narrator.", "English", None)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: (
+            [_types.SimpleNamespace(ref_code=None, ref_text="calib")],
+            "English",
+            False,
+        ),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+
+    # First call: cache MISS — derives and writes nadia__1.7b.pt to disk.
+    eng.synthesize("1.7b", "nadia", "First line.")
+    pt_17b = os.path.join(str(vdir), "nadia__1.7b.pt")
+    assert os.path.isfile(pt_17b)
+
+    # Simulate a sidecar restart: fresh process → empty in-memory prompt
+    # cache, but the .pt file from the prior process is still on disk.
+    eng._prompt_cache.pop("nadia__1.7b", None)
+
+    prompt_calls_before = len(eng._base17.prompt_calls)
+    res = eng.synthesize("1.7b", "nadia", "Second line, after restart.")
+    prompt_calls_after = len(eng._base17.prompt_calls)
+
+    assert prompt_calls_after == prompt_calls_before, (
+        "create_voice_clone_prompt was called again after a simulated restart — "
+        "the on-disk nadia__1.7b.pt should have been loaded instead of re-derived"
+    )
+    assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+
+
 def test_synth_17b_does_not_call_ensure_base_loaded(fake_qwen_runtime, monkeypatch) -> None:
     """synthesize('1.7b') must NOT call _ensure_base_loaded (the 0.6B loader).
     Only _ensure_base17_loaded should be called — the 0.6B path is unchanged."""
