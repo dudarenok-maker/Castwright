@@ -72,17 +72,24 @@ const TREND_STYLE: Record<Trend, { cls: string; glyph: string; label: string }> 
 
 /* Shared column templates so each table's sticky header and its body rows are
    ONE grid definition, not two independent grids whose `auto` tracks size to
-   different content (header text vs. data) and drift out of alignment. Explicit
-   rem widths on the fixed columns guarantee the tracks line up; the responsive
-   variants drop tracks in lockstep with the cells' `hidden sm:/md:block` so the
-   collapse stays aligned at every breakpoint. The header lives INSIDE the
+   different content (header text vs. data) and drift out of alignment. EVERY
+   column (including the last) must be an explicit rem width — an `auto` last
+   column reintroduces the exact bug this comment warns about: the header row
+   and each data row are separate `<div className={..._COLS}>` grids, so an
+   `auto` track sizes independently per row (e.g. the header's short "VRAM"
+   vs. a row's wide "23.9 / 24.0 GB"), which changes how much space is left
+   for the adjacent `1fr` column and shifts every later column out of line
+   with the header. The responsive variants drop tracks in lockstep with the
+   cells' `hidden sm:/md:block` so the collapse stays aligned — and track
+   COUNT per breakpoint must match the number of non-hidden cells at that
+   breakpoint, or a cell lands in the wrong track. The header lives INSIDE the
    scroll container (sticky) so it shares the scrollbar gutter the rows reserve
    (scrollbar-gutter: stable from .scrollbar-thin) — otherwise the header would
    run a gutter-width past the rows. */
 const THROUGHPUT_COLS =
-  'grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_7rem_auto] md:grid-cols-[1fr_7rem_3.5rem_3.5rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
+  'grid grid-cols-[1fr_4.5rem] sm:grid-cols-[1fr_7rem_4.5rem] md:grid-cols-[1fr_7rem_3.5rem_3.5rem_3.5rem_4.5rem] gap-x-3 sm:gap-x-6';
 const TRENDS_COLS =
-  'grid grid-cols-[1fr_3rem_3rem_auto] sm:grid-cols-[1fr_7rem_3rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
+  'grid grid-cols-[1fr_3rem_8rem] sm:grid-cols-[1fr_7rem_3.5rem_3rem_3.5rem_8rem] gap-x-3 sm:gap-x-6';
 
 export function AdminView() {
   const [stats, setStats] = useState<GenerationStatsResponse | null>(null);
@@ -536,6 +543,7 @@ function ResourceTrends() {
             >
               <span>Chapter</span>
               <span className="text-right hidden sm:block">Engine</span>
+              <span className="text-right hidden sm:block">QA</span>
               <span className="text-right">RTF</span>
               <span className="text-right hidden sm:block">Wall</span>
               <span className="text-right">VRAM</span>
@@ -562,6 +570,12 @@ function ResourceTrends() {
                       </span>
                       <span className="text-right text-xs text-ink/50 font-mono hidden sm:block">
                         {r.modelKey ? ttsModelLabel(r.modelKey as TtsModelKey) : '–'}
+                      </span>
+                      <span
+                        className="text-right text-xs text-ink/50 font-mono tabular-nums hidden sm:block"
+                        data-testid="resource-qa-cell"
+                      >
+                        {fmtRtf(r.rerecordRtf)}
                       </span>
                       <span className="text-right font-mono tabular-nums text-ink/80">
                         {fmtRtf(r.rtf)}

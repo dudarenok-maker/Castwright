@@ -79,6 +79,7 @@ const telemetry = (over: Partial<ResourceTelemetryRecord>): ResourceTelemetryRec
   title: 'Chapter 1',
   modelKey: 'qwen3-tts-0.6b',
   rtf: 1.2,
+  rerecordRtf: null,
   audioSec: 600,
   wallSec: 720,
   vramReservedMb: 3200,
@@ -330,6 +331,27 @@ describe('AdminView — fs-20 resource trends panel', () => {
     expect(within(panel).getByTestId('resource-rtf-sparkline')).toBeInTheDocument();
   });
 
+  it('renders the QA (rerecordRtf) column, distinct from the RTF column', async () => {
+    mockTelemetry.mockResolvedValue({
+      records: [
+        telemetry({ chapterId: 3, rtf: 2.1, rerecordRtf: 0.4 }),
+        telemetry({ chapterId: 2, rtf: 1.4, rerecordRtf: null }),
+      ],
+    });
+    renderAdmin();
+
+    const panel = await screen.findByTestId('resource-trends');
+    expect(within(panel).getByText('QA')).toBeInTheDocument();
+
+    const row3 = within(panel).getByTestId('resource-row-3');
+    expect(within(row3).getByTestId('resource-qa-cell')).toHaveTextContent('0.40');
+    expect(within(row3).getByText('2.10')).toBeInTheDocument();
+
+    // null rerecordRtf renders a dash, not "0.00" or the RTF value.
+    const row2 = within(panel).getByTestId('resource-row-2');
+    expect(within(row2).getByTestId('resource-qa-cell')).toHaveTextContent('–');
+  });
+
   it('groups rows under a sticky per-book header, splitting on book change', async () => {
     mockTelemetry.mockResolvedValue({
       records: [
@@ -382,9 +404,10 @@ describe('AdminView — table scroll regions + header alignment', () => {
      every other in-card scroll region), and pin their column header INSIDE the
      scroller with ONE shared column template so the header tracks line up with
      the data rows instead of drifting on the scrollbar gutter + independent
-     `auto` columns. */
-  const THROUGHPUT_COLS = 'md:grid-cols-[1fr_7rem_3.5rem_3.5rem_3.5rem_auto]';
-  const TRENDS_COLS = 'sm:grid-cols-[1fr_7rem_3rem_3.5rem_auto]';
+     `auto` columns — every track (including the last) is a fixed rem width so
+     jsdom-string equality plus the e2e layout assertion both actually pin it. */
+  const THROUGHPUT_COLS = 'md:grid-cols-[1fr_7rem_3.5rem_3.5rem_3.5rem_4.5rem]';
+  const TRENDS_COLS = 'sm:grid-cols-[1fr_7rem_3.5rem_3rem_3.5rem_8rem]';
 
   it('scrolls the generation-throughput rows in the inset thin-scrollbar region', async () => {
     mockStats.mockResolvedValue({
