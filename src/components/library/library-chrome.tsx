@@ -222,7 +222,7 @@ export function LibraryChrome({
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3 mb-6">
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
         <div className="flex items-center gap-1">
           {filters.map((f) => (
             <button
