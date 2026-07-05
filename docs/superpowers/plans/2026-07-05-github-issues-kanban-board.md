@@ -437,7 +437,7 @@ assigned once and **never reused or renumbered**; gaps are expected.
 first) — set it via the board UI or \`gh project item-edit --field-id
 <priorityFieldId> --number <n>\` to reprioritize, then re-run \`npm run
 backlog:sync\`. An issue with no \`Priority\` set sorts after every
-prioritized issue in its tier.\`;
+prioritized issue in its tier.`;
 
 const RETIRED_NUMBERING = `## Retired numbering
 
@@ -780,13 +780,13 @@ git commit -m "feat(ops): wire backlog-sync GraphQL query + npm script (ops-25)"
 // scripts/bulk-add-project-items.mjs
 #!/usr/bin/env node
 // One-off rollout tool (ops-25 rollout step 2): add every currently-open
-// issue to the Project board, setting an initial Status by heuristic. This
-// is a single, one-time bulk-add — GitHub Projects doesn't document
-// item-add as dedup-safe against re-adding the same issue twice, so don't
-// re-run this against a board that already has items on it; use the
-// per-issue `gh project item-add` manually for anything added later.
-// Throwaway rollout tooling: reviewed by hand, not unit tested (spec's
-// Testing section).
+// issue to the Project board, setting an initial Status by heuristic and
+// seeding Priority. This is a single, one-time bulk-add — GitHub Projects
+// doesn't document item-add as dedup-safe against re-adding the same issue
+// twice, so --apply REFUSES to run against a non-empty board (see
+// boardIsEmpty below); use the per-issue `gh project item-add` manually for
+// anything added later. Throwaway rollout tooling: reviewed by hand, not
+// unit tested (spec's Testing section).
 //
 // Usage:
 //   node scripts/bulk-add-project-items.mjs            (dry-run — prints the manifest)
@@ -898,12 +898,20 @@ function listOpenPrBodies() {
   return JSON.parse(json).map((pr) => pr.body ?? '');
 }
 
+function boardIsEmpty(config) {
+  const raw = gh(['project', 'item-list', String(config.projectNumber), '--owner', PROJECT_OWNER, '--limit', '1', '--format', 'json']);
+  return JSON.parse(raw).items.length === 0;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!existsSync(CONFIG_PATH)) die(`Not found: ${CONFIG_PATH} — run the Task 1 board setup first.`);
   if (!ghAvailable()) die('`gh` not found. Install the GitHub CLI + `gh auth login`.');
 
   const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  if (args.apply && !boardIsEmpty(config)) {
+    die('The board already has items on it — this script is a ONE-SHOT bulk-add, not safe to re-run (it would double-add every issue and re-seed Priority). Use per-issue `gh project item-add` for anything added after the initial rollout.');
+  }
   const issues = listOpenIssues();
   const prBodies = listOpenPrBodies();
   const now = Date.now();
@@ -1939,7 +1947,14 @@ Backlog view's `type:feature`-only filter; the Bugs & Chores view's `bug`
 OR `type:chore` filter; `docs/BACKLOG.md` is generated, never hand-edited;
 `moscow:*` is meaningless off `type:feature`; intra-tier ordering is driven
 by the numeric `Priority` field — lower number = higher priority — not by
-issue number or MoSCoW label alone), and **Test plan** (automated =
+issue number or MoSCoW label alone; **"Status ≠ Done" is deliberately
+stricter than the spec's literal wording** — `backlog-sync.mjs` requires
+BOTH the issue being open AND the board Status not being `Done`, not the
+Status field alone, so a closed issue whose card missed the "Item closed →
+Done" automation can never reappear in `docs/BACKLOG.md` even with a stale
+Status value; this is an intentional belt-and-suspenders policy layered on
+top of spec §D, not a bug to "fix" back to the literal field-only reading),
+and **Test plan** (automated =
 `scripts/tests/backlog-sync.test.mjs` via `npm run test:hooks`; manual =
 the Task 1-12 walkthrough above, re-run in full whenever the board's field
 or view config changes). Link back to the design spec and to issue #1321.
