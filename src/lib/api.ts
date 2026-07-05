@@ -8279,62 +8279,19 @@ const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
   },
 ];
 
-/* In-memory mock config store. Starts with default values; PUT/reset mutate it. */
-/* The 5 hand-maintained legacy keys in MOCK_CONFIG_VALUES below — every other
-   knob's `effective` is derived from MOCK_CONFIG_DESCRIPTORS' `default` field
-   (see the spread at the bottom of that object) so a descriptor default can't
-   drift out of sync with its mock value. */
-const LEGACY_MOCK_CONFIG_KEYS = new Set([
-  'KOKORO_SAMPLE_RATE',
-  'SEG_QA_MAX_RERECORDS',
-  'SEG_ASR_ENABLED',
-  'ANALYZER_STAGE1_PROMPT',
-  'tts.qwen.device',
-]);
-
-const MOCK_CONFIG_VALUES: import('./types').ConfigValues = {
-  KOKORO_SAMPLE_RATE: {
-    key: 'KOKORO_SAMPLE_RATE',
-    effective: 24000,
-    source: 'default',
-    locked: false,
-    overridden: false,
-  },
-  SEG_QA_MAX_RERECORDS: {
-    key: 'SEG_QA_MAX_RERECORDS',
-    effective: 2,
-    source: 'default',
-    locked: false,
-    overridden: false,
-  },
-  SEG_ASR_ENABLED: {
-    key: 'SEG_ASR_ENABLED',
-    effective: false,
-    source: 'default',
-    locked: false,
-    overridden: false,
-  },
-  ANALYZER_STAGE1_PROMPT: {
-    key: 'ANALYZER_STAGE1_PROMPT',
-    effective: 'Attribute each sentence to its speaker.',
-    source: 'default',
-    locked: false,
-    overridden: false,
-  },
-  'tts.qwen.device': {
-    key: 'tts.qwen.device',
-    effective: 'auto',
-    source: 'default',
-    locked: false,
-    overridden: false,
-  },
-  ...Object.fromEntries(
-    MOCK_CONFIG_DESCRIPTORS.filter((d) => !LEGACY_MOCK_CONFIG_KEYS.has(d.key)).map((d) => [
+/* In-memory mock config store. Starts with default values; PUT/reset mutate it.
+   Every knob's `effective` is derived from MOCK_CONFIG_DESCRIPTORS' `default`
+   field so a descriptor default can't drift out of sync with its mock value. */
+function deriveMockConfigDefaults(): import('./types').ConfigValues {
+  return Object.fromEntries(
+    MOCK_CONFIG_DESCRIPTORS.map((d) => [
       d.key,
       { key: d.key, effective: d.default, source: 'default' as const, locked: false, overridden: false },
     ]),
-  ),
-};
+  );
+}
+
+const MOCK_CONFIG_VALUES: import('./types').ConfigValues = deriveMockConfigDefaults();
 
 /* In-memory prompt store keyed by id. */
 const MOCK_PROMPTS = new Map<string, PromptState>([
@@ -8461,49 +8418,7 @@ export async function mockRestartSidecar(): Promise<{ ok: boolean; error?: strin
 
 /* Test helper — reset the mock config store to its initial defaults. */
 export function _resetMockConfig(): void {
-  Object.assign(MOCK_CONFIG_VALUES, {
-    KOKORO_SAMPLE_RATE: {
-      key: 'KOKORO_SAMPLE_RATE',
-      effective: 24000,
-      source: 'default',
-      locked: false,
-      overridden: false,
-    },
-    SEG_QA_MAX_RERECORDS: {
-      key: 'SEG_QA_MAX_RERECORDS',
-      effective: 2,
-      source: 'default',
-      locked: false,
-      overridden: false,
-    },
-    SEG_ASR_ENABLED: {
-      key: 'SEG_ASR_ENABLED',
-      effective: false,
-      source: 'default',
-      locked: false,
-      overridden: false,
-    },
-    ANALYZER_STAGE1_PROMPT: {
-      key: 'ANALYZER_STAGE1_PROMPT',
-      effective: 'Attribute each sentence to its speaker.',
-      source: 'default',
-      locked: false,
-      overridden: false,
-    },
-    'tts.qwen.device': {
-      key: 'tts.qwen.device',
-      effective: 'auto',
-      source: 'default',
-      locked: false,
-      overridden: false,
-    },
-    ...Object.fromEntries(
-      MOCK_CONFIG_DESCRIPTORS.filter((d) => !LEGACY_MOCK_CONFIG_KEYS.has(d.key)).map((d) => [
-        d.key,
-        { key: d.key, effective: d.default, source: 'default' as const, locked: false, overridden: false },
-      ]),
-    ),
-  });
+  Object.assign(MOCK_CONFIG_VALUES, deriveMockConfigDefaults());
   MOCK_PROMPTS.set('ANALYZER_STAGE1_PROMPT', {
     id: 'ANALYZER_STAGE1_PROMPT',
     text: 'Attribute each sentence to its speaker.',
