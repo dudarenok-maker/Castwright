@@ -190,6 +190,45 @@ describe('book-state router — manuscript slice validation (#1356 mock-fixture-
     const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
     expect(parsed.sentences).toHaveLength(1);
   });
+
+  it('PUT slice=manuscript accepts additive sentence fields (startMs/endMs) instead of 400ing the whole patch', async () => {
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'manuscript',
+        patch: { sentences: [{ ...validSentence, startMs: 1000, endMs: 2500 }] },
+      });
+    expect(res.status).toBe(204);
+
+    const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const parsed = JSON.parse(readFileSync(onDisk, 'utf8'));
+    expect(parsed.sentences[0].startMs).toBe(1000);
+    expect(parsed.sentences[0].endMs).toBe(2500);
+  });
+
+  it('PUT slice=manuscript 500s (does not silently wipe) when manuscript-edits.json on disk is corrupt', async () => {
+    const onDisk = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const validContent = readFileSync(onDisk, 'utf8');
+    writeFileSync(onDisk, '{not valid json');
+
+    try {
+      const res = await request(app)
+        .put(`/api/books/${bookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({ slice: 'manuscript', patch: { sentences: [] } });
+      expect(res.status).toBe(500);
+
+      /* The corrupt file must be left untouched, not silently overwritten
+         with an empty sentence list — a corrupt file must never be treated
+         the same as "no existing content" by the wipe-guard. */
+      expect(readFileSync(onDisk, 'utf8')).toBe('{not valid json');
+    } finally {
+      /* This file is shared across every test in this suite (same bookDir),
+         so leaving it corrupt would break every later GET /state test. */
+      writeFileSync(onDisk, validContent);
+    }
+  });
 });
 
 describe('book-state router — chapterLufs hydration (plan 77)', () => {
