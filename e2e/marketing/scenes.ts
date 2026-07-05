@@ -634,10 +634,23 @@ export const SCENES: Scene[] = [
        before the click so the in-browser setTimeout backing that delay never
        fires — the loading state holds indefinitely for the shot, entirely
        within this scene's own action (no change to the harness or the mock
-       needed). */
+       needed).
+
+       REGRESSED (Task 14 final verification) then FIXED: this scene had no
+       `waitFor`, so `action` ran straight after `waitForImages` — fine when
+       the inventory row it targets happened to already be in the DOM, but a
+       race the moment the initial `GET` (mockGetModelInventory's own 80ms
+       delay) is still in flight when `page.clock.install()` + `pauseAt()`
+       fire: that freezes the in-page fake clock before the delay's own
+       setTimeout resolves, so the page hangs on "Loading model inventory…"
+       forever and no "Load model" button ever appears (5s timeout). Added
+       the same `waitFor: '[data-testid^="model-row-"]'` guard used by the
+       'model-manager-installed' scene above, so the clock only gets frozen
+       once the inventory (and its Load buttons) has actually rendered. */
     id: 'model-pill-loading',
     hash: '#/models',
     viewports: ['desktop'],
+    waitFor: '[data-testid^="model-row-"]',
     action: async (page) => {
       await page.clock.install();
       await page.clock.pauseAt(Date.now());
