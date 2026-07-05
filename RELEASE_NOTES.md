@@ -10,6 +10,7 @@
 - **A chapter's audio failing to load, fixed.** If your library folder happened to sit inside a hidden folder, a finished chapter's audio could refuse to play even though the file was right there. It now plays.
 - **The Books page no longer scrolls sideways on a phone.** A long library folder path could push the page wider than your screen; it now tucks in neatly with an ellipsis instead.
 - **A last sliver of sideways scroll on the Books page, gone.** Even with a short folder path, the page could still creep a couple of pixels past the edge of a phone screen; it now sits flush.
+- **The Model Manager finally has its own page — and its own manual.** It's split out of Admin, with every setting explained in plain terms and pictured section by section. And the wiki's Advanced Settings page now shows you all eleven groups of dials, not just the first — plus eleven more corners of the guide that finally show you exactly what you'll see before you click.
 
 # Castwright 1.10.0
 
