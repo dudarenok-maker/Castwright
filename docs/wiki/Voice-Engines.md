@@ -25,7 +25,11 @@ loaded and ready with a **Stop** action.
 An **optional add-on** (not installed by default) — install it from **Admin
 → Model Manager → Optional add-ons → Coqui → Install**. Once the package is
 present, Coqui gets the same idle/loading/ready pill as any other engine (see
-[The Model Control Pill](The-Model-Control-Pill)).
+[The Model Control Pill](The-Model-Control-Pill)). Below, Coqui's row once
+installed: **Installed** badge, **Load model** pill, and an **Update** toggle
+for reinstalling the package.
+
+![Model Manager — Coqui XTTS v2 row, installed](images/voice-engines/coqui-row.png)
 
 ## Qwen (default generation engine)
 
@@ -33,7 +37,12 @@ Qwen is the flagship per-character engine — the one the cast's designed
 voices actually use. It ships a Base tier (0.6B, the everyday default, and a
 higher-quality 1.7B) plus a VoiceDesign model used transiently while
 designing a bespoke voice — each its own Model Manager row, loaded and
-unloaded independently.
+unloaded independently. Below, the Base (0.6B) row installed and idle: an
+**unpinned** integrity chip (its weights aren't a single fixed-file release,
+so size-based integrity pinning doesn't apply the way it does for Kokoro),
+**Installed** badge, and a **Load model** pill.
+
+![Model Manager — Qwen3-TTS Base (0.6B) row, installed](images/voice-engines/qwen-row.png)
 
 ## Gemini
 
@@ -48,7 +57,5 @@ Qwen; a Qwen-engine character designs a bespoke voice instead (see
 with **Audition base voice** and **Rebaseline the series** actions.
 
 ![Voice Library — a Gemini voice family reused across a series](images/voice-engines/04-gemini.png)
-
-> A screenshot of Coqui's and Qwen's individual Model Manager rows is tracked as a follow-up — the shot above shows Kokoro's row as a real example of the shared pill/badge pattern every engine uses.
 
 Next: [The Model Control Pill](The-Model-Control-Pill).

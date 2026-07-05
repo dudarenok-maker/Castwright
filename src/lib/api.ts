@@ -6632,10 +6632,7 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       sizeBytes: 1_283_457_024,
       diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base',
       loaded: MOCK_SIDECAR_QWEN_LOADED,
-      /* package-missing exercises the Needs-repair / Repair / no-Load-pill
-           health states that model-manager-health.spec.ts pins (Task 12).
-           installState resolves back to 'loaded' when the user loads it. */
-      installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'package-missing',
+      installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'ready',
       tier: 'standard',
       isDefaultEngine: MOCK_SIDECAR_QWEN_LOADED,
       isFallbackEngine: false,
@@ -6661,16 +6658,16 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       id: 'coqui',
       kind: 'tts',
       label: 'Coqui XTTS v2',
-      present: false,
-      sizeBytes: null,
+      present: true,
+      sizeBytes: 2_952_790_016,
       diskPath:
         'server/tts-sidecar/voices/coqui/tts/tts_models--multilingual--multi-dataset--xtts_v2',
       loaded: false,
-      installState: 'not-installed',
+      installState: 'ready',
       tier: 'secondary',
       isDefaultEngine: false,
       isFallbackEngine: false,
-      removable: false,
+      removable: true,
       updatable: true,
     },
     {

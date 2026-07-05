@@ -751,4 +751,20 @@ export const SCENES: Scene[] = [
     waitFor: '[aria-label^="Open profile for"]',
     strict: true,
   },
+  {
+    id: 'voice-engines-coqui',
+    hash: '#/models',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="model-row-coqui"]',
+    scrollTo: '[data-testid="model-row-coqui"]',
+    strict: true,
+  },
+  {
+    id: 'voice-engines-qwen',
+    hash: '#/models',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="model-row-qwen-base"]',
+    scrollTo: '[data-testid="model-row-qwen-base"]',
+    strict: true,
+  },
 ];
