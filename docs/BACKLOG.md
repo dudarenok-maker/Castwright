@@ -228,6 +228,12 @@ _Full detail + acceptance:_ [#1228](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
 _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
 
+#### `srv-56` — Centralize the off-GPU semaphore-gating idiom + shared engine-list constant ([#1327](https://github.com/dudarenok-maker/Castwright/issues/1327))
+
+- _What:_ PR #1324's device-aware GPU semaphore gating duplicated the same "skip acquire when off-GPU" idiom across 3 new call sites, on top of 3 pre-existing, differently-shaped copies elsewhere — and duplicated a 3-element engine-list constant between `engine-device-state.ts` and `sidecar-health.ts`. A code review flagged both as real but non-blocking (fixing them in #1324 would have expanded that PR into unrelated files).
+- _Benefit (technical):_ a shared helper would have caught (rather than merely fixed after the fact) the exact "qwen-voice.ts's acquire left ungated" mistake PR #1324's own adversarial review needed to catch by hand; removes a duplicated constant two files must otherwise keep in sync by convention alone.
+_Full detail + acceptance:_ [#1327](https://github.com/dudarenok-maker/Castwright/issues/1327).
+
 ### Companion app
 
 _`app-10` is the companion-app follow-up left after the Android v1 shipped
