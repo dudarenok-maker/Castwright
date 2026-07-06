@@ -62,7 +62,12 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   const label = typeof (req.body as { label?: unknown })?.label === 'string'
     ? (req.body as { label: string }).label : 'Device';
   const { code, expiresAt } = createPairingSession(label, undefined, 10);
-  res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt });
+  const isFriendlyHostnameReachable = req.app.get('isFriendlyHostnameReachable') as
+    (() => boolean) | undefined;
+  const friendlyUrl = isFriendlyHostnameReachable?.() === true
+    ? `https://castwright.local/#/pair?c=${code}`
+    : undefined;
+  res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt, friendlyUrl });
 });
 
 devicesRouter.delete('/devices/:id', async (req: Request, res: Response) => {

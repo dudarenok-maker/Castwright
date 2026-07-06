@@ -176,6 +176,35 @@ describe('devices route (srv-33)', () => {
     expect(typeof res.body.expiresAt).toBe('number');
   });
 
+  it('pair-session includes a friendlyUrl when isFriendlyHostnameReachable is set true', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    app.set('isFriendlyHostnameReachable', () => true);
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
+    expect(res.status).toBe(200);
+    expect(res.body.friendlyUrl).toMatch(/^https:\/\/castwright\.local\/#\/pair\?c=[0-9A-HJKMNP-TV-Z]{16}$/);
+  });
+
+  it('pair-session omits friendlyUrl when isFriendlyHostnameReachable is set false', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    app.set('isFriendlyHostnameReachable', () => false);
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
+    expect(res.status).toBe(200);
+    expect(res.body.friendlyUrl).toBeUndefined();
+  });
+
+  it('pair-session omits friendlyUrl when the getter was never set (a bare test app that skipped app.set — not any real server mode, which always sets it via the shared listenerCallback)', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
+    expect(res.status).toBe(200);
+    expect(res.body.friendlyUrl).toBeUndefined();
+  });
+
   it('pair-session 409s when LAN auth is not enforced', async () => {
     delete process.env.LAN_AUTH_TOKEN;
     process.env.LAN_HTTPS = '1';
