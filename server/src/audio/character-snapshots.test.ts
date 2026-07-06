@@ -103,4 +103,16 @@ describe('buildCharacterSnapshots — per-character render tier (srv-36 audition
     const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'kokoro', new Map(), 'kokoro-v1');
     expect(snaps.hero.modelKey).toBe('qwen3-tts-1.7b');
   });
+
+  it('F1 regression: an UN-PINNED Qwen character in a Kokoro-default book is stamped the Qwen base (0.6B), not the raw run key', () => {
+    // routeFor renders `extra` on Qwen 0.6B (resolveForEngine('qwen').modelKey
+    // falls back to 0.6B). Before the fix, buildCharacterSnapshots passed the
+    // raw run key `kokoro-v1` into resolveCharacterQwenTier, which — with no
+    // per-character ttsModelKey — returned it VERBATIM, stamping a `qwen`-engine
+    // snapshot with `kokoro-v1`. The render-integrity keep-flags then missed the
+    // in-use 0.6B tier and reconcile evicted it out from under the render.
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['extra']), 'kokoro', new Map(), 'kokoro-v1');
+    expect(snaps.extra.voiceEngine).toBe('qwen');
+    expect(snaps.extra.modelKey).toBe('qwen3-tts-0.6b');
+  });
 });
