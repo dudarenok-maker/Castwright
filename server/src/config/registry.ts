@@ -510,6 +510,36 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'high',
   },
   {
+    key: 'tts.qwen.codecDevice',
+    env: 'QWEN_CODEC_DEVICE',
+    group: 'tts-engine',
+    label: 'Qwen codec device',
+    help: '"cpu" (default) keeps the Code2Wav codec decode on CPU, matching today\'s behaviour. "auto" moves it onto whichever device this Qwen instance itself resolved to (NOT an independent cuda→mps→cpu probe — it always follows the model, so the codec can never land on a different card). Pin an explicit "cuda:1" to force a specific card regardless of where the model landed. Changing this requires a sidecar restart.',
+    type: 'device',
+    default: 'cpu', // ← QWEN_CODEC_DEVICE default in tts-sidecar/main.py (_resolve_codec_device)
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
+    key: 'tts.qwen.codecChunkSize',
+    env: 'QWEN_CODEC_CHUNK_SIZE',
+    group: 'tts-engine',
+    label: 'Qwen codec chunk size',
+    help: 'Codec decode chunk size (time-axis frames). Bounds the GPU activation peak when tts.qwen.codecDevice moves the codec off CPU — lower it if a tight card OOMs during decode. Library default 300; unset uses that default unchanged. No effect while the codec stays on CPU. Changing this requires a sidecar restart.',
+    type: 'integer', min: 1,
+    default: 300, // ← chunked_decode's own chunk_size default in the qwen_tts package
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
+    key: 'tts.qwen.codecLeftContextSize',
+    env: 'QWEN_CODEC_LEFT_CONTEXT_SIZE',
+    group: 'tts-engine',
+    label: 'Qwen codec left-context size',
+    help: 'Codec decode left-context overlap (time-axis frames) between chunks. Library default 25; unset uses that default unchanged. Larger values cost more overlap compute for smoother chunk boundaries. No effect while the codec stays on CPU. Changing this requires a sidecar restart.',
+    type: 'integer', min: 0,
+    default: 25, // ← chunked_decode's own left_context_size default in the qwen_tts package
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
     key: 'tts.preload.coqui',
     env: 'PRELOAD_COQUI',
     group: 'tts-engine',
