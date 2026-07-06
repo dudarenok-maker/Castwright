@@ -108,7 +108,17 @@ export const generationRouter = Router();
 const scoringInFlight = new Map<string, Promise<void>>();
 
 export async function afterChapterFinalized(
-  ctx: { bookId: string; bookDir: string; chapters: { id: number; slug: string }[] },
+  ctx: {
+    bookId: string;
+    bookDir: string;
+    chapters: { id: number; slug: string }[];
+    /** The Qwen base tier(s) this run's FULL cast uses (elevate-only, same as
+        routeFor) — computed once at run start and threaded here so the post-
+        audition reconcile evicts only tiers NO chapter of this book will use.
+        NOT derived from the finalized-chapters-only score pass, which can't see
+        an in-flight sibling chapter's tier (the Finding-2 race). */
+    keep: { keep06: boolean; keep17: boolean };
+  },
 ) {
   if (!configValue('qa.speaker.enabled')) return;
   if (scoringInFlight.has(ctx.bookId)) return;
@@ -121,17 +131,19 @@ export async function afterChapterFinalized(
      8GB box (#1029). The pass is non-fatal (.catch) and self-cleaning (.finally);
      a stale verdict file just gets overwritten on the next chapter's pass. */
   const run = scoreBook(ctx.bookDir, ctx.chapters)
-    .then(async (keep) => {
-      /* Hardening (2026-07-06): re-assert Qwen tier hygiene AFTER the audition
-         pass. The run-start `reconcileResidentQwenTiers` fires once; the between-
-         chapters Option-B audition can transiently pull a base tier the render
-         doesn't use (a legacy segments file with no stamped modelKey → the 0.6B
-         audition fallback), which would then linger co-resident with the 1.7B
-         synth (the 8GB-card OOM). `scoreBook` returns the tiers the book ACTUALLY
-         rendered under (no extra segments re-read); reconcile only evicts tiers
-         NOT in use, so the in-use tier stays warm and a mixed-tier book keeps
-         both. Best-effort; skipped when nothing stamped a tier. */
-      if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
+    .then(async () => {
+      /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
+         run-start `reconcileResidentQwenTiers` fires once; the between-chapters
+         Option-B audition can transiently pull a base tier the render doesn't
+         use (a legacy segments file with no stamped modelKey → the 0.6B audition
+         fallback), which would then linger co-resident with the 1.7B synth (the
+         8GB-card OOM). Reconcile against the run's FULL-cast tier set (`ctx.keep`,
+         the same target the run-start reconcile used), NOT the finalized-chapters
+         view scoreBook sees — that view misses an in-flight sibling chapter's
+         tier and would evict it mid-render (Finding 2). reconcile only evicts
+         tiers NOT in that set, so the in-use tier stays warm and a mixed-tier
+         book keeps both. Best-effort; skipped when the run uses no Qwen tier. */
+      if (ctx.keep.keep06 || ctx.keep.keep17) await reconcileResidentQwenTiers(ctx.keep);
     })
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
@@ -671,6 +683,26 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const qwenInUse = requiredEngines.has('qwen');
   const qwenState = getLastKnownQwenInstallState();
   const qwenUnavailable = qwenInUse && qwenState !== 'ready' && qwenState !== 'loaded';
+  /* The Qwen base tier(s) this WHOLE run will use, resolved from the FULL cast
+     with the elevate-only precedence routeFor uses (a per-character ttsModelKey
+     can only raise a character above the run default). Invariant for the run —
+     the cast is fixed — so it's computed ONCE and reused for BOTH the run-start
+     VRAM reconcile AND the post-audition reconcile after each chapter's score
+     pass. The latter must reconcile against THIS full-cast set, never a
+     finalized-chapters-only view: a sibling chapter of this same book can be
+     mid-render on a tier no finished chapter used yet, and evicting it out from
+     under that in-flight render is exactly the srv-36 race (Finding 2).
+
+     Known tradeoff (shared with this same run-start reconcile): the full cast is
+     a SUPERSET of the tiers actually rendered — a declared-but-silent Qwen cast
+     member (or one that fell back to Kokoro) still pins its tier here, so a
+     stray same-tier base (a legacy-segments audition pull, or a prior book's
+     leftover) won't be evicted. Precisely evicting only truly-unused tiers needs
+     the actual in-flight+rendered tier set, i.e. the active-generation tier
+     registry tracked in #1393 (same infra as the cross-book fix). */
+  const usedQwenTiers = qwenInUse
+    ? computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey)
+    : { keep06: false, keep17: false };
   /* NEVER silently downgrade a Qwen book to Kokoro. When the whole cast's Qwen
      characters are about to render in the wrong engine (wrong voices) because
      Qwen reads unavailable, say so loudly — server log + a UI warning toast
@@ -819,12 +851,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      defeating the whole point of this precompute). A genuinely mixed-tier book
      still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0) {
-    const { keep06, keep17 } = computeUsedQwenTiers(
-      cast.characters,
-      engine,
-      resolveForEngine('qwen').modelKey,
-    );
-    await reconcileResidentQwenTiers({ keep06, keep17 }).catch((e) =>
+    await reconcileResidentQwenTiers(usedQwenTiers).catch((e) =>
       console.warn('[generation] tier reconcile skipped:', (e as Error).message),
     );
   }
@@ -1623,6 +1650,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         bookId,
         bookDir,
         chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
+        keep: usedQwenTiers,
       });
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber

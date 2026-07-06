@@ -198,9 +198,10 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *
  * Idempotent — safe to re-run; files are overwritten each call.
  *
- * Returns the Qwen base tier(s) the book's chapters actually rendered under
- * (`keep06`/`keep17`) so the caller can re-assert VRAM hygiene without re-reading
- * the segments files this pass already parsed.
+ * Returns nothing: the caller's post-audition VRAM reconcile no longer derives
+ * its keep-flags from here (a finalized-chapters-only view can't see an in-flight
+ * sibling chapter's tier — the Finding-2 race). It reconciles against the run's
+ * FULL-cast tier set instead, computed once at run start.
  *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
@@ -208,7 +209,7 @@ function segKey(characterId: string, sentenceIds: number[]): string {
 export async function scoreBook(
   bookDir: string,
   chapters: { id: number; slug: string }[],
-): Promise<{ keep06: boolean; keep17: boolean }> {
+): Promise<void> {
   const root = audioDir(bookDir);
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
@@ -261,24 +262,8 @@ export async function scoreBook(
     });
   }
 
-  /* The Qwen base tier(s) this book's chapters actually rendered under — returned
-     so `afterChapterFinalized` can re-assert VRAM hygiene (evict a tier the render
-     doesn't use) WITHOUT re-reading the segments files this pass already parsed.
-     Resolved PER-CHARACTER (snapshot.modelKey, same source the audition uses),
-     falling back to the chapter run-default — so an elevated Qwen char in a lower-
-     default book keeps its tier flagged and reconcile never evicts a warm in-use
-     tier (matches the run-start `computeUsedQwenTiers`, which is also per-char). */
-  const rendered = { keep06: false, keep17: false };
-  for (const cd of chapterData) {
-    for (const snap of Object.values(cd.snapshots)) {
-      const tier = snap.modelKey ?? cd.modelKey;
-      if (tier === 'qwen3-tts-0.6b') rendered.keep06 = true;
-      if (tier === 'qwen3-tts-1.7b') rendered.keep17 = true;
-    }
-  }
-
   // No chapter data → nothing to do
-  if (chapterData.length === 0) return rendered;
+  if (chapterData.length === 0) return;
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
@@ -327,7 +312,7 @@ export async function scoreBook(
     if (STOCHASTIC_ENGINES.has(engine)) stochasticChars.add(charId);
   }
 
-  if (stochasticChars.size === 0) return rendered; // No stochastic characters → nothing to score
+  if (stochasticChars.size === 0) return; // No stochastic characters → nothing to score
 
   // Gather anchor-eligible vectors per character:
   // eligible iff: stochastic-configured AND per-segment renderedFallbackEngine unset/null
@@ -436,7 +421,5 @@ export async function scoreBook(
     const verdictPath = join(root, `${cd.slug}.render-integrity.json`);
     await writeVerdicts(verdictPath, verdictRows);
   }
-
-  return rendered;
 }
 

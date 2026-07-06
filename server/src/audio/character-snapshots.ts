@@ -39,10 +39,17 @@ export function buildCharacterSnapshots(
     const resolvedVoiceName = pickVoiceForEngine(charEngine, toVoiceLike(c), buildHintFromCast(c));
     /* The model key this character ACTUALLY renders under: for Qwen, the
        elevate-only per-character tier; for any other engine, that engine's
-       canonical key. Mirrors `routeFor` by construction (shared helper). */
+       canonical key. Mirrors `routeFor` by construction (shared helper).
+       The Qwen tier is resolved against the run key CANONICALISED to Qwen
+       first — exactly as routeFor resolves against `resolveForEngine('qwen')
+       .modelKey`. Without that, an un-pinned Qwen character in a non-Qwen-
+       default book (runModelKey e.g. `kokoro-v1`) would be stamped with the
+       raw foreign key instead of the Qwen base it renders under (0.6B),
+       desyncing the snapshot from the actual render (the render-integrity
+       keep-flags then miss the in-use tier). */
     const modelKey: TtsModelKey =
       charEngine === 'qwen'
-        ? resolveCharacterQwenTier(c, runModelKey)
+        ? resolveCharacterQwenTier(c, canonicalModelKeyForEngine('qwen', runModelKey))
         : canonicalModelKeyForEngine(charEngine, runModelKey);
     snapshots[c.id] = {
       tone: c.tone,
