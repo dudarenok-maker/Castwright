@@ -50,7 +50,9 @@ describe('afterChapterFinalized', () => {
     vi.spyOn(cfg, 'configValue').mockReturnValue(true);
     // Simulate the slow/hung audition-centroid score path that stalled chapter
     // assembly for 720s on the 8GB box: scoreBook never resolves.
-    vi.mocked(scoreBook).mockImplementationOnce(() => new Promise<void>(() => {}));
+    vi.mocked(scoreBook).mockImplementationOnce(
+      () => new Promise<{ keep06: boolean; keep17: boolean }>(() => {}),
+    );
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race([

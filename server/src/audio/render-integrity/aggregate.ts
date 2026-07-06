@@ -180,29 +180,6 @@ async function readSegmentsFile(path: string): Promise<SegmentsFileView | null> 
   }
 }
 
-/** The Qwen base tier(s) a book's chapters were ACTUALLY rendered under, read
-    from each chapter's stamped segments.json `modelKey`. Used by the post-scoring
-    VRAM re-assert (routes/generation.ts `afterChapterFinalized`) so a tier the
-    render doesn't use can't linger resident after the between-chapters audition
-    pass — a belt-and-suspenders on the run-start `reconcileResidentQwenTiers`
-    for a stray mid-run 0.6B load (e.g. a legacy segments file with no stamped
-    modelKey → the 0.6B audition fallback). Returns both-false when no chapter
-    stamped a Qwen tier (nothing to reconcile). */
-export async function renderTiersUsed(
-  bookDir: string,
-  chapters: { id: number; slug: string }[],
-): Promise<{ keep06: boolean; keep17: boolean }> {
-  const root = audioDir(bookDir);
-  let keep06 = false;
-  let keep17 = false;
-  for (const ch of chapters) {
-    const seg = await readSegmentsFile(join(root, `${ch.slug}.segments.json`));
-    if (seg?.modelKey === 'qwen3-tts-0.6b') keep06 = true;
-    if (seg?.modelKey === 'qwen3-tts-1.7b') keep17 = true;
-  }
-  return { keep06, keep17 };
-}
-
 // ── Key for joining embedding rows to segment rows ─────────────────────────
 
 function segKey(characterId: string, sentenceIds: number[]): string {
@@ -221,13 +198,17 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *
  * Idempotent — safe to re-run; files are overwritten each call.
  *
+ * Returns the Qwen base tier(s) the book's chapters actually rendered under
+ * (`keep06`/`keep17`) so the caller can re-assert VRAM hygiene without re-reading
+ * the segments files this pass already parsed.
+ *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
  */
 export async function scoreBook(
   bookDir: string,
   chapters: { id: number; slug: string }[],
-): Promise<void> {
+): Promise<{ keep06: boolean; keep17: boolean }> {
   const root = audioDir(bookDir);
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
@@ -280,8 +261,16 @@ export async function scoreBook(
     });
   }
 
+  /* The Qwen base tier(s) this book's chapters actually rendered under — returned
+     so `afterChapterFinalized` can re-assert VRAM hygiene (evict a tier the render
+     doesn't use) WITHOUT re-reading the segments files this pass already parsed. */
+  const rendered = {
+    keep06: chapterData.some((cd) => cd.modelKey === 'qwen3-tts-0.6b'),
+    keep17: chapterData.some((cd) => cd.modelKey === 'qwen3-tts-1.7b'),
+  };
+
   // No chapter data → nothing to do
-  if (chapterData.length === 0) return;
+  if (chapterData.length === 0) return rendered;
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
@@ -330,7 +319,7 @@ export async function scoreBook(
     if (STOCHASTIC_ENGINES.has(engine)) stochasticChars.add(charId);
   }
 
-  if (stochasticChars.size === 0) return; // No stochastic characters → nothing to score
+  if (stochasticChars.size === 0) return rendered; // No stochastic characters → nothing to score
 
   // Gather anchor-eligible vectors per character:
   // eligible iff: stochastic-configured AND per-segment renderedFallbackEngine unset/null
@@ -439,5 +428,7 @@ export async function scoreBook(
     const verdictPath = join(root, `${cd.slug}.render-integrity.json`);
     await writeVerdicts(verdictPath, verdictRows);
   }
+
+  return rendered;
 }
 

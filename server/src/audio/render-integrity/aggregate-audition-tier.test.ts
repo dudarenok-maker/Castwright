@@ -24,7 +24,7 @@ vi.mock('./audition-centroid.js', async (importOriginal) => ({
   auditionCentroid: auditionSpy,
 }));
 
-import { scoreBook, renderTiersUsed } from './aggregate.js';
+import { scoreBook } from './aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 
 // A 2-d unit vector at angle θ, padded to length 8 (matches aggregate.test.ts).
@@ -130,30 +130,38 @@ describe('scoreBook — audition renders under the chapter render tier, not a ha
   });
 });
 
-describe('renderTiersUsed — VRAM-reconcile keep flags from stamped render tiers', () => {
+describe('scoreBook — returns the render tiers used (reconcile without re-reading segments)', () => {
+  async function writeChapter(dir: string, slug: string, chapterId: number, modelKey: string): Promise<void> {
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    const rows = Array.from({ length: 3 }, (_, i) => ({
+      characterId: 'x',
+      sentenceIds: [i],
+      vec: vec(0.02 * i),
+    }));
+    await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(dir, 'audio', `${slug}.segments.json`),
+      JSON.stringify({
+        chapterId,
+        modelKey,
+        segments: rows.map((r) => ({ characterId: 'x', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+        characterSnapshots: { x: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-x', modelKey } },
+      }),
+    );
+  }
+
   it('reports keep17 only for a pure-1.7B book (so reconcile evicts a stray 0.6B)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-tiers-17-'));
-    mkdirSync(join(dir, 'audio'), { recursive: true });
-    writeFileSync(
-      join(dir, 'audio', 'ch1.segments.json'),
-      JSON.stringify({ chapterId: 1, modelKey: 'qwen3-tts-1.7b', segments: [], characterSnapshots: {} }),
-    );
-    const keep = await renderTiersUsed(dir, [{ id: 1, slug: 'ch1' }]);
+    await writeChapter(dir, 'ch1', 1, 'qwen3-tts-1.7b');
+    const keep = await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
     expect(keep).toEqual({ keep06: false, keep17: true });
   });
 
   it('keeps BOTH tiers for a genuinely mixed-tier book', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-tiers-mixed-'));
-    mkdirSync(join(dir, 'audio'), { recursive: true });
-    writeFileSync(
-      join(dir, 'audio', 'ch1.segments.json'),
-      JSON.stringify({ chapterId: 1, modelKey: 'qwen3-tts-0.6b', segments: [], characterSnapshots: {} }),
-    );
-    writeFileSync(
-      join(dir, 'audio', 'ch2.segments.json'),
-      JSON.stringify({ chapterId: 2, modelKey: 'qwen3-tts-1.7b', segments: [], characterSnapshots: {} }),
-    );
-    const keep = await renderTiersUsed(dir, [
+    await writeChapter(dir, 'ch1', 1, 'qwen3-tts-0.6b');
+    await writeChapter(dir, 'ch2', 2, 'qwen3-tts-1.7b');
+    const keep = await scoreBook(dir, [
       { id: 1, slug: 'ch1' },
       { id: 2, slug: 'ch2' },
     ]);
