@@ -2826,6 +2826,24 @@ class QwenEngine(Engine):
         )
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
+    def _read_voice_language(self, voice: str) -> str:
+        """Read just the `language` field from a designed voice's JSON
+        manifest, without touching its (potentially large) .pt embedding.
+        Falls back to DEFAULT_LANGUAGE if the manifest is absent/unreadable —
+        same fallback `_load_voice_prompt` uses, kept as a single source of
+        truth so the two never drift."""
+        _pt_path, json_path = self._voice_paths(voice)
+        lang = self.DEFAULT_LANGUAGE
+        if os.path.isfile(json_path):
+            try:
+                import json as _json
+
+                with open(json_path, encoding="utf-8") as fh:
+                    lang = _json.load(fh).get("language", lang) or lang
+            except Exception:
+                pass
+        return lang
+
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
         """Return (clone_prompt, language, cache_hit) for a designed voice.
 
@@ -2844,7 +2862,7 @@ class QwenEngine(Engine):
             prompt, lang = cached
             return prompt, lang, True
 
-        pt_path, json_path = self._voice_paths(voice)
+        pt_path, _json_path = self._voice_paths(voice)
         if not os.path.isfile(pt_path):
             # Typed so the /synthesize route can map it to a clear 409 instead
             # of the opaque 500 (#1063). The absolute path is omitted from the
@@ -2854,15 +2872,7 @@ class QwenEngine(Engine):
                 f"Qwen voice '{voice}' has not been designed yet (no cached "
                 "embedding). Design it first via POST /qwen/design-voice."
             )
-        lang = self.DEFAULT_LANGUAGE
-        if os.path.isfile(json_path):
-            try:
-                import json as _json
-
-                with open(json_path, encoding="utf-8") as fh:
-                    lang = _json.load(fh).get("language", lang) or lang
-            except Exception:
-                pass
+        lang = self._read_voice_language(voice)
         # weights_only=False: the cached prompt is a qwen_tts VoiceClonePromptItem
         # (not a plain tensor), which PyTorch 2.6+'s default safe-unpickler
         # rejects. Safe here — WE wrote this file in design_voice (trusted),
@@ -2896,11 +2906,6 @@ class QwenEngine(Engine):
             prompt, lang = cached
             return prompt, lang, True
 
-        # Load the base (0.6B) prompt to get ref_code + language.
-        base_items, lang, _ = self._load_voice_prompt(voice)
-        base_items = base_items if isinstance(base_items, list) else [base_items]
-        base_item = base_items[0]
-
         pt_path, _json_path = self._voice_paths(cache_key)
 
         # A prior process may already have derived and persisted this voice's
@@ -2910,7 +2915,11 @@ class QwenEngine(Engine):
         # every restart was forcing full re-derivation for every voice
         # touched again, regardless of an existing on-disk .pt). Reported as
         # a MISS (like the sibling 0.6B disk-load path below) — it's a real
-        # disk read with non-trivial load_ms, not a warm in-memory hit.
+        # disk read with non-trivial load_ms, not a warm in-memory hit. Only
+        # needs `lang` here — read cheaply straight from the base voice's JSON
+        # manifest rather than via _load_voice_prompt, which would also
+        # torch.load the full 0.6B .pt just to throw it away; that full load
+        # is only needed below, on the actual re-derivation path.
         if os.path.isfile(pt_path):
             try:
                 prompt = torch.load(pt_path, weights_only=False)
@@ -2921,9 +2930,16 @@ class QwenEngine(Engine):
                 # surfacing a benign race as a synth failure.
                 pass
             else:
+                lang = self._read_voice_language(voice)
                 with self._cache_lock:
                     self._prompt_cache[cache_key] = (prompt, lang)
                 return prompt, lang, False
+
+        # Cache MISS (in-memory AND on-disk) — load the base (0.6B) prompt to
+        # get ref_code + language for the re-derivation below.
+        base_items, lang, _ = self._load_voice_prompt(voice)
+        base_items = base_items if isinstance(base_items, list) else [base_items]
+        base_item = base_items[0]
 
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
