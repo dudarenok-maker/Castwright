@@ -691,7 +691,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      pass. The latter must reconcile against THIS full-cast set, never a
      finalized-chapters-only view: a sibling chapter of this same book can be
      mid-render on a tier no finished chapter used yet, and evicting it out from
-     under that in-flight render is exactly the srv-36 race (Finding 2). */
+     under that in-flight render is exactly the srv-36 race (Finding 2).
+
+     Known tradeoff (shared with this same run-start reconcile): the full cast is
+     a SUPERSET of the tiers actually rendered — a declared-but-silent Qwen cast
+     member (or one that fell back to Kokoro) still pins its tier here, so a
+     stray same-tier base (a legacy-segments audition pull, or a prior book's
+     leftover) won't be evicted. Precisely evicting only truly-unused tiers needs
+     the actual in-flight+rendered tier set, i.e. the active-generation tier
+     registry tracked in #1393 (same infra as the cross-book fix). */
   const usedQwenTiers = qwenInUse
     ? computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey)
     : { keep06: false, keep17: false };
