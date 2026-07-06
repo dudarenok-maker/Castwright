@@ -718,6 +718,34 @@ def test_resolve_codec_device_explicit_pin_passes_through() -> None:
     assert main._resolve_codec_device("cuda:1", "cuda:0") == "cuda:1"
 
 
+def test_resolve_codec_device_explicit_pin_normalizes_case_and_whitespace() -> None:
+    assert main._resolve_codec_device("CUDA:0", "cpu") == "cuda:0"
+    assert main._resolve_codec_device(" cuda:1 ", "cpu") == "cuda:1"
+
+
+def test_resolve_codec_device_auto_on_cpu_only_box_is_a_true_noop() -> None:
+    assert main._resolve_codec_device("auto", "cpu") is None
+
+
+def test_load_survives_invalid_codec_device_index(fake_qwen_runtime, monkeypatch) -> None:
+    """An out-of-range QWEN_CODEC_DEVICE (e.g. cuda:5 on a 1-GPU box) must not
+    kill the whole model load -- it's a secondary perf knob, not the main
+    device pin. Degrades to leaving the codec on CPU with a logged warning."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:5")
+    engine._device = "cuda:0"
+    import torch as fake_torch
+    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(fake_torch.cuda, "device_count", lambda: 1, raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    assert model is not None  # the load must succeed despite the bad codec pin
+    codec_model = model.model.speech_tokenizer.model
+    assert codec_model.to_calls == []  # codec never moved -- degraded to no-op
+
+
 def test_load_moves_codec_to_device_when_configured(fake_qwen_runtime, monkeypatch) -> None:
     """QWEN_CODEC_DEVICE=cuda:0 moves speech_tokenizer.model to that device
     and resyncs the cached speech_tokenizer.device -- the codec's own

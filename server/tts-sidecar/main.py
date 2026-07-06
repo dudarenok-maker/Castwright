@@ -332,8 +332,8 @@ def _resolve_codec_device(pref: str, model_device: str) -> Optional[str]:
     if p == "cpu":
         return None
     if p == "auto":
-        return model_device
-    return pref
+        return None if model_device == "cpu" else model_device
+    return p
 
 
 def _move_codec_to_device(model: Any, device: str, torch_module: Any) -> None:
@@ -1950,6 +1950,18 @@ class QwenEngine(Engine):
             ) from e
         _apply_torch_perf_flags(torch)
         _validate_cuda_index(self._device, torch)
+        codec_device = _resolve_codec_device(
+            os.environ.get("QWEN_CODEC_DEVICE", "cpu"), self._device
+        )
+        if codec_device is not None:
+            try:
+                _validate_cuda_index(codec_device, torch)
+            except ValueError as e:
+                log.warning(
+                    "QWEN_CODEC_DEVICE=%s invalid (%s) -- leaving codec on CPU.",
+                    codec_device, e,
+                )
+                codec_device = None
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
@@ -1994,11 +2006,7 @@ class QwenEngine(Engine):
                 model.device = torch.device(self._device)
             except Exception:
                 pass
-            codec_device = _resolve_codec_device(
-                os.environ.get("QWEN_CODEC_DEVICE", "cpu"), self._device
-            )
             if codec_device is not None:
-                _validate_cuda_index(codec_device, torch)
                 _move_codec_to_device(model, codec_device, torch)
             _apply_codec_chunk_size(
                 model,
