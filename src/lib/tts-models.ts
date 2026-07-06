@@ -81,6 +81,30 @@ export function ttsModelLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find((m) => m.id === key)?.label ?? EXTRA_MODEL_LABELS[key] ?? key;
 }
 
+/** The per-character tier resolution shared by `effectiveEngineLabel` and
+    `effectiveModelKey`. `ttsModelKey` is documented as "Ignored for non-Qwen
+    characters" (openapi `CastCharacter.ttsModelKey`) — synthesis's `routeFor`
+    (`synthesise-chapter.ts`) only reads it when the character actually
+    resolves to the Qwen engine, so a character since moved to another engine
+    can carry a stale leftover value that must NOT count as a pin — and must
+    NOT contribute to the Set at all (folding it in as a fallback `modelKey`
+    entry would falsely manufacture a "Mixed" tier out of a cast that's
+    uniformly on Qwen plus an unrelated non-Qwen character). A character's
+    engine resolves the same way `resolveCharacterEngine` does server-side:
+    its own `ttsEngine` when set, else the run default. A cast with no
+    Qwen-routed character at all (or an empty cast) falls back to the plain
+    run-default `modelKey`, matching the pre-override behaviour. */
+function effectiveModelKeySet(
+  characters: ReadonlyArray<{ ttsModelKey?: string | null; ttsEngine?: string | null }>,
+  modelKey: TtsModelKey,
+): Set<string> {
+  const defaultEngine = engineForModelKey(modelKey);
+  const qwenTiers = characters
+    .filter((c) => (c.ttsEngine ?? defaultEngine) === 'qwen')
+    .map((c) => c.ttsModelKey ?? modelKey);
+  return new Set<string>(qwenTiers.length > 0 ? qwenTiers : [modelKey]);
+}
+
 /** The Qwen tier(s) a book's cast will ACTUALLY render in. Per-character
     `ttsModelKey` overrides win over the run-default `modelKey` in synthesis
     (`synthesise-chapter.ts` `routeFor`), so the generation header must reflect
@@ -90,12 +114,10 @@ export function ttsModelLabel(key: TtsModelKey): string {
     the plain run-default label when nothing is pinned (byte-identical to the
     pre-override header). */
 export function effectiveEngineLabel(
-  characters: ReadonlyArray<{ ttsModelKey?: string | null }>,
+  characters: ReadonlyArray<{ ttsModelKey?: string | null; ttsEngine?: string | null }>,
   modelKey: TtsModelKey,
 ): string {
-  const anyPinned = characters.some((c) => c.ttsModelKey);
-  if (!anyPinned) return ttsModelLabel(modelKey);
-  const effective = new Set<string>(characters.map((c) => c.ttsModelKey ?? modelKey));
+  const effective = effectiveModelKeySet(characters, modelKey);
   if (effective.size === 1) return ttsModelLabel([...effective][0] as TtsModelKey);
   return `Mixed: ${[...effective]
     .map((k) => ttsModelLabel(k as TtsModelKey))
@@ -111,10 +133,10 @@ export function effectiveEngineLabel(
     downgrade). Falls back to the raw `modelKey` when the cast fans out across
     tiers (mirrors the label's "Mixed" case, which has no single key to give). */
 export function effectiveModelKey(
-  characters: ReadonlyArray<{ ttsModelKey?: string | null }>,
+  characters: ReadonlyArray<{ ttsModelKey?: string | null; ttsEngine?: string | null }>,
   modelKey: TtsModelKey,
 ): TtsModelKey {
-  const effective = new Set<string>(characters.map((c) => c.ttsModelKey ?? modelKey));
+  const effective = effectiveModelKeySet(characters, modelKey);
   return effective.size === 1 ? ([...effective][0] as TtsModelKey) : modelKey;
 }
 

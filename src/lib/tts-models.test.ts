@@ -110,4 +110,19 @@ describe('effectiveModelKey (the key behind effectiveEngineLabel, for comparison
     const cast = [{ ttsModelKey: 'qwen3-tts-1.7b' as const }, { ttsModelKey: null }];
     expect(effectiveModelKey(cast, 'qwen3-tts-0.6b')).toBe('qwen3-tts-0.6b');
   });
+
+  it('ignores a stale ttsModelKey on a character who has since moved to a non-Qwen engine', () => {
+    /* ttsModelKey is documented as "Ignored for non-Qwen characters" — a
+       character moved off Qwen can carry a leftover value from before the
+       move. Folding it into the comparison anyway reintroduces a false
+       "Mixed" tier and falls back to the raw run-default, which is exactly
+       the false-drift bug this helper exists to fix. */
+    const cast = [
+      { ttsModelKey: 'qwen3-tts-1.7b' as const, ttsEngine: 'qwen' as const },
+      { ttsModelKey: 'qwen3-tts-1.7b' as const, ttsEngine: 'qwen' as const },
+      { ttsModelKey: 'qwen3-tts-0.6b' as const, ttsEngine: 'kokoro' as const },
+    ];
+    expect(effectiveModelKey(cast, 'qwen3-tts-0.6b')).toBe('qwen3-tts-1.7b');
+    expect(effectiveEngineLabel(cast, 'qwen3-tts-0.6b')).toBe('Qwen3-TTS 1.7B');
+  });
 });
