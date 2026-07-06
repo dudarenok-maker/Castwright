@@ -871,6 +871,38 @@ def test_load_leaves_chunk_size_at_library_defaults_when_unset(fake_qwen_runtime
     assert result == {"chunk_size": 300, "left_context_size": 25}
 
 
+def test_load_floors_invalid_chunk_size_to_library_default(fake_qwen_runtime, monkeypatch) -> None:
+    """A hand-edited env value can bypass the Advanced Settings API's min:1
+    validation on QWEN_CODEC_CHUNK_SIZE -- a 0/negative value must fall back
+    to the library default (300) rather than corrupting every chunked_decode
+    call, mirroring _design_idle_ttl's floor-then-fallback-to-default idiom."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "0")
+    monkeypatch.delenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 300, "left_context_size": 25}
+
+
+def test_load_floors_negative_left_context_size_to_library_default(fake_qwen_runtime, monkeypatch) -> None:
+    """A negative QWEN_CODEC_LEFT_CONTEXT_SIZE must fall back to the library
+    default (25) rather than being passed straight through."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.delenv("QWEN_CODEC_CHUNK_SIZE", raising=False)
+    monkeypatch.setenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", "-1")
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 300, "left_context_size": 25}
+
+
 # ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──
 
 def test_voices_dir_resolves_from_env(monkeypatch, tmp_path) -> None:

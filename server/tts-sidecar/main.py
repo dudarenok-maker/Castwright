@@ -397,7 +397,25 @@ def _apply_codec_chunk_size(
     unset (library defaults apply as-is) or the decoder can't be
     resolved. Idempotent in practice: each _load_qwen_model call builds a
     fresh decoder instance, so there's no risk of wrapping an
-    already-wrapped chunked_decode and nesting partials."""
+    already-wrapped chunked_decode and nesting partials.
+
+    Floors each value to the library default when it's out of the range
+    the Advanced Settings API enforces (registry.ts min:1/min:0) -- a
+    hand-edited env value bypasses that validation, and a 0/negative
+    chunk_size would corrupt every subsequent chunked_decode call.
+    Mirrors _design_idle_ttl's floor-then-fallback-to-default idiom."""
+    if chunk_size is not None and chunk_size < 1:
+        log.warning(
+            "QWEN_CODEC_CHUNK_SIZE=%d invalid (must be >=1) -- using library default 300.",
+            chunk_size,
+        )
+        chunk_size = None
+    if left_context_size is not None and left_context_size < 0:
+        log.warning(
+            "QWEN_CODEC_LEFT_CONTEXT_SIZE=%d invalid (must be >=0) -- using library default 25.",
+            left_context_size,
+        )
+        left_context_size = None
     if chunk_size is None and left_context_size is None:
         return
     decoder = _resolve_codec_decoder(model)

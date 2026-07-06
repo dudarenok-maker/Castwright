@@ -70,6 +70,14 @@ def test_codec_decode_matches_length_cpu_vs_auto(model_attr: str, monkeypatch) -
     model_cpu = engine_cpu._load_qwen_model(model_id)
     wavs_cpu, sr_cpu = _round_trip(model_cpu, synthetic_audio)
 
+    # Release the first model before loading the second: both engines
+    # resolve to the same GPU by default (only the codec placement differs
+    # between the cpu/auto runs here), so two live full-model copies at
+    # once is a real double-residency OOM risk on a VRAM-constrained box
+    # (this repo's own history flags exactly this failure class).
+    del model_cpu
+    main._reclaim_host_and_vram()
+
     monkeypatch.setenv("QWEN_CODEC_DEVICE", "auto")
     engine_gpu = main.QwenEngine()
     engine_gpu._ensure_device_resolved()
