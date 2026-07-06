@@ -95,7 +95,7 @@ import type { FailureCode } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
-import { scoreBook } from '../audio/render-integrity/aggregate.js';
+import { scoreBook, renderTiersUsed } from '../audio/render-integrity/aggregate.js';
 
 export const generationRouter = Router();
 
@@ -121,6 +121,19 @@ export async function afterChapterFinalized(
      8GB box (#1029). The pass is non-fatal (.catch) and self-cleaning (.finally);
      a stale verdict file just gets overwritten on the next chapter's pass. */
   const run = scoreBook(ctx.bookDir, ctx.chapters)
+    .then(async () => {
+      /* Hardening (2026-07-06): re-assert Qwen tier hygiene AFTER the audition
+         pass. The run-start `reconcileResidentQwenTiers` fires once; the between-
+         chapters Option-B audition can transiently pull a base tier the render
+         doesn't use (a legacy segments file with no stamped modelKey → the 0.6B
+         audition fallback), which would then linger co-resident with the 1.7B
+         synth (the 8GB-card OOM). Reconcile from the tiers the book ACTUALLY
+         rendered under — only evicts tiers NOT in use, so the in-use tier stays
+         warm; a mixed-tier book keeps both. Best-effort; skipped when nothing
+         stamped a tier. */
+      const keep = await renderTiersUsed(ctx.bookDir, ctx.chapters);
+      if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
+    })
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
     .finally(() => scoringInFlight.delete(ctx.bookId));

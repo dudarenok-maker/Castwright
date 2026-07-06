@@ -37,7 +37,7 @@ import {
   CUTOFFS,
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter } from './audition-centroid.js';
-import { canonicalModelKeyForEngine } from '../../tts/model-keys.js';
+import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -57,6 +57,12 @@ interface SegmentsEntry {
 
 interface SegmentsFileView {
   chapterId?: number;
+  /** Render tier stamped by finalize-chapter-write (ChapterSegmentsFile.modelKey)
+   *  — the model this chapter's audio was ACTUALLY rendered under. The Option-B
+   *  audition centroid renders under this SAME tier (see Phase 2 below) so its
+   *  embeddings are comparable to the in-book anchors AND it never pulls a 0.6B
+   *  base in co-resident with a 1.7B render. Absent on legacy pre-stamp files. */
+  modelKey?: TtsModelKey;
   segments?: SegmentsEntry[];
   characterSnapshots?: Record<string, {
     voiceEngine?: string;
@@ -171,6 +177,29 @@ async function readSegmentsFile(path: string): Promise<SegmentsFileView | null> 
   }
 }
 
+/** The Qwen base tier(s) a book's chapters were ACTUALLY rendered under, read
+    from each chapter's stamped segments.json `modelKey`. Used by the post-scoring
+    VRAM re-assert (routes/generation.ts `afterChapterFinalized`) so a tier the
+    render doesn't use can't linger resident after the between-chapters audition
+    pass — a belt-and-suspenders on the run-start `reconcileResidentQwenTiers`
+    for a stray mid-run 0.6B load (e.g. a legacy segments file with no stamped
+    modelKey → the 0.6B audition fallback). Returns both-false when no chapter
+    stamped a Qwen tier (nothing to reconcile). */
+export async function renderTiersUsed(
+  bookDir: string,
+  chapters: { id: number; slug: string }[],
+): Promise<{ keep06: boolean; keep17: boolean }> {
+  const root = audioDir(bookDir);
+  let keep06 = false;
+  let keep17 = false;
+  for (const ch of chapters) {
+    const seg = await readSegmentsFile(join(root, `${ch.slug}.segments.json`));
+    if (seg?.modelKey === 'qwen3-tts-0.6b') keep06 = true;
+    if (seg?.modelKey === 'qwen3-tts-1.7b') keep17 = true;
+  }
+  return { keep06, keep17 };
+}
+
 // ── Key for joining embedding rows to segment rows ─────────────────────────
 
 function segKey(characterId: string, sentenceIds: number[]): string {
@@ -212,6 +241,9 @@ export async function scoreBook(
     embRows: EmbeddingRow[];
     segsByKey: Map<string, SegmentsEntry>;
     snapshots: Record<string, SnapshotView>;
+    /** Render tier this chapter's audio was synthesised under (segments.json
+     *  `modelKey`), used to render the Option-B audition on the SAME tier. */
+    modelKey?: TtsModelKey;
   };
 
   const chapterData: ChapterData[] = [];
@@ -239,6 +271,7 @@ export async function scoreBook(
       embRows: embResult.rows,
       segsByKey,
       snapshots: segFile.characterSnapshots ?? {},
+      modelKey: segFile.modelKey,
     });
   }
 
@@ -261,9 +294,16 @@ export async function scoreBook(
       // Collect voice info for Option-B (first chapter's snapshot wins).
       if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
-        // Only stochastic engines can reach Option-B — safe to call canonicalModelKeyForEngine
-        // with a placeholder request key (unused for local engines).
-        const modelKey = canonicalModelKeyForEngine(engine, 'qwen3-tts-0.6b');
+        // Render the Option-B audition under the SAME tier this chapter's audio was
+        // ACTUALLY rendered in (segments.json `modelKey`) — NOT a hardcoded 0.6B.
+        // canonicalModelKeyForEngine returns a Qwen request key VERBATIM, so the old
+        // 'qwen3-tts-0.6b' placeholder forced EVERY too-thin/bimodal Qwen character's
+        // audition (K=12 full synths) onto the 0.6B base: co-resident with a 1.7B
+        // render (8GB-card OOM), and embedded under a model whose speaker space isn't
+        // comparable to the 1.7B-rendered anchors (a corrupt centroid). Legacy
+        // segments files with no stamped modelKey fall back to 0.6B.
+        const renderKey: TtsModelKey = cd.modelKey ?? 'qwen3-tts-0.6b';
+        const modelKey = canonicalModelKeyForEngine(engine, renderKey);
         voiceInfoByChar.set(charId, {
           voiceName: snap.resolvedVoiceName,
           modelKey,
