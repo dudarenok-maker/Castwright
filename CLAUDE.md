@@ -141,9 +141,10 @@ Design rationale:
 - `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Lands in pre-push `verify` AND label-gated PR CI (`verify.yml`, Ubuntu → `e2e/linux` baselines), so visual regressions surface at PR time rather than only at release.
 - `npm run test:fast` — frontend + server only (matches the pre-commit hook).
 - `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
-- `npm run verify` — full battery: typecheck + all tests + e2e + build (matches the pre-push hook).
+- `npm run verify` — full battery: typecheck + all tests + e2e + build. No longer the pre-push default (see "Commit gate") — run manually when you want the full local battery (e.g. before a release cut).
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
 - `npm run verify:fast` — fast tests only (alias for `test:fast`) — pre-commit gate.
+- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs, plus `test:sidecar` scope-gated to `server/tts-sidecar/**`. This is the new pre-push default (see "Commit gate") — the fast, branch-scoped smoke check; cloud `verify.yml` is now the actual enforcement gate for everything else.
 - `npm run build` — production build into `dist/`.
 - `npm run apk:companion` — build the Android companion APK and drop it at
   `companion/castwright-companion.apk` (the path `GET /api/companion/apk` serves;
@@ -233,7 +234,9 @@ Harnesses (five tiers):
   invoked via `npm run test:e2e`. Browser-level golden paths + on-ramp for
   visual regression (`toHaveScreenshot()`). See `docs/features/37-e2e-playwright.md`.
 - Top-level `npm run test:all` runs the four unit/integration harnesses.
-  `npm run verify` adds typecheck + e2e + build on top (pre-push gate).
+  `npm run verify` adds typecheck + e2e + build on top (no longer the
+  pre-push default — see "Commit gate" — but still the full local battery
+  when you want to run it).
 
 Canonical end-to-end manuscript for full-pipeline regression:
 `server/src/__fixtures__/the-coalfall-commission.md` — _The Coalfall Commission_,
@@ -294,7 +297,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 4. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
 5. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR. Once `main`'s required-status-check ruleset for it is wired (a one-time, user-run setup step — see `docs/features/235-model-routing-review-gates.md`), a missing link blocks merge; until then it only fails a visible check.
-6. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
+6. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
 7. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 8. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 9. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory `code-review` pass — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
@@ -425,16 +428,22 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   belt-and-suspenders; see
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
   bypass the local hook intentionally with `git push --no-verify`). Then, unless
-  the push is docs-only (below), runs `npm run verify` — typecheck + all tests
-  + e2e + build. Refuses the push if any step fails.
+  the push is docs-only (below), runs `npm run verify:fast:branch` — a fast,
+  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, test,
+  test:server, build, plus test:sidecar when the diff touches
+  `server/tts-sidecar/**`). Refuses the push if any in-scope step fails. This
+  replaced running the full `npm run verify` battery on every push (see
+  [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md))
+  — the heavy legs (e2e, server-slow, scripts, test:pinokio) now run in the
+  cloud instead, which is now the required, enforcing gate (see below).
 
-**Docs-only pushes skip `npm run verify` entirely** — `scripts/is-docs-only-push.mjs`
+**Docs-only pushes skip `npm run verify:fast:branch` entirely** — `scripts/is-docs-only-push.mjs`
 checks the pushed commits' changed-file set against the same doc-glob test as
 CONTRIBUTING.md's "Doc-only PR fast-path" (`docs/**`, root `*.md`, `.github/*.md`);
-a doc-only diff has no runtime surface for tests/build/e2e to exercise, so
-paying the ~15-min battery locally is wasted time/CPU on top of the CI-side
-skip. Conservative by design: any uncertainty (git error, unresolvable
-merge-base) runs the full battery rather than guessing.
+a doc-only diff has no runtime surface for tests/build to exercise, so paying
+even the fast local check is wasted time/CPU. Conservative by design: any
+uncertainty (git error, unresolvable merge-base) runs the full selected-steps
+battery rather than guessing.
 
 `npm run verify` is cache-aware (see
 [docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
@@ -447,34 +456,45 @@ core views) — see [docs/features/archive/46-lint-format-a11y.md](docs/features
 for the rulesets, the autofix-baseline shape, and the rationale for each
 relaxed rule.
 
-**GitHub CI is OPT-IN (plan 215)**: the `verify.yml` battery does **not** run
-automatically on PRs. The local pre-push hook already runs the FULL `npm run
-verify` battery on every push, so a per-PR cloud run is redundant spend on
-Actions minutes. Push freely — every PR push bills **0 CI minutes** by default.
-Run the cloud battery on demand when you want a clean-room check: add the
-**`run-ci`** label to the PR (fires one run; re-runs on each new push while the
-label is on), or dispatch it manually (Actions tab → Verify → Run workflow, or
-`gh workflow run verify.yml --ref <branch>`). A manual dispatch runs the full
-battery; a labeled PR runs only the **scope-filtered** legs the diff touched
-(plan 103 — `git diff` against the PR base; a frontend-only PR skips server
-tests, a server-only PR skips Playwright e2e + the frontend unit suite, a root
-`package.json`/`package-lock.json` change runs every leg).
+**GitHub CI is OPT-OUT (2026-07-06, superseding plan 215's opt-in design)**:
+the `verify.yml` battery runs automatically on every PR by default and is a
+**required status check** on `main` — it actually blocks merge on red. This
+replaces the prior opt-in/label-gated design, which existed to control
+Actions-minute cost while the repo was private; the repo is now public, so
+standard-runner Actions minutes are free and uncapped, and that rationale no
+longer applies. Local pre-push now only runs a fast, branch-scoped subset
+(`verify:fast:branch`) — this cloud run is the real enforcement gate for
+everything else, not redundant insurance. Every leg is still
+**scope-filtered** to what the PR's diff actually touched (plan 103 — `git
+diff` against the PR base; a frontend-only PR skips server tests, a
+server-only PR skips Playwright e2e + the frontend unit suite, a root
+`package.json`/`package-lock.json` change runs every leg) — that scoping is
+now about not running tests that can't fail, not about saving money. A
+manual dispatch (Actions tab → Verify → Run workflow, or `gh workflow run
+verify.yml --ref <branch>`) still runs the full unscoped battery, useful for
+a clean-room check off a non-PR ref.
 
 What still runs automatically: `pr-title-lint.yml` and `pr-issue-link.yml` on
 every PR, `app.yml` on `apps/android/**` changes (the only automated coverage
 for the Flutter companion — no local hook runs `flutter analyze`/`test`),
-`release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` on its weekly Sunday cron. **Every release tag
-now runs COMPLETE cross-platform verification before it publishes** (plan 215):
-`release.yml` gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile`
-(Ubuntu) + `verify:quick`+build on macOS **and** Windows — a red leg on any
-deployer OS blocks the public-beta release, so you no longer fire cross-OS by
-hand before a release. `cross-os.yml` (`workflow_dispatch` + weekly cron on
-`main`) stays as the between-releases pulse + ad-hoc cross-OS/mobile run. The
-doc-only `paths-ignore` fast-path (plan 101) is a second layer — a `run-ci`-labeled
-PR whose files are all docs still won't spin up the battery.
-See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md),
-[103](docs/features/103-ci-cost-reduction.md), and
-[archive/101](docs/features/archive/101-docs-only-ci-skip.md).
+`release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` on its **twice-weekly**
+(Wednesday + Sunday) cron. **Every release tag now runs COMPLETE
+cross-platform verification before it publishes** (plan 215): `release.yml`
+gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile` (Ubuntu)
++ `verify:quick`+build on macOS **and** Windows — a red leg on any deployer
+OS blocks the public-beta release, so you no longer fire cross-OS by hand
+before a release. `cross-os.yml` (`workflow_dispatch` + twice-weekly cron on
+`main`) stays as the between-releases pulse + ad-hoc cross-OS/mobile run.
+Docs-only PRs still complete `verify.yml` in seconds rather than deadlocking
+the required check — every leg's own scope condition is false for a
+docs-only diff, so the job just does env setup and reports green (see
+[docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
+for why `paths-ignore` was deliberately removed rather than kept).
+See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md)
+and [103](docs/features/103-ci-cost-reduction.md) for the superseded opt-in
+design's history/rationale, and
+[docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
+for the current design.
 
 Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in
@@ -528,17 +548,15 @@ a missing link blocks merge; until that setup is done, a missing link only
 fails a visible, non-blocking check.
 Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
 
-**Requesting a CI run on a PR (plan 215).** CI is opt-in (see "Commit gate"
-above): push freely — drafts and ready PRs alike bill **0 Actions minutes**.
-The local pre-push hook is the real gate and runs the full `npm run verify`
-battery on every push. When you want a clean-room cloud check (typically right
-before merge, or to confirm something you couldn't verify locally), add the
-**`run-ci`** label to the PR or dispatch `verify.yml` manually — the labeled
-run is insurance, not the gate. (Draft status no longer affects CI cost, so the
-old draft-by-default dance is unnecessary; still open as draft if you simply
-want to signal work-in-progress.) Rationale + measurements:
+**Requesting a clean-room CI run on a PR.** CI now runs automatically on
+every PR push (see "Commit gate" above) and is the real, required gate —
+you don't need to request it. Dispatch `verify.yml` manually (Actions tab →
+Verify → Run workflow, or `gh workflow run verify.yml --ref <branch>`) only
+when you want an unscoped, full-battery run off a non-PR ref. Rationale +
+history of the prior opt-in design:
 [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md)
-and [215](docs/features/215-ci-label-gated-verify.md).
+and [215](docs/features/215-ci-label-gated-verify.md); current design:
+[docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md).
 
 ### Parallel agents
 
@@ -559,11 +577,16 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
   verified once — not N separate PRs.** Reconcile the branches via the
   [`integration/<date>` pattern](CONTRIBUTING.md#reconciliation-pattern): fresh
   branch off `main`, merge each agent branch one at a time, run `npm run verify`
-  between merges. Open that integration branch as a **draft** PR and only
-  `gh pr ready` once the whole reconciliation is locally green — so the round
-  bills ONE verify run instead of one (or several) per agent branch. This is the
-  largest CI-cost lever alongside draft-by-default; see
-  [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
+  between merges. Open that integration branch as a **draft** PR while
+  reconciling — draft is a work-in-progress signal, not a cost lever now that
+  cloud `verify.yml` runs automatically (and posts a required status) on every
+  push regardless of draft state — and `gh pr ready` once the whole
+  reconciliation is locally green, so reviewers see one settled PR per round
+  instead of N in-flight ones. See
+  [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
+  for why the opt-in/draft-batching cost framing in
+  [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md)
+  is now historical.
 
 ### Planning agents
 
@@ -596,9 +619,13 @@ Additional one-time setup:
 
 Working practice:
 
-- Before committing anything non-trivial, run `npm run verify` — same battery
-  as pre-push. Catching failures in the same turn beats catching them at
-  push time.
+- Default loop for non-trivial work: finalize the change → run
+  `npm run verify:fast:branch` (same branch-scoped check pre-push now runs)
+  → open the PR → cloud `verify.yml` (required, opt-out) and the mandatory
+  code-review pass run independently → merge once both are green. Run the
+  full `npm run verify` manually only when you specifically want the full
+  local battery (e.g. before a release cut, or debugging something scope-
+  filtering might be hiding).
 - `npm run verify:fast` matches pre-commit; `npm run verify:quick` is `test:all` without typecheck/build/e2e.
 - **Do not use `--no-verify` to bypass.** If a hook fails:
   1. **Triage first.** Categorise the failure as **related to my change** vs. **pre-existing** (i.e. the same test would fail on `main`). A `git stash && git checkout main && <run the failing test>` round-trip settles it in 30 seconds.

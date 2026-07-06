@@ -11,6 +11,15 @@ owner: null
 > URL surface: none (CI / process)
 > OpenAPI ops: none
 
+> **Update 2026-07-06:** superseded by
+> [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](../superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
+> — the opt-in/label-gated design this doc describes flips to opt-out (CI
+> runs on every PR by default) and the check becomes required on `main`'s
+> ruleset, now that the repo is public and Actions minutes are free/uncapped
+> (the reason this doc's opt-in design existed no longer applies). This
+> doc's per-run cost-reduction mechanisms (scope-gated legs, one-job design)
+> remain in effect and accurate.
+
 ## Benefit / Rationale
 
 The local pre-push husky hook already runs the FULL `npm run verify` battery on
