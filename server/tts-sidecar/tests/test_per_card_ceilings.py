@@ -25,11 +25,45 @@ def test_free_floor_env_override(monkeypatch):
 
 
 def test_check_per_card_ceilings_flags_floor_breach(monkeypatch):
+    """Floor fires on a card torch is NOT actively managing (reserved below
+    _TORCH_ACTIVE_RESERVED_MB) — the ORT/CT2-only guard the floor exists for.
+    The breach now carries the breaching reading + limit so the trip log names
+    real numbers (was "0MB crossed ... 0MB")."""
     monkeypatch.setenv("SIDECAR_VRAM_FREE_FLOOR_MB", "1024")
     tm = _fake_torch_with_reserved(free_mb=500, reserved_mb=100)  # free < floor
     ledger = main.DeviceLedger(tm)
     breach = main._check_per_card_ceilings(ledger, tm)
-    assert breach == {"uuid": "GPU-0", "idx": 0, "reason": "driver_free_floor"}
+    assert breach == {
+        "uuid": "GPU-0", "idx": 0, "reason": "driver_free_floor",
+        "metric_mb": 500.0, "threshold_mb": 1024.0,
+    }
+
+
+def test_check_per_card_ceilings_floor_skipped_on_torch_active_card(monkeypatch):
+    """The 2026-07-06 recycle storm: torch actively reserves on the card, so a
+    routine 1.7B batch peak legitimately drives driver-free below the floor.
+    The floor must NOT flag it — OOM protection there is the reserved ceiling
+    (and the queue-level storm breaker otherwise pauses the whole run)."""
+    monkeypatch.setenv("SIDECAR_VRAM_FREE_FLOOR_MB", "1024")
+    tm = _fake_torch_with_reserved(free_mb=500, reserved_mb=6000)  # free < floor, torch active
+    ledger = main.DeviceLedger(tm)
+    assert main._check_per_card_ceilings(ledger, tm) is None
+
+
+def test_check_per_card_ceilings_floor_applies_when_torch_unreadable(monkeypatch):
+    """torch reserved unreadable for the card (ORT/CT2-only deployment) → the
+    card is treated as non-torch and the floor still guards it — the guard's
+    original purpose survives the scoping fix."""
+    monkeypatch.setenv("SIDECAR_VRAM_FREE_FLOOR_MB", "1024")
+    tm = _fake_torch_with_reserved(free_mb=500, reserved_mb=100)
+
+    def boom(i):
+        raise RuntimeError("no torch context on this card")
+
+    tm.cuda.memory_reserved = boom
+    ledger = main.DeviceLedger(tm)
+    breach = main._check_per_card_ceilings(ledger, tm)
+    assert breach is not None and breach["reason"] == "driver_free_floor"
 
 
 def test_check_per_card_ceilings_flags_reserved_ceiling(monkeypatch):
@@ -37,7 +71,11 @@ def test_check_per_card_ceilings_flags_reserved_ceiling(monkeypatch):
     tm = _fake_torch_with_reserved(free_mb=2000, reserved_mb=15700)  # reserved >= 0.98*16000
     ledger = main.DeviceLedger(tm)
     breach = main._check_per_card_ceilings(ledger, tm)
-    assert breach == {"uuid": "GPU-0", "idx": 0, "reason": "reserved_vram_ceiling"}
+    assert breach is not None
+    assert breach["reason"] == "reserved_vram_ceiling"
+    assert breach["uuid"] == "GPU-0" and breach["idx"] == 0
+    assert breach["metric_mb"] == 15700.0
+    assert breach["threshold_mb"] == main._card_reserved_ceiling_mb(16000.0)
 
 
 def test_check_per_card_ceilings_none_when_healthy(monkeypatch):
