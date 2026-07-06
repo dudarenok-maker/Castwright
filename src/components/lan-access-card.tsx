@@ -10,7 +10,9 @@ export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   const [manageHint, setManageHint] = useState(false); // true on 401 (viewing from a phone)
   const [label, setLabel] = useState('');
-  const [session, setSession] = useState<{ url: string; expiresAt: number } | null>(null);
+  const [session, setSession] = useState<
+    { url: string; friendlyUrl?: string; expiresAt: number } | null
+  >(null);
   const [err, setErr] = useState<string | null>(null);
   const [certState, setCertState] = useState<
     { status: 'idle' } | { status: 'loading' } | { status: 'success'; hosts: string[] } | { status: 'error'; message: string }
@@ -65,6 +67,16 @@ export function LanAccessCard() {
           {session && (
             <div className="mt-4">
               <PairingQr payload={session.url} expiresAt={session.expiresAt} onRegenerate={authorize} />
+              {session.friendlyUrl && (
+                <a
+                  href={session.friendlyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-block text-sm text-magenta hover:underline"
+                >
+                  Open pairing link on castwright.local
+                </a>
+              )}
             </div>
           )}
           <ul className="mt-6 divide-y divide-ink/8">

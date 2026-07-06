@@ -106,6 +106,42 @@ describe('LanAccessCard', () => {
     expect(screen.getByTestId('mock-qr')).toBeInTheDocument();
   });
 
+  it('shows a "castwright.local" pairing link when the session includes a friendlyUrl', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockResolvedValue({
+      ...PAIR_SESSION,
+      friendlyUrl: 'https://castwright.local/#/pair?c=ABC',
+    });
+
+    render(<LanAccessCard />);
+
+    fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
+
+    await waitFor(() => expect(screen.getByTestId('mock-qr')).toBeInTheDocument());
+
+    const link = screen.getByRole('link', { name: /open pairing link on castwright\.local/i });
+    expect(link).toHaveAttribute('href', 'https://castwright.local/#/pair?c=ABC');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('does not show the pairing link when the session has no friendlyUrl (dev:lan, or a live-but-unreachable start:lan)', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockResolvedValue(PAIR_SESSION); // no friendlyUrl field
+
+    render(<LanAccessCard />);
+
+    fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
+
+    await waitFor(() => expect(screen.getByTestId('mock-qr')).toBeInTheDocument());
+
+    expect(
+      screen.queryByRole('link', { name: /open pairing link on castwright\.local/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it('shows "manage from desktop" note on 401 from listDevices (no crash)', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
 

@@ -12,6 +12,7 @@
 - **A more honest word on hardware.** The About page and the "Will it run on my machine?" panel now say a 6 GB graphics card gets you started, with 8 GB as the sweet spot — matching what you'll find on castwright.ai.
 - **One address, no port to remember.** When you're listening from another device on your network, `castwright.local` now works exactly as typed — no `:8443` to type or mistype.
 - **Renew your network certificate without leaving the app.** A new button lets you refresh your computer's local certificate on the spot, so a new device or a new network trusts it right away.
+- **Pairing your own computer for `castwright.local` is now one click — no phone required.**
 - **The Books page no longer scrolls sideways on a phone.** A long library folder path could push the page wider than your screen; it now tucks in neatly with an ellipsis instead.
 - **A last sliver of sideways scroll on the Books page, gone.** Even with a short folder path, the page could still creep a couple of pixels past the edge of a phone screen; it now sits flush.
 - **The Model Manager finally has its own page — and its own manual.** It's split out of Admin, with every setting explained in plain terms and pictured section by section. And the wiki's Advanced Settings page now shows you all eleven groups of dials, not just the first — plus eleven more corners of the guide that finally show you exactly what you'll see before you click.

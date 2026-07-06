@@ -34,6 +34,7 @@ import { shouldSpawnMdnsResponder } from './mdns-owner.js';
 export interface PortForwarderHandle {
   server: net.Server;
   close: () => Promise<void>;
+  isBound: () => boolean;
 }
 
 /** True only for the start:lan shape (lanHttps AND NODE_ENV=production) —
@@ -84,6 +85,7 @@ export function startPortForwarder(
      open keep-alive HTTPS connection through this forwarder would otherwise
      hang close() (and index.ts's shutdown() Promise.all) indefinitely. */
   const openClientSockets = new Set<net.Socket>();
+  let bound = false;
 
   const server = createServerFn((client) => {
     openClientSockets.add(client);
@@ -155,9 +157,13 @@ export function startPortForwarder(
   });
 
   server.listen(listenPort, '0.0.0.0');
+  server.once('listening', () => {
+    bound = true;
+  });
 
   return {
     server,
+    isBound: () => bound,
     close: () =>
       new Promise<void>((resolvePromise) => {
         server.close(() => resolvePromise());

@@ -19,7 +19,7 @@ owner: null
 
 ## Architectural impact
 
-- **New seams:** `server/src/mdns-owner.ts` (`shouldSpawnMdnsResponder`, `spawnMdnsResponder`); `scripts/mdns-responder.mjs` (`primaryLanIp`, `buildAnswer`); `buildCertHosts()` export on `scripts/setup-lan-certs.mjs`.
+- **New seams:** `server/src/mdns-owner.ts` (`shouldSpawnMdnsResponder`, `spawnMdnsResponder`); `scripts/mdns-responder.mjs` (`primaryLanIp`, `buildAnswer`); `buildCertHosts()` export on `scripts/setup-lan-certs.mjs`; `server/src/lan-port-forwarder.ts`'s `PortForwarderHandle.isBound()` and `server/src/mdns-owner.ts`'s `MdnsResponderHandle.isAlive()` (real liveness checks, combined via `app.get('isFriendlyHostnameReachable')` in `server/src/routes/devices.ts`) — added by the one-click pairing-link feature; see `docs/superpowers/specs/2026-07-06-lan-pairing-friendly-hostname-link-design.md`.
 - **Invariants preserved:** `dev:lan` / `start:lan` LAN-IP URLs are unaffected and remain the fallback in every failure mode (responder bind failure, stale cert, Windows LAN peer). Plain `npm run dev` / `npm run start` are untouched.
 - **Migration story:** n/a — no persisted data shape changes.
 - **Reversibility:** revert the `dev:lan` script line and the `shouldSpawnMdnsResponder` gate in `server/src/index.ts`; both hostnames simply stop resolving and the existing LAN-IP flow is unaffected. No cleanup needed elsewhere — a stale cert SAN entry or an unused `multicast-dns` dependency is harmless.
@@ -58,6 +58,13 @@ No e2e coverage — this is dev/LAN tooling, not shipped product behavior reacha
     the app keeps serving uninterrupted throughout (no dropped requests), the button shows the
     new host list on success, and a **fresh** browser tab opened afterward shows no certificate
     warning — without restarting the app.
+11. From the same desktop session (loopback, e.g. `https://localhost:8443`), open **Admin →
+    LAN access** and click **Authorize a device**. Expected: alongside the existing pairing QR,
+    an **"Open pairing link on castwright.local"** link now appears. Click it (opens a new
+    tab). Expected: the new tab loads `PairShell`'s "Authorize this browser?" confirmation at
+    `https://castwright.local`; click **Authorize**; the tab redirects to `#/` and the library
+    loads with no further pairing step. Confirm the link is absent under `dev:lan` (QR-only,
+    unchanged).
 
 ## Out of scope
 

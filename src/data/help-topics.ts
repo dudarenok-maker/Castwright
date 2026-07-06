@@ -206,6 +206,22 @@ export const HELP_TOPICS: HelpTopic[] = [
       'on the same network.',
   },
   {
+    id: 'lan-token-pairing',
+    title: 'The app loads at castwright.local but the library won\'t — "Missing or invalid LAN access token"',
+    body:
+      'This means `LAN_AUTH_TOKEN` is set in `server/.env` — every non-loopback request then needs ' +
+      'to pair first, and `castwright.local` / `castwright.dev.local` / a raw LAN IP all count as ' +
+      'non-loopback, even from a browser on the desktop machine itself. Only `https://localhost:8443` ' +
+      'skips pairing — the quickest fix for same-machine testing. To authorize an actual phone or ' +
+      'tablet, open Admin → LAN access and click "Authorize a device" for a pairing QR, then scan it ' +
+      'with that device\'s camera. For a different desktop browser tab on the same machine, the LAN Access ' +
+      'card also shows a one-click "Open pairing link on castwright.local" link right next to the QR — ' +
+      'clicking it opens a new tab straight to the authorization confirmation, no camera needed. This link ' +
+      'only appears when the friendly hostname is confirmed reachable (not under dev:lan, where QR-only ' +
+      'shows instead). If you never meant to require pairing, remove `LAN_AUTH_TOKEN` from `server/.env` ' +
+      'and restart — the guard is opt-in and off by default.',
+  },
+  {
     id: 'where-files-live',
     title: 'Where are my books and audio on disk?',
     body:

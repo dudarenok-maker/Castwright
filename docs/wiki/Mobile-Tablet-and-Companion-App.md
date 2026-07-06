@@ -14,9 +14,18 @@ trusted certificate, so a phone's browser doesn't show a security warning.
 **Admin → LAN access** is where you authorize a browser device once that
 mode is running — see the LAN access card on the [Admin](Admin) page.
 
+**The friendly `castwright.local` / `castwright.dev.local` hostnames still
+need pairing.** These addresses (and any raw LAN IP) always go through the
+same LAN entry point as a phone would — even when you type them into a
+browser on the desktop machine itself — so the app loads but the library
+fails with `401: Missing or invalid LAN access token` until that browser is
+paired via the steps below. `https://localhost:8443` is the one address
+exempt from this: it's recognised as loopback and skips pairing entirely, so
+it's the quickest way to check the app locally without pairing anything.
+
 ![Admin page — LAN access card with Authorize a device and the resulting pairing QR](images/mobile-tablet-and-companion-app/lan-access-qr.png)
 
-Click **Authorize a device** (a device name is optional — it defaults to "Device") and a pairing QR appears right below the card, ready for a phone's camera.
+Click **Authorize a device** (a device name is optional — it defaults to "Device") and a pairing QR appears right below the card, ready for a phone's camera. When testing from a desktop browser tab on the same machine, a one-click "Open pairing link on castwright.local" link also appears next to the QR — clicking it opens a new tab with the authorization confirmation directly, no camera needed (available only when the friendly hostname is confirmed reachable).
 
 The one-time root-certificate step is
 `npm run install:cert-mobile` — it generates a per-LAN-IP certificate, prints

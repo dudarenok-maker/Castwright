@@ -293,6 +293,19 @@ async function main(): Promise<void> {
     if (shouldSpawnPortForwarder(lanHttps)) {
       portForwarderHandle = startPortForwarder(LAN_HTTPS_PORT);
     }
+
+    /* castwright-local-pairing-link — expose a single combined liveness check
+       for the friendly-hostname pairing link (server/src/routes/devices.ts),
+       via app.set()/app.get() — the same idiom this file already uses for
+       'lanHttpsServer' just above (see that comment), avoiding a circular
+       import: devices.ts is mounted by app.js, which this file imports, so
+       devices.ts importing back from here would be circular. This runs on
+       EVERY boot (LAN-HTTPS or not) since listenerCallback is shared by both
+       app.listen() branches — in non-LAN-HTTPS mode both handles are null,
+       so the getter is still set, just permanently false, not unset. */
+    app.set('isFriendlyHostnameReachable', () =>
+      mdnsResponderHandle?.isAlive() === true && portForwarderHandle?.isBound() === true,
+    );
   };
 
   /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
