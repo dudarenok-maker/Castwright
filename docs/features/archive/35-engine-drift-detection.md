@@ -236,6 +236,32 @@ D. **Existing wrong stamps are repaired by
    First run (2026-06-07) corrected 2 stamps (The Floodmark CH12/13, narrator-only
    Qwen chapters mis-stamped Kokoro) and set 355 breakdowns library-wide.
 
+## Per-book effective-tier reconciliation (false-drift fix, 2026-07-06)
+
+A second false-drift source, sibling to the 2026-06-07 per-character fix
+above but on the OTHER side of the comparison: the drift check compared each
+chapter's stamp against the raw run-default `modelKey` (the global model
+picker's value), not the tier the book's cast actually renders at. Per-
+character `ttsModelKey` overrides win over the run-default in synthesis
+(`synthesise-chapter.ts` `routeFor`) — a book whose whole cast is pinned to
+Qwen3-TTS 1.7B renders every chapter at 1.7B regardless of what the raw
+`modelKey` says. The generation header already accounted for this
+(`effectiveEngineLabel`, added for the analogous header-label bug), but the
+drift banner, per-row caption, and bulk-regen dialog did not: a cast pinned
+uniformly to 1.7B against a stale 0.6B run-default read every chapter as
+"generated with a different engine" and reported the stale 0.6B as the
+"current engine" — read by the user as an unexplained downgrade that never
+happened.
+
+Fix: `effectiveModelKey()` (`src/lib/tts-models.ts`), a key-returning sibling
+to `effectiveEngineLabel()`, resolves the single tier the whole cast agrees
+on (or falls back to the raw `modelKey` when the cast fans out across
+tiers — same "Mixed" case the label already handles). `generation.tsx`
+resolves this once as `activeEngineKey` and uses it everywhere drift is
+compared or displayed — the `driftedChapters` filter, the top-of-view
+banner, the per-row caption, and the bulk-regen confirm dialog — instead of
+the raw `modelKey`.
+
 ## Modal fidelity contract (drift-report-fidelity, 2026-05-19)
 
 The per-character Drift Report modal (`src/modals/drift-report.tsx`) was

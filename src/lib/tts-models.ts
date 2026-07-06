@@ -103,6 +103,21 @@ export function effectiveEngineLabel(
     .join(' + ')}`;
 }
 
+/** The single model key `effectiveEngineLabel` resolves to, for callers that
+    need a comparable key rather than a display string — namely engine-drift
+    detection (generation.tsx), which was comparing recorded chapter audio
+    against the raw run-default `modelKey` and so flagged a whole cast pinned
+    to 1.7B as "drifted" against a stale 0.6B default (misreported as a
+    downgrade). Falls back to the raw `modelKey` when the cast fans out across
+    tiers (mirrors the label's "Mixed" case, which has no single key to give). */
+export function effectiveModelKey(
+  characters: ReadonlyArray<{ ttsModelKey?: string | null }>,
+  modelKey: TtsModelKey,
+): TtsModelKey {
+  const effective = new Set<string>(characters.map((c) => c.ttsModelKey ?? modelKey));
+  return effective.size === 1 ? ([...effective][0] as TtsModelKey) : modelKey;
+}
+
 /* Short, engine-level labels (not model-level) for the mixed-engine chapter
    caption — "Kokoro (1), Qwen (6)". The model labels ("Kokoro v1") are too long
    to repeat per engine in a compact row caption. */
