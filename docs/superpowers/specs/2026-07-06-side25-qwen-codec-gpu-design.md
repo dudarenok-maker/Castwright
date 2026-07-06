@@ -47,6 +47,20 @@ mechanical gap: explicitly move `speech_tokenizer.model` and resync the
 cached `speech_tokenizer.device` right after the existing `inner.to(...)`
 call.
 
+**Verified only for the 12Hz decode path** (the hot path this issue targets):
+traced `decode()` → `Qwen3TTSTokenizerV2Model.decode()` → `decoder.
+chunked_decode()` end to end — no hardcoded `.cpu()` calls anywhere in that
+chain except the correct final output marshalling
+(`w.detach().cpu().numpy()`). The 25Hz encode path (`Qwen3TTSTokenizerV1*`,
+used for VoiceDesign ref-audio encode/xvector/ref-mel) has more device
+juggling (`tokenizer.py:340–352`) and was **not** traced the same way — Phase
+0's implementation task includes tracing it before claiming the fix is
+uniform across all three load call-sites. Similarly, whether
+`Qwen3TTSModel.from_pretrained` (the wrapper's own `from_pretrained`,
+`inference/qwen3_tts_model.py`) does anything with device placement for the
+tokenizer internally has not been read — Phase 0 confirms this by reading
+that file, not by assumption.
+
 ## Design
 
 ### Placement fix
@@ -75,19 +89,66 @@ VoiceDesign) since they all route through `_load_qwen_model`.
   avoid confusion with the pre-existing `auto` grammar.
 
 - **`QWEN_CODEC_CHUNK_SIZE`** / **`QWEN_CODEC_LEFT_CONTEXT_SIZE`**
-  (`tts.qwen.codecChunkSize` / `tts.qwen.codecLeftContextSize`): passed into
-  the existing `chunked_decode(chunk_size, left_context_size)` call.
-  Defaults 300/25 (the library's own defaults — unchanged unless set).
+  (`tts.qwen.codecChunkSize` / `tts.qwen.codecLeftContextSize`): defaults
+  300/25 (the library's own defaults — unchanged unless set).
+
+  **Wiring correction (caught in adversarial review):** the reachable call
+  path is `speech_tokenizer.decode()` → `Qwen3TTSTokenizerV2Model.decode()`
+  → `self.decoder.chunked_decode(audio_codes.transpose(1, 2))`
+  (`modeling_qwen3_tts_tokenizer_v2.py:1015`) — called with **no
+  arguments**, so `chunk_size`/`left_context_size` always fall back to
+  `chunked_decode`'s own hardcoded defaults (300/25). Neither wrapper
+  `decode()` accepts or threads these params. There is no "existing call"
+  to pass them into. The only way to make them configurable is to bind them
+  onto the resolved decoder instance, the same way `_maybe_compile_codec`
+  already binds a compiled `forward` (`main.py:265–286`):
+  `_resolve_codec_decoder(model)` already resolves `st.model.decoder`; at
+  load time, when either knob differs from the library default, replace
+  `decoder.chunked_decode` with
+  `functools.partial(decoder.chunked_decode, chunk_size=N,
+  left_context_size=M)` bound onto the instance (mirrors the existing
+  `decoder.forward` swap pattern, so no new pattern is introduced).
+
+  **Interaction with the side-19 compile wrapper**: `chunked_decode` calls
+  `self(codes_chunk)` per chunk, i.e. `decoder.forward` — whichever forward
+  is currently installed (eager or the `QWEN_COMPILE_CODEC`-compiled one via
+  `_codec_compiled_for_batch`). Binding a chunk-size partial onto
+  `chunked_decode` and swapping `forward` are two different attributes on
+  the same object, so they compose without conflict: the chunk-size wrap
+  controls the outer chunking loop, the forward-swap controls what runs
+  inside each chunk. Called out explicitly since side-19 is officially
+  "superseded," not deleted — its scaffolding (`_maybe_compile_codec`,
+  `_codec_compiled_for_batch`) stays live in the load/batch paths and this
+  fix must not silently break it.
+
   Only meaningful when the codec is on GPU (bounds activation peak);
-  no-ops on CPU.
+  no-ops (well, harmlessly re-binds to the same defaults) on CPU.
 
 All three: `apply: restart-sidecar`, `risk: high` (matches the existing
 `tts.qwen.device` entry).
 
-No new VRAM-semaphore weight: `GPU_WEIGHT_QWEN` already models the qwen
-op's total VRAM cost as one number; moving the codec to GPU just makes
-that number bigger for that op. Its registry help text gets a note that
-`QWEN_CODEC_DEVICE=auto` requires re-tuning `GPU_WEIGHT_QWEN` upward.
+**VRAM protection — corrected framing (caught in adversarial review):** the
+original draft claimed "no new VRAM-semaphore weight is needed... just
+re-tune `GPU_WEIGHT_QWEN` upward," which is self-contradictory (it says no
+change, then describes a change) and wrong regardless — `GPU_WEIGHT_QWEN`
+gates **concurrent-op admission** (how many ops may run at once), not a
+single op's internal activation peak. Retuning it does nothing to stop one
+qwen batch's codec decode from OOMing alone on an otherwise-idle card. The
+actual protection against that is `QWEN_CODEC_CHUNK_SIZE` (above) — smaller
+chunks bound the per-op activation peak directly. These are two separate,
+complementary levers and the spec should not conflate them:
+- `GPU_WEIGHT_QWEN` / the VRAM semaphore: protects against **concurrent**
+  ops (e.g. Qwen + Kokoro both resident) collectively exceeding the card.
+  Operators enabling `QWEN_CODEC_DEVICE=auto` on a tight card should
+  re-tune this upward to reflect the qwen op's now-larger footprint — this
+  remains true, just stated as its own thing, not as "instead of" chunk
+  sizing.
+- `QWEN_CODEC_CHUNK_SIZE`: protects against a **single** op's peak. Phase 1
+  measures the actual peak at the default 300 on the 8GB box (`bench-tts.py
+  --mem-sample` with `QWEN_CODEC_DEVICE=auto`) and only lowers the default
+  if that measurement shows it's needed — per the earlier scoping decision,
+  the knob ships regardless, but its *default value* is decided by
+  measurement, not assumed safe.
 
 ### Error handling
 
@@ -104,13 +165,31 @@ consistent device across `.model` and the cached `.device`.
   `QWEN_DEVICE`/`_resolve_torch_device` tests) covering `QWEN_CODEC_DEVICE`
   parsing (`cpu`/`auto`/`cuda:N`), the default (`cpu`), and OOM-fallback-to-
   CPU via a mocked `.to()` raising `torch.cuda.OutOfMemoryError`.
-- **Quality gate**: no new golden fixture. `test_instruct_golden.py`
-  (`npm run test:golden-audio` Suite A) already blesses absolute tolerances
-  (ECAPA identity cosine, per-emotion loudness, batched RTF) against a
-  CPU-decoded baseline. Re-running it with `QWEN_CODEC_DEVICE=auto` is the
-  quality-neutral check — fp32-on-GPU vs fp32-on-CPU should reproduce
-  closely enough to pass the existing tolerances. A failure here is a real
-  finding, not a fixture gap.
+- **Quality gate — scoped honestly (corrected in adversarial review):**
+  `test_instruct_golden.py` (`npm run test:golden-audio` Suite A) covers
+  **only** the 1.7B-Base live-instruct 12Hz decode path, with one voice and
+  one passage, at tolerances calibrated for on-box sampling variance
+  (identity cosine headroom ~0.10, loudness ±4dB) — coarse enough to catch
+  gross breakage, not fine enough to certify subtle numerical parity. This
+  is a real regression net for the one path it covers, not proof of
+  quality-neutrality overall, and the design does not claim otherwise.
+  Re-running it with `QWEN_CODEC_DEVICE=auto` is still the right first
+  check — a failure is a real finding — but it leaves the 0.6B-Base and
+  VoiceDesign/25Hz encode paths with **zero** golden coverage, since no
+  existing fixture touches them.
+  - **New smoke coverage** (sidecar pytest, not golden-gated): for the
+    0.6B-Base and VoiceDesign paths, add a cheap correctness check — decode
+    a short fixed input on both `QWEN_CODEC_DEVICE=cpu` and `=auto`, assert
+    output length/sample-rate match and no exception — gated the same way
+    other real-model sidecar tests are (skips cleanly without weights).
+    This is a smoke check (catches "it crashes" / "wildly wrong length"),
+    explicitly not a quality-parity claim the way the golden suite is for
+    the 1.7B path.
+  - No new golden *fixture* is added — the gap on the other two paths is
+    covered by the smoke check above, not by extending the golden suite.
+    If the on-box acceptance run (Phase 3) surfaces an audible quality
+    difference on either uncovered path, that becomes its own follow-up
+    (a new golden fixture), not something this spec pre-builds speculatively.
 - **Measurement**: reuse `bench-tts.py --code2wav-share` (codec share of
   batch time) and `--mem-sample` (committed-RAM plateau) as-is — both
   already exist and are what the issue's numbers were measured with.
@@ -154,6 +233,8 @@ enough on their own:
 - `server/.env.example` — new knobs + rollout guidance comment.
 - `server/tts-sidecar/scripts/bench-tts.py` — already instrumented
   (`--code2wav-share`, `--mem-sample`), no changes needed.
+- `server/tts-sidecar/tests/` — new device-knob parsing/fallback cases +
+  the 0.6B/VoiceDesign codec-placement smoke check.
 - `docs/tts-performance.md` — acceptance-run results land here.
 
 ## Depends on / relates to
