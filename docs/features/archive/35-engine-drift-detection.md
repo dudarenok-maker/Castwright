@@ -262,6 +262,20 @@ compared or displayed — the `driftedChapters` filter, the top-of-view
 banner, the per-row caption, and the bulk-regen confirm dialog — instead of
 the raw `modelKey`.
 
+Both helpers share a `effectiveModelKeySet()` builder that ALSO filters each
+character by resolved engine (`ttsEngine ?? <the run default's engine>`,
+mirroring server's `resolveCharacterEngine`) before folding in its
+`ttsModelKey` — `ttsModelKey` is "Ignored for non-Qwen characters" (openapi
+`CastCharacter.ttsModelKey`), so a character since moved off Qwen can carry a
+stale leftover tier from before the move. An earlier version of this fix
+(caught in review before merge) folded that stale value in as a fallback
+`modelKey` entry regardless of engine, which manufactured a false "Mixed"
+tier — and fell back to the raw run-default — for a cast that was otherwise
+uniformly on Qwen. Non-Qwen characters (and their `ttsModelKey`, however
+stale) are now excluded from the tier computation entirely; a cast with no
+Qwen-routed character at all falls back to the plain run-default, unchanged
+from the pre-override behaviour.
+
 ## Modal fidelity contract (drift-report-fidelity, 2026-05-19)
 
 The per-character Drift Report modal (`src/modals/drift-report.tsx`) was
