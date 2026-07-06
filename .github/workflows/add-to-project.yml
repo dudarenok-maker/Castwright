@@ -1,0 +1,43 @@
+name: Add issue to project
+
+# Auto-adds every new (or reopened / transferred-in) issue to the GitHub
+# Projects v2 "Castwright Kanban" board, so nothing ever sits off-board where
+# the planning views (docs/BACKLOG.md via `backlog:sync`) and the kanban views
+# can't see it. This replaces relying solely on the Project's *built-in*
+# "Auto-add to project" workflow, which had been leaking issues onto the floor
+# (e.g. #1386, #1377). See docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md.
+#
+# GitHub offers no way to *block* creating an issue that lacks a project — this
+# is the achievable guarantee: the issue is on the board the instant it exists.
+#
+# REQUIRED SECRET — ADD_TO_PROJECT_PAT:
+#   The default GITHUB_TOKEN CANNOT write a *user-owned* Projects v2 board, so
+#   this needs a personal access token with project write access, stored as the
+#   repo secret `ADD_TO_PROJECT_PAT`:
+#     - Classic PAT: scopes `repo` + `project`, OR
+#     - Fine-grained PAT: repository "Issues: read" on Castwright + account
+#       "Projects: read and write".
+#   Add it at: repo Settings → Secrets and variables → Actions → New secret.
+#   Without it this job fails red on the next issue — a loud signal, not a
+#   silent leak like the built-in workflow.
+
+on:
+  issues:
+    types: [opened, reopened, transferred]
+
+permissions:
+  contents: read
+
+jobs:
+  add-to-project:
+    name: Add issue to Castwright Kanban
+    runs-on: ubuntu-latest
+    # Tiny single-step job; cap explicitly so a hung run can't bill the
+    # 360-min default (same rationale as pr-issue-link.yml).
+    timeout-minutes: 5
+    steps:
+      - name: Add to project
+        uses: actions/add-to-project@v2.0.0
+        with:
+          project-url: https://github.com/users/dudarenok-maker/projects/1
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
