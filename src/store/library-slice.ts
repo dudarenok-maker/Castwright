@@ -113,6 +113,9 @@ export const selectAllTags = createSelector(
 export const LANGUAGE_LABELS: Record<string, string> = {
   en: 'English',
   ru: 'Русский',
+  de: 'Deutsch',
+  es: 'Español',
+  fr: 'Français',
 };
 
 export function languageLabel(code: string): string {

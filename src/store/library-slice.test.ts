@@ -227,6 +227,9 @@ describe('librarySlice — language filter (fe-16)', () => {
   it('languageLabel maps known codes and falls back to the raw code', () => {
     expect(languageLabel('en')).toBe('English');
     expect(languageLabel('ru')).toBe(LANGUAGE_LABELS.ru);
-    expect(languageLabel('de')).toBe('de');
+    expect(languageLabel('de')).toBe(LANGUAGE_LABELS.de);
+    expect(languageLabel('es')).toBe(LANGUAGE_LABELS.es);
+    expect(languageLabel('fr')).toBe(LANGUAGE_LABELS.fr);
+    expect(languageLabel('pt')).toBe('pt');
   });
 });

@@ -534,7 +534,7 @@ export function AccountView() {
           </section>
         </SettingsAccordion>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 px-6">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
             {saving ? 'Saving…' : 'Save changes'}
           </PrimaryButton>

@@ -59,7 +59,7 @@ export function LanAccessCard() {
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <input
               value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Device name"
-              className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink min-h-[44px] sm:min-h-0"
+              className="px-4 py-2.5 rounded-full border border-ink/15 bg-white text-sm text-ink min-h-[44px] sm:min-h-0"
             />
             <PrimaryButton variant="dark" onClick={authorize} icon={false}>Authorize a device</PrimaryButton>
           </div>
@@ -98,7 +98,7 @@ export function LanAccessCard() {
               type="button"
               onClick={regenerateCert}
               disabled={certState.status === 'loading'}
-              className="px-3 py-1.5 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0 disabled:opacity-50"
+              className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0 disabled:opacity-50"
             >
               {certState.status === 'loading' ? 'Regenerating…' : 'Regenerate certificate'}
             </button>
