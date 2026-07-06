@@ -81,6 +81,17 @@ VoiceDesign) since they all route through `_load_qwen_model`.
 
 ### Knobs (new registry entries, `tts-engine` group, next to `tts.qwen.device`)
 
+The Admin "Advanced Settings" UI is fully registry-driven — `GET
+/api/config` (`server/src/routes/config.ts:62–65`) serves `GROUPS` plus
+every entry in `KNOBS` generically, and the frontend renders whatever it's
+given. Adding these three entries to `server/src/config/registry.ts` (below)
+*is* making them appear in Advanced Settings — there's no separate frontend
+wiring step. They'll surface under the existing "Voice engine & device"
+group, alongside `tts.qwen.device`/`tts.qwen.attnImpl`. (`docs/wiki/
+Advanced-Settings.md`'s per-group documentation completeness is tracked
+separately under #1318/#1319 — an ongoing wiki-content effort unrelated to
+this feature, not a blocking dependency here.)
+
 - **`QWEN_CODEC_DEVICE`** (`tts.qwen.codecDevice`): `cpu` (default — today's
   behavior) | `auto` (mirror this Qwen instance's already-resolved
   `self._device`) | explicit `cuda`/`cuda:N` (pin regardless of where the
