@@ -109,6 +109,56 @@ describe('spawnMdnsResponder', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('isAlive() is true right after a normal spawn', () => {
+    const spawnFn = vi.fn(() => makeFakeChild());
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+    });
+    expect(handle!.isAlive()).toBe(true);
+  });
+
+  it('isAlive() flips false after a graceful bind-failure exit(0) — the exact case round 2 of adversarial review caught missing', () => {
+    const child = makeFakeChild();
+    const spawnFn = vi.fn(() => child);
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+    });
+    child.emit('exit', 0, null);
+    expect(handle!.isAlive()).toBe(false);
+  });
+
+  it('isAlive() flips false after an unexpected nonzero exit', () => {
+    const child = makeFakeChild();
+    const spawnFn = vi.fn(() => child);
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+    });
+    child.emit('exit', 1, null);
+    expect(handle!.isAlive()).toBe(false);
+  });
+
+  it('isAlive() stays at its prior value across an intentional kill() (the killedIntentionally guard skips the flip entirely, matching the existing no-warn behavior for this case)', async () => {
+    const child = makeFakeChild();
+    // Stub .kill so the non-win32 kill() branch (child.kill('SIGTERM')) has something
+    // to call — makeFakeChild() is a bare EventEmitter with no .kill method otherwise,
+    // matching the existing "kill() on non-win32 sends SIGTERM directly" test's setup.
+    const killSpy = vi.fn();
+    (child as unknown as { kill: typeof killSpy }).kill = killSpy;
+    const spawnFn = vi.fn(() => child);
+    const handle = spawnMdnsResponder('castwright.local', '/repo', {
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      warn: vi.fn(),
+      platform: 'linux',
+    });
+    expect(handle!.isAlive()).toBe(true);
+    await handle!.kill();
+    child.emit('exit', null, 'SIGTERM');
+    expect(handle!.isAlive()).toBe(true);
+  });
+
   it('kill() on win32 shells out to taskkill /T /F /PID', async () => {
     const child = makeFakeChild(4242);
     const spawnFn = vi.fn(() => child);

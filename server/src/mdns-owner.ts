@@ -37,6 +37,7 @@ import { resolve } from 'node:path';
 export interface MdnsResponderHandle {
   child: ChildProcess;
   kill: () => Promise<void>;
+  isAlive: () => boolean;
 }
 
 /** True only for the start:lan shape (lanHttps AND NODE_ENV=production) —
@@ -88,6 +89,7 @@ export function spawnMdnsResponder(
   }
 
   let killedIntentionally = false;
+  let alive = true;
 
   child.once('error', (err) => {
     warn(`[mdns] responder for ${hostname} reported an error:`, err);
@@ -97,17 +99,30 @@ export function spawnMdnsResponder(
      "Cannot find module" if the responder script or a dependency is
      missing) exits ASYNCHRONOUSLY with a nonzero code — without this, that
      failure is silent: the caller holds a handle to an already-dead child
-     and is never told. Only a clean exit(0) (the responder's own graceful
-     bind-failure path — see scripts/mdns-responder.mjs) and
-     killedIntentionally (an explicit kill() call — checked first, so it
-     wins regardless of what exit code/signal the OS reports for it;
-     Windows' `taskkill /F` reports a NONZERO code (commonly 1) while POSIX
-     SIGTERM reports code=null+signal=SIGTERM) do NOT warn. Everything else
-     warns, including a null code we did NOT ask for — e.g. an OS OOM-kill,
-     an external `pkill`, or a SIGSEGV crash, all of which Node reports as
-     code=null with `signal` set. */
+     and is never told. Only killedIntentionally (an explicit kill() call —
+     checked first, so it wins regardless of what exit code/signal the OS
+     reports for it; Windows' `taskkill /F` reports a NONZERO code (commonly
+     1) while POSIX SIGTERM reports code=null+signal=SIGTERM) skips both the
+     `alive` flip and the warning below.
+
+     `alive` flips false on ANY non-intentional exit, code 0 included —
+     unlike the warn condition below, which stays gated to `code !== 0`.
+     scripts/mdns-responder.mjs's only voluntary exit path reachable from
+     this caller's spawn (which always passes --name) is a graceful
+     multicast-bind failure, and that path uses process.exit(0) — so
+     code===0 here does NOT mean "fine, still serving," it means "gave up
+     and already logged its own message." Treating it as still-alive was a
+     Critical bug caught by round 2 of adversarial review on the design
+     spec (docs/superpowers/specs/2026-07-06-lan-pairing-friendly-hostname-link-design.md):
+     it let a dead responder keep answering isFriendlyHostnameReachable()
+     with "true," handing a friendlyUrl to a user with no other way to
+     pair. The warn() call stays code-gated because the graceful path
+     already logs its own message from inside mdns-responder.mjs itself —
+     warning here too would just be a redundant second line, not a
+     correctness issue. */
   child.once('exit', (code, signal) => {
     if (killedIntentionally) return;
+    alive = false;
     if (code !== 0) {
       warn(
         `[mdns] responder for ${hostname} exited unexpectedly (code=${code}${signal ? `, signal=${signal}` : ''})`,
@@ -117,6 +132,7 @@ export function spawnMdnsResponder(
 
   return {
     child,
+    isAlive: () => alive,
     /* Returns a Promise that resolves once the kill attempt has genuinely
        completed, mirroring spawn-sidecar.ts's killTree() pattern — so a
        caller (server/src/index.ts's shutdown()) can await it before
