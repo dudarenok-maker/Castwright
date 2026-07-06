@@ -152,6 +152,26 @@ describe('resolveVoiceStatus — Qwen lifecycle', () => {
     });
   });
 
+  it('reads "Needs voice" for a non-reused, non-linked character whose only match is a stale id-fallback Voice (fe-48)', () => {
+    /* Regression (fe-48, #1359): `findVoiceForCharacter`'s id-fallback (Voice.id ===
+       Character.id, used when the character has no explicit `voiceId`) can return a
+       library Voice that is stale — e.g. left behind after this exact character's own
+       design fields were reset/cleared, without the Voice record being retired. Unlike
+       the "reused" case below (trustworthy because of an explicit `voiceId` link or
+       `matchedFrom` reuse provenance), a character with NEITHER carries no signal that
+       the id-fallback match is actually CURRENT, so its own (now-empty) override fields
+       must be the only source of truth — this must read "Needs voice", not "Designed". */
+    const c = char({}); // no overrideTtsVoices, no voiceId, no matchedFrom
+    const staleVoice = voice({
+      id: 'c1', // coincidentally shares id with the character (the fallback match)
+      ttsVoice: { provider: 'qwen', name: 'qwen-x', description: 'Stale design' },
+    });
+    expect(resolveVoiceStatus(c, staleVoice, QWEN).lifecycle).toEqual({
+      label: 'Needs voice',
+      color: 'warning',
+    });
+  });
+
   it('reads "Needs voice" for a reused voice whose matched Qwen Voice has an EMPTY name', () => {
     /* Regression: the matched Voice resolves to the qwen provider but carries no
        designed name (voiceId never linked, or the referenced Voice was lost to a
