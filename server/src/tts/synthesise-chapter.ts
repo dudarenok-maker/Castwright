@@ -836,6 +836,17 @@ export async function synthesiseChapter(
      a pass-through. */
   const langCode = normaliseBookLanguage(bookLanguage);
 
+  /* fs-56: per-character 1.7B Quality-tier — when the character carries a
+     ttsModelKey and routes to Qwen, ELEVATE to it over `defaultModelKey`.
+     `higherQwenTier` means a stale/never-elevated character tier can never
+     downgrade a run explicitly started at 1.7B (side-11 follow-up) — the
+     per-character field only ever raises the bar. Shared by both routeFor
+     branches below so the precedence rule can't drift between them. */
+  const resolveCharQwenModelKey = (c: CastCharacter, defaultModelKey: TtsModelKey): TtsModelKey =>
+    c.ttsModelKey
+      ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), defaultModelKey)
+      : defaultModelKey;
+
   /* Per-character engine resolver (plan 108). Returns the engine + its
      provider + modelKey for a given character. When the caller supplied
      `resolveForEngine`, each character routes to its own engine's provider;
@@ -846,23 +857,12 @@ export async function synthesiseChapter(
     const charEngine = resolveCharacterEngine(c, engine);
     if (resolveForEngine && charEngine !== engine) {
       const r = resolveForEngine(charEngine);
-      /* fs-56: per-character 1.7B Quality-tier — when the character carries
-         a ttsModelKey and routes to Qwen, ELEVATE to it over the run's
-         default. `higherQwenTier` means a stale/never-elevated character
-         tier can never downgrade a run explicitly started at 1.7B (side-11
-         follow-up) — the per-character field only ever raises the bar. */
-      const charModelKey =
-        charEngine === 'qwen' && c.ttsModelKey
-          ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), r.modelKey)
-          : r.modelKey;
+      const charModelKey = charEngine === 'qwen' ? resolveCharQwenModelKey(c, r.modelKey) : r.modelKey;
       return { engine: charEngine, provider: r.provider, modelKey: charModelKey };
     }
-    /* Same elevate-only override for the same-engine path (character on the
-       run-default engine but still carrying an explicit ttsModelKey for Qwen). */
-    const charModelKey =
-      charEngine === 'qwen' && c.ttsModelKey
-        ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), modelKey)
-        : modelKey;
+    /* Same-engine path (character on the run-default engine but still
+       carrying an explicit ttsModelKey for Qwen). */
+    const charModelKey = charEngine === 'qwen' ? resolveCharQwenModelKey(c, modelKey) : modelKey;
     return { engine: charEngine, provider, modelKey: charModelKey };
   };
 

@@ -3120,6 +3120,51 @@ describe('fs-56 — per-character 1.7B Quality-tier model key routing', () => {
     expect(calls[0].modelKey).toBe('qwen3-tts-1.7b');
   });
 
+  /* Same elevate-only guarantee, but through the CROSS-engine routeFor branch
+     (resolveForEngine) — the character's own ttsEngine differs from the run's
+     default engine (Kokoro narrator, Qwen side character), which resolveGroup
+     routes via `resolveForEngine` instead of the top-level `modelKey`/`provider`.
+     Both branches must apply the same never-downgrade rule (workflow-review
+     finding: they were previously covered by only one of the two branches). */
+  it('never downgrades a 1.7B override for a stale-0.6B character on the resolveForEngine (cross-engine) path', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'sidekick',
+        name: 'Sidekick',
+        ttsEngine: 'qwen',
+        ttsModelKey: 'qwen3-tts-0.6b',
+        overrideTtsVoices: { qwen: { name: 'qwen-sidekick' } },
+      },
+    ];
+    const calls: Array<{ modelKey: string }> = [];
+    const qwenProvider: TtsProvider = {
+      async synthesize(input) {
+        calls.push({ modelKey: input.modelKey });
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+    const kokoroProvider: TtsProvider = {
+      async synthesize() {
+        throw new Error('kokoro should not be called in this test');
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'sidekick', 'A line.')],
+      cast,
+      provider: kokoroProvider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+      resolveForEngine: (e) =>
+        e === 'qwen'
+          ? { provider: qwenProvider, modelKey: 'qwen3-tts-1.7b' }
+          : { provider: kokoroProvider, modelKey: 'kokoro-v1' },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].modelKey).toBe('qwen3-tts-1.7b');
+  });
+
   it('routes a Qwen character without ttsModelKey through the default 0.6B model key', async () => {
     const cast: CastCharacter[] = [
       {
