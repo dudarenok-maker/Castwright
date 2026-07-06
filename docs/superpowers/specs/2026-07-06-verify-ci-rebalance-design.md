@@ -197,7 +197,15 @@ every commit on the current branch since it diverged from local `main`.
 This is the right basis for a pre-push-time check, where "staged" is
 usually empty or meaningless (commits already exist). Falls back to
 running everything if the merge-base/diff git calls fail, mirroring the
-existing tolerant-on-uncertainty behavior for `--scope-staged`.
+existing tolerant-on-uncertainty behavior for `--scope-staged`. Distinct
+from that failure case: a **successful** merge-base diff that comes back
+*empty* (branch fully merged into local `main`, run directly on `main`, or
+a branch with no commits yet) must NOT be treated the same as "git
+failed" — it's a legitimate zero-file diff, and the existing scope-filter
+semantics would correctly skip every step for it. That's fine given
+`verify.yml` is now the required backstop (§3), but it should be a
+deliberate, documented behavior of `branchDiffFiles`, not an accidental
+side effect an implementer discovers later.
 
 New npm script:
 
@@ -220,9 +228,13 @@ respectively) exactly the same way — an earlier draft of this spec
 incorrectly described them as "always run regardless of relevance," which
 would have defeated the point of the whole redesign (`test:server` is one
 of only two `RETRIABLE_POOL_STEPS`, i.e. the exact fork-pool-crash-prone
-leg the Problem section is about). `lint`/`typecheck`/`test:hooks`/
-`config:check` have broad-enough globs that they'll still fire on nearly
-every code PR — that's expected and fine, they're cheap.
+leg the Problem section is about). Of the remaining steps, `lint` (`**/*.
+{ts,tsx,js,jsx,cjs,mjs}`) and `typecheck` (`src/**`, `server/src/**`) have
+broad-enough globs that they'll fire on nearly every code PR — that's
+expected and fine, they're cheap. `test:hooks` and `config:check` are
+actually narrow (`scripts/tests/*.test.mjs` / `.husky`+validator, and
+`server/src/config/*.ts` + the two extraFiles respectively) and correctly
+skip on PRs outside their scope — narrow-but-correct, not "broad."
 
 This means on a branch that touches `server/tts-sidecar/**`, `test:sidecar`
 auto-runs and blocks the push on failure — real, automatic local coverage
@@ -317,6 +329,19 @@ to twice weekly: add Wednesday 02:00 UTC alongside the existing Sunday
   (or actually root-causing the original 2-3h/day incident, which this spec
   deliberately did not chase) may still be worth doing if it bites again on
   that path.
+- **Also open, narrower than the above:** on any server- or full-stack-
+  touching branch (not just sidecar work), `verify:fast:branch` still runs
+  `test:server` — one of only two `RETRIABLE_POOL_STEPS`, i.e. the exact
+  fork-pool-crash-prone leg named in the Problem section — plus `test` and
+  `build`, whenever that branch's diff actually touches their scopes (which
+  is the common case for backend/full-stack work). Scope-gating removes
+  these from *irrelevant* pushes, and the steps run sequentially rather
+  than concurrently, so the residual load per push is real but smaller
+  than today's full parallel battery — but this spec does not claim, and
+  should not be read as claiming, that a routine server-touching push can
+  no longer reproduce any version of the original contention. If the
+  incident recurs there, that's a signal to revisit this leg specifically,
+  not evidence the whole redesign failed.
 - `verify:fast:branch`'s `--scope-branch` diffs against local `main`, not
   `origin/main` — assumes the developer's local `main` is reasonably
   current. This is a materially bigger deal now than an earlier draft
