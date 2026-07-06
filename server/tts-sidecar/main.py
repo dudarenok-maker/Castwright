@@ -3981,6 +3981,12 @@ def _card_reserved_ceiling_mb(total_mb: float) -> float:
 # there — it read a routine 1.7B batch peak as OOM and hard-recycled mid-chapter
 # every few minutes (all 6 recycles on 2026-07-06; the recycle-storm breaker
 # then paused the queue). Torch-managed cards keep the reserved-VRAM ceilings.
+# KNOWN TRADEOFF (review 2026-07-06): non-torch VRAM growth (ORT/CT2) on a
+# torch-ACTIVE card is now unguarded — the reserved ceiling is blind to it and
+# the floor is skipped. Accepted: on a torch-active card "free < floor" is the
+# NORMAL steady state, so the floor could never guard that mix without the very
+# false-positive storm this fixes; the co-resident ORT engines are also small
+# and bounded (Kokoro ~1 GB, ASR int8 ~150–400 MB, both idle-evicted).
 _TORCH_ACTIVE_RESERVED_MB = 256.0
 
 
@@ -4187,7 +4193,11 @@ def _schedule_restart_exit(
     _write_restart_breadcrumb(card, metric_label)
     grace_ms = _drain_grace_ms()
     log.warning(
-        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB%s — "
+        # "breached ... limit" is deliberately direction-NEUTRAL: reserved-VRAM
+        # trips are metric ABOVE ceiling, driver_free_floor trips are free
+        # BELOW floor — the old "crossed the restart ceiling" wording read
+        # backwards for the floor case (review finding, 2026-07-06).
+        "sidecar %s %.0fMB breached the restart limit %.0fMB%s — "
         "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
         "server respawns a fresh process. Completed chapters are skipped (srv-16); "
         "the in-flight chapter finishes here or is re-rendered by the server "
