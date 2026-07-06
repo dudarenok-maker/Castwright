@@ -167,4 +167,30 @@ describe('scoreBook — returns the render tiers used (reconcile without re-read
     ]);
     expect(keep).toEqual({ keep06: true, keep17: true });
   });
+
+  it('flags an ELEVATED per-character tier even when the chapter run-default is lower', async () => {
+    // Run default 0.6B, but a per-character 1.7B pin → that char rendered on 1.7B.
+    // keep17 MUST be true or the post-scoring reconcile evicts a warm in-use tier.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-tiers-elevated-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    const rows = Array.from({ length: 3 }, (_, i) => ({
+      characterId: 'x',
+      sentenceIds: [i],
+      vec: vec(0.02 * i),
+    }));
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(dir, 'audio', 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        modelKey: 'qwen3-tts-0.6b', // run default
+        segments: rows.map((r) => ({ characterId: 'x', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+        characterSnapshots: {
+          x: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-x', modelKey: 'qwen3-tts-1.7b' }, // elevated
+        },
+      }),
+    );
+    const keep = await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(keep).toEqual({ keep06: false, keep17: true });
+  });
 });

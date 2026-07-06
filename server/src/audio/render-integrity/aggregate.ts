@@ -263,11 +263,19 @@ export async function scoreBook(
 
   /* The Qwen base tier(s) this book's chapters actually rendered under — returned
      so `afterChapterFinalized` can re-assert VRAM hygiene (evict a tier the render
-     doesn't use) WITHOUT re-reading the segments files this pass already parsed. */
-  const rendered = {
-    keep06: chapterData.some((cd) => cd.modelKey === 'qwen3-tts-0.6b'),
-    keep17: chapterData.some((cd) => cd.modelKey === 'qwen3-tts-1.7b'),
-  };
+     doesn't use) WITHOUT re-reading the segments files this pass already parsed.
+     Resolved PER-CHARACTER (snapshot.modelKey, same source the audition uses),
+     falling back to the chapter run-default — so an elevated Qwen char in a lower-
+     default book keeps its tier flagged and reconcile never evicts a warm in-use
+     tier (matches the run-start `computeUsedQwenTiers`, which is also per-char). */
+  const rendered = { keep06: false, keep17: false };
+  for (const cd of chapterData) {
+    for (const snap of Object.values(cd.snapshots)) {
+      const tier = snap.modelKey ?? cd.modelKey;
+      if (tier === 'qwen3-tts-0.6b') rendered.keep06 = true;
+      if (tier === 'qwen3-tts-1.7b') rendered.keep17 = true;
+    }
+  }
 
   // No chapter data → nothing to do
   if (chapterData.length === 0) return rendered;
