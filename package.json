@@ -55,6 +55,7 @@
     "verify:quick": "npm run test:all",
     "verify:fast": "node scripts/verify-cache.mjs --steps test:hooks,test,test:server",
     "verify:fast:scoped": "node scripts/verify-cache.mjs --steps test:hooks,test,test:server --scope-staged",
+    "verify:fast:branch": "node scripts/verify-cache.mjs --steps lint,typecheck,config:check,test:hooks,test,test:server,build,test:sidecar --scope-branch",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "stats": "node scripts/code-stats.mjs",
     "backlog:sync": "node scripts/backlog-sync.mjs",

@@ -27,9 +27,9 @@ import { selectBindHost } from './bind-host.js';
 installCrashHandlers();
 
 import { createServer as createHttpsServer } from 'node:https';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app } from './app.js';
 import { lanExposureWarning } from './lan-safety.js';
 import { enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
@@ -60,10 +60,7 @@ import {
   registerActiveSupervisor,
   type SidecarSupervisor,
 } from './tts/sidecar-supervisor.js';
-import {
-  enforceSingleSidecarOwner,
-  releaseSidecarOwnership,
-} from './tts/sidecar-owner.js';
+import { enforceSingleSidecarOwner, releaseSidecarOwnership } from './tts/sidecar-owner.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 import {
   shouldSpawnMdnsResponder,
@@ -77,55 +74,6 @@ import {
 } from './lan-port-forwarder.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-ensureWorkspace();
-/* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
-   see real values from disk before the first request lands. Fire-and-forget:
-   a missing or malformed file falls through to defaults inside
-   readUserSettings(). */
-void readUserSettings();
-
-/* One-shot wipe-and-fresh for change-logs written before the
-   generation_run_complete rollup landed. The pre-collapse middleware wrote
-   one event per chapter_complete tick, and books that ran a few times
-   accumulated 200+ near-identical rows. Migration renames the legacy
-   file to `.legacy.json` (kept for recovery) and replaces the live file
-   with `[]`. Fire-and-forget: never blocks listen, never crashes on a
-   malformed file. */
-void migrateLegacyChangeLogs()
-  .then((r) => {
-    if (r.migrated.length > 0) {
-      console.log(
-        `[changelog] migrated ${r.migrated.length} book(s) to a fresh log ` +
-          `(originals saved alongside as change-log.legacy.json).`,
-      );
-    }
-  })
-  .catch((err) => console.warn('[changelog] migration skipped:', err));
-
-/* Plan 20 — sibling fsck for the rollback-preservation pair. The
-   preserve helper (`workspace/preserve-previous-audio.ts`) renames two
-   files (audio + segments) sequentially; a crash between them leaves a
-   half-preserved state. On startup we walk every book's audio root,
-   promote any `.previous.mp3` back to live when the live counterpart
-   is missing (regen crash recovery), and drop orphan
-   `.previous.segments.json` files. Fire-and-forget: never blocks
-   listen, never throws. */
-void fsckAllBooks()
-  .then((r) => {
-    if (r.recovered.length > 0) {
-      console.log(
-        `[fsck] reconciled ${r.recovered.length} rollback-pair half-state(s) on startup ` +
-          `(see workspace/fsck-orphan-audio.ts).`,
-      );
-    }
-    if (r.errors.length > 0) {
-      for (const e of r.errors) {
-        console.warn(`[fsck] ${e.action} failed for ${e.slug}: ${e.message}`);
-      }
-    }
-  })
-  .catch((err) => console.warn('[fsck] sweep skipped:', err));
 
 const PORT = Number(process.env.PORT ?? 8080);
 const LAN_HTTPS_PORT = Number(process.env.LAN_HTTPS_PORT ?? 8443);
@@ -144,238 +92,299 @@ let mdnsResponderHandle: MdnsResponderHandle | null = null;
    alongside the sidecar and the mDNS responder. */
 let portForwarderHandle: PortForwarderHandle | null = null;
 
-/* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
-   listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
-   certs from .run/certs/. iOS Safari / Android Chrome won't show the
-   "Not Secure" warning AND clipboard / file-picker / mic / camera /
-   service-worker APIs become available on mobile.
-
-   When LAN_HTTPS is unset, behaviour is plain HTTP on :8080, every existing
-   workflow unchanged — EXCEPT the bind host: since srv-19 the default HTTP
-   listener binds loopback (127.0.0.1) only, so the unauthenticated API +
-   /workspace static mount aren't reachable from other LAN machines. Set
-   BIND_HOST=0.0.0.0 (or HOST=…) to restore all-interface HTTP. The HTTPS path
-   is opt-in only via npm run start:lan (LAN_HTTPS=1) and keeps binding all
-   interfaces — it's the deliberately-reachable mobile flow. */
-const lanHttps = isLanHttpsEnabled();
-const bindHost = selectBindHost(lanHttps);
+/* repoRoot/runDir are pure path resolution (no I/O) off __dirname, so they're
+   safe to compute unconditionally at module scope — shutdown() (below) needs
+   runDir regardless of whether this process ever reaches the boot sequence. */
 const repoRoot = resolve(__dirname, '..', '..');
 /* .run/ honours APP_RUN_DIR so a versioned-dir install (fs-1) shares one cert
    store across releases instead of regenerating per release. */
 const runDir = resolveRunDir(repoRoot);
-const { certFile: LAN_CERT_FILE, keyFile: LAN_KEY_FILE } = resolveLanCertPaths(repoRoot);
 
-const listenerCallback = () => {
-  const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
-  const listenPort = lanHttps ? LAN_HTTPS_PORT : PORT;
+/* #1366 — the actual startup orchestration (workspace I/O, sidecar spawn,
+   real port bind) lives in this function instead of running unconditionally
+   at module scope, so `index.test.ts` can import this module for its
+   `runShutdownSequence` export without booting a real server. See the
+   isMainModule guard at the bottom of the file (mirrors the same pattern
+   already used in scripts/bump-version.mjs). */
+async function main(): Promise<void> {
+  ensureWorkspace();
+  /* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
+     see real values from disk before the first request lands. Fire-and-forget:
+     a missing or malformed file falls through to defaults inside
+     readUserSettings(). */
+  void readUserSettings();
 
-  console.log(`[server] listening on ${protocol}://localhost:${listenPort}`);
+  /* One-shot wipe-and-fresh for change-logs written before the
+     generation_run_complete rollup landed. The pre-collapse middleware wrote
+     one event per chapter_complete tick, and books that ran a few times
+     accumulated 200+ near-identical rows. Migration renames the legacy
+     file to `.legacy.json` (kept for recovery) and replaces the live file
+     with `[]`. Fire-and-forget: never blocks listen, never crashes on a
+     malformed file. */
+  void migrateLegacyChangeLogs()
+    .then((r) => {
+      if (r.migrated.length > 0) {
+        console.log(
+          `[changelog] migrated ${r.migrated.length} book(s) to a fresh log ` +
+            `(originals saved alongside as change-log.legacy.json).`,
+        );
+      }
+    })
+    .catch((err) => console.warn('[changelog] migration skipped:', err));
 
-  console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
+  /* Plan 20 — sibling fsck for the rollback-preservation pair. The
+     preserve helper (`workspace/preserve-previous-audio.ts`) renames two
+     files (audio + segments) sequentially; a crash between them leaves a
+     half-preserved state. On startup we walk every book's audio root,
+     promote any `.previous.mp3` back to live when the live counterpart
+     is missing (regen crash recovery), and drop orphan
+     `.previous.segments.json` files. Fire-and-forget: never blocks
+     listen, never throws. */
+  void fsckAllBooks()
+    .then((r) => {
+      if (r.recovered.length > 0) {
+        console.log(
+          `[fsck] reconciled ${r.recovered.length} rollback-pair half-state(s) on startup ` +
+            `(see workspace/fsck-orphan-audio.ts).`,
+        );
+      }
+      if (r.errors.length > 0) {
+        for (const e of r.errors) {
+          console.warn(`[fsck] ${e.action} failed for ${e.slug}: ${e.message}`);
+        }
+      }
+    })
+    .catch((err) => console.warn('[fsck] sweep skipped:', err));
 
-  /* Log the LAN URLs so the user can spot which IP to point their phone's
-     browser at for the audiobook export sideload flow. Node's listen
-     binds all interfaces, so every URL here genuinely reaches us. */
-  const lan = enumerateLanUrls(listenPort, protocol);
-  for (const url of lan.urls) {
-    console.log(`[server] LAN URL: ${url}`);
-  }
+  /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
+     listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
+     certs from .run/certs/. iOS Safari / Android Chrome won't show the
+     "Not Secure" warning AND clipboard / file-picker / mic / camera /
+     service-worker APIs become available on mobile.
 
-  /* Static catalog self-consistency check (instant, no I/O). Catches
-     "wrong voices used for wrong models" at its source — the per-engine
-     PROFILE_VOICES table and VOICE_DESCRIPTIONS table can drift apart
-     (a picker chooses a voice with no description, or a described voice
-     is never routable). This runs synchronously at boot so any drift
-     prints before the first request lands. */
-  for (const engine of ['gemini', 'coqui'] as const) {
-    const audit = auditEngineCatalog(engine);
-    if (audit.missingDescriptions.length > 0) {
-      console.warn(
-        `[tts:catalog] ${engine}: ${audit.missingDescriptions.length} picker voice(s) ` +
-          `have no description — cast view will show "Prebuilt voice" placeholder for: ` +
-          audit.missingDescriptions.join(', '),
-      );
+     When LAN_HTTPS is unset, behaviour is plain HTTP on :8080, every existing
+     workflow unchanged — EXCEPT the bind host: since srv-19 the default HTTP
+     listener binds loopback (127.0.0.1) only, so the unauthenticated API +
+     /workspace static mount aren't reachable from other LAN machines. Set
+     BIND_HOST=0.0.0.0 (or HOST=…) to restore all-interface HTTP. The HTTPS path
+     is opt-in only via npm run start:lan (LAN_HTTPS=1) and keeps binding all
+     interfaces — it's the deliberately-reachable mobile flow. */
+  const lanHttps = isLanHttpsEnabled();
+  const bindHost = selectBindHost(lanHttps);
+  const { certFile: LAN_CERT_FILE, keyFile: LAN_KEY_FILE } = resolveLanCertPaths(repoRoot);
+
+  const listenerCallback = () => {
+    const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
+    const listenPort = lanHttps ? LAN_HTTPS_PORT : PORT;
+
+    console.log(`[server] listening on ${protocol}://localhost:${listenPort}`);
+
+    console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
+
+    /* Log the LAN URLs so the user can spot which IP to point their phone's
+       browser at for the audiobook export sideload flow. Node's listen
+       binds all interfaces, so every URL here genuinely reaches us. */
+    const lan = enumerateLanUrls(listenPort, protocol);
+    for (const url of lan.urls) {
+      console.log(`[server] LAN URL: ${url}`);
     }
-    if (audit.unrouted.length > 0) {
-      console.info(
-        `[tts:catalog] ${engine}: ${audit.unrouted.length} described voice(s) are ` +
-          `never chosen by the picker (orphan entries): ${audit.unrouted.join(', ')}`,
-      );
+
+    /* Static catalog self-consistency check (instant, no I/O). Catches
+       "wrong voices used for wrong models" at its source — the per-engine
+       PROFILE_VOICES table and VOICE_DESCRIPTIONS table can drift apart
+       (a picker chooses a voice with no description, or a described voice
+       is never routable). This runs synchronously at boot so any drift
+       prints before the first request lands. */
+    for (const engine of ['gemini', 'coqui'] as const) {
+      const audit = auditEngineCatalog(engine);
+      if (audit.missingDescriptions.length > 0) {
+        console.warn(
+          `[tts:catalog] ${engine}: ${audit.missingDescriptions.length} picker voice(s) ` +
+            `have no description — cast view will show "Prebuilt voice" placeholder for: ` +
+            audit.missingDescriptions.join(', '),
+        );
+      }
+      if (audit.unrouted.length > 0) {
+        console.info(
+          `[tts:catalog] ${engine}: ${audit.unrouted.length} described voice(s) are ` +
+            `never chosen by the picker (orphan entries): ${audit.unrouted.join(', ')}`,
+        );
+      }
+      if (audit.missingDescriptions.length === 0 && audit.unrouted.length === 0) {
+        console.log(`[tts:catalog] ${engine}: ${audit.routedCount} voices, tables in sync.`);
+      }
     }
-    if (audit.missingDescriptions.length === 0 && audit.unrouted.length === 0) {
-      console.log(`[tts:catalog] ${engine}: ${audit.routedCount} voices, tables in sync.`);
+
+    /* Background model-manifest audit: poll the sidecar's /speakers endpoint
+       until the XTTS v2 model has loaded, then diff our hardcoded
+       COQUI_PROFILE_VOICES (server/src/tts/voice-mapping.ts) against the
+       model's actual speaker manifest. Logs a structured summary the
+       moment it completes so any catalog drift is visible at boot
+       instead of silently substituting voices mid-chapter. Result is
+       cached and served by GET /api/sidecar/catalog-audit.
+
+       Fire-and-forget — we don't block app.listen on the sidecar being
+       up, and runCatalogAudit never throws (it logs a warning on timeout). */
+    const sidecarUrl = getResolvedSidecarUrl();
+    void runCatalogAudit({ sidecarUrl });
+
+    /* Plan 43 — spawn the Python TTS sidecar per user preference. Fired
+       after the listener is up so the server is already accepting requests
+       while the sidecar warms in the background. The catalog audit above
+       will pick up the same sidecar once Kokoro/Coqui finishes loading. */
+    const bootRepoRoot = resolve(__dirname, '..', '..');
+    /* Seed the Qwen install-state from a Node-side disk probe BEFORE resolving
+       the default — the sidecar /health probe isn't available yet (we're about
+       to spawn it). This lets a box with Qwen installed hot-preload Qwen at boot
+       (PRELOAD_QWEN=1); a box without it spawns with Kokoro eager + Qwen off, and
+       the conditional default falls back to Kokoro. The /health poll refreshes
+       this continuously once the sidecar is up. */
+    setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
+    /* #1030 — refuse to boot if another LIVE server already owns the :9000
+       sidecar, so two stacks can't fight over it (the recycle storm). Only when
+       THIS server will actually manage the sidecar (autoStart on); a no-autostart
+       server never supervises and so never conflicts. Drops/clears an owner note
+       in .run/; keyed on ppid so a `tsx watch` reload takes over rather than
+       refusing. Mirrors the EADDRINUSE HTTP-port guard (crash-logging.ts). Runs
+       before the supervisor starts AND before app.listen, so a conflict exits
+       cleanly without spawning a rival sidecar or grabbing the HTTP port. */
+    if (getResolvedAutoStartSidecar()) {
+      enforceSingleSidecarOwner({ runDir });
     }
-  }
+    /* srv-15 — supervise the sidecar instead of a one-shot spawn, so a crash /
+       OOM-kill / poison self-exit respawns instead of stalling generation
+       forever. `buildOpts` re-reads settings on each respawn so a mid-session
+       eager-load / model-key change is picked up by the next process. */
+    sidecarSupervisor = createSidecarSupervisor({
+      buildOpts: async () => {
+        await readUserSettings();
+        return {
+          autoStart: getResolvedAutoStartSidecar(),
+          /* Resolved (Qwen-when-installed) key — drives PRELOAD_COQUI. */
+          modelKey: getResolvedTtsModelKey(),
+          repoRoot: bootRepoRoot,
+        };
+      },
+    });
+    void sidecarSupervisor.start();
+    registerActiveSupervisor(sidecarSupervisor);
 
-  /* Background model-manifest audit: poll the sidecar's /speakers endpoint
-     until the XTTS v2 model has loaded, then diff our hardcoded
-     COQUI_PROFILE_VOICES (server/src/tts/voice-mapping.ts) against the
-     model's actual speaker manifest. Logs a structured summary the
-     moment it completes so any catalog drift is visible at boot
-     instead of silently substituting voices mid-chapter. Result is
-     cached and served by GET /api/sidecar/catalog-audit.
+    /* srv-2 — start the periodic per-book state.json backup sweep (no-op when
+       disabled in user-settings). Timers are unref()'d so they never hold the
+       process open on their own. */
+    startBackupScheduler();
 
-     Fire-and-forget — we don't block app.listen on the sidecar being
-     up, and runCatalogAudit never throws (it logs a warning on timeout). */
-  const sidecarUrl = getResolvedSidecarUrl();
-  void runCatalogAudit({ sidecarUrl });
-
-  /* Plan 43 — spawn the Python TTS sidecar per user preference. Fired
-     after the listener is up so the server is already accepting requests
-     while the sidecar warms in the background. The catalog audit above
-     will pick up the same sidecar once Kokoro/Coqui finishes loading. */
-  const bootRepoRoot = resolve(__dirname, '..', '..');
-  /* Seed the Qwen install-state from a Node-side disk probe BEFORE resolving
-     the default — the sidecar /health probe isn't available yet (we're about
-     to spawn it). This lets a box with Qwen installed hot-preload Qwen at boot
-     (PRELOAD_QWEN=1); a box without it spawns with Kokoro eager + Qwen off, and
-     the conditional default falls back to Kokoro. The /health poll refreshes
-     this continuously once the sidecar is up. */
-  setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
-  /* #1030 — refuse to boot if another LIVE server already owns the :9000
-     sidecar, so two stacks can't fight over it (the recycle storm). Only when
-     THIS server will actually manage the sidecar (autoStart on); a no-autostart
-     server never supervises and so never conflicts. Drops/clears an owner note
-     in .run/; keyed on ppid so a `tsx watch` reload takes over rather than
-     refusing. Mirrors the EADDRINUSE HTTP-port guard (crash-logging.ts). Runs
-     before the supervisor starts AND before app.listen, so a conflict exits
-     cleanly without spawning a rival sidecar or grabbing the HTTP port. */
-  if (getResolvedAutoStartSidecar()) {
-    enforceSingleSidecarOwner({ runDir });
-  }
-  /* srv-15 — supervise the sidecar instead of a one-shot spawn, so a crash /
-     OOM-kill / poison self-exit respawns instead of stalling generation
-     forever. `buildOpts` re-reads settings on each respawn so a mid-session
-     eager-load / model-key change is picked up by the next process. */
-  sidecarSupervisor = createSidecarSupervisor({
-    buildOpts: async () => {
-      await readUserSettings();
-      return {
-        autoStart: getResolvedAutoStartSidecar(),
-        /* Resolved (Qwen-when-installed) key — drives PRELOAD_COQUI. */
-        modelKey: getResolvedTtsModelKey(),
-        repoRoot: bootRepoRoot,
-      };
-    },
-  });
-  void sidecarSupervisor.start();
-  registerActiveSupervisor(sidecarSupervisor);
-
-  /* srv-2 — start the periodic per-book state.json backup sweep (no-op when
-     disabled in user-settings). Timers are unref()'d so they never hold the
-     process open on their own. */
-  startBackupScheduler();
-
-  /* ops (castwright-local-hostnames) — server-owned castwright.local mDNS
-     responder, start:lan only. NODE_ENV, not lanHttps, is the discriminator:
-     dev:lan's server leg ALSO sets LAN_HTTPS=1 (so its Vite half can serve
-     castwright.dev.local), so gating on lanHttps alone would spin up an
-     extra, unwanted castwright.local responder here during dev:lan — a
-     process dev:lan's own concurrently neither advertises nor reaps (NOT a
-     port-5353 collision: multicast-dns binds with reuseAddr:true, so two
-     responders on one box coexist rather than erroring). See mdns-owner.ts
-     + the design spec. */
-  if (shouldSpawnMdnsResponder(lanHttps)) {
-    mdnsResponderHandle = spawnMdnsResponder('castwright.local', repoRoot);
-  }
-
-  /* castwright-local-port-cert — server-owned :443 forwarder to LAN_HTTPS_PORT,
-     start:lan only (same NODE_ENV-gated shape as the mDNS responder above —
-     dev:lan's server leg also sets LAN_HTTPS=1 and must not also get this). */
-  if (shouldSpawnPortForwarder(lanHttps)) {
-    portForwarderHandle = startPortForwarder(LAN_HTTPS_PORT);
-  }
-};
-
-/* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
-   / crash / browser reload can strand entries `in_progress` on disk with no
-   live stream behind them; the frontend dispatcher then neither re-runs them
-   (FILL claims only `queued`) nor reconciles them (its in-memory inFlight map
-   is empty on a fresh boot), so the chapter wedges and the GPU sits idle.
-   Flipping them back to `queued` lets the dispatcher re-claim and finish them.
-   Safe because a server restart kills all in-flight synthesis (the server owns
-   the generation SSE). AWAITED before listen — not fire-and-forget — so no
-   freshly-connecting frontend can /start a queued entry in the gap between the
-   sweep's read and write and have it clobbered. The inner .catch keeps a queue
-   read error from blocking startup. See workspace/queue-boot.ts. */
-await resetOrphanedQueueEntries()
-  .then((r) => {
-    if (r.reset > 0) {
-      console.log(
-        `[queue] reset ${r.reset} orphaned in_progress entr${r.reset === 1 ? 'y' : 'ies'} ` +
-          `to queued on boot (workspace/queue-boot.ts).`,
-      );
+    /* ops (castwright-local-hostnames) — server-owned castwright.local mDNS
+       responder, start:lan only. NODE_ENV, not lanHttps, is the discriminator:
+       dev:lan's server leg ALSO sets LAN_HTTPS=1 (so its Vite half can serve
+       castwright.dev.local), so gating on lanHttps alone would spin up an
+       extra, unwanted castwright.local responder here during dev:lan — a
+       process dev:lan's own concurrently neither advertises nor reaps (NOT a
+       port-5353 collision: multicast-dns binds with reuseAddr:true, so two
+       responders on one box coexist rather than erroring). See mdns-owner.ts
+       + the design spec. */
+    if (shouldSpawnMdnsResponder(lanHttps)) {
+      mdnsResponderHandle = spawnMdnsResponder('castwright.local', repoRoot);
     }
+
+    /* castwright-local-port-cert — server-owned :443 forwarder to LAN_HTTPS_PORT,
+       start:lan only (same NODE_ENV-gated shape as the mDNS responder above —
+       dev:lan's server leg also sets LAN_HTTPS=1 and must not also get this). */
+    if (shouldSpawnPortForwarder(lanHttps)) {
+      portForwarderHandle = startPortForwarder(LAN_HTTPS_PORT);
+    }
+  };
+
+  /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
+     / crash / browser reload can strand entries `in_progress` on disk with no
+     live stream behind them; the frontend dispatcher then neither re-runs them
+     (FILL claims only `queued`) nor reconciles them (its in-memory inFlight map
+     is empty on a fresh boot), so the chapter wedges and the GPU sits idle.
+     Flipping them back to `queued` lets the dispatcher re-claim and finish them.
+     Safe because a server restart kills all in-flight synthesis (the server owns
+     the generation SSE). AWAITED before listen — not fire-and-forget — so no
+     freshly-connecting frontend can /start a queued entry in the gap between the
+     sweep's read and write and have it clobbered. The inner .catch keeps a queue
+     read error from blocking startup. See workspace/queue-boot.ts. */
+  await resetOrphanedQueueEntries()
+    .then((r) => {
+      if (r.reset > 0) {
+        console.log(
+          `[queue] reset ${r.reset} orphaned in_progress entr${r.reset === 1 ? 'y' : 'ies'} ` +
+            `to queued on boot (workspace/queue-boot.ts).`,
+        );
+      }
+    })
+    .catch((err) => console.warn('[queue] orphan reset skipped:', err));
+
+  // VRAM telemetry substrate (fs-45 v1, record-only — nothing consumes this yet).
+  // Order: probe device total → rotate stale stats if GPU changed → prime cache.
+  await initDeviceTotalVram();
+  await rotateStatsIfDeviceChanged(getDeviceTotalVramMb());
+  await initVramStats();
+
+  /* fs-1 — boot upgrade coordinator. On a version increase since last boot it
+     backs up every workspace JSON to <WORKSPACE_ROOT>/.upgrade-backups/ BEFORE
+     running any schema migration, records the new version, and flags the
+     what's-new banner. AWAITED before listen so no request hits half-migrated
+     data; the inner .catch keeps a backup/IO error from blocking startup (the
+     coordinator is idempotent and retries next boot). releasesDir is the parent
+     of repoRoot ONLY in a versioned-dir install (repoRoot == releases/vX.Y.Z),
+     else null — so prune is a no-op in a dev checkout. */
+  const releasesParent = dirname(repoRoot);
+  const releasesDir = basename(releasesParent) === 'releases' ? releasesParent : null;
+  await runUpgradeCoordinator({
+    appVersion: getAppVersion(),
+    workspaceRoot: WORKSPACE_ROOT,
+    booksRoot: BOOKS_ROOT,
+    userSettingsPath: USER_SETTINGS_PATH,
+    readLastSeenAppVersion: async () => (await readUserSettings()).lastSeenAppVersion,
+    writeMeta: writeUpgradeMeta,
+    releasesDir,
+    log: (m) => console.log(m),
   })
-  .catch((err) => console.warn('[queue] orphan reset skipped:', err));
+    .then((r) => {
+      if (r.action === 'upgrade') {
+        console.log(
+          `[upgrade] v${r.fromVersion} → v${r.toVersion}: ${r.backedUp?.length ?? 0} file(s) backed up, ` +
+            `${r.migrated?.length ?? 0} migrated, ${r.prunedReleases?.length ?? 0} old release(s) pruned.`,
+        );
+      }
+    })
+    .catch((err) => console.warn('[upgrade] coordinator skipped:', err));
 
-// VRAM telemetry substrate (fs-45 v1, record-only — nothing consumes this yet).
-// Order: probe device total → rotate stale stats if GPU changed → prime cache.
-await initDeviceTotalVram();
-await rotateStatsIfDeviceChanged(getDeviceTotalVramMb());
-await initVramStats();
+  const warn = lanExposureWarning();
+  if (warn) console.warn(warn);
 
-/* fs-1 — boot upgrade coordinator. On a version increase since last boot it
-   backs up every workspace JSON to <WORKSPACE_ROOT>/.upgrade-backups/ BEFORE
-   running any schema migration, records the new version, and flags the
-   what's-new banner. AWAITED before listen so no request hits half-migrated
-   data; the inner .catch keeps a backup/IO error from blocking startup (the
-   coordinator is idempotent and retries next boot). releasesDir is the parent
-   of repoRoot ONLY in a versioned-dir install (repoRoot == releases/vX.Y.Z),
-   else null — so prune is a no-op in a dev checkout. */
-const releasesParent = dirname(repoRoot);
-const releasesDir = basename(releasesParent) === 'releases' ? releasesParent : null;
-await runUpgradeCoordinator({
-  appVersion: getAppVersion(),
-  workspaceRoot: WORKSPACE_ROOT,
-  booksRoot: BOOKS_ROOT,
-  userSettingsPath: USER_SETTINGS_PATH,
-  readLastSeenAppVersion: async () => (await readUserSettings()).lastSeenAppVersion,
-  writeMeta: writeUpgradeMeta,
-  releasesDir,
-  log: (m) => console.log(m),
-})
-  .then((r) => {
-    if (r.action === 'upgrade') {
-      console.log(
-        `[upgrade] v${r.fromVersion} → v${r.toVersion}: ${r.backedUp?.length ?? 0} file(s) backed up, ` +
-          `${r.migrated?.length ?? 0} migrated, ${r.prunedReleases?.length ?? 0} old release(s) pruned.`,
+  if (lanHttps) {
+    if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {
+      console.error(
+        `[server] LAN_HTTPS=1 set but cert files are missing.\n` +
+          `[server] Expected: ${LAN_CERT_FILE}\n` +
+          `[server]           ${LAN_KEY_FILE}\n` +
+          `[server] Run 'npm run install:cert-mobile' first to bootstrap mkcert and generate per-LAN-IP certs.`,
       );
+      process.exit(1);
     }
-  })
-  .catch((err) => console.warn('[upgrade] coordinator skipped:', err));
-
-const warn = lanExposureWarning();
-if (warn) console.warn(warn);
-
-if (lanHttps) {
-  if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {
-    console.error(
-      `[server] LAN_HTTPS=1 set but cert files are missing.\n` +
-        `[server] Expected: ${LAN_CERT_FILE}\n` +
-        `[server]           ${LAN_KEY_FILE}\n` +
-        `[server] Run 'npm run install:cert-mobile' first to bootstrap mkcert and generate per-LAN-IP certs.`,
+    const key = readFileSync(LAN_KEY_FILE);
+    const cert = readFileSync(LAN_CERT_FILE);
+    const server = createHttpsServer({ key, cert }, app).listen(
+      LAN_HTTPS_PORT,
+      bindHost,
+      listenerCallback,
     );
-    process.exit(1);
+    /* castwright-local-port-cert — expose the live server so the cert-regen
+       route (server/src/routes/lan-cert.ts) can call setSecureContext() on it
+       without a circular import (index.ts imports the router; the router
+       can't import back from index.ts). Express's own app.set()/app.get() is
+       the idiomatic pattern for exactly this "expose a singleton to route
+       handlers" need — no new module required. */
+    app.set('lanHttpsServer', server);
+    attachListenErrorHandler(server, LAN_HTTPS_PORT);
+  } else {
+    const server = app.listen(PORT, bindHost, listenerCallback);
+    attachListenErrorHandler(server, PORT);
   }
-  const key = readFileSync(LAN_KEY_FILE);
-  const cert = readFileSync(LAN_CERT_FILE);
-  const server = createHttpsServer({ key, cert }, app).listen(
-    LAN_HTTPS_PORT,
-    bindHost,
-    listenerCallback,
-  );
-  /* castwright-local-port-cert — expose the live server so the cert-regen
-     route (server/src/routes/lan-cert.ts) can call setSecureContext() on it
-     without a circular import (index.ts imports the router; the router
-     can't import back from index.ts). Express's own app.set()/app.get() is
-     the idiomatic pattern for exactly this "expose a singleton to route
-     handlers" need — no new module required. */
-  app.set('lanHttpsServer', server);
-  attachListenErrorHandler(server, LAN_HTTPS_PORT);
-} else {
-  const server = app.listen(PORT, bindHost, listenerCallback);
-  attachListenErrorHandler(server, PORT);
 }
 
 /* On Ctrl+C or kill, reap the sidecar tree before exit so port 9000 is
@@ -383,29 +392,70 @@ if (lanHttps) {
    to find. On Windows the child is powershell.exe → uvicorn → python,
    and the handle's kill() runs `taskkill /T /F /PID <pid>` to cascade
    through the tree. */
-let shuttingDown = false;
-function shutdown(signal: NodeJS.Signals): void {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  stopBackupScheduler();
-  console.log(`[server] ${signal} received, tearing down sidecar...`);
+
+/** Dependencies for {@link runShutdownSequence} — every teardown call
+    shutdown() makes, injected instead of closed over from module scope
+    (mirrors resolveUpgradePaths in upgrade/paths.ts) so the sequence is
+    unit-testable without a real sidecar/mDNS/port-forwarder handle. */
+export interface ShutdownDeps {
+  releaseSidecarOwnership: (runDir: string) => void;
+  allowSleep: () => void;
+  runDir: string;
+  sidecarSupervisor: Pick<SidecarSupervisor, 'stop'> | null;
+  mdnsResponderHandle: Pick<MdnsResponderHandle, 'kill'> | null;
+  portForwarderHandle: Pick<PortForwarderHandle, 'close'> | null;
+}
+
+/* #1366 — pure teardown sequence, extracted out of shutdown() so it can be
+   exercised by a test without binding a real port. Order matches the
+   original inline shutdown() body exactly: release the :9000 ownership note,
+   drop the sleep-prevention wake lock, then reap the sidecar / mDNS responder
+   / port forwarder in parallel (each a no-op Promise.resolve() when its
+   handle is null). */
+export async function runShutdownSequence(deps: ShutdownDeps): Promise<void> {
   /* #1030 — release our :9000 ownership note so the next boot (or another
      stack) sees the port as free. No-op if we never claimed it (autoStart off)
      or a same-lineage reload already took it over. */
-  releaseSidecarOwnership(runDir);
+  deps.releaseSidecarOwnership(deps.runDir);
   /* Release the sleep-prevention wake lock too — on Windows a child spawned
      without job-object semantics is NOT killed when its parent exits (the
      same reason the sidecar reap below needs an explicit taskkill /T /F
      rather than relying on parent-exit), so without this an active
      generation's ES_SYSTEM_REQUIRED-holding powershell.exe would survive
      Ctrl+C/kill as an orphan, keeping the machine awake indefinitely. */
-  allowSleep();
+  deps.allowSleep();
   /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
      child's exit can't trigger a respawn race during shutdown. */
-  const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
-  const mdnsKilled = mdnsResponderHandle?.kill() ?? Promise.resolve();
-  const forwarderClosed = portForwarderHandle?.close() ?? Promise.resolve();
-  void Promise.all([reap, mdnsKilled, forwarderClosed]).finally(() => process.exit(0));
+  const reap = deps.sidecarSupervisor?.stop() ?? Promise.resolve();
+  const mdnsKilled = deps.mdnsResponderHandle?.kill() ?? Promise.resolve();
+  const forwarderClosed = deps.portForwarderHandle?.close() ?? Promise.resolve();
+  await Promise.all([reap, mdnsKilled, forwarderClosed]);
 }
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
+
+let shuttingDown = false;
+function shutdown(signal: NodeJS.Signals): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  stopBackupScheduler();
+  console.log(`[server] ${signal} received, tearing down sidecar...`);
+  void runShutdownSequence({
+    releaseSidecarOwnership,
+    allowSleep,
+    runDir,
+    sidecarSupervisor,
+    mdnsResponderHandle,
+    portForwarderHandle,
+  }).finally(() => process.exit(0));
+}
+
+/* Guarded so a test can import this module (e.g. for `runShutdownSequence`)
+   without executing the real boot sequence — mirrors the identical guard in
+   scripts/bump-version.mjs. `process.argv[1]` is resolved through
+   realpathSync before the compare for the same reason documented there
+   (symlinked temp dirs on macOS would otherwise make the hrefs unequal). */
+const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
+if (invokedHref && import.meta.url === invokedHref) {
+  await main();
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+}

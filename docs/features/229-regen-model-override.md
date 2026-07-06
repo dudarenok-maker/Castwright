@@ -49,6 +49,25 @@ route is dropped (falls back to the default) rather than rejected.
   per-chapter entry with the same choice.
 - The 1.7B tier remains a per-character setting too (`voice-engine-picker`); this
   adds a chapter-level override at regen time, it doesn't replace per-character.
+- **Elevate-only precedence (bug fix, side-11 follow-up):** a character's stored
+  `ttsModelKey` (cast.json) and the regenerate-time `modelKey` are resolved via
+  `higherQwenTier()` (`server/src/tts/model-keys.ts`), NOT "character always
+  wins". Originally `routeFor()` in `synthesise-chapter.ts` let the per-character
+  field win outright — since fs-56 stamps every cast member with a tier once
+  cast, that made this whole feature a no-op on any already-cast book: picking
+  "Qwen3-TTS 1.7B" here silently rendered every character at whatever tier
+  cast.json already had. Now the per-character field only ever ELEVATES a
+  character above the chosen tier here, never downgrades one below it.
+- **The run-start VRAM-hygiene precompute must use the same elevate-only
+  resolution (review finding on the fix above).** `generation.ts` evicts
+  whichever Qwen base tier a run won't need, once, before chapter 1, so the
+  in-use tier stays warm for the rest of the book. It derives "which tiers are
+  needed" from the same cast + run default `routeFor` uses — now via the
+  shared `computeUsedQwenTiers()` helper (`server/src/tts/per-character-engine.ts`)
+  so the two can't drift apart again. Missing this the first time round meant a
+  regenerate started at 1.7B with stale-0.6B cast entries evicted the 1.7B tier
+  at run start, then paid a cold mid-run reload on chapter 1 anyway — exactly
+  the stall this precompute exists to prevent.
 
 ## Tests
 
@@ -58,6 +77,13 @@ route is dropped (falls back to the default) rather than rejected.
   entry's `modelKey` when present, falls back to `ui.ttsModelKey` when absent.
 - `server/src/workspace/queue-io.test.ts` — `enqueue()` carries `modelKey` onto
   the stored entry; omits it when absent.
+- `server/src/tts/synthesise-chapter.test.ts` — elevate-only precedence pinned
+  on BOTH `routeFor` branches: "never downgrades a 1.7B run/regenerate
+  override for a character stuck on the 0.6B tier" (same-engine path) and
+  "…on the resolveForEngine (cross-engine) path" (mixed-engine chapter).
+- Two `higherQwenTier` cases in `server/src/tts/index.test.ts`.
+- `server/src/tts/per-character-engine.test.ts` — three `computeUsedQwenTiers`
+  cases pinning the run-start VRAM-hygiene precompute fix above.
 - typecheck (frontend + server) + ESLint clean; full frontend + server suites green.
 
 ## Follow-up

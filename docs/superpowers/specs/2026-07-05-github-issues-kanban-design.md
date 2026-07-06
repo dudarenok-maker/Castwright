@@ -117,8 +117,15 @@ only the subset of Status values that applies to its track:
   which issues these are, but auto-routing by label isn't part of the
   built-in workflow set below and isn't built now.
 
-**Built-in automation only** (no custom scripting) for the common-path
-transitions: a new issue is auto-added to the board with Status = `Backlog`;
+**Mostly built-in automation** for the common-path transitions: a new issue
+is auto-added to the board with Status = `Backlog`. **Auto-add is now driven
+by a version-controlled Action** (`.github/workflows/add-to-project.yml`, via
+`actions/add-to-project`, ops #1390) rather than the Project's built-in
+"Auto-add to project" workflow, which had been leaking issues onto the floor
+(e.g. #1386, #1377) — the Action fires on `issues: [opened, reopened,
+transferred]` and needs the `ADD_TO_PROJECT_PAT` repo secret (the default
+`GITHUB_TOKEN` can't write a user-owned Projects v2 board). Everything else
+below stays built-in:
 GitHub's separate **"Item closed"** workflow moves that issue's card to
 `Done` when the issue itself closes (including via a PR's `Closes #NN` on
 merge); a reopened issue moves back to `Backlog`. These are two distinct

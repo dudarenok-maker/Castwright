@@ -21,10 +21,12 @@ name: Cross-OS Verify
 on:
   workflow_dispatch:
   schedule:
-    # Sunday 02:00 UTC — well clear of weekday PR contention. Weekly pulse so
-    # cross-OS / mobile regressions on main surface within a week even when
-    # nobody fires the manual button.
-    - cron: '0 2 * * 0'
+    # Twice weekly (was once) — see docs/superpowers/specs/2026-07-06-verify-
+    # ci-rebalance-design.md §5: once local pre-push stops running a full
+    # Windows/Pester/macOS-equivalent pass on every push, this cron becomes
+    # the only regular cross-platform coverage, so the cadence doubles.
+    - cron: '0 2 * * 3' # Wednesday 02:00 UTC
+    - cron: '0 2 * * 0' # Sunday 02:00 UTC — well clear of weekday PR contention
 
 permissions:
   contents: read

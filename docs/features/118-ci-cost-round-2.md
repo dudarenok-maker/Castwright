@@ -11,6 +11,15 @@ owner: null
 > URL surface: none (CI / process)
 > OpenAPI ops: none
 
+> **Update 2026-07-06:** the cost-minimization *posture* this doc describes
+> (opt-in CI, draft-PR batching to avoid billed runs) is superseded by
+> [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](../superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
+> now that the repo is public — Actions minutes on standard runners are free
+> and uncapped, so CI flips from opt-in to opt-out and required. This doc's
+> test-impact-selection mechanism (`--changed <base>`) and its cost analysis
+> remain accurate history/rationale for why that mechanism exists; only the
+> "minimize run count" framing is stale.
+
 ## Benefit / Rationale
 
 GitHub Actions metered usage hit ~$17 for May 2026 on a steeply accelerating

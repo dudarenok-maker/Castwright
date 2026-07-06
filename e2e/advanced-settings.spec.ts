@@ -8,10 +8,12 @@
  * canned descriptors in src/lib/api.ts:
  *   group "tts"      collapsedByDefault:false  (open on load)
  *     KOKORO_SAMPLE_RATE   integer  apply:restart-sidecar  default:24000
- *     SEG_QA_MAX_RERECORDS integer  apply:live             default:2
- *     SEG_ASR_ENABLED      boolean  apply:live             default:false
  *   group "analyzer" collapsedByDefault:true   (closed on load)
  *     ANALYZER_STAGE1_PROMPT  string  isPrompt:true
+ *   group "qa-gates" collapsedByDefault:false  (open on load) — mirrors the
+ *   real server/src/config/registry.ts KNOBS entries (#1360):
+ *     qa.seg.maxRerecords integer  apply:live  default:2
+ *     qa.asr.enabled      boolean  apply:live  default:false
  *
  * The spec does NOT need a route stub — the mock api.getConfig() +
  * mockPutConfig() + mockResetConfig() all run in-process. */
@@ -54,7 +56,7 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     await expect(ttsButton).toHaveAttribute('aria-expanded', 'true');
 
     /* At least one knob label is rendered inside the open section. */
-    await expect(page.getByText('Max re-records per segment')).toBeVisible();
+    await expect(page.getByText('Kokoro sample rate')).toBeVisible();
   });
 
   test('can reach the view via the Admin entry card', async ({ page }) => {
@@ -72,14 +74,13 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     await page.goto('/#/advanced');
     await waitForRouteReady(page);
 
-    /* SEG_QA_MAX_RERECORDS is a live integer knob (default 2, range 0-10).
-       In the mock descriptor list order, KOKORO_SAMPLE_RATE is first
-       (restart-sidecar) and SEG_QA_MAX_RERECORDS is second (live). */
-    await expect(page.getByText('Max re-records per segment')).toBeVisible({ timeout: 10_000 });
-
-    /* Use the second number input — SEG_QA_MAX_RERECORDS. */
-    const input = page.locator('input[type="number"]').nth(1);
-    await expect(input).toBeVisible();
+    /* qa.seg.maxRerecords ("Signal QA max re-records") is a live integer
+       knob (default 2) under the "qa-gates" group, which is open by
+       default. Locate its number input by aria-label rather than by
+       page-wide input index — the group's position among the other
+       open-by-default sections isn't this test's concern. */
+    const input = page.getByLabel('Signal QA max re-records');
+    await expect(input).toBeVisible({ timeout: 10_000 });
     /* Triple-click to select all, then type new value. */
     await input.click({ clickCount: 3 });
     await input.fill('5');
@@ -98,10 +99,9 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     await page.goto('/#/advanced');
     await waitForRouteReady(page);
 
-    await expect(page.getByText('Max re-records per segment')).toBeVisible({ timeout: 10_000 });
-
-    /* Override the second knob (SEG_QA_MAX_RERECORDS, live). */
-    const input = page.locator('input[type="number"]').nth(1);
+    /* Override qa.seg.maxRerecords ("Signal QA max re-records", live). */
+    const input = page.getByLabel('Signal QA max re-records');
+    await expect(input).toBeVisible({ timeout: 10_000 });
     await input.click({ clickCount: 3 });
     await input.fill('7');
     await input.press('Tab');
@@ -120,9 +120,9 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     await page.goto('/#/advanced');
     await waitForRouteReady(page);
 
-    /* KOKORO_SAMPLE_RATE is the first integer knob in the TTS section and has
-       apply:restart-sidecar.  SEG_QA_MAX_RERECORDS is second (apply:live).
-       Use the first number input. */
+    /* KOKORO_SAMPLE_RATE is the only knob in the TTS section and has
+       apply:restart-sidecar. It's also the first number input on the page
+       (the "tts" group renders first). */
     const firstInput = page.locator('input[type="number"]').first();
     await expect(firstInput).toBeVisible({ timeout: 10_000 });
 

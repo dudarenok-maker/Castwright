@@ -54,17 +54,17 @@ describe('mockPutConfig round-trip', () => {
   });
 
   it('updates a boolean knob and reflects it in values', async () => {
-    const putResult = await mockPutConfig({ SEG_ASR_ENABLED: true });
+    const putResult = await mockPutConfig({ 'qa.asr.enabled': true });
     expect(putResult.ok).toBe(true);
-    expect(putResult.values.SEG_ASR_ENABLED.effective).toBe(true);
-    expect(putResult.values.SEG_ASR_ENABLED.overridden).toBe(true);
+    expect(putResult.values['qa.asr.enabled'].effective).toBe(true);
+    expect(putResult.values['qa.asr.enabled'].overridden).toBe(true);
   });
 
   it('persists the override so a subsequent getConfig reflects it', async () => {
-    await mockPutConfig({ SEG_QA_MAX_RERECORDS: 5 });
+    await mockPutConfig({ 'qa.seg.maxRerecords': 5 });
     const { values } = await mockGetConfig();
-    expect(values.SEG_QA_MAX_RERECORDS.effective).toBe(5);
-    expect(values.SEG_QA_MAX_RERECORDS.overridden).toBe(true);
+    expect(values['qa.seg.maxRerecords'].effective).toBe(5);
+    expect(values['qa.seg.maxRerecords'].overridden).toBe(true);
   });
 });
 
@@ -82,17 +82,17 @@ describe('mockResetConfig round-trip', () => {
   });
 
   it('resets all keys when all:true', async () => {
-    await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000, SEG_QA_MAX_RERECORDS: 7 });
+    await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000, 'qa.seg.maxRerecords': 7 });
     const resetResult = await mockResetConfig({ all: true });
     expect(resetResult.values.KOKORO_SAMPLE_RATE.effective).toBe(24000);
-    expect(resetResult.values.SEG_QA_MAX_RERECORDS.effective).toBe(2);
+    expect(resetResult.values['qa.seg.maxRerecords'].effective).toBe(2);
   });
 
   it('resets keys in a group', async () => {
-    await mockPutConfig({ SEG_ASR_ENABLED: true, SEG_QA_MAX_RERECORDS: 9 });
-    const resetResult = await mockResetConfig({ group: 'tts' });
-    expect(resetResult.values.SEG_ASR_ENABLED.effective).toBe(false);
-    expect(resetResult.values.SEG_QA_MAX_RERECORDS.effective).toBe(2);
+    await mockPutConfig({ 'qa.asr.enabled': true, 'qa.seg.maxRerecords': 9 });
+    const resetResult = await mockResetConfig({ group: 'qa-gates' });
+    expect(resetResult.values['qa.asr.enabled'].effective).toBe(false);
+    expect(resetResult.values['qa.seg.maxRerecords'].effective).toBe(2);
     /* Analyzer group key should be unaffected */
     expect(resetResult.values.ANALYZER_STAGE1_PROMPT.effective).toBe(
       'Attribute each sentence to its speaker.',

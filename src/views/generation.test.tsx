@@ -19,7 +19,7 @@ import { textHashForStale } from '../lib/stale-chapters';
 import { api } from '../lib/api';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import type { LayoutContext } from '../components/layout';
-import type { Chapter, Character, Sentence } from '../lib/types';
+import type { Chapter, Character, Sentence, TtsModelKey } from '../lib/types';
 import type { ComponentProps } from 'react';
 
 /* After plan 30 G1, GenerationView reads its TTS pill state from a
@@ -1103,7 +1103,11 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
      summarises across all chapters with a top-of-view banner. Drift is
      symmetric — switching engines exposes whichever side is now stale. */
 
-  function renderWithChapters(chapters: Chapter[], modelKey: 'coqui-xtts-v2' | 'kokoro-v1'): void {
+  function renderWithChapters(
+    chapters: Chapter[],
+    modelKey: TtsModelKey,
+    customCharacters: Character[] = characters,
+  ): void {
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -1120,7 +1124,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     store.dispatch(
       manuscriptSlice.actions.hydrateFromAnalysis({
         bookId: 'b1',
-        characters,
+        characters: customCharacters,
         chapters,
         sentences,
       } as any),
@@ -1129,11 +1133,12 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
       <Provider store={store}>
         <HostedGenerationView
           chapters={chapters}
-          characters={characters}
+          characters={customCharacters}
           paused
           title="Drift Fixture"
           bookId="b1"
-          modelKey={modelKey}          onRegenerate={() => {}}
+          modelKey={modelKey}
+          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
           onRegenerateCharacterInChapter={() => {}}
           onPreview={() => {}}
@@ -1232,6 +1237,39 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     };
     renderWithChapters([excludedDrifted, chapter2], 'kokoro-v1');
     expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+  });
+
+  it('does not flag a whole cast pinned to 1.7B as drifted against a stale 0.6B run-default (reported bug)', () => {
+    /* Per-character ttsModelKey overrides win over the run-default modelKey
+       in synthesis (routeFor) and in the generation header's engineLabel
+       (effectiveEngineLabel) — drift detection must agree with both, or a
+       cast pinned above the raw default gets falsely flagged as "generated
+       with a different engine" / reported as a downgrade to the raw
+       default. */
+    const pinnedCast: Character[] = characters.map((c) => ({
+      ...c,
+      ttsModelKey: 'qwen3-tts-1.7b',
+    }));
+    const rendered17b: Chapter = { ...chapter1, audioModelKey: 'qwen3-tts-1.7b' };
+    renderWithChapters([rendered17b, chapter2], 'qwen3-tts-0.6b', pinnedCast);
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+    expect(screen.queryByText(/Generated with .* · current engine is/i)).toBeNull();
+  });
+
+  it('ignores a stale ttsModelKey on a character since moved off Qwen when resolving the effective tier', () => {
+    /* ttsModelKey is "Ignored for non-Qwen characters" (openapi) — a character
+       moved to another engine can carry a leftover value from before the
+       move. Folding it into the drift comparison anyway would reintroduce a
+       false "Mixed" tier and fall back to the raw run-default, exactly the
+       bug this fix eliminates. */
+    const mixedPinCast: Character[] = [
+      { ...characters[0], ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' },
+      { ...characters[1], ttsEngine: 'kokoro', ttsModelKey: 'qwen3-tts-0.6b' },
+    ];
+    const rendered17b: Chapter = { ...chapter1, audioModelKey: 'qwen3-tts-1.7b' };
+    renderWithChapters([rendered17b, chapter2], 'qwen3-tts-0.6b', mixedPinCast);
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+    expect(screen.queryByText(/Generated with .* · current engine is/i)).toBeNull();
   });
 });
 

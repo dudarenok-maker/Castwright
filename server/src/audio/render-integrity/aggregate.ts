@@ -37,7 +37,7 @@ import {
   CUTOFFS,
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter } from './audition-centroid.js';
-import { canonicalModelKeyForEngine } from '../../tts/model-keys.js';
+import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -57,10 +57,19 @@ interface SegmentsEntry {
 
 interface SegmentsFileView {
   chapterId?: number;
+  /** Render tier stamped by finalize-chapter-write (ChapterSegmentsFile.modelKey)
+   *  — the model this chapter's audio was ACTUALLY rendered under. The Option-B
+   *  audition centroid renders under this SAME tier (see Phase 2 below) so its
+   *  embeddings are comparable to the in-book anchors AND it never pulls a 0.6B
+   *  base in co-resident with a 1.7B render. Absent on legacy pre-stamp files. */
+  modelKey?: TtsModelKey;
   segments?: SegmentsEntry[];
   characterSnapshots?: Record<string, {
     voiceEngine?: string;
     renderedFallbackEngine?: string;
+    /** Per-character render tier (see CharacterSnapshot.modelKey). The audition
+     *  renders under THIS (falls back to the chapter-level modelKey, then 0.6B). */
+    modelKey?: TtsModelKey;
     /** Resolved voice name at render time (e.g. `qwen-<uuid>` or `af_sarah`). */
     resolvedVoiceName?: string;
     voiceId?: string;
@@ -189,6 +198,11 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *
  * Idempotent — safe to re-run; files are overwritten each call.
  *
+ * Returns nothing: the caller's post-audition VRAM reconcile no longer derives
+ * its keep-flags from here (a finalized-chapters-only view can't see an in-flight
+ * sibling chapter's tier — the Finding-2 race). It reconciles against the run's
+ * FULL-cast tier set instead, computed once at run start.
+ *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
  */
@@ -205,6 +219,8 @@ export async function scoreBook(
     resolvedVoiceName?: string;
     voiceId?: string;
     attributes?: string[];
+    /** Per-character render tier — the audition renders under this. */
+    modelKey?: TtsModelKey;
   };
 
   type ChapterData = {
@@ -212,6 +228,9 @@ export async function scoreBook(
     embRows: EmbeddingRow[];
     segsByKey: Map<string, SegmentsEntry>;
     snapshots: Record<string, SnapshotView>;
+    /** Render tier this chapter's audio was synthesised under (segments.json
+     *  `modelKey`), used to render the Option-B audition on the SAME tier. */
+    modelKey?: TtsModelKey;
   };
 
   const chapterData: ChapterData[] = [];
@@ -239,6 +258,7 @@ export async function scoreBook(
       embRows: embResult.rows,
       segsByKey,
       snapshots: segFile.characterSnapshots ?? {},
+      modelKey: segFile.modelKey,
     });
   }
 
@@ -261,9 +281,18 @@ export async function scoreBook(
       // Collect voice info for Option-B (first chapter's snapshot wins).
       if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
-        // Only stochastic engines can reach Option-B — safe to call canonicalModelKeyForEngine
-        // with a placeholder request key (unused for local engines).
-        const modelKey = canonicalModelKeyForEngine(engine, 'qwen3-tts-0.6b');
+        // Render the Option-B audition under the SAME tier this character ACTUALLY
+        // rendered in — NOT a hardcoded 0.6B. canonicalModelKeyForEngine returns a
+        // Qwen request key VERBATIM, so the old 'qwen3-tts-0.6b' placeholder forced
+        // EVERY too-thin/bimodal Qwen character's audition (K=12 full synths) onto the
+        // 0.6B base: co-resident with a 1.7B render (8GB-card OOM), and embedded under
+        // a model whose speaker space isn't comparable to the 1.7B-rendered anchors (a
+        // corrupt centroid). Prefer the PER-CHARACTER stamp (elevate-only tier from
+        // buildCharacterSnapshots) so an elevated Qwen char in a non-Qwen-default book
+        // isn't under-tiered by the chapter run-default; fall back to the chapter-level
+        // modelKey, then 0.6B for legacy segments with neither stamp.
+        const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
+        const modelKey = canonicalModelKeyForEngine(engine, renderKey);
         voiceInfoByChar.set(charId, {
           voiceName: snap.resolvedVoiceName,
           modelKey,

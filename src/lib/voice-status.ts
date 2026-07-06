@@ -105,10 +105,24 @@ function resolveLifecyclePill(
        EMPTY name (the designed voiceId was never linked or was lost to a
        persistence bug) is NOT designed → "Needs voice", matching the row's
        "No voice designed yet" sub-line. Checking only the provider let that
-       broken-link state mislabel itself "Designed". */
+       broken-link state mislabel itself "Designed".
+
+       fe-48 (#1359): the matched-Voice-derived signal is only trustworthy when
+       the match is corroborated by the character's OWN link to it — an explicit
+       `voiceId` that the matched Voice's `id` actually satisfies, or reuse
+       provenance (`matchedFrom`). Without either, `findVoiceForCharacter`'s
+       id-fallback (Voice.id === Character.id, used for a character with no
+       explicit voiceId) can only have found this Voice by id-coincidence, which
+       is not necessarily CURRENT — e.g. if this exact character's own design
+       fields were later reset/cleared without the Voice record being retired.
+       In that case the character's own (now-empty) `overrideTtsVoices.qwen.name`
+       must be the only source of truth. */
+    const linkedViaVoiceId = !!c.voiceId && voice?.id === c.voiceId;
     const hasVoice =
       !!c.overrideTtsVoices?.qwen?.name ||
-      (voice?.ttsVoice?.provider === 'qwen' && !!voice.ttsVoice.name);
+      ((linkedViaVoiceId || !!c.matchedFrom) &&
+        voice?.ttsVoice?.provider === 'qwen' &&
+        !!voice.ttsVoice.name);
     if (!hasVoice) return { label: 'Needs voice', color: 'warning' };
     if (voice?.generated) return { label: 'Generated', color: 'success' };
     /* A synthesised 12s audition sits between bare design and rendered

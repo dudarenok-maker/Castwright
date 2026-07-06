@@ -1,44 +1,44 @@
 name: Verify
 
-# Plan 60 — CI verify-on-PR. Plan 103 — per-PR cost reduction.
-# Plan 215 — CI is OPT-IN: this battery no longer runs automatically on PRs.
+# Plan 60 — CI verify-on-PR. Plan 103 — per-PR cost reduction. Plan 215 — CI
+# was opt-in (label-gated) while the repo was private and Actions minutes
+# were metered. See docs/superpowers/specs/2026-07-06-verify-ci-rebalance-
+# design.md: the repo is now public (free, uncapped Actions minutes on
+# standard runners), and local `npm run verify` was causing multi-hour
+# self-contention on the dev box, so this workflow flips from opt-in to
+# OPT-OUT (runs on every PR by default) AND becomes a required status check
+# on `main`'s branch-protection ruleset — closing the gap where local
+# pre-push was previously the only thing that refused to push on a red leg.
 #
-# Runs the verify battery ON DEMAND — when a PR carries the `run-ci` label or
-# the workflow is dispatched manually (see the `on:`/`if:` blocks below). It
-# runs only the LEGS whose scope actually changed. A single job does setup
+# It runs only the LEGS whose scope actually changed. A single job does setup
 # once, detects which scopes the PR touched (git diff against the PR base),
 # then gates each expensive leg (server tests, e2e, build, …) behind an `if:`
 # on that scope. A PR that touches only `src/**` skips the server tests; a
-# server-only PR skips the frontend unit suite + Playwright e2e; etc. The
-# local pre-push hook runs the FULL `npm run verify` battery on every push, so
-# the per-PR cloud run is redundant insurance, not the gate — nothing is
-# permanently un-covered. See docs/features/103-ci-cost-reduction.md and
-# docs/features/215-ci-label-gated-verify.md.
+# server-only PR skips the frontend unit suite + Playwright e2e; etc. Local
+# pre-push now only runs a fast, branch-diff-scoped subset
+# (`verify:fast:branch`) — this cloud run is the actual enforcement gate for
+# everything else, not redundant insurance.
 #
 # Why one job with conditional steps (not a job-per-leg matrix): GitHub bills
 # each job's wall-clock separately, summed, rounded UP to the minute per job.
-# Parallel jobs would duplicate `npm ci` + pay a 1-min floor each, which
-# INCREASES billed minutes for multi-scope PRs. One job → setup paid once,
-# skipped legs cost ~0.
+# Parallel jobs would duplicate `npm ci` + pay a 1-min floor each. One job →
+# setup paid once, skipped legs cost ~0. (Billing is no longer the primary
+# driver now that Actions minutes are free on this public repo, but the
+# single-job shape is still the simpler design.)
 #
-# Plan 101 — doc-only PR fast-path. The `paths-ignore` block below skips the
-# whole workflow when EVERY changed file matches a doc glob. The scope
-# detector below is the second tier for non-doc PRs.
-# See docs/features/archive/101-docs-only-ci-skip.md.
+# No `paths-ignore` here (deliberately removed — see design spec): keeping it
+# while this is a required status check would deadlock every docs-only PR,
+# since a required check that never fires blocks merge forever. Every leg's
+# own `if:` scope condition already evaluates false for a docs-only diff, so
+# the job still completes in roughly the time of "Setup Node + deps" alone
+# and reports green — no deadlock, negligible added time. Same reasoning is
+# why the job no longer gates on PR `draft` status either — a draft-gated
+# required check would deadlock every draft PR the same way.
 
 on:
-  # The job `if:` below is the real gate; these triggers just decide WHEN the
-  # workflow is *evaluated*. `labeled` lets adding the `run-ci` label to an
-  # existing PR fire a run immediately; `synchronize` re-runs on new pushes
-  # while the label stays on; `ready_for_review` covers promoting a labeled
-  # draft. An unlabeled PR still evaluates the workflow but the job no-ops.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '.github/*.md'
   # Manual on-demand run: Actions tab → Verify → Run workflow, or
   # `gh workflow run verify.yml --ref <branch>`. A dispatch has no PR diff to
   # scope against, so it runs the FULL battery (every leg) — see the scope
@@ -57,21 +57,11 @@ concurrency:
 jobs:
   verify:
     # NOTE: the `name:` "npm run verify" is the historical status-check name.
-    # Branch protection on `main` deliberately does NOT require it as a status
-    # check (the staged ruleset excludes required checks so opt-in/doc-only PRs
-    # can't deadlock — see brand/ruleset-main.json / com-4), so a no-op run on
-    # an unlabeled PR never blocks merge. Keep the name stable anyway in case a
-    # required check is added later.
+    # This check IS required on `main`'s branch-protection ruleset (see the
+    # design spec) — keep this name stable, since renaming the job would
+    # silently detach the required-check rule from it.
     name: npm run verify
     runs-on: ubuntu-latest
-    # Opt-in gate: run ONLY on a manual dispatch, or a non-draft PR carrying
-    # the `run-ci` label. Unlabeled PRs evaluate the workflow but the job is
-    # skipped here → zero runner minutes billed. Local pre-push already runs
-    # the full battery, so this cloud run is on-demand insurance.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.draft == false &&
-       contains(github.event.pull_request.labels.*.name, 'run-ci'))
     # 30 (was 20): a run that dies AT the cap bills the full cap for nothing and
     # forces a re-run = double charge, so the cap must clear the SLOWEST real run.
     # Full-scope runs were ~13-15 min historically, but a full-stack PR (frontend +
@@ -98,7 +88,7 @@ jobs:
           # A manual dispatch has no PR base/head to diff against — run the
           # FULL battery (every scope true) and skip the diff logic.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            for k in frontend server sidecar e2e scripts hooks shared; do
+            for k in frontend server sidecar e2e scripts hooks pinokio shared; do
               echo "$k=true" >> "$GITHUB_OUTPUT"
               echo "scope $k=true (workflow_dispatch → full run)"
             done
@@ -112,17 +102,18 @@ jobs:
           echo "---"
           match() { echo "$FILES" | grep -qE "$1"; }
           frontend=false; server=false; sidecar=false
-          e2e=false; scripts=false; hooks=false; shared=false
+          e2e=false; scripts=false; hooks=false; pinokio=false; shared=false
           match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
-          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$)' && server=true
+          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$)' && server=true
           match '^server/tts-sidecar/' && sidecar=true
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true
           match '^scripts/' && scripts=true
           match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$)' && hooks=true
+          match '^(pinokio/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
           # `shared` = a ROOT dependency manifest changed → treat as global
           # (a dep/lockfile bump can affect every leg), so run everything.
           match '^(package\.json|package-lock\.json)$' && shared=true
-          for k in frontend server sidecar e2e scripts hooks shared; do
+          for k in frontend server sidecar e2e scripts hooks pinokio shared; do
             echo "$k=${!k}" >> "$GITHUB_OUTPUT"
             echo "scope $k=${!k}"
           done
@@ -142,6 +133,13 @@ jobs:
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.server == 'true' || steps.changes.outputs.shared == 'true'
         run: npm run typecheck
 
+      # Drift guard: fails if server/.env.example is out of sync with the
+      # config registry. Previously ONLY ran via local `npm run verify` — see
+      # docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md §3.
+      - name: Config check
+        if: steps.changes.outputs.server == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run config:check
+
       - name: Hooks tests
         if: steps.changes.outputs.hooks == 'true' || steps.changes.outputs.scripts == 'true' || steps.changes.outputs.shared == 'true'
         run: npm run test:hooks
@@ -153,6 +151,12 @@ jobs:
         # real coverage if/when Pester 5 is bootstrapped on the runner.
         if: steps.changes.outputs.scripts == 'true'
         run: npm run test:scripts
+
+      # Previously ONLY ran via local `npm run verify` — see
+      # docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md §3.
+      - name: Pinokio tests
+        if: steps.changes.outputs.pinokio == 'true' || steps.changes.outputs.shared == 'true'
+        run: npm run test:pinokio
 
       # `--changed <base>` narrows the frontend vitest run to only the tests
       # whose module graph touches this PR's diff (CI cost round 2). Reliable

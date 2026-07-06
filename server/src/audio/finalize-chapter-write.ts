@@ -176,7 +176,7 @@ export async function finalizeChapterAudioWrite(
   for (const s of segments) {
     if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
   }
-  const characterSnapshots = buildCharacterSnapshots(cast, speakingIds, defaultEngine, fallbackByChar);
+  const characterSnapshots = buildCharacterSnapshots(cast, speakingIds, defaultEngine, fallbackByChar, modelKey);
 
   /* Drift stamp from the ACTUAL render, not the request default (false-drift
      fix, 2026-06-07). The breakdown counts the speaking characters per engine
