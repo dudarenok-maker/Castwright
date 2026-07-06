@@ -29,6 +29,7 @@ owner: null
 1. The four-tier routing table (`CLAUDE.md` "Model routing" section, and the full copy in `.claude/skills/model-routing/SKILL.md`) never routes a fork — forks always inherit the dispatching session's model (`Agent` tool schema; see Decision 1 in the design spec).
 2. `scripts/validate-pr-issue-link.mjs`'s `hasIssueLink()` strips fenced + inline code spans before testing for `Closes #NN` / `Refs #NN` — a backtick-wrapped keyword must not satisfy the check (it doesn't actually auto-close on GitHub either).
 3. `.github/workflows/pr-issue-link.yml`'s job `name:` field ("Verify PR body links a GitHub issue") is the exact string referenced by the required-status-check ruleset (Task 7 Step 8, the manual step) — renaming the job without updating the ruleset silently breaks the required-check binding.
+4. That same manual ruleset step now also needs to bind `verify.yml`'s `npm run verify` job name (see [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](../superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)) — do both required-check bindings in the same GitHub settings visit if convenient, but they're independent action items; this doc's Task 7 Step 8 landing does not depend on the other one landing, or vice versa.
 
 ## Test plan
 
