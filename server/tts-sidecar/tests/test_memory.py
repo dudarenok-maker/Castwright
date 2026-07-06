@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import time
@@ -167,6 +168,25 @@ def test_mem_warn_threshold_parsing(monkeypatch):
 
     monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")
     assert main._mem_warn_threshold_mb() == 0.0
+
+
+# --- side-11: bound the oneDNN primitive cache (the variable-shape host leak) ---
+
+
+def test_onednn_primitive_cache_capacity_default():
+    """Importing main must pin ONEDNN_PRIMITIVE_CACHE_CAPACITY (issue #399).
+
+    The Code2Wav codec runs on CPU; unbounded, oneDNN caches one JIT'd kernel +
+    scratchpad per distinct input shape — the monotonic committed-RAM climb the
+    process-recycle contains. main.py setdefaults the cap BEFORE torch's first
+    CPU conv (module top, beside PYTORCH_CUDA_ALLOC_CONF). `import main` above
+    already ran it, so a clean pytest env carries the key; deleting the
+    setdefault line breaks this test. An operator override wins (setdefault),
+    so assert presence + a sane non-negative integer rather than the literal 64.
+    """
+    raw = os.environ.get("ONEDNN_PRIMITIVE_CACHE_CAPACITY")
+    assert raw is not None, "main.py must setdefault ONEDNN_PRIMITIVE_CACHE_CAPACITY"
+    assert int(raw) >= 0
 
 
 # --- side-11: env-gated MKLDNN disable (variable-shape host-leak probe) ---

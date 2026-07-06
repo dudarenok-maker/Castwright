@@ -58,6 +58,22 @@ configure_warning_filters()
 # torch ignores it with a warning — harmless. Validate the effect on the 8 GB box.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+# side-11 — bound the oneDNN primitive cache, the variable-input-shape host
+# committed-RAM leak (issue #399). The Code2Wav codec runs on CPU (the Qwen
+# forward is on CUDA — see _apply_torch_perf_flags): every distinct input shape
+# JIT-compiles a fresh conv kernel + scratchpad, and oneDNN caches one entry PER
+# SHAPE (default capacity 1024, never evicted by gc/empty_cache) — the monotonic
+# committed climb the process-recycle (plans 143/158) exists to contain. Capping
+# the cache keeps MKLDNN fully enabled — identical kernels, identical audio;
+# this is NOT the rejected SIDECAR_DISABLE_MKLDNN (plan 153) — it only stops the
+# per-shape hoarding. Isolated A/B on this stack (torch 2.11.0+cu128,
+# 2026-07-06): committed growth +592 MB → +59 MB over 120 variable-shape conv
+# iters, per-iter wall time unchanged (54 ms → 55 ms). 64 keeps a batch's hot
+# chunked_decode shapes (fixed 300-code chunks) cached across the run. oneDNN
+# reads the env once at library init — must be set before the first CPU conv;
+# `setdefault` so an operator override (server/.env) wins.
+os.environ.setdefault("ONEDNN_PRIMITIVE_CACHE_CAPACITY", "64")
+
 # Exposed as module constants so the logging-format regression test can
 # assert on the intended format directly, instead of fishing the formatter
 # off `logging.getLogger().handlers[0]` — pytest's caplog plugin installs
