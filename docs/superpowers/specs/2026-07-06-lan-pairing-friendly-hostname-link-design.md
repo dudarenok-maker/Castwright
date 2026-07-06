@@ -81,14 +81,18 @@ gating on **actual observed liveness** of both processes, not the launch predica
 
 Round 1's fix had its own hole, also **Critical/Contradicted**: the proposed `isAlive` closure
 only flipped `alive = false` when `code !== 0` — but `scripts/mdns-responder.mjs`'s *only*
-voluntary exit path, a multicast bind failure (EACCES, or blocked by a firewall/OS policy), is
-`mdns.once('error', ...) → process.exit(0)` (mdns-responder.mjs:111-119). So the exact
-graceful-give-up case the gate exists to catch left `alive === true` for a process that had
-already exited and was serving nothing — reopening the original gap it was meant to close.
+voluntary exit path **reachable from this caller's spawn** (`mdns-owner.ts` always passes
+`--name castwright.local`), a multicast bind failure (EACCES, or blocked by a firewall/OS
+policy), is `mdns.once('error', ...) → process.exit(0)` (mdns-responder.mjs:111-119). (The
+script has a second self-exit, `process.exit(1)` on a missing `--name`, at mdns-responder.mjs:93-96
+— unreachable here since `--name` is always passed, and it would still correctly resolve to
+`alive = false` if it somehow were reached.) So the exact graceful-give-up case the gate exists
+to catch left `alive === true` for a process that had already exited and was serving nothing —
+reopening the original gap it was meant to close.
 
-**Fix:** since this script has no *other* voluntary self-exit path (a healthy responder is a
-long-running process that only ever leaves via an external kill), any non-intentional exit —
-code 0 included — reliably means "no longer serving," not just a nonzero one:
+**Fix:** since this script has a healthy long-running success path (it only ever leaves via an
+external kill) and no other voluntary self-exit reachable from this spawn, any non-intentional
+exit — code 0 included — reliably means "no longer serving," not just a nonzero one:
 
 ```ts
 child.once('exit', (code, signal) => {
@@ -106,14 +110,18 @@ child.once('exit', (code, signal) => {
 its own message from inside `mdns-responder.mjs` itself, so a second warning here would be
 redundant, not incorrect.)
 
-**Residual, accepted limitation (distinct from the gap just fixed):** there's a brief
-millisecond-scale window right after spawn, before the responder's async multicast bind
-either succeeds or fails, where `alive` is optimistically `true` and no exit has fired yet.
-A `friendlyUrl` click landing in that exact window could still fail once. This is inherent to
-any async-readiness signal without a dedicated ready/bind-failed IPC handshake (out of scope —
-would mean changing `spawnMdnsResponder`'s `stdio: 'ignore'` to add an IPC channel, a
-meaningfully bigger change for a race too narrow to be worth it) — not a regression from the
-current QR-only status quo, which has no readiness signal at all.
+**Residual, accepted limitation (distinct from the gap just fixed, and narrower than it first
+looks):** `isFriendlyHostnameReachable` ANDs `isAlive()` with `isBound()`, and `isBound()`
+starts **pessimistically `false`** until the forwarder's `'listening'` event fires — so the
+gate already reads `false` for most of the immediate post-spawn window regardless of `alive`.
+The real residual race is narrower: only the sub-window where the `:443` forwarder *has*
+already bound but the mDNS responder's multicast bind is still pending (or about to fail). A
+`friendlyUrl` click landing in that specific window fails once (the browser's own
+resolution-failure error) and a retry after the responder settles works normally — not a stuck
+state. Closing even this narrower window would need a dedicated ready/bind-failed IPC
+handshake (changing `spawnMdnsResponder`'s `stdio: 'ignore'` to add an IPC channel) — a
+meaningfully bigger change for a race this narrow, and not a regression from the current
+QR-only status quo, which has no readiness signal at all.
 
 ### Backend — liveness tracking for the two LAN helper processes
 
@@ -233,8 +241,10 @@ const [session, setSession] = useState<
 >(null);
 ```
 
-Render, directly below the existing `<PairingQr>` block, only when `session.friendlyUrl` is
-set:
+Render, inside the existing `{session && (...)}` guard block (`lan-access-card.tsx:65-69`)
+that already wraps `<PairingQr>` — directly below it — and only when `session.friendlyUrl` is
+also set (a nested condition, not a sibling of that outer guard, since `session.friendlyUrl`
+isn't reachable outside it):
 
 ```tsx
 {session.friendlyUrl && (
@@ -318,9 +328,14 @@ path still works" degradation plan 239 already established for the hostname feat
   when the full chain holds — loopback request, `isLanTokenEnforced()` true, **and**
   `req.app.get('isFriendlyHostnameReachable')()` true (set directly on a bare test app, no
   `index.ts` import); assert it's `undefined` when any one of those three is false, including
-  the case that predicate returning `false` despite `NODE_ENV=production` (simulating a
-  bind/spawn failure), and the case the getter itself is unset (mirrors a real server where
-  `app.set` never ran, e.g. non-LAN-HTTPS mode).
+  the case that predicate returning `false` (simulating a bind/spawn failure — note: in a real
+  server, `app.set` runs inside `listenerCallback`, shared by both the LAN-HTTPS and plain-HTTP
+  listen branches, so non-LAN-HTTPS mode still *sets* the getter, just returning `false` — it
+  is never genuinely unset there; a `req.app.get(...)` returning `undefined` only models a bare
+  test app that skipped the `app.set()` call entirely, not any real server mode). The `?.()`
+  guard in the handler collapses both "returns false" and "unset" to the same
+  `friendlyUrl = undefined` outcome either way, so this distinction doesn't need separate
+  production behavior — only accurate test-case framing.
 - **`src/components/lan-access-card.test.tsx`**: assert the link renders with the correct
   `href` when the mocked `createDevicePairSession` response includes `friendlyUrl`; assert it
   does not render when the field is absent (dev:lan, or a live-but-unreachable start:lan).
