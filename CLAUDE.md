@@ -296,7 +296,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
 3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 4. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
-5. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR. Once `main`'s required-status-check ruleset for it is wired (a one-time, user-run setup step — see `docs/features/235-model-routing-review-gates.md`), a missing link blocks merge; until then it only fails a visible check.
+5. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
 6. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
 7. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 8. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
@@ -540,12 +540,10 @@ files [bugs] as they hit them" convention, for this gate only — labeled per
 `CONTRIBUTING.md`'s two-shape convention (bug-shaped work → standalone `bug`
 label; backlog-shaped work → `type:feature`/`type:chore` + `area:<prefix>`,
 `moscow:` left for you to set). `.github/workflows/pr-issue-link.yml` surfaces a failing
-check on every PR that skips this, mirroring `pr-title-lint.yml`. Once wired
-into `main`'s required status checks (a one-time, user-run ruleset setup —
-see
-[docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md)),
-a missing link blocks merge; until that setup is done, a missing link only
-fails a visible, non-blocking check.
+check on every PR that skips this, mirroring `pr-title-lint.yml`, and (since
+2026-07-06) a missing link blocks merge outright — wired into `main`'s
+required status checks alongside `verify.yml` in the same ruleset action;
+see [docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md).
 Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
 
 **Requesting a clean-room CI run on a PR.** CI now runs automatically on

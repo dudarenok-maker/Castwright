@@ -22,14 +22,14 @@ owner: null
 - **New seams**: a new project skill directory (`.claude/skills/model-routing/`); a new validator module shape (`scripts/validate-*.mjs` + CLI mode) alongside the existing `validate-commit-msg.mjs`; a second always-on `pull_request` workflow alongside `pr-title-lint.yml`.
 - **Invariants preserved**: no application code, test suite, or product surface changes (spec "Out of scope"); `brainstorming`/`writing-plans` (global plugin skills) are not edited, only project-level `CLAUDE.md` / `.claude/skills/` content, which the standing instruction-precedence rule already gives priority over skill defaults.
 - **Migration story**: none — no stored data shape changes.
-- **Reversibility**: every CLAUDE.md edit and the skill file are plain markdown, revertible with a single `git revert`. The workflow is inert until wired into a required-status-check ruleset (Task 7 Step 8, the manual step — see the implementation plan); if that step is reverted, the check becomes advisory-only again, not broken.
+- **Reversibility**: every CLAUDE.md edit and the skill file are plain markdown, revertible with a single `git revert`. The workflow's status check was wired into `main`'s required-status-check ruleset (`id 17654264`) on 2026-07-06, bundled with the `verify.yml` required-check action from the verify/CI rebalance work; if that ruleset rule is reverted, the check becomes advisory-only again, not broken.
 
 ## Invariants to preserve
 
 1. The four-tier routing table (`CLAUDE.md` "Model routing" section, and the full copy in `.claude/skills/model-routing/SKILL.md`) never routes a fork — forks always inherit the dispatching session's model (`Agent` tool schema; see Decision 1 in the design spec).
 2. `scripts/validate-pr-issue-link.mjs`'s `hasIssueLink()` strips fenced + inline code spans before testing for `Closes #NN` / `Refs #NN` — a backtick-wrapped keyword must not satisfy the check (it doesn't actually auto-close on GitHub either).
-3. `.github/workflows/pr-issue-link.yml`'s job `name:` field ("Verify PR body links a GitHub issue") is the exact string referenced by the required-status-check ruleset (Task 7 Step 8, the manual step) — renaming the job without updating the ruleset silently breaks the required-check binding.
-4. That same manual ruleset step now also needs to bind `verify.yml`'s `npm run verify` job name (see [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](../superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)) — do both required-check bindings in the same GitHub settings visit if convenient, but they're independent action items; this doc's Task 7 Step 8 landing does not depend on the other one landing, or vice versa.
+3. `.github/workflows/pr-issue-link.yml`'s job `name:` field ("Verify PR body links a GitHub issue") is the exact string referenced by the required-status-check ruleset (`id 17654264`, wired 2026-07-06) — renaming the job without updating the ruleset silently breaks the required-check binding.
+4. That same ruleset also binds `verify.yml`'s `npm run verify` job name (see [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](../superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)) — both required-check bindings were done in the same GitHub settings action, but they remain independent: renaming either job's `name:` only breaks its own binding.
 
 ## Test plan
 
@@ -43,7 +43,7 @@ owner: null
 1. Open a PR against `main` with a body that does **not** contain `Closes` or `Refs` → expect the `Verify PR body links a GitHub issue` check to fail (red ✗) on the PR.
 2. Edit the PR body to add `Closes #<some real issue number>` (plain, not inside backticks) → expect the check to re-run (the `edited` trigger) and turn green.
 3. Confirm `pr-title-lint.yml` (`.github/workflows/pr-title-lint.yml`) is unaffected — both workflows run independently on the same PR events.
-4. After Task 7 Step 8 (the manual ruleset step) is applied: repeat step 1 and confirm the PR's merge button is now disabled/blocked by GitHub until the check passes (not just red).
+4. The required-check ruleset step is applied (2026-07-06): repeat step 1 and confirm the PR's merge button is now disabled/blocked by GitHub until the check passes (not just red).
 
 ## Out of scope
 
