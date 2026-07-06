@@ -64,7 +64,7 @@ with the user — smaller change now, dev:lan keeps the QR-only flow).
 
 ## Design
 
-### Correction from adversarial review (2026-07-06)
+### Correction from adversarial review, round 1 (2026-07-06)
 
 The first draft gated `friendlyUrl` purely on `NODE_ENV === 'production'` (via
 `shouldSpawnMdnsResponder(true)`) — a **Critical/Contradicted** finding from the mandatory
@@ -76,6 +76,44 @@ only logged, and the caller still gets a handle back (`mdns-owner.ts`'s own docs
 resolves to nothing, for exactly the same-machine-without-a-camera user this feature exists to
 help — worse than the QR-only status quo, since that user has no fallback. Fixed below by
 gating on **actual observed liveness** of both processes, not the launch predicate.
+
+### Correction from adversarial review, round 2 (2026-07-06)
+
+Round 1's fix had its own hole, also **Critical/Contradicted**: the proposed `isAlive` closure
+only flipped `alive = false` when `code !== 0` — but `scripts/mdns-responder.mjs`'s *only*
+voluntary exit path, a multicast bind failure (EACCES, or blocked by a firewall/OS policy), is
+`mdns.once('error', ...) → process.exit(0)` (mdns-responder.mjs:111-119). So the exact
+graceful-give-up case the gate exists to catch left `alive === true` for a process that had
+already exited and was serving nothing — reopening the original gap it was meant to close.
+
+**Fix:** since this script has no *other* voluntary self-exit path (a healthy responder is a
+long-running process that only ever leaves via an external kill), any non-intentional exit —
+code 0 included — reliably means "no longer serving," not just a nonzero one:
+
+```ts
+child.once('exit', (code, signal) => {
+  if (killedIntentionally) return;
+  alive = false; // ANY non-intentional exit means no longer serving — this script's only
+                  // voluntary exit path (a bind failure) is itself code 0, so code===0 is not
+                  // a "fine, ignore it" case here, unlike a typical long-running service.
+  if (code !== 0) {
+    warn(`[mdns] responder for ${hostname} exited unexpectedly (code=${code}${signal ? `, signal=${signal}` : ''})`);
+  }
+});
+```
+
+(The `warn()` call stays gated to `code !== 0` — the graceful bind-failure case already logs
+its own message from inside `mdns-responder.mjs` itself, so a second warning here would be
+redundant, not incorrect.)
+
+**Residual, accepted limitation (distinct from the gap just fixed):** there's a brief
+millisecond-scale window right after spawn, before the responder's async multicast bind
+either succeeds or fails, where `alive` is optimistically `true` and no exit has fired yet.
+A `friendlyUrl` click landing in that exact window could still fail once. This is inherent to
+any async-readiness signal without a dedicated ready/bind-failed IPC handshake (out of scope —
+would mean changing `spawnMdnsResponder`'s `stdio: 'ignore'` to add an IPC channel, a
+meaningfully bigger change for a race too narrow to be worth it) — not a regression from the
+current QR-only status quo, which has no readiness signal at all.
 
 ### Backend — liveness tracking for the two LAN helper processes
 
@@ -99,7 +137,8 @@ return { server, isBound: () => bound, close: /* unchanged */ };
 
 **`server/src/mdns-owner.ts`**: add a closure-scoped `alive` flag to `MdnsResponderHandle`,
 mirroring the existing `killedIntentionally` bookkeeping in the `child.once('exit', ...)`
-handler.
+handler — using the round-2-corrected logic above (any non-intentional exit, not just a
+nonzero one, flips `alive` false):
 
 ```ts
 export interface MdnsResponderHandle {
@@ -111,35 +150,58 @@ export interface MdnsResponderHandle {
 let alive = true;
 child.once('exit', (code, signal) => {
   if (killedIntentionally) return;
-  if (code !== 0) { alive = false; warn(/* unchanged */); }
+  alive = false;
+  if (code !== 0) {
+    warn(`[mdns] responder for ${hostname} exited unexpectedly (code=${code}${signal ? `, signal=${signal}` : ''})`);
+  }
 });
 return { child, isAlive: () => alive, kill: /* unchanged */ };
 ```
 
 (`spawnMdnsResponder` already returns `null` on a *synchronous* spawn failure — `isAlive`
-closes the remaining gap, an async crash after a successful spawn.)
+closes the remaining gap: both an async crash after a successful spawn, and a graceful
+bind-failure `exit(0)`, per the round-2 correction above.)
 
-**`server/src/index.ts`**: export a small accessor next to the existing handle variables:
+**`server/src/index.ts`**: **Correction from adversarial review, round 2** — the first revision
+proposed `export function isFriendlyHostnameReachable()` from `index.ts`, importable from
+`devices.ts`. Round 2 confirmed (not just suspected) this is circular: `index.ts` imports
+`app.js`, which mounts `devicesRouter`; `devices.ts` importing back from `index.ts` is exactly
+the case this same file already solved for the cert-regen route, via `app.set()`/`app.get()`
+(`index.ts:376-382`: *"expose the live server so the cert-regen route can call
+setSecureContext() on it without a circular import… Express's own app.set()/app.get() is the
+idiomatic pattern for exactly this 'expose a singleton to route handlers' need"*). Reusing that
+exact idiom instead of inventing a second mechanism:
 
 ```ts
-export function isFriendlyHostnameReachable(): boolean {
-  return mdnsResponderHandle?.isAlive() === true && portForwarderHandle?.isBound() === true;
+if (shouldSpawnMdnsResponder(lanHttps)) {
+  mdnsResponderHandle = spawnMdnsResponder('castwright.local', repoRoot);
 }
+if (shouldSpawnPortForwarder(lanHttps)) {
+  portForwarderHandle = startPortForwarder(LAN_HTTPS_PORT);
+}
+app.set('isFriendlyHostnameReachable', () =>
+  mdnsResponderHandle?.isAlive() === true && portForwarderHandle?.isBound() === true,
+);
 ```
 
 ### Backend — `server/src/routes/devices.ts`
 
 In the `POST /devices/pair-session` handler, after minting `{ code, expiresAt }` via
-`createPairingSession`, add (new import: `isFriendlyHostnameReachable` from `../index.js`, or a
-small shared module if importing from `index.ts` proves circular — a follow-up implementation
-detail, not a design fork):
+`createPairingSession`, read the accessor off `req.app` — no new import, no circularity:
 
 ```ts
-const friendlyUrl = isFriendlyHostnameReachable()
+const isFriendlyHostnameReachable = req.app.get('isFriendlyHostnameReachable') as
+  (() => boolean) | undefined;
+const friendlyUrl = isFriendlyHostnameReachable?.() === true
   ? `https://castwright.local/#/pair?c=${code}`
   : undefined;
 res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt, friendlyUrl });
 ```
+
+This also keeps `devices.test.ts` cheap: a test can call `app.set('isFriendlyHostnameReachable',
+() => true/false)` directly on a bare test Express app, with no need to import `index.ts` (and
+therefore none of its top-level side effects — `installTimestamps()`, `installCrashHandlers()`,
+the full sidecar-supervisor/GPU import graph — reaching the test at all).
 
 No change to the existing `url` field, `code`, or `expiresAt` — additive only.
 
@@ -235,8 +297,9 @@ A stale/expired/already-consumed code clicked after the fact hits `PairShell`'s 
 code expired — generate a new one on the desktop" branch (`src/views/pair.tsx:22-23`) exactly
 as it does today for the QR path — see the consumed-vs-expired message caveat above.
 
-**New failure mode requiring explicit handling:** when `isFriendlyHostnameReachable()` is
-false (mDNS responder or `:443` forwarder didn't come up), `friendlyUrl` is `undefined` and
+**New failure mode requiring explicit handling:** when the `isFriendlyHostnameReachable`
+accessor (set via `app.set()` in `index.ts`, read via `req.app.get()` in `devices.ts`) returns
+false — mDNS responder or `:443` forwarder didn't come up — `friendlyUrl` is `undefined` and
 `LanAccessCard` simply doesn't render the link — falling back to the QR, exactly like the
 dev:lan case. No error message needed; this is the same "friendly hostname unavailable, raw-IP
 path still works" degradation plan 239 already established for the hostname feature itself.
@@ -247,14 +310,17 @@ path still works" degradation plan 239 already established for the hostname feat
   `'listening'` fires, `true` after; assert it stays `true` across a subsequent `'error'`
   event (the EMFILE-hiccup-after-bind case), and `false` if `'error'` fires before
   `'listening'` ever does (never-bound case).
-- **`server/src/mdns-owner.test.ts`**: assert `isAlive()` is `true` after a normal spawn,
-  `false` after a non-intentional nonzero exit, and unaffected by an intentional `kill()`.
+- **`server/src/mdns-owner.test.ts`**: assert `isAlive()` is `true` after a normal spawn;
+  `false` after a non-intentional **exit code 0** (the graceful bind-failure path — the case
+  round 2 caught missing coverage for); `false` after a non-intentional nonzero exit; and
+  unaffected (stays whatever it already was) by an intentional `kill()`.
 - **`server/src/routes/devices.test.ts`**: assert `friendlyUrl` is present and correctly formed
   when the full chain holds — loopback request, `isLanTokenEnforced()` true, **and**
-  `isFriendlyHostnameReachable()` true (not just `NODE_ENV=production` in isolation, which the
-  first draft's test bullet under-specified); assert it's `undefined` when any one of those
-  three is false, including the new case this spec adds coverage for — reachable-check false
-  despite `NODE_ENV=production` (simulating a bind/spawn failure).
+  `req.app.get('isFriendlyHostnameReachable')()` true (set directly on a bare test app, no
+  `index.ts` import); assert it's `undefined` when any one of those three is false, including
+  the case that predicate returning `false` despite `NODE_ENV=production` (simulating a
+  bind/spawn failure), and the case the getter itself is unset (mirrors a real server where
+  `app.set` never ran, e.g. non-LAN-HTTPS mode).
 - **`src/components/lan-access-card.test.tsx`**: assert the link renders with the correct
   `href` when the mocked `createDevicePairSession` response includes `friendlyUrl`; assert it
   does not render when the field is absent (dev:lan, or a live-but-unreachable start:lan).
