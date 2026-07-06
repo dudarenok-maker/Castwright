@@ -6094,7 +6094,7 @@ async function realCreateDevicePairSession(body: { label: string }) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(`pair-session failed (${res.status})`, res.status);
-  return res.json() as Promise<{ url: string; code: string; expiresAt: number }>;
+  return res.json() as Promise<{ url: string; code: string; expiresAt: number; friendlyUrl?: string }>;
 }
 async function realListDevices() {
   const res = await fetch('/api/devices');
@@ -6123,7 +6123,12 @@ async function realRedeemBrowserPair(body: { code: string }) {
 }
 
 const mockCreateDevicePairSession = async (_b: { label: string }) =>
-  ({ url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`, code: 'MOCKCODEMOCKCODE', expiresAt: Date.now() + 300_000 });
+  ({
+    url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`,
+    code: 'MOCKCODEMOCKCODE',
+    expiresAt: Date.now() + 300_000,
+    friendlyUrl: 'https://castwright.local/#/pair?c=MOCKCODEMOCKCODE',
+  });
 const mockListDevices = async () => ({ devices: [] as PublicDevice[] });
 const mockRevokeDevice = async (_id: string) => ({ ok: true as const });
 const mockRegenerateLanCert = async () => ({
