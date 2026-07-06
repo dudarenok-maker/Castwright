@@ -1656,6 +1656,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         transcribeMs: oneWorker ? result.transcribeMs : null,
         embedMs: oneWorker ? result.embedMs : null,
       });
+      /* Captured synchronously, right off the record recordChapterThroughput
+         just unshifted — `roll.recentChapters` is a LIVE reference to the
+         shared history array (generation-stats.ts's `history`), so reading
+         index 0 later (e.g. after an `await` in the fire-and-forget telemetry
+         block below) could pick up a DIFFERENT chapter's record if another
+         completion interleaves first. Reusing this value (instead of
+         recomputing the same formula again below) also keeps the throughput
+         table's and Resource trends' "QA" columns from silently desyncing if
+         the gating logic in generation-stats.ts ever changes on one side
+         only. */
+      const chapterRerecordRtf = roll.recentChapters[0]?.rerecordRtf ?? null;
       console.info(
         `[generation] chapter ${chapter.id} "${chapter.title ?? ''}" rendered: ` +
           `lines=${totalLines} groups=${result.segments.length} ` +
@@ -1696,6 +1707,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           title: chapter.title ?? null,
           modelKey,
           rtf: audioSec > 0 ? chapterRtf : null,
+          rerecordRtf: chapterRerecordRtf,
           audioSec,
           wallSec: synthSec,
           vramReservedMb,

@@ -84,6 +84,7 @@ let app: Express;
 let bookId: string;
 let getGenerationStats: typeof import('../tts/generation-stats.js').getGenerationStats;
 let resetGenerationStats: typeof import('../tts/generation-stats.js').__resetGenerationStatsForTest;
+let readTelemetry: typeof import('../tts/resource-telemetry.js').readTelemetry;
 
 interface ParsedTick {
   type: string;
@@ -109,14 +110,17 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ generationRouter }, { makeBookId }, cacheModule, statsModule] = await Promise.all([
-    import('./generation.js'),
-    import('../workspace/paths.js'),
-    import('../store/analysis-cache.js'),
-    import('../tts/generation-stats.js'),
-  ]);
+  const [{ generationRouter }, { makeBookId }, cacheModule, statsModule, telemetryModule] =
+    await Promise.all([
+      import('./generation.js'),
+      import('../workspace/paths.js'),
+      import('../store/analysis-cache.js'),
+      import('../tts/generation-stats.js'),
+      import('../tts/resource-telemetry.js'),
+    ]);
   getGenerationStats = statsModule.getGenerationStats;
   resetGenerationStats = statsModule.__resetGenerationStatsForTest;
+  readTelemetry = telemetryModule.readTelemetry;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -1431,6 +1435,14 @@ describe('POST /api/books/:bookId/generation — B1 QA-cost telemetry passthroug
     expect(latest.rerecordRtf).toBeCloseTo(2000 / 1000 / 10, 5);
     expect(latest.verifyRtf).not.toBeNull();
     expect(latest.verifyRtf).toBeCloseTo((500 + 300) / 1000 / 10, 5);
+
+    /* The resource-telemetry record mirrors the same rerecordRtf — it's
+       fire-and-forget (never awaited by the route), so poll for it. */
+    await vi.waitFor(async () => {
+      const [rec] = await readTelemetry(1);
+      expect(rec?.chapterId).toBe(1);
+      expect(rec?.rerecordRtf).toBeCloseTo(2000 / 1000 / 10, 5);
+    });
   });
 
   it('two GENUINELY concurrent chapter renders leave rerecordRtf/verifyRtf null for both (real overlap, no generationWorkers config set at all)', async () => {

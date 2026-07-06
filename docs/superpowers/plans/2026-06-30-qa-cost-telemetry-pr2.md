@@ -520,13 +520,22 @@ In `ThroughputRow` (after the Synth cell, line ~665):
       </span>
 ```
 
-- [ ] **Step 5: Add the header + cell in `ResourceTrends`**
+- [x] **Step 5: Add the header + cell in `ResourceTrends`**
 
 `ResourceTrends` reads `ResourceTelemetryRecord`, which does NOT carry `rerecordRtf`. Two options — pick the lighter:
-- **(a) Skip the QA column in `ResourceTrends`** (the spec's "column only, no summary" is satisfied by the throughput table; ResourceTrends is VRAM/wall-focused). Recommended — avoids threading `rerecordRtf` through the telemetry record + its server emit.
-- (b) If the operator wants QA next to VRAM too, add `rerecordRtf` to `ResourceTelemetryRecord` and its server-side emit, then render here.
+- (a) Skip the QA column in `ResourceTrends` (the spec's "column only, no summary" is satisfied by the throughput table; ResourceTrends is VRAM/wall-focused). Avoids threading `rerecordRtf` through the telemetry record + its server emit.
+- **(b) If the operator wants QA next to VRAM too, add `rerecordRtf` to `ResourceTelemetryRecord` and its server-side emit, then render here.**
 
-Default to **(a)**: revert the `TRENDS_COLS` change from Step 3 and do not touch `ResourceTrends`. Note the choice in the commit body. (Step 3's `TRENDS_COLS` edit applies only if you choose (b).)
+**Shipped 2026-07-06 via option (b)**, alongside an unrelated column-alignment
+bug fix discovered in the same file (both `TRENDS_COLS`/`THROUGHPUT_COLS`
+ended their last grid column in `auto`, which drifted out of alignment with
+the header — see [[127-generation-rtf-telemetry]] for the root cause). Column
+order is `Chapter, Engine, QA, RTF, Wall, VRAM` — QA immediately precedes RTF,
+mirroring the throughput table's `Synth, QA, RTF` order. `rerecordRtf` was
+added to `resource-telemetry.ts`, threaded through `generation.ts`'s
+`appendTelemetry` call (same `oneWorker` gate), and added to the OpenAPI
+schema. See [175-resource-telemetry](175-resource-telemetry.md) for the
+shipped shape.
 
 - [ ] **Step 6: Run the test to verify it passes**
 
@@ -595,4 +604,4 @@ PR title `feat(server): QA-cost RTF telemetry in the admin throughput table`. Bo
 
 **3. Type consistency:** `rerecordMs`/`transcribeMs`/`embedMs` (number) flow Task 1 → Task 3; `rerecordRtf`/`verifyRtf` (number | null) flow Task 2 → Task 4 → Task 5 with identical names and nullability throughout.
 
-**Open decision left to the executor (flagged, not hidden):** Task 5 Step 5 — whether `ResourceTrends` also gets the QA column (option b, needs a `ResourceTelemetryRecord` field + server emit) or not (option a, recommended). Default (a) keeps PR-2 scoped to the throughput table; (b) is a clean follow-up if the operator wants QA beside VRAM.
+**Open decision left to the executor (flagged, not hidden):** Task 5 Step 5 — whether `ResourceTrends` also gets the QA column (option b, needs a `ResourceTelemetryRecord` field + server emit) or not (option a, recommended). **Resolved 2026-07-06: option (b) shipped**, bundled with a column-alignment bug fix found in the same file — see Task 5 Step 5's updated note above.

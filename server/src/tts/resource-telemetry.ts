@@ -36,6 +36,12 @@ export interface ResourceTelemetryRecord {
   vramReservedMb: number | null;
   vramTotalMb: number | null;
   committedHostMb: number | null;
+  /** QA-driven re-record wall ÷ audio for this chapter (mirrors
+      `ChapterThroughputRecord.rerecordRtf` in generation-stats.ts). Populated
+      only for single-worker renders — under multi-worker interleaving the
+      summed per-block wall over-counts, so the route passes `null` (rendered
+      n/a). */
+  rerecordRtf: number | null;
 }
 
 /* Cap on retained lines. ~2000 chapters is many full books; past that we drop

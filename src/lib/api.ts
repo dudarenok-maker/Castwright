@@ -9055,6 +9055,9 @@ const mock = {
         title: `Chapter ${7 - i}`,
         modelKey: 'qwen3-tts-0.6b',
         rtf,
+        // Newest-first: index 0 is newest → lowest QA cost (post-fix), matching
+        // the getGenerationStats mock's rerecordRtf story.
+        rerecordRtf: [0.02, 0.05, 0.4, 0.7, 0.9, 1.1, 1.3][i] ?? null,
         audioSec: 600,
         wallSec: Math.round(600 * rtf),
         vramReservedMb: 3000 + i * 120,

@@ -4011,6 +4011,8 @@ export interface components {
             modelKey: string | null;
             /** @description synth wall ÷ audio (< 1 = faster than realtime). */
             rtf: number | null;
+            /** @description QA-driven re-record wall ÷ audio for this chapter; null for multi-worker runs. */
+            rerecordRtf: number | null;
             audioSec: number;
             wallSec: number;
             vramReservedMb: number | null;

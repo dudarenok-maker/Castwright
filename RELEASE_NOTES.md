@@ -15,6 +15,7 @@
 - **The Model Manager finally has its own page — and its own manual.** It's split out of Admin, with every setting explained in plain terms and pictured section by section. And the wiki's Advanced Settings page now shows you all eleven groups of dials, not just the first — plus eleven more corners of the guide that finally show you exactly what you'll see before you click.
 - **The Quality Gate wiki page finally shows its work.** Real pictures of a flagged line, a voice-drift flag, and the amber warning following you into the mini-player, plus the word-check pass documented for the first time.
 - **Your manuscript can no longer be quietly overwritten with sample text.** A rare timing gap while a chapter was still loading could, on the next edit, bake Castwright's own demo story into your real book's saved manuscript. That gap is closed, and a save can no longer wipe an already-read chapter down to nothing.
+- **The Admin watch console's columns finally line up.** Its two tables' headers could drift out of step with the numbers beneath them, most noticeably on Resource trends' VRAM column. They now stay put. Resource trends also picks up the same quality-check cost column the throughput table already showed, right next to its RTF figure.
 
 # Castwright 1.10.0
 

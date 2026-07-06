@@ -21,6 +21,7 @@ const rec = (over: Partial<Parameters<typeof mod.appendTelemetry>[0]> = {}) => (
   title: 'Chapter 1',
   modelKey: 'qwen3-tts-0.6b',
   rtf: 1.2,
+  rerecordRtf: null,
   audioSec: 600,
   wallSec: 720,
   vramReservedMb: 3200,
@@ -60,6 +61,18 @@ describe('resource-telemetry', () => {
     expect(out[0].rtf).toBe(0.9);
     expect(out[0].vramTotalMb).toBe(8192);
     expect(out[0].bookTitle).toBe('Book A');
+  });
+
+  it('round-trips a non-null rerecordRtf (single-worker QA-cost split)', async () => {
+    await mod.appendTelemetry(rec({ chapterId: 8, rerecordRtf: 0.3 }));
+    const out = await mod.readTelemetry();
+    expect(out[0].rerecordRtf).toBe(0.3);
+  });
+
+  it('round-trips a null rerecordRtf (multi-worker run)', async () => {
+    await mod.appendTelemetry(rec({ chapterId: 9, rerecordRtf: null }));
+    const out = await mod.readTelemetry();
+    expect(out[0].rerecordRtf).toBeNull();
   });
 
   it('returns records newest-first and honours the limit', async () => {

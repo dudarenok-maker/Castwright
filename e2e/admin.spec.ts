@@ -56,4 +56,64 @@ test.describe('Admin watch console', () => {
     const row7 = page.getByTestId('throughput-row-7');
     await expect(row7.getByTestId('throughput-qa-cell')).toHaveText('0.02');
   });
+
+  test('resource trends table shows the QA re-record RTF column', async ({ page }) => {
+    await page.goto('/#/admin');
+
+    const panel = page.getByTestId('resource-trends');
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+
+    await expect(panel.getByText('QA', { exact: true })).toBeVisible();
+
+    // Mock's newest chapter (id=7) carries rerecordRtf: 0.02 — same story as
+    // the throughput table's mock, proving the value flows into this
+    // specific cell, not just anywhere in the row.
+    const row7 = page.getByTestId('resource-row-7');
+    await expect(row7.getByTestId('resource-qa-cell')).toHaveText('0.02');
+  });
+
+  /* Regression for the column-alignment bug (2026-07-06): a trailing `auto`
+     grid track sizes independently per row (header vs. data), since each row
+     is its own grid container — jsdom string-equality tests on the class name
+     can't catch this because the class is identical even when the COMPUTED
+     layout drifts. Only a real layout engine (this Playwright spec) proves
+     header and data cells actually land in the same horizontal position. */
+  test('column headers stay aligned with their data cells in both tables', async ({ page }) => {
+    await page.goto('/#/admin');
+
+    await expect(page.getByTestId('generation-throughput-table')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('resource-trends')).toBeVisible({ timeout: 10_000 });
+
+    const alignment = await page.evaluate(() => {
+      const rectsOf = (el: Element) =>
+        Array.from(el.children)
+          .filter((c) => getComputedStyle(c).display !== 'none')
+          .map((c) => c.getBoundingClientRect().right);
+
+      const throughputScroll = document.querySelector('[data-testid="generation-throughput-scroll"]')!;
+      const throughputHeader = throughputScroll.firstElementChild!;
+      const throughputRow = document.querySelector('[data-testid="throughput-row-7"]')!;
+
+      const trendsScroll = document.querySelector('[data-testid="resource-trends-scroll"]')!;
+      const trendsHeader = trendsScroll.firstElementChild!;
+      const trendsRow = document.querySelector('[data-testid="resource-row-7"]')!;
+
+      return {
+        throughput: { header: rectsOf(throughputHeader), row: rectsOf(throughputRow) },
+        trends: { header: rectsOf(trendsHeader), row: rectsOf(trendsRow) },
+      };
+    });
+
+    // Same number of visible columns, and each column's right edge lines up
+    // within a pixel between the header row and a data row.
+    expect(alignment.throughput.header.length).toBe(alignment.throughput.row.length);
+    for (let i = 0; i < alignment.throughput.header.length; i++) {
+      expect(Math.abs(alignment.throughput.header[i] - alignment.throughput.row[i])).toBeLessThanOrEqual(1);
+    }
+
+    expect(alignment.trends.header.length).toBe(alignment.trends.row.length);
+    for (let i = 0; i < alignment.trends.header.length; i++) {
+      expect(Math.abs(alignment.trends.header[i] - alignment.trends.row[i])).toBeLessThanOrEqual(1);
+    }
+  });
 });
