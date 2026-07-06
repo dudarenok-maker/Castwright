@@ -22,6 +22,7 @@ that's fine. Read the license before redistributing audio you generate.
 from __future__ import annotations
 
 import asyncio
+import functools
 import gc
 import hashlib
 import json
@@ -304,6 +305,42 @@ def _codec_compiled_for_batch(model: Any):
         yield
     finally:
         decoder.forward = eager
+
+
+def _resolve_codec_device(pref: str, model_device: str) -> Optional[str]:
+    """Resolve QWEN_CODEC_DEVICE to a concrete device string, or None to
+    leave the codec exactly where it already is (today's CPU-only
+    behaviour).
+
+    'cpu' (default) -> None: no move attempted.
+    'auto' -> model_device: mirror this Qwen instance's OWN resolved device.
+      Deliberately NOT an independent cuda->mps->cpu probe like
+      QWEN_DEVICE=auto -- the codec is always loaded alongside an
+      already-resolved model (self._device is concrete by the time
+      _load_qwen_model runs this), so 'auto' here means "wherever that
+      model landed," full stop. This is the only way the codec can never
+      end up on a different card than its own model.
+    explicit cuda/cuda:N/mps -> returned unchanged (validated by the
+      caller via _validate_cuda_index, same as every other device knob)."""
+    p = (pref or "cpu").strip().lower()
+    if p == "cpu":
+        return None
+    if p == "auto":
+        return model_device
+    return pref
+
+
+def _move_codec_to_device(model: Any, device: str, torch_module: Any) -> None:
+    """Move the resolved codec (speech_tokenizer.model) to `device` and
+    resync its cached `.device` attribute, so every `.to(self.device)` call
+    inside Qwen3TTSTokenizer.encode()/decode() lands on the right device.
+    No-op when the codec can't be resolved (a perf/placement knob must
+    never break a model load)."""
+    speech_tokenizer = _resolve_speech_tokenizer(model)
+    if speech_tokenizer is None:
+        return
+    speech_tokenizer.model.to(device)
+    speech_tokenizer.device = torch_module.device(device)
 
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")
@@ -1890,6 +1927,12 @@ class QwenEngine(Engine):
                 model.device = torch.device(self._device)
             except Exception:
                 pass
+            codec_device = _resolve_codec_device(
+                os.environ.get("QWEN_CODEC_DEVICE", "cpu"), self._device
+            )
+            if codec_device is not None:
+                _validate_cuda_index(codec_device, torch)
+                _move_codec_to_device(model, codec_device, torch)
             # Surface the impl that actually took effect (getattr-guarded — the
             # nested attribute path can drift across qwen_tts/transformers versions).
             resolved = getattr(getattr(model, "model", None), "config", None)
