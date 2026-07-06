@@ -474,8 +474,8 @@ script). Replace the entire file content with:
 #      changed file is docs (same test as CONTRIBUTING.md's CI doc-only
 #      fast-path) — a docs-only diff has no runtime surface to exercise.
 #
-# The heavy legs (e2e, server-slow, scripts/Pester, build's full battery,
-# etc.) no longer run locally on every push — cloud `verify.yml` is now a
+# The heavy legs (e2e, server-slow, scripts/Pester, test:pinokio, etc.) no
+# longer run locally on every push — cloud `verify.yml` is now a
 # required status check covering them (see
 # docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md).
 # `verify:fast:branch` runs only the fast/cheap steps, each scope-gated to
