@@ -99,4 +99,21 @@ describe('config registry', () => {
     expect(byKey['qa.speaker.device']).toMatchObject({ apply: 'restart-sidecar', default: 'cpu' });
     expect(byKey['qa.speaker.autoRepair']).toMatchObject({ apply: 'live', default: false });
   });
+
+  it('registers the three Qwen codec-placement knobs with cpu/300/25 defaults', () => {
+    const device = getKnob('tts.qwen.codecDevice');
+    const chunkSize = getKnob('tts.qwen.codecChunkSize');
+    const leftContext = getKnob('tts.qwen.codecLeftContextSize');
+    expect(device?.env).toBe('QWEN_CODEC_DEVICE');
+    expect(device?.default).toBe('cpu');
+    expect(chunkSize?.env).toBe('QWEN_CODEC_CHUNK_SIZE');
+    expect(chunkSize?.default).toBe(300);
+    expect(leftContext?.env).toBe('QWEN_CODEC_LEFT_CONTEXT_SIZE');
+    expect(leftContext?.default).toBe(25);
+    [device, chunkSize, leftContext].forEach((k) => {
+      expect(k?.group).toBe('tts-engine');
+      expect(k?.apply).toBe('restart-sidecar');
+      expect(k?.risk).toBe('high');
+    });
+  });
 });

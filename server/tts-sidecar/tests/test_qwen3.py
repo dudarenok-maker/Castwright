@@ -38,9 +38,50 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
+class _FakeCodecDecoder:
+    """Stand-in for the real Qwen3TTSTokenizerV2Decoder -- the nn.Module
+    `chunked_decode` lives on (two levels below speech_tokenizer). Records
+    the kwargs it was called with so Task 3's tests can assert a
+    functools.partial bound the right chunk_size/left_context_size."""
+
+    def chunked_decode(self, codes: Any, chunk_size: int = 300, left_context_size: int = 25) -> dict:
+        return {"chunk_size": chunk_size, "left_context_size": left_context_size}
+
+
+class _FakeCodecModel:
+    """Stand-in for speech_tokenizer.model (the real Qwen3TTSTokenizerV2Model)
+    -- an nn.Module with a .decoder submodule and its own .to(). Records every
+    .to() call; `fail_calls` (a set of 1-indexed call numbers) makes that call
+    raise instead of succeeding, so Task 2's tests can simulate a mid-move
+    CUDA OOM (fail the 1st call) and confirm a rollback .to('cpu') (the 2nd
+    call) either succeeds or -- for the "rollback also fails" edge case --
+    also raises."""
+
+    def __init__(self, fail_calls: frozenset = frozenset()) -> None:
+        self.device: Any = None
+        self.decoder = _FakeCodecDecoder()
+        self.to_calls: list[Any] = []
+        self._fail_calls = fail_calls
+
+    def to(self, device: Any) -> "_FakeCodecModel":
+        self.to_calls.append(device)
+        if len(self.to_calls) in self._fail_calls:
+            raise RuntimeError("CUDA out of memory (fake OOM)")
+        self.device = device
+        return self
+
+
 class _FakeTokenizerStub:
-    """Stand-in for model.speech_tokenizer used by _icl_instruct_synth (Task 2).
-    decode() returns a flat-zero 24 kHz clip — same shape as the real decode."""
+    """Stand-in for model.speech_tokenizer used by _icl_instruct_synth (Task 2
+    fs-55) AND the side-25 codec-placement fix. decode() returns a flat-zero
+    24 kHz clip -- same shape as the real decode. .model/.device mirror the
+    real Qwen3TTSTokenizer's shape (a plain object, NOT an nn.Module -- see
+    _resolve_speech_tokenizer's docstring in main.py) so the placement fix's
+    .to()/device resync can be exercised without real weights."""
+
+    def __init__(self, codec_model: "_FakeCodecModel | None" = None) -> None:
+        self.model = codec_model if codec_model is not None else _FakeCodecModel()
+        self.device: Any = "cpu"  # matches the real class's from_pretrained default
 
     def decode(self, codes: Any) -> tuple[list[Any], int]:  # type: ignore[return]
         return [np.zeros(6000, dtype=np.float32)], 24000
@@ -660,6 +701,206 @@ def test_load_moves_inner_model_and_resyncs_device(fake_qwen_runtime, monkeypatc
     # device was resynced to match (so generate-time inputs land on the GPU).
     assert model.model.device == engine._device
     assert model.device == engine._device
+
+
+def test_resolve_codec_device_cpu_default_means_no_move() -> None:
+    assert main._resolve_codec_device("cpu", "cuda:0") is None
+    assert main._resolve_codec_device("", "cuda:0") is None
+    assert main._resolve_codec_device(None, "cuda:0") is None
+
+
+def test_resolve_codec_device_auto_mirrors_model_device() -> None:
+    assert main._resolve_codec_device("auto", "cuda:1") == "cuda:1"
+    assert main._resolve_codec_device("AUTO", "mps") == "mps"
+
+
+def test_resolve_codec_device_explicit_pin_passes_through() -> None:
+    assert main._resolve_codec_device("cuda:1", "cuda:0") == "cuda:1"
+
+
+def test_resolve_codec_device_explicit_pin_normalizes_case_and_whitespace() -> None:
+    assert main._resolve_codec_device("CUDA:0", "cpu") == "cuda:0"
+    assert main._resolve_codec_device(" cuda:1 ", "cpu") == "cuda:1"
+
+
+def test_resolve_codec_device_auto_on_cpu_only_box_is_a_true_noop() -> None:
+    assert main._resolve_codec_device("auto", "cpu") is None
+
+
+def test_load_survives_invalid_codec_device_index(fake_qwen_runtime, monkeypatch) -> None:
+    """An out-of-range QWEN_CODEC_DEVICE (e.g. cuda:5 on a 1-GPU box) must not
+    kill the whole model load -- it's a secondary perf knob, not the main
+    device pin. Degrades to leaving the codec on CPU with a logged warning."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:5")
+    engine._device = "cuda:0"
+    import torch as fake_torch
+    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(fake_torch.cuda, "device_count", lambda: 1, raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    assert model is not None  # the load must succeed despite the bad codec pin
+    codec_model = model.model.speech_tokenizer.model
+    assert codec_model.to_calls == []  # codec never moved -- degraded to no-op
+
+
+def test_load_moves_codec_to_device_when_configured(fake_qwen_runtime, monkeypatch) -> None:
+    """QWEN_CODEC_DEVICE=cuda:0 moves speech_tokenizer.model to that device
+    and resyncs the cached speech_tokenizer.device -- the codec's own
+    .to(self.device) calls inside encode()/decode() then land on the right
+    device."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:0")
+    engine._device = "cuda:0"
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    codec_model = model.model.speech_tokenizer.model
+    assert codec_model.device == "cuda:0"
+    assert model.model.speech_tokenizer.device == "cuda:0"
+
+
+def test_load_leaves_codec_on_cpu_by_default(fake_qwen_runtime, monkeypatch) -> None:
+    """QWEN_CODEC_DEVICE unset (default 'cpu') never touches the codec --
+    preserves today's behaviour exactly."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.delenv("QWEN_CODEC_DEVICE", raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    codec_model = model.model.speech_tokenizer.model
+    assert codec_model.to_calls == []
+
+
+def test_load_rolls_back_codec_on_oom(fake_qwen_runtime, monkeypatch) -> None:
+    """A CUDA OOM partway through the codec move must roll the codec back
+    to cpu -- not leave .model half-migrated. nn.Module.to() moves
+    submodules in place and non-transactionally, so a naive except that
+    only reset the cached .device attribute (without ALSO rolling .model
+    back) would leave weights split across devices and break every
+    subsequent decode()."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:0")
+    engine._device = "cuda:0"
+    import qwen_tts
+
+    failing_codec = _FakeCodecModel(fail_calls=frozenset({1}))  # move raises; rollback must succeed
+
+    def recorder(model_id, **kwargs):
+        fake_model = _FakeQwenModel(model_id)
+        fake_model.model.speech_tokenizer = _FakeTokenizerStub(codec_model=failing_codec)
+        return fake_model
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", recorder)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    assert model is not None  # a RECOVERABLE codec OOM must not fail the whole load
+    assert failing_codec.to_calls == ["cuda:0", "cpu"]  # move attempted, then rolled back
+    assert failing_codec.device == "cpu"
+    assert model.model.speech_tokenizer.device == "cpu"
+
+
+def test_load_propagates_when_codec_rollback_also_fails(fake_qwen_runtime, monkeypatch) -> None:
+    """If even the cpu rollback raises (e.g. a poisoned CUDA context), the
+    exception must propagate to _load_qwen_model's outer handler rather
+    than being swallowed -- a failed load is a clean, fully-visible
+    failure, never a half-migrated model handed back to a caller."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:0")
+    engine._device = "cuda:0"
+    import qwen_tts
+
+    unrecoverable_codec = _FakeCodecModel(fail_calls=frozenset({1, 2}))  # move AND rollback raise
+
+    def recorder(model_id, **kwargs):
+        fake_model = _FakeQwenModel(model_id)
+        fake_model.model.speech_tokenizer = _FakeTokenizerStub(codec_model=unrecoverable_codec)
+        return fake_model
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", recorder)
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        engine._load_qwen_model(engine.BASE_MODEL)
+
+
+def test_read_int_env_parses_and_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "150")
+    assert main._read_int_env("QWEN_CODEC_CHUNK_SIZE") == 150
+    monkeypatch.delenv("QWEN_CODEC_CHUNK_SIZE", raising=False)
+    assert main._read_int_env("QWEN_CODEC_CHUNK_SIZE") is None
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "not-a-number")
+    assert main._read_int_env("QWEN_CODEC_CHUNK_SIZE") is None
+
+
+def test_load_binds_chunk_size_when_configured(fake_qwen_runtime, monkeypatch) -> None:
+    """QWEN_CODEC_CHUNK_SIZE/QWEN_CODEC_LEFT_CONTEXT_SIZE bind a
+    functools.partial onto the resolved decoder's chunked_decode -- the
+    ONLY way to make these configurable, since
+    Qwen3TTSTokenizerV2Model.decode() calls chunked_decode() with no
+    arguments (verified directly against the installed qwen_tts package
+    during the design's adversarial review)."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "150")
+    monkeypatch.setenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", "10")
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 150, "left_context_size": 10}
+
+
+def test_load_leaves_chunk_size_at_library_defaults_when_unset(fake_qwen_runtime, monkeypatch) -> None:
+    """Knobs unset -> chunked_decode is left completely untouched (its own
+    300/25 defaults apply, matching today's behaviour byte-for-byte)."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.delenv("QWEN_CODEC_CHUNK_SIZE", raising=False)
+    monkeypatch.delenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 300, "left_context_size": 25}
+
+
+def test_load_floors_invalid_chunk_size_to_library_default(fake_qwen_runtime, monkeypatch) -> None:
+    """A hand-edited env value can bypass the Advanced Settings API's min:1
+    validation on QWEN_CODEC_CHUNK_SIZE -- a 0/negative value must fall back
+    to the library default (300) rather than corrupting every chunked_decode
+    call, mirroring _design_idle_ttl's floor-then-fallback-to-default idiom."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "0")
+    monkeypatch.delenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 300, "left_context_size": 25}
+
+
+def test_load_floors_negative_left_context_size_to_library_default(fake_qwen_runtime, monkeypatch) -> None:
+    """A negative QWEN_CODEC_LEFT_CONTEXT_SIZE must fall back to the library
+    default (25) rather than being passed straight through."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.delenv("QWEN_CODEC_CHUNK_SIZE", raising=False)
+    monkeypatch.setenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", "-1")
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 300, "left_context_size": 25}
 
 
 # ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──

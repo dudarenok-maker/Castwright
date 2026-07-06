@@ -22,6 +22,7 @@ that's fine. Read the license before redistributing audio you generate.
 from __future__ import annotations
 
 import asyncio
+import functools
 import gc
 import hashlib
 import json
@@ -280,9 +281,15 @@ def _should_compile_codec() -> bool:
 
 def _maybe_compile_codec(model: Any, torch: Any) -> bool:
     """Compile the resolved codec decoder's `forward` and stash the compiled
-    callable on the model (side-19 Task 4: the decoder runs on CPU on this
-    box for BOTH tiers -> inductor's cpp backend via dynamic=True; no
-    CUDA-graph modes apply). We compile `forward`, NOT the whole decoder
+    callable on the model (side-19 Task 4: originally written when the
+    decoder ran on CPU for BOTH tiers -> inductor's cpp backend via
+    dynamic=True. Since side-25, QWEN_CODEC_DEVICE can move the decoder
+    onto CUDA -- inductor adapts its backend to wherever the tensors
+    actually are at trace time, so this still works, but the "CPU for
+    both tiers" framing below is no longer universally true. Not a
+    correctness risk either way: a compile failure is swallowed to eager,
+    and this knob is off by default and off on Windows). We compile
+    `forward`, NOT the whole decoder
     module -- see the module docstring / plan note on why a whole-module swap
     silently defeats chunked_decode. Any failure is swallowed -> eager
     fallback; a perf knob must never kill a model load. Returns True iff a
@@ -320,6 +327,133 @@ def _codec_compiled_for_batch(model: Any):
         yield
     finally:
         decoder.forward = eager
+
+
+def _resolve_codec_device(pref: str, model_device: str) -> Optional[str]:
+    """Resolve QWEN_CODEC_DEVICE to a concrete device string, or None to
+    leave the codec exactly where it already is (today's CPU-only
+    behaviour).
+
+    'cpu' (default) -> None: no move attempted.
+    'auto' -> model_device: mirror this Qwen instance's OWN resolved device.
+      Deliberately NOT an independent cuda->mps->cpu probe like
+      QWEN_DEVICE=auto -- the codec is always loaded alongside an
+      already-resolved model (self._device is concrete by the time
+      _load_qwen_model runs this), so 'auto' here means "wherever that
+      model landed," full stop. This is the only way the codec can never
+      end up on a different card than its own model.
+    explicit cuda/cuda:N/mps -> returned unchanged (validated by the
+      caller via _validate_cuda_index, same as every other device knob)."""
+    p = (pref or "cpu").strip().lower()
+    if p == "cpu":
+        return None
+    if p == "auto":
+        return None if model_device == "cpu" else model_device
+    return p
+
+
+def _move_codec_to_device(model: Any, device: str, torch_module: Any) -> None:
+    """Move the resolved codec (speech_tokenizer.model) to `device` and
+    resync its cached `.device` attribute, so every `.to(self.device)` call
+    inside Qwen3TTSTokenizer.encode()/decode() lands on the right device.
+
+    On failure (most commonly a CUDA OOM), rolls the codec back to CPU
+    explicitly -- nn.Module.to() moves submodules in place and
+    non-transactionally, so merely resetting the cached `.device`
+    attribute without ALSO rolling back `.model` would leave some layers
+    on CUDA and the rest on CPU, and every subsequent decode() would fail
+    pushing CPU inputs into a partially-CUDA model. The rollback is a
+    real `.to('cpu')` call (frees GPU memory rather than allocating more
+    of the scarce resource, so it doesn't share the OOM's failure mode).
+    If the rollback itself raises, that exception is NOT swallowed -- it
+    propagates to _load_qwen_model's outer try/except, which already
+    reclaims and fails the whole load (see _load_qwen_model's
+    "Reclaim-on-failure" docstring note). A failed load is a clean,
+    fully-visible failure -- no half-migrated model is ever handed back
+    to a caller."""
+    speech_tokenizer = _resolve_speech_tokenizer(model)
+    if speech_tokenizer is None:
+        return
+    try:
+        speech_tokenizer.model.to(device)
+        speech_tokenizer.device = torch_module.device(device)
+    except Exception as e:
+        log.warning(
+            "Could not move Qwen codec to %s (%s) -- rolling back to cpu.",
+            device, e,
+        )
+        speech_tokenizer.model.to("cpu")
+        speech_tokenizer.device = torch_module.device("cpu")
+
+
+def _read_int_env(var_name: str) -> Optional[int]:
+    """Parse an integer env knob, returning None when unset or unparsable
+    -- a malformed value falls back to the library default rather than
+    hardening a model load into a failure."""
+    raw = os.environ.get(var_name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return None
+
+
+# These four must match server/src/config/registry.ts's tts.qwen.codecChunkSize
+# / codecLeftContextSize `min`/`default` values -- if either changes there,
+# update here too. A hand-edited env value bypasses the Advanced Settings
+# API's validation entirely, so the sidecar enforces its own floor
+# independently; named here (rather than left as inline literals) so the
+# TS/Python duplication is one grep away instead of silent.
+_CODEC_CHUNK_SIZE_MIN = 1
+_CODEC_CHUNK_SIZE_DEFAULT = 300
+_CODEC_LEFT_CONTEXT_SIZE_MIN = 0
+_CODEC_LEFT_CONTEXT_SIZE_DEFAULT = 25
+
+
+def _apply_codec_chunk_size(
+    model: Any, chunk_size: Optional[int], left_context_size: Optional[int]
+) -> None:
+    """Bind QWEN_CODEC_CHUNK_SIZE / QWEN_CODEC_LEFT_CONTEXT_SIZE onto the
+    resolved codec decoder's chunked_decode, mirroring how
+    _maybe_compile_codec binds a compiled forward onto the same decoder
+    object. The reachable call path -- speech_tokenizer.decode() ->
+    Qwen3TTSTokenizerV2Model.decode() -> decoder.chunked_decode(codes) --
+    calls chunked_decode with NO arguments, so its own
+    chunk_size=300/left_context_size=25 defaults always apply; there is
+    no other way to make them configurable. No-op when both knobs are
+    unset (library defaults apply as-is) or the decoder can't be
+    resolved. Idempotent in practice: each _load_qwen_model call builds a
+    fresh decoder instance, so there's no risk of wrapping an
+    already-wrapped chunked_decode and nesting partials.
+
+    Floors each value to the library default when it's out of the range
+    the Advanced Settings API enforces (see the _CODEC_*_MIN constants
+    above) -- a hand-edited env value bypasses that validation, and a
+    0/negative chunk_size would corrupt every subsequent chunked_decode
+    call. Mirrors _design_idle_ttl's floor-then-fallback-to-default idiom."""
+    if chunk_size is not None and chunk_size < _CODEC_CHUNK_SIZE_MIN:
+        log.warning(
+            "QWEN_CODEC_CHUNK_SIZE=%d invalid (must be >=%d) -- using library default %d.",
+            chunk_size, _CODEC_CHUNK_SIZE_MIN, _CODEC_CHUNK_SIZE_DEFAULT,
+        )
+        chunk_size = None
+    if left_context_size is not None and left_context_size < _CODEC_LEFT_CONTEXT_SIZE_MIN:
+        log.warning(
+            "QWEN_CODEC_LEFT_CONTEXT_SIZE=%d invalid (must be >=%d) -- using library default %d.",
+            left_context_size, _CODEC_LEFT_CONTEXT_SIZE_MIN, _CODEC_LEFT_CONTEXT_SIZE_DEFAULT,
+        )
+        left_context_size = None
+    if chunk_size is None and left_context_size is None:
+        return
+    decoder = _resolve_codec_decoder(model)
+    if decoder is None:
+        return
+    decoder.chunked_decode = functools.partial(
+        decoder.chunked_decode,
+        chunk_size=chunk_size if chunk_size is not None else _CODEC_CHUNK_SIZE_DEFAULT,
+        left_context_size=left_context_size if left_context_size is not None else _CODEC_LEFT_CONTEXT_SIZE_DEFAULT,
+    )
 
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")
@@ -1862,6 +1996,18 @@ class QwenEngine(Engine):
             ) from e
         _apply_torch_perf_flags(torch)
         _validate_cuda_index(self._device, torch)
+        codec_device = _resolve_codec_device(
+            os.environ.get("QWEN_CODEC_DEVICE", "cpu"), self._device
+        )
+        if codec_device is not None:
+            try:
+                _validate_cuda_index(codec_device, torch)
+            except ValueError as e:
+                log.warning(
+                    "QWEN_CODEC_DEVICE=%s invalid (%s) -- leaving codec on CPU.",
+                    codec_device, e,
+                )
+                codec_device = None
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
@@ -1906,6 +2052,13 @@ class QwenEngine(Engine):
                 model.device = torch.device(self._device)
             except Exception:
                 pass
+            if codec_device is not None:
+                _move_codec_to_device(model, codec_device, torch)
+            _apply_codec_chunk_size(
+                model,
+                _read_int_env("QWEN_CODEC_CHUNK_SIZE"),
+                _read_int_env("QWEN_CODEC_LEFT_CONTEXT_SIZE"),
+            )
             # Surface the impl that actually took effect (getattr-guarded — the
             # nested attribute path can drift across qwen_tts/transformers versions).
             resolved = getattr(getattr(model, "model", None), "config", None)
