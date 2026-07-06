@@ -96,6 +96,23 @@ export function canonicalModelKeyForEngine(
   }
 }
 
+/* Ordinal rank of the two Qwen quality tiers — 1.7B outranks 0.6B. Non-Qwen
+   keys rank 0 (never meaningfully compared; callers only invoke this once
+   both sides are already known to be Qwen tiers). */
+function qwenTierRank(key: TtsModelKey): number {
+  return key === 'qwen3-tts-1.7b' ? 1 : 0;
+}
+
+/* The higher-ranked of two Qwen model keys. Used to resolve a per-character
+   tier override (cast.json's `ttsModelKey`, meant to ELEVATE one character
+   above the run's default) against the run's own default/regenerate-chosen
+   tier — so a character whose stored tier happens to be the lower one (stale,
+   or simply never elevated) can never drag a run that was explicitly started
+   at the higher tier back down. Ties keep `a` (the character's tier). */
+export function higherQwenTier(a: TtsModelKey, b: TtsModelKey): TtsModelKey {
+  return qwenTierRank(a) >= qwenTierRank(b) ? a : b;
+}
+
 /* For sidecar requests, derive the engine-side model id from the namespaced
    key. `coqui-xtts-v2` → `xtts_v2`, `piper-en-us-medium` → `en-us-medium`. */
 export function sidecarModelId(key: TtsModelKey): string {

@@ -59,7 +59,7 @@ import {
   type TtsModelKey,
   type TtsProvider,
 } from '../tts/index.js';
-import { resolveCharacterEngine } from '../tts/per-character-engine.js';
+import { resolveCharacterEngine, computeUsedQwenTiers } from '../tts/per-character-engine.js';
 import { finalizeChapterAudioWrite } from '../audio/finalize-chapter-write.js';
 import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import {
@@ -799,23 +799,22 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
      vice-versa. Fires ONCE here, before any chapter synth — never per chapter —
      so the in-use tier stays warm across the book (load price paid on chapter 1
-     only). The needed tiers come from the cast's per-character ttsModelKey + the
-     run default (mirrors synthesise-chapter's routeFor), so a genuinely
-     mixed-tier book keeps both. Best-effort; a down / recycling sidecar skips. */
+     only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
+     against the run default with the SAME elevate-only precedence
+     synthesise-chapter's routeFor uses, so a character whose stored tier is
+     stale/lower than the run default can't make this precompute evict the tier
+     routeFor is about to request (which forced a cold mid-run load on chapter 1,
+     defeating the whole point of this precompute). A genuinely mixed-tier book
+     still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0) {
-    const usedQwenKeys = new Set<TtsModelKey>();
-    for (const c of cast.characters) {
-      if (resolveCharacterEngine(c, engine) !== 'qwen') continue;
-      usedQwenKeys.add(
-        c.ttsModelKey
-          ? canonicalModelKeyForEngine('qwen', c.ttsModelKey)
-          : resolveForEngine('qwen').modelKey,
-      );
-    }
-    await reconcileResidentQwenTiers({
-      keep06: usedQwenKeys.has('qwen3-tts-0.6b'),
-      keep17: usedQwenKeys.has('qwen3-tts-1.7b'),
-    }).catch((e) => console.warn('[generation] tier reconcile skipped:', (e as Error).message));
+    const { keep06, keep17 } = computeUsedQwenTiers(
+      cast.characters,
+      engine,
+      resolveForEngine('qwen').modelKey,
+    );
+    await reconcileResidentQwenTiers({ keep06, keep17 }).catch((e) =>
+      console.warn('[generation] tier reconcile skipped:', (e as Error).message),
+    );
   }
 
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio
