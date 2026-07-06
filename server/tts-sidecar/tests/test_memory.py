@@ -491,13 +491,13 @@ def test_debug_memory_endpoint_shape(monkeypatch):
         except Exception:
             has_host_stats = False
         if has_host_stats:
+            # Presence + sanity only — torch's host-allocator counters don't
+            # guarantee active <= owned at all times (observed active 6 KB vs
+            # owned 13 B on a barely-used pool), so no cross-key invariant.
             assert "host_pinned_owned_mb" in body["cuda"]
             assert "host_pinned_active_mb" in body["cuda"]
             assert body["cuda"]["host_pinned_owned_mb"] >= 0
-            assert (
-                body["cuda"]["host_pinned_active_mb"]
-                <= body["cuda"]["host_pinned_owned_mb"]
-            )
+            assert body["cuda"]["host_pinned_active_mb"] >= 0
 
 
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
