@@ -141,6 +141,9 @@ export interface PortForwarderHandle {
     close: () =>
       new Promise<void>((resolvePromise) => {
         server.close(() => resolvePromise());
+        // Force-evict any still-open client sockets (see openClientSockets'
+        // own comment above) so the close() callback above can fire promptly
+        // instead of waiting on a connection that may never end naturally.
         for (const socket of openClientSockets) socket.destroy();
       }),
   };
@@ -223,6 +226,11 @@ Open `server/src/mdns-owner.test.ts`. Add these new tests inside the existing
 
   it('isAlive() stays at its prior value across an intentional kill() (the killedIntentionally guard skips the flip entirely, matching the existing no-warn behavior for this case)', async () => {
     const child = makeFakeChild();
+    // Stub .kill so the non-win32 kill() branch (child.kill('SIGTERM')) has something
+    // to call — makeFakeChild() is a bare EventEmitter with no .kill method otherwise,
+    // matching the existing "kill() on non-win32 sends SIGTERM directly" test's setup.
+    const killSpy = vi.fn();
+    (child as unknown as { kill: typeof killSpy }).kill = killSpy;
     const spawnFn = vi.fn(() => child);
     const handle = spawnMdnsResponder('castwright.local', '/repo', {
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
