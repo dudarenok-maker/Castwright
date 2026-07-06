@@ -782,10 +782,8 @@ export function CastView({
             {/* fe-46 — always visible, never disabled; the voice-readiness
                 gate lives at generation start, not at this navigation step. */}
             <PrimaryButton variant="dark" icon={false} onClick={onContinueToManuscript}>
-              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                Continue to manuscript
-                <IconChevR className="w-4 h-4" />
-              </span>
+              Continue to manuscript
+              <IconChevR className="w-4 h-4" />
             </PrimaryButton>
           </div>
         </div>
@@ -964,7 +962,7 @@ export function CastView({
 
         {/* Plan 81 wave 3 — md:+ table layout (legacy, unchanged contract). */}
         <div className="hidden md:block bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
-          <div className="grid grid-cols-[40px_2fr_0.9fr_1.6fr_0.5fr_1fr_1fr_110px] gap-x-3 px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
+          <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] gap-x-3 px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
             <span></span>
             <span>Character</span>
             <span>Role</span>
@@ -1008,7 +1006,7 @@ export function CastView({
                   }
                   onOpenProfile(c.id);
                 }}
-                className={`w-full grid grid-cols-[40px_2fr_0.9fr_1.6fr_0.5fr_1fr_1fr_110px] gap-x-3 px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
+                className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] gap-x-3 px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
               >
                 <span
                   onClick={(e) => {
@@ -1158,7 +1156,7 @@ export function CastView({
                   </button>
                   {row?.error && (
                     <span
-                      className="text-[10px] text-red-600/80 truncate max-w-[100px]"
+                      className="text-[10px] text-red-600/80 truncate max-w-[130px]"
                       title={row.error}
                     >
                       ⚠ {row.error}
