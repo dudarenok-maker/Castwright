@@ -16,6 +16,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
+import type { TtsModelKey } from '../tts/index.js';
 
 export interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -23,6 +24,13 @@ export interface CharacterSnapshot {
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
   voiceId?: string;
   voiceEngine?: string;
+  /** The model key this character ACTUALLY rendered under — for Qwen, the
+      per-character elevate-only tier (`resolveCharacterQwenTier`); for any other
+      engine, that engine's canonical key. The srv-36 audition centroid renders
+      under this exact tier so its embeddings are comparable to the anchors AND a
+      0.6B base is never pulled co-resident with a 1.7B render. Absent on segments
+      written before this stamp (aggregate falls back to the chapter `modelKey`). */
+  modelKey?: TtsModelKey;
   /** The voice NAME resolved at render time (plan 108 Wave 2b) — for a
       bespoke Qwen render this is the designed voiceId (e.g. `qwen-oduvan`).
       Absent on pre-108 segments. */

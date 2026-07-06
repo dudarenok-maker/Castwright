@@ -63,6 +63,42 @@ describe('scoreBook — audition renders under the chapter render tier, not a ha
     expect(arg.modelKey).toBe('qwen3-tts-1.7b');
   });
 
+  it('THE FIX: per-character snapshot tier wins over a non-Qwen chapter run-default (mixed-engine book)', async () => {
+    // Mixed-engine book: the chapter's run-default is a Kokoro key, but Thurid
+    // (a per-character Qwen 1.7B override) rendered on 1.7B. Using the chapter
+    // top-level 'kokoro-v1' would collapse to 0.6B for Qwen (the OOM). The
+    // per-character snapshot modelKey must win.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-audition-perchar-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    const rows = Array.from({ length: 3 }, (_, i) => ({
+      characterId: 'thurid',
+      sentenceIds: [i],
+      vec: vec(0.02 * i),
+    }));
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(dir, 'audio', 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        modelKey: 'kokoro-v1', // chapter run-default is a non-Qwen engine
+        segments: rows.map((r) => ({
+          characterId: 'thurid',
+          sentenceIds: r.sentenceIds,
+          renderedFallbackEngine: null,
+        })),
+        characterSnapshots: {
+          thurid: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-thurid', modelKey: 'qwen3-tts-1.7b' },
+        },
+      }),
+    );
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    const arg = auditionSpy.mock.calls[0][0] as unknown as { modelKey: string };
+    expect(arg.modelKey).toBe('qwen3-tts-1.7b');
+  });
+
   it('falls back to 0.6B only for a legacy segments file with no stamped modelKey', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-audition-legacy-'));
     mkdirSync(join(dir, 'audio'), { recursive: true });

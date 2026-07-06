@@ -67,6 +67,9 @@ interface SegmentsFileView {
   characterSnapshots?: Record<string, {
     voiceEngine?: string;
     renderedFallbackEngine?: string;
+    /** Per-character render tier (see CharacterSnapshot.modelKey). The audition
+     *  renders under THIS (falls back to the chapter-level modelKey, then 0.6B). */
+    modelKey?: TtsModelKey;
     /** Resolved voice name at render time (e.g. `qwen-<uuid>` or `af_sarah`). */
     resolvedVoiceName?: string;
     voiceId?: string;
@@ -234,6 +237,8 @@ export async function scoreBook(
     resolvedVoiceName?: string;
     voiceId?: string;
     attributes?: string[];
+    /** Per-character render tier — the audition renders under this. */
+    modelKey?: TtsModelKey;
   };
 
   type ChapterData = {
@@ -294,15 +299,17 @@ export async function scoreBook(
       // Collect voice info for Option-B (first chapter's snapshot wins).
       if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
-        // Render the Option-B audition under the SAME tier this chapter's audio was
-        // ACTUALLY rendered in (segments.json `modelKey`) — NOT a hardcoded 0.6B.
-        // canonicalModelKeyForEngine returns a Qwen request key VERBATIM, so the old
-        // 'qwen3-tts-0.6b' placeholder forced EVERY too-thin/bimodal Qwen character's
-        // audition (K=12 full synths) onto the 0.6B base: co-resident with a 1.7B
-        // render (8GB-card OOM), and embedded under a model whose speaker space isn't
-        // comparable to the 1.7B-rendered anchors (a corrupt centroid). Legacy
-        // segments files with no stamped modelKey fall back to 0.6B.
-        const renderKey: TtsModelKey = cd.modelKey ?? 'qwen3-tts-0.6b';
+        // Render the Option-B audition under the SAME tier this character ACTUALLY
+        // rendered in — NOT a hardcoded 0.6B. canonicalModelKeyForEngine returns a
+        // Qwen request key VERBATIM, so the old 'qwen3-tts-0.6b' placeholder forced
+        // EVERY too-thin/bimodal Qwen character's audition (K=12 full synths) onto the
+        // 0.6B base: co-resident with a 1.7B render (8GB-card OOM), and embedded under
+        // a model whose speaker space isn't comparable to the 1.7B-rendered anchors (a
+        // corrupt centroid). Prefer the PER-CHARACTER stamp (elevate-only tier from
+        // buildCharacterSnapshots) so an elevated Qwen char in a non-Qwen-default book
+        // isn't under-tiered by the chapter run-default; fall back to the chapter-level
+        // modelKey, then 0.6B for legacy segments with neither stamp.
+        const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
         const modelKey = canonicalModelKeyForEngine(engine, renderKey);
         voiceInfoByChar.set(charId, {
           voiceName: snap.resolvedVoiceName,
