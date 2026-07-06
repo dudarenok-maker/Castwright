@@ -123,8 +123,16 @@ test('saveCache + loadCache round-trips deep-equal', () => {
   const original = {
     schemaVersion: SCHEMA_VERSION,
     steps: {
-      lint: { inputHash: 'a'.repeat(64), lastGreenAt: '2026-05-18T00:00:00.000Z', durationMs: 1234 },
-      test: { inputHash: 'b'.repeat(64), lastGreenAt: '2026-05-18T00:00:01.000Z', durationMs: 5678 },
+      lint: {
+        inputHash: 'a'.repeat(64),
+        lastGreenAt: '2026-05-18T00:00:00.000Z',
+        durationMs: 1234,
+      },
+      test: {
+        inputHash: 'b'.repeat(64),
+        lastGreenAt: '2026-05-18T00:00:01.000Z',
+        durationMs: 5678,
+      },
     },
   };
   saveCache(path, original);
@@ -463,7 +471,13 @@ function gitAt(cwd, args) {
   // `npm run verify:fast:scoped` -> `npm run test:hooks`), git sets these in
   // the process env for the hook, and without stripping them these fixture
   // commands would operate on the REAL repo instead of the throwaway `cwd`.
-  const { GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_PREFIX, ...cleanEnv } = process.env;
+  const {
+    GIT_DIR: _GIT_DIR,
+    GIT_WORK_TREE: _GIT_WORK_TREE,
+    GIT_INDEX_FILE: _GIT_INDEX_FILE,
+    GIT_PREFIX: _GIT_PREFIX,
+    ...cleanEnv
+  } = process.env;
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanEnv });
   if (r.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
@@ -505,4 +519,29 @@ test('branchDiffFiles: returns null when cwd is not a git repo', () => {
   const dir = mkTmp(); // no git init — merge-base has nothing to find
   const files = branchDiffFiles(dir);
   assert.equal(files, null);
+});
+
+test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
+  // Regression test for a real incident: branchDiffFiles must resolve git
+  // state strictly relative to its `cwd` argument, even when invoked from
+  // inside a process that already has GIT_DIR/GIT_WORK_TREE set for a
+  // DIFFERENT repo (exactly what happens when this suite runs inside the
+  // real pre-commit hook). Deterministic — doesn't depend on actually being
+  // inside a hook to catch a regression.
+  const dir = makeGitFixture();
+  gitAt(dir, ['switch', '-q', '-c', 'feature']);
+  writeFileSync(join(dir, 'feature.txt'), 'x', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'feature commit']);
+
+  const bogusGitDir = join(mkTmp(), 'unrelated-repo', '.git');
+  const prevGitDir = process.env.GIT_DIR;
+  process.env.GIT_DIR = bogusGitDir;
+  try {
+    const files = branchDiffFiles(dir);
+    assert.deepEqual(files, ['feature.txt']);
+  } finally {
+    if (prevGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = prevGitDir;
+  }
 });

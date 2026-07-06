@@ -7,13 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import {
-  readFileSync,
-  renameSync,
-  writeFileSync,
-  existsSync,
-  statSync,
-} from 'node:fs';
+import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
@@ -36,12 +30,7 @@ export const STEPS = [
     name: 'typecheck',
     inputs: {
       globs: ['src/**', 'server/src/**'],
-      extraFiles: [
-        'tsconfig.json',
-        'server/tsconfig.json',
-        'vite.config.ts',
-        'vitest.config.ts',
-      ],
+      extraFiles: ['tsconfig.json', 'server/tsconfig.json', 'vite.config.ts', 'vitest.config.ts'],
       includeLockfiles: ['root', 'server'],
     },
   },
@@ -103,7 +92,11 @@ export const STEPS = [
     name: 'test:server-slow',
     inputs: {
       globs: ['server/src/**'],
-      extraFiles: ['server/vitest.config.slow.ts', 'server/vitest.config.ts', 'server/tsconfig.json'],
+      extraFiles: [
+        'server/vitest.config.slow.ts',
+        'server/vitest.config.ts',
+        'server/tsconfig.json',
+      ],
       includeLockfiles: ['server'],
     },
   },
@@ -425,16 +418,39 @@ function stagedDiffFiles(cwd) {
 // filter correctly skips every step for that, which is fine given
 // verify.yml is now the required backstop. Exported (unlike
 // stagedDiffFiles) so it can be unit-tested directly.
+//
+// Strips ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX before
+// spawning: this function is invoked with an explicit `cwd` and must resolve
+// git state strictly relative to it. Without stripping, a caller running
+// inside an enclosing git process that already has these set (e.g. this
+// very function running inside the pre-push hook it's part of) would have
+// git resolve against the ENCLOSING process's repo instead of `cwd` — harmless
+// when `cwd` happens to be that same repo (the real pre-push path), but wrong
+// whenever `cwd` points elsewhere (exactly what this file's own unit tests do).
+function gitEnv() {
+  const {
+    GIT_DIR: _GIT_DIR,
+    GIT_WORK_TREE: _GIT_WORK_TREE,
+    GIT_INDEX_FILE: _GIT_INDEX_FILE,
+    GIT_PREFIX: _GIT_PREFIX,
+    ...cleanEnv
+  } = process.env;
+  return cleanEnv;
+}
+
 export function branchDiffFiles(cwd) {
+  const env = gitEnv();
   const base = spawnSync('git', ['merge-base', 'HEAD', 'main'], {
     cwd,
     encoding: 'utf8',
+    env,
   });
   if (base.error || base.status !== 0) return null;
   const baseSha = base.stdout.trim();
   const r = spawnSync('git', ['diff', '--name-only', baseSha, 'HEAD'], {
     cwd,
     encoding: 'utf8',
+    env,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -515,11 +531,10 @@ function sidecarFingerprint() {
 }
 
 function gitFileList(cwd) {
-  const r = spawnSync(
-    'git',
-    ['ls-files', '--cached', '--others', '--exclude-standard'],
-    { cwd, encoding: 'utf8' },
-  );
+  const r = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+    cwd,
+    encoding: 'utf8',
+  });
   if (r.error || r.status !== 0) return null;
   return r.stdout
     .split('\n')
@@ -554,7 +569,9 @@ const RETRIABLE_POOL_STEPS = new Set(['test:server', 'test:server-slow']);
     died), as opposed to a normal test failure. A real test failure must NOT match
     — retrying that would mask a flaky test. */
 export function isVitestPoolCrash(stderr) {
-  return /Worker exited unexpectedly|Worker forks emitted error|\[vitest-pool\]/i.test(stderr || '');
+  return /Worker exited unexpectedly|Worker forks emitted error|\[vitest-pool\]/i.test(
+    stderr || '',
+  );
 }
 
 /** Run one pipeline step (`npm run <name>`) and return its exit code. Retriable
@@ -609,9 +626,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
   if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
     const { busy, util } = detectGpuContention();
     if (busy) {
-      console.log(
-        `[contention] GPU busy (~${util}% util) — a generation run may be active.`,
-      );
+      console.log(`[contention] GPU busy (~${util}% util) — a generation run may be active.`);
       console.log(
         '[contention] Throttling test concurrency (LOW_CONCURRENCY=1). Set SKIP_CONTENTION_CHECK=1 to disable.',
       );
