@@ -81,11 +81,13 @@ import {
 } from '../verify-cache.mjs';
 ```
 
-Then replace the entire `parseFlags` test block (currently the 11 tests
-between `test('parseFlags recognizes --no-cache anywhere in argv', ...)` and
-`test('parseFlags recognizes --scope-staged', ...)`, i.e. lines 197-273 of
-the current file) with this — every existing assertion gains the new
-`scopeBranch: false` key, and one new test is added at the end:
+Then replace the entire `parseFlags` test block — the 8 existing tests
+from `test('parseFlags recognizes --no-cache anywhere in argv', ...)`
+through `test('parseFlags recognizes --scope-staged', ...)` inclusive
+(around lines 197-273 in the file before this step's own import edits shift
+line numbers down slightly — match by test-block content, not line number)
+— with this. Every existing assertion gains the new `scopeBranch: false`
+key, and one new test is added at the end:
 
 ```js
 test('parseFlags recognizes --no-cache anywhere in argv', () => {
@@ -414,13 +416,14 @@ Add immediately after it:
 - [ ] **Step 8: Manually spot-check the new script**
 
 Run: `npm run verify:fast:branch`
-Expected: since this branch (`docs/verify-ci-rebalance-design`) so far only
-touches `docs/superpowers/specs/**` and (after this task) `scripts/`,
-`package.json`, `scripts/tests/**` — steps whose scope includes those paths
-run (e.g. `test:hooks` since it now covers `scripts/tests/*.test.mjs`);
-steps like `test:sidecar` (scope `server/tts-sidecar/**`) print
-`[skip] test:sidecar (out of scope)`. Confirm no step errors out and the
-scope decisions look sane in the printed `[skip]`/`[run]` lines.
+Expected: `branchDiffFiles` diffs COMMITTED history (`merge-base(HEAD,main)`
+vs `HEAD`), not the working tree — so at this point, before this task's own
+changes are committed (Step 9 below), it only sees this branch's
+already-committed diff (the spec + plan docs under `docs/superpowers/**`),
+which touches none of the 8 selected steps' scopes. Every step should print
+`[skip] ... (out of scope)` and the command exits 0. This is correct: it
+confirms the filter is diff-based on git history, not on uncommitted files.
+Don't be alarmed that nothing actually runs yet.
 
 - [ ] **Step 9: Commit**
 
@@ -428,6 +431,20 @@ scope decisions look sane in the printed `[skip]`/`[run]` lines.
 git add scripts/verify-cache.mjs scripts/tests/verify-cache.test.mjs package.json
 git commit -m "feat(scripts): add --scope-branch mode to verify-cache for branch-diff-scoped pre-push checks"
 ```
+
+- [ ] **Step 10: Re-check after committing (note the `computeShared` interaction)**
+
+Now that Step 9 has committed `package.json` on this branch, run
+`npm run verify:fast:branch` again.
+Expected: this time EVERY selected step runs (no skips) — because
+`package.json` is now part of the branch's diff vs `main`, and
+`verify-cache.mjs`'s existing `computeShared()` treats any root
+`package.json`/`package-lock.json` change as global (a dep/lockfile bump can
+affect every leg), overriding the per-step scope filter for the rest of
+this branch's life. This is pre-existing, correct behavior (the same rule
+`--scope-staged` already honors) — not a bug, and not something to "fix."
+From this point on, every `verify:fast:branch` run on this branch runs the
+full 8-step list until the branch merges.
 
 ---
 
@@ -479,8 +496,12 @@ npm run verify:fast:branch
 
 Run: `git add -A && git commit -m "test: dummy commit for hook check" --allow-empty` (a throwaway empty commit — do NOT push it)
 Then run: `bash .husky/pre-push <<< "refs/heads/docs/verify-ci-rebalance-design"`
-Expected: the guard scripts run, then `npm run verify:fast:branch` runs
-(same scope-filtered output as Task 1 Step 8), exiting 0 on success.
+Expected: the guard scripts run, then `npm run verify:fast:branch` runs. By
+this point Task 1 has already committed `package.json` on this branch, so
+per Task 1 Step 10's note, `computeShared` is in effect and the FULL
+8-step list runs (not a scoped subset) — that's correct here, not a
+regression. Confirm the hook exits 0 on success (or fails loudly if a step
+is genuinely red).
 Then run: `git reset --hard HEAD~1` to remove the throwaway commit (it was
 never pushed, so this is safe and doesn't touch the real commit history).
 
@@ -1226,6 +1247,9 @@ Rationale and the exact glob list:
 
 The same file-set test also skips the **local** pre-push `npm run verify`
 battery (`scripts/is-docs-only-push.mjs`, wired into `.husky/pre-push`) — a
+docs-only push has no runtime surface for tests/build/e2e to exercise, so the
+~15-min battery would otherwise run twice (locally, then again in CI) for zero
+signal. See [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate).
 ```
 
 Replace with:
@@ -1250,7 +1274,10 @@ scope-matching (unrelated to the removed `paths-ignore`):
 
 The same file-set test also skips the **local** pre-push
 `npm run verify:fast:branch` check (`scripts/is-docs-only-push.mjs`, wired
-into `.husky/pre-push`) — a
+into `.husky/pre-push`) — a docs-only push has no runtime surface for the
+fast checks to exercise, so paying even that fast local cost is wasted
+time/CPU for zero signal. See
+[CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate).
 ```
 
 - [ ] **Step 5: Fix five more stale "pre-push gate" / "npm run verify" references**
@@ -1455,28 +1482,59 @@ the still-pending equivalent action for `pr-issue-link.yml` (doc 235, Task 7
 Step 8) has been treated. Do this only after Tasks 1-7 are merged to `main`
 (the ruleset should reference a check that's already running there).
 
-- [ ] **Step 1: Confirm current ruleset state**
+**Do not let this task stall.** Doc 235's identical manual ruleset step for
+`pr-issue-link.yml` has sat pending since it was written — that is the
+concrete precedent for this exact class of action not happening promptly.
+Between Tasks 1-7 landing and this task completing, the repo is in a
+**strictly weaker** enforcement state than before this plan started: local
+pre-push no longer runs the full battery (Task 2), and cloud `verify.yml`
+runs but is merely advisory (not required) until this task lands. Treat
+this window as something to close quickly, not a "whenever" follow-up —
+ideally attempt it in the same working session that merges Tasks 1-7,
+before moving on to unrelated work.
 
-Run: `gh api repos/dudarenok-maker/Castwright/rulesets` and identify the
-ruleset covering `main` (per CONTRIBUTING.md, `id 17654264`). Read its
-current `rules` array to confirm it has no `required_status_checks` rule
-yet (matches the documented "deliberately excludes required checks" state).
+- [ ] **Step 1: Fetch the FULL current ruleset, don't assume its shape**
+
+Run: `gh api repos/dudarenok-maker/Castwright/rulesets/17654264 > /tmp/ruleset-current.json`
+(per CONTRIBUTING.md, `id 17654264` is the ruleset covering `main`). Read
+the saved JSON in full. Confirm its `rules` array has no
+`required_status_checks` entry yet (matches the documented "deliberately
+excludes required checks" state), and note down every OTHER rule present
+(expected: at minimum a rule blocking force-push and a rule blocking
+deletion — CONTRIBUTING.md describes these as "blocks force-push +
+deletion"). **These existing rules MUST be preserved** in Step 3 — GitHub's
+ruleset update endpoint is `PUT /repos/{owner}/{repo}/rulesets/{id}` with
+**replace semantics on the whole `rules` array**, not a per-rule merge.
+There is no PATCH-style "add one rule" call for rulesets. A `PUT` sent with
+only a new `required_status_checks` rule and none of the existing rules
+would silently **delete** the force-push/deletion protection — this is the
+single highest-risk mistake in this entire plan; do not rush this step.
 
 - [ ] **Step 2: Present the exact change to the user and get explicit go-ahead**
 
-State plainly: this will add a `required_status_checks` rule to ruleset
-`17654264` requiring the `npm run verify` check (the `verify.yml` job name)
-to pass before merge on `main`. Ask the user to confirm before proceeding —
-do not run Step 3 without an explicit yes in this session.
+State plainly: this will `PUT` an updated ruleset body to
+`repos/dudarenok-maker/Castwright/rulesets/17654264` that contains **every
+rule from Step 1's fetch, unchanged, PLUS one new
+`required_status_checks` rule** requiring the `npm run verify` check (the
+`verify.yml` job name) to pass before merge on `main`. Show the user the
+full diff between Step 1's saved JSON and the body you're about to send —
+every field should match except the added rule. Ask for explicit
+confirmation before proceeding — do not run Step 3 without an explicit yes
+in this session.
 
 - [ ] **Step 3: Apply the ruleset change**
 
-Once confirmed, use `gh api` (PATCH or PUT against
-`repos/dudarenok-maker/Castwright/rulesets/17654264`) to add a
-`required_status_checks` rule listing `npm run verify` as a required check
-(add `Verify PR body links a GitHub issue` too in the same call if the user
-wants doc 235's pending item bundled in — ask which they want per the plan's
-Task 8 framing, don't assume).
+Once confirmed: take Step 1's saved JSON, add ONE new entry to its `rules`
+array —
+`{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "npm run verify"}], "strict_required_status_checks_policy": false}}`
+(add a second entry in the same `required_status_checks` array,
+`{"context": "Verify PR body links a GitHub issue"}`, only if the user
+confirms they want doc 235's pending item bundled in during Step 2 — ask,
+don't assume) — leaving every other existing field and rule byte-for-byte
+untouched. `PUT` the complete modified JSON body to
+`repos/dudarenok-maker/Castwright/rulesets/17654264` via `gh api --method
+PUT --input <file>`. Immediately re-fetch (repeat Step 1's `GET`) and diff
+against what was intended, to confirm nothing else changed.
 
 - [ ] **Step 4: Verify**
 
@@ -1530,3 +1588,21 @@ full-`npm run verify` usage in parallel-agent integration-branch
 reconciliation) describe behavior that's still accurate and were
 deliberately left untouched — noted here so a reviewer doesn't have to
 re-derive why they're not in the task list.
+
+**Revision history (round-1 adversarial plan review):** an Opus pass found
+one Critical/Contradicted issue and several Significant/Contradicted ones,
+all fixed in this version: Task 8's `gh api` guidance was rewritten to
+fetch-preserve-modify-PUT the full ruleset body instead of risking a bare
+`PUT`/`PATCH` that could silently drop the existing force-push/deletion
+protection rules; Task 1 Step 8 and Task 2 Step 2's manual checks
+were corrected to predict the ACTUAL scope-filter behavior on this branch
+(all-skip before this task's own commit, since `branchDiffFiles` reads
+committed history not the working tree; all-run after, since this task's
+own `package.json` change trips the existing `computeShared` global-override
+for the rest of the branch's life) instead of a plausible-but-wrong guess;
+the `parseFlags` test-block instructions dropped a stale exact line-number
+anchor in favor of a content anchor; and the Doc-only PR fast-path
+CONTRIBUTING.md edit was extended to cover a trailing clause it had
+previously left stale ("~15-min battery", "tests/build/e2e"). Task 8 also
+gained an explicit warning against letting the ruleset step stall the way
+doc 235's identical pending item has.
