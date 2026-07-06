@@ -49,6 +49,15 @@ route is dropped (falls back to the default) rather than rejected.
   per-chapter entry with the same choice.
 - The 1.7B tier remains a per-character setting too (`voice-engine-picker`); this
   adds a chapter-level override at regen time, it doesn't replace per-character.
+- **Elevate-only precedence (bug fix, side-11 follow-up):** a character's stored
+  `ttsModelKey` (cast.json) and the regenerate-time `modelKey` are resolved via
+  `higherQwenTier()` (`server/src/tts/model-keys.ts`), NOT "character always
+  wins". Originally `routeFor()` in `synthesise-chapter.ts` let the per-character
+  field win outright — since fs-56 stamps every cast member with a tier once
+  cast, that made this whole feature a no-op on any already-cast book: picking
+  "Qwen3-TTS 1.7B" here silently rendered every character at whatever tier
+  cast.json already had. Now the per-character field only ever ELEVATES a
+  character above the chosen tier here, never downgrades one below it.
 
 ## Tests
 
@@ -58,6 +67,10 @@ route is dropped (falls back to the default) rather than rejected.
   entry's `modelKey` when present, falls back to `ui.ttsModelKey` when absent.
 - `server/src/workspace/queue-io.test.ts` — `enqueue()` carries `modelKey` onto
   the stored entry; omits it when absent.
+- `server/src/tts/synthesise-chapter.test.ts` ("never downgrades a 1.7B
+  run/regenerate override for a character stuck on the 0.6B tier") + two
+  `higherQwenTier` cases in `server/src/tts/index.test.ts` — pin the
+  elevate-only precedence above.
 - typecheck (frontend + server) + ESLint clean; full frontend + server suites green.
 
 ## Follow-up
