@@ -6,7 +6,12 @@ BeforeAll {
     Import-Module $modulePath -Force
 }
 
-Describe 'Set-SystemAwake / Reset-SystemAwake' {
+Describe 'Set-SystemAwake / Reset-SystemAwake' -Skip:($env:OS -ne 'Windows_NT') {
+    # The underlying SetThreadExecutionState P/Invoke is Windows-only —
+    # kernel32.dll doesn't exist on the Linux CI runner (npm run verify runs
+    # cross-platform via pwsh), so these tests are a no-op there rather than a
+    # false failure. $env:OS is 'Windows_NT' only on Windows, in both Windows
+    # PowerShell 5.1 and pwsh (unlike $IsWindows, which 5.1 doesn't define).
     AfterEach {
         # Don't leave the test run itself holding ES_SYSTEM_REQUIRED.
         Reset-SystemAwake | Out-Null

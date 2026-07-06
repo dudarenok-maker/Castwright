@@ -1348,6 +1348,101 @@ def test_synth_17b_reuses_disk_cached_prompt_after_restart(
     assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
 
 
+def _seed_stale_17b_disk_cache(eng, vdir: str, voice_id: str) -> str:
+    """Simulate a 1.7B-native prompt already derived+persisted for `voice_id`
+    by an earlier call — both the on-disk .pt and (to mimic the common case
+    of evicting a same-process cache) the in-memory entry. Returns pt_path."""
+    cache_key = f"{voice_id}__1.7b"
+    pt_path, _json_path = eng._voice_paths(cache_key)
+    os.makedirs(vdir, exist_ok=True)
+    with open(pt_path, "wb") as fh:
+        fh.write(b"\x00")
+    eng._prompt_cache[cache_key] = ({"_prompt": True, "stale": True}, "English")
+    return pt_path
+
+
+def test_redesign_evicts_stale_1_7b_disk_cache(fake_qwen_runtime) -> None:
+    """Re-designing a voiceId must drop BOTH the in-memory AND on-disk 1.7B
+    native prompt — not just the 0.6B one — so a chapter rendered at the
+    1.7B tier after a re-design can't silently keep the OLD voice's timbre
+    via the on-disk .pt read path added for side-11."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = str(fake_qwen_runtime["dir"])
+    eng.design_voice("hart", "a witty teenage boy", "English", None)
+    pt_path = _seed_stale_17b_disk_cache(eng, vdir, "hart")
+
+    eng.design_voice("hart", "now a gruff old sailor", "English", None)
+
+    assert "hart__1.7b" not in eng._prompt_cache
+    assert not os.path.isfile(pt_path), "stale 1.7B .pt must be deleted on re-design"
+
+
+def test_mint_variant_remint_evicts_stale_1_7b_disk_cache(fake_qwen_runtime, monkeypatch) -> None:
+    """Re-minting a variant voiceId must drop its stale 1.7B native prompt too
+    — mint_variant only wrote/evicted the 0.6B-style key before this fix."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = str(fake_qwen_runtime["dir"])
+    eng.design_voice("v1", "A warm narrator.", "English", None)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+    eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, None)
+    pt_path = _seed_stale_17b_disk_cache(eng, vdir, "v1__angry")
+
+    eng.mint_variant("v1", "v1__angry", "Delivered even angrier.", "English", None, None)
+
+    assert "v1__angry__1.7b" not in eng._prompt_cache
+    assert not os.path.isfile(pt_path), "stale 1.7B .pt must be deleted on re-mint"
+
+
+def test_evict_voice_route_evicts_1_7b_disk_cache(fake_qwen_runtime) -> None:
+    """POST /qwen/evict-voice must drop the 1.7B native prompt alongside the
+    0.6B one — the server's voice-design 'promote' step calls this expecting
+    a full evict, not just the base embedding."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = str(fake_qwen_runtime["dir"])
+    eng.design_voice("wren", "a curious teenage girl", "English", None)
+    pt_path = _seed_stale_17b_disk_cache(eng, vdir, "wren")
+
+    client = TestClient(main.app)
+    resp = client.post("/qwen/evict-voice", json={"voiceId": "wren"})
+
+    assert resp.status_code == 200
+    assert "wren__1.7b" not in eng._prompt_cache
+    assert not os.path.isfile(pt_path), "stale 1.7B .pt must be deleted by /qwen/evict-voice"
+
+
+def test_synth_17b_derive_writes_pt_atomically(fake_qwen_runtime, monkeypatch) -> None:
+    """The freshly-derived <voice>__1.7b.pt is written via temp-file +
+    os.replace, not a direct torch.save onto the final path — so a concurrent
+    _load_voice_prompt_17b call for the same cold-cache voice (two sibling
+    chapters rendering at once) can never observe a torn/partial file."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = str(fake_qwen_runtime["dir"])
+    os.makedirs(vdir, exist_ok=True)
+    eng.design_voice("priya", "A steady narrator.", "English", None)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+
+    eng.synthesize("1.7b", "priya", "First line.")
+
+    pt_path = os.path.join(vdir, "priya__1.7b.pt")
+    assert os.path.isfile(pt_path)
+    leftovers = [f for f in os.listdir(vdir) if f.startswith("priya__1.7b.pt.tmp-")]
+    assert leftovers == [], f"atomic write left a temp file behind: {leftovers}"
+
+
 def test_synth_17b_does_not_call_ensure_base_loaded(fake_qwen_runtime, monkeypatch) -> None:
     """synthesize('1.7b') must NOT call _ensure_base_loaded (the 0.6B loader).
     Only _ensure_base17_loaded should be called — the 0.6B path is unchanged."""

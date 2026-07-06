@@ -2301,6 +2301,24 @@ class QwenEngine(Engine):
             os.path.join(self._voices_dir, f"{safe}.json"),
         )
 
+    def _evict_17b_prompt(self, voice_id: str) -> None:
+        """Drop BOTH the in-memory and on-disk 1.7B-native prompt cache for a
+        voice. Called anywhere the base (0.6B) embedding is replaced or evicted
+        — design_voice, mint_variant, /qwen/evict-voice — so a stale
+        `<voice_id>__1.7b.pt` left over from the previous embedding can never
+        be served again (`_load_voice_prompt_17b` reads that file back on a
+        cache miss instead of always re-deriving)."""
+        cache_key = f"{voice_id}__1.7b"
+        with self._cache_lock:
+            self._prompt_cache.pop(cache_key, None)
+        pt_path, _json_path = self._voice_paths(cache_key)
+        try:
+            os.remove(pt_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.warning("Failed to evict stale 1.7B prompt file %s: %s", pt_path, e)
+
     def _migrate_legacy_voices(self, legacy_dir: str) -> None:
         """One-time move of designed voices from the legacy __file__-relative
         dir into the configured QWEN_VOICES_DIR (the per-workspace tree).
@@ -2608,9 +2626,12 @@ class QwenEngine(Engine):
             # serving the previous embedding — the next synth reloads the fresh
             # .pt we just wrote. (We don't warm it here: the audition preview
             # below uses `prompt` directly, and the first real synth's single
-            # disk load is negligible.)
+            # disk load is negligible.) Also evict the derived 1.7B-native
+            # prompt (in-memory AND on-disk) — it was derived from the OLD
+            # embedding and must be re-derived from this new one.
             with self._cache_lock:
                 self._prompt_cache.pop(voice_id, None)
+            self._evict_17b_prompt(voice_id)
 
             # 4. audition preview — speak the caller's calibration line in the new
             #    voice (the full evidence quote, NOT the short reference text).
@@ -2778,6 +2799,7 @@ class QwenEngine(Engine):
         )
         with self._cache_lock:
             self._prompt_cache.pop(variant_voice_id, None)
+        self._evict_17b_prompt(variant_voice_id)
 
         # audition preview — speak the calibration line in the new variant voice
         _phase("rendering")
@@ -2885,12 +2907,14 @@ class QwenEngine(Engine):
         # in-memory cache) — load it instead of re-deriving, which is an
         # expensive GPU decode + create_voice_clone_prompt call (side-11:
         # every restart was forcing full re-derivation for every voice
-        # touched again, regardless of an existing on-disk .pt).
+        # touched again, regardless of an existing on-disk .pt). Reported as
+        # a MISS (like the sibling 0.6B disk-load path below) — it's a real
+        # disk read with non-trivial load_ms, not a warm in-memory hit.
         if os.path.isfile(pt_path):
             prompt = torch.load(pt_path, weights_only=False)
             with self._cache_lock:
                 self._prompt_cache[cache_key] = (prompt, lang)
-            return prompt, lang, True
+            return prompt, lang, False
 
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
@@ -2904,8 +2928,14 @@ class QwenEngine(Engine):
         )
 
         # Persist to disk so re-runs and restarts skip the derivation step.
+        # Written to a temp file then atomically replaced into place — a
+        # concurrent _load_voice_prompt_17b call for the same cold-cache voice
+        # (e.g. two sibling chapters rendering at once) can then only ever see
+        # pt_path fully-written or not-yet-existing, never a torn/partial file.
         os.makedirs(self._voices_dir, exist_ok=True)
-        torch.save(prompt, pt_path)
+        tmp_path = f"{pt_path}.tmp-{os.getpid()}"
+        torch.save(prompt, tmp_path)
+        os.replace(tmp_path, pt_path)
         with self._cache_lock:
             self._prompt_cache[cache_key] = (prompt, lang)
         log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
@@ -5291,8 +5321,10 @@ async def qwen_evict_voice(req: Request) -> Response:
     qwen = ENGINES.get("qwen")
     evicted = False
     if isinstance(qwen, QwenEngine):
+        stripped_id = voice_id.strip()
         with qwen._cache_lock:
-            evicted = qwen._prompt_cache.pop(voice_id.strip(), None) is not None
+            evicted = qwen._prompt_cache.pop(stripped_id, None) is not None
+        qwen._evict_17b_prompt(stripped_id)
     return JSONResponse({"ok": True, "evicted": evicted})
 
 
