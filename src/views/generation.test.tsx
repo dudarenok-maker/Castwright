@@ -1233,6 +1233,59 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     renderWithChapters([excludedDrifted, chapter2], 'kokoro-v1');
     expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
   });
+
+  it('does not flag a whole cast pinned to 1.7B as drifted against a stale 0.6B run-default (reported bug)', () => {
+    /* Per-character ttsModelKey overrides win over the run-default modelKey
+       in synthesis (routeFor) and in the generation header's engineLabel
+       (effectiveEngineLabel) — drift detection must agree with both, or a
+       cast pinned above the raw default gets falsely flagged as "generated
+       with a different engine" / reported as a downgrade to the raw
+       default. */
+    const pinnedCast: Character[] = characters.map((c) => ({
+      ...c,
+      ttsModelKey: 'qwen3-tts-1.7b',
+    }));
+    const rendered17b: Chapter = { ...chapter1, audioModelKey: 'qwen3-tts-1.7b' };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([rendered17b, chapter2]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters: pinnedCast,
+        chapters: [rendered17b, chapter2],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[rendered17b, chapter2]}
+          characters={pinnedCast}
+          paused
+          title="Drift Fixture"
+          bookId="b1"
+          modelKey="qwen3-tts-0.6b"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+    expect(screen.queryByText(/Generated with .* · current engine is/i)).toBeNull();
+  });
 });
 
 describe('GenerationView — reassignment staleness caption (Bug 2)', () => {

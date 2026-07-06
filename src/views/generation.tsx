@@ -62,7 +62,12 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { engineForModelId } from '../lib/models';
-import { ttsModelLabel, effectiveEngineLabel, formatEngineBreakdown } from '../lib/tts-models';
+import {
+  ttsModelLabel,
+  effectiveEngineLabel,
+  effectiveModelKey,
+  formatEngineBreakdown,
+} from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { deriveIssues } from '../lib/chapter-issues';
@@ -767,21 +772,31 @@ export function GenerationView({
      different TTS engine than the project's current selection — usually
      because the user changed the model picker after generation. The list
      drives the top-of-view banner (count + bulk-regen affordance), the
-     per-row caption, and the bulk-regen confirm dialog's body copy. */
+     per-row caption, and the bulk-regen confirm dialog's body copy.
+
+     "Current selection" here is the EFFECTIVE engine (per-character
+     `ttsModelKey` pins win over the raw run-default `modelKey`, same as the
+     header's `engineLabel` below) — not the raw picker value. Comparing
+     against the raw value flagged a whole cast pinned to 1.7B as drifted
+     against a stale 0.6B default, misreporting it as a "downgrade". */
+  const activeEngineKey = useMemo(
+    () => effectiveModelKey(characters, modelKey),
+    [characters, modelKey],
+  );
   const driftedChapters = useMemo(
     () =>
       activeChapters.filter(
         (c) =>
           c.state === 'done' &&
           c.audioModelKey != null &&
-          c.audioModelKey !== modelKey &&
+          c.audioModelKey !== activeEngineKey &&
           /* A genuinely mixed-engine chapter (narrator on Kokoro + dialogue on
              Qwen) is intentional, not drift — it shows a per-engine breakdown
              caption instead, and must not inflate the drift banner/bulk-regen
              (false-drift fix, 2026-06-07). */
           !isMixedEngineChapter(c),
       ),
-    [activeChapters, modelKey],
+    [activeChapters, activeEngineKey],
   );
   const driftedCount = driftedChapters.length;
   /* Distinct source engines seen across the drifted set. The common case
@@ -1054,7 +1069,7 @@ export function GenerationView({
               engine
             </p>
             <p className="text-sm text-amber-800/90 mt-0.5">
-              Current engine is <span className="font-medium">{ttsModelLabel(modelKey)}</span>.
+              Current engine is <span className="font-medium">{ttsModelLabel(activeEngineKey)}</span>.
               Drifted chapters keep their original voices until you regenerate them.
             </p>
           </div>
@@ -1074,7 +1089,7 @@ export function GenerationView({
         variant="danger"
         eyebrow="Regenerate"
         icon={<IconRefresh className="w-4 h-4" />}
-        title={`Regenerate ${driftedCount} chapter${driftedCount === 1 ? '' : 's'} with ${ttsModelLabel(modelKey)}?`}
+        title={`Regenerate ${driftedCount} chapter${driftedCount === 1 ? '' : 's'} with ${ttsModelLabel(activeEngineKey)}?`}
         body={
           <div className="space-y-3">
             <p>
@@ -1229,7 +1244,7 @@ export function GenerationView({
                 isChapterStaleFromReassign(ch, activityEvents)
               }
               subsetProgress={subsetByChapter[ch.id] ?? null}
-              activeModelKey={modelKey}
+              activeModelKey={activeEngineKey}
             />
           ))}
         </div>
