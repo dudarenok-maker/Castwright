@@ -119,7 +119,7 @@ describe('OverrideRow — overridden', () => {
 /* ─── onChange coercion ──────────────────────────────────────────────────── */
 
 describe('OverrideRow — onChange coercion', () => {
-  it('calls onChange with a number when a number input changes', () => {
+  it('does not call onChange while typing a number — only on blur', () => {
     const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
     const value = makeValue({ effective: 10 });
     const onChange = vi.fn();
@@ -132,12 +132,16 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '5' } });
     fireEvent.change(input, { target: { value: '55' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledWith(55);
     expect(typeof onChange.mock.calls[0][0]).toBe('number');
   });
 
-  it('calls onChange with an integer when an integer input changes', () => {
+  it('calls onChange with an integer on blur when an integer input changes', () => {
     const descriptor = makeDescriptor({ type: 'integer', min: 1, max: 10, step: 1 });
     const value = makeValue({ effective: 3 });
     const onChange = vi.fn();
@@ -151,8 +155,50 @@ describe('OverrideRow — onChange coercion', () => {
     );
     const input = screen.getByRole('spinbutton');
     fireEvent.change(input, { target: { value: '7' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith(7);
     expect(Number.isInteger(onChange.mock.calls[0][0])).toBe(true);
+  });
+
+  it('reverts the draft to the last effective value on blur when the typed number is invalid', () => {
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input.value).toBe('10');
+  });
+
+  it('does not call onChange while typing a string — only on blur', () => {
+    const descriptor = makeDescriptor({ type: 'string', default: 'hello' });
+    const value = makeValue({ effective: 'hello', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'hell' } });
+    fireEvent.change(input, { target: { value: 'hello world' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledWith('hello world');
   });
 
   it('calls onChange with the option string when an enum select changes', () => {

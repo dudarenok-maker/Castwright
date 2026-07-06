@@ -43,12 +43,14 @@ owner: null
 - Env-locked knobs (`locked: true`) must never appear in PUT request bodies — `mockPutConfig` and the real `PUT /api/config` route both silently drop unknown keys, but the UI guard (`disabled={locked}` on `KnobControl`) is the primary defence.
 - The `SettingsSection` button carries `aria-label={group.label}` and `aria-expanded` — used by the e2e spec and by a11y tooling; do not change without updating both.
 - `MOCK_CONFIG_DESCRIPTORS` in `src/lib/api.ts` must keep at least one `restart-sidecar` knob and one `live` knob so the e2e spec (`e2e/advanced-settings.spec.ts`) can cover both banner states.
+- `KnobControl` (`src/components/settings/override-row.tsx`) commits number/integer/string edits on **blur only**, via a local draft buffer (`useState` + a `!editing` resync effect) — not on every keystroke. Dispatching `saveOverride` per character re-renders every row off the still-stale server value while a real (non-mock) PUT is in flight, which visibly reverts multi-digit edits mid-keystroke. Select/checkbox/device controls are unaffected (single discrete action per interaction already). Don't reintroduce a per-keystroke dispatch on these two input types.
 
 ## Test plan
 
 ### Automated coverage
 
-- Vitest unit (`src/views/advanced.test.tsx`) — asserts group headers render after `fetchConfig` hydrates, a knob label renders inside the open TTS section, `saveOverride` is dispatched with the correct key + value when a number input changes, the restart banner appears when a restart-sidecar knob is overridden, and it does NOT appear when no knob is overridden.
+- Vitest unit (`src/views/advanced.test.tsx`) — asserts group headers render after `fetchConfig` hydrates, a knob label renders inside the open TTS section, `saveOverride` is dispatched with the correct key + value on **blur** (not on the preceding `change` event) for a number input, the restart banner appears when a restart-sidecar knob is overridden, and it does NOT appear when no knob is overridden.
+- Vitest unit (`src/components/settings/override-row.test.tsx`) — asserts number/integer/string `KnobControl`s buffer keystrokes locally and only call `onChange` on blur, that an invalid numeric draft reverts to the last effective value on blur rather than committing, and that enum/boolean/device controls still commit immediately (single discrete action).
 - Playwright e2e (`e2e/advanced-settings.spec.ts`) — six specs: heading visible at `#/advanced`, TTS accordion `aria-expanded="true"` + knob label on load, Admin card navigation to `#/advanced`, LIVE knob edit → Revert button + `default: N` label, Revert click → button disappears, restart-sidecar knob edit → amber `RestartSidecarBanner` + "Restart sidecar" CTA.
 - Playwright responsive (`e2e/responsive/coverage.spec.ts`) — `advanced configuration view` case asserts no horizontal overflow at chromium / mobile-chrome / tablet-chrome viewports.
 - Server unit (`server/src/routes/config.test.ts`) — GET returns descriptors + values, PUT merges override, DELETE resets to defaults, env-locked keys are ignored in PUT body. (Server test file to be verified against existing coverage.)

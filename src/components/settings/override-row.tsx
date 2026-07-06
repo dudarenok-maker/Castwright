@@ -2,7 +2,7 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Checkbox } from '../primitives';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
@@ -65,6 +65,35 @@ interface ControlProps {
 
 function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: ControlProps) {
   const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
+
+  // Free-typed knobs (number/integer/string) get a local draft buffer,
+  // committed via onChange (a network save) only on blur — not on every
+  // keystroke. Firing saveOverride per character round-trips through Redux
+  // (status flips to 'saving' synchronously, re-rendering every row off the
+  // still-stale server value), so under real network latency a multi-digit
+  // edit visibly reverts mid-keystroke. Select/checkbox/device rows are
+  // single discrete actions and are unaffected.
+  const [draft, setDraft] = useState(() => String(value.effective));
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(String(value.effective));
+  }, [value.effective, editing]);
+
+  const commitNumericDraft = (raw: string, isInteger: boolean) => {
+    setEditing(false);
+    const parsed = isInteger ? parseInt(raw, 10) : parseFloat(raw);
+    if (Number.isFinite(parsed)) {
+      onChange(parsed);
+    } else {
+      setDraft(String(value.effective));
+    }
+  };
+
+  const commitStringDraft = (raw: string) => {
+    setEditing(false);
+    onChange(raw);
+  };
 
   const base =
     'px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink ' +
@@ -159,16 +188,14 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
       <input
         type="number"
         aria-label={descriptor.label}
-        value={Number(value.effective)}
+        value={draft}
         min={descriptor.min}
         max={descriptor.max}
         step={descriptor.step ?? (isInteger ? 1 : undefined)}
         disabled={disabled}
-        onChange={(e) => {
-          const raw = e.target.value;
-          const parsed = isInteger ? parseInt(raw, 10) : parseFloat(raw);
-          if (Number.isFinite(parsed)) onChange(parsed);
-        }}
+        onFocus={() => setEditing(true)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commitNumericDraft(e.target.value, isInteger)}
         className={`w-32 ${base}`}
       />
     );
@@ -179,13 +206,11 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     <input
       type="text"
       aria-label={descriptor.label}
-      value={String(value.effective)}
+      value={draft}
       disabled={disabled}
-      onBlur={(e) => onChange(e.target.value)}
-      onChange={
-        /* immediate feedback for text so the input doesn't feel sticky */
-        (e) => onChange(e.target.value)
-      }
+      onFocus={() => setEditing(true)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={(e) => commitStringDraft(e.target.value)}
       className={`w-full ${base}`}
     />
   );

@@ -214,6 +214,8 @@ describe('AdvancedView — OverrideRow dispatch', () => {
     renderView();
     const input = (await screen.findByRole('spinbutton')) as HTMLInputElement;
     fireEvent.change(input, { target: { value: '16000' } });
+    expect(mockPutConfig).not.toHaveBeenCalled();
+    fireEvent.blur(input);
 
     await waitFor(() =>
       expect(mockPutConfig).toHaveBeenCalledWith({ KOKORO_SAMPLE_RATE: 16000 }),
