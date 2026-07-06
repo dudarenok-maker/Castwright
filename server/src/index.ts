@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { app } from './app.js';
 import { lanExposureWarning } from './lan-safety.js';
 import { enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
+import { allowSleep } from './system/prevent-sleep.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
@@ -392,6 +393,13 @@ function shutdown(signal: NodeJS.Signals): void {
      stack) sees the port as free. No-op if we never claimed it (autoStart off)
      or a same-lineage reload already took it over. */
   releaseSidecarOwnership(runDir);
+  /* Release the sleep-prevention wake lock too — on Windows a child spawned
+     without job-object semantics is NOT killed when its parent exits (the
+     same reason the sidecar reap below needs an explicit taskkill /T /F
+     rather than relying on parent-exit), so without this an active
+     generation's ES_SYSTEM_REQUIRED-holding powershell.exe would survive
+     Ctrl+C/kill as an orphan, keeping the machine awake indefinitely. */
+  allowSleep();
   /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
      child's exit can't trigger a respawn race during shutdown. */
   const reap = sidecarSupervisor?.stop() ?? Promise.resolve();

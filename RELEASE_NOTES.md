@@ -17,6 +17,9 @@
 - **Your manuscript can no longer be quietly overwritten with sample text.** A rare timing gap while a chapter was still loading could, on the next edit, bake Castwright's own demo story into your real book's saved manuscript. That gap is closed, and a save can no longer wipe an already-read chapter down to nothing.
 - **The Admin watch console's columns finally line up.** Its two tables' headers could drift out of step with the numbers beneath them, most noticeably on Resource trends' VRAM column. They now stay put. Resource trends also picks up the same quality-check cost column the throughput table already showed, right next to its RTF figure.
 
+- **A chapter with a full cast of speaking voices is less likely to stall after a background hiccup.** If the narration engine had to restart partway through your book, it was quietly redoing setup work for every voice in the next chapter instead of picking up where it had already left off — the more characters speaking in that chapter, the more likely it was to stumble. It now reuses what it already prepared.
+- **An overnight performance can no longer be put to sleep by Windows itself.** Your computer could quietly drift into sleep partway through a long, unattended performance, leaving it stalled for hours with nothing to show for it. Castwright now keeps your computer awake for as long as it's performing — your screen still dims and locks exactly as it always has, only the machine underneath stays at work.
+
 # Castwright 1.10.0
 
 - **Three new languages take the stage: Spanish, French, and German.** After English and Russian, Castwright now performs Spanish-, French-, and German-language books with the same full-cast craft — it reads the manuscript in its own language, gives every character a voice that speaks it, and keeps the cast's tone and descriptions written in the book's own tongue. Five languages, one machine.

@@ -18,6 +18,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
+import { quarantinedIt } from '../test-utils/quarantine.js';
 
 /* Mock synthesiseChapter so the route never needs a real TTS provider. The
    mock is mutable per test case via the synthesiseImpl ref. */
@@ -59,6 +61,17 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
      consumer) is a no-op here — these tests don't exercise it and must not
      fire a real /health probe at a dev-box sidecar. */
   SIDECAR_ENGINES: new Set(),
+}));
+
+/* Mock the sleep-prevention wake lock — a real spawn would launch an actual
+   powershell.exe in CI (and this suite doesn't run on Windows only). The
+   registerJob/deregisterJob wiring test below asserts on these mocks
+   directly; every other test in this file just needs them to be silent
+   no-ops. */
+vi.mock('../system/prevent-sleep.js', () => ({
+  preventSleep: vi.fn(),
+  allowSleep: vi.fn(),
+  isSleepPrevented: vi.fn(() => false),
 }));
 
 /* srv-28 — control the disk-space probe so the disk guard is deterministic.
@@ -197,6 +210,152 @@ beforeEach(() => {
     ],
   });
 });
+
+/* side-11 investigation follow-up (2026-07-06) — hold the sleep-prevention
+   wake lock for exactly as long as SOMETHING is in flight, across the whole
+   process (not per-book): engage on the first job to register, release only
+   once the LAST job across every book has deregistered.
+
+   The two `it`s below are QUARANTINED (`quarantinedIt`, see
+   docs/testing/flaky-register.md) — this file is a documented "Hook timed
+   out under Windows tmpdir/fs contention" hot file (vitest.config.slow.ts's
+   file-level comment). Verified this is pre-existing file-level flakiness,
+   not a defect in these tests or the feature: a throwaway, completely
+   unrelated single-request test (no prevent-sleep involvement at all)
+   reproduced an identical indefinite hang under the same real-Windows-fs-I/O
+   load, regardless of where in the file it was placed (including as the very
+   first describe block, before anything else runs). Both tests pass
+   reliably and deterministically in isolation under normal system load —
+   run with RUN_QUARANTINE=1 to exercise them locally. */
+describe('POST /api/books/:bookId/generation — sleep prevention wake lock', () => {
+  beforeEach(() => {
+    /* Other describe blocks later in this file also trigger registerJob/
+       deregisterJob (hence preventSleep/allowSleep) as a side effect of their
+       own generation calls — clear accumulated call counts before each of
+       THIS block's tests so they only see calls from their own request(s). */
+    vi.mocked(preventSleep).mockClear();
+    vi.mocked(allowSleep).mockClear();
+  });
+
+  afterEach(async () => {
+    const fs = await import('node:fs');
+    const audioRoot = join(bookDir, 'audio');
+    if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  quarantinedIt('engages on the one in-flight chapter and releases once it completes', async () => {
+    let resolveStarted: () => void;
+    const started = new Promise<void>((r) => {
+      resolveStarted = r;
+    });
+    let release: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    synthesiseImpl = async () => {
+      resolveStarted();
+      await gate;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+
+    const p = request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    await started;
+
+    expect(preventSleep).toHaveBeenCalledTimes(1);
+    expect(allowSleep).not.toHaveBeenCalled();
+
+    release!();
+    await p;
+
+    expect(allowSleep).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  quarantinedIt('stays engaged while a second chapter is still in flight, releases only after both drain', async () => {
+    const gate = gatedSleepLockSynth(2);
+
+    const p1 = request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    const p2 = request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [2] });
+    await gate.bothStarted();
+
+    /* Two concurrent jobs, but the wake lock only engages ONCE (idempotent —
+       the second registerJob call finds one already active). */
+    expect(preventSleep).toHaveBeenCalledTimes(1);
+    expect(allowSleep).not.toHaveBeenCalled();
+
+    gate.releaseOne();
+    /* One chapter still in flight — must NOT release yet. */
+    await new Promise((r) => setTimeout(r, 20));
+    expect(allowSleep).not.toHaveBeenCalled();
+
+    gate.releaseOne();
+    await Promise.all([p1, p2]);
+
+    expect(allowSleep).toHaveBeenCalledTimes(1);
+  }, 15_000);
+});
+
+/* Two-deferred gate for the wake-lock tests above: each call blocks until
+   releaseOne() is called for it specifically (FIFO), so both requests can be
+   proven in flight together before either completes. */
+function gatedSleepLockSynth(count: number): {
+  bothStarted: () => Promise<void>;
+  releaseOne: () => void;
+} {
+  let startedCount = 0;
+  let resolveBothStarted: () => void;
+  const bothStartedPromise = new Promise<void>((r) => {
+    resolveBothStarted = r;
+  });
+  const pending: Array<() => void> = [];
+  synthesiseImpl = () => {
+    startedCount += 1;
+    if (startedCount === count) resolveBothStarted();
+    return new Promise((resolve) => {
+      pending.push(() =>
+        resolve({
+          pcm: Buffer.alloc(2),
+          sampleRate: 24000,
+          durationSec: 1,
+          segments: [
+            {
+              characterId: 'narrator',
+              voiceName: 'Zephyr',
+              sampleStart: 0,
+              sampleEnd: 1,
+              sentenceIds: [1],
+            },
+          ],
+        }),
+      );
+    });
+  };
+  return {
+    bothStarted: () => bothStartedPromise,
+    releaseOne: () => {
+      const next = pending.shift();
+      if (next) next();
+    },
+  };
+}
 
 describe('POST /api/books/:bookId/generation', () => {
   it('happy path: emits progress + chapter_complete + idle for every chapter', async () => {
