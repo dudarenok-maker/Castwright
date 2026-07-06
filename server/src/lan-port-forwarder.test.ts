@@ -244,4 +244,38 @@ describe('startPortForwarder', () => {
     client.destroy();
     await handle.close();
   });
+
+  describe('isBound()', () => {
+    it('is false before listening, true after', async () => {
+      const handle = startPortForwarder(9999, { listenPort: 0 });
+      expect(handle.isBound()).toBe(false);
+      await listenAndGetPort(handle.server);
+      expect(handle.isBound()).toBe(true);
+      await handle.close();
+    });
+
+    it('stays true across a later transient error (the EMFILE-after-bind case — net.Server can emit "error" more than once without dying)', async () => {
+      const handle = startPortForwarder(9999, { listenPort: 0 });
+      await listenAndGetPort(handle.server);
+      expect(handle.isBound()).toBe(true);
+      handle.server.emit('error', new Error('transient EMFILE'));
+      expect(handle.isBound()).toBe(true);
+      await handle.close();
+    });
+
+    it('is false if the bind fails before "listening" ever fires (never-bound case)', async () => {
+      const blocker = net.createServer();
+      blocker.listen(0, '0.0.0.0');
+      const blockedPort = await listenAndGetPort(blocker);
+
+      const warn = vi.fn();
+      const handle = startPortForwarder(9999, { listenPort: blockedPort, warn });
+      await new Promise<void>((resolve) => handle.server.once('error', () => resolve()));
+
+      expect(handle.isBound()).toBe(false);
+
+      await handle.close();
+      blocker.close();
+    });
+  });
 });
