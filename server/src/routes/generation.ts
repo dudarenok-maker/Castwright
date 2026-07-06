@@ -37,6 +37,7 @@ import {
   setPaused,
 } from '../workspace/queue-io.js';
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
+import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import {
@@ -391,6 +392,12 @@ async function markQueueEntryAwaitingConfirmOnDisk(
 }
 
 function registerJob(key: string, job: RunningJob): void {
+  /* side-11 investigation (2026-07-06) — an overnight generation was found
+     asleep for ~7h after Windows entered Modern Standby mid-run. Hold the
+     system awake for as long as ANYTHING is in flight, across every book —
+     engage on the first job to register (no-op if one is already active),
+     release only once the LAST job anywhere has deregistered. */
+  if (inFlightByChapter.size === 0) preventSleep();
   inFlightByChapter.set(key, job);
   let set = inFlightByBook.get(job.bookId);
   if (!set) {
@@ -420,6 +427,7 @@ function deregisterJob(key: string, job: RunningJob): void {
     set.delete(job);
     if (set.size === 0) inFlightByBook.delete(job.bookId);
   }
+  if (inFlightByChapter.size === 0) allowSleep();
 }
 
 /** True when any generation job is currently in flight for the book. Exposed
