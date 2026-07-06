@@ -1439,8 +1439,86 @@ def test_synth_17b_derive_writes_pt_atomically(fake_qwen_runtime, monkeypatch) -
 
     pt_path = os.path.join(vdir, "priya__1.7b.pt")
     assert os.path.isfile(pt_path)
-    leftovers = [f for f in os.listdir(vdir) if f.startswith("priya__1.7b.pt.tmp-")]
+    leftovers = [
+        f for f in os.listdir(vdir)
+        if f.startswith("priya__1.7b.pt.") and f.endswith(".tmp")
+    ]
     assert leftovers == [], f"atomic write left a temp file behind: {leftovers}"
+
+
+def test_synth_17b_reraises_and_cleans_up_tmp_file_on_save_failure(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """If torch.save (or the rename) fails mid-derivation, the mkstemp temp
+    file must be cleaned up rather than left behind forever, and the original
+    exception must still propagate (not swallowed)."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = str(fake_qwen_runtime["dir"])
+    os.makedirs(vdir, exist_ok=True)
+    eng.design_voice("omar", "A firm coach.", "English", None)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+
+    torch_module = sys.modules["torch"]
+    monkeypatch.setattr(
+        torch_module, "save", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("disk full"))
+    )
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        eng.synthesize("1.7b", "omar", "A line.")
+
+    leftovers = [
+        f for f in os.listdir(vdir)
+        if f.startswith("omar__1.7b.pt.") and f.endswith(".tmp")
+    ]
+    assert leftovers == [], f"failed save left a temp file behind: {leftovers}"
+
+
+def test_synth_17b_disk_hit_falls_through_to_rederive_on_concurrent_eviction(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """A redesign / mint-variant / /qwen/evict-voice racing between the
+    isfile() check and the torch.load() on the disk-cache-hit fast path must
+    NOT surface as a synth failure — it's a benign race (the file existed a
+    moment ago, then got evicted); the correct behaviour is to fall through
+    and re-derive fresh, not raise."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    vdir = str(fake_qwen_runtime["dir"])
+    eng.design_voice("nadia", "A calm narrator.", "English", None)
+    _seed_stale_17b_disk_cache(eng, vdir, "nadia")
+    eng._prompt_cache.pop("nadia__1.7b", None)  # force the disk-read branch, not the memory hit
+
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+
+    torch_module = sys.modules["torch"]
+    real_load = torch_module.load
+    calls: list[str] = []
+
+    def _load_once_missing(path, **kwargs):
+        calls.append(path)
+        if len(calls) == 1:
+            raise FileNotFoundError(path)
+        return real_load(path, **kwargs)
+
+    monkeypatch.setattr(torch_module, "load", _load_once_missing)
+
+    res = eng.synthesize("1.7b", "nadia", "A line.")
+
+    assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+    assert len(eng._base17.prompt_calls) == 1, "must have re-derived after the FileNotFoundError race"
 
 
 def test_synth_17b_does_not_call_ensure_base_loaded(fake_qwen_runtime, monkeypatch) -> None:

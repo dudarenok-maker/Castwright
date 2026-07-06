@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -2911,10 +2912,18 @@ class QwenEngine(Engine):
         # a MISS (like the sibling 0.6B disk-load path below) — it's a real
         # disk read with non-trivial load_ms, not a warm in-memory hit.
         if os.path.isfile(pt_path):
-            prompt = torch.load(pt_path, weights_only=False)
-            with self._cache_lock:
-                self._prompt_cache[cache_key] = (prompt, lang)
-            return prompt, lang, False
+            try:
+                prompt = torch.load(pt_path, weights_only=False)
+            except FileNotFoundError:
+                # Evicted (redesign / mint-variant / /qwen/evict-voice, all of
+                # which call _evict_17b_prompt) between the isfile check above
+                # and this load — fall through and re-derive instead of
+                # surfacing a benign race as a synth failure.
+                pass
+            else:
+                with self._cache_lock:
+                    self._prompt_cache[cache_key] = (prompt, lang)
+                return prompt, lang, False
 
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
@@ -2928,14 +2937,28 @@ class QwenEngine(Engine):
         )
 
         # Persist to disk so re-runs and restarts skip the derivation step.
-        # Written to a temp file then atomically replaced into place — a
-        # concurrent _load_voice_prompt_17b call for the same cold-cache voice
-        # (e.g. two sibling chapters rendering at once) can then only ever see
-        # pt_path fully-written or not-yet-existing, never a torn/partial file.
+        # Written to an exclusively-owned temp file (tempfile.mkstemp — atomic,
+        # OS-guaranteed unique even across threads of the SAME process, unlike
+        # a pid-based name: concurrent cold-cache synths for the same voice run
+        # as separate threads via asyncio.to_thread, not separate processes, so
+        # os.getpid() alone would collide) then atomically replaced into place
+        # — a concurrent _load_voice_prompt_17b call for the same cold-cache
+        # voice (e.g. two sibling chapters rendering at once) can then only
+        # ever see pt_path fully-written or not-yet-existing, never torn.
         os.makedirs(self._voices_dir, exist_ok=True)
-        tmp_path = f"{pt_path}.tmp-{os.getpid()}"
-        torch.save(prompt, tmp_path)
-        os.replace(tmp_path, pt_path)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=self._voices_dir, prefix=f"{os.path.basename(pt_path)}.", suffix=".tmp"
+        )
+        os.close(tmp_fd)  # mkstemp only needed to atomically allocate the unique name
+        try:
+            torch.save(prompt, tmp_path)
+            os.replace(tmp_path, pt_path)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
         with self._cache_lock:
             self._prompt_cache[cache_key] = (prompt, lang)
         log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
