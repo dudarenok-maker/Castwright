@@ -577,11 +577,16 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
   verified once — not N separate PRs.** Reconcile the branches via the
   [`integration/<date>` pattern](CONTRIBUTING.md#reconciliation-pattern): fresh
   branch off `main`, merge each agent branch one at a time, run `npm run verify`
-  between merges. Open that integration branch as a **draft** PR and only
-  `gh pr ready` once the whole reconciliation is locally green — so the round
-  bills ONE verify run instead of one (or several) per agent branch. This is the
-  largest CI-cost lever alongside draft-by-default; see
-  [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
+  between merges. Open that integration branch as a **draft** PR while
+  reconciling — draft is a work-in-progress signal, not a cost lever now that
+  cloud `verify.yml` runs automatically (and posts a required status) on every
+  push regardless of draft state — and `gh pr ready` once the whole
+  reconciliation is locally green, so reviewers see one settled PR per round
+  instead of N in-flight ones. See
+  [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
+  for why the opt-in/draft-batching cost framing in
+  [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md)
+  is now historical.
 
 ### Planning agents
 
