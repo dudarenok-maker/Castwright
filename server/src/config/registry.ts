@@ -524,7 +524,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'QWEN_CODEC_CHUNK_SIZE',
     group: 'tts-engine',
     label: 'Qwen codec chunk size',
-    help: 'Codec decode chunk size (time-axis frames). Bounds the GPU activation peak when tts.qwen.codecDevice moves the codec off CPU — lower it if a tight card OOMs during decode. Library default 300; unset uses that default unchanged. No effect while the codec stays on CPU. Changing this requires a sidecar restart.',
+    help: 'Codec decode chunk size (time-axis frames). Bounds the GPU activation peak when tts.qwen.codecDevice moves the codec off CPU — lower it if a tight card OOMs during decode. Library default 300; unset uses that default unchanged. Applied regardless of `QWEN_CODEC_DEVICE`; only matters for activation-peak shaping when the codec is actually on GPU. Changing this requires a sidecar restart.',
     type: 'integer', min: 1,
     default: 300, // ← chunked_decode's own chunk_size default in the qwen_tts package
     apply: 'restart-sidecar', risk: 'high',
@@ -534,7 +534,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'QWEN_CODEC_LEFT_CONTEXT_SIZE',
     group: 'tts-engine',
     label: 'Qwen codec left-context size',
-    help: 'Codec decode left-context overlap (time-axis frames) between chunks. Library default 25; unset uses that default unchanged. Larger values cost more overlap compute for smoother chunk boundaries. No effect while the codec stays on CPU. Changing this requires a sidecar restart.',
+    help: 'Codec decode left-context overlap (time-axis frames) between chunks. Library default 25; unset uses that default unchanged. Larger values cost more overlap compute for smoother chunk boundaries. Applied regardless of `QWEN_CODEC_DEVICE`; only matters for activation-peak shaping when the codec is actually on GPU. Changing this requires a sidecar restart.',
     type: 'integer', min: 0,
     default: 25, // ← chunked_decode's own left_context_size default in the qwen_tts package
     apply: 'restart-sidecar', risk: 'high',
