@@ -37,7 +37,7 @@ import {
   CUTOFFS,
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter } from './audition-centroid.js';
-import { canonicalModelKeyForEngine } from '../../tts/model-keys.js';
+import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -57,10 +57,19 @@ interface SegmentsEntry {
 
 interface SegmentsFileView {
   chapterId?: number;
+  /** Render tier stamped by finalize-chapter-write (ChapterSegmentsFile.modelKey)
+   *  — the model this chapter's audio was ACTUALLY rendered under. The Option-B
+   *  audition centroid renders under this SAME tier (see Phase 2 below) so its
+   *  embeddings are comparable to the in-book anchors AND it never pulls a 0.6B
+   *  base in co-resident with a 1.7B render. Absent on legacy pre-stamp files. */
+  modelKey?: TtsModelKey;
   segments?: SegmentsEntry[];
   characterSnapshots?: Record<string, {
     voiceEngine?: string;
     renderedFallbackEngine?: string;
+    /** Per-character render tier (see CharacterSnapshot.modelKey). The audition
+     *  renders under THIS (falls back to the chapter-level modelKey, then 0.6B). */
+    modelKey?: TtsModelKey;
     /** Resolved voice name at render time (e.g. `qwen-<uuid>` or `af_sarah`). */
     resolvedVoiceName?: string;
     voiceId?: string;
@@ -189,13 +198,17 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *
  * Idempotent — safe to re-run; files are overwritten each call.
  *
+ * Returns the Qwen base tier(s) the book's chapters actually rendered under
+ * (`keep06`/`keep17`) so the caller can re-assert VRAM hygiene without re-reading
+ * the segments files this pass already parsed.
+ *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
  */
 export async function scoreBook(
   bookDir: string,
   chapters: { id: number; slug: string }[],
-): Promise<void> {
+): Promise<{ keep06: boolean; keep17: boolean }> {
   const root = audioDir(bookDir);
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
@@ -205,6 +218,8 @@ export async function scoreBook(
     resolvedVoiceName?: string;
     voiceId?: string;
     attributes?: string[];
+    /** Per-character render tier — the audition renders under this. */
+    modelKey?: TtsModelKey;
   };
 
   type ChapterData = {
@@ -212,6 +227,9 @@ export async function scoreBook(
     embRows: EmbeddingRow[];
     segsByKey: Map<string, SegmentsEntry>;
     snapshots: Record<string, SnapshotView>;
+    /** Render tier this chapter's audio was synthesised under (segments.json
+     *  `modelKey`), used to render the Option-B audition on the SAME tier. */
+    modelKey?: TtsModelKey;
   };
 
   const chapterData: ChapterData[] = [];
@@ -239,11 +257,28 @@ export async function scoreBook(
       embRows: embResult.rows,
       segsByKey,
       snapshots: segFile.characterSnapshots ?? {},
+      modelKey: segFile.modelKey,
     });
   }
 
+  /* The Qwen base tier(s) this book's chapters actually rendered under — returned
+     so `afterChapterFinalized` can re-assert VRAM hygiene (evict a tier the render
+     doesn't use) WITHOUT re-reading the segments files this pass already parsed.
+     Resolved PER-CHARACTER (snapshot.modelKey, same source the audition uses),
+     falling back to the chapter run-default — so an elevated Qwen char in a lower-
+     default book keeps its tier flagged and reconcile never evicts a warm in-use
+     tier (matches the run-start `computeUsedQwenTiers`, which is also per-char). */
+  const rendered = { keep06: false, keep17: false };
+  for (const cd of chapterData) {
+    for (const snap of Object.values(cd.snapshots)) {
+      const tier = snap.modelKey ?? cd.modelKey;
+      if (tier === 'qwen3-tts-0.6b') rendered.keep06 = true;
+      if (tier === 'qwen3-tts-1.7b') rendered.keep17 = true;
+    }
+  }
+
   // No chapter data → nothing to do
-  if (chapterData.length === 0) return;
+  if (chapterData.length === 0) return rendered;
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
@@ -261,9 +296,18 @@ export async function scoreBook(
       // Collect voice info for Option-B (first chapter's snapshot wins).
       if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
-        // Only stochastic engines can reach Option-B — safe to call canonicalModelKeyForEngine
-        // with a placeholder request key (unused for local engines).
-        const modelKey = canonicalModelKeyForEngine(engine, 'qwen3-tts-0.6b');
+        // Render the Option-B audition under the SAME tier this character ACTUALLY
+        // rendered in — NOT a hardcoded 0.6B. canonicalModelKeyForEngine returns a
+        // Qwen request key VERBATIM, so the old 'qwen3-tts-0.6b' placeholder forced
+        // EVERY too-thin/bimodal Qwen character's audition (K=12 full synths) onto the
+        // 0.6B base: co-resident with a 1.7B render (8GB-card OOM), and embedded under
+        // a model whose speaker space isn't comparable to the 1.7B-rendered anchors (a
+        // corrupt centroid). Prefer the PER-CHARACTER stamp (elevate-only tier from
+        // buildCharacterSnapshots) so an elevated Qwen char in a non-Qwen-default book
+        // isn't under-tiered by the chapter run-default; fall back to the chapter-level
+        // modelKey, then 0.6B for legacy segments with neither stamp.
+        const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
+        const modelKey = canonicalModelKeyForEngine(engine, renderKey);
         voiceInfoByChar.set(charId, {
           voiceName: snap.resolvedVoiceName,
           modelKey,
@@ -283,7 +327,7 @@ export async function scoreBook(
     if (STOCHASTIC_ENGINES.has(engine)) stochasticChars.add(charId);
   }
 
-  if (stochasticChars.size === 0) return; // No stochastic characters → nothing to score
+  if (stochasticChars.size === 0) return rendered; // No stochastic characters → nothing to score
 
   // Gather anchor-eligible vectors per character:
   // eligible iff: stochastic-configured AND per-segment renderedFallbackEngine unset/null
@@ -392,5 +436,7 @@ export async function scoreBook(
     const verdictPath = join(root, `${cd.slug}.render-integrity.json`);
     await writeVerdicts(verdictPath, verdictRows);
   }
+
+  return rendered;
 }
 

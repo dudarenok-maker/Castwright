@@ -49,11 +49,27 @@ export function computeUsedQwenTiers(
   let keep17 = false;
   for (const c of characters) {
     if (resolveCharacterEngine(c, projectDefaultEngine) !== 'qwen') continue;
-    const key = c.ttsModelKey
-      ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), runDefaultQwenModelKey)
-      : runDefaultQwenModelKey;
+    const key = resolveCharacterQwenTier(c, runDefaultQwenModelKey);
     if (key === 'qwen3-tts-0.6b') keep06 = true;
     if (key === 'qwen3-tts-1.7b') keep17 = true;
   }
   return { keep06, keep17 };
+}
+
+/** The Qwen quality tier a character renders under, resolved with the SAME
+    elevate-only precedence `synthesise-chapter.ts`'s `routeFor` uses: a per-
+    character `ttsModelKey` can only RAISE the character above `runModelKey`,
+    never lower it; a character with no `ttsModelKey` rides the run default.
+    Callers gate on the character routing to Qwen. Single definition shared by
+    `routeFor` (the synth path), `computeUsedQwenTiers` (run-start VRAM hygiene),
+    and `buildCharacterSnapshots` (the per-character render-tier stamp) so the
+    three can never drift — a drift is exactly what let the srv-36 audition
+    render on the wrong tier (0.6B co-resident with a 1.7B render → 8GB OOM). */
+export function resolveCharacterQwenTier(
+  character: HasQwenTier,
+  runModelKey: TtsModelKey,
+): TtsModelKey {
+  return character.ttsModelKey
+    ? higherQwenTier(canonicalModelKeyForEngine('qwen', character.ttsModelKey), runModelKey)
+    : runModelKey;
 }

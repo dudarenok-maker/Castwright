@@ -1,7 +1,9 @@
 /* Unit coverage for the extracted snapshot builder shared by generation +
    splice. The drift detector depends on this shape, so we pin: only speaking
    characters appear, attributes are sorted, the resolved voice name is the
-   real picker output, and a fallback engine is threaded through. */
+   real picker output, and a fallback engine is threaded through. The per-
+   character render tier (`modelKey`) is pinned separately below — it feeds the
+   srv-36 audition centroid, so it MUST match what routeFor synthesised under. */
 
 import { describe, it, expect } from 'vitest';
 import { buildCharacterSnapshots } from './character-snapshots.js';
@@ -15,18 +17,18 @@ const cast: CastCharacter[] = [
 
 describe('buildCharacterSnapshots', () => {
   it('includes only characters that actually spoke', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['castor', 'narrator']), 'kokoro', new Map());
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor', 'narrator']), 'kokoro', new Map(), 'kokoro-v1');
     expect(Object.keys(snaps).sort()).toEqual(['castor', 'narrator']);
     expect(snaps['silent-guy']).toBeUndefined();
   });
 
   it('sorts attributes for stable drift comparison', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map());
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1');
     expect(snaps.castor.attributes).toEqual(['bright', 'warm']);
   });
 
   it('records the per-character engine + a resolved voice name', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map());
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1');
     expect(snaps.castor.voiceEngine).toBe('kokoro');
     expect(typeof snaps.castor.resolvedVoiceName).toBe('string');
     expect(snaps.castor.resolvedVoiceName!.length).toBeGreaterThan(0);
@@ -38,12 +40,13 @@ describe('buildCharacterSnapshots', () => {
       new Set(['castor']),
       'qwen',
       new Map([['castor', 'kokoro']]),
+      'qwen3-tts-1.7b',
     );
     expect(snaps.castor.renderedFallbackEngine).toBe('kokoro');
   });
 
   it('omits attributes when the character has none', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['narrator']), 'kokoro', new Map());
+    const snaps = buildCharacterSnapshots(cast, new Set(['narrator']), 'kokoro', new Map(), 'kokoro-v1');
     expect(snaps.narrator.attributes).toBeUndefined();
   });
 
@@ -65,7 +68,39 @@ describe('buildCharacterSnapshots', () => {
         ttsEngine: 'qwen',
       },
     ];
-    const snaps = buildCharacterSnapshots(legacy, new Set(['char-wren']), 'qwen', new Map());
+    const snaps = buildCharacterSnapshots(legacy, new Set(['char-wren']), 'qwen', new Map(), 'qwen3-tts-1.7b');
     expect(snaps['char-wren'].resolvedVoiceName).toBe('qwen-wren');
+  });
+});
+
+describe('buildCharacterSnapshots — per-character render tier (srv-36 audition-centroid feed)', () => {
+  const qwenCast: CastCharacter[] = [
+    { id: 'hero', name: 'Hero', ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' },
+    { id: 'extra', name: 'Extra', ttsEngine: 'qwen' }, // no per-char tier → run default
+    { id: 'reader', name: 'Reader', ttsEngine: 'kokoro' },
+  ];
+
+  it('stamps a Qwen character with an explicit 1.7B tier as 1.7B, even when the run default is 0.6B', () => {
+    // The elevate-only rule: a per-character 1.7B pin wins over a lower run default.
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'qwen', new Map(), 'qwen3-tts-0.6b');
+    expect(snaps.hero.modelKey).toBe('qwen3-tts-1.7b');
+  });
+
+  it('stamps an un-pinned Qwen character with the run default tier', () => {
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['extra']), 'qwen', new Map(), 'qwen3-tts-1.7b');
+    expect(snaps.extra.modelKey).toBe('qwen3-tts-1.7b');
+  });
+
+  it('stamps a Kokoro character with its canonical key regardless of run default', () => {
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['reader']), 'qwen', new Map(), 'qwen3-tts-1.7b');
+    expect(snaps.reader.modelKey).toBe('kokoro-v1');
+  });
+
+  it('THE FIX: a Qwen 1.7B character in a NON-Qwen-default book is stamped 1.7B (not dragged to 0.6B)', () => {
+    // The mixed-engine edge case the chapter-level modelKey missed: run default
+    // is a Kokoro key, but a per-character Qwen 1.7B override renders on 1.7B.
+    // The audition MUST see 1.7B here, or it co-resides the 0.6B base (8GB OOM).
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'kokoro', new Map(), 'kokoro-v1');
+    expect(snaps.hero.modelKey).toBe('qwen3-tts-1.7b');
   });
 });

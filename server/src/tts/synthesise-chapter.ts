@@ -15,8 +15,7 @@ import {
 } from './voice-mapping.js';
 import { resolveInstructForGroup } from './resolve-instruct.js';
 import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from './index.js';
-import { canonicalModelKeyForEngine, higherQwenTier } from './model-keys.js';
-import { resolveCharacterEngine } from './per-character-engine.js';
+import { resolveCharacterEngine, resolveCharacterQwenTier } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { normaliseBookLanguage } from './language.js';
 import { pcmDurationSec } from './pcm.js';
@@ -837,15 +836,12 @@ export async function synthesiseChapter(
   const langCode = normaliseBookLanguage(bookLanguage);
 
   /* fs-56: per-character 1.7B Quality-tier — when the character carries a
-     ttsModelKey and routes to Qwen, ELEVATE to it over `defaultModelKey`.
-     `higherQwenTier` means a stale/never-elevated character tier can never
-     downgrade a run explicitly started at 1.7B (side-11 follow-up) — the
-     per-character field only ever raises the bar. Shared by both routeFor
-     branches below so the precedence rule can't drift between them. */
-  const resolveCharQwenModelKey = (c: CastCharacter, defaultModelKey: TtsModelKey): TtsModelKey =>
-    c.ttsModelKey
-      ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), defaultModelKey)
-      : defaultModelKey;
+     ttsModelKey and routes to Qwen, ELEVATE to it over the run default via
+     `resolveCharacterQwenTier` (per-character-engine.js): the elevate-only rule
+     means a stale/never-elevated character tier can never downgrade a run
+     explicitly started at 1.7B (side-11 follow-up). That SAME helper stamps the
+     per-character render tier into the snapshot (buildCharacterSnapshots) so the
+     srv-36 audition renders on exactly this tier — the two can't drift. */
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
      provider + modelKey for a given character. When the caller supplied
@@ -857,12 +853,12 @@ export async function synthesiseChapter(
     const charEngine = resolveCharacterEngine(c, engine);
     if (resolveForEngine && charEngine !== engine) {
       const r = resolveForEngine(charEngine);
-      const charModelKey = charEngine === 'qwen' ? resolveCharQwenModelKey(c, r.modelKey) : r.modelKey;
+      const charModelKey = charEngine === 'qwen' ? resolveCharacterQwenTier(c, r.modelKey) : r.modelKey;
       return { engine: charEngine, provider: r.provider, modelKey: charModelKey };
     }
     /* Same-engine path (character on the run-default engine but still
        carrying an explicit ttsModelKey for Qwen). */
-    const charModelKey = charEngine === 'qwen' ? resolveCharQwenModelKey(c, modelKey) : modelKey;
+    const charModelKey = charEngine === 'qwen' ? resolveCharacterQwenTier(c, modelKey) : modelKey;
     return { engine: charEngine, provider, modelKey: charModelKey };
   };
 

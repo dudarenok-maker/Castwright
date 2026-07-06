@@ -121,6 +121,18 @@ export async function afterChapterFinalized(
      8GB box (#1029). The pass is non-fatal (.catch) and self-cleaning (.finally);
      a stale verdict file just gets overwritten on the next chapter's pass. */
   const run = scoreBook(ctx.bookDir, ctx.chapters)
+    .then(async (keep) => {
+      /* Hardening (2026-07-06): re-assert Qwen tier hygiene AFTER the audition
+         pass. The run-start `reconcileResidentQwenTiers` fires once; the between-
+         chapters Option-B audition can transiently pull a base tier the render
+         doesn't use (a legacy segments file with no stamped modelKey → the 0.6B
+         audition fallback), which would then linger co-resident with the 1.7B
+         synth (the 8GB-card OOM). `scoreBook` returns the tiers the book ACTUALLY
+         rendered under (no extra segments re-read); reconcile only evicts tiers
+         NOT in use, so the in-use tier stays warm and a mixed-tier book keeps
+         both. Best-effort; skipped when nothing stamped a tier. */
+      if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
+    })
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
     .finally(() => scoringInFlight.delete(ctx.bookId));
