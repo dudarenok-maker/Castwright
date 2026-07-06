@@ -514,7 +514,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         <ModelsCardBody />
       </SettingsSection>
 
-      <div className="flex items-center gap-4 px-1">
+      <div className="flex items-center gap-4 px-6">
         <PrimaryButton
           variant={dirty && !sidecarUrlInvalid ? 'dark' : 'ghost'}
           onClick={onSave}
