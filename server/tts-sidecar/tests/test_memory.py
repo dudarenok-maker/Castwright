@@ -478,6 +478,26 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     assert qwen["design_loaded"] is False
     assert qwen["prompt_cache_entries"] == 0
     assert "cuda" in body
+    # side-11 leak attribution: on a CUDA box whose torch has the pinned-host
+    # allocator stats API (>=2.6), the cuda block must carry the pinned-pool
+    # split — "owned" (active + cached, the never-returned pool) vs "active"
+    # (checked out to callers). Guarded like the endpoint itself: no CUDA or
+    # no API → keys legitimately absent.
+    if body["cuda"]:
+        try:
+            import torch  # noqa: PLC0415
+
+            has_host_stats = hasattr(torch.cuda, "host_memory_stats")
+        except Exception:
+            has_host_stats = False
+        if has_host_stats:
+            assert "host_pinned_owned_mb" in body["cuda"]
+            assert "host_pinned_active_mb" in body["cuda"]
+            assert body["cuda"]["host_pinned_owned_mb"] >= 0
+            assert (
+                body["cuda"]["host_pinned_active_mb"]
+                <= body["cuda"]["host_pinned_owned_mb"]
+            )
 
 
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---

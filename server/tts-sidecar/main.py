@@ -4981,6 +4981,28 @@ def debug_memory() -> dict[str, Any]:
                 # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
                 "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
             }
+            # side-11 leak attribution: CUDA PINNED host memory (cudaHostAlloc
+            # staging buffers for H2D/D2H copies). torch's caching host
+            # allocator never returns pinned blocks to the OS, so this pool is
+            # a candidate for the committed-RAM climb that persists with the
+            # oneDNN primitive cache capped. Reporting it splits the climb into
+            # "pinned staging" vs "CPU-side native heap (codec scratchpads /
+            # allocator retention)" without a profiler. Guarded: the API is
+            # torch>=2.6; absent/failing → the keys are simply omitted.
+            try:
+                host = torch.cuda.host_memory_stats()
+                # Host-allocator keys have NO ".all." segment (unlike device
+                # memory_stats): "allocated_bytes.current" = pinned blocks owned
+                # by the allocator (active + cached — the never-returned pool),
+                # "active_bytes.current" = the subset checked out to callers.
+                cuda["host_pinned_owned_mb"] = (
+                    host.get("allocated_bytes.current", 0) / 1_000_000.0
+                )
+                cuda["host_pinned_active_mb"] = (
+                    host.get("active_bytes.current", 0) / 1_000_000.0
+                )
+            except Exception:
+                pass
     except Exception:
         pass
     out["cuda"] = cuda
