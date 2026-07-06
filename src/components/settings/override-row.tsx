@@ -83,15 +83,23 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   const commitNumericDraft = (raw: string, isInteger: boolean) => {
     setEditing(false);
     const parsed = isInteger ? parseInt(raw, 10) : parseFloat(raw);
-    if (Number.isFinite(parsed)) {
-      onChange(parsed);
-    } else {
+    if (!Number.isFinite(parsed)) {
       setDraft(String(value.effective));
+      return;
     }
+    // Tabbing (or clicking elsewhere) blurs whatever field focus is
+    // currently sitting in, even one the user never touched — e.g. focus
+    // landing on the NEXT row after Tab-ing out of the one actually being
+    // edited. Only commit when the value actually changed, so merely
+    // passing focus through a field can't fire a no-op save that marks it
+    // overridden.
+    if (parsed === Number(value.effective)) return;
+    onChange(parsed);
   };
 
   const commitStringDraft = (raw: string) => {
     setEditing(false);
+    if (raw === String(value.effective)) return;
     onChange(raw);
   };
 

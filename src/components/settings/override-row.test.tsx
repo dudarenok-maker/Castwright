@@ -201,6 +201,44 @@ describe('OverrideRow — onChange coercion', () => {
     expect(onChange).toHaveBeenCalledWith('hello world');
   });
 
+  it('does not commit on blur when the field was focused/blurred but never edited (tab-through)', () => {
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton');
+    // Tab landing on this field (e.g. as focus moves off a preceding row)
+    // then away again, with no edit in between, must not fire a save.
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not commit on blur when the typed value equals the current effective value', () => {
+    const descriptor = makeDescriptor({ type: 'string', default: 'hello' });
+    const value = makeValue({ effective: 'hello', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('calls onChange with the option string when an enum select changes', () => {
     const descriptor = makeDescriptor({
       type: 'enum',
