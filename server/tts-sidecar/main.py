@@ -58,6 +58,22 @@ configure_warning_filters()
 # torch ignores it with a warning — harmless. Validate the effect on the 8 GB box.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+# side-11 — bound the oneDNN primitive cache, the variable-input-shape host
+# committed-RAM leak (issue #399). The Code2Wav codec runs on CPU (the Qwen
+# forward is on CUDA — see _apply_torch_perf_flags): every distinct input shape
+# JIT-compiles a fresh conv kernel + scratchpad, and oneDNN caches one entry PER
+# SHAPE (default capacity 1024, never evicted by gc/empty_cache) — the monotonic
+# committed climb the process-recycle (plans 143/158) exists to contain. Capping
+# the cache keeps MKLDNN fully enabled — identical kernels, identical audio;
+# this is NOT the rejected SIDECAR_DISABLE_MKLDNN (plan 153) — it only stops the
+# per-shape hoarding. Isolated A/B on this stack (torch 2.11.0+cu128,
+# 2026-07-06): committed growth +592 MB → +59 MB over 120 variable-shape conv
+# iters, per-iter wall time unchanged (54 ms → 55 ms). 64 keeps a batch's hot
+# chunked_decode shapes (fixed 300-code chunks) cached across the run. oneDNN
+# reads the env once at library init — must be set before the first CPU conv;
+# `setdefault` so an operator override (server/.env) wins.
+os.environ.setdefault("ONEDNN_PRIMITIVE_CACHE_CAPACITY", "64")
+
 # Exposed as module constants so the logging-format regression test can
 # assert on the intended format directly, instead of fishing the formatter
 # off `logging.getLogger().handlers[0]` — pytest's caplog plugin installs
@@ -5006,6 +5022,28 @@ def debug_memory() -> dict[str, Any]:
                 # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
                 "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
             }
+            # side-11 leak attribution: CUDA PINNED host memory (cudaHostAlloc
+            # staging buffers for H2D/D2H copies). torch's caching host
+            # allocator never returns pinned blocks to the OS, so this pool is
+            # a candidate for the committed-RAM climb that persists with the
+            # oneDNN primitive cache capped. Reporting it splits the climb into
+            # "pinned staging" vs "CPU-side native heap (codec scratchpads /
+            # allocator retention)" without a profiler. Guarded: the API is
+            # torch>=2.6; absent/failing → the keys are simply omitted.
+            try:
+                host = torch.cuda.host_memory_stats()
+                # Host-allocator keys have NO ".all." segment (unlike device
+                # memory_stats): "allocated_bytes.current" = pinned blocks owned
+                # by the allocator (active + cached — the never-returned pool),
+                # "active_bytes.current" = the subset checked out to callers.
+                cuda["host_pinned_owned_mb"] = (
+                    host.get("allocated_bytes.current", 0) / 1_000_000.0
+                )
+                cuda["host_pinned_active_mb"] = (
+                    host.get("active_bytes.current", 0) / 1_000_000.0
+                )
+            except Exception:
+                pass
     except Exception:
         pass
     out["cuda"] = cuda

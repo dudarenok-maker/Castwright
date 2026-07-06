@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 import time
@@ -167,6 +168,28 @@ def test_mem_warn_threshold_parsing(monkeypatch):
 
     monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")
     assert main._mem_warn_threshold_mb() == 0.0
+
+
+# --- side-11: bound the oneDNN primitive cache (the variable-shape host leak) ---
+
+
+def test_onednn_primitive_cache_capacity_default():
+    """Importing main must pin ONEDNN_PRIMITIVE_CACHE_CAPACITY (issue #399).
+
+    The Code2Wav codec runs on CPU; unbounded, oneDNN caches one JIT'd kernel +
+    scratchpad per distinct input shape — the monotonic committed-RAM climb the
+    process-recycle contains. main.py setdefaults the cap BEFORE torch's first
+    CPU conv (module top, beside PYTORCH_CUDA_ALLOC_CONF). `import main` above
+    already ran it, so a clean pytest env carries the key; deleting the
+    setdefault line breaks this test. An operator override wins (setdefault),
+    so assert presence + a sane non-negative integer rather than the literal 64.
+    """
+    raw = os.environ.get("ONEDNN_PRIMITIVE_CACHE_CAPACITY")
+    assert raw is not None, "main.py must setdefault ONEDNN_PRIMITIVE_CACHE_CAPACITY"
+    # A dev shell may pre-set the var (setdefault keeps it) — fail with a clear
+    # assertion on a non-integer value rather than erroring inside int().
+    assert raw.lstrip("-").isdigit(), f"non-integer ONEDNN_PRIMITIVE_CACHE_CAPACITY {raw!r}"
+    assert int(raw) >= 0
 
 
 # --- side-11: env-gated MKLDNN disable (variable-shape host-leak probe) ---
@@ -458,6 +481,31 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     assert qwen["design_loaded"] is False
     assert qwen["prompt_cache_entries"] == 0
     assert "cuda" in body
+    # side-11 leak attribution: on a CUDA box whose torch has the pinned-host
+    # allocator stats API (>=2.6), the cuda block must carry the pinned-pool
+    # split — "owned" (active + cached, the never-returned pool) vs "active"
+    # (checked out to callers). Guarded like the endpoint itself: no CUDA or
+    # no API → keys legitimately absent.
+    if body["cuda"]:
+        # Mirror the ENDPOINT's guard exactly: it emits the keys iff the CALL
+        # succeeds (not merely iff the attribute exists) — assert presence
+        # under the same condition, so an attribute-present-but-raising torch
+        # can't fail this test spuriously (review finding, 2026-07-06).
+        try:
+            import torch  # noqa: PLC0415
+
+            torch.cuda.host_memory_stats()
+            has_host_stats = True
+        except Exception:
+            has_host_stats = False
+        if has_host_stats:
+            # Presence + sanity only — torch's host-allocator counters don't
+            # guarantee active <= owned at all times (observed active 6 KB vs
+            # owned 13 B on a barely-used pool), so no cross-key invariant.
+            assert "host_pinned_owned_mb" in body["cuda"]
+            assert "host_pinned_active_mb" in body["cuda"]
+            assert body["cuda"]["host_pinned_owned_mb"] >= 0
+            assert body["cuda"]["host_pinned_active_mb"] >= 0
 
 
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
