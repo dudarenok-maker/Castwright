@@ -10,7 +10,7 @@ The knobs are grouped into a collapsible, side-nav-indexed accordion:
 LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
-memory, Gemini rate limits, and LAN access & device tokens — 97 knobs
+memory, Gemini rate limits, and LAN access & device tokens — 100 knobs
 across 11 groups in total. High-risk groups (marked with a small warning
 glyph) start collapsed; the rest start open.
 
@@ -119,10 +119,23 @@ sidecar — not instant, but your books/cast/voices are untouched.
 | Kokoro device | Device for Kokoro (onnxruntime) | `auto` | device dropdown | restart · sidecar | high |
 | Qwen device | PyTorch device for Qwen3-TTS | `auto` | device dropdown | restart · sidecar | high |
 | Qwen attention impl | sdpa (default) vs flash_attention_2 | `sdpa` | sdpa / flash_attention_2 | restart · sidecar | high |
+| Qwen codec device | Moves the Code2Wav codec decode off CPU onto a GPU — an opt-in speed boost | `cpu` | device dropdown | restart · sidecar | high |
+| Qwen codec chunk size | Codec decode chunk width; lower it if GPU codec decode runs a card out of memory | 300 | integer, min 1 | restart · sidecar | high |
+| Qwen codec left-context size | Codec chunk overlap, for smoother chunk boundaries | 25 | integer, min 0 | restart · sidecar | high |
 | Preload Coqui at startup | Eager-load Coqui at boot (~3GB VRAM) | `false` | boolean | restart · sidecar | high |
 | Preload Kokoro at startup | Eager-load Kokoro at boot (~1GB VRAM) | `true` | boolean | restart · sidecar | high |
 | Preload Qwen at startup | Eager-load Qwen Base at boot (~1.2GB VRAM) | `false` | boolean | restart · sidecar | high |
 | Preload Qwen 1.7B-Base at startup | Eager-load 1.7B-Base for anchored emotion variants (~3.4GB) | `false` | boolean | restart · sidecar | high |
+
+**Qwen codec device** ships off by default, so it changes nothing on its
+own — leave it on `cpu` and every book renders exactly as it does today.
+Flipping it to `auto` (or pinning a card) hands the codec's decode step to
+your GPU alongside the rest of Qwen, which can meaningfully speed up
+batches — but it also raises Qwen's VRAM footprint, so it's worth trying
+chunk size lower before you commit a tight card to it. If a batch starts
+spilling into slower shared GPU memory or the sidecar reports a poisoned
+CUDA state, see [Troubleshooting](Troubleshooting#gpu-out-of-memory-vram)
+and dial it back to `cpu`.
 
 A read-only **Analyzer (Ollama) device** row appears at the end of this
 group when the local analyzer is active — Ollama's device isn't
