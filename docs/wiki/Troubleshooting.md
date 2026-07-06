@@ -66,6 +66,8 @@ When a render goes wrong, Castwright names the failure instead of shrugging. Eve
 
 **What to do:** Unload any models you are not generating with (the analyzer Ollama, or a second voice engine) from the model pills, then retry. On an 8 GB card keep only one heavy voice engine loaded.
 
+**If you've turned on "Qwen codec device" (Advanced Settings → Voice engine & device):** this opt-in setting moves part of Qwen's decode work onto the GPU for a speed boost, but it noticeably raises Qwen's own VRAM footprint. On-box testing on an 8 GB card (RTX 4070 Laptop) at a real production batch size (32) measured the dedicated VRAM peak rising from ~5.2 GB (codec off) to ~7.9 GB (codec on) — even after lowering "Qwen codec chunk size" from its default (300) to 100 — with the excess spilling into Windows' much slower shared-memory GPU fallback and then poisoning the CUDA context (every request 503s until the sidecar auto-restarts). This is a real capacity limit on 8 GB cards at larger batch sizes, not a bug: if you see this, turn "Qwen codec device" back to its default (off), or try a smaller batch size before re-enabling it. See [issue #1374](https://github.com/dudarenok-maker/Castwright/issues/1374) and the [follow-up on VRAM accounting](https://github.com/dudarenok-maker/Castwright/issues/1396).
+
 ### Computer ran out of memory
 
 **What you saw:** The voice engine was killed by the operating system — the machine ran out of host RAM.
