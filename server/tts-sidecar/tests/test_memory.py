@@ -186,6 +186,9 @@ def test_onednn_primitive_cache_capacity_default():
     """
     raw = os.environ.get("ONEDNN_PRIMITIVE_CACHE_CAPACITY")
     assert raw is not None, "main.py must setdefault ONEDNN_PRIMITIVE_CACHE_CAPACITY"
+    # A dev shell may pre-set the var (setdefault keeps it) — fail with a clear
+    # assertion on a non-integer value rather than erroring inside int().
+    assert raw.lstrip("-").isdigit(), f"non-integer ONEDNN_PRIMITIVE_CACHE_CAPACITY {raw!r}"
     assert int(raw) >= 0
 
 
@@ -484,10 +487,15 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     # (checked out to callers). Guarded like the endpoint itself: no CUDA or
     # no API → keys legitimately absent.
     if body["cuda"]:
+        # Mirror the ENDPOINT's guard exactly: it emits the keys iff the CALL
+        # succeeds (not merely iff the attribute exists) — assert presence
+        # under the same condition, so an attribute-present-but-raising torch
+        # can't fail this test spuriously (review finding, 2026-07-06).
         try:
             import torch  # noqa: PLC0415
 
-            has_host_stats = hasattr(torch.cuda, "host_memory_stats")
+            torch.cuda.host_memory_stats()
+            has_host_stats = True
         except Exception:
             has_host_stats = False
         if has_host_stats:
