@@ -15,7 +15,7 @@ import {
 } from './voice-mapping.js';
 import { resolveInstructForGroup } from './resolve-instruct.js';
 import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from './index.js';
-import { canonicalModelKeyForEngine } from './model-keys.js';
+import { canonicalModelKeyForEngine, higherQwenTier } from './model-keys.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { normaliseBookLanguage } from './language.js';
@@ -264,10 +264,14 @@ export interface CastCharacter {
       run's default engine; absent → the run default. The narrator typically
       leaves this unset and stays on the default (Kokoro). */
   ttsEngine?: TtsEngine | null;
-  /** fs-56 — per-character model-key override for the Qwen engine. When set
-      on a Qwen character, the synth call uses this key instead of the run
-      default (e.g. `'qwen3-tts-1.7b'` to route to the 1.7B-Base). Ignored
-      for non-Qwen characters. Absent / null → run default (0.6B). */
+  /** fs-56 — per-character model-key override for the Qwen engine, meant to
+      ELEVATE one character above the run's default (e.g. `'qwen3-tts-1.7b'`
+      to route just this character to the 1.7B-Base in an otherwise-0.6B run).
+      Resolved via `higherQwenTier` against the run default, so it only ever
+      raises the effective tier — a character stuck on a stale/unset 0.6B
+      value can never downgrade a run (or per-regenerate override) that was
+      explicitly started at 1.7B. Ignored for non-Qwen characters. Absent /
+      null → run default. */
   ttsModelKey?: TtsModelKey | null;
 }
 
@@ -843,19 +847,21 @@ export async function synthesiseChapter(
     if (resolveForEngine && charEngine !== engine) {
       const r = resolveForEngine(charEngine);
       /* fs-56: per-character 1.7B Quality-tier — when the character carries
-         a ttsModelKey and routes to Qwen, use it as the canonical model key
-         so the sidecar can pick the 1.7B-Base over the 0.6B default. */
+         a ttsModelKey and routes to Qwen, ELEVATE to it over the run's
+         default. `higherQwenTier` means a stale/never-elevated character
+         tier can never downgrade a run explicitly started at 1.7B (side-11
+         follow-up) — the per-character field only ever raises the bar. */
       const charModelKey =
         charEngine === 'qwen' && c.ttsModelKey
-          ? canonicalModelKeyForEngine('qwen', c.ttsModelKey)
+          ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), r.modelKey)
           : r.modelKey;
       return { engine: charEngine, provider: r.provider, modelKey: charModelKey };
     }
-    /* Same override for the same-engine path (character on the run-default
-       engine but still carrying an explicit ttsModelKey for Qwen). */
+    /* Same elevate-only override for the same-engine path (character on the
+       run-default engine but still carrying an explicit ttsModelKey for Qwen). */
     const charModelKey =
       charEngine === 'qwen' && c.ttsModelKey
-        ? canonicalModelKeyForEngine('qwen', c.ttsModelKey)
+        ? higherQwenTier(canonicalModelKeyForEngine('qwen', c.ttsModelKey), modelKey)
         : modelKey;
     return { engine: charEngine, provider, modelKey: charModelKey };
   };

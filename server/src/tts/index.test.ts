@@ -85,6 +85,20 @@ describe('canonicalModelKeyForEngine', () => {
   });
 });
 
+describe('higherQwenTier — elevate-only tier resolution (side-11 follow-up)', () => {
+  it('picks 1.7B whichever side it comes from', () => {
+    const { higherQwenTier } = indexModule;
+    expect(higherQwenTier('qwen3-tts-1.7b', 'qwen3-tts-0.6b')).toBe('qwen3-tts-1.7b');
+    expect(higherQwenTier('qwen3-tts-0.6b', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+  });
+
+  it('never lets a 0.6B side win over the other', () => {
+    const { higherQwenTier } = indexModule;
+    expect(higherQwenTier('qwen3-tts-0.6b', 'qwen3-tts-0.6b')).toBe('qwen3-tts-0.6b');
+    expect(higherQwenTier('qwen3-tts-1.7b', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+  });
+});
+
 /* Cycle-break guard. The pure helpers live in the leaf ./model-keys.js so the
    provider modules (gemini/sidecar) can import them WITHOUT forming an
    index ↔ provider runtime cycle — that cycle made `importOriginal('../tts/index.js')`

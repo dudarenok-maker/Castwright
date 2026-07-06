@@ -3085,6 +3085,41 @@ describe('fs-56 — per-character 1.7B Quality-tier model key routing', () => {
     expect(calls[0].modelKey).toBe('qwen3-tts-1.7b');
   });
 
+  /* side-11 follow-up: a per-regenerate/run override at 1.7B must never be
+     dragged back down to 0.6B by a character whose stored ttsModelKey is the
+     lower tier (stale, or never elevated) — the field is an ELEVATE-only
+     lever. Without this, choosing "Qwen3-TTS 1.7B" in the Regenerate modal
+     silently did nothing for any already-cast character. */
+  it('never downgrades a 1.7B run/regenerate override for a character stuck on the 0.6B tier', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        ttsEngine: 'qwen',
+        ttsModelKey: 'qwen3-tts-0.6b',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+      },
+    ];
+    const calls: Array<{ modelKey: string }> = [];
+    const provider: TtsProvider = {
+      async synthesize(input) {
+        calls.push({ modelKey: input.modelKey });
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line.')],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-1.7b',
+      engine: 'qwen',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].modelKey).toBe('qwen3-tts-1.7b');
+  });
+
   it('routes a Qwen character without ttsModelKey through the default 0.6B model key', async () => {
     const cast: CastCharacter[] = [
       {
