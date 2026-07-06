@@ -334,13 +334,34 @@ def _move_codec_to_device(model: Any, device: str, torch_module: Any) -> None:
     """Move the resolved codec (speech_tokenizer.model) to `device` and
     resync its cached `.device` attribute, so every `.to(self.device)` call
     inside Qwen3TTSTokenizer.encode()/decode() lands on the right device.
-    No-op when the codec can't be resolved (a perf/placement knob must
-    never break a model load)."""
+
+    On failure (most commonly a CUDA OOM), rolls the codec back to CPU
+    explicitly -- nn.Module.to() moves submodules in place and
+    non-transactionally, so merely resetting the cached `.device`
+    attribute without ALSO rolling back `.model` would leave some layers
+    on CUDA and the rest on CPU, and every subsequent decode() would fail
+    pushing CPU inputs into a partially-CUDA model. The rollback is a
+    real `.to('cpu')` call (frees GPU memory rather than allocating more
+    of the scarce resource, so it doesn't share the OOM's failure mode).
+    If the rollback itself raises, that exception is NOT swallowed -- it
+    propagates to _load_qwen_model's outer try/except, which already
+    reclaims and fails the whole load (see _load_qwen_model's
+    "Reclaim-on-failure" docstring note). A failed load is a clean,
+    fully-visible failure -- no half-migrated model is ever handed back
+    to a caller."""
     speech_tokenizer = _resolve_speech_tokenizer(model)
     if speech_tokenizer is None:
         return
-    speech_tokenizer.model.to(device)
-    speech_tokenizer.device = torch_module.device(device)
+    try:
+        speech_tokenizer.model.to(device)
+        speech_tokenizer.device = torch_module.device(device)
+    except Exception as e:
+        log.warning(
+            "Could not move Qwen codec to %s (%s) -- rolling back to cpu.",
+            device, e,
+        )
+        speech_tokenizer.model.to("cpu")
+        speech_tokenizer.device = torch_module.device("cpu")
 
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")

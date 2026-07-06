@@ -748,6 +748,58 @@ def test_load_leaves_codec_on_cpu_by_default(fake_qwen_runtime, monkeypatch) -> 
     assert codec_model.to_calls == []
 
 
+def test_load_rolls_back_codec_on_oom(fake_qwen_runtime, monkeypatch) -> None:
+    """A CUDA OOM partway through the codec move must roll the codec back
+    to cpu -- not leave .model half-migrated. nn.Module.to() moves
+    submodules in place and non-transactionally, so a naive except that
+    only reset the cached .device attribute (without ALSO rolling .model
+    back) would leave weights split across devices and break every
+    subsequent decode()."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:0")
+    engine._device = "cuda:0"
+    import qwen_tts
+
+    failing_codec = _FakeCodecModel(fail_calls=frozenset({1}))  # move raises; rollback must succeed
+
+    def recorder(model_id, **kwargs):
+        fake_model = _FakeQwenModel(model_id)
+        fake_model.model.speech_tokenizer = _FakeTokenizerStub(codec_model=failing_codec)
+        return fake_model
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", recorder)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    assert model is not None  # a RECOVERABLE codec OOM must not fail the whole load
+    assert failing_codec.to_calls == ["cuda:0", "cpu"]  # move attempted, then rolled back
+    assert failing_codec.device == "cpu"
+    assert model.model.speech_tokenizer.device == "cpu"
+
+
+def test_load_propagates_when_codec_rollback_also_fails(fake_qwen_runtime, monkeypatch) -> None:
+    """If even the cpu rollback raises (e.g. a poisoned CUDA context), the
+    exception must propagate to _load_qwen_model's outer handler rather
+    than being swallowed -- a failed load is a clean, fully-visible
+    failure, never a half-migrated model handed back to a caller."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda:0")
+    engine._device = "cuda:0"
+    import qwen_tts
+
+    unrecoverable_codec = _FakeCodecModel(fail_calls=frozenset({1, 2}))  # move AND rollback raise
+
+    def recorder(model_id, **kwargs):
+        fake_model = _FakeQwenModel(model_id)
+        fake_model.model.speech_tokenizer = _FakeTokenizerStub(codec_model=unrecoverable_codec)
+        return fake_model
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", recorder)
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        engine._load_qwen_model(engine.BASE_MODEL)
+
+
 # ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──
 
 def test_voices_dir_resolves_from_env(monkeypatch, tmp_path) -> None:
