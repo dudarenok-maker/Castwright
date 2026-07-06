@@ -38,8 +38,12 @@ private-repo minute costs that no longer apply. Its rationale is stale.
 ## Goals
 
 - Local pre-push/pre-commit work stops running the heavy, contention-prone
-  legs (server/frontend integration suites, Playwright, build) as routine,
-  on-every-push behavior *when they're not relevant to the change*.
+  legs (server/frontend integration suites, Playwright, build)
+  *unconditionally on every push* — every step in the new local command is
+  scope-gated to whether the branch diff actually touches its own declared
+  inputs, the same uniform mechanism `--scope-staged` already uses for
+  pre-commit, just applied to a branch-level diff instead of a staged one.
+  Nothing is special-cased to "always run regardless of relevance."
 - Nothing loses **enforcement**: every cloud-safe leg still runs on every
   PR, in the cloud instead of locally, AND `verify.yml` becomes a **required
   status check** on `main` — so it actually blocks merge on red, closing the
@@ -47,19 +51,22 @@ private-repo minute costs that no longer apply. Its rationale is stale.
   (An earlier draft of this spec claimed cloud coverage alone was
   equivalent to today's local gate; adversarial review found that's false
   while `verify.yml` isn't required — see the design-doc history / PR
-  discussion for that correction.)
-- The local machine is reserved for what genuinely requires it: real
-  GPU/CUDA + the bootstrapped Python sidecar venv + actual model weights.
-  `test:golden-audio` and manual generation/model testing become
-  deliberate, on-demand, manual commands. `test:sidecar` is the one
-  exception that stays in the **automatic** local gate, but scope-gated —
-  it auto-runs in the new pre-push hook only when the branch diff actually
-  touches `server/tts-sidecar/**`, so it doesn't burden unrelated commits
-  but still catches sidecar regressions on the one path where the machine
-  is genuinely needed and the work is actually relevant. None of this runs
-  in the cloud (cloud runners can't load real models).
+  discussion for that correction. This action is required regardless of
+  whether the separately-pending `pr-issue-link.yml` required-check wiring
+  in doc 235 has happened yet — see §3.)
+- The local machine is reserved for what genuinely requires it: things CI
+  cannot do at all — real GPU/CUDA + actual model weights
+  (`test:golden-audio`, manual generation/model testing) — and things CI
+  merely doesn't have set up (the bootstrapped Python sidecar venv/deps,
+  `test:sidecar`). These stay local; only `test:golden-audio` and manual
+  model work are fully manual-only. `test:sidecar` itself is **model-free**
+  (`-m "not golden"`) — it's local because CI has no bootstrapped venv, not
+  because it needs a GPU — and rejoins the automatic local gate like every
+  other step, scope-gated to its own real inputs (§4). None of this runs in
+  the cloud.
 - CI flips from opt-in (`run-ci` label / manual dispatch) to opt-out
-  (runs by default on every PR; docs-only PRs stay exempt, same as today).
+  (runs by default on every PR, including docs-only — see §3 for why
+  docs-only can't stay exempt once the check is required).
 
 ## Non-goals
 
@@ -85,9 +92,11 @@ code-review subagent is dispatched in parallel → merge once both are green.
 ### 2. STEPS reclassification
 
 Audited every step in `scripts/verify-cache.mjs`'s `STEPS` array against
-whether it needs this machine's actual hardware (GPU + bootstrapped
-sidecar venv + real model weights) or can run on a stock GitHub-hosted
-runner:
+whether it needs something a stock GitHub-hosted runner doesn't have —
+either the bootstrapped Python sidecar venv/deps (`test:sidecar`) or real
+GPU/CUDA + actual model weights (`test:golden-audio`, not itself a `STEPS`
+entry) — versus everything else, which is plain Node/TS/Python-mock work
+any runner can do:
 
 | Step | Cloud-safe? | Notes |
 |---|---|---|
@@ -100,7 +109,7 @@ runner:
 | test:server | yes | already cloud (`--changed` narrowed), unchanged |
 | test:server-slow | yes | already cloud, unchanged |
 | test:scripts (Pester) | yes | already cloud (ubuntu has pwsh), unchanged |
-| test:sidecar | **no** (local-only, auto) | needs the bootstrapped venv + real model weights. **There is no `test:sidecar` step in `verify.yml` today at all** — cloud coverage has always been zero, not "skipped." Stays out of the cloud workflow, but rejoins the local automatic gate scope-gated (§4) |
+| test:sidecar | **no** (local-only, auto) | needs the bootstrapped Python venv/deps CI doesn't have — **not** real model weights (it runs `-m "not golden"`, explicitly model-free). **There is no `test:sidecar` step in `verify.yml` today at all** — cloud coverage has always been zero, not "skipped." Stays out of the cloud workflow, but rejoins the local automatic gate scope-gated to its own real inputs, same as every other step (§4) |
 | test:e2e | yes | already cloud, unchanged |
 | test:e2e:visual | yes | already cloud, unchanged |
 | build | yes | already cloud, unchanged |
@@ -129,17 +138,33 @@ so it only fires when relevant (§4).
 - Drop the `labeled` event and the `run-ci` label requirement from the job
   `if:` gate — the workflow runs on every `pull_request` (opened,
   synchronize, reopened, ready_for_review) by default.
-- Keep the existing `paths-ignore` docs-only fast-path and the per-scope
-  `if:` gating on each leg (still worth skipping legs a PR didn't touch —
-  now framed as "don't run tests that can't fail," not "save money").
+- **Drop the `paths-ignore: [docs/**, *.md, .github/*.md]` block entirely.**
+  Keeping it while also making this a required status check would deadlock
+  every docs-only PR: `verify.yml`'s own header explains branch protection
+  today *deliberately* excludes it as required specifically so doc-only PRs
+  "can't deadlock" against a check that never fires. Once required, the
+  workflow must always trigger. This isn't a new cost, though: the existing
+  per-leg scope `if:` gating already makes every leg's condition false for
+  a genuinely docs-only diff (none of `frontend`/`server`/`sidecar`/`e2e`/
+  `scripts`/`hooks`/`pinokio` match a docs-only file set), so the job still
+  completes in roughly the time of "Setup Node + deps" alone (~20-40s) and
+  reports green — no deadlock, negligible added time, no new logic needed.
+- Keep the per-scope `if:` gating on each leg otherwise (still worth
+  skipping legs a PR didn't touch — now framed as "don't run tests that
+  can't fail," not "save money").
 - **Add its check as a required status check** in `main`'s branch-protection
   ruleset. This is the load-bearing change: without it, cloud verify running
   on every PR is only *advisory* — mergeable-past on red — which is a net
   enforcement regression versus today's push-refusing local pre-push. This
-  is a one-time, manual GitHub settings action (same category as the
-  pending `pr-issue-link.yml` required-check wiring already noted in
-  `docs/features/235-model-routing-review-gates.md` — bundle both into the
-  same ruleset-setup step rather than doing it twice).
+  is a one-time, manual GitHub settings action that must happen as part of
+  implementing this spec, **independently of** whether the separately
+  pending `pr-issue-link.yml` required-check wiring
+  (`docs/features/235-model-routing-review-gates.md`) has landed yet — do
+  the ruleset edit for both checks together if 235's wiring happens to be
+  done at the same time, but don't make this spec's completion contingent
+  on that other item finally landing (it's been pending independently;
+  treat them as two separate action items that happen to touch the same
+  GitHub settings page).
 - Add a `pinokio` key to the scope-detection step. Match both the test
   files and the runner script, not just the directory: `match
   '^(pinokio/|scripts/run-pinokio-tests\.mjs$)'` — the plain `^pinokio/`
@@ -180,20 +205,30 @@ New npm script:
 "verify:fast:branch": "node scripts/verify-cache.mjs --steps lint,typecheck,config:check,test:hooks,test,test:server,build,test:sidecar --scope-branch"
 ```
 
-`test:sidecar` is in this list, but — unlike every other step here — it
-should remain scope-gated to fire **only** when the branch diff touches
-`server/tts-sidecar/**`, even though `--scope-branch` is otherwise just a
-speed/diff-basis choice, not an exclusion mechanism. Concretely: pass it
-through the same `stepTouchedByDiff` scope check that `--scope-staged`
-already uses (verify-cache.mjs:391-399) — `test:sidecar` runs only when
-its own step-scope (`server/tts-sidecar/**`) intersects the branch diff;
-every other step in the list still always runs (they're fast/CPU-only, no
-reason to skip them for speed). This is the one place local pre-push does
-real, unconditional model/venv work — deliberately, since that's the
-"machine reserved for what needs it" case (§ Goals) — and it runs
-automatically (not just a reminder) because a silently-skipped sidecar
-regression on the one branch that's actively touching sidecar code is a
-worse outcome than the extra local runtime when it fires.
+`--scope-branch` applies the **same uniform per-step scope filter**
+`--scope-staged` already applies today (verify-cache.mjs's main loop
+checks `stepTouchedByDiff(step, scopeDiff)` for every step in the active
+list, not a hand-picked subset — see `runPipeline`'s loop). No special-
+casing: `test:sidecar` isn't treated differently from `test:server` or
+`build` in the mechanism, it just happens to have narrower globs
+(`server/tts-sidecar/**/*.py`, `requirements*.txt`, `run-tests.ps1` — its
+own already-declared `STEPS` entry, reused as-is, not a new
+`server/tts-sidecar/**` match invented for this spec) so it fires less
+often in practice. `test:server`/`build`/`test` are scope-gated by their
+own existing globs (`server/src/**`, `src/** + server/src/**`, `src/**`
+respectively) exactly the same way — an earlier draft of this spec
+incorrectly described them as "always run regardless of relevance," which
+would have defeated the point of the whole redesign (`test:server` is one
+of only two `RETRIABLE_POOL_STEPS`, i.e. the exact fork-pool-crash-prone
+leg the Problem section is about). `lint`/`typecheck`/`test:hooks`/
+`config:check` have broad-enough globs that they'll still fire on nearly
+every code PR — that's expected and fine, they're cheap.
+
+This means on a branch that touches `server/tts-sidecar/**`, `test:sidecar`
+auto-runs and blocks the push on failure — real, automatic local coverage
+on the one path where the machine is genuinely relevant — without any new
+selective-gating logic beyond what the existing scope-filter engine
+already does for `--scope-staged`.
 
 This single command serves two purposes with no duplication:
 
@@ -216,11 +251,17 @@ discipline):** `scripts/tests/verify-cache.test.mjs`'s existing `parseFlags`
 tests assert an exact `deepEqual` against today's return shape
 (`{ noCache, steps, scopeStaged }`); adding a `scopeBranch` field breaks
 every one of them and must be updated in the same change, not left for CI
-to discover. The new `--scope-branch` diff path (`git merge-base HEAD
-main` → `git diff --name-only`) and the `test:sidecar`-only scope
-exclusion inside a `--scope-branch` run are both new behavior with zero
-existing coverage — both need new test cases, mirroring how
-`stagedDiffFiles`/`--scope-staged` are already tested.
+to discover. The new `git merge-base HEAD main` → `git diff --name-only`
+logic has no equivalent to mirror: `stagedDiffFiles` (the `--scope-staged`
+counterpart) isn't exported and isn't unit-tested today — only the pure
+predicates `stepTouchedByDiff`/`computeShared` are, and `runPipeline`
+itself is explicitly documented as exercised by manual walkthrough, not
+unit tests. Don't assert test parity that doesn't exist: the new function
+(name it e.g. `branchDiffFiles`) should be **exported** specifically so it
+can be unit-tested directly (with `cwd` pointed at a throwaway git repo
+fixture, or by injecting a `spawnSync`-like seam), closing a gap that
+`stagedDiffFiles` itself still has rather than just matching its
+(non-)existing coverage.
 
 `.husky/pre-commit` (`npm run verify:fast:scoped`, staged-diff based) is
 unchanged — it's already fast/scoped and wasn't implicated in the waste.
@@ -257,9 +298,11 @@ to twice weekly: add Wednesday 02:00 UTC alongside the existing Sunday
   opt-in design existed while the repo was private).
 - `docs/features/235-model-routing-review-gates.md`: this already documents
   a pending, one-time required-status-check ruleset setup for
-  `pr-issue-link.yml`. Update it to also cover `verify.yml` in the same
-  ruleset action (§3), so the manual setup step is done once for both
-  rather than as two separate asks of the user.
+  `pr-issue-link.yml`. Note that `verify.yml` also needs the same
+  ruleset-required treatment (§3) — do both in one GitHub settings visit if
+  235's item happens to still be open at the same time, but treat them as
+  independent action items rather than coupling this spec's completion to
+  235's.
 - `feedback_ci_cost_shipping_practice` memory: update once implemented —
   the draft-PR-to-save-minutes rationale is retired (repo is public, cost
   is no longer the reason); note whether the draft-PR practice itself is
@@ -286,8 +329,16 @@ to twice weekly: add Wednesday 02:00 UTC alongside the existing Sunday
 - The `main` branch-protection ruleset change (§3) is a manual, one-time
   GitHub settings action this spec's file changes cannot perform by
   themselves — implementation must call this out explicitly rather than
-  quietly assume it's done as a side effect of merging code.
+  quietly assume it's done as a side effect of merging code. It's
+  deliberately treated as its own action item, not contingent on doc 235's
+  separate (still-pending) `pr-issue-link.yml` wiring actually landing.
 - `scripts/tests/verify-cache.test.mjs` needs updating in the same change
   as the `--scope-branch`/`scopeBranch` work (see §4) — flagged here again
   since a plan that treats this as a follow-up rather than in-scope would
-  violate CLAUDE.md's testing discipline.
+  violate CLAUDE.md's testing discipline. The new diff-listing function
+  needs to be exported and directly unit-tested (§4) rather than assumed
+  covered by analogy to `stagedDiffFiles`, which has no such test itself.
+- Dropping `verify.yml`'s `paths-ignore` (§3) means every docs-only PR now
+  spins up the workflow (env setup only, ~20-40s) instead of never
+  triggering — a deliberate, confirmed tradeoff to avoid the required-check
+  deadlock, not an oversight.
