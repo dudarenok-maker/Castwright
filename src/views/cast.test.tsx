@@ -294,7 +294,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
      with an empty voice name and the sidecar 400'd ("`voice` is required.").
      The sample must route to the Qwen model key and carry the designed
      voiceId, and gate cleanly when no voice has been designed. */
-  function renderChars(characters: Character[]) {
+  function renderChars(characters: Character[], libraryOverride: Voice[] = library) {
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -309,7 +309,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
           <CastView
             characters={characters}
             setCharacters={() => {}}
-            library={library}
+            library={libraryOverride}
             title="The Northern Star"
             onOpenProfile={() => {}}
             onShowMatchDetail={() => {}}
@@ -354,6 +354,44 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
     const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
     expect(args.voice.voiceUuid).toBe('uuid-marrow-123');
+  });
+
+  it("prefers the character's own voiceUuid over a stale/foreign one on the matched library voice", async () => {
+    /* Regression: the matched library voice can carry the WRONG voiceUuid —
+       e.g. the server aggregation bleeding an unrelated book's identity onto
+       a same-id character (voices.ts's cross-book dedup collision, fixed
+       separately), or any other stale-cache case. The character's OWN
+       voiceUuid (read straight from this book's cast.json) must win; the
+       matched voice's uuid is only a fallback for a genuinely reused
+       character that carries none of its own. */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    const foreignUuidLibrary = library.map((v) =>
+      v.id === 'v_marrow' ? { ...v, voiceUuid: 'foreign-uuid-from-other-book' } : v,
+    );
+    renderChars([{ ...marrowQwen, voiceUuid: 'own-uuid-correct' }], foreignUuidLibrary);
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.voice.voiceUuid).toBe('own-uuid-correct');
+  });
+
+  it('falls back to the matched voice\'s voiceUuid for a reused character that carries none of its own', async () => {
+    /* The other half of the precedence contract: a character matched/reused
+       from a prior book (no bespoke voiceUuid of its own — the design lives
+       on the matched Voice) must still resolve the uuid-keyed cache entry. */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    const uuidLibrary = library.map((v) =>
+      v.id === 'v_marrow' ? { ...v, voiceUuid: 'matched-voice-uuid' } : v,
+    );
+    renderChars([marrowQwen], uuidLibrary);
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.voice.voiceUuid).toBe('matched-voice-uuid');
   });
 
   it('shows an inline error (no API call) for a Qwen-pinned row with no designed voice', async () => {

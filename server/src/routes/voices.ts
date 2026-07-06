@@ -282,6 +282,20 @@ async function aggregateVoices(
           const c = normaliseCastCharacter(rawC);
           const id = c.voiceId ?? c.id;
           if (!id) continue;
+          /* Cross-book MERGE key — deliberately separate from the public `id`
+             above. An explicit `voiceId` is the only real signal that two
+             characters in different books are meant to be the same voice
+             (series continuity, deliberate reuse). Without one, bare `c.id`
+             is NOT a safe cross-book identity: the analyzer assigns the same
+             literal id ('narrator', 'unknown-male', 'unknown-female') to
+             EVERY book's narrator and auto-folded background-bucket
+             character, so two unrelated standalone books can coincidentally
+             share it. Scoping the fold key by bookId in that case stops one
+             book's generated/sampled/languageCode/voiceUuid from bleeding
+             into an unrelated book's same-slug character. `id` itself stays
+             the bare `voiceId ?? c.id` so the frontend's same-book id-
+             fallback join (voice-character-link.ts) is unaffected. */
+          const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
           /* The sample-cache scope keys on `char-<id>` (not bare `<id>`) for a
              voiceId-less character — matching the frontend's sampleScopeFor —
              so it can diverge from `id` above. Compute it explicitly. */
@@ -296,7 +310,7 @@ async function aggregateVoices(
           const overrideMap = c.overrideTtsVoices ?? null;
           const overrideForEngine = overrideMap?.[engine] ?? null;
           const legacyShape = overrideForEngine ? { engine, name: overrideForEngine.name } : null;
-          const existing = acc.get(id);
+          const existing = acc.get(dedupKey);
           if (existing) {
             existing.books.add(state.bookId);
             existing.usedIn = existing.books.size;
@@ -391,7 +405,7 @@ async function aggregateVoices(
             engine === 'qwen' && ttsVoiceRaw.name
               ? { ...ttsVoiceRaw, name: `qwen-${id}` }
               : ttsVoiceRaw;
-          acc.set(id, {
+          acc.set(dedupKey, {
             id,
             character: c.name ?? id,
             bookTitle: state.title,

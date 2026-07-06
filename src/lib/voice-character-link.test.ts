@@ -57,6 +57,35 @@ describe('findVoiceForCharacter', () => {
     const c = makeChar('marlow');
     expect(findVoiceForCharacter(c, [])).toBeUndefined();
   });
+
+  it("prefers the current book's own voice over an unrelated book sharing the same bare id (no voiceId)", () => {
+    /* Real-world collision: the analyzer assigns the SAME literal id
+       ('narrator', 'unknown-male', 'unknown-female') to every book's
+       narrator / auto-folded background character, and neither ever gets an
+       explicit voiceId. Two unrelated books' narrators both resolve to bare
+       id 'narrator' — the current book's own `source: 'current'` entry must
+       win over a same-id `source: 'library'` entry from a different book,
+       regardless of array order (the server can't guarantee scan order). */
+    const c = makeChar('narrator');
+    const ownBookVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
+    const foreignBookVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'unrelated-book',
+    };
+    expect(findVoiceForCharacter(c, [foreignBookVoice, ownBookVoice])).toBe(ownBookVoice);
+    expect(findVoiceForCharacter(c, [ownBookVoice, foreignBookVoice])).toBe(ownBookVoice);
+  });
+
+  it('falls back to any bare-id match when no current-book voice is present', () => {
+    const c = makeChar('narrator');
+    const libraryVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'unrelated-book',
+    };
+    expect(findVoiceForCharacter(c, [libraryVoice])).toBe(libraryVoice);
+  });
 });
 
 describe('findCharacterForVoice', () => {

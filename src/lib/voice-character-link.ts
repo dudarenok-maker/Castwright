@@ -11,7 +11,19 @@
         rely on this fallback.
 
    Without (2) the cast Voice column shows "No library voice" on every row
-   of a freshly-analysed book and the library panel cards stay inert. */
+   of a freshly-analysed book and the library panel cards stay inert.
+
+   Rule (2) has a real collision, though: the analyzer assigns the SAME
+   literal id ('narrator', 'unknown-male', 'unknown-female') to every book's
+   narrator and auto-folded background-bucket character, and neither ever
+   gets an explicit voiceId. Two unrelated books' narrators both fall back
+   to bare id 'narrator', so the aggregated `library` array can carry two
+   entries with that same id — one this character's own (`source:
+   'current'`), one an unrelated book's (`source: 'library'`). A plain
+   `.find()` would return whichever happens to be array-first. Preferring a
+   `source: 'current'` match first removes that ambiguity: the character
+   being looked up always belongs to the currently-open book, so its own
+   voice (if the fallback found anything at all) is always the right one. */
 
 import type { Character, Voice } from './types';
 
@@ -20,6 +32,8 @@ export function findVoiceForCharacter(c: Character, library: Voice[]): Voice | u
     const explicit = library.find((v) => v.id === c.voiceId);
     if (explicit) return explicit;
   }
+  const currentBookMatch = library.find((v) => v.id === c.id && v.source === 'current');
+  if (currentBookMatch) return currentBookMatch;
   return library.find((v) => v.id === c.id);
 }
 
