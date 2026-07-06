@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import {
   composeInputHash,
@@ -22,6 +23,7 @@ import {
   computeShared,
   parseNvidiaSmiUtil,
   isVitestPoolCrash,
+  branchDiffFiles,
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
@@ -195,16 +197,23 @@ test('path normalization — Windows and POSIX produce identical hashes', () => 
 });
 
 test('parseFlags recognizes --no-cache anywhere in argv', () => {
-  assert.deepEqual(parseFlags([]), { noCache: false, steps: null, scopeStaged: false });
+  assert.deepEqual(parseFlags([]), {
+    noCache: false,
+    steps: null,
+    scopeStaged: false,
+    scopeBranch: false,
+  });
   assert.deepEqual(parseFlags(['--no-cache']), {
     noCache: true,
     steps: null,
     scopeStaged: false,
+    scopeBranch: false,
   });
   assert.deepEqual(parseFlags(['a', 'b', '--no-cache', 'c']), {
     noCache: true,
     steps: null,
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -213,6 +222,7 @@ test('parseFlags --steps with space-separated form', () => {
     noCache: false,
     steps: ['test:hooks', 'test', 'test:server'],
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -221,6 +231,7 @@ test('parseFlags --steps with = form', () => {
     noCache: false,
     steps: ['test:hooks', 'test', 'test:server'],
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -229,6 +240,7 @@ test('parseFlags --steps trims whitespace and drops empty segments', () => {
     noCache: false,
     steps: ['test:hooks', 'test'],
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -237,6 +249,7 @@ test('parseFlags --steps combines with --no-cache', () => {
     noCache: true,
     steps: ['test:hooks', 'test'],
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -248,11 +261,13 @@ test('parseFlags missing --steps argument yields empty list (caller errors out)'
     noCache: false,
     steps: [],
     scopeStaged: false,
+    scopeBranch: false,
   });
   assert.deepEqual(parseFlags(['--steps', '--no-cache']), {
     noCache: true,
     steps: [],
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -261,6 +276,7 @@ test('parseFlags absent --steps leaves steps null (full pipeline)', () => {
     noCache: false,
     steps: null,
     scopeStaged: false,
+    scopeBranch: false,
   });
 });
 
@@ -269,6 +285,16 @@ test('parseFlags recognizes --scope-staged', () => {
     noCache: false,
     steps: null,
     scopeStaged: true,
+    scopeBranch: false,
+  });
+});
+
+test('parseFlags recognizes --scope-branch', () => {
+  assert.deepEqual(parseFlags(['--scope-branch']), {
+    noCache: false,
+    steps: null,
+    scopeStaged: false,
+    scopeBranch: true,
   });
 });
 
@@ -427,4 +453,56 @@ test('parseNvidiaSmiUtil returns null on empty / unparseable output', () => {
   assert.equal(parseNvidiaSmiUtil(''), null);
   assert.equal(parseNvidiaSmiUtil('\n'), null);
   assert.equal(parseNvidiaSmiUtil('N/A\n'), null);
+});
+
+// --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
+
+function gitAt(cwd, args) {
+  // Strip ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX before
+  // spawning: when this suite runs inside a real git hook (pre-commit calls
+  // `npm run verify:fast:scoped` -> `npm run test:hooks`), git sets these in
+  // the process env for the hook, and without stripping them these fixture
+  // commands would operate on the REAL repo instead of the throwaway `cwd`.
+  const { GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_PREFIX, ...cleanEnv } = process.env;
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanEnv });
+  if (r.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+  }
+  return r.stdout;
+}
+
+// Builds a throwaway repo with one commit on a `main` branch, so tests can
+// exercise branchDiffFiles' real `git merge-base` + `git diff` calls without
+// touching this actual repo.
+function makeGitFixture() {
+  const dir = mkTmp();
+  gitAt(dir, ['init', '-q', '-b', 'main']);
+  gitAt(dir, ['config', 'user.email', 'test@example.com']);
+  gitAt(dir, ['config', 'user.name', 'Test']);
+  writeFileSync(join(dir, 'base.txt'), 'base', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+  return dir;
+}
+
+test('branchDiffFiles: returns files changed since branching off main', () => {
+  const dir = makeGitFixture();
+  gitAt(dir, ['switch', '-q', '-c', 'feature']);
+  writeFileSync(join(dir, 'feature.txt'), 'x', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'feature commit']);
+  const files = branchDiffFiles(dir);
+  assert.deepEqual(files, ['feature.txt']);
+});
+
+test('branchDiffFiles: empty array (not null) when run directly on main with nothing new', () => {
+  const dir = makeGitFixture();
+  const files = branchDiffFiles(dir);
+  assert.deepEqual(files, []);
+});
+
+test('branchDiffFiles: returns null when cwd is not a git repo', () => {
+  const dir = mkTmp(); // no git init — merge-base has nothing to find
+  const files = branchDiffFiles(dir);
+  assert.equal(files, null);
 });
