@@ -800,6 +800,49 @@ def test_load_propagates_when_codec_rollback_also_fails(fake_qwen_runtime, monke
         engine._load_qwen_model(engine.BASE_MODEL)
 
 
+def test_read_int_env_parses_and_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "150")
+    assert main._read_int_env("QWEN_CODEC_CHUNK_SIZE") == 150
+    monkeypatch.delenv("QWEN_CODEC_CHUNK_SIZE", raising=False)
+    assert main._read_int_env("QWEN_CODEC_CHUNK_SIZE") is None
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "not-a-number")
+    assert main._read_int_env("QWEN_CODEC_CHUNK_SIZE") is None
+
+
+def test_load_binds_chunk_size_when_configured(fake_qwen_runtime, monkeypatch) -> None:
+    """QWEN_CODEC_CHUNK_SIZE/QWEN_CODEC_LEFT_CONTEXT_SIZE bind a
+    functools.partial onto the resolved decoder's chunked_decode -- the
+    ONLY way to make these configurable, since
+    Qwen3TTSTokenizerV2Model.decode() calls chunked_decode() with no
+    arguments (verified directly against the installed qwen_tts package
+    during the design's adversarial review)."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_CODEC_CHUNK_SIZE", "150")
+    monkeypatch.setenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", "10")
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 150, "left_context_size": 10}
+
+
+def test_load_leaves_chunk_size_at_library_defaults_when_unset(fake_qwen_runtime, monkeypatch) -> None:
+    """Knobs unset -> chunked_decode is left completely untouched (its own
+    300/25 defaults apply, matching today's behaviour byte-for-byte)."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.delenv("QWEN_CODEC_CHUNK_SIZE", raising=False)
+    monkeypatch.delenv("QWEN_CODEC_LEFT_CONTEXT_SIZE", raising=False)
+    _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+
+    decoder = model.model.speech_tokenizer.model.decoder
+    result = decoder.chunked_decode(codes="fake-codes")
+    assert result == {"chunk_size": 300, "left_context_size": 25}
+
+
 # ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──
 
 def test_voices_dir_resolves_from_env(monkeypatch, tmp_path) -> None:

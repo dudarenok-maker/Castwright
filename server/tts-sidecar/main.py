@@ -265,9 +265,15 @@ def _should_compile_codec() -> bool:
 
 def _maybe_compile_codec(model: Any, torch: Any) -> bool:
     """Compile the resolved codec decoder's `forward` and stash the compiled
-    callable on the model (side-19 Task 4: the decoder runs on CPU on this
-    box for BOTH tiers -> inductor's cpp backend via dynamic=True; no
-    CUDA-graph modes apply). We compile `forward`, NOT the whole decoder
+    callable on the model (side-19 Task 4: originally written when the
+    decoder ran on CPU for BOTH tiers -> inductor's cpp backend via
+    dynamic=True. Since side-25, QWEN_CODEC_DEVICE can move the decoder
+    onto CUDA -- inductor adapts its backend to wherever the tensors
+    actually are at trace time, so this still works, but the "CPU for
+    both tiers" framing below is no longer universally true. Not a
+    correctness risk either way: a compile failure is swallowed to eager,
+    and this knob is off by default and off on Windows). We compile
+    `forward`, NOT the whole decoder
     module -- see the module docstring / plan note on why a whole-module swap
     silently defeats chunked_decode. Any failure is swallowed -> eager
     fallback; a perf knob must never kill a model load. Returns True iff a
@@ -362,6 +368,46 @@ def _move_codec_to_device(model: Any, device: str, torch_module: Any) -> None:
         )
         speech_tokenizer.model.to("cpu")
         speech_tokenizer.device = torch_module.device("cpu")
+
+
+def _read_int_env(var_name: str) -> Optional[int]:
+    """Parse an integer env knob, returning None when unset or unparsable
+    -- a malformed value falls back to the library default rather than
+    hardening a model load into a failure."""
+    raw = os.environ.get(var_name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return None
+
+
+def _apply_codec_chunk_size(
+    model: Any, chunk_size: Optional[int], left_context_size: Optional[int]
+) -> None:
+    """Bind QWEN_CODEC_CHUNK_SIZE / QWEN_CODEC_LEFT_CONTEXT_SIZE onto the
+    resolved codec decoder's chunked_decode, mirroring how
+    _maybe_compile_codec binds a compiled forward onto the same decoder
+    object. The reachable call path -- speech_tokenizer.decode() ->
+    Qwen3TTSTokenizerV2Model.decode() -> decoder.chunked_decode(codes) --
+    calls chunked_decode with NO arguments, so its own
+    chunk_size=300/left_context_size=25 defaults always apply; there is
+    no other way to make them configurable. No-op when both knobs are
+    unset (library defaults apply as-is) or the decoder can't be
+    resolved. Idempotent in practice: each _load_qwen_model call builds a
+    fresh decoder instance, so there's no risk of wrapping an
+    already-wrapped chunked_decode and nesting partials."""
+    if chunk_size is None and left_context_size is None:
+        return
+    decoder = _resolve_codec_decoder(model)
+    if decoder is None:
+        return
+    decoder.chunked_decode = functools.partial(
+        decoder.chunked_decode,
+        chunk_size=chunk_size if chunk_size is not None else 300,
+        left_context_size=left_context_size if left_context_size is not None else 25,
+    )
 
 
 app = FastAPI(title="audiobook-generator local TTS sidecar")
@@ -1954,6 +2000,11 @@ class QwenEngine(Engine):
             if codec_device is not None:
                 _validate_cuda_index(codec_device, torch)
                 _move_codec_to_device(model, codec_device, torch)
+            _apply_codec_chunk_size(
+                model,
+                _read_int_env("QWEN_CODEC_CHUNK_SIZE"),
+                _read_int_env("QWEN_CODEC_LEFT_CONTEXT_SIZE"),
+            )
             # Surface the impl that actually took effect (getattr-guarded — the
             # nested attribute path can drift across qwen_tts/transformers versions).
             resolved = getattr(getattr(model, "model", None), "config", None)
