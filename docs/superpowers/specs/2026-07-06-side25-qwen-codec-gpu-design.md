@@ -59,7 +59,13 @@ uniform across all three load call-sites. Similarly, whether
 `Qwen3TTSModel.from_pretrained` (the wrapper's own `from_pretrained`,
 `inference/qwen3_tts_model.py`) does anything with device placement for the
 tokenizer internally has not been read — Phase 0 confirms this by reading
-that file, not by assumption.
+that file, not by assumption. Phase 0 also confirms `speech_tokenizer` is
+actually attached (non-`None`) by the point the move runs
+(`main.py:1886`) rather than assuming eager attachment during
+`from_pretrained` — `_resolve_speech_tokenizer` already returns `None`
+safely if it isn't, but a silent `None` here means the codec quietly stays
+on CPU with no error, which Phase 0's measurement pass should be able to
+tell apart from a working move.
 
 ## Design
 
@@ -121,6 +127,17 @@ VoiceDesign) since they all route through `_load_qwen_model`.
   `_codec_compiled_for_batch`) stays live in the load/batch paths and this
   fix must not silently break it.
 
+  **Residual note (round-2 review):** the "compose without conflict"
+  argument above is at the attribute level only. `_maybe_compile_codec`'s
+  own docstring assumes the decoder runs on CPU and targets inductor's cpp
+  backend specifically; moving the codec to CUDA while
+  `QWEN_COMPILE_CODEC=1` compiles a CUDA `forward` under that CPU-era
+  assumption. Not a correctness risk — a compile failure is swallowed to
+  eager (`main.py:283–286`), and `QWEN_COMPILE_CODEC` is off by default and
+  off on Windows — but worth a one-line comment update in
+  `_maybe_compile_codec`'s docstring when this ships, so the "CPU on this
+  box for BOTH tiers" claim there doesn't quietly go stale.
+
   Only meaningful when the codec is on GPU (bounds activation peak);
   no-ops (well, harmlessly re-binds to the same defaults) on CPU.
 
@@ -143,21 +160,53 @@ complementary levers and the spec should not conflate them:
   re-tune this upward to reflect the qwen op's now-larger footprint — this
   remains true, just stated as its own thing, not as "instead of" chunk
   sizing.
-- `QWEN_CODEC_CHUNK_SIZE`: protects against a **single** op's peak. Phase 1
-  measures the actual peak at the default 300 on the 8GB box (`bench-tts.py
-  --mem-sample` with `QWEN_CODEC_DEVICE=auto`) and only lowers the default
-  if that measurement shows it's needed — per the earlier scoping decision,
-  the knob ships regardless, but its *default value* is decided by
-  measurement, not assumed safe.
+- `QWEN_CODEC_CHUNK_SIZE`: reduces a **single** op's activation peak, but
+  **not the whole story** (round-2 review finding): `chunked_decode` chunks
+  the time axis only (`modeling_qwen3_tts_tokenizer_v2.py:889–890`), so the
+  actual peak scales as `batch_size × chunk_size` — the issue's own
+  measurements use 16-item batches, and this knob does nothing to cap batch
+  size. `chunked_decode` also accumulates every chunk's output in a list
+  and concatenates the full utterance at the end (`:887,894,896`), so the
+  full-length output tensor is held regardless of chunk size. Phase 1
+  measures the actual peak **at production batch sizes** (`bench-tts.py
+  --mem-sample`, 16-item batches, `QWEN_CODEC_DEVICE=auto`) — not chunk size
+  in isolation — and only lowers the chunk-size default if that measurement
+  shows it's needed; if batch size turns out to be the dominant driver
+  instead, that's a distinct finding to size before flipping any box's
+  default (a batch-size cap is out of scope for this spec — see "Out of
+  scope").
 
 ### Error handling
 
-The `speech_tokenizer.model.to(device)` move is wrapped in its own
-try/except, separate from the outer model-load try/except. A CUDA OOM here
-logs a warning and leaves the codec on CPU (both `.model` and the cached
-`.device`) rather than failing the whole Qwen load. This is all-or-nothing
-per attempt (never a half-moved codec) since `decode()` assumes a
-consistent device across `.model` and the cached `.device`.
+**Corrected in round-2 adversarial review** — the original wording claimed
+a failed `speech_tokenizer.model.to(device)` cleanly "leaves the codec on
+CPU," which is false: `nn.Module.to()` moves submodules **in place,
+non-transactionally**, so an OOM partway through can leave some layers
+already on CUDA and the rest on CPU. Just setting the cached `.device` back
+to `cpu` in that case would NOT roll those migrated layers back — `decode()`
+would then push CPU inputs into a model with some CUDA weights and fail on
+every subsequent synth, on exactly the OOM-pressured boxes this knob exists
+to help.
+
+The actual design: the move is wrapped in its own try/except, separate from
+the outer model-load try/except. On failure, the except block explicitly
+attempts a rollback — `speech_tokenizer.model.to('cpu')` — before resetting
+the cached `.device` to `cpu` and logging a warning; this is a genuine
+"all-or-nothing" invariant because the rollback is itself a real `.to()`
+call, not just a cached-attribute reset. Moving data CUDA→CPU frees GPU
+memory rather than allocating more of the scarce resource, so it doesn't
+share the OOM's failure mode — but on the rare chance the rollback itself
+raises (e.g. a poisoned CUDA context, or host-memory exhaustion), that
+exception is NOT swallowed: it propagates to the outer `_load_qwen_model`
+try/except, which already runs `_reclaim_host_and_vram()` and fails the
+whole model load (the existing "Reclaim-on-failure" pattern, `main.py:1853
+–1863`). A failed load is a clean, fully-visible failure — no
+half-migrated model is ever handed back to a caller.
+
+**Idempotency**: the chunk-size `functools.partial` wrap (above) is applied
+once, at load time, to a freshly-constructed decoder instance — each
+`_load_qwen_model` call builds a new model, so there's no risk of wrapping
+an already-wrapped `chunked_decode` and nesting partials.
 
 ### Testing
 
@@ -175,8 +224,10 @@ consistent device across `.model` and the cached `.device`.
   quality-neutrality overall, and the design does not claim otherwise.
   Re-running it with `QWEN_CODEC_DEVICE=auto` is still the right first
   check — a failure is a real finding — but it leaves the 0.6B-Base and
-  VoiceDesign/25Hz encode paths with **zero** golden coverage, since no
-  existing fixture touches them.
+  VoiceDesign/25Hz encode paths with **zero golden** coverage (the 0.6B
+  path does have a non-golden identity check elsewhere —
+  `test_qwen3.test_minted_variant_holds_base_identity` — but nothing at the
+  golden-tolerance level, and VoiceDesign/25Hz has neither).
   - **New smoke coverage** (sidecar pytest, not golden-gated): for the
     0.6B-Base and VoiceDesign paths, add a cheap correctness check — decode
     a short fixed input on both `QWEN_CODEC_DEVICE=cpu` and `=auto`, assert
@@ -224,6 +275,12 @@ enough on their own:
 - Automatic VRAM-threshold default-flip heuristic (mirroring
   `GPU_SAFE_COEXIST_MB`'s pattern) — a manual per-box flip is simpler and
   has no new failure modes.
+- A batch-size cap for the codec decode specifically (round-2 review: the
+  activation peak scales as `batch_size × chunk_size`, and chunk-size alone
+  doesn't bound it). If Phase 1's measurement shows batch size, not chunk
+  size, is the dominant driver of VRAM pressure at production batch sizes,
+  that becomes its own follow-up rather than something this spec pre-builds
+  speculatively.
 
 ## Key files
 
