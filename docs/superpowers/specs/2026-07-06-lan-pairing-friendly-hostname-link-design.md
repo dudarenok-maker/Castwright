@@ -64,25 +64,102 @@ with the user — smaller change now, dev:lan keeps the QR-only flow).
 
 ## Design
 
+### Correction from adversarial review (2026-07-06)
+
+The first draft gated `friendlyUrl` purely on `NODE_ENV === 'production'` (via
+`shouldSpawnMdnsResponder(true)`) — a **Critical/Contradicted** finding from the mandatory
+`assumption-checker` pass: that predicate proves configuration *intent*, not that the mDNS
+responder or the `:443` forwarder actually came up. Both `spawnMdnsResponder` and
+`startPortForwarder` are documented to **never throw** on failure — a bind/spawn failure is
+only logged, and the caller still gets a handle back (`mdns-owner.ts`'s own docstring;
+`lan-port-forwarder.ts:51-53`). So the env-only gate could hand the UI a `friendlyUrl` that
+resolves to nothing, for exactly the same-machine-without-a-camera user this feature exists to
+help — worse than the QR-only status quo, since that user has no fallback. Fixed below by
+gating on **actual observed liveness** of both processes, not the launch predicate.
+
+### Backend — liveness tracking for the two LAN helper processes
+
+**`server/src/lan-port-forwarder.ts`**: add a closure-scoped `bound` flag to
+`PortForwarderHandle`, set `true` only on the server's `'listening'` event (never reset back to
+`false` by a later transient `'error'` — matching the file's existing reasoning for using `.on`
+over `.once`: an EMFILE hiccup after a successful bind doesn't mean the forwarder is dead).
+
+```ts
+export interface PortForwarderHandle {
+  server: net.Server;
+  close: () => Promise<void>;
+  isBound: () => boolean;
+}
+// ...
+let bound = false;
+server.once('listening', () => { bound = true; });
+// ... existing server.on('error', ...) unchanged ...
+return { server, isBound: () => bound, close: /* unchanged */ };
+```
+
+**`server/src/mdns-owner.ts`**: add a closure-scoped `alive` flag to `MdnsResponderHandle`,
+mirroring the existing `killedIntentionally` bookkeeping in the `child.once('exit', ...)`
+handler.
+
+```ts
+export interface MdnsResponderHandle {
+  child: ChildProcess;
+  kill: () => Promise<void>;
+  isAlive: () => boolean;
+}
+// ...
+let alive = true;
+child.once('exit', (code, signal) => {
+  if (killedIntentionally) return;
+  if (code !== 0) { alive = false; warn(/* unchanged */); }
+});
+return { child, isAlive: () => alive, kill: /* unchanged */ };
+```
+
+(`spawnMdnsResponder` already returns `null` on a *synchronous* spawn failure — `isAlive`
+closes the remaining gap, an async crash after a successful spawn.)
+
+**`server/src/index.ts`**: export a small accessor next to the existing handle variables:
+
+```ts
+export function isFriendlyHostnameReachable(): boolean {
+  return mdnsResponderHandle?.isAlive() === true && portForwarderHandle?.isBound() === true;
+}
+```
+
 ### Backend — `server/src/routes/devices.ts`
 
 In the `POST /devices/pair-session` handler, after minting `{ code, expiresAt }` via
-`createPairingSession`, add (new import: `shouldSpawnMdnsResponder` from `../mdns-owner.js`):
+`createPairingSession`, add (new import: `isFriendlyHostnameReachable` from `../index.js`, or a
+small shared module if importing from `index.ts` proves circular — a follow-up implementation
+detail, not a design fork):
 
 ```ts
-// isLanTokenEnforced() above already returned 409 if LAN HTTPS were off, so
-// lanHttps is known true here — only NODE_ENV is still in question.
-const friendlyUrl = shouldSpawnMdnsResponder(true)
+const friendlyUrl = isFriendlyHostnameReachable()
   ? `https://castwright.local/#/pair?c=${code}`
   : undefined;
 res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt, friendlyUrl });
 ```
 
-Reuses `shouldSpawnMdnsResponder` directly rather than re-deriving the
-`NODE_ENV === 'production'` condition, so the two can never silently drift — same reasoning
-already documented in `lan-port-forwarder.ts`'s `shouldSpawnPortForwarder`.
-
 No change to the existing `url` field, `code`, or `expiresAt` — additive only.
+
+### Frontend — `src/lib/api.ts`
+
+**Gap in the first draft:** `realCreateDevicePairSession`'s return type is hand-cast to
+`Promise<{ url: string; code: string; expiresAt: number }>` (this endpoint has no OpenAPI
+entry — confirmed zero hits for `pair-session` in `openapi.yaml` — so it's already hand-typed
+off-contract). `friendlyUrl` would arrive at runtime via `res.json()` regardless, silently
+invisible to the type until `lan-access-card.tsx`'s widened `useState` re-introduces it — the
+exact "true at runtime, invisible to types" smell CLAUDE.md's OpenAPI-source-of-truth
+convention exists to avoid. Widen the cast:
+
+```ts
+return res.json() as Promise<{ url: string; code: string; expiresAt: number; friendlyUrl?: string }>;
+```
+
+Also add `friendlyUrl` (present or absent, matching whatever mock-mode scenario is being
+exercised) to `mockCreateDevicePairSession` so the new UI branch is exercisable under
+`VITE_USE_MOCKS`.
 
 ### Frontend — `src/components/lan-access-card.tsx`
 
@@ -120,26 +197,67 @@ the confirmation step.
 
 ### Security
 
-No new surface: `friendlyUrl` carries the exact same short-lived (10-minute TTL), single-use,
-rate-limited (`redeemLimiter`, `pairing.ts`) code already exposed via the QR image, gated
-behind the same loopback-only `/devices/pair-session` endpoint. It's a second rendering of a
-secret the caller could already see, not a new one.
+No new secret surface: `friendlyUrl` carries the exact same short-lived, single-use code
+already exposed via the QR image, gated behind the same loopback-only `/devices/pair-session`
+endpoint. **Correction from adversarial review:** the TTL is **5 minutes**
+(`pairing-sessions.ts`'s hardcoded `TTL_MS`), not 10 — the first draft misread the `10` in
+`createPairingSession(label, undefined, 10)` as minutes; it's actually the **byte count** for
+the code (→16 chars for the browser flow, vs. 5 bytes/8 chars for the companion QR).
+
+Two characteristics the first draft glossed over as "harmless" — both accepted, neither fixed
+here, but named explicitly rather than left implicit:
+
+- **The QR and the link share one code.** `createPairingSession` mints a single code per
+  "Authorize a device" click; `redeemPairingSession` is single-use (`consumed = true` on first
+  redemption). So scanning the QR with a phone *and* clicking the link on the same click's
+  session are mutually exclusive — the second redemption gets `410` (mapped by both
+  `pairing.ts`'s `/redeem-browser` and `PairShell` to "This code expired — generate a new one,"
+  which is a misleading message for a *consumed*-not-*expired* code, but not a functional bug:
+  click **Authorize a device** again for a second code). Accepted for this same-machine,
+  single-admin-click scope; not engineered around (that would mean minting two independent
+  codes per click, adding complexity this spec doesn't need).
+- **The friendly link's redemption travels through the `:443` forwarder**, which presents
+  every client as `127.0.0.2` (`lan-port-forwarder.ts`'s documented rate-limit-bucket
+  collapse, ops-24/#1309) — so it shares a `redeemLimiter` identity with every other
+  bare-hostname/bare-IP client, distinct from the QR's explicit-`:8443` identity. Immaterial at
+  this feature's volume (one click, one redemption), noted for completeness.
+
+**Certificate coverage (resolves a reviewer question):** already confirmed by prior work —
+`scripts/setup-lan-certs.mjs`'s `buildCertHosts()` unconditionally includes `castwright.local`
+in the LAN cert's SAN list (see `docs/superpowers/specs/2026-07-04-castwright-local-port-cert-design.md`),
+so a non-stale cert presents cleanly on the opened tab with no browser warning. A *stale* cert
+(LAN-IP churn) is an existing, separately-handled condition (the LAN Access card's "Regenerate
+certificate" button) — not a new failure mode this feature introduces.
 
 ### Error handling
 
-None new. A stale/expired code clicked after the TTL hits `PairShell`'s existing "This code
-expired — generate a new one on the desktop" branch (`src/views/pair.tsx:22-23`) exactly as it
-does today for the QR path.
+A stale/expired/already-consumed code clicked after the fact hits `PairShell`'s existing "This
+code expired — generate a new one on the desktop" branch (`src/views/pair.tsx:22-23`) exactly
+as it does today for the QR path — see the consumed-vs-expired message caveat above.
+
+**New failure mode requiring explicit handling:** when `isFriendlyHostnameReachable()` is
+false (mDNS responder or `:443` forwarder didn't come up), `friendlyUrl` is `undefined` and
+`LanAccessCard` simply doesn't render the link — falling back to the QR, exactly like the
+dev:lan case. No error message needed; this is the same "friendly hostname unavailable, raw-IP
+path still works" degradation plan 239 already established for the hostname feature itself.
 
 ## Testing
 
-- **`server/src/routes/devices.test.ts`**: assert `friendlyUrl` is present and correctly
-  formed when the request is loopback + LAN HTTPS enforced + `NODE_ENV=production`; assert
-  it's `undefined` when `NODE_ENV` is anything else (dev:lan shape).
+- **`server/src/lan-port-forwarder.test.ts`**: assert `isBound()` is `false` before
+  `'listening'` fires, `true` after; assert it stays `true` across a subsequent `'error'`
+  event (the EMFILE-hiccup-after-bind case), and `false` if `'error'` fires before
+  `'listening'` ever does (never-bound case).
+- **`server/src/mdns-owner.test.ts`**: assert `isAlive()` is `true` after a normal spawn,
+  `false` after a non-intentional nonzero exit, and unaffected by an intentional `kill()`.
+- **`server/src/routes/devices.test.ts`**: assert `friendlyUrl` is present and correctly formed
+  when the full chain holds — loopback request, `isLanTokenEnforced()` true, **and**
+  `isFriendlyHostnameReachable()` true (not just `NODE_ENV=production` in isolation, which the
+  first draft's test bullet under-specified); assert it's `undefined` when any one of those
+  three is false, including the new case this spec adds coverage for — reachable-check false
+  despite `NODE_ENV=production` (simulating a bind/spawn failure).
 - **`src/components/lan-access-card.test.tsx`**: assert the link renders with the correct
   `href` when the mocked `createDevicePairSession` response includes `friendlyUrl`; assert it
-  does not render when the field is absent (today's dev:lan / non-production behavior
-  unchanged).
+  does not render when the field is absent (dev:lan, or a live-but-unreachable start:lan).
 
 No e2e coverage needed — this is additive UI behind an already-loopback-gated admin flow, not
 a new user-facing surface reachable from `npm run test:e2e`'s mock-mode Vite instance (which
