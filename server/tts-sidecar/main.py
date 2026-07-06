@@ -3990,16 +3990,37 @@ def _card_reserved_ceiling_mb(total_mb: float) -> float:
     return _VRAM_HARD_FRACTION * total_mb if total_mb and total_mb > 0 else 0.0
 
 
+# A card with at least this much torch-RESERVED VRAM is "torch-managed": torch's
+# caching allocator is actively working the card, so driver-free legitimately
+# dips near 0 at batch peaks (allocator grabs as needed; reserved + CUDA context
+# + display compositor ≈ the whole card). The free floor below must NOT apply
+# there — it read a routine 1.7B batch peak as OOM and hard-recycled mid-chapter
+# every few minutes (all 6 recycles on 2026-07-06; the recycle-storm breaker
+# then paused the queue). Torch-managed cards keep the reserved-VRAM ceilings.
+# KNOWN TRADEOFF (review 2026-07-06): non-torch VRAM growth (ORT/CT2) on a
+# torch-ACTIVE card is now unguarded — the reserved ceiling is blind to it and
+# the floor is skipped. Accepted: on a torch-active card "free < floor" is the
+# NORMAL steady state, so the floor could never guard that mix without the very
+# false-positive storm this fixes; the co-resident ORT engines are also small
+# and bounded (Kokoro ~1 GB, ASR int8 ~150–400 MB, both idle-evicted).
+_TORCH_ACTIVE_RESERVED_MB = 256.0
+
+
 def _check_per_card_ceilings(ledger: "DeviceLedger", torch_module: Any = None) -> Optional[dict]:
     """OR-rule per-card breach: for each visible card, freshly sampled via the
-    ledger, breach if EITHER free_mb < the absolute floor OR (torch-only)
-    reserved VRAM crosses THIS card's own fraction ceiling. Returns the FIRST
-    breaching card's {uuid, idx, reason}, or None. Each card's readings are
+    ledger, breach if EITHER (torch-only) reserved VRAM crosses THIS card's own
+    fraction ceiling OR — on a card torch is NOT actively managing — free_mb
+    falls below the absolute floor. The floor is the ORT/CT2-only guard
+    (Kokoro/Whisper VRAM is invisible to torch's reserved metric — see
+    _sidecar_vram_free_floor_mb); on a torch-active card low driver-free is a
+    NORMAL batch peak and the reserved ceiling owns OOM protection instead.
+    Returns the FIRST breaching card's {uuid, idx, reason, metric_mb,
+    threshold_mb} (metric/threshold are the breaching reading and its limit, so
+    the caller's log names real numbers), or None. Each card's readings are
     independently fresh — never a stale/cached value from another card's check."""
     floor = _sidecar_vram_free_floor_mb()
     for card in ledger.sample_all():
-        if card["free_mb"] < floor:
-            return {"uuid": card["uuid"], "idx": card["idx"], "reason": "driver_free_floor"}
+        reserved: Optional[float] = None
         try:
             tm = torch_module
             if tm is None:
@@ -4007,9 +4028,20 @@ def _check_per_card_ceilings(ledger: "DeviceLedger", torch_module: Any = None) -
             reserved = tm.cuda.memory_reserved(card["idx"]) / 1_000_000.0
             ceiling = _card_reserved_ceiling_mb(card["total_mb"])
             if ceiling > 0 and reserved >= ceiling:
-                return {"uuid": card["uuid"], "idx": card["idx"], "reason": "reserved_vram_ceiling"}
+                return {
+                    "uuid": card["uuid"], "idx": card["idx"],
+                    "reason": "reserved_vram_ceiling",
+                    "metric_mb": reserved, "threshold_mb": ceiling,
+                }
         except Exception:
-            pass
+            reserved = None  # torch unreadable → treat the card as non-torch below
+        torch_active = reserved is not None and reserved >= _TORCH_ACTIVE_RESERVED_MB
+        if not torch_active and card["free_mb"] < floor:
+            return {
+                "uuid": card["uuid"], "idx": card["idx"],
+                "reason": "driver_free_floor",
+                "metric_mb": card["free_mb"], "threshold_mb": floor,
+            }
     return None
 
 
@@ -4177,7 +4209,11 @@ def _schedule_restart_exit(
     _write_restart_breadcrumb(card, metric_label)
     grace_ms = _drain_grace_ms()
     log.warning(
-        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB%s — "
+        # "breached ... limit" is deliberately direction-NEUTRAL: reserved-VRAM
+        # trips are metric ABOVE ceiling, driver_free_floor trips are free
+        # BELOW floor — the old "crossed the restart ceiling" wording read
+        # backwards for the floor case (review finding, 2026-07-06).
+        "sidecar %s %.0fMB breached the restart limit %.0fMB%s — "
         "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
         "server respawns a fresh process. Completed chapters are skipped (srv-16); "
         "the in-flight chapter finishes here or is re-rendered by the server "
@@ -4240,8 +4276,13 @@ async def _memory_watchdog() -> None:
                 continue
             per_card_breach = _check_per_card_ceilings(_DEVICE_LEDGER)
             if per_card_breach is not None:
+                # Pass the breaching reading + its limit so the trip log names
+                # real numbers (this line used to print "0MB crossed ... 0MB",
+                # which hid that every 2026-07-06 recycle was the same guard).
                 _schedule_restart_exit(
-                    0.0, 0.0, f"card {per_card_breach['idx']} {per_card_breach['reason']}",
+                    per_card_breach.get("metric_mb", 0.0),
+                    per_card_breach.get("threshold_mb", 0.0),
+                    f"card {per_card_breach['idx']} {per_card_breach['reason']}",
                     card=per_card_breach,
                 )
                 continue
