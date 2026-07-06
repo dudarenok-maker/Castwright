@@ -84,6 +84,15 @@ def test_codec_decode_matches_length_cpu_vs_auto(model_attr: str, monkeypatch) -
     model_gpu = engine_gpu._load_qwen_model(model_id)
     wavs_gpu, sr_gpu = _round_trip(model_gpu, synthetic_audio)
 
+    # Release the second model too -- this test is parametrized over
+    # [BASE_MODEL, VOICEDESIGN_MODEL], and without this the GPU-resident
+    # model_gpu from one parametrized case could still be alive when the
+    # next case starts loading its own pair, piling up 3 live models on a
+    # VRAM-constrained box (the same co-residency class model_cpu's cleanup
+    # above already guards against, within a single case).
+    del model_gpu
+    main._reclaim_host_and_vram()
+
     assert sr_cpu == sr_gpu
     assert len(wavs_cpu[0]) == len(wavs_gpu[0])
     assert len(wavs_cpu[0]) > 0

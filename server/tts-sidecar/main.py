@@ -383,6 +383,18 @@ def _read_int_env(var_name: str) -> Optional[int]:
         return None
 
 
+# These four must match server/src/config/registry.ts's tts.qwen.codecChunkSize
+# / codecLeftContextSize `min`/`default` values -- if either changes there,
+# update here too. A hand-edited env value bypasses the Advanced Settings
+# API's validation entirely, so the sidecar enforces its own floor
+# independently; named here (rather than left as inline literals) so the
+# TS/Python duplication is one grep away instead of silent.
+_CODEC_CHUNK_SIZE_MIN = 1
+_CODEC_CHUNK_SIZE_DEFAULT = 300
+_CODEC_LEFT_CONTEXT_SIZE_MIN = 0
+_CODEC_LEFT_CONTEXT_SIZE_DEFAULT = 25
+
+
 def _apply_codec_chunk_size(
     model: Any, chunk_size: Optional[int], left_context_size: Optional[int]
 ) -> None:
@@ -400,20 +412,20 @@ def _apply_codec_chunk_size(
     already-wrapped chunked_decode and nesting partials.
 
     Floors each value to the library default when it's out of the range
-    the Advanced Settings API enforces (registry.ts min:1/min:0) -- a
-    hand-edited env value bypasses that validation, and a 0/negative
-    chunk_size would corrupt every subsequent chunked_decode call.
-    Mirrors _design_idle_ttl's floor-then-fallback-to-default idiom."""
-    if chunk_size is not None and chunk_size < 1:
+    the Advanced Settings API enforces (see the _CODEC_*_MIN constants
+    above) -- a hand-edited env value bypasses that validation, and a
+    0/negative chunk_size would corrupt every subsequent chunked_decode
+    call. Mirrors _design_idle_ttl's floor-then-fallback-to-default idiom."""
+    if chunk_size is not None and chunk_size < _CODEC_CHUNK_SIZE_MIN:
         log.warning(
-            "QWEN_CODEC_CHUNK_SIZE=%d invalid (must be >=1) -- using library default 300.",
-            chunk_size,
+            "QWEN_CODEC_CHUNK_SIZE=%d invalid (must be >=%d) -- using library default %d.",
+            chunk_size, _CODEC_CHUNK_SIZE_MIN, _CODEC_CHUNK_SIZE_DEFAULT,
         )
         chunk_size = None
-    if left_context_size is not None and left_context_size < 0:
+    if left_context_size is not None and left_context_size < _CODEC_LEFT_CONTEXT_SIZE_MIN:
         log.warning(
-            "QWEN_CODEC_LEFT_CONTEXT_SIZE=%d invalid (must be >=0) -- using library default 25.",
-            left_context_size,
+            "QWEN_CODEC_LEFT_CONTEXT_SIZE=%d invalid (must be >=%d) -- using library default %d.",
+            left_context_size, _CODEC_LEFT_CONTEXT_SIZE_MIN, _CODEC_LEFT_CONTEXT_SIZE_DEFAULT,
         )
         left_context_size = None
     if chunk_size is None and left_context_size is None:
@@ -423,8 +435,8 @@ def _apply_codec_chunk_size(
         return
     decoder.chunked_decode = functools.partial(
         decoder.chunked_decode,
-        chunk_size=chunk_size if chunk_size is not None else 300,
-        left_context_size=left_context_size if left_context_size is not None else 25,
+        chunk_size=chunk_size if chunk_size is not None else _CODEC_CHUNK_SIZE_DEFAULT,
+        left_context_size=left_context_size if left_context_size is not None else _CODEC_LEFT_CONTEXT_SIZE_DEFAULT,
     )
 
 
