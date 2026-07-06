@@ -335,6 +335,11 @@ export function AdvancedView() {
           <div className="flex items-center justify-end">
             <button
               type="button"
+              /* See OverrideRow's Revert button — prevents this click from
+                 blurring (and thus committing) an uncommitted edit in
+                 whatever field currently has focus, which would otherwise
+                 race a fresh saveOverride against resetAllConfig. */
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleResetAll}
               className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0"
             >

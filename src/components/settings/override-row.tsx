@@ -2,7 +2,7 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Checkbox } from '../primitives';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
@@ -75,10 +75,21 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   // single discrete actions and are unaffected.
   const [draft, setDraft] = useState(() => String(value.effective));
   const [editing, setEditing] = useState(false);
+  // Read inside the effect via a ref, NOT as a dependency: the commit
+  // handlers below call setEditing(false) in the same tick as dispatching
+  // the save, before the save has resolved. If `editing` were a dependency,
+  // that transition alone would re-run this effect against the still-stale
+  // (pre-save) `value.effective` and snap the draft back to the OLD value
+  // for the one render before the save resolves — reproducing the exact
+  // revert-flash this component exists to prevent. Depending on
+  // `value.effective` alone means this only resyncs when the server value
+  // itself actually changes (a real Revert/Reset, or another tab's edit).
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
 
   useEffect(() => {
-    if (!editing) setDraft(String(value.effective));
-  }, [value.effective, editing]);
+    if (!editingRef.current) setDraft(String(value.effective));
+  }, [value.effective]);
 
   const commitNumericDraft = (raw: string, isInteger: boolean) => {
     setEditing(false);
@@ -296,6 +307,16 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
             </span>
             <button
               type="button"
+              /* A mousedown on this button blurs whatever input currently
+                 has focus — including this row's own, if the user typed a
+                 new value but never tabbed away. That blur would commit an
+                 uncommitted edit at the exact moment Revert is clicked,
+                 racing a fresh saveOverride against the resetKnob this
+                 click triggers (config-slice has no ordering guard, so
+                 whichever response lands last wins). Prevent the default
+                 mousedown behavior so focus — and any pending edit — is
+                 simply abandoned instead of raced. */
+              onMouseDown={(e) => e.preventDefault()}
               onClick={onRevert}
               className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
             >

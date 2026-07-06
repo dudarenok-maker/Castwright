@@ -213,9 +213,16 @@ describe('AdvancedView — OverrideRow dispatch', () => {
 
     renderView();
     const input = (await screen.findByRole('spinbutton')) as HTMLInputElement;
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '16000' } });
     expect(mockPutConfig).not.toHaveBeenCalled();
     fireEvent.blur(input);
+
+    // Regression: right after blur, the PUT is in flight but hasn't
+    // resolved yet (config.status is 'saving', values still hold the
+    // pre-edit default) — the field must keep showing what was just typed,
+    // not snap back to the old value for the duration of the round-trip.
+    expect(input.value).toBe('16000');
 
     await waitFor(() =>
       expect(mockPutConfig).toHaveBeenCalledWith({ KOKORO_SAMPLE_RATE: 16000 }),

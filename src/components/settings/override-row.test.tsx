@@ -132,6 +132,7 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('spinbutton');
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '5' } });
     fireEvent.change(input, { target: { value: '55' } });
     expect(onChange).not.toHaveBeenCalled();
@@ -139,6 +140,33 @@ describe('OverrideRow — onChange coercion', () => {
     expect(onChange).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledWith(55);
     expect(typeof onChange.mock.calls[0][0]).toBe('number');
+  });
+
+  it('keeps showing the newly committed value immediately after blur, before the store confirms it', () => {
+    // Regression: the draft-resync effect used to depend on `editing`
+    // directly, so the blur handler's setEditing(false) — which happens
+    // in the same tick as dispatching the save, before it resolves — would
+    // itself re-run the effect against the still-stale `value.effective`
+    // and snap the field back to the OLD value for the duration of the
+    // in-flight save. `value.effective` is deliberately left at its
+    // pre-edit value here to simulate that in-flight window.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '55' } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith(55);
+    expect(input.value).toBe('55');
   });
 
   it('calls onChange with an integer on blur when an integer input changes', () => {
@@ -154,6 +182,7 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('spinbutton');
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '7' } });
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.blur(input);
@@ -174,6 +203,7 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '' } });
     fireEvent.blur(input);
     expect(onChange).not.toHaveBeenCalled();
@@ -193,6 +223,7 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'hell' } });
     fireEvent.change(input, { target: { value: 'hello world' } });
     expect(onChange).not.toHaveBeenCalled();
@@ -234,6 +265,7 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.blur(input);
     expect(onChange).not.toHaveBeenCalled();
