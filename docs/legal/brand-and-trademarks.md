@@ -1,6 +1,6 @@
 # Castwright — brand & trademarks
 
-The **Castwright** name, the "Castwave" mark, wordmarks, logos, icons, the colour
+The **Castwright™** name, the "Castwave" mark, wordmarks, logos, icons, the colour
 system, and related identity assets are **all rights reserved**, Copyright © 2026
 Mikhail Dudarenok.
 
@@ -9,8 +9,10 @@ License — see [`/LICENSE`](../../LICENSE)), and the asset source files are **n
 distributed in this repository**. A licence to the code is not a licence to the
 identity.
 
-"Castwright" is an unregistered trade mark of the copyright holder; trade-mark
-registration is in progress.
+"Castwright" is a trade mark of Mikhail Dudarenok. Its Australian trade-mark
+application (IP Australia no. 2662523, classes 9 and 42) has been examined and
+**accepted**, and is pending registration. Until the mark registers, it is used
+as "Castwright™"; the ® symbol will apply only once registration is granted.
 
 ## You may
 

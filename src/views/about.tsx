@@ -38,7 +38,7 @@ export function AboutView() {
       <div className="mb-8">
         <SectionLabel>About</SectionLabel>
         <div className="mt-4">
-          <MixedHeading regular="About" bold="Castwright" level="h1" />
+          <MixedHeading regular="About" bold="Castwright™" level="h1" />
         </div>
       </div>
 
