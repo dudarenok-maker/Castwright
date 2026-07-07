@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
-import { OverrideRow } from '../components/settings/override-row';
+import { OverrideRow, beginConfigAction } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -335,10 +335,10 @@ export function AdvancedView() {
           <div className="flex items-center justify-end">
             <button
               type="button"
-              /* See override-row.tsx's isConfigActionTarget — marks this as
-                 a button whose blur should abandon, not commit, whatever's
-                 mid-edit in the currently-focused knob input. */
-              data-config-action
+              /* See override-row.tsx's beginConfigAction — abandons, rather
+                 than commits, whatever's mid-edit in the currently-focused
+                 knob input. */
+              onMouseDown={beginConfigAction}
               onClick={handleResetAll}
               className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0"
             >

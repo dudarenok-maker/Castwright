@@ -55,17 +55,51 @@ function staleReasonLabel(reason: StaleReason): string {
 
 /* ── editable input controls ─────────────────────────────────────────────── */
 
-/* Revert / Reset section / Reset all all carry this marker (see OverrideRow,
-   settings-accordion.tsx, advanced.tsx). A blur whose relatedTarget lands on
-   one of them means the user is abandoning whatever they were mid-typing,
-   not committing it — checked via relatedTarget rather than blocking the
-   blur outright (e.g. via mousedown preventDefault), because blocking blur
-   also blocks the `editing` transition the draft-resync effect needs to
-   pick up the row's new value once the reset actually resolves. */
-const CONFIG_ACTION_SELECTOR = '[data-config-action]';
+/* Revert / Reset section / Reset all all call beginConfigAction() from
+   onMouseDown, before their onClick fires. Only one element can be focused
+   on the page at a time, so a single module-level flag (not per-row state)
+   is enough to tell whichever KnobControl is currently mid-edit "this blur
+   is an abandon, not a commit."
 
-function isConfigActionTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && target.closest(CONFIG_ACTION_SELECTOR) !== null;
+   An earlier version checked the blur event's relatedTarget instead (was
+   the button about to receive focus a Revert/Reset button?), relying on
+   the browser's own click-focuses-the-button behavior to fire that blur.
+   That's unreliable: WebKit (desktop Safari, and every iOS browser, which
+   is WebKit under the hood) doesn't move focus to a <button> on
+   click/tap the way Chromium/Firefox do — so no blur ever fired there,
+   `editing` stayed true, and the abandoned edit silently re-committed
+   (recreating the override the click just cleared) on the row's next real
+   blur. Forcing the blur ourselves, imperatively, sidesteps that browser
+   difference entirely — it doesn't depend on focus ever reaching the
+   button at all. */
+let abandonNextBlur = false;
+
+export function beginConfigAction(): void {
+  abandonNextBlur = true;
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+  // Reset unconditionally: if the active element WAS a knob input, its
+  // onBlur already consumed (and cleared) the flag synchronously inside
+  // the .blur() call above. If it wasn't (nothing to abandon), this clears
+  // the flag so it can't leak into some unrelated later blur.
+  abandonNextBlur = false;
+}
+
+function consumeAbandonNextBlur(): boolean {
+  if (!abandonNextBlur) return false;
+  abandonNextBlur = false;
+  return true;
+}
+
+/* Swallow a rejected save's promise for controls (boolean/enum/device) that
+   don't buffer a local draft to revert on failure — value.effective is
+   already the source of truth for them either way, so there's nothing to
+   recover; this only exists to prevent an unhandled promise rejection. */
+function swallowRejection(result: void | Promise<unknown>): void {
+  if (result && typeof (result as Promise<unknown>).catch === 'function') {
+    (result as Promise<unknown>).catch(() => {});
+  }
 }
 
 interface ControlProps {
@@ -105,11 +139,29 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   }, [value.effective]);
 
   // Discard whatever's in the field without saving it — used when blur was
-  // caused by a Revert/Reset button (see isConfigActionTarget) rather than
-  // the user genuinely moving on to another field.
+  // triggered by beginConfigAction() (a Revert/Reset click) rather than the
+  // user genuinely moving on to another field.
   const abandonEdit = () => {
     setEditing(false);
     setDraft(String(value.effective));
+  };
+
+  // Shared by both commit paths below. A rejected save leaves the redux
+  // value untouched (config-slice's `rejected` case doesn't touch
+  // `values`), so the draft would otherwise stay frozen on the unsaved
+  // value forever with no visible sign the save never landed — fall back
+  // to the last known-good value. Guarded by editingRef, matching the
+  // resync effect's own guard: if the user has since refocused this same
+  // field and started a fresh edit before the earlier save's rejection
+  // arrives, this must NOT clobber that in-progress edit.
+  const commitEdit = (parsed: number | string) => {
+    const revertTo = String(value.effective);
+    const result = onChange(parsed);
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      (result as Promise<unknown>).catch(() => {
+        if (!editingRef.current) setDraft(revertTo);
+      });
+    }
   };
 
   const commitNumericDraft = (raw: string, isInteger: boolean) => {
@@ -126,24 +178,13 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     // passing focus through a field can't fire a no-op save that marks it
     // overridden.
     if (parsed === Number(value.effective)) return;
-    // A rejected save leaves the redux value untouched, so the draft would
-    // otherwise stay frozen on the unsaved value forever with no visible
-    // sign the save never landed — fall back to the last known-good value.
-    const revertTo = String(value.effective);
-    const result = onChange(parsed);
-    if (result && typeof (result as Promise<unknown>).catch === 'function') {
-      (result as Promise<unknown>).catch(() => setDraft(revertTo));
-    }
+    commitEdit(parsed);
   };
 
   const commitStringDraft = (raw: string) => {
     setEditing(false);
     if (raw === String(value.effective)) return;
-    const revertTo = String(value.effective);
-    const result = onChange(raw);
-    if (result && typeof (result as Promise<unknown>).catch === 'function') {
-      (result as Promise<unknown>).catch(() => setDraft(revertTo));
-    }
+    commitEdit(raw);
   };
 
   const base =
@@ -157,7 +198,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
       <Checkbox
         checked={Boolean(value.effective)}
         disabled={disabled}
-        onChange={onChange}
+        onChange={(next) => swallowRejection(onChange(next))}
         label={value.effective ? 'Enabled' : 'Disabled'}
       />
     );
@@ -169,7 +210,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
         aria-label={descriptor.label}
         value={String(value.effective)}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => swallowRejection(onChange(e.target.value))}
         className={`w-full ${base}`}
       >
         {(descriptor.options ?? []).map((opt) => (
@@ -212,7 +253,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
             } else {
               setFootprintWarning(null);
             }
-            onChange(selected);
+            swallowRejection(onChange(selected));
           }}
           className={`w-full ${base}`}
         >
@@ -247,9 +288,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
         onFocus={() => setEditing(true)}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={(e) =>
-          isConfigActionTarget(e.relatedTarget)
-            ? abandonEdit()
-            : commitNumericDraft(e.target.value, isInteger)
+          consumeAbandonNextBlur() ? abandonEdit() : commitNumericDraft(e.target.value, isInteger)
         }
         className={`w-32 ${base}`}
       />
@@ -265,8 +304,8 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
       disabled={disabled}
       onFocus={() => setEditing(true)}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) =>
-        isConfigActionTarget(e.relatedTarget) ? abandonEdit() : commitStringDraft(e.target.value)
+      onBlur={() =>
+        consumeAbandonNextBlur() ? abandonEdit() : commitStringDraft(draft)
       }
       className={`w-full ${base}`}
     />
@@ -345,10 +384,9 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
             </span>
             <button
               type="button"
-              /* See isConfigActionTarget above — marks this as a button
-                 whose blur should abandon rather than commit whatever's
-                 mid-edit in the row's own input. */
-              data-config-action
+              /* See beginConfigAction above — abandons rather than commits
+                 whatever's mid-edit in the row's own input. */
+              onMouseDown={beginConfigAction}
               onClick={onRevert}
               className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
             >

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { OverrideRow } from './override-row';
 import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
 
@@ -272,11 +272,18 @@ describe('OverrideRow — onChange coercion', () => {
   });
 
   it('abandons an uncommitted edit instead of committing it when Revert is clicked directly', () => {
-    // Regression: a mousedown-preventDefault was tried first to stop this
-    // race, but that also blocks the blur that the draft-resync effect
+    // Regression, round 1: a mousedown-preventDefault was tried first to
+    // stop this race, but that also blocks the blur the draft-resync effect
     // needs — the abandoned edit ended up silently re-committing (recreating
     // the override the click was reverting) on the row's next real blur.
-    // The fix lets blur fire normally and instead checks relatedTarget.
+    // Regression, round 2: a relatedTarget check was tried next, but WebKit
+    // (desktop Safari, all iOS browsers) doesn't move focus to a <button>
+    // on click the way Chromium/Firefox do, so no blur — and no
+    // relatedTarget — ever fired there either. The fix forces the blur
+    // itself, imperatively, via document.activeElement.blur() in
+    // beginConfigAction — reproduced here with a real DOM .focus() call
+    // (not fireEvent.focus) so document.activeElement is genuinely the
+    // input, matching what the fix actually reads.
     const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
     const value = makeValue({ effective: 5, source: 'override', overridden: true });
     const onChange = vi.fn();
@@ -292,17 +299,75 @@ describe('OverrideRow — onChange coercion', () => {
     const input = screen.getByRole('spinbutton') as HTMLInputElement;
     const revertButton = screen.getByRole('button', { name: /revert/i });
 
-    fireEvent.focus(input);
+    act(() => input.focus());
     fireEvent.change(input, { target: { value: '99' } });
-    // Clicking a button blurs whatever currently has focus first, with
-    // relatedTarget set to the element about to receive it — reproduce
-    // that real browser event ordering.
-    fireEvent.blur(input, { relatedTarget: revertButton });
+    fireEvent.mouseDown(revertButton);
     fireEvent.click(revertButton);
 
     expect(onChange).not.toHaveBeenCalled();
     expect(onRevert).toHaveBeenCalledOnce();
     expect(input.value).toBe('5');
+  });
+
+  it('does not clobber a fresh re-edit if an earlier rejected save resolves late', async () => {
+    // Regression: the rejection .catch originally reset the draft
+    // unconditionally. If the user refocuses the same field and starts a
+    // new edit before the EARLIER save's rejection arrives, that stale
+    // rejection must not stomp the in-progress edit.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    let rejectFirstSave: (() => void) | undefined;
+    const onChange = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFirstSave = () => reject(new Error('save failed'));
+        }),
+    );
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    // A real input.blur() (not fireEvent.blur, which dispatches the event
+    // without moving document.activeElement) so the next .focus() below is
+    // a genuine focus transition rather than a same-element no-op.
+    act(() => input.blur());
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '42' } });
+
+    await act(async () => {
+      rejectFirstSave?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(input.value).toBe('42');
+  });
+
+  it('does not leave an unhandled rejection when a boolean save fails', async () => {
+    const descriptor = makeDescriptor({ type: 'boolean', default: false });
+    const value = makeValue({ effective: false, source: 'default' });
+    const onChange = vi.fn(() => Promise.reject(new Error('save failed')));
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onChange).toHaveBeenCalledWith(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it('reverts the draft to the last known value if the save is rejected', async () => {
