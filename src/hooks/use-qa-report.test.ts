@@ -2,6 +2,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { useQaReport } from './use-qa-report';
 import { MOCK_QA_REPORT } from '../data/qa-report';
+import { api } from '../lib/api';
 
 vi.mock('../lib/api', () => ({ api: { getQaReport: vi.fn(async () => MOCK_QA_REPORT) } }));
 
@@ -12,5 +13,15 @@ describe('useQaReport', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.report).toEqual(MOCK_QA_REPORT);
     expect(result.current.error).toBe(false);
+  });
+
+  it('sets error and clears loading when the fetch rejects', async () => {
+    vi.mocked(api.getQaReport).mockImplementationOnce(async () => {
+      throw new Error('network error');
+    });
+    const { result } = renderHook(() => useQaReport('b1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe(true);
+    expect(result.current.report).toBeNull();
   });
 });
