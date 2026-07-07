@@ -388,6 +388,15 @@ chapterQaRepairRouter.post(
              accepted (or still-suspect) take's retry count can be returned
              alongside its verdict, instead of always reporting undefined. */
           let retryCount = 0;
+          /* fs-51 follow-up — unlike `retryCount` above (total attempts in this
+             route's SINGLE combined signal-QA/ASR loop), `asrRetryCount` counts
+             only the attempts the ASR check itself flagged (`a.verdict ===
+             'drift'`) — mirroring synthesise-chapter.ts's independent
+             `asrRetryCountByIndex`, which increments only on ASR-driven
+             re-records from its own separate ASR loop. A segment that needs 3
+             attempts purely on signal-QA (ASR verdict `ok`/absent throughout)
+             must report `asrRetries: undefined`, not 3. */
+          let asrRetryCount = 0;
 
           /* Edit 5 (srv-36): extend isAcceptable with the conditional acoustic term.
              The acoustic gate ONLY applies when candidate.acoustic === true AND a
@@ -433,6 +442,7 @@ chapterQaRepairRouter.post(
             });
             const v = evaluateSegmentPcm(r.pcm, r.sampleRate, text);
             const a = asrOn && text ? await verifyAsr(r.pcm, text) : null;
+            if (a?.verdict === 'drift') asrRetryCount += 1;
             /* Edit 4 (srv-36): embed the pre-resample/pre-loudnorm PCM for the
                acoustic accept-check. Only embed when the candidate is acoustic AND a
                centroid exists for this character — avoid the sidecar round-trip for
@@ -511,7 +521,7 @@ chapterQaRepairRouter.post(
             asr: bestAsr ?? undefined,
             asrSuspect: accepted || !asrOn ? undefined : bestAsr?.verdict === 'drift' ? true : undefined,
             qaRetries: retryCount || undefined,
-            asrRetries: asrOn ? retryCount || undefined : undefined,
+            asrRetries: asrOn ? asrRetryCount || undefined : undefined,
             /* fs-51 follow-up — unlike the splice route, THIS route's whole job
                is signal-QA repair: `bestVerdict` above is always populated by
                `evaluateSegmentPcm` regardless of any config gate, so the
