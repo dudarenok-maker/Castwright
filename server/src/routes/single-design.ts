@@ -170,7 +170,7 @@ async function runSingleDesign(
     }
 
     /* First design: auto-persist exactly as the bulk job does. fs-61 —
-       pass job.bookId so a standalone (no seriesFilter) writes ONLY this
+       pass job.bookDir so a standalone (no seriesFilter) writes ONLY this
        book instead of sweeping every book in the workspace sharing the
        same bare character id (e.g. "narrator"). */
     const matchKey = character.voiceId ?? character.id;
@@ -178,7 +178,7 @@ async function runSingleDesign(
       matchKey,
       { engine: 'qwen', name: voiceId },
       seriesFilter,
-      job.bookId,
+      job.bookDir,
     );
     endJob(job, {
       type: 'designed',

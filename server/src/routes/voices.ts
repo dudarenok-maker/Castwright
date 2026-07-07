@@ -653,16 +653,35 @@ export async function forEachMatchingCastCharacter(
   voiceId: string,
   seriesFilter: { author: string; series: string } | undefined,
   mutate: (character: CastCharacter) => CastCharacter,
-  /* fs-61 — when `seriesFilter` is absent, restrict the walk to exactly this
-     bookId instead of the whole workspace. Every standalone book resolves to
-     the same synthetic (author: X, series: "Standalones") pair, so a caller
-     with "this book has no series" (isStandalone → seriesFilter omitted)
-     must NOT fall through to a workspace-wide match on a bare character id
-     like "narrator" — that silently overwrites the SAME id in every other
-     unrelated (or different-language) standalone book. Omit only for the
-     genuinely-global PUT /:voiceId/override 'workspace' scope. */
-  onlyBookId?: string,
+  /* fs-61 — when `seriesFilter` is absent, restrict the write to exactly this
+     book's directory instead of the whole workspace. Every standalone book
+     resolves to the same synthetic (author: X, series: "Standalones") pair,
+     so a caller with "this book has no series" (isStandalone → seriesFilter
+     omitted) must NOT fall through to a workspace-wide match on a bare
+     character id like "narrator" — that silently overwrites the SAME id in
+     every other unrelated (or different-language) standalone book. Taking
+     the directory (not just a bookId) lets this skip the workspace walk
+     entirely — the caller already has it in hand (job.bookDir) for every
+     real call site. Omit only for the genuinely-global
+     PUT /:voiceId/override 'workspace' scope. */
+  onlyBookDir?: string,
 ): Promise<number> {
+  if (!seriesFilter && onlyBookDir) {
+    const cast = await readJson<CastJson>(castJsonPath(onlyBookDir));
+    if (!cast?.characters?.length) return 0;
+    let updated = 0;
+    let dirty = false;
+    for (let i = 0; i < cast.characters.length; i++) {
+      const original = cast.characters[i];
+      const id = original.voiceId ?? original.id;
+      if (id !== voiceId) continue;
+      cast.characters[i] = mutate(original);
+      dirty = true;
+      updated += 1;
+    }
+    if (dirty) await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
+    return updated;
+  }
   let updated = 0;
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
@@ -674,8 +693,6 @@ export async function forEachMatchingCastCharacter(
           if (state.isStandalone === true) continue;
           if (state.author !== seriesFilter.author || state.series !== seriesFilter.series)
             continue;
-        } else if (onlyBookId) {
-          if (state.bookId !== onlyBookId) continue;
         }
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
@@ -719,12 +736,12 @@ export async function applyOverrideToCastFiles(
      excluded from a series scope (a standalone's cast isn't series
      continuity). Omit for the original workspace-wide behaviour. */
   seriesFilter?: { author: string; series: string },
-  /* fs-61 — pass the calling book's id when `seriesFilter` is omitted
+  /* fs-61 — pass the calling book's directory when `seriesFilter` is omitted
      because the book has no series (e.g. a standalone design action), so
      the write stays book-scoped instead of sweeping every book in the
      workspace sharing the same bare character id. Only the genuinely-global
      PUT /:voiceId/override 'workspace' scope should omit both. */
-  onlyBookId?: string,
+  onlyBookDir?: string,
 ): Promise<number> {
   const updated = await forEachMatchingCastCharacter(
     voiceId,
@@ -755,7 +772,7 @@ export async function applyOverrideToCastFiles(
       delete replacement.overrideTtsVoice;
       return replacement;
     },
-    onlyBookId,
+    onlyBookDir,
   );
   /* Override changes don't affect the base-voice catalog itself, but call
      this anyway so a future invocation refreshes /speakers cleanly if the

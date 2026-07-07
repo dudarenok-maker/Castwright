@@ -43,6 +43,25 @@ import { resolveReusedVoiceFields, type CastLoader } from '../tts/hydrate-reused
 import { createWorkspaceCastLoader } from '../tts/hydrate-reused-voice-workspace.js';
 import type { TtsEngine } from '../tts/index.js';
 
+/* Memoize a per-bookId async lookup within one linkSeriesReuseAtAnalysis /
+   pruneStaleReuseLinks call. Each of resolveAuthorSeries/isStandaloneBookId/
+   resolveBookLanguageForBookId re-walks the ENTIRE workspace tree to find one
+   bookId's state.json (see findBookStateForBookId in series-cast-scan.ts) —
+   with many characters sharing the same bookId (a typical book has a dozen),
+   calling all three per character multiplied that walk 3x per character
+   instead of once per distinct book. */
+function memoizeAsync<T>(fn: (bookId: string) => Promise<T>): (bookId: string) => Promise<T> {
+  const cache = new Map<string, Promise<T>>();
+  return (bookId: string) => {
+    let cached = cache.get(bookId);
+    if (!cached) {
+      cached = fn(bookId);
+      cache.set(bookId, cached);
+    }
+    return cached;
+  };
+}
+
 const SKIP_IDS = new Set(['unknown-male', 'unknown-female']);
 
 /** The reuse-relevant slice of a freshly-detected character. Kept structural
@@ -204,9 +223,11 @@ export async function pruneStaleReuseLinks(
   const linked = characters.filter((c) => c.matchedFrom?.bookId);
   if (linked.length === 0) return 0;
 
-  const resolveAuthorSeries = options.resolveAuthorSeries ?? findAuthorSeriesForBookId;
-  const isStandalone = options.isStandaloneBookId ?? isStandaloneBookId;
-  const resolveBookLanguage = options.resolveBookLanguage ?? resolveBookLanguageForBookId;
+  const resolveAuthorSeries = memoizeAsync(options.resolveAuthorSeries ?? findAuthorSeriesForBookId);
+  const isStandalone = memoizeAsync(options.isStandaloneBookId ?? isStandaloneBookId);
+  const resolveBookLanguage = memoizeAsync(
+    options.resolveBookLanguage ?? resolveBookLanguageForBookId,
+  );
   const meta = await resolveAuthorSeries(bookId);
   if (!meta) return 0; // can't resolve the current book — don't guess
   const myLanguage = await resolveBookLanguage(bookId);
@@ -248,9 +269,11 @@ export async function linkSeriesReuseAtAnalysis(
 ): Promise<number> {
   if (!bookId || characters.length === 0) return 0;
 
-  const resolveAuthorSeries = options.resolveAuthorSeries ?? findAuthorSeriesForBookId;
-  const isStandalone = options.isStandaloneBookId ?? isStandaloneBookId;
-  const resolveBookLanguage = options.resolveBookLanguage ?? resolveBookLanguageForBookId;
+  const resolveAuthorSeries = memoizeAsync(options.resolveAuthorSeries ?? findAuthorSeriesForBookId);
+  const isStandalone = memoizeAsync(options.isStandaloneBookId ?? isStandaloneBookId);
+  const resolveBookLanguage = memoizeAsync(
+    options.resolveBookLanguage ?? resolveBookLanguageForBookId,
+  );
   const meta = await resolveAuthorSeries(bookId);
   if (!meta) return 0; // not in library / standalone resolves elsewhere
   const myLanguage = await resolveBookLanguage(bookId);

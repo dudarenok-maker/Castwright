@@ -368,7 +368,7 @@ async function runDesignJob(
           if (!emotion) {
             /* Base path — persist the override exactly as the drawer does. Match
                key is the character's voiceId/id, the name is the `qwen-…` id.
-               fs-61 — pass job.bookId so a standalone (no seriesFilter) writes
+               fs-61 — pass job.bookDir so a standalone (no seriesFilter) writes
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
@@ -376,7 +376,7 @@ async function runDesignJob(
               matchKey,
               { engine: 'qwen', name: voiceId },
               seriesFilter,
-              job.bookId,
+              job.bookDir,
             );
             job.done += 1;
             broadcast(job, { type: 'character_designed', characterId, voiceId });

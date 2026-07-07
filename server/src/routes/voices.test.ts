@@ -34,8 +34,8 @@ let applyTierToCastFiles: (
   seriesFilter?: { author: string; series: string },
 ) => Promise<number>;
 let applyOverrideToCastFiles: typeof import('./voices.js').applyOverrideToCastFiles;
-let standaloneA: { bookId: string };
-let standaloneB: { bookId: string };
+let standaloneA: { bookDir: string };
+let standaloneB: { bookDir: string };
 
 function writeBookOnDisk(
   workspace: string,
@@ -156,8 +156,8 @@ beforeAll(async () => {
      id "narrator" (no explicit voiceId — the common case for a fresh,
      undesigned character). Every standalone shares the same synthetic
      (author, series) = ("Castwright", "Standalones") pair, so a caller with
-     no seriesFilter must scope to exactly one bookId — otherwise designing
-     "narrator" in one book silently overwrites the other's. */
+     no seriesFilter must scope to exactly one book directory — otherwise
+     designing "narrator" in one book silently overwrites the other's. */
   const standaloneABookId = paths.makeBookId('Castwright', 'Standalones', 'Standalone A');
   const standaloneBBookId = paths.makeBookId('Castwright', 'Standalones', 'Standalone B');
   writeBookOnDisk(
@@ -178,8 +178,8 @@ beforeAll(async () => {
     [{ id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' }],
     true,
   );
-  standaloneA = { bookId: standaloneABookId };
-  standaloneB = { bookId: standaloneBBookId };
+  standaloneA = { bookDir: join(workspaceRoot, 'books', 'Castwright', 'Standalones', 'Standalone A') };
+  standaloneB = { bookDir: join(workspaceRoot, 'books', 'Castwright', 'Standalones', 'Standalone B') };
 
   app = express();
   app.use(express.json());
@@ -1254,21 +1254,22 @@ describe('applyTierToCastFiles', () => {
    and silently overwriting every OTHER standalone book's same-id character
    too, including a different-language one (a Qwen voice bakes its design
    language into the .pt, so this produced garbled audio). The design-flow
-   callers (single-design.ts, cast-design.ts) now pass the calling book's id
-   so the write stays scoped to exactly that book. */
+   callers (single-design.ts, cast-design.ts) now pass the calling book's
+   directory so the write stays scoped to exactly that book (and skips the
+   workspace walk entirely). */
 describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
   afterEach(async () => {
     /* Reset both standalones' narrator override between cases. */
-    await applyOverrideToCastFiles('narrator', null, undefined, standaloneA.bookId);
-    await applyOverrideToCastFiles('narrator', null, undefined, standaloneB.bookId);
+    await applyOverrideToCastFiles('narrator', null, undefined, standaloneA.bookDir);
+    await applyOverrideToCastFiles('narrator', null, undefined, standaloneB.bookDir);
   });
 
-  it('with no seriesFilter but an onlyBookId, touches only that book', async () => {
+  it('with no seriesFilter but an onlyBookDir, touches only that book', async () => {
     const n = await applyOverrideToCastFiles(
       'narrator',
       { engine: 'qwen', name: 'qwen-standalone-a-voice' },
       undefined,
-      standaloneA.bookId,
+      standaloneA.bookDir,
     );
     expect(n).toBe(1);
 
@@ -1284,7 +1285,7 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
     expect(b.characters[0].overrideTtsVoices).toBeUndefined();
   });
 
-  it('with neither seriesFilter nor onlyBookId, still sweeps the whole workspace (unchanged default)', async () => {
+  it('with neither seriesFilter nor onlyBookDir, still sweeps the whole workspace (unchanged default)', async () => {
     const n = await applyOverrideToCastFiles('narrator', {
       engine: 'qwen',
       name: 'qwen-workspace-wide',
