@@ -108,12 +108,16 @@ export async function deriveBookOutline(
   const attemptedChapterIds = new Set<number>();
 
   for (const ch of chapters) {
-    if (await readAttempted(attemptedPath(root, ch.slug))) {
+    const path = join(root, `${ch.slug}.render-integrity.json`);
+    const [attempted, rows] = await Promise.all([
+      readAttempted(attemptedPath(root, ch.slug)),
+      readVerdicts(path),
+    ]);
+
+    if (attempted) {
       attemptedChapterIds.add(ch.id);
     }
 
-    const path = join(root, `${ch.slug}.render-integrity.json`);
-    const rows = await readVerdicts(path);
     if (!rows) continue;
     scoredChapterIds.add(ch.id);
 
