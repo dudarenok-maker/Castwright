@@ -206,6 +206,7 @@ function ReEntryFlow({
       <SetupSummary
         readiness={readiness}
         onRefetch={onRefetch}
+        onFinish={onFinish}
         onOpenStep={(i) => setWizardStep(i)}
       />
     );
@@ -286,10 +287,12 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
 function SetupSummary({
   readiness,
   onRefetch,
+  onFinish,
   onOpenStep,
 }: {
   readiness: SetupReadiness;
   onRefetch: () => void;
+  onFinish: () => void;
   onOpenStep: (stepIndex: number) => void;
 }) {
   const rows = buildSummaryRows(readiness);
@@ -345,10 +348,19 @@ function SetupSummary({
         ))}
       </div>
 
-      <div className="flex items-center">
-        <PrimaryButton onClick={() => onOpenStep(attention[0]?.stepIndex ?? 0)}>
-          {allGood ? 'Open setup wizard' : 'Fix setup'}
-        </PrimaryButton>
+      <div className="flex items-center gap-3">
+        {allGood ? (
+          <>
+            <PrimaryButton onClick={onFinish}>Continue to my library</PrimaryButton>
+            <PrimaryButton variant="ghost" icon={false} onClick={() => onOpenStep(0)}>
+              Open setup wizard
+            </PrimaryButton>
+          </>
+        ) : (
+          <PrimaryButton onClick={() => onOpenStep(attention[0]?.stepIndex ?? 0)}>
+            Fix setup
+          </PrimaryButton>
+        )}
       </div>
     </div>
   );
