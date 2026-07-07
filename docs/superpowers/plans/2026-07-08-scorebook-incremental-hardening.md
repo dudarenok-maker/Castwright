@@ -59,7 +59,7 @@
 
 ## Design
 
-### 1. `pending-attempts-io.ts` (new)
+### Task 1: `pending-attempts-io.ts` (new)
 
 **Files:**
 - Create: `server/src/audio/render-integrity/pending-attempts-io.ts`
@@ -169,7 +169,7 @@ git commit -m "feat(server): add pending-attempts-io for srv-36 retry-cap counte
 
 ---
 
-### 2. `verdicts-io.ts` — `mergeVerdictRows` + `verdictCharactersByChapter`
+### Task 2: `verdicts-io.ts` — `mergeVerdictRows` + `verdictCharactersByChapter`
 
 **Files:**
 - Modify: `server/src/audio/render-integrity/verdicts-io.ts`
@@ -361,7 +361,7 @@ git commit -m "feat(server): add mergeVerdictRows and per-chapter character cove
 
 ---
 
-### 3. `aggregate.ts` — the core restructure
+### Task 3: `aggregate.ts` — the core restructure
 
 This is the largest task. It replaces `resolveCharacterReference` and `scoreBook`'s Phase 3+4 with a single interleaved, cheap-first-ordered, per-character resolve-and-persist loop, per spec §1/§2.
 
@@ -838,7 +838,7 @@ git commit -m "feat(server): interleave scoreBook's per-character resolve+persis
 
 ---
 
-### 4. `qa-report.ts` — embeddings-sourced roster, `charactersPending`, roster-aware scoring
+### Task 4: `qa-report.ts` — embeddings-sourced roster, `charactersPending`, roster-aware scoring
 
 **Files:**
 - Modify: `server/src/audio/qa-report.ts`
@@ -1012,7 +1012,7 @@ git commit -m "feat(server): source qa-report's per-chapter roster from embeddin
 
 ---
 
-### 5. `openapi.yaml` — schema updates + regenerate `api-types.ts`
+### Task 5: `openapi.yaml` — schema updates + regenerate `api-types.ts`
 
 **Files:**
 - Modify: `openapi.yaml`
@@ -1112,7 +1112,7 @@ git commit -m "feat(openapi): add srv-36 scoring SSE tick types, change-log even
 
 ---
 
-### 6. `generation.ts` — extract `triggerScoring`, wire SSE emission
+### Task 6: `generation.ts` — extract `triggerScoring`, wire SSE emission
 
 **Files:**
 - Modify: `server/src/routes/generation.ts`
@@ -1314,7 +1314,7 @@ git commit -m "feat(server): extract triggerScoring, broadcast scoring SSE ticks
 
 ---
 
-### 7. `qa-report.ts` route — `POST /:bookId/resume-scoring`
+### Task 7: `qa-report.ts` route — `POST /:bookId/resume-scoring`
 
 **Files:**
 - Modify: `server/src/routes/qa-report.ts`
@@ -1410,7 +1410,7 @@ git commit -m "feat(server): add POST /:bookId/resume-scoring route"
 
 ---
 
-### 8. Frontend `api.ts` — `resumeScoring`
+### Task 8: Frontend `api.ts` — `resumeScoring`
 
 **Files:**
 - Modify: `src/lib/api.ts`
@@ -1455,7 +1455,7 @@ git commit -m "feat(frontend): add api.resumeScoring"
 
 ---
 
-### 9. Frontend `change-log.ts` — scoring event builders
+### Task 9: Frontend `change-log.ts` — scoring event builders
 
 **Files:**
 - Modify: `src/lib/change-log.ts`
@@ -1550,7 +1550,7 @@ git commit -m "feat(frontend): add buildScoringStartedEvent/buildScoringComplete
 
 ---
 
-### 10. Frontend `chapters-slice.ts` — `scoringProgress` state
+### Task 10: Frontend `chapters-slice.ts` — `scoringProgress` state
 
 **Files:**
 - Modify: `src/store/chapters-slice.ts`
@@ -1622,7 +1622,7 @@ git commit -m "feat(frontend): add scoringProgress state to chapters-slice"
 
 ---
 
-### 11. Frontend `generation-stream-runner.ts` — handle the 3 new tick types
+### Task 11: Frontend `generation-stream-runner.ts` — handle the 3 new tick types
 
 **Files:**
 - Modify: `src/store/generation-stream-runner.ts`
@@ -1683,7 +1683,7 @@ git commit -m "feat(frontend): handle scoring_started/progress/complete SSE tick
 
 ---
 
-### 12. Frontend `generation.tsx` + `listen.tsx` — wire `bookId` and live progress into `QaReportCard`; extend `ACTIVITY_FEED_TYPES`
+### Task 12: Frontend `generation.tsx` + `listen.tsx` — wire `bookId` and live progress into `QaReportCard`; extend `ACTIVITY_FEED_TYPES`
 
 **Files:**
 - Modify: `src/views/generation.tsx`
@@ -1724,7 +1724,7 @@ Expected: FAIL until Task 13 adds the new props to `QaReportCardProps` — that'
 
 ---
 
-### 13. Frontend `qa-report-card.tsx` — three-state `VoiceMatchRow` + Resume button
+### Task 13: Frontend `qa-report-card.tsx` — three-state `VoiceMatchRow` + Resume button
 
 **Files:**
 - Modify: `src/components/qa-report-card.tsx`
@@ -1920,7 +1920,7 @@ git commit -m "feat(frontend): three-state Voice Match row with live progress an
 
 ---
 
-### 14. E2E — scoring progress + resume UX
+### Task 14: E2E — scoring progress + resume UX
 
 **Files:**
 - Create: `e2e/generation-scoring-progress.spec.ts`
