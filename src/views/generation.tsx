@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useOutletContext } from 'react-router-dom';
 import { helpHrefForFailureCode } from '../lib/router';
@@ -18,6 +18,8 @@ import {
   IconSparkle,
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
+import { QaReportCard } from '../components/qa-report-card';
+import { useQaReport } from '../hooks/use-qa-report';
 import { Stat } from '../components/stat-tiles';
 import { ModelControlPill } from '../components/ModelControlPill';
 import { selectEnginesInUse } from '../store/engines-in-use-selector';
@@ -178,6 +180,32 @@ export function GenerationView({
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const activityEvents = useAppSelector((s) => s.changeLog.events);
+  /* fs-51 — per-book performance-QA report card. Fetched on mount, then
+     refetched live whenever a fresh chapter_complete entry lands in this
+     book's activity feed (below), so the card's numbers advance as chapters
+     finish rendering instead of only reflecting the state at page load. */
+  const { report: qaReport, loading: qaLoading, error: qaError, refetch: refetchQaReport } =
+    useQaReport(bookId);
+  /* Tracks the most recent chapter_complete-typed activity-feed entry (by
+     id) so the effect below can tell "a NEW one just landed" apart from
+     "the same set re-rendered" — including the very first entry ever
+     appearing (baseline was "none"). `hasChapterCompleteBaseline` guards the
+     initial mount run specifically, so the mount's own fetch above isn't
+     double-fired by this effect too. */
+  const latestChapterCompleteId = useRef<number | undefined>(undefined);
+  const hasChapterCompleteBaseline = useRef(false);
+  useEffect(() => {
+    const latest = activityEvents.find((e) => e.type === 'chapter_complete')?.id;
+    if (
+      hasChapterCompleteBaseline.current &&
+      latest !== undefined &&
+      latest !== latestChapterCompleteId.current
+    ) {
+      refetchQaReport();
+    }
+    latestChapterCompleteId.current = latest;
+    hasChapterCompleteBaseline.current = true;
+  }, [activityEvents, refetchQaReport]);
   /* #650 — render-time sentence→speaker map per chapter, for the PRECISE
      reassignment-staleness diff (vs the time-based change-log fallback). */
   const renderedSpeakersByChapter = useAppSelector(
@@ -1191,6 +1219,14 @@ export function GenerationView({
           <Stat label="Queued" value={queued} />
           <Stat label="Failed" value={failed} danger />
         </div>
+      </div>
+
+      {/* fs-51 — per-book performance-QA report, live during generation.
+          Kept next to the Overall-progress summary above (rather than in the
+          Activity sidebar below) so it reads as a book-level status card, not
+          a log entry. */}
+      <div className="mb-6 sm:mb-8">
+        <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title ?? ''} />
       </div>
 
       {/* Wave-3 responsive layout: single column on phone + tablet (chapter

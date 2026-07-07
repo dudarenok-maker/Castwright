@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/16-generation-stream.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router-dom';
@@ -16,6 +16,7 @@ import { queueSlice } from '../store/queue-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { GenerationView, ChapterSegmentStrip } from './generation';
 import { textHashForStale } from '../lib/stale-chapters';
+import { MOCK_QA_REPORT } from '../data/qa-report';
 import { api } from '../lib/api';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import type { LayoutContext } from '../components/layout';
@@ -62,6 +63,7 @@ const getOllamaHealthSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
 const setChapterExcludedSpy = vi.fn();
 const runAnalysisForChaptersSpy = vi.fn();
+const getQaReportSpy = vi.fn();
 
 vi.mock('../lib/api', () => ({
   /* Never-resolving so the ChapterSegmentStrip useEffect doesn't flush a
@@ -100,6 +102,9 @@ vi.mock('../lib/api', () => ({
       chapterIds: number[],
       opts?: Record<string, unknown>,
     ) => runAnalysisForChaptersSpy(manuscriptId, chapterIds, opts),
+    /* fs-51 — QaReportCard's useQaReport hook fetches on mount and on the
+       live chapter_complete refetch trigger under test below. */
+    getQaReport: (bookId: string) => getQaReportSpy(bookId),
   },
   /* Stub class so `instanceof AnalysisError` checks in production code
      don't throw "Right-hand side of instanceof is not callable". */
@@ -122,6 +127,8 @@ beforeEach(() => {
   getSidecarHealthSpy.mockReset();
   setChapterExcludedSpy.mockReset();
   runAnalysisForChaptersSpy.mockReset();
+  getQaReportSpy.mockReset();
+  getQaReportSpy.mockResolvedValue(MOCK_QA_REPORT);
   vi.mocked(api.getChapterAudio).mockReset();
   vi.mocked(api.getChapterAudio).mockReturnValue(new Promise(() => {}));
   getOllamaHealthSpy.mockResolvedValue({
@@ -204,7 +211,7 @@ function makeStore() {
 
 function renderView() {
   const store = makeStore();
-  return render(
+  const utils = render(
     <Provider store={store}>
       <HostedGenerationView
         chapters={[chapter1, chapter2]}
@@ -220,6 +227,7 @@ function renderView() {
       />
     </Provider>,
   );
+  return { ...utils, store };
 }
 
 describe('GenerationView — prosody toggle removed (#1100)', () => {
@@ -848,6 +856,36 @@ describe('GenerationView — activity sidebar', () => {
     expect(screen.getByText('Activity')).toBeInTheDocument();
     /* The event's title is rendered inside the sidebar row. */
     expect(screen.getByText('Chapter 1 complete')).toBeInTheDocument();
+  });
+});
+
+describe('GenerationView — fs-51 QA report card', () => {
+  it('refetches the QA report when a chapter completes', async () => {
+    const { store } = renderView();
+
+    await screen.findByText(/quality gate/i);
+    expect(getQaReportSpy).toHaveBeenCalledTimes(1);
+
+    /* Mirrors the real event shape appended by the generation-stream
+       runner (see buildChapterCompleteEvent / ACTIVITY_FEED_TYPES) —
+       a live chapter_complete entry landing in this book's activity feed. */
+    act(() => {
+      store.dispatch(
+        changeLogSlice.actions.appendLogEvent({
+          id: Date.now(),
+          at: new Date().toISOString(),
+          ts: 'Just now',
+          date: 'today',
+          type: 'chapter_complete',
+          title: 'Chapter 1 complete',
+          note: 'Finished synthesising "Chapter 1".',
+          actor: 'system',
+          chapterId: 1,
+        }),
+      );
+    });
+
+    await waitFor(() => expect(getQaReportSpy).toHaveBeenCalledTimes(2));
   });
 });
 
