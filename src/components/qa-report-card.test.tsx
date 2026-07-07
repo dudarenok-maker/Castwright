@@ -70,7 +70,7 @@ describe('QaReportCard', () => {
   it('triggers a text download when the export button is clicked', () => {
     render(<QaReportCard report={MOCK_QA_REPORT} loading={false} error={false} bookTitle="Test Book" />);
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    screen.getByRole('button', { name: /copy as text/i }).click();
+    screen.getByRole('button', { name: /download as text/i }).click();
     expect(clickSpy).toHaveBeenCalled();
     clickSpy.mockRestore();
   });

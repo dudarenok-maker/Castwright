@@ -16,7 +16,7 @@ test.describe('QA report card', () => {
 
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('button', { name: /copy as text/i }).click(),
+      page.getByRole('button', { name: /download as text/i }).click(),
     ]);
     expect(download.suggestedFilename()).toMatch(/qa-report\.txt$/);
 

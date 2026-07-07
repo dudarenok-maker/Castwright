@@ -155,7 +155,7 @@ export function QaReportCard({ report, loading, error, bookTitle }: QaReportCard
           onClick={() => downloadFile(`${slugify(bookTitle)}-qa-report.txt`, formatQaReportText(report, bookTitle), 'text/plain')}
           className="text-xs font-semibold text-ink/70 hover:text-ink px-3 py-1.5 rounded-full border border-ink/10"
         >
-          Copy as text
+          Download as text
         </button>
         <button
           onClick={() => downloadFile(`${slugify(bookTitle)}-qa-report.json`, formatQaReportJson(report), 'application/json')}
