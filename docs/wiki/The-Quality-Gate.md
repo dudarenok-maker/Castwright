@@ -22,6 +22,8 @@ The acoustic gate catches a broken *take*. It doesn't catch a voice that rendere
 
 Flags are severity-tiered — **Severe**, **Moderate**, **Mild** — and open into a comparison view: the profile's voice attributes (gender, age, warmth, pace, authority, emotion) as they were "when rendered" against "now," a **Listen** control that A/B-plays the actual chapter audio against a fresh sample of the current profile so you can hear the drift rather than just read it, and a one-click **Regenerate** for that chapter. A Severe flag offers **Auto-regen** — no confirmation step, because at that severity the drift is confident enough not to need a second opinion. Anything you're not worried about, **Dismiss** (or **Dismiss all**) clears it.
 
+The report opens scoped to the book you're in. If that book is part of a series, a **This book** / **Series** toggle sits at the top — flip it to pull in flags from every other title sharing the cast. However many chapters are flagged, the list loads a screenful at a time; scroll, and the rest follows.
+
 ![Voice drift report — severity-tiered flags with the Auto-regen control on a Severe event](images/the-quality-gate/02-voice-drift-report.png)
 
 ## Where a flag follows you: the preview surface

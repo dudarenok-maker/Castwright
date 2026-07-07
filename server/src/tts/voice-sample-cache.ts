@@ -27,6 +27,27 @@ export function voiceSampleAudioDir(): string {
   return process.env.VOICE_SAMPLE_AUDIO_DIR ?? resolve(__dirname, '..', '..', 'audio', 'voices');
 }
 
+/* Sample-cache scope for a voiceId-less character — must match the
+   frontend's src/lib/sample-scope.ts sampleScopeFor exactly (design-time
+   write and play-time read agree by construction, same invariant as the
+   rest of this module). bug #1411 code-review follow-up: this was
+   hand-duplicated as an inline literal in both voices.ts (the read side)
+   and cast-design.ts (a write side) — the exact drift class this module
+   exists to prevent, and the same class of bug (#1410) that needed a
+   follow-up commit to catch a missed call site. `bookId` disambiguates
+   the fallback across books (two unrelated books' analyzer-assigned
+   narrator/unknown-male/unknown-female share the bare id); joined with `__`
+   (not a hyphen) since bookId is itself hyphen-rich free text and a hyphen
+   join can still collide across two distinct (book, id) pairs — `__` stays
+   inside asciiFileScope's allow-list below, keeping the write path and this
+   read-side raw-prefix-matching in sync for the common ASCII case. */
+export function sampleScopeForCharacter(
+  character: { id: string; voiceId?: string | null },
+  bookId: string,
+): string {
+  return character.voiceId ?? `char-${bookId}__${character.id}`;
+}
+
 /* Every cached sample .mp3 currently on disk (filenames only, not paths).
    The voices aggregator reads this once per Qwen query to stamp the
    `sampled` lifecycle flag: a designed Qwen voice whose

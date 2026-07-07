@@ -45,6 +45,18 @@ const READINESS: SetupReadiness = {
   info: { gpu: 'CPU — no GPU detected' },
 };
 
+const READY_READINESS: SetupReadiness = {
+  ready: true,
+  completedAt: '2026-07-01T00:00:00.000Z',
+  blockers: {
+    sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+    ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+    tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+    analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+  },
+  info: { gpu: 'cuda · 0.0 / 8.4 GB reserved' },
+};
+
 const STEP_TESTIDS = [
   'step-environment-stub',
   'step-ffmpeg-stub',
@@ -270,5 +282,45 @@ describe('SetupWizard', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /re-check/i }));
     expect(onRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-entry mode: when everything is ready, a Continue button dismisses and calls onFinish', () => {
+    const onFinish = vi.fn();
+    render(
+      <SetupWizard
+        readiness={READY_READINESS}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={onFinish}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /continue to my library/i }));
+    expect(onFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-entry mode: when everything is ready, "Open setup wizard" still drills into the guided flow', () => {
+    render(
+      <SetupWizard
+        readiness={READY_READINESS}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /open setup wizard/i }));
+    expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
+  });
+
+  it('re-entry mode: when blockers remain, there is no Continue button — only Fix setup', () => {
+    render(
+      <SetupWizard
+        readiness={READINESS}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /continue to my library/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /fix setup/i })).toBeInTheDocument();
   });
 });

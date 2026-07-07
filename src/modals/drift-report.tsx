@@ -5,12 +5,19 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { api } from '../lib/api';
 import { useAppSelector } from '../store';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import { useAbAudition, type AbSide, type AbSideKey } from '../lib/use-ab-audition';
 import {
   distinctDriftChapterCount,
   type DriftGroup,
   type DriftChapterEntry,
 } from '../store/revisions-slice';
 import type { DriftEvent, Character, CharColor, Voice } from '../lib/types';
+
+/* Number of drift-group cards rendered per book before the "load more on
+   scroll" sentinel takes over — see `DriftBookSection`. Keeps the DOM light
+   for a heavily-drifted book instead of mounting every group at once. */
+const GROUPS_PAGE_SIZE = 20;
 
 /* The modal renders one card per `(book × character × snapshot)` group
    (see `selectDriftGroupsByBook` in `src/store/revisions-slice.ts`).
@@ -51,6 +58,13 @@ interface Props {
      the character whose pill they clicked. */
   filterCharacterId?: string | null;
   onClearFilter?: () => void;
+  /* "This book" / "Series" scope toggle. `groupsByBook` arrives already
+     scoped (the caller — layout.tsx — filters before building the prop);
+     this pair only drives the pill UI + the callback that flips the
+     caller's redux scope. Toggle is hidden unless `seriesAvailable`. */
+  scope?: 'book' | 'series';
+  onScopeChange?: (scope: 'book' | 'series') => void;
+  seriesAvailable?: boolean;
 }
 
 /* Resolve a display name for the per-character filter banner. The cast
@@ -93,6 +107,9 @@ export function DriftReportModal({
   voices,
   filterCharacterId,
   onClearFilter,
+  scope = 'book',
+  onScopeChange,
+  seriesAvailable,
 }: Props) {
   /* When a per-character filter is active, prune each book's groups
      down to that character. Empty books drop out so the section
@@ -151,6 +168,33 @@ export function DriftReportModal({
           </div>
 
           <div className="p-6 space-y-8 overflow-y-auto scrollbar-thin">
+            {seriesAvailable && onScopeChange && (
+              <div
+                className="inline-flex items-center gap-1 rounded-full bg-ink/5 p-0.5 text-xs font-semibold"
+                data-testid="drift-report-scope-toggle"
+              >
+                <button
+                  onClick={() => onScopeChange('book')}
+                  data-testid="drift-report-scope-book"
+                  aria-pressed={scope !== 'series'}
+                  className={`px-3 py-1 rounded-full transition-colors ${
+                    scope !== 'series' ? 'bg-white shadow-sm text-ink' : 'text-ink/55 hover:text-ink'
+                  }`}
+                >
+                  This book
+                </button>
+                <button
+                  onClick={() => onScopeChange('series')}
+                  data-testid="drift-report-scope-series"
+                  aria-pressed={scope === 'series'}
+                  className={`px-3 py-1 rounded-full transition-colors ${
+                    scope === 'series' ? 'bg-white shadow-sm text-ink' : 'text-ink/55 hover:text-ink'
+                  }`}
+                >
+                  Series
+                </button>
+              </div>
+            )}
             {filterCharacterId && onClearFilter ? (
               <div
                 className="-mt-2 -mx-2 px-3 py-2 rounded-2xl bg-amber-50/70 border border-amber-200 flex items-center gap-3 text-sm"
@@ -228,6 +272,52 @@ function DriftBookSection({
   );
   const findChar = (id: string) => view.characters.find((c) => c.id === id);
 
+  /* Incremental reveal: only the first `visibleCount` groups (severe-first,
+     matching the section order below) actually mount a `DriftGroupCard`.
+     Fixes the other half of the "375 chapters across 10 books" hang — even
+     scoped to one book, a heavily-drifted book can carry hundreds of
+     groups, and consolidation (plan 91) doesn't help when they're mostly
+     single-chapter. A sentinel at the tail reveals another page on
+     scroll-into-view, same IntersectionObserver technique as the
+     change-log view's infinite scroll (src/views/change-log.tsx).
+
+     No reset-on-book-switch effect is needed: the parent keys this
+     component by `view.bookId` (see the `.map` below), so switching books
+     already remounts a fresh instance with `visibleCount` back at
+     `GROUPS_PAGE_SIZE` — a reset keyed on `orderedGroups.length` would
+     instead (and did, pre-fix) collapse the reveal back to page 1 any time
+     the SAME book's group count changed for an unrelated reason (a
+     dismiss, a regen, or the background drift poll adding a group),
+     discarding the user's scroll progress. */
+  const orderedGroups = useMemo(
+    () => severityOrder.flatMap((sev) => bySeverity[sev]),
+    [bySeverity],
+  );
+  const [visibleCount, setVisibleCount] = useState(GROUPS_PAGE_SIZE);
+  const visibleIds = useMemo(
+    () => new Set(orderedGroups.slice(0, visibleCount).map((g) => g.groupId)),
+    [orderedGroups, visibleCount],
+  );
+  const hasMore = visibleCount < orderedGroups.length;
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!hasMore) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setVisibleCount((c) => Math.min(orderedGroups.length, c + GROUPS_PAGE_SIZE));
+          }
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [hasMore, orderedGroups.length]);
+
   return (
     <section className="space-y-4">
       <header className="flex items-center gap-3 pb-2 border-b border-ink/10">
@@ -243,6 +333,8 @@ function DriftBookSection({
       {severityOrder.map((sev) => {
         const items = bySeverity[sev];
         if (!items || items.length === 0) return null;
+        const visibleItems = items.filter((g) => visibleIds.has(g.groupId));
+        if (visibleItems.length === 0) return null;
         return (
           <section key={sev}>
             <div className="flex items-center gap-3 mb-3">
@@ -251,7 +343,7 @@ function DriftBookSection({
               <span className="text-xs text-ink/50 tabular-nums">{items.length}</span>
             </div>
             <div className="space-y-2">
-              {items.map((g) => {
+              {visibleItems.map((g) => {
                 const char = findChar(g.characterId);
                 return (
                   <DriftGroupCard
@@ -270,6 +362,16 @@ function DriftBookSection({
           </section>
         );
       })}
+
+      {hasMore && (
+        <div
+          ref={sentinelRef}
+          data-testid={`drift-book-load-more-${view.bookId}`}
+          className="py-3 text-center text-xs text-ink/45"
+        >
+          Loading more…
+        </div>
+      )}
     </section>
   );
 }
@@ -834,12 +936,16 @@ const AttributeList = memo(function AttributeList({
    voice profile. Lets the user decide between Regenerate / Dismiss by
    ear, not just the attribute-diff summary.
 
-   Two refs + a single playing-state lets us implement mutex without
-   importing the revision-diff useAbPlayback hook — A's URL is static
-   (just the chapter audio path) but B's URL needs an async resolve via
-   api.getVoiceSample, which is awkward to feed into a useEffect-driven
-   src sync. Cleanup useEffect pauses both elements on unmount so the
-   browser releases the decode buffers when the modal closes. */
+   Built on the same shared-singleton A/B pattern as CompareCastModal /
+   VoiceCompareModal (`use-sample-playback.ts` + `use-ab-audition.ts`)
+   instead of mounting two real `<audio>` elements per row. The prior
+   per-row-refs implementation mounted both elements unconditionally
+   (regardless of whether Listen was even clicked) — at "375 chapters
+   across 10 books" scale that was ~750 concurrently-live
+   HTMLMediaElements, the proximate cause of the browser-hang report.
+   The singleton means at most one real `<audio>` element exists for the
+   whole app, and — as a side effect — rows now mutex against each other
+   too, not just within one widget. */
 function DriftListenWidget({
   event,
   bookId,
@@ -853,93 +959,93 @@ function DriftListenWidget({
 }) {
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const [open, setOpen] = useState(false);
-  const [playing, setPlaying] = useState<'A' | 'B' | null>(null);
   const [voiceSampleUrl, setVoiceSampleUrl] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const chapterRef = useRef<HTMLAudioElement | null>(null);
-  const voiceRef = useRef<HTMLAudioElement | null>(null);
+  const playback = useSamplePlayback();
 
+  /* Groups are keyed by (book, character, snapshot) — not by chapter — so
+     two different characters can each have their own drift row for the
+     SAME chapter. Appending the character id as a harmless query param
+     (Express ignores unknown query params; the server always serves the
+     same file) gives each row a distinct match/playback URL against the
+     one shared singleton — without it, playing one character's "Chapter"
+     audio also flipped an unrelated character's row to "Pause chapter"
+     purely because they resolved to the identical bare URL. */
+  const chapterUrl = `/api/books/${encodeURIComponent(bookId)}/chapters/${event.chapterId}/audio?forCharacter=${encodeURIComponent(event.characterId)}`;
+
+  /* Tracks whether this widget instance is still mounted, so an
+     `api.getVoiceSample` fetch that resolves after the row was
+     dismissed/regenerated (or the modal closed) doesn't set state on an
+     unmounted component or start audio on the shared singleton with no
+     surviving control to stop it. */
+  const mountedRef = useRef(true);
   useEffect(() => {
-    const a = chapterRef.current;
-    const b = voiceRef.current;
+    mountedRef.current = true;
     return () => {
-      if (a) {
-        a.pause();
-        a.removeAttribute('src');
-      }
-      if (b) {
-        b.pause();
-        b.removeAttribute('src');
-      }
+      mountedRef.current = false;
     };
   }, []);
 
-  const chapterUrl = `/api/books/${encodeURIComponent(bookId)}/chapters/${event.chapterId}/audio`;
+  const sides: Record<AbSideKey, AbSide> = {
+    a: {
+      matchUrl: chapterUrl,
+      matchMode: 'exact',
+      play: () => playback.play(chapterUrl),
+    },
+    b: {
+      /* Before the first successful fetch there's no sample URL yet — a
+         sentinel that can never match `playback.currentUrl` keeps
+         isSidePlaying('b') false rather than throwing on an empty string
+         (which would `matchMode: 'exact'`-match nothing anyway, but an
+         explicit sentinel documents the intent). */
+      matchUrl: voiceSampleUrl ?? 'drift-voice-sample-unresolved',
+      matchMode: 'exact',
+      play: async () => {
+        let url = voiceSampleUrl;
+        if (!url) {
+          const sample = await api.getVoiceSample({
+            voiceId: voice.id,
+            voice,
+            modelKey: ttsModelKey,
+            characterHint: character
+              ? {
+                  description: character.description,
+                  gender: character.gender as 'male' | 'female' | 'neutral' | undefined,
+                  ageRange: character.ageRange as
+                    | 'child'
+                    | 'teen'
+                    | 'adult'
+                    | 'elderly'
+                    | undefined,
+                }
+              : undefined,
+          });
+          url = sample.url;
+          if (!mountedRef.current) return;
+          setVoiceSampleUrl(url);
+        }
+        if (!mountedRef.current) return;
+        await playback.play(url);
+      },
+    },
+  };
 
-  function pauseAll() {
-    chapterRef.current?.pause();
-    voiceRef.current?.pause();
-    setPlaying(null);
-  }
+  const { rowState, playSide, isSidePlaying, stopAndCancel } = useAbAudition({ sides, playback });
 
-  async function playChapter() {
-    voiceRef.current?.pause();
-    const el = chapterRef.current;
-    if (!el) return;
-    if (el.src !== window.location.origin + chapterUrl && !el.src.endsWith(chapterUrl)) {
-      el.src = chapterUrl;
-    }
-    try {
-      await el.play();
-      setPlaying('A');
-    } catch {
-      setPlaying(null);
-    }
-  }
-
-  async function playVoice() {
-    chapterRef.current?.pause();
-    let url = voiceSampleUrl;
-    if (!url) {
-      setBusy(true);
-      try {
-        const sample = await api.getVoiceSample({
-          voiceId: voice.id,
-          voice,
-          modelKey: ttsModelKey,
-          characterHint: character
-            ? {
-                description: character.description,
-                gender: character.gender as 'male' | 'female' | 'neutral' | undefined,
-                ageRange: character.ageRange as
-                  | 'child'
-                  | 'teen'
-                  | 'adult'
-                  | 'elderly'
-                  | undefined,
-              }
-            : undefined,
-        });
-        url = sample.url;
-        setVoiceSampleUrl(url);
-      } catch {
-        setBusy(false);
-        return;
-      }
-      setBusy(false);
-    }
-    const el = voiceRef.current;
-    if (!el || !url) return;
-    if (el.src !== url && !el.src.endsWith(url)) {
-      el.src = url;
-    }
-    try {
-      await el.play();
-      setPlaying('B');
-    } catch {
-      setPlaying(null);
-    }
-  }
+  /* If THIS widget's own chapter/voice track is what's currently audible
+     when it unmounts (row dismissed/regenerated, or the modal closes),
+     stop it so the browser releases the decode buffer — mirrors the old
+     per-widget cleanup effect, but scoped so dismissing one row doesn't
+     stop a track a DIFFERENT row started. A ref (not the effect's deps)
+     carries the latest urls/handles so the cleanup always checks current
+     state rather than whatever was true on first mount. */
+  const latestRef = useRef({ isSidePlaying, stopAndCancel });
+  latestRef.current = { isSidePlaying, stopAndCancel };
+  useEffect(() => {
+    return () => {
+      const { isSidePlaying, stopAndCancel } = latestRef.current;
+      if (isSidePlaying('a') || isSidePlaying('b')) stopAndCancel();
+    };
+  }, []);
 
   return (
     <span className="inline-flex items-center gap-2">
@@ -955,25 +1061,23 @@ function DriftListenWidget({
         <>
           <button
             data-testid={`drift-play-chapter-${event.id}`}
-            onClick={() => (playing === 'A' ? pauseAll() : void playChapter())}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${playing === 'A' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
+            onClick={() => void playSide('a')}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${isSidePlaying('a') ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
           >
             <IconWaveform className="w-3 h-3" />
-            {playing === 'A' ? 'Pause chapter' : 'Chapter'}
+            {isSidePlaying('a') ? 'Pause chapter' : 'Chapter'}
           </button>
           <button
             data-testid={`drift-play-voice-${event.id}`}
-            onClick={() => (playing === 'B' ? pauseAll() : void playVoice())}
-            disabled={busy}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium disabled:opacity-50 disabled:cursor-wait ${playing === 'B' ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
+            onClick={() => void playSide('b')}
+            disabled={rowState.b?.loading}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium disabled:opacity-50 disabled:cursor-wait ${isSidePlaying('b') ? 'bg-ink text-canvas border-ink' : 'bg-canvas border-ink/10 text-ink/70 hover:text-ink'}`}
           >
             <IconWaveform className="w-3 h-3" />
-            {busy ? 'Loading…' : playing === 'B' ? 'Pause voice' : 'Voice profile'}
+            {rowState.b?.loading ? 'Loading…' : isSidePlaying('b') ? 'Pause voice' : 'Voice profile'}
           </button>
         </>
       )}
-      <audio ref={chapterRef} onEnded={() => setPlaying((p) => (p === 'A' ? null : p))} />
-      <audio ref={voiceRef} onEnded={() => setPlaying((p) => (p === 'B' ? null : p))} />
     </span>
   );
 }

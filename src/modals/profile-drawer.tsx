@@ -493,7 +493,7 @@ export function ProfileDrawer({
      character-derived stub so brand-new (unmatched) characters can still
      preview their attributes. Server file is namespaced `char-<id>` for
      character samples to keep them separate from library voice samples. */
-  const sampleVoiceId = sampleScopeFor(character);
+  const sampleVoiceId = sampleScopeFor(character, bookId);
   /* Recompute against the *edited* identity so the displayed TTS voice
      updates live as the user changes the dropdowns. Saving the drawer
      persists these values; until then the recompute is local-only. */

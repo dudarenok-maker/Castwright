@@ -96,7 +96,19 @@ jobs:
           fi
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
-          FILES="$(git diff --name-only "$BASE" "$HEAD")"
+          # Merge-base, not BASE itself: a PR branch created from a stale
+          # local `origin/<default-branch>` (e.g. right after a `gh pr merge`
+          # that doesn't update local refs) can be a strict ancestor of BASE
+          # rather than a descendant. A literal `git diff BASE HEAD` in that
+          # case treats every file BASE moved past HEAD's fork point as
+          # "changed in this PR", spuriously widening scope (a docs-only PR
+          # tripping the full frontend battery). Diffing from the actual
+          # merge-base is what the diff is meant to mean regardless of how
+          # stale the branch's fork point drifted. Falls back to BASE itself
+          # if the merge-base can't be resolved (shouldn't happen — Checkout
+          # above pulls full history — but conservative on any surprise).
+          MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+          FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
           echo "Changed files in this PR:"
           echo "$FILES"
           echo "---"

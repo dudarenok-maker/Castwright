@@ -570,6 +570,18 @@ def test_watchdog_sets_recycle_pending_below_hard(monkeypatch):
     monkeypatch.setattr(main, "_recycle_pending", False)
     monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 20000.0})
     monkeypatch.setattr(main, "_process_commit_mb", lambda: 32000.0)  # soft < c < hard
+    # bug #1377: this tick falls through to the real _check_per_card_ceilings
+    # (unlike test_watchdog_hard_ceiling_still_exits_when_soft_set, which
+    # `continue`s before reaching it). Unstubbed, it samples the box's ACTUAL
+    # GPU via _DEVICE_LEDGER — if driver-free VRAM genuinely dips below the
+    # floor (another process, busy desktop), a real breach fires
+    # _schedule_restart_exit(..., card=breach), the card= kwarg doesn't match
+    # this test's `lambda *a` mock, the resulting TypeError is swallowed by
+    # the watchdog's own try/except, and the soft-recycle code below never
+    # runs on that tick — failing the assertion below on hardware state that
+    # has nothing to do with this test. Stub it to a clean "no breach" so the
+    # test is hermetic regardless of what else is resident on the card.
+    monkeypatch.setattr(main, "_check_per_card_ceilings", lambda *a, **k: None)
     scheduled: list = []
     monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
     monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))
@@ -596,6 +608,9 @@ def test_watchdog_finer_sampling_catches_transient_committed_spike(monkeypatch):
     samples = iter([9000.0, 36000.0, 9000.0])  # trough, SPIKE (≥ soft, < hard), trough
     monkeypatch.setattr(main, "_process_commit_mb", lambda: next(samples, 9000.0))
     monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (None, None, None))
+    # bug #1377 — see test_watchdog_sets_recycle_pending_below_hard's comment:
+    # this tick also falls through to the real (unstubbed) per-card check.
+    monkeypatch.setattr(main, "_check_per_card_ceilings", lambda *a, **k: None)
     scheduled: list = []
     monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
     monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(4))  # 3 iterations
@@ -748,6 +763,9 @@ def test_watchdog_vram_soft_sets_recycle_pending(monkeypatch):
     monkeypatch.setattr(main, "_process_commit_mb", lambda: 5000.0)
     # reserved 7500: soft(7000) <= reserved < hard(8000) on an 8188MB card.
     monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (5000.0, 7500.0, 8188.0))
+    # bug #1377 — see test_watchdog_sets_recycle_pending_below_hard's comment:
+    # this tick also falls through to the real (unstubbed) per-card check.
+    monkeypatch.setattr(main, "_check_per_card_ceilings", lambda *a, **k: None)
     scheduled: list = []
     monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
     monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))

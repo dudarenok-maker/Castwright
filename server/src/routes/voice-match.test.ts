@@ -46,6 +46,7 @@ function writeBookOnDisk(
   bookId: string,
   cast: PriorCast['characters'],
   castConfirmed: boolean,
+  language?: string,
 ) {
   const bookDir = join(workspace, 'books', author, series, title);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -65,6 +66,7 @@ function writeBookOnDisk(
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ...(language ? { language } : {}),
     }),
   );
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
@@ -165,6 +167,21 @@ beforeAll(async () => {
     makeBookId('Derek Landy', 'Skulduggery Pleasant', 'Scepter of the Ancients'),
     [{ id: 'narrator', name: 'Narrator', voiceId: 'v_narr_skul', gender: 'neutral' }],
     true,
+  );
+
+  /* fs-61 — a same-author/same-series sibling designed in a different
+     language. A Qwen voice bakes its design language into the .pt, so it
+     must never surface as a candidate for the (English, default) current
+     book even though the name matches exactly. */
+  writeBookOnDisk(
+    workspaceRoot,
+    AUTHOR,
+    SERIES,
+    'Book Four Spanish',
+    makeBookId(AUTHOR, SERIES, 'Book Four Spanish'),
+    [{ id: 'marlow', name: 'Marlow', voiceId: 'v_marlow_es', gender: 'male', ageRange: 'teen' }],
+    true,
+    'es',
   );
 
   /* The current book being analysed — a real The Hollow Tide-series book on disk so the
@@ -428,5 +445,23 @@ describe('voice-match router', () => {
     expect(res.status).toBe(200);
     const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
     expect(voiceIds.some((v: string) => v === 'v_marlow' || v === 'v_marlow_alt')).toBe(true);
+  });
+
+  /* fs-61 regression (2026-07-07): the per-language Coalfall demo books share
+     one author + the synthetic "Standalones" series, but even within a REAL
+     series a language-mismatched sibling must never surface as a candidate —
+     Qwen bakes its design language into the .pt, so reusing it reads the new
+     book's text in the wrong phoneme set (garbled audio). */
+  it('a same-series sibling in a DIFFERENT language never surfaces as a candidate', async () => {
+    const res = await callMatch(CURRENT_BOOK_ID, {
+      characters: [
+        { id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
+    expect(voiceIds).not.toContain('v_marlow_es');
+    /* Same-language siblings are unaffected. */
+    expect(voiceIds).toContain('v_marlow');
   });
 });

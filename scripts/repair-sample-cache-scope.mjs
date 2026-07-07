@@ -54,7 +54,13 @@ function parseFile(name) {
   return null;
 }
 
-const sampleScopeFor = (c) => c.voiceId ?? `char-${c.id}`;
+/* bug #1411 code-review follow-up: must match src/lib/sample-scope.ts's
+   sampleScopeFor / server/src/routes/voices.ts's book-scoped fallback
+   (`char-<bookId>__<id>`), or this repair computes the wrong "current" scope
+   for a voiceId-less character and copies files to a destination the server
+   never looks up under the new scheme. */
+const sampleScopeFor = (c, bookId) =>
+  c.voiceId ?? (bookId ? `char-${bookId}__${c.id}` : `char-${c.id}`);
 
 const lib = await (await fetch(`${BASE}/api/library`)).json();
 const bookIds = lib.authors.flatMap((a) => a.series.flatMap((s) => s.books.map((b) => b.bookId)));
@@ -71,7 +77,7 @@ const addRemap = (from, to) => {
 for (const bookId of bookIds) {
   const st = await (await fetch(`${BASE}/api/books/${encodeURIComponent(bookId)}/state`)).json();
   for (const c of st.cast?.characters ?? []) {
-    const now = sampleScopeFor(c);
+    const now = sampleScopeFor(c, bookId);
     for (const cand of new Set([`char-${c.id}`, c.id, c.voiceId].filter(Boolean))) {
       addRemap(cand, now);
     }

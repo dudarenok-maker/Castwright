@@ -68,6 +68,12 @@ export interface UiState {
       "Show all characters" affordance in the modal header clears this
       back to null without closing. */
   driftReportCharacterFilter: string | null;
+  /** Voice Drift Detector scope (fixes the "375 chapters across 10 books"
+      browser-hang report). 'book' (the default) shows only the active
+      book's drift; 'series' expands to every book in the active book's
+      series. Reset to 'book' whenever the modal closes so the next
+      top-banner open doesn't silently start scoped to a stale series. */
+  driftReportScope: 'book' | 'series';
   previewMode: boolean;
   selectedModel: string;
   ttsModelKey: TtsModelKey;
@@ -132,6 +138,7 @@ const initialState: UiState = {
   revisionHistoryFor: null,
   showDriftReport: false,
   driftReportCharacterFilter: null,
+  driftReportScope: 'book',
   previewMode: false,
   selectedModel: DEFAULT_MODEL,
   ttsModelKey: DEFAULT_TTS_MODEL,
@@ -323,10 +330,18 @@ export const uiSlice = createSlice({
     },
     setShowDriftReport: (s, a: PayloadAction<boolean>) => {
       s.showDriftReport = a.payload;
-      /* Closing the modal also clears any per-character scope so the
-         next top-banner open starts on the full list. The "Show all
-         characters" affordance is the in-modal escape hatch. */
-      if (!a.payload) s.driftReportCharacterFilter = null;
+      /* Closing the modal also clears any per-character scope and resets
+         the book/series toggle so the next top-banner open starts on the
+         active book's list. The "Show all characters" affordance is the
+         in-modal escape hatch for the character filter; "This book" /
+         "Series" pills are the equivalent for the scope toggle. */
+      if (!a.payload) {
+        s.driftReportCharacterFilter = null;
+        s.driftReportScope = 'book';
+      }
+    },
+    setDriftReportScope: (s, a: PayloadAction<'book' | 'series'>) => {
+      s.driftReportScope = a.payload;
     },
     /* Pill click on a cast row — open the modal scoped to that
        character. One dispatch covers both the open + filter so the
@@ -449,7 +464,12 @@ export const uiActions = uiSlice.actions;
 
 export const uiSelectors = {
   stageKind: (s: RootState) => s.ui.stage.kind,
-  bookId: (s: RootState) => (s.ui.stage as { bookId?: string }).bookId ?? null,
+  /* Optional-chained on `s.ui` itself (matches manuscript.tsx's own inline
+     version of this selector) — plenty of existing component tests render
+     with a store that has no `ui` slice wired up at all; a strict `s.ui.stage`
+     read would throw for them instead of just reporting "no book open". */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  bookId: (s: RootState) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null,
   view: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.view : null),
   chapterId: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null),
   profileId: (s: RootState) =>

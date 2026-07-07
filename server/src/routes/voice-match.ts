@@ -32,7 +32,10 @@ import {
   scanLibraryCharacters,
   type LibraryCharacterRecord,
 } from '../workspace/library-cast-scan.js';
-import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
+import {
+  scanSeriesCharactersForBookId,
+  resolveBookLanguageForBookId,
+} from '../workspace/series-cast-scan.js';
 import { jaccard, nameTokens, normaliseForMatch } from '../util/text-match.js';
 
 export const voiceMatchRouter = Router();
@@ -294,6 +297,21 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
       (await scanSeriesCharactersForBookId(bookId)).map((r) => r.bookId),
     );
 
+    /* fs-61 — never auto-match across a language boundary. A Qwen voice
+       bakes its design language into the on-disk .pt, so reusing a voice
+       designed for a different-language book reads the new text in the
+       wrong phoneme set (garbled audio). This is a hard veto independent
+       of the same-series scoping above: two series-mates in different
+       languages must not silently share a voice. Computed once per request
+       (not per character) since it depends only on the candidate bookId. */
+    const currentBookLanguage = await resolveBookLanguageForBookId(bookId);
+    const sameLanguageBookIds = new Set<string>();
+    for (const mateBookId of seriesMateBookIds) {
+      if ((await resolveBookLanguageForBookId(mateBookId)) === currentBookLanguage) {
+        sameLanguageBookIds.add(mateBookId);
+      }
+    }
+
     const matches = characters.map((c) => {
       const scored: Candidate[] = [];
       for (const v of voices) {
@@ -304,7 +322,7 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
            "Pell Hollis" claiming Della Renwick's "Pell"). Cross-series reuse
            stays available as an explicit Voice-library assignment; it is never
            a silent auto-match. */
-        if (!seriesMateBookIds.has(v.bookId)) continue;
+        if (!sameLanguageBookIds.has(v.bookId)) continue;
         const cand = scoreOne(c, v);
         if (cand) scored.push(cand);
       }

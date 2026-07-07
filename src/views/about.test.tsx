@@ -30,6 +30,13 @@ describe('AboutView', () => {
     expect(screen.getByText(MANIFESTO)).toBeInTheDocument();
   });
 
+  it('marks the brand-page heading with ™ (accepted, pre-registration — never ®)', () => {
+    renderAbout();
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent(/Castwright™/);
+    expect(heading).not.toHaveTextContent(/Castwright®/);
+  });
+
   it('renders the teaser WITH its in-development flag (teaser rule)', () => {
     renderAbout();
     expect(screen.getByText(TEASER)).toBeInTheDocument();

@@ -40,6 +40,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
+import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import { applyOverrideToCastFiles } from './voices.js';
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
@@ -327,7 +328,16 @@ async function runDesignJob(
         }
       }
 
-      const baseSampleVoiceId = character.voiceId ?? `char-${characterId}`;
+      /* bug #1411 code-review follow-up: must match sample-scope.ts's
+         sampleScopeFor / voices.ts's read-side scope, or a bulk-designed
+         voiceId-less character's audition caches under a scope the Voices
+         Library never looks up and reads back as "Not sampled".
+         sampleScopeForCharacter is the single shared source of this formula
+         (voice-sample-cache.ts) — don't recompute it inline here. */
+      const baseSampleVoiceId = sampleScopeForCharacter(
+        { id: characterId, voiceId: character.voiceId },
+        job.bookId,
+      );
       const sampleVoiceId = emotion
         ? `${baseSampleVoiceId}__${emotion}`
         : baseSampleVoiceId;
@@ -367,9 +377,17 @@ async function runDesignJob(
 
           if (!emotion) {
             /* Base path — persist the override exactly as the drawer does. Match
-               key is the character's voiceId/id, the name is the `qwen-…` id. */
+               key is the character's voiceId/id, the name is the `qwen-…` id.
+               fs-61 — pass job.bookDir so a standalone (no seriesFilter) writes
+               ONLY this book instead of sweeping every book in the workspace
+               sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
+            await applyOverrideToCastFiles(
+              matchKey,
+              { engine: 'qwen', name: voiceId },
+              seriesFilter,
+              job.bookDir,
+            );
             job.done += 1;
             broadcast(job, { type: 'character_designed', characterId, voiceId });
           } else {

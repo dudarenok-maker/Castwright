@@ -60,7 +60,7 @@ import {
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
-import { listVoiceSampleFiles } from '../tts/voice-sample-cache.js';
+import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 
 /* The single model key the bespoke Qwen engine synthesises under (mirror of
    the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
@@ -304,10 +304,19 @@ async function aggregateVoices(
              the bare `voiceId ?? c.id` so the frontend's same-book id-
              fallback join (voice-character-link.ts) is unaffected. */
           const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
-          /* The sample-cache scope keys on `char-<id>` (not bare `<id>`) for a
-             voiceId-less character — matching the frontend's sampleScopeFor —
-             so it can diverge from `id` above. Compute it explicitly. */
-          const sampleScope = c.voiceId ?? `char-${c.id}`;
+          /* The sample-cache scope keys on `char-<bookId>__<id>` (not bare
+             `<id>`) for a voiceId-less character — matching the frontend's
+             sampleScopeFor and cast-design.ts's design-time write — so it
+             can diverge from `id` above. bug #1411: this MUST match, or a
+             voiceId-less character sampled in one book falsely reads as
+             Sampled in every other book whose analyzer-assigned id
+             coincidentally matches (narrator, unknown-male, ...) — the
+             sample cache dir is workspace-global, so an unscoped prefix
+             check can't tell them apart. sampleScopeForCharacter is the
+             single shared source of this formula (voice-sample-cache.ts) —
+             don't recompute it inline here, that's exactly the drift this
+             extraction closed. */
+          const sampleScope = sampleScopeForCharacter(c, state.bookId);
           /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
              Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
              Used to key generated-flag lookups against renderedQwenNames (which
@@ -653,7 +662,35 @@ export async function forEachMatchingCastCharacter(
   voiceId: string,
   seriesFilter: { author: string; series: string } | undefined,
   mutate: (character: CastCharacter) => CastCharacter,
+  /* fs-61 — when `seriesFilter` is absent, restrict the write to exactly this
+     book's directory instead of the whole workspace. Every standalone book
+     resolves to the same synthetic (author: X, series: "Standalones") pair,
+     so a caller with "this book has no series" (isStandalone → seriesFilter
+     omitted) must NOT fall through to a workspace-wide match on a bare
+     character id like "narrator" — that silently overwrites the SAME id in
+     every other unrelated (or different-language) standalone book. Taking
+     the directory (not just a bookId) lets this skip the workspace walk
+     entirely — the caller already has it in hand (job.bookDir) for every
+     real call site. Omit only for the genuinely-global
+     PUT /:voiceId/override 'workspace' scope. */
+  onlyBookDir?: string,
 ): Promise<number> {
+  if (!seriesFilter && onlyBookDir) {
+    const cast = await readJson<CastJson>(castJsonPath(onlyBookDir));
+    if (!cast?.characters?.length) return 0;
+    let updated = 0;
+    let dirty = false;
+    for (let i = 0; i < cast.characters.length; i++) {
+      const original = cast.characters[i];
+      const id = original.voiceId ?? original.id;
+      if (id !== voiceId) continue;
+      cast.characters[i] = mutate(original);
+      dirty = true;
+      updated += 1;
+    }
+    if (dirty) await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
+    return updated;
+  }
   let updated = 0;
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
@@ -708,33 +745,44 @@ export async function applyOverrideToCastFiles(
      excluded from a series scope (a standalone's cast isn't series
      continuity). Omit for the original workspace-wide behaviour. */
   seriesFilter?: { author: string; series: string },
+  /* fs-61 — pass the calling book's directory when `seriesFilter` is omitted
+     because the book has no series (e.g. a standalone design action), so
+     the write stays book-scoped instead of sweeping every book in the
+     workspace sharing the same bare character id. Only the genuinely-global
+     PUT /:voiceId/override 'workspace' scope should omit both. */
+  onlyBookDir?: string,
 ): Promise<number> {
-  const updated = await forEachMatchingCastCharacter(voiceId, seriesFilter, (original) => {
-    const normalised = normaliseCastCharacter(original);
-    const replacement: CastCharacter = { ...normalised };
-    if (override === null) {
-      delete replacement.overrideTtsVoices;
-    } else {
-      const map = { ...(normalised.overrideTtsVoices ?? {}) };
-      /* Preserve any existing slot detail (notably qwen emotion `variants`)
-         when (re)assigning the base name — a base re-design, or its series
-         propagation, must NOT wipe designed variants. */
-      map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
-      replacement.overrideTtsVoices = map;
-      /* Setting a per-engine voice override is a deliberate "use this
-         engine for this character" action (the only callers — the cast
-         picker + the series rebaseline — only write when switching the
-         character TO that engine). Pin `ttsEngine` so the switch
-         propagates across the series: otherwise other books get the
-         voice slot but keep the wrong active engine (plan 108 — "wrong
-         model in this book"). */
-      replacement.ttsEngine = override.engine;
-    }
-    /* Always remove the legacy singular field — normaliseCastCharacter
-       already folded it into the map. */
-    delete replacement.overrideTtsVoice;
-    return replacement;
-  });
+  const updated = await forEachMatchingCastCharacter(
+    voiceId,
+    seriesFilter,
+    (original) => {
+      const normalised = normaliseCastCharacter(original);
+      const replacement: CastCharacter = { ...normalised };
+      if (override === null) {
+        delete replacement.overrideTtsVoices;
+      } else {
+        const map = { ...(normalised.overrideTtsVoices ?? {}) };
+        /* Preserve any existing slot detail (notably qwen emotion `variants`)
+           when (re)assigning the base name — a base re-design, or its series
+           propagation, must NOT wipe designed variants. */
+        map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
+        replacement.overrideTtsVoices = map;
+        /* Setting a per-engine voice override is a deliberate "use this
+           engine for this character" action (the only callers — the cast
+           picker + the series rebaseline — only write when switching the
+           character TO that engine). Pin `ttsEngine` so the switch
+           propagates across the series: otherwise other books get the
+           voice slot but keep the wrong active engine (plan 108 — "wrong
+           model in this book"). */
+        replacement.ttsEngine = override.engine;
+      }
+      /* Always remove the legacy singular field — normaliseCastCharacter
+         already folded it into the map. */
+      delete replacement.overrideTtsVoice;
+      return replacement;
+    },
+    onlyBookDir,
+  );
   /* Override changes don't affect the base-voice catalog itself, but call
      this anyway so a future invocation refreshes /speakers cleanly if the
      sidecar was bounced in between. Cheap and side-effect free. */

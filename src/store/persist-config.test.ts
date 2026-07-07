@@ -48,6 +48,7 @@ describe('UI_PERSIST_WHITELIST', () => {
       'showRevisionPlayer',
       'showDriftReport',
       'driftReportCharacterFilter',
+      'driftReportScope',
       'previewMode',
       'reuploadingBookId',
       /* Per-run analyzer-model override — transient by design so it can't

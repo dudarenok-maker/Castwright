@@ -35,8 +35,9 @@ export async function playEmotionVariantSample(
   character: Character,
   emotion: Exclude<Emotion, 'neutral'>,
   playback: { play: (url: string) => Promise<void> },
+  bookId?: string,
 ): Promise<EmotionVariantPlayResult> {
-  const baseScope = sampleScopeFor(character);
+  const baseScope = sampleScopeFor(character, bookId);
   const variantVoiceId = variantVoiceIdFor(character, emotion);
   const fellBackToBase = !variantVoiceId;
 

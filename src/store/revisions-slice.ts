@@ -527,3 +527,25 @@ export const selectDriftGroupsByBook = createSelector(
     }));
   },
 );
+
+/* Fixes the "375 chapters flagged across 10 books" browser-hang report:
+   `selectDriftGroupsByBook` buckets the ENTIRE workspace's drift (the
+   background cross-book poll — docs/features/archive/83-drift-poll-multibook.md
+   — deliberately fills it for books the user isn't even looking at), but the
+   modal has no reason to render more than the active book (or its series) at
+   once. Pure filter over the selector's output, applied in `layout.tsx`
+   before the per-book view is built, so `DriftReportModal` itself never sees
+   unscoped data. `scope: 'book'` with no `activeBookId` (can't happen from
+   the real UI, but defensive) falls back to the unscoped list rather than
+   rendering nothing. */
+export function scopeDriftGroupsByBook(
+  groupsByBook: Array<{ bookId: string; groups: DriftGroup[] }>,
+  scope: 'book' | 'series',
+  activeBookId: string | null,
+  seriesBookIds: string[],
+): Array<{ bookId: string; groups: DriftGroup[] }> {
+  if (!activeBookId) return groupsByBook;
+  if (scope === 'book') return groupsByBook.filter((g) => g.bookId === activeBookId);
+  const allow = new Set(seriesBookIds.length > 0 ? seriesBookIds : [activeBookId]);
+  return groupsByBook.filter((g) => allow.has(g.bookId));
+}
