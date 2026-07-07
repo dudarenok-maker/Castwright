@@ -137,6 +137,16 @@ function buildAuditionTexts(
 This still shares zero code/constants with the voice-preview `buildSampleText`/`MAX_CHARS`
 path (untouched — see Out of scope).
 
+**Correction from adversarial review, round 3 — retry semantics under distinct per-render
+text.** Today's duration-floor retry appends one fixed `secondaryQuote` to one fixed
+`primaryText`, which only makes sense when every render shares that one text. Once each
+render `i` speaks its own `texts[i]`, the retry needs its own per-render definition: on an
+under-floor render, retry by appending the *next* text in the cycle —
+`` `${texts[i]} ${cleaned[(i + 1) % cleaned.length]}` `` — to add real evidence-quote content
+rather than a hardcoded second quote. When `cleaned.length <= 1` (canned-fallback array, or a
+character with exactly one distinct quote) there's no different text to append, so no retry
+is attempted — same "give up under-floor" outcome as today's no-secondary-evidence case.
+
 ### 2. Pool composition splits by *why* the fallback is needed
 
 `aggregate.ts`'s `resolveCharacterReference` already computes `anchorVecs` and `result =
@@ -223,9 +233,21 @@ unbounded-cost problem this correction just closed, for a failure mode (syntheti
 renders splitting into two clusters) this chore doesn't newly introduce and isn't trying to
 fix.
 
+**Correction from adversarial review, round 3:** the shared 8-render cap is a *cost* guarantee,
+not a *pool-size* guarantee — the two can conflict. If the initial attempt already spent most
+of its share of the cap on duration-floor failures (e.g. K=4 anchors, initial attempt uses all
+4 of its allotted renders but only 2 clear the floor), the top-up's remaining budget may not
+be enough to replace the discarded anchors and still reach `AUDITION_POOL_TARGET_N`. This is
+the accepted, intended trade: cost wins, pool size degrades to the existing "too-short →
+inconclusive" outcome — the same result as when every render already fails the duration floor
+today. The 8-render cap is never exceeded to chase the full target size.
+
 **Net effect:** worst case (0 anchors, no evidence, or the bimodal-fallback path) is capped at
-`AUDITION_POOL_TARGET_N + AUDITION_POOL_MARGIN` = 8 total renders for any character, by
-construction — down from 12 today. Typical too-thin characters with some anchors need fewer
+`AUDITION_POOL_TARGET_N + AUDITION_POOL_MARGIN` = 8 total pool slots for any character, by
+construction — down from 12 today, on the same unit (a duration-floor retry still counts as a
+second `synth()` call against the *same* slot on both the old and new path, so the 8-vs-12
+comparison is apples-to-apples, not a 2x-larger gap than it looks). Typical too-thin
+characters with some anchors need fewer
 still, down to zero new renders when anchors alone already meet target and the blend isn't
 bimodal. This is a **directional** improvement, not a measured one — no before/after
 false-positive rate is available for this chore to compare against (see Accepted limitation
@@ -259,10 +281,17 @@ that test should stay, change, or go.
 directly instead of via a render-count override that no longer maps onto a single loop
 variable. The "respects k override" test is rewritten against `targetN`, not deleted.
 `AuditionCharacter` already declares `hint?: CharacterHint` (`audition-centroid.ts:37`) — §1's
-plumbing fix populates it at the call site for the first time; it needs no type change. The
-function itself gains one new parameter, `existingAnchors: Float32Array[]` (defaulting to
-`[]`), so the bimodal call site and every other existing unit test that doesn't pass it keep
-working unchanged.
+plumbing fix populates it at the call site for the first time; it needs no type change.
+
+**Correction from adversarial review, round 3 — parameter placement.** The prior wording
+("the function gains one new parameter") left the position unspecified; at the natural 2nd
+positional slot it would silently shift every existing test's `opts` argument into that slot
+instead, breaking every test that doesn't pass anchors — the opposite of the stated
+back-compat goal. **Resolved:** `existingAnchors` is a new optional field *on
+`AuditionCentroidOpts`* (`existingAnchors?: Float32Array[]`, default `[]`), not a new
+positional parameter — `auditionCentroid`'s signature stays `(character, opts?)`. Every
+existing call site and test that constructs an `opts` object without `existingAnchors` is
+unaffected by construction, no ordering question possible.
 
 ## Testing
 
@@ -277,7 +306,14 @@ working unchanged.
   the total render count across both the initial attempt and the top-up never exceeds `targetN
   + margin` — the regression test for the round-2 cost-blowup fix), (g) a resulting
   synthetic-only pool is used as-is with no second bimodal check (documents the accepted
-  pre-existing limitation, doesn't newly assert incorrect behavior as correct).
+  pre-existing limitation, doesn't newly assert incorrect behavior as correct), (h) an
+  under-floor render at slot `i` retries by appending `cleaned[(i+1) % cleaned.length]` — the
+  rewritten form of today's "retries with secondary evidence quote" case, now keyed to a
+  per-slot text instead of one shared `primaryText` — and (i) an under-floor render with
+  `cleaned.length <= 1` (canned fallback, or exactly one distinct quote) attempts no retry,
+  same outcome as today's no-secondary-evidence case; (j) the shared render cap leaving the
+  bimodal-fallback pool below `targetN` after floor failures → falls to `too-short`, not an
+  infinite retry or a cap overrun.
 - `aggregate.test.ts` / `aggregate-audition-tier.test.ts`: assert too-thin characters' anchors
   are passed into `auditionCentroid` and bimodal characters' are not; assert `scoreBook` loads
   `cast.json` via the new best-effort `readCastJson` and threads `buildHintFromCast` onto
