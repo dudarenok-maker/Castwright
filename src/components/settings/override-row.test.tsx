@@ -353,6 +353,89 @@ describe('OverrideRow — onChange coercion', () => {
     expect(input.value).toBe('42');
   });
 
+  it('does not clobber an already-committed newer edit if an earlier rejected save resolves late', async () => {
+    // Regression: the previous fix guarded only on "is the user still
+    // mid-typing" (editingRef), which isn't enough — a SECOND edit that's
+    // itself already been committed (blurred, its own save dispatched) is
+    // no longer "mid-typing" either, so the first edit's stale rejection
+    // would still clobber it back to the pre-edit-1 value. Only the most
+    // recent commit's own rejection should be allowed to revert the draft.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    let rejectFirstSave: (() => void) | undefined;
+    const onChange = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirstSave = () => reject(new Error('save failed'));
+          }),
+      )
+      .mockImplementationOnce(() => new Promise(() => {})); // second save never resolves either way
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+
+    // Edit 1: 10 -> 99, committed (save in flight, not yet resolved).
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    act(() => input.blur());
+    expect(onChange).toHaveBeenNthCalledWith(1, 99);
+
+    // Edit 2: refocus, 99 -> 55, ALSO committed before edit 1 resolves.
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '55' } });
+    act(() => input.blur());
+    expect(onChange).toHaveBeenNthCalledWith(2, 55);
+
+    // Now edit 1's stale save rejects. It must not clobber edit 2's value.
+    await act(async () => {
+      rejectFirstSave?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(input.value).toBe('55');
+  });
+
+  it('abandons an uncommitted edit when Tab lands focus directly on Revert (keyboard nav)', () => {
+    // Regression: an earlier version of the fix dropped the relatedTarget
+    // check entirely in favor of an onMouseDown-only mechanism, which
+    // never fires for keyboard navigation — tabbing straight from a knob
+    // input to its own Revert button (the common case, since Revert sits
+    // right after its knob in tab order) would otherwise commit the edit
+    // via the ordinary blur-commit path before Revert could abandon it.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 5, source: 'override', overridden: true });
+    const onChange = vi.fn();
+    const onRevert = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={onRevert}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    const revertButton = screen.getByRole('button', { name: /revert/i });
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    // Tab's own focus change blurs the input with relatedTarget set to
+    // whatever receives focus next — no mousedown involved at all.
+    fireEvent.blur(input, { relatedTarget: revertButton });
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input.value).toBe('5');
+  });
+
   it('does not leave an unhandled rejection when a boolean save fails', async () => {
     const descriptor = makeDescriptor({ type: 'boolean', default: false });
     const value = makeValue({ effective: false, source: 'default' });
