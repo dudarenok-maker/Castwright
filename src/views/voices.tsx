@@ -273,13 +273,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      Resolve each Qwen voice to its character (redux for the open book, the
      global cast cache for others) and count its qwen.variants. */
   const variantCountByVoiceId = useMemo(() => {
+    /* Keyed on familyKey (falling back to id) — qwenLibrary spans every
+       book, so two unrelated books' same-slug, voiceId-less Qwen
+       characters (narrator/unknown-male/female) can share bare `id`, which
+       would otherwise overwrite one book's count with the other's. */
     const map = new Map<string, number>();
     for (const v of qwenLibrary) {
       const source =
         v.bookId === currentBookId ? characters : (globalCastCache.get(v.bookId) ?? null);
       const ch = source ? findCharacterForVoice(v, source) : null;
       const n = ch ? Object.keys(ch.overrideTtsVoices?.qwen?.variants ?? {}).length : 0;
-      if (n > 0) map.set(v.id, n);
+      if (n > 0) map.set(v.familyKey ?? v.id, n);
     }
     return map;
   }, [qwenLibrary, currentBookId, characters, globalCastCache]);
@@ -287,6 +291,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      Mirrors variantCountByVoiceId but needs the book's sentences (redux for the
      open book, the cache for foreign books — 0 until a book hydrates). */
   const missingVariantCountByVoiceId = useMemo(() => {
+    /* Keyed on familyKey (falling back to id) — same cross-book bare-id
+       collision as variantCountByVoiceId above. */
     const map = new Map<string, number>();
     for (const v of qwenLibrary) {
       const source =
@@ -297,7 +303,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         v.bookId === currentBookId ? openBookSentences : (sentencesByBookId.get(v.bookId) ?? []);
       const used = usedEmotionsByCharacter(sents).get(ch.id);
       const n = countMissingVariants(ch, used);
-      if (n > 0) map.set(v.id, n);
+      if (n > 0) map.set(v.familyKey ?? v.id, n);
     }
     return map;
   }, [qwenLibrary, currentBookId, characters, globalCastCache, openBookSentences, sentencesByBookId]);
@@ -308,7 +314,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         : qwenLibrary.filter((v) => v.languageCode === languageFilter);
     if (variantFilter === 'all') return langFiltered;
     const map = variantFilter === 'has' ? variantCountByVoiceId : missingVariantCountByVoiceId;
-    return langFiltered.filter((v) => (map.get(v.id) ?? 0) > 0);
+    return langFiltered.filter((v) => (map.get(v.familyKey ?? v.id) ?? 0) > 0);
   }, [qwenLibrary, languageFilter, variantFilter, variantCountByVoiceId, missingVariantCountByVoiceId]);
   const qwenGroups = useMemo(
     () => buildQwenStatusGroups(filteredQwenLibrary, tab),
@@ -1933,12 +1939,15 @@ function QwenStatusSection({
                                 ) : (
                                   <Pill color="library">Designed</Pill>
                                 )}
-                                {(variantCountByVoiceId.get(v.id) ?? 0) > 0 && (
-                                  <VariantsBadge count={variantCountByVoiceId.get(v.id)!} />
+                                {(variantCountByVoiceId.get(v.familyKey ?? v.id) ?? 0) > 0 && (
+                                  <VariantsBadge
+                                    count={variantCountByVoiceId.get(v.familyKey ?? v.id)!}
+                                  />
                                 )}
-                                {(missingVariantCountByVoiceId.get(v.id) ?? 0) > 0 && (
+                                {(missingVariantCountByVoiceId.get(v.familyKey ?? v.id) ?? 0) >
+                                  0 && (
                                   <NeedsVariantsBadge
-                                    count={missingVariantCountByVoiceId.get(v.id)!}
+                                    count={missingVariantCountByVoiceId.get(v.familyKey ?? v.id)!}
                                   />
                                 )}
                               </span>

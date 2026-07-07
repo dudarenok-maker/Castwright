@@ -58,14 +58,16 @@ describe('findVoiceForCharacter', () => {
     expect(findVoiceForCharacter(c, [])).toBeUndefined();
   });
 
-  it("prefers the current book's own voice over an unrelated book sharing the same bare id (no voiceId)", () => {
+  it("with preferCurrentBook=true, prefers the current book's own voice over an unrelated book sharing the same bare id (no voiceId)", () => {
     /* Real-world collision: the analyzer assigns the SAME literal id
        ('narrator', 'unknown-male', 'unknown-female') to every book's
        narrator / auto-folded background character, and neither ever gets an
        explicit voiceId. Two unrelated books' narrators both resolve to bare
        id 'narrator' — the current book's own `source: 'current'` entry must
        win over a same-id `source: 'library'` entry from a different book,
-       regardless of array order (the server can't guarantee scan order). */
+       regardless of array order (the server can't guarantee scan order).
+       Only safe for callers whose `c` is guaranteed to be the currently-
+       open book's own character (cast.tsx, voice-readiness-selectors.ts). */
     const c = makeChar('narrator');
     const ownBookVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
     const foreignBookVoice: Voice = {
@@ -73,18 +75,40 @@ describe('findVoiceForCharacter', () => {
       source: 'library',
       bookId: 'unrelated-book',
     };
-    expect(findVoiceForCharacter(c, [foreignBookVoice, ownBookVoice])).toBe(ownBookVoice);
-    expect(findVoiceForCharacter(c, [ownBookVoice, foreignBookVoice])).toBe(ownBookVoice);
+    expect(findVoiceForCharacter(c, [foreignBookVoice, ownBookVoice], true)).toBe(ownBookVoice);
+    expect(findVoiceForCharacter(c, [ownBookVoice, foreignBookVoice], true)).toBe(ownBookVoice);
   });
 
-  it('falls back to any bare-id match when no current-book voice is present', () => {
+  it('with preferCurrentBook=true, falls back to any bare-id match when no current-book voice is present', () => {
     const c = makeChar('narrator');
     const libraryVoice: Voice = {
       ...makeVoice('narrator', 'Narrator'),
       source: 'library',
       bookId: 'unrelated-book',
     };
-    expect(findVoiceForCharacter(c, [libraryVoice])).toBe(libraryVoice);
+    expect(findVoiceForCharacter(c, [libraryVoice], true)).toBe(libraryVoice);
+  });
+
+  it('defaults to unrestricted (no current-book preference) for the cross-book compare/rebaseline flows', () => {
+    /* compare-cast-modal.tsx and rebaseline-modal.tsx resolve a voice for an
+       arbitrary OTHER book's character (a specific comparison/rebaseline
+       side, not the globally-open book) — they must NOT get the
+       preferCurrentBook substitution, or they'd silently resolve the
+       open book's own same-id voice instead of that side's real one. The
+       default (no third arg) just matches by bare id, whichever comes
+       first — same as pre-fix behavior, so these callers see no change. */
+    const c = makeChar('narrator');
+    const openBooksOwnVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
+    const thisSidesRealVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'the-actual-book-being-compared',
+    };
+    /* thisSidesRealVoice listed first → unrestricted default returns it,
+       proving the current-book entry is NOT preferred unless opted in. */
+    expect(findVoiceForCharacter(c, [thisSidesRealVoice, openBooksOwnVoice])).toBe(
+      thisSidesRealVoice,
+    );
   });
 });
 

@@ -301,8 +301,12 @@ export function CastView({
      the rows. Counts every emotion character's missing variants; `hasBase`
      splits the actionable-now total (`readyTasks`) from the work blocked behind
      a missing base voice (`blockedTasks`/`blockedChars`). */
+  /* Every findVoiceForCharacter call in this view passes preferCurrentBook:
+     true — `c` always comes from `characters`, this view's own open book's
+     roster, so preferring a same-id `source: 'current'` match is safe (see
+     the function's doc comment for why that's NOT true everywhere). */
   const isQwenForVariants = (c: Character): boolean =>
-    effectiveEngineFor(c) === 'qwen' || findVoiceForCharacter(c, library)?.ttsVoice?.provider === 'qwen';
+    effectiveEngineFor(c) === 'qwen' || findVoiceForCharacter(c, library, true)?.ttsVoice?.provider === 'qwen';
   const variantTasks = useMemo(
     () => buildVariantTasks(characters, usedEmotions, isQwenForVariants),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -314,7 +318,7 @@ export function CastView({
      StatusPill resolves its labels (matched library voice + effective engine)
      so the chips and the rows can't disagree. */
   const statusKeysFor = (c: Character): string[] =>
-    statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c), usedEmotions.get(c.id));
+    statusFilterKeys(c, findVoiceForCharacter(c, library, true), effectiveEngineFor(c), usedEmotions.get(c.id));
 
   /* "Design full cast" — every character whose lifecycle is "Needs voice" (a
      Qwen-effective character with no designed voice), most-spoken first. Built
@@ -325,7 +329,7 @@ export function CastView({
       characters
         .filter(
           (c) =>
-            resolveVoiceStatus(c, findVoiceForCharacter(c, library), effectiveEngineFor(c))
+            resolveVoiceStatus(c, findVoiceForCharacter(c, library, true), effectiveEngineFor(c))
               .lifecycle?.label === 'Needs voice',
         )
         .slice()
@@ -436,7 +440,7 @@ export function CastView({
     const tally = new Map<string, { color: StatusPillColor; count: number }>();
     for (const c of characters) {
       const effectiveEngine = c.ttsEngine ?? ttsEngine;
-      const voice = findVoiceForCharacter(c, library);
+      const voice = findVoiceForCharacter(c, library, true);
       const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(c, voice, effectiveEngine);
       const lifecycleKey = lifecycle?.label ?? 'Unset';
       const lifecycleColor: StatusPillColor = lifecycle?.color ?? 'neutral';
@@ -987,7 +991,7 @@ export function CastView({
             <span>Sample</span>
           </div>
           {filtered.map((c, i) => {
-            const voice = findVoiceForCharacter(c, library);
+            const voice = findVoiceForCharacter(c, library, true);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = sampleScopeFor(c);
@@ -1192,7 +1196,7 @@ export function CastView({
             for touch devices). */}
         <div className="md:hidden flex flex-col gap-3">
           {filtered.map((c) => {
-            const voice = findVoiceForCharacter(c, library);
+            const voice = findVoiceForCharacter(c, library, true);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = sampleScopeFor(c);

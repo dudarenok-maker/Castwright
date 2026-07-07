@@ -437,8 +437,16 @@ async function aggregateVoices(
                pin toggled from the client sends `familyKey` as the
                `:voiceId` route param (src/views/voices.tsx togglePin), so
                reading it back must use the same book-scoped key or pin
-               state bleeds across unrelated books' same-slug characters. */
-            pinned: pinned.has(dedupKey) || undefined,
+               state bleeds across unrelated books' same-slug characters.
+               `pinned.has(id)` is a MIGRATION fallback: a pin set before
+               this change persisted the bare id (the only scheme that
+               existed then) in voices.json, and nothing rewrites that file
+               on upgrade — without this fallback a pre-existing pin on a
+               voiceId-less character would silently vanish. Harmless
+               false-positive risk only for the exact pre-existing
+               cross-book ambiguity this whole fix addresses, which is no
+               worse than the pin behavior before this change. */
+            pinned: (pinned.has(dedupKey) || pinned.has(id)) || undefined,
             /* srv-43 Wave 2: key on the STORAGE key (qwenStoreKey) so a uuid-
                bearing voice (storage key = qwen-<uuid>) still matches the
                rendered snapshot even though ttsVoice.name is now qwen-<voiceId>. */

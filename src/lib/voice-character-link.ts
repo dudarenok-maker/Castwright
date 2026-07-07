@@ -21,19 +21,34 @@
    entries with that same id — one this character's own (`source:
    'current'`), one an unrelated book's (`source: 'library'`). A plain
    `.find()` would return whichever happens to be array-first. Preferring a
-   `source: 'current'` match first removes that ambiguity: the character
-   being looked up always belongs to the currently-open book, so its own
-   voice (if the fallback found anything at all) is always the right one. */
+   `source: 'current'` match first removes that ambiguity — but ONLY when
+   `c` itself is known to belong to the currently-open book (see
+   `preferCurrentBook` below). */
 
 import type { Character, Voice } from './types';
 
-export function findVoiceForCharacter(c: Character, library: Voice[]): Voice | undefined {
+export function findVoiceForCharacter(
+  c: Character,
+  library: Voice[],
+  /** Prefer a `source: 'current'` match for the bare-id fallback. Opt-in
+      (default false) because not every caller's `c` belongs to the
+      globally-open book — compare-cast-modal.tsx and rebaseline-modal.tsx
+      intentionally resolve a voice for an arbitrary OTHER book's character
+      (a cross-book comparison/rebaseline side), where preferring the
+      open book's own same-id voice would silently substitute the wrong
+      book's voice (including its sample audio). Only callers whose `c` is
+      guaranteed to be the currently-open book's own character (the cast
+      view, the voice-readiness gate) should pass true. */
+  preferCurrentBook = false,
+): Voice | undefined {
   if (c.voiceId) {
     const explicit = library.find((v) => v.id === c.voiceId);
     if (explicit) return explicit;
   }
-  const currentBookMatch = library.find((v) => v.id === c.id && v.source === 'current');
-  if (currentBookMatch) return currentBookMatch;
+  if (preferCurrentBook) {
+    const currentBookMatch = library.find((v) => v.id === c.id && v.source === 'current');
+    if (currentBookMatch) return currentBookMatch;
+  }
   return library.find((v) => v.id === c.id);
 }
 

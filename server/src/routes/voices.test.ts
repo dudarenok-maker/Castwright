@@ -798,6 +798,32 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
         .send({ pinned: false });
     }
   });
+
+  it("a legacy bare-id pin (set before the familyKey migration) still surfaces as pinned, not silently lost", async () => {
+    /* voices.json's `pinned` array is workspace-global and never rewritten
+       on upgrade. A pin set before this fix stored the bare id ('narrator')
+       — the only scheme that existed then. Simulate that by writing it
+       directly (bypassing the PUT route, which now only ever writes
+       familyKey values), then confirm the read side's legacy fallback
+       still honours it instead of the pin silently vanishing. */
+    const [{ voicesMetaPath }, { writeJsonAtomic }] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../workspace/state-io.js'),
+    ]);
+    try {
+      await writeJsonAtomic(voicesMetaPath(), {
+        pinned: ['narrator'],
+        updatedAt: new Date().toISOString(),
+      });
+      const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${alphaBookId}`);
+      const alpha = res.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+      );
+      expect(alpha.pinned).toBe(true);
+    } finally {
+      await writeJsonAtomic(voicesMetaPath(), { pinned: [], updatedAt: new Date().toISOString() });
+    }
+  });
 });
 
 describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
