@@ -1,12 +1,29 @@
 /* Integration test for GET /api/books/:bookId/qa-report.
    Workspace tempdir + supertest pattern matches revisions.test.ts. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* Mocks findBookByBookId so a sentinel bookId ('THROW_TRIGGER') exercises the
+   route's catch block, proving a thrown error from the disk-read path
+   returns a clean 500 instead of an unhandled rejection. Real lookups pass
+   through to the actual implementation. */
+vi.mock('../workspace/scan.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/scan.js')>();
+  return {
+    ...actual,
+    findBookByBookId: async (bookId: string) => {
+      if (bookId === 'THROW_TRIGGER') {
+        throw new Error('disk read failed');
+      }
+      return actual.findBookByBookId(bookId);
+    },
+  };
+});
 
 const AUTHOR = 'QA Report Test';
 const SERIES = 'Standalones';
@@ -75,5 +92,11 @@ describe('GET /api/books/:bookId/qa-report', () => {
   it('404s for an unknown book', async () => {
     const res = await request(app).get('/api/books/does-not-exist/qa-report');
     expect(res.status).toBe(404);
+  });
+
+  it('returns 500 when the underlying lookup throws', async () => {
+    const res = await request(app).get('/api/books/THROW_TRIGGER/qa-report');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'disk read failed' });
   });
 });

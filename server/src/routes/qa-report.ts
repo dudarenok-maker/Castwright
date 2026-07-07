@@ -13,28 +13,33 @@ import { getRevisionsForBook } from './revisions.js';
 export const qaReportRouter = Router();
 
 qaReportRouter.get('/:bookId/qa-report', async (req: Request, res: Response) => {
-  const { bookId } = req.params;
-  const located = await findBookByBookId(bookId);
-  if (!located) {
-    res.status(404).json({ error: 'Book not found' });
-    return;
+  try {
+    const { bookId } = req.params;
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      res.status(404).json({ error: 'Book not found' });
+      return;
+    }
+    const { bookDir, state } = located;
+
+    const [audio, revisions] = await Promise.all([
+      buildAudioQaReport(bookDir, state.chapters),
+      getRevisionsForBook(bookId),
+    ]);
+
+    const drift = revisions?.drift ?? [];
+    const counts = { mild: 0, moderate: 0, severe: 0 } as Record<'mild' | 'moderate' | 'severe', number>;
+    for (const event of drift) counts[event.severity] += 1;
+
+    res.json({
+      bookId,
+      generatedAt: new Date().toISOString(),
+      chaptersTotal: state.chapters.length,
+      ...audio,
+      configDrift: { counts, events: drift },
+    });
+  } catch (e) {
+    console.error('[qa-report] GET failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to build QA report.' });
   }
-  const { bookDir, state } = located;
-
-  const [audio, revisions] = await Promise.all([
-    buildAudioQaReport(bookDir, state.chapters),
-    getRevisionsForBook(bookId),
-  ]);
-
-  const drift = revisions?.drift ?? [];
-  const counts = { mild: 0, moderate: 0, severe: 0 } as Record<'mild' | 'moderate' | 'severe', number>;
-  for (const event of drift) counts[event.severity] += 1;
-
-  res.json({
-    bookId,
-    generatedAt: new Date().toISOString(),
-    chaptersTotal: state.chapters.length,
-    ...audio,
-    configDrift: { counts, events: drift },
-  });
 });
