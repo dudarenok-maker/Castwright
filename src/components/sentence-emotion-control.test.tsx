@@ -3,6 +3,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { uiSlice } from '../store/ui-slice';
 import { SentenceEmotionControl } from './sentence-emotion-control';
 import type { Character } from '../lib/types';
 
@@ -19,10 +20,16 @@ vi.mock('../lib/play-emotion-variant', async () => {
   };
 });
 
-function makeStore(sentences: any[]) {
+function makeStore(sentences: any[], bookId = 'book-one') {
   return configureStore({
-    reducer: { manuscript: manuscriptSlice.reducer },
-    preloadedState: { manuscript: { ...manuscriptSlice.getInitialState(), sentences } },
+    reducer: { manuscript: manuscriptSlice.reducer, ui: uiSlice.reducer },
+    preloadedState: {
+      manuscript: { ...manuscriptSlice.getInitialState(), sentences },
+      ui: {
+        ...uiSlice.getInitialState(),
+        stage: { kind: 'ready', bookId, view: 'manuscript', currentChapterId: 1 } as never,
+      },
+    },
   });
 }
 
@@ -139,5 +146,25 @@ describe('fe-31 — emotion preview from the chip', () => {
   it('renders no preview affordance when no character is resolved', () => {
     renderWithChar(undefined);
     expect(screen.queryByTestId('emotion-preview')).toBeNull();
+  });
+
+  it("bug #1411: threads the open book's id so the sample scope doesn't bleed across books", async () => {
+    const store = makeStore(
+      [{ id: 2, chapterId: 1, characterId: qwenChar.id, text: 'Stop.', emotion: 'angry' }],
+      'book-alpha',
+    );
+    render(
+      <Provider store={store}>
+        <SentenceEmotionControl
+          chapterId={1}
+          sentenceId={2}
+          emotion="angry"
+          character={qwenChar}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('emotion-preview'));
+    await waitFor(() => expect(playEmotionVariantSample).toHaveBeenCalledTimes(1));
+    expect(playEmotionVariantSample.mock.calls[0][3]).toBe('book-alpha');
   });
 });

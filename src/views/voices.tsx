@@ -1403,6 +1403,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           return (
             <CompareCastModal
               characters={[charA, charB]}
+              bookIds={[va.bookId, vb.bookId]}
               library={library}
               ttsModelKey={ttsModelKey}
               propagatesAcrossSeries

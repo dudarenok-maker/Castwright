@@ -25,9 +25,25 @@
    not by design-time — so the audition cached under `char-wren` was re-synth-
    ised under `wren`. When `voiceId` IS set it equals the matched `voice.id`
    anyway, so dropping `voice` loses nothing and makes the scope stable for
-   both cases. */
-export function sampleScopeFor(character: { id: string; voiceId?: string | null }): string {
-  return character.voiceId ?? `char-${character.id}`;
+   both cases.
+
+   bug #1411: the `char-<id>` fallback namespace is workspace-global, not
+   per-book — the analyzer assigns the same literal id ('narrator',
+   'unknown-male', 'unknown-female') to every book's narrator/auto-folded
+   background character, so two unrelated books' voiceId-less characters
+   shared one cache-file prefix and one book's "Sampled" badge bled onto the
+   other's. `bookId` disambiguates the fallback the same way server/src/
+   routes/voices.ts's `dedupKey` already disambiguates cross-book identity
+   (#1410) — omitted only for the rare no-book-context caller (e.g. the
+   Profile Drawer opened from the Voices Library with nothing open), which
+   degrades to the old unscoped behaviour rather than losing the preview
+   affordance entirely. */
+export function sampleScopeFor(
+  character: { id: string; voiceId?: string | null },
+  bookId?: string,
+): string {
+  if (character.voiceId) return character.voiceId;
+  return bookId ? `char-${bookId}-${character.id}` : `char-${character.id}`;
 }
 
 /* The server names cached sample files as

@@ -12,7 +12,7 @@
    control still lets you tag (it survives an engine switch). */
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import {
@@ -57,6 +57,13 @@ export function SentenceEmotionControl({
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const markStale = useMarkCharacterStaleIfRendered();
+  /* Optional-chained (matches manuscript.tsx's own bookId selector) — many
+     existing tests render this component in a store with no `ui` slice
+     wired up at all, and this preview affordance degrades gracefully to the
+     old unscoped sample behaviour when a book id genuinely isn't available. */
+  const bookId = useAppSelector(
+    (s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? undefined,
+  );
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -100,7 +107,7 @@ export function SentenceEmotionControl({
     setPreviewing(true);
     setNote(null);
     try {
-      const { fellBackToBase } = await playEmotionVariantSample(character, current, playback);
+      const { fellBackToBase } = await playEmotionVariantSample(character, current, playback, bookId);
       if (fellBackToBase) {
         setNote(`no ${current} variant for ${firstName} — renders neutral`);
       }

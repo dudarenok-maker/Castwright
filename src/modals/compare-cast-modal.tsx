@@ -34,6 +34,14 @@ const DEFAULT_TONE: Tone = { warmth: 50, pace: 50, authority: 50, emotion: 50 };
 
 interface Props {
   characters: [Character, Character];
+  /* bug #1411 — the book each side's character belongs to, in the same
+     order as `characters`. Cross-book compare is explicitly supported here
+     (buildSideContext below deliberately doesn't prefer the open book's own
+     same-id voice — see its comment), so a single modal-level bookId isn't
+     enough: each side's sample-cache scope must be namespaced by ITS OWN
+     book, or a voiceId-less character's "Sampled" state can bleed onto an
+     unrelated same-id character on the other side. */
+  bookIds: [string, string];
   library: Voice[];
   ttsModelKey: TtsModelKey;
   /* Plan 96 — when true, render an inline hint per side noting that
@@ -99,6 +107,7 @@ function isDirty(orig: Character, d: SideDraft): boolean {
 
 export function CompareCastModal({
   characters,
+  bookIds,
   library,
   ttsModelKey,
   propagatesAcrossSeries = false,
@@ -107,6 +116,7 @@ export function CompareCastModal({
   onOpenProfile,
 }: Props) {
   const [a, b] = characters;
+  const [bookIdA, bookIdB] = bookIds;
   const ttsEngine = engineForModelKey(ttsModelKey);
   const playback = useSamplePlayback();
 
@@ -114,12 +124,12 @@ export function CompareCastModal({
   const [draftB, setDraftB] = useState<SideDraft>(() => draftFromCharacter(b));
 
   const sideA = useMemo(
-    () => buildSideContext(a, draftA, library, ttsEngine, ttsModelKey),
-    [a, draftA, library, ttsEngine, ttsModelKey],
+    () => buildSideContext(a, draftA, library, ttsEngine, ttsModelKey, bookIdA),
+    [a, draftA, library, ttsEngine, ttsModelKey, bookIdA],
   );
   const sideB = useMemo(
-    () => buildSideContext(b, draftB, library, ttsEngine, ttsModelKey),
-    [b, draftB, library, ttsEngine, ttsModelKey],
+    () => buildSideContext(b, draftB, library, ttsEngine, ttsModelKey, bookIdB),
+    [b, draftB, library, ttsEngine, ttsModelKey, bookIdB],
   );
 
   const dirtyA = isDirty(a, draftA);
@@ -275,6 +285,7 @@ function buildSideContext(
   library: Voice[],
   engine: TtsEngine,
   modelKey: TtsModelKey,
+  bookId: string,
 ): SideContext {
   /* Compute the resolved voice off the dirty draft so the labels update
      live as the user edits. Sample requests use the same dirty hint via
@@ -286,7 +297,11 @@ function buildSideContext(
      Preferring the open book's own same-id voice would silently substitute
      the wrong book's voice for this side. */
   const matched = findVoiceForCharacter(c, library);
-  const sampleVoiceId = sampleScopeFor(c);
+  /* bug #1411 — `bookId` is THIS side's own book (see the Props.bookIds
+     comment), not necessarily the globally-open one, so a voiceId-less
+     character's sample scope stays namespaced to the book it actually
+     belongs to. */
+  const sampleVoiceId = sampleScopeFor(c, bookId);
   const ttsVoice = matched?.ttsVoice ?? resolveTtsVoiceForCharacter(merged, engine);
   const subject: Voice = matched ?? {
     id: sampleVoiceId,

@@ -824,6 +824,57 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
       await writeJsonAtomic(voicesMetaPath(), { pinned: [], updatedAt: new Date().toISOString() });
     }
   });
+
+  it("bug #1411: Alpha's cached sample audition never marks Beta's un-sampled narrator as Sampled", async () => {
+    /* Both narrators are voiceId-less, so the sample-cache scope falls back
+       to `char-<id>` — bare, unscoped by book (unlike familyKey above, which
+       IS book-scoped since #1410). A stray `char-narrator-*.mp3` dropped by
+       Alpha's real audition matches Beta's `hasCachedQwenSample` prefix
+       check too, purely because the workspace-global sample cache has no
+       book boundary. */
+    const sampleCacheDir = join(workspaceRoot, 'sample-cache-cross-book-1411');
+    mkdirSync(sampleCacheDir, { recursive: true });
+    process.env.VOICE_SAMPLE_AUDIO_DIR = sampleCacheDir;
+    try {
+      writeFileSync(join(sampleCacheDir, 'char-narrator-qwen3-tts-0.6b-deadbeef.mp3'), 'fake-mp3');
+      const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+      const beta = res.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+      );
+      expect(beta).toBeDefined();
+      expect(beta.sampled).toBeFalsy();
+    } finally {
+      rmSync(sampleCacheDir, { recursive: true, force: true });
+      delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+    }
+  });
+
+  it('bug #1411: Alpha IS sampled from its own book-scoped cache file', async () => {
+    const sampleCacheDir = join(workspaceRoot, 'sample-cache-cross-book-1411-own');
+    mkdirSync(sampleCacheDir, { recursive: true });
+    process.env.VOICE_SAMPLE_AUDIO_DIR = sampleCacheDir;
+    try {
+      writeFileSync(
+        join(sampleCacheDir, `char-${alphaBookId}-narrator-qwen3-tts-0.6b-deadbeef.mp3`),
+        'fake-mp3',
+      );
+      const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${alphaBookId}`);
+      const alpha = res.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+      );
+      const betaRes = await request(app).get(
+        `/api/voices?engine=qwen&currentBookId=${betaBookId}`,
+      );
+      const beta = betaRes.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+      );
+      expect(alpha.sampled).toBe(true);
+      expect(beta.sampled).toBeFalsy();
+    } finally {
+      rmSync(sampleCacheDir, { recursive: true, force: true });
+      delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+    }
+  });
 });
 
 describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {

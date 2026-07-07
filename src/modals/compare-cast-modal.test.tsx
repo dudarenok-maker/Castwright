@@ -58,6 +58,7 @@ function renderModal(overrides?: Partial<Parameters<typeof CompareCastModal>[0]>
   const store = configureStore({ reducer: { ui: uiSlice.reducer } });
   const props = {
     characters: [charA, charB] as [Character, Character],
+    bookIds: ['book-one', 'book-one'] as [string, string],
     library: [] as Voice[],
     ttsModelKey: 'kokoro-v1' as const,
     onSaveSide: vi.fn(),
@@ -169,6 +170,26 @@ describe('CompareCastModal sample playback', () => {
     expect(call.args.characterHint?.ageRange).toBe('child');
     expect(call.args.characterHint?.gender).toBe('male');
   });
+
+  it('bug #1411: scopes each side\'s sample by its OWN bookId in a cross-book compare', async () => {
+    /* charA/charB are both voiceId-less, so their sample scope falls back to
+       char-<bookId>-<id>. A cross-book compare (the Voices view's
+       propagatesAcrossSeries path) must keep the two sides' scopes distinct
+       even when the ids happen to coincide across books — this modal is
+       explicitly used with characters from different books. */
+    renderModal({ bookIds: ['book-alpha', 'book-beta'] });
+    fireEvent.click(screen.getByLabelText(/Play sample for Halloran/));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe(
+      'char-book-alpha-halloran',
+    );
+
+    fireEvent.click(screen.getByLabelText(/Play sample for Marcus/));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[1][0].args.voiceId).toBe(
+      'char-book-beta-marcus',
+    );
+  });
 });
 
 describe('CompareCastModal Auto A→B', () => {
@@ -189,7 +210,12 @@ describe('CompareCastModal Auto A→B', () => {
     fireEvent.click(screen.getByRole('button', { name: /Auto A → B/ }));
 
     await waitFor(() => expect(trace.length).toBe(4));
-    expect(trace).toEqual(['synth:char-halloran', 'ended', 'synth:char-marcus', 'ended']);
+    expect(trace).toEqual([
+      'synth:char-book-one-halloran',
+      'ended',
+      'synth:char-book-one-marcus',
+      'ended',
+    ]);
   });
 
   it('stops the sequence when playUntilEnded reports cancelled', async () => {
@@ -205,7 +231,7 @@ describe('CompareCastModal Auto A→B', () => {
 
     /* Side A synth fires, the ended-await reports cancelled, so side B
        must not synth. */
-    await waitFor(() => expect(calls).toEqual(['char-halloran']));
+    await waitFor(() => expect(calls).toEqual(['char-book-one-halloran']));
   });
 });
 

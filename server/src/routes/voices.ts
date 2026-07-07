@@ -304,10 +304,16 @@ async function aggregateVoices(
              the bare `voiceId ?? c.id` so the frontend's same-book id-
              fallback join (voice-character-link.ts) is unaffected. */
           const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
-          /* The sample-cache scope keys on `char-<id>` (not bare `<id>`) for a
-             voiceId-less character — matching the frontend's sampleScopeFor —
-             so it can diverge from `id` above. Compute it explicitly. */
-          const sampleScope = c.voiceId ?? `char-${c.id}`;
+          /* The sample-cache scope keys on `char-<bookId>-<id>` (not bare
+             `<id>`) for a voiceId-less character — matching the frontend's
+             sampleScopeFor — so it can diverge from `id` above. bug #1411:
+             this MUST match sampleScopeFor's book-scoped fallback, or a
+             voiceId-less character sampled in one book falsely reads as
+             Sampled in every other book whose analyzer-assigned id
+             coincidentally matches (narrator, unknown-male, ...) — the sample
+             cache dir is workspace-global, so an unscoped prefix check can't
+             tell them apart. */
+          const sampleScope = c.voiceId ?? `char-${state.bookId}-${c.id}`;
           /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
              Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
              Used to key generated-flag lookups against renderedQwenNames (which
