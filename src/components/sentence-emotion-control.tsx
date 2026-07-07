@@ -61,9 +61,8 @@ export function SentenceEmotionControl({
      existing tests render this component in a store with no `ui` slice
      wired up at all, and this preview affordance degrades gracefully to the
      old unscoped sample behaviour when a book id genuinely isn't available. */
-  const bookId = useAppSelector(
-    (s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? undefined,
-  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? undefined);
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
