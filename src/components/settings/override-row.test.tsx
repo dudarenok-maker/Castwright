@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { OverrideRow } from './override-row';
 import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
 
@@ -269,6 +269,64 @@ describe('OverrideRow — onChange coercion', () => {
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.blur(input);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('abandons an uncommitted edit instead of committing it when Revert is clicked directly', () => {
+    // Regression: a mousedown-preventDefault was tried first to stop this
+    // race, but that also blocks the blur that the draft-resync effect
+    // needs — the abandoned edit ended up silently re-committing (recreating
+    // the override the click was reverting) on the row's next real blur.
+    // The fix lets blur fire normally and instead checks relatedTarget.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 5, source: 'override', overridden: true });
+    const onChange = vi.fn();
+    const onRevert = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={onRevert}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    const revertButton = screen.getByRole('button', { name: /revert/i });
+
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '99' } });
+    // Clicking a button blurs whatever currently has focus first, with
+    // relatedTarget set to the element about to receive it — reproduce
+    // that real browser event ordering.
+    fireEvent.blur(input, { relatedTarget: revertButton });
+    fireEvent.click(revertButton);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onRevert).toHaveBeenCalledOnce();
+    expect(input.value).toBe('5');
+  });
+
+  it('reverts the draft to the last known value if the save is rejected', async () => {
+    // Regression: with the local draft buffer, a rejected saveOverride left
+    // `value.effective` untouched (config-slice only updates on fulfilled),
+    // so the draft stayed frozen on the unsaved value forever with no
+    // visible sign the save never landed.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn(() => Promise.reject(new Error('save failed')));
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith(99);
+    await waitFor(() => expect(input.value).toBe('10'));
   });
 
   it('calls onChange with the option string when an enum select changes', () => {

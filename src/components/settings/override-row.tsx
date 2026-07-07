@@ -55,10 +55,23 @@ function staleReasonLabel(reason: StaleReason): string {
 
 /* ── editable input controls ─────────────────────────────────────────────── */
 
+/* Revert / Reset section / Reset all all carry this marker (see OverrideRow,
+   settings-accordion.tsx, advanced.tsx). A blur whose relatedTarget lands on
+   one of them means the user is abandoning whatever they were mid-typing,
+   not committing it — checked via relatedTarget rather than blocking the
+   blur outright (e.g. via mousedown preventDefault), because blocking blur
+   also blocks the `editing` transition the draft-resync effect needs to
+   pick up the row's new value once the reset actually resolves. */
+const CONFIG_ACTION_SELECTOR = '[data-config-action]';
+
+function isConfigActionTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest(CONFIG_ACTION_SELECTOR) !== null;
+}
+
 interface ControlProps {
   descriptor: KnobDescriptor;
   value: KnobValue;
-  onChange: (raw: number | boolean | string) => void;
+  onChange: (raw: number | boolean | string) => void | Promise<unknown>;
   disabled: boolean;
   gpuDevices?: GpuDevice[];
 }
@@ -91,6 +104,14 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     if (!editingRef.current) setDraft(String(value.effective));
   }, [value.effective]);
 
+  // Discard whatever's in the field without saving it — used when blur was
+  // caused by a Revert/Reset button (see isConfigActionTarget) rather than
+  // the user genuinely moving on to another field.
+  const abandonEdit = () => {
+    setEditing(false);
+    setDraft(String(value.effective));
+  };
+
   const commitNumericDraft = (raw: string, isInteger: boolean) => {
     setEditing(false);
     const parsed = isInteger ? parseInt(raw, 10) : parseFloat(raw);
@@ -105,13 +126,24 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     // passing focus through a field can't fire a no-op save that marks it
     // overridden.
     if (parsed === Number(value.effective)) return;
-    onChange(parsed);
+    // A rejected save leaves the redux value untouched, so the draft would
+    // otherwise stay frozen on the unsaved value forever with no visible
+    // sign the save never landed — fall back to the last known-good value.
+    const revertTo = String(value.effective);
+    const result = onChange(parsed);
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      (result as Promise<unknown>).catch(() => setDraft(revertTo));
+    }
   };
 
   const commitStringDraft = (raw: string) => {
     setEditing(false);
     if (raw === String(value.effective)) return;
-    onChange(raw);
+    const revertTo = String(value.effective);
+    const result = onChange(raw);
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      (result as Promise<unknown>).catch(() => setDraft(revertTo));
+    }
   };
 
   const base =
@@ -214,7 +246,11 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
         disabled={disabled}
         onFocus={() => setEditing(true)}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={(e) => commitNumericDraft(e.target.value, isInteger)}
+        onBlur={(e) =>
+          isConfigActionTarget(e.relatedTarget)
+            ? abandonEdit()
+            : commitNumericDraft(e.target.value, isInteger)
+        }
         className={`w-32 ${base}`}
       />
     );
@@ -229,7 +265,9 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
       disabled={disabled}
       onFocus={() => setEditing(true)}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) => commitStringDraft(e.target.value)}
+      onBlur={(e) =>
+        isConfigActionTarget(e.relatedTarget) ? abandonEdit() : commitStringDraft(e.target.value)
+      }
       className={`w-full ${base}`}
     />
   );
@@ -240,7 +278,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
 export interface OverrideRowProps {
   descriptor: KnobDescriptor;
   value: KnobValue;
-  onChange: (raw: number | boolean | string) => void;
+  onChange: (raw: number | boolean | string) => void | Promise<unknown>;
   onRevert: () => void;
   /** GPU cards detected via GET /api/gpu/devices — only consumed by type: 'device' knobs. */
   gpuDevices?: GpuDevice[];
@@ -307,16 +345,10 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
             </span>
             <button
               type="button"
-              /* A mousedown on this button blurs whatever input currently
-                 has focus — including this row's own, if the user typed a
-                 new value but never tabbed away. That blur would commit an
-                 uncommitted edit at the exact moment Revert is clicked,
-                 racing a fresh saveOverride against the resetKnob this
-                 click triggers (config-slice has no ordering guard, so
-                 whichever response lands last wins). Prevent the default
-                 mousedown behavior so focus — and any pending edit — is
-                 simply abandoned instead of raced. */
-              onMouseDown={(e) => e.preventDefault()}
+              /* See isConfigActionTarget above — marks this as a button
+                 whose blur should abandon rather than commit whatever's
+                 mid-edit in the row's own input. */
+              data-config-action
               onClick={onRevert}
               className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
             >

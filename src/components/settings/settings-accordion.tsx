@@ -113,11 +113,10 @@ export function SettingsSection({
           <button
             type="button"
             aria-label="Reset section"
-            /* See OverrideRow's Revert button — prevents this click from
-               blurring (and thus committing) an uncommitted edit in
-               whatever field currently has focus, which would otherwise
-               race a fresh saveOverride against resetGroup. */
-            onMouseDown={(e) => e.preventDefault()}
+            /* See override-row.tsx's isConfigActionTarget — marks this as
+               a button whose blur should abandon, not commit, whatever's
+               mid-edit in the currently-focused knob input. */
+            data-config-action
             onClick={onResetSection}
             className="shrink-0 px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/60 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
           >

@@ -335,11 +335,10 @@ export function AdvancedView() {
           <div className="flex items-center justify-end">
             <button
               type="button"
-              /* See OverrideRow's Revert button — prevents this click from
-                 blurring (and thus committing) an uncommitted edit in
-                 whatever field currently has focus, which would otherwise
-                 race a fresh saveOverride against resetAllConfig. */
-              onMouseDown={(e) => e.preventDefault()}
+              /* See override-row.tsx's isConfigActionTarget — marks this as
+                 a button whose blur should abandon, not commit, whatever's
+                 mid-edit in the currently-focused knob input. */
+              data-config-action
               onClick={handleResetAll}
               className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0"
             >
@@ -377,7 +376,7 @@ export function AdvancedView() {
                         key={d.key}
                         descriptor={d}
                         value={{ ...value, staleReason: deriveStaleReason(d, value, gpuDevices) }}
-                        onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw }))}
+                        onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw })).unwrap()}
                         onRevert={() => dispatch(resetKnob(d.key))}
                         gpuDevices={gpuDevices}
                       />
