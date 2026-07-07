@@ -32,4 +32,19 @@ A Suspect flag isn't stranded on the Generate screen. The same amber-marked wave
 
 ![The same flag in the mini-player — a bad take lights up amber before you've pressed play](images/the-quality-gate/03-preview-surface.png)
 
+## The receipt: a quality-gate report card for the whole book
+
+Everything above happens per line, per chapter — useful when you're chasing down one bad take, but not something you'd read start to finish for a 12-chapter book. The **Quality gate** card, on the Listen view (below the player, above the downloads) and on the Generate view (while a book is mid-render), rolls all of it into one card you can read in five seconds: a headline, four rows, and two export buttons.
+
+The headline is blunt on purpose: **"Every line held."** if nothing needed a second take, **"N lines needed a second take."** if the acoustic gate caught and fixed something, or **"Some lines need a second look."** if the transcript check or the drift detector flagged something the acoustic gate can't see. Below it, four rows — one per signal this book actually generated:
+
+- **Acoustic** — lines checked, and how many needed a second take (Check one, above).
+- **Transcript** — lines verified against the script, and how many were flagged (the optional content check, off by default).
+- **Voice match** — chapters scored for drift against each character's profile, and how many mismatches turned up (Check two, above).
+- **Cast continuity** — how many config changes have happened since this book last rendered, tiered mild/moderate/severe.
+
+Every row is honest about the difference between "clean" and "never checked." A book with no stochastic-voiced characters (an all-Kokoro cast, say) shows *"No stochastic-voiced characters in this book — nothing for this check to do"* on the Voice match row — that's not the same claim as *"Not run for this book — flip on render-integrity checking to catch mismatches automatically,"* which means the check was available and simply wasn't switched on. And if voice-match scoring ran but failed for some chapters — an embedding failure, say — the row says so explicitly (*"N of M eligible chapters scored, X couldn't be embedded"*) rather than quietly reporting the chapters that did succeed as if they were the whole book. The same rule holds for the Transcript row: *"Not run for this book"* only appears when transcript verification is genuinely off, never when it ran clean. Nothing on this card is allowed to look clean by omission.
+
+**Download as text** saves a `<book-title>-qa-report.txt` file with the headline and all four rows, in plain sentences — the fastest way to hand a client or a narrator proof that a book cleared the gate. **Download as JSON** saves the full `<book-title>-qa-report.json` — every count and every mismatch behind the summary, for anyone who wants to script against it rather than read it.
+
 Next: [Listening & Revising](Listening-and-Revising).
