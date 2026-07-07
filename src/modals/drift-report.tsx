@@ -279,15 +279,21 @@ function DriftBookSection({
      groups, and consolidation (plan 91) doesn't help when they're mostly
      single-chapter. A sentinel at the tail reveals another page on
      scroll-into-view, same IntersectionObserver technique as the
-     change-log view's infinite scroll (src/views/change-log.tsx). */
+     change-log view's infinite scroll (src/views/change-log.tsx).
+
+     No reset-on-book-switch effect is needed: the parent keys this
+     component by `view.bookId` (see the `.map` below), so switching books
+     already remounts a fresh instance with `visibleCount` back at
+     `GROUPS_PAGE_SIZE` — a reset keyed on `orderedGroups.length` would
+     instead (and did, pre-fix) collapse the reveal back to page 1 any time
+     the SAME book's group count changed for an unrelated reason (a
+     dismiss, a regen, or the background drift poll adding a group),
+     discarding the user's scroll progress. */
   const orderedGroups = useMemo(
     () => severityOrder.flatMap((sev) => bySeverity[sev]),
     [bySeverity],
   );
   const [visibleCount, setVisibleCount] = useState(GROUPS_PAGE_SIZE);
-  useEffect(() => {
-    setVisibleCount(GROUPS_PAGE_SIZE);
-  }, [view.bookId, orderedGroups.length]);
   const visibleIds = useMemo(
     () => new Set(orderedGroups.slice(0, visibleCount).map((g) => g.groupId)),
     [orderedGroups, visibleCount],
@@ -956,7 +962,28 @@ function DriftListenWidget({
   const [voiceSampleUrl, setVoiceSampleUrl] = useState<string | null>(null);
   const playback = useSamplePlayback();
 
-  const chapterUrl = `/api/books/${encodeURIComponent(bookId)}/chapters/${event.chapterId}/audio`;
+  /* Groups are keyed by (book, character, snapshot) — not by chapter — so
+     two different characters can each have their own drift row for the
+     SAME chapter. Appending the character id as a harmless query param
+     (Express ignores unknown query params; the server always serves the
+     same file) gives each row a distinct match/playback URL against the
+     one shared singleton — without it, playing one character's "Chapter"
+     audio also flipped an unrelated character's row to "Pause chapter"
+     purely because they resolved to the identical bare URL. */
+  const chapterUrl = `/api/books/${encodeURIComponent(bookId)}/chapters/${event.chapterId}/audio?forCharacter=${encodeURIComponent(event.characterId)}`;
+
+  /* Tracks whether this widget instance is still mounted, so an
+     `api.getVoiceSample` fetch that resolves after the row was
+     dismissed/regenerated (or the modal closed) doesn't set state on an
+     unmounted component or start audio on the shared singleton with no
+     surviving control to stop it. */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const sides: Record<AbSideKey, AbSide> = {
     a: {
@@ -993,8 +1020,10 @@ function DriftListenWidget({
               : undefined,
           });
           url = sample.url;
+          if (!mountedRef.current) return;
           setVoiceSampleUrl(url);
         }
+        if (!mountedRef.current) return;
         await playback.play(url);
       },
     },

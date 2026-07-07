@@ -390,7 +390,63 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     renderModalWithVoices([makeEvent({})]);
     fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
     fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
-    expect(samplePlaybackState.play).toHaveBeenCalledWith('/api/books/b-keeper/chapters/1/audio');
+    /* `forCharacter` disambiguates rows sharing the same chapter across two
+       different characters against the one shared playback singleton — see
+       the "distinct rows for the same chapter" test below. */
+    expect(samplePlaybackState.play).toHaveBeenCalledWith(
+      '/api/books/b-keeper/chapters/1/audio?forCharacter=eliza',
+    );
+  });
+
+  it("two characters drifting on the same chapter do not mutex each other's Chapter button", async () => {
+    /* Groups are keyed by (book, character, snapshot) — not by chapter — so
+       the same chapterId can appear in two different characters' rows.
+       Regression: both used to resolve to the identical bare chapter URL
+       against the one shared singleton, so playing one row's audio falsely
+       flipped the OTHER character's unrelated row to "Pause chapter" too. */
+    const elizaEvent = makeEvent({
+      id: 'drift:b-keeper:1:eliza:voice',
+      characterId: 'eliza',
+      chapterId: 1,
+    });
+    const stenEvent = makeEvent({
+      id: 'drift:b-keeper:1:sten:voice',
+      characterId: 'sten',
+      chapterId: 1,
+    });
+    const stenVoice: Voice = { id: 'voice-sten', character: 'Sten', attributes: [] } as unknown as Voice;
+    const bothCharacters: Character[] = [
+      characters[0],
+      { ...characters[1], voiceId: 'voice-sten' },
+    ];
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <DriftReportModal
+          groupsByBook={[
+            group([elizaEvent, stenEvent], { bookId: 'b-keeper', characters: bothCharacters }),
+          ]}
+          voices={[elizaVoice, stenVoice]}
+          onClose={vi.fn()}
+          onRegenerateChapter={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('drift-listen-drift:b-keeper:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:b-keeper:1:eliza:voice'));
+    await waitFor(() =>
+      expect(screen.getByTestId('drift-play-chapter-drift:b-keeper:1:eliza:voice')).toHaveTextContent(
+        'Pause chapter',
+      ),
+    );
+    /* Sten's row shows the idle "Chapter" label, not "Pause chapter" —
+       the shared singleton is playing eliza's disambiguated URL, which no
+       longer collides with Sten's. */
+    fireEvent.click(screen.getByTestId('drift-listen-drift:b-keeper:1:sten:voice'));
+    expect(screen.getByTestId('drift-play-chapter-drift:b-keeper:1:sten:voice')).toHaveTextContent(
+      'Chapter',
+    );
   });
 
   it('Play voice fetches the sample URL on first click and plays it', async () => {
@@ -436,6 +492,42 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     samplePlaybackState.stop.mockClear();
     unmount();
     expect(samplePlaybackState.stop).toHaveBeenCalled();
+  });
+
+  it('does not start audio (or set state) if the row unmounts while the voice-sample fetch is still in flight', async () => {
+    /* Regression: the old <audio>-ref implementation guarded the post-await
+       resume with `if (!el || !url) return;` (the ref goes null on
+       unmount), so a stale resolve was a silent no-op. The shared-singleton
+       rewrite dropped the equivalent check. */
+    let resolveSample!: (v: {
+      url: string;
+      durationSec: number;
+      cached: boolean;
+      modelKey: 'kokoro-v1';
+    }) => void;
+    getVoiceSampleSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSample = resolve;
+        }),
+    );
+    const { unmount } = renderModalWithVoices([makeEvent({})]);
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
+    await waitFor(() => expect(getVoiceSampleSpy).toHaveBeenCalledTimes(1));
+
+    unmount();
+    samplePlaybackState.play.mockClear();
+    await act(async () => {
+      resolveSample({
+        url: '/audio/voices/voice-eliza-kokoro-v1-cafe.mp3',
+        durationSec: 12,
+        cached: true,
+        modelKey: 'kokoro-v1',
+      });
+      await Promise.resolve();
+    });
+    expect(samplePlaybackState.play).not.toHaveBeenCalled();
   });
 });
 
@@ -574,6 +666,42 @@ describe('DriftReportModal — scale regression (375-chapters browser-hang repor
     });
     const after = container.querySelectorAll('article[data-testid^="drift-group-"]').length;
     expect(after).toBeGreaterThan(before);
+  });
+
+  it('does not collapse the revealed page when the same book gains or loses a group (dismiss/regen/background poll)', () => {
+    const { chars, events } = manyCharactersAndVoices();
+    const { container, rerender } = render(
+      <DriftReportModal
+        groupsByBook={[group(events, { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    act(() => ControllableIntersectionObserver.instances[0]?.intersect());
+    const revealedBefore = container.querySelectorAll(
+      'article[data-testid^="drift-group-"]',
+    ).length;
+    expect(revealedBefore).toBeGreaterThan(20); // confirms the reveal actually grew past page 1
+
+    /* Simulate one group disappearing (a dismiss, a regen, or the
+       background drift poll clearing an event) — the book id is
+       unchanged, only the group count shrinks. */
+    rerender(
+      <DriftReportModal
+        groupsByBook={[group(events.slice(1), { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const revealedAfter = container.querySelectorAll(
+      'article[data-testid^="drift-group-"]',
+    ).length;
+    /* Regression: this used to reset straight back to the first 20 cards
+       any time `orderedGroups.length` changed for ANY reason, silently
+       discarding the user's scroll-reveal progress. */
+    expect(revealedAfter).toBeGreaterThan(20);
   });
 
   it('omits the sentinel once every group has been revealed', () => {
