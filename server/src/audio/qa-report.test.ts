@@ -1,0 +1,127 @@
+import { describe, it, expect } from 'vitest';
+import { mkdtemp, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { writeJsonAtomic } from '../workspace/state-io.js';
+import { audioDir } from '../workspace/paths.js';
+import { writeVerdicts } from './render-integrity/verdicts-io.js';
+import { buildAudioQaReport } from './qa-report.js';
+
+async function makeBook(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'qa-report-'));
+  await mkdir(audioDir(dir), { recursive: true });
+  return dir;
+}
+
+function seg(overrides: Record<string, unknown> = {}) {
+  return {
+    groupIndex: 0,
+    characterId: 'wren',
+    sentenceIds: [1],
+    startSec: 0,
+    endSec: 1,
+    ...overrides,
+  };
+}
+
+describe('buildAudioQaReport', () => {
+  it('reports full coverage on a clean, fully-gated book', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1',
+      chapterId: 1,
+      chapterTitle: 'One',
+      durationSec: 10,
+      sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b',
+      synthesizedAt: new Date(0).toISOString(),
+      segments: [
+        seg({ qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 } }),
+      ],
+      characterSnapshots: { wren: { voiceEngine: 'qwen' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+
+    expect(report.chaptersRendered).toBe(1);
+    expect(report.totalLines).toBe(1);
+    expect(report.acoustic.linesChecked).toBe(1);
+    expect(report.acoustic.linesRerecorded).toBe(0);
+    expect(report.asr.linesVerified).toBe(0); // ASR field absent on this fixture → not verified
+    expect(report.voiceDrift.chaptersEligible).toBe(1); // wren is qwen-voiced
+    expect(report.voiceDrift.chaptersScored).toBe(0); // no render-integrity.json written
+  });
+
+  it('reports chaptersEligible = 0 for an all-Kokoro book, distinct from not-run', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'kokoro', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg()],
+      characterSnapshots: { wren: { voiceEngine: 'kokoro' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(0);
+  });
+
+  it('counts sentenceIds, not segment-group counts, for lines', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ sentenceIds: [1, 2, 3] })], // one group, three sentences
+      characterSnapshots: { wren: { voiceEngine: 'qwen' } },
+    });
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.totalLines).toBe(3);
+  });
+
+  it('sets attribution to legacy-unattributed when a voice-mismatch row has no chapterId', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg()],
+      characterSnapshots: { wren: { voiceEngine: 'qwen' } },
+    });
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      {
+        characterId: 'wren', sentenceIds: [1], verdict: 'voice-mismatch', cosine: 0.3,
+        severity: 'severe', fixable: true, expectedEngine: 'qwen', renderedEngine: 'qwen',
+        referenceKind: 'in-book', windowed: false,
+        // no chapterId — simulates a pre-fs-51 render
+      },
+    ]);
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.attribution).toBe('legacy-unattributed');
+  });
+
+  it('attributes an eligible-but-unscored chapter to chaptersEmbedFailed once the gate is demonstrably on elsewhere', async () => {
+    const dir = await makeBook();
+    // Chapter 1: eligible AND scored — proves the gate is on for this book.
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg()],
+      characterSnapshots: { wren: { voiceEngine: 'qwen' } },
+    });
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'wren', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    // Chapter 2: eligible, but no verdict file — an embed failure, not "off"
+    // (the gate is confirmed on by chapter 1's verdict file above).
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'oduvan' })],
+      characterSnapshots: { oduvan: { voiceEngine: 'qwen' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(2);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(1);
+  });
+});
