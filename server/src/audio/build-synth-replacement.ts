@@ -34,6 +34,17 @@ export interface SynthOutput {
   asrSuspect?: ChapterSegment['asrSuspect'];
   qaRetries?: ChapterSegment['qaRetries'];
   asrRetries?: ChapterSegment['asrRetries'];
+  /** Did the signal-QA gate actually EXECUTE for this specific call — not
+      "is signal-QA enabled globally," but "did this call evaluate a verdict
+      at all." False (or absent) means `qa`/`suspect`/`qaRetries` above are
+      meaningless placeholders (the gate never ran), NOT "ran clean" — so
+      `buildSynthReplacements` must not let them overwrite a segment's prior,
+      still-valid verdict. */
+  signalQaRan?: boolean;
+  /** Same distinction as `signalQaRan`, for the ASR gate: did ASR verification
+      actually run for this call, gating whether `asr`/`asrSuspect`/`asrRetries`
+      are meaningful. */
+  asrRan?: boolean;
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -59,18 +70,21 @@ export async function buildSynthReplacements(
       out.sampleRate === opts.chapterSampleRate
         ? out.pcm
         : resamplePcm16(out.pcm, out.sampleRate, opts.chapterSampleRate);
+    /* Only let a gate's fields overwrite the segment's prior verdict when that
+       gate actually RAN for this call — a gate that's configured off never
+       populates its fields, and an omitted key here (not `key: undefined`) is
+       what makes `spliceChapterSegments`'s `{...segment, ...freshVerdict}`
+       spread leave the segment's prior value alone (see the module doc on
+       `SegmentReplacement.freshVerdict` in splice-chapter.ts). */
+    const freshVerdict: NonNullable<SegmentReplacement['freshVerdict']> = {
+      ...(out.signalQaRan ? { qa: out.qa, suspect: out.suspect, qaRetries: out.qaRetries } : {}),
+      ...(out.asrRan ? { asr: out.asr, asrSuspect: out.asrSuspect, asrRetries: out.asrRetries } : {}),
+    };
     replacements.push({
       startSegmentIndex: i,
       endSegmentIndex: i,
       pcm,
-      freshVerdict: {
-        qa: out.qa,
-        suspect: out.suspect,
-        asr: out.asr,
-        asrSuspect: out.asrSuspect,
-        qaRetries: out.qaRetries,
-        asrRetries: out.asrRetries,
-      },
+      freshVerdict,
     });
   }
   return replacements;

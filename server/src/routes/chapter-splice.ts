@@ -298,6 +298,8 @@ chapterSpliceRouter.post(
             const ids = new Set(seg.sentenceIds);
             const subset = sentences.filter((s) => ids.has(s.id));
             send({ type: 'progress', chapterId, characterId, progress: 0.5 });
+            const maxSegmentRerecords = configValue<number>('qa.seg.maxRerecords');
+            const asrOn = asrEnabled();
             const r = await synthesiseChapter({
               sentences: subset,
               cast: cast.characters,
@@ -311,8 +313,8 @@ chapterSpliceRouter.post(
               signal: controller.signal,
               chapterTitleNarration: undefined,
               narratorCharacterId: 'narrator',
-              maxSegmentRerecords: configValue<number>('qa.seg.maxRerecords'),
-              ...(asrEnabled()
+              maxSegmentRerecords,
+              ...(asrOn
                 ? {
                     asr: {
                       maxRerecords: resolveAsrRerecords(),
@@ -333,6 +335,14 @@ chapterSpliceRouter.post(
               asrSuspect: s?.asrSuspect,
               qaRetries: s?.qaRetries,
               asrRetries: s?.asrRetries,
+              /* fs-51 follow-up — the signal-QA gate only actually evaluates a
+                 verdict when `maxSegmentRerecords > 0` (synthesiseChapter's own
+                 gate); ASR only runs when `asrOn`. Without these flags,
+                 buildSynthReplacements can't tell "gate ran clean" apart from
+                 "gate never ran," and would wipe a segment's genuine prior
+                 suspect/qa verdict whenever the gate is configured off. */
+              signalQaRan: maxSegmentRerecords > 0,
+              asrRan: asrOn,
             };
           },
         });

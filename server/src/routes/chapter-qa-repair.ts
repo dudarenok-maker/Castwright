@@ -512,6 +512,13 @@ chapterQaRepairRouter.post(
             asrSuspect: accepted || !asrOn ? undefined : bestAsr?.verdict === 'drift' ? true : undefined,
             qaRetries: retryCount || undefined,
             asrRetries: asrOn ? retryCount || undefined : undefined,
+            /* fs-51 follow-up — unlike the splice route, THIS route's whole job
+               is signal-QA repair: `bestVerdict` above is always populated by
+               `evaluateSegmentPcm` regardless of any config gate, so the
+               signal-QA "gate" always ran for this call. ASR ran iff this
+               route's own `asrOn` flag is set. */
+            signalQaRan: true,
+            asrRan: asrOn,
           };
         },
       });
