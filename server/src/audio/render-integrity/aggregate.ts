@@ -78,7 +78,7 @@ interface SegmentsFileView {
 }
 
 /** Stochastic engines (Kokoro-configured characters are skipped). */
-const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
+export const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
 
 // ── Reference resolution (Task 10 seam) ───────────────────────────────────
 
@@ -224,6 +224,7 @@ export async function scoreBook(
   };
 
   type ChapterData = {
+    id: number;
     slug: string;
     embRows: EmbeddingRow[];
     segsByKey: Map<string, SegmentsEntry>;
@@ -254,6 +255,7 @@ export async function scoreBook(
     }
 
     chapterData.push({
+      id: ch.id,
       slug: ch.slug,
       embRows: embResult.rows,
       segsByKey,
@@ -387,6 +389,7 @@ export async function scoreBook(
           renderedEngine,
           referenceKind: 'too-short',
           windowed: false,
+          chapterId: cd.id,
         });
         continue;
       }
@@ -413,6 +416,7 @@ export async function scoreBook(
         renderedEngine,
         referenceKind: ref.referenceKind,
         windowed: false,
+        chapterId: cd.id,
       });
     }
 

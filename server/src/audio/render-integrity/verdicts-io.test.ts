@@ -191,4 +191,52 @@ describe('deriveBookOutline', () => {
     expect(result.counts.fixable).toBe(0);
     expect(result.counts.uncheckedCharacters).toHaveLength(0);
   });
+
+  it('deriveBookOutline reports scoredChapterIds and inconclusiveChapterIds', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'outline-chapter-ids-'));
+    const audioDir = join(dir, 'audio');
+    mkdirSync(audioDir);
+
+    await writeVerdicts(join(audioDir, 'ch1.render-integrity.json'), [
+      {
+        characterId: 'wren',
+        sentenceIds: [1, 2],
+        verdict: 'voice-mismatch',
+        cosine: 0.4,
+        severity: 'severe',
+        fixable: true,
+        expectedEngine: 'qwen',
+        renderedEngine: 'qwen',
+        referenceKind: 'in-book',
+        windowed: false,
+        chapterId: 1,
+      },
+    ]);
+    await writeVerdicts(join(audioDir, 'ch2.render-integrity.json'), [
+      {
+        characterId: 'oduvan',
+        sentenceIds: [5],
+        verdict: 'inconclusive',
+        cosine: 0,
+        severity: 'inconclusive',
+        fixable: false,
+        expectedEngine: 'qwen',
+        renderedEngine: 'qwen',
+        referenceKind: 'too-short',
+        windowed: false,
+        chapterId: 2,
+      },
+    ]);
+
+    const outline = await deriveBookOutline(dir, [
+      { id: 1, slug: 'ch1' },
+      { id: 2, slug: 'ch2' },
+      { id: 3, slug: 'ch3' }, // never rendered — no file
+    ]);
+
+    expect(outline.issues).toEqual([expect.objectContaining({ characterId: 'wren', chapterId: 1 })]);
+    expect(outline.scoredChapterIds.sort()).toEqual([1, 2]);
+    expect(outline.inconclusiveChapterIds).toEqual([2]);
+    expect(outline.counts.uncheckedCharacters).toEqual(['oduvan']);
+  });
 });

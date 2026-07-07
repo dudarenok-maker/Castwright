@@ -16,6 +16,10 @@ export interface VerdictRow {
   renderedEngine: string;
   referenceKind: 'in-book' | 'audition' | 'too-short';
   windowed: boolean;
+  /** fs-51 — the chapter this row belongs to. Absent on files written before
+      this field existed (a legacy book); the qa-report aggregator uses that
+      absence to set `voiceDrift.attribution: 'legacy-unattributed'`. */
+  chapterId?: number;
 }
 
 /** Write verdict rows atomically. */
@@ -50,19 +54,27 @@ export async function deriveBookOutline(
 ): Promise<{
   issues: VerdictRow[];
   counts: { suspect: number; fixable: number; uncheckedCharacters: string[] };
+  scoredChapterIds: number[];
+  inconclusiveChapterIds: number[];
 }> {
   const root = audioDir(bookDir);
   const issues: VerdictRow[] = [];
   const uncheckedSet = new Set<string>();
+  const scoredChapterIds = new Set<number>();
+  const inconclusiveChapterIds = new Set<number>();
 
   for (const ch of chapters) {
     const path = join(root, `${ch.slug}.render-integrity.json`);
     const rows = await readVerdicts(path);
     if (!rows) continue;
+    scoredChapterIds.add(ch.id);
 
     for (const row of rows) {
       if (row.verdict === 'voice-mismatch') {
         issues.push(row);
+      }
+      if (row.verdict === 'inconclusive') {
+        inconclusiveChapterIds.add(ch.id);
       }
       if (row.referenceKind === 'too-short') {
         uncheckedSet.add(row.characterId);
@@ -79,5 +91,7 @@ export async function deriveBookOutline(
       fixable: issues.filter((r) => r.fixable).length,
       uncheckedCharacters,
     },
+    scoredChapterIds: Array.from(scoredChapterIds).sort((a, b) => a - b),
+    inconclusiveChapterIds: Array.from(inconclusiveChapterIds).sort((a, b) => a - b),
   };
 }
