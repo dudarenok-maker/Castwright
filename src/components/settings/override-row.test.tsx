@@ -404,6 +404,108 @@ describe('OverrideRow — onChange coercion', () => {
     expect(input.value).toBe('55');
   });
 
+  it('does not clobber a value already reset externally while the original save is still pending', async () => {
+    // Regression: the previous guard (commitSeqRef) only tracked NEWER
+    // LOCAL commits — it didn't account for value.effective changing via
+    // an EXTERNAL Revert/Reset on the same field while the original save
+    // was still in flight. Replaced with a single generationRef bumped on
+    // any value.effective change too, not just local commits.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    let rejectSave: (() => void) | undefined;
+    const onChange = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = () => reject(new Error('save failed'));
+        }),
+    );
+    const { rerender } = render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ effective: 10 })}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+
+    // Edit: 10 -> 99, committed, save in flight (not yet resolved).
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    act(() => input.blur());
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    // Externally, the field gets reset to its real default (0) — e.g. the
+    // user clicked Revert and resetKnob resolved — before the original
+    // save settles. Simulated by re-rendering with the new value, same as
+    // a real store update flowing down as a prop change.
+    rerender(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ effective: 0 })}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(input.value).toBe('0');
+
+    // The original (99) save's stale rejection arrives. It must NOT
+    // clobber the already-correct, already-reset value.
+    await act(async () => {
+      rejectSave?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(input.value).toBe('0');
+  });
+
+  it("does not abandon an unrelated row's in-progress edit when a different row's Revert is clicked", () => {
+    // Regression: beginConfigAction used to blur/abandon whatever was
+    // GLOBALLY focused (document.activeElement), regardless of which
+    // row's Revert button was actually clicked. Now scoped to the
+    // clicked button's own row via inputRef.
+    const descriptorA = makeDescriptor({ key: 'knob_a', label: 'Knob A', type: 'number' });
+    const valueA = makeValue({ key: 'knob_a', effective: 5 });
+    const onChangeA = vi.fn();
+
+    const descriptorB = makeDescriptor({ key: 'knob_b', label: 'Knob B', type: 'number' });
+    const valueB = makeValue({
+      key: 'knob_b',
+      effective: 7,
+      source: 'override',
+      overridden: true,
+    });
+    const onRevertB = vi.fn();
+
+    render(
+      <>
+        <OverrideRow
+          descriptor={descriptorA}
+          value={valueA}
+          onChange={onChangeA}
+          onRevert={vi.fn()}
+        />
+        <OverrideRow descriptor={descriptorB} value={valueB} onChange={vi.fn()} onRevert={onRevertB} />
+      </>,
+    );
+    const inputA = screen.getByRole('spinbutton', { name: 'Knob A' }) as HTMLInputElement;
+    const revertB = screen.getByRole('button', { name: /revert/i });
+
+    // Mid-typing in Row A, never blurred...
+    act(() => inputA.focus());
+    fireEvent.change(inputA, { target: { value: '99' } });
+
+    // ...then click Row B's Revert.
+    fireEvent.mouseDown(revertB);
+    fireEvent.click(revertB);
+
+    expect(onRevertB).toHaveBeenCalledOnce();
+    expect(onChangeA).not.toHaveBeenCalled();
+    // Row A's in-progress edit must be untouched — still showing what was
+    // typed, not silently abandoned back to 5.
+    expect(inputA.value).toBe('99');
+  });
+
   it('abandons an uncommitted edit when Tab lands focus directly on Revert (keyboard nav)', () => {
     // Regression: an earlier version of the fix dropped the relatedTarget
     // check entirely in favor of an onMouseDown-only mechanism, which

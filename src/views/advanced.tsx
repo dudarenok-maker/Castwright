@@ -340,7 +340,7 @@ export function AdvancedView() {
                  currently-focused knob input, whether reached by mouse or
                  by Tab. */
               data-config-action
-              onMouseDown={beginConfigAction}
+              onMouseDown={() => beginConfigAction()}
               onClick={handleResetAll}
               className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0"
             >

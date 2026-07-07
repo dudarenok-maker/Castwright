@@ -119,7 +119,7 @@ export function SettingsSection({
                currently-focused knob input, whether reached by mouse or
                by Tab. */
             data-config-action
-            onMouseDown={beginConfigAction}
+            onMouseDown={() => beginConfigAction()}
             onClick={onResetSection}
             className="shrink-0 px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/60 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
           >

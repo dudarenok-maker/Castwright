@@ -2,7 +2,7 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Checkbox } from '../primitives';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
@@ -85,11 +85,17 @@ function isConfigActionTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest(CONFIG_ACTION_SELECTOR) !== null;
 }
 
-export function beginConfigAction(): void {
+export function beginConfigAction(scopedInput?: HTMLElement | null): void {
+  // scopedInput, when passed (the row's own Revert button), only abandons
+  // THAT row's input — clicking Row B's Revert must not silently discard
+  // an unrelated Row A's in-progress edit just because Row A happens to
+  // be what's currently focused. Reset section / Reset all don't have a
+  // single row to scope to (they can legitimately affect many rows at
+  // once), so they fall back to "whatever's currently focused."
+  const target = scopedInput === undefined ? document.activeElement : scopedInput;
+  if (!(target instanceof HTMLElement) || target !== document.activeElement) return;
   abandonNextBlur = true;
-  if (document.activeElement instanceof HTMLElement) {
-    document.activeElement.blur();
-  }
+  target.blur();
   // Reset unconditionally: if the active element WAS a knob input, its
   // onBlur already consumed (and cleared) the flag synchronously inside
   // the .blur() call above. If it wasn't (nothing to abandon), this clears
@@ -119,9 +125,15 @@ interface ControlProps {
   onChange: (raw: number | boolean | string) => void | Promise<unknown>;
   disabled: boolean;
   gpuDevices?: GpuDevice[];
+  /** Exposes the number/string input's DOM node to OverrideRow's Revert
+      button, so a click can scope its abandon-on-blur to THIS row's own
+      input rather than whatever happens to be globally focused. Left
+      unattached (stays null) for boolean/enum/device rows — they have no
+      draft to abandon. */
+  inputRef?: RefObject<HTMLInputElement | null>;
 }
 
-function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: ControlProps) {
+function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputRef }: ControlProps) {
   const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
 
   // Free-typed knobs (number/integer/string) get a local draft buffer,
@@ -144,15 +156,25 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   // itself actually changes (a real Revert/Reset, or another tab's edit).
   const editingRef = useRef(editing);
   editingRef.current = editing;
-  // Bumped on every commit; a rejection handler only acts if it's still the
-  // MOST RECENT commit for this field — otherwise a stale, late-rejecting
-  // save could clobber a second edit that was itself already committed
-  // (blurred, save dispatched) before the first one's rejection arrived.
-  // editingRef alone isn't enough for that case: it's back to `false` again
-  // once the second edit is also blurred.
-  const commitSeqRef = useRef(0);
+  // Bumped whenever this field's ground truth could have moved on without
+  // this specific commit's involvement: either a newer local commit (via
+  // commitEdit, below) or value.effective itself changing for ANY other
+  // reason (a Revert/Reset on this same field, another tab's edit, etc. —
+  // the effect below bumps it on every value.effective change). A
+  // rejection handler only reverts the draft if the generation is still
+  // exactly what it was when THAT commit started — otherwise something
+  // has already superseded it, and stomping the draft with this stale
+  // save's pre-edit value would clobber whatever's now actually correct.
+  // editingRef alone isn't enough: it doesn't cover a same-field Revert/
+  // Reset landing while the original save is still in flight (no local
+  // re-edit happens in that case, so editingRef never blocks it), and a
+  // bare "did a newer local commit happen" counter alone doesn't cover
+  // it either (nothing local happened — the field's truth moved out from
+  // under it via an external reset instead).
+  const generationRef = useRef(0);
 
   useEffect(() => {
+    generationRef.current += 1;
     if (!editingRef.current) setDraft(String(value.effective));
   }, [value.effective]);
 
@@ -168,19 +190,16 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   // value untouched (config-slice's `rejected` case doesn't touch
   // `values`), so the draft would otherwise stay frozen on the unsaved
   // value forever with no visible sign the save never landed — fall back
-  // to the last known-good value. Guarded two ways: `editingRef` (don't
-  // clobber a re-edit that's still mid-typing) and `commitSeqRef` (don't
-  // clobber a re-edit that's ALREADY been committed — a second, newer save
-  // may be in flight or may have already succeeded by the time this
-  // earlier one's rejection arrives; only the most recent commit's own
-  // rejection should be allowed to revert the draft).
+  // to the last known-good value. Guarded two ways, both required (see
+  // generationRef's own comment for why neither alone is sufficient).
   const commitEdit = (parsed: number | string) => {
     const revertTo = String(value.effective);
-    const mySeq = ++commitSeqRef.current;
+    generationRef.current += 1;
+    const myGeneration = generationRef.current;
     const result = onChange(parsed);
     if (result && typeof (result as Promise<unknown>).catch === 'function') {
       (result as Promise<unknown>).catch(() => {
-        if (!editingRef.current && commitSeqRef.current === mySeq) setDraft(revertTo);
+        if (!editingRef.current && generationRef.current === myGeneration) setDraft(revertTo);
       });
     }
   };
@@ -299,6 +318,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
     const isInteger = descriptor.type === 'integer';
     return (
       <input
+        ref={inputRef}
         type="number"
         aria-label={descriptor.label}
         value={draft}
@@ -321,6 +341,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices }: Cont
   /* string */
   return (
     <input
+      ref={inputRef}
       type="text"
       aria-label={descriptor.label}
       value={draft}
@@ -348,6 +369,7 @@ export interface OverrideRowProps {
 
 export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices }: OverrideRowProps) {
   const locked = value.locked;
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <div className="py-3 border-b border-ink/8 last:border-b-0">
@@ -389,6 +411,7 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
           onChange={onChange}
           disabled={locked}
           gpuDevices={gpuDevices}
+          inputRef={inputRef}
         />
 
         {/* Env-locked indicator */}
@@ -409,9 +432,12 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
               type="button"
               /* See beginConfigAction/isConfigActionTarget above — abandons
                  rather than commits whatever's mid-edit in the row's own
-                 input, whether reached by mouse or by Tab. */
+                 input, whether reached by mouse or by Tab. Scoped to
+                 THIS row's own input (inputRef), not "whatever's globally
+                 focused" — clicking one row's Revert must not silently
+                 discard an unrelated row's in-progress edit. */
               data-config-action
-              onMouseDown={beginConfigAction}
+              onMouseDown={() => beginConfigAction(inputRef.current)}
               onClick={onRevert}
               className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
             >
