@@ -2653,6 +2653,36 @@ describe('synthesiseChapter — orphaned characterId falls back to narrator', ()
       }),
     ).rejects.toBeInstanceOf(MissingDesignedVoiceError);
   });
+
+  it('names the orphaned characterId in the error when the substituted narrator ALSO has no designed voice', async () => {
+    /* Narrow double-failure case (found in review): the book's narrator has no
+       designed Qwen voice either, so the substitution still throws — but the
+       error text must carry the original orphaned id, not just "narrator",
+       so the real data-consistency bug stays debuggable. */
+    const cast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator', gender: 'neutral' }];
+    const qwen = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'radiy-pogodin')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        forbidKokoroFallback: true,
+        bookLanguage: 'ru',
+      }),
+    ).rejects.toThrow(/radiy-pogodin/);
+
+    warnSpy.mockRestore();
+  });
 });
 
 /* ── QWEN_BATCH_TOKEN_BUDGET env resolution (plan 136, shipped default 3600) ──

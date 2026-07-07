@@ -177,11 +177,12 @@ export class RecycleStormError extends Error {
    the chapter LOUDLY instead, naming the character so the user can design its
    voice in the cast view. */
 export class MissingDesignedVoiceError extends Error {
-  constructor(characterName: string, language: string) {
+  constructor(characterName: string, language: string, detail?: string) {
     super(
       `Character "${characterName}" has no designed voice for this ${language} book — ` +
         `design a voice for it (and the narrator) in the cast view before generating. ` +
-        `English Kokoro voices cannot read ${language} text.`,
+        `English Kokoro voices cannot read ${language} text.` +
+        (detail ? ` ${detail}` : ''),
     );
     this.name = 'MissingDesignedVoiceError';
   }
@@ -883,6 +884,7 @@ export async function synthesiseChapter(
     c: CastCharacter,
     route: Route,
     voiceName: string,
+    detail?: string,
   ): { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine } => {
     const needsFallback =
       route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
@@ -891,7 +893,7 @@ export async function synthesiseChapter(
        read the book's language through an English-only voice. Fail loudly so
        the user designs the missing voice instead of shipping garbage audio. */
     if (forbidKokoroFallback) {
-      throw new MissingDesignedVoiceError(c.name ?? c.id, bookLanguage ?? 'non-English');
+      throw new MissingDesignedVoiceError(c.name ?? c.id, bookLanguage ?? 'non-English', detail);
     }
     const kokoro = resolveForEngine('kokoro');
     return {
@@ -903,6 +905,13 @@ export async function synthesiseChapter(
 
   const castById = new Map(cast.map((c) => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
+
+  /* Shared synthetic-narrator stub, used wherever a narrator CastCharacter is
+     needed but the book's cast has no explicit `narrator` entry. Single
+     source of truth so the title beat and the orphaned-characterId fallback
+     below can never diverge on what a "missing narrator" looks like. */
+  const resolveNarratorChar = (): CastCharacter =>
+    castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
 
   /* Orphaned characterId safety net. A sentence can reference a characterId
      that has no corresponding entry in `cast` at all — e.g. a stray
@@ -978,10 +987,7 @@ export async function synthesiseChapter(
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    const narratorChar = castById.get(narratorCharacterId) ?? {
-      id: narratorCharacterId,
-      name: 'Narrator',
-    };
+    const narratorChar = resolveNarratorChar();
     /* The title beat speaks in the narrator's engine — which, per plan 108, is
        usually the default (Kokoro) since the narrator rarely carries a bespoke
        per-character engine. routeFor honours an explicit narrator ttsEngine if
@@ -1055,6 +1061,7 @@ export async function synthesiseChapter(
     const cached = resolvedByIndex.get(group.index);
     if (cached) return cached;
     let character = castById.get(group.characterId);
+    let orphanedFromId: string | undefined;
     if (!character) {
       if (!warnedUnknownCharacterIds.has(group.characterId)) {
         warnedUnknownCharacterIds.add(group.characterId);
@@ -1063,7 +1070,8 @@ export async function synthesiseChapter(
             `which is not in this book's cast — falling back to the narrator voice for this line.`,
         );
       }
-      character = castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+      character = resolveNarratorChar();
+      orphanedFromId = group.characterId;
     }
     const baseRoute = routeFor(character);
     const baseVoice = pickVoiceForEngine(
@@ -1099,7 +1107,19 @@ export async function synthesiseChapter(
        call), so the fallback is decided in one place — the partition then
        sees the post-fallback Kokoro engine and routes the group as a Kokoro
        single item, not a Qwen batch item. */
-    const r = { ...applyQwenFallback(character, baseRoute, voiceForGroup), configuredEngine };
+    const r = {
+      ...applyQwenFallback(
+        character,
+        baseRoute,
+        voiceForGroup,
+        orphanedFromId
+          ? `(This line's original characterId "${orphanedFromId}" is not in this book's cast and ` +
+              `was substituted with the narrator — that substitution is what's failing here, not a ` +
+              `narrator dialogue line.)`
+          : undefined,
+      ),
+      configuredEngine,
+    };
     resolvedByIndex.set(group.index, r);
     return r;
   };
