@@ -781,6 +781,11 @@ export type ExportLanInfo = components['schemas']['ExportLanInfo'];
    modal with this URL. */
 export type BookShareLink = components['schemas']['BookShareLink'];
 
+/* fs-51 — per-book QA report returned by GET /api/books/{bookId}/qa-report.
+   Aggregated live from existing per-chapter files; never persisted as its
+   own book-level record. See `server/src/audio/qa-report.ts`. */
+export type BookQaReport = components['schemas']['BookQaReport'];
+
 /* ── Advanced config knob types ──────────────────────────────────────── */
 
 /** One configurable knob as described by the server. */
