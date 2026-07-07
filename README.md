@@ -4,6 +4,8 @@
 
 > _Any book, performed by a full cast — kept true, kept yours, book after book._
 
+**▶ Hear a 90-second sample** — the same passage as one narrator, then the full cast: **[castwright.ai/#demo](https://www.castwright.ai/#demo)**.
+
 Turn a manuscript into a finished, **full-cast** audiobook on your own machine —
 every character in their own voice, consistent across a whole series. Castwright
 runs locally end-to-end; nothing leaves your computer unless you opt into a cloud
@@ -22,9 +24,8 @@ or MP3.
   series, even when an author renames someone mid-series. *(No other tool does
   this for readers.)*
 - **Designed voices** — every character gets a unique voice designed from its persona, kept consistent across the series. (Cloning a voice from your own sample is the next major release.)
-- **Quality gate** — every line is acoustically checked, transcript-verified, and drift-checked
-  before a chapter is assembled, and any that fail are re-recorded automatically; the plainly
-  broken lines never reach your ears.
+- **Five languages** — performs English, Russian, Spanish, French, and German end-to-end, with the manuscript's language detected on import. A cast never crosses languages within a book.
+- **Quality-checked automatically** — every chapter is gated before it's assembled: acoustic checks (dead air, over-long lines, timing drift), optional word-for-word ASR transcript verification, and an opt-in speaker-fingerprint check that catches a voice drifting out of character even when the words are right. Flagged takes are surfaced on the waveform and re-recorded automatically.
 - **On-device by default** — analysis and speech run on your machine; cloud is
   opt-in.
 - **You own the files** — export standard M4B / MP3 / AAC / Opus and keep them.
