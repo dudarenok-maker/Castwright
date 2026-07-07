@@ -87,6 +87,16 @@ entry exists. One extra file read plus a lookup, reusing an existing reader/buil
 rather than inventing a new one. Corollary: this also makes the pre-existing but previously
 dead duration-floor retry path functional for the first time.
 
+**Correction from adversarial review, round 2:** the read must be best-effort, mirroring the
+existing `readSegmentsFile` idiom in this same file (`aggregate.ts:173-181` — swallows ENOENT
+*and* any parse error, returns `null`). Three existing `aggregate-audition-tier.test.ts` cases
+write `segments.json` fixtures with no `cast.json` on disk at all; an unhandled ENOENT here
+would break all three. `readCastJson(bookDir)` returns `CastCharacter[] | null` using that
+same try/catch-swallow-all pattern; a `null` (missing or unparseable file) yields an empty
+lookup map, every character's `hint` stays `undefined`, and the canned-line fallback applies
+— **identical to this change's behavior before cast.json existed for a given book**, not a
+new failure mode.
+
 **(b) One shared longer text doesn't widen the variance the tolerance band is built from.**
 `pSevere`/`pBand`/`cleanMean` are the spread of the N embeddings' cosines to their own
 centroid. If all N renders still speak one identical text — even a longer, concatenated one —
@@ -186,19 +196,38 @@ only by `centroid.test.ts`'s own unit tests, unused by either production caller)
 the pool reaches target size it gets the full trim/bimodal-check treatment (`kind: 'in-book'`
 internally, relabeled `'audition'` by the caller) instead of the degenerate `'too-thin'` path.
 
-**Bimodal safety check on the blended pool (new):** if `result.bimodal` comes back `true` on
-this combined pool — the character's real anchors split from the new audition renders, or
-from each other, once blended — discard the anchors for this character and render the full
-`AUDITION_POOL_TARGET_N` (+margin) audition samples fresh, ignoring anchors entirely: the same
-treatment the bimodal branch above already gets. One re-attempt, not a recursive retry loop.
-This prevents silently shipping a centroid built from exactly the kind of cluster split the
-bimodal check exists to catch.
+**Bimodal safety check on the blended pool (new) — corrected in round 2 to stay cost-bounded:**
+the first revision discarded anchors and re-rendered a *full fresh* `AUDITION_POOL_TARGET_N +
+AUDITION_POOL_MARGIN` pool from scratch on top of the renders already spent reaching the
+blended pool — for a character with `K` anchors that's `(6−K) + 8 = 14−K` total renders, e.g.
+**14 at K=2, worse than today's K=12** — inverting the whole "anchors save renders" premise
+and silently contradicting the very "worst case = 8" claim this section made three paragraphs
+later. Fixed by **reusing, not discarding, the synthetic renders already obtained**: if
+`result.bimodal` is `true` on the anchors+synthetics blend, drop only the anchors and top up
+the *already-rendered* synthetic set to `AUDITION_POOL_TARGET_N` using more distinct texts
+from the same cycle, capping **total synthetic renders for this character, across both the
+initial attempt and this top-up, at `AUDITION_POOL_TARGET_N + AUDITION_POOL_MARGIN`** — the
+same hard ceiling as every other path, never a second independent budget stacked on top of
+the first. This makes the "worst case = 8" line below a real invariant rather than a
+best-path example.
 
-**Net effect:** worst case (0 anchors, no evidence) drops from 12 renders to
-`AUDITION_POOL_TARGET_N + AUDITION_POOL_MARGIN` = 8 once margin is restored honestly — a real
-but more modest cut than the first draft's unqualified 2x. Typical too-thin characters with
-some anchors need fewer still, down to zero new renders when anchors alone already meet
-target. This is a **directional** improvement, not a measured one — no before/after
+The resulting synthetic-only pool is **not** itself re-checked for bimodality. This is a
+known, pre-existing limitation, not a new gap this redesign introduces: today's
+`auditionCentroid` already never inspects `result.bimodal` for its (already pure-synthetic)
+pool (`audition-centroid.ts:159-167`), and the bimodal-*origin* branch in §2 has never had a
+"combined pool" to check in the first place. This safety check exists specifically for the
+one new failure mode this redesign creates — mixing real anchors with synthetic renders — not
+as general bimodal-proofing for every path. Recursing further (re-checking the fallback, and
+falling back again if that's also bimodal) is explicitly out of scope: it would reopen the
+unbounded-cost problem this correction just closed, for a failure mode (synthetic-only
+renders splitting into two clusters) this chore doesn't newly introduce and isn't trying to
+fix.
+
+**Net effect:** worst case (0 anchors, no evidence, or the bimodal-fallback path) is capped at
+`AUDITION_POOL_TARGET_N + AUDITION_POOL_MARGIN` = 8 total renders for any character, by
+construction — down from 12 today. Typical too-thin characters with some anchors need fewer
+still, down to zero new renders when anchors alone already meet target and the blend isn't
+bimodal. This is a **directional** improvement, not a measured one — no before/after
 false-positive rate is available for this chore to compare against (see Accepted limitation
 below and Out of scope). What's concretely fixed without needing a measurement to know it was
 wrong: same-text-only cross-sample variance, and burning full-model renders on characters that
@@ -217,26 +246,45 @@ dogfood shows this producing materially more false positives/negatives than toda
 
 ### 4. Signature change
 
-`auditionCentroid`'s `AuditionCharacter`/`AuditionCentroidOpts` types stay as-is; the function
-gains an optional `existingAnchors: Float32Array[]` parameter (defaulting to `[]`, so the
-bimodal call site and all existing unit tests that don't pass it keep working unchanged
-except for the K/pool-size assertions called out below).
+**Correction from adversarial review, round 2:** the first two drafts never said what happens
+to `CENTROID_K` and `AuditionCentroidOpts.k` (the existing override, still asserted by
+`audition-centroid.test.ts`'s "respects k override" case) once a fixed render count is
+replaced by the target/margin/anchor-count formula — leaving an implementer unable to tell if
+that test should stay, change, or go.
+
+**Resolved:** `CENTROID_K` is removed (superseded by `AUDITION_POOL_TARGET_N` +
+`AUDITION_POOL_MARGIN`). `AuditionCentroidOpts.k` is removed and replaced by optional
+`targetN`/`margin` overrides on the same options object (defaulting to
+`AUDITION_POOL_TARGET_N`/`AUDITION_POOL_MARGIN`), so tests can still exercise small pool sizes
+directly instead of via a render-count override that no longer maps onto a single loop
+variable. The "respects k override" test is rewritten against `targetN`, not deleted.
+`AuditionCharacter` already declares `hint?: CharacterHint` (`audition-centroid.ts:37`) — §1's
+plumbing fix populates it at the call site for the first time; it needs no type change. The
+function itself gains one new parameter, `existingAnchors: Float32Array[]` (defaulting to
+`[]`), so the bimodal call site and every other existing unit test that doesn't pass it keep
+working unchanged.
 
 ## Testing
 
-- `audition-centroid.test.ts`: update the hardcoded `CENTROID_K`-based call-count assertions
-  to the new `AUDITION_POOL_TARGET_N`/`AUDITION_POOL_MARGIN`-based top-up math; add cases for
-  (a) anchors alone already meeting target → zero new renders, (b) partial anchors → partial
+- `audition-centroid.test.ts`: replace the `CENTROID_K`-based call-count assertions (and the
+  "respects k override" case) with `targetN`/`margin`-based top-up math; add cases for (a)
+  anchors alone already meeting target → zero new renders, (b) partial anchors → partial
   top-up, (c) zero anchors → full target+margin renders (today's shape, smaller pool), (d)
   `buildAuditionTexts` cycling through fewer-than-N distinct quotes vs. the no-evidence canned
   fallback, (e) the pool-filling loop stopping early once target is reached vs. exhausting the
   margin and falling to `too-short`, (f) a blended pool that comes back `bimodal: true` →
-  anchors discarded, full fresh audition-only pool rendered instead.
+  anchors discarded and the *already-rendered* synthetic embeddings topped up to target (assert
+  the total render count across both the initial attempt and the top-up never exceeds `targetN
+  + margin` — the regression test for the round-2 cost-blowup fix), (g) a resulting
+  synthetic-only pool is used as-is with no second bimodal check (documents the accepted
+  pre-existing limitation, doesn't newly assert incorrect behavior as correct).
 - `aggregate.test.ts` / `aggregate-audition-tier.test.ts`: assert too-thin characters' anchors
   are passed into `auditionCentroid` and bimodal characters' are not; assert `scoreBook` loads
-  `cast.json` and threads `buildHintFromCast` onto `voiceInfoByChar` (including the
-  no-matching-cast-entry case, where `hint` stays `undefined` and the canned-line fallback
-  applies exactly as before this change); assert the combined pool (not just fresh renders)
+  `cast.json` via the new best-effort `readCastJson` and threads `buildHintFromCast` onto
+  `voiceInfoByChar`, covering **both** failure states — no matching cast entry (character
+  present, `hint` stays `undefined`) **and** `cast.json` entirely missing/unparseable (the
+  state the three existing fixtures in `aggregate-audition-tier.test.ts` are already in —
+  confirms this change doesn't red them); assert the combined pool (not just fresh renders)
   drives the resulting `cleanMean`/`pSevere`/`pBand`.
 - No e2e coverage needed — this is a backend scoring-pipeline change with no new UI surface;
   existing srv-36 render-integrity coverage (Phase 1) is the relevant regression net.
