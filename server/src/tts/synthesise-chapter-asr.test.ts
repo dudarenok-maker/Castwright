@@ -70,6 +70,7 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     const seg = res.segments.find((s) => s.kind !== 'title');
     expect(seg?.asr?.verdict).toBe('ok');
     expect(seg?.asrSuspect).toBeUndefined();
+    expect(seg?.asrRetries).toBe(1);
   });
 
   it('flags asrSuspect and ships the best take when drift persists', async () => {
