@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Capture the AuditionCharacter passed into auditionCentroid without touching a
-// sidecar. importOriginal keeps CENTROID_K etc. intact; only the fn is swapped.
+// sidecar. importOriginal keeps AUDITION_POOL_TARGET_N etc. intact; only the fn is swapped.
 const { auditionSpy } = vi.hoisted(() => ({
   auditionSpy: vi.fn(async (_character: { modelKey: string }) => null),
 }));

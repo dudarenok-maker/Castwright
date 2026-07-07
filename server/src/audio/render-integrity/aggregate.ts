@@ -22,7 +22,8 @@
 
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { audioDir } from '../../workspace/paths.js';
+import { audioDir, castJsonPath } from '../../workspace/paths.js';
+import { readJson } from '../../workspace/state-io.js';
 import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
 import { writeVerdicts, writeAttempted, attemptedPath, type VerdictRow } from './verdicts-io.js';
@@ -39,6 +40,7 @@ import {
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter } from './audition-centroid.js';
 import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
+import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -154,10 +156,11 @@ interface CharacterReference {
  * from anchor-eligible vectors, derive the clean spread statistics.
  *
  * Task 10 — too-thin / bimodal path: attempt Option-B audition centroid:
- *   render the character's approved audition sample K times, embed each,
- *   and build the centroid from those renders. If the audition sample is
- *   itself too short to produce reliable embeddings → `referenceKind: 'too-short'`
- *   (all segments → inconclusive).
+ *   blend real anchor embeddings (too-thin only) with new audition renders
+ *   under distinct evidence-quote text, up to AUDITION_POOL_TARGET_N +
+ *   AUDITION_POOL_MARGIN total render attempts (see audition-centroid.ts).
+ *   If the resulting pool is still too short for a reliable reference →
+ *   `referenceKind: 'too-short'` (all segments → inconclusive).
  *
  * @param anchorVecs    Anchor-eligible embedding vectors collected from the book.
  * @param voiceInfo     Optional voice info for Option-B (absent when no snapshot).
@@ -190,7 +193,12 @@ async function resolveCharacterReference(
 
   // Task 10: too-thin OR bimodal → Option-B audition centroid.
   if (voiceInfo) {
-    const audition = await auditionCentroid(voiceInfo);
+    const audition = await auditionCentroid(voiceInfo, {
+      // Too-thin: blend the real anchors in (better signal than synthetic-only).
+      // Bimodal: pass none — the anchors ARE the untrustworthy data causing
+      // the split; auditionCentroid falls back to a pure audition-only pool.
+      existingAnchors: result.kind === 'too-thin' ? anchorVecs : [],
+    });
     if (audition && audition.kind === 'audition') {
       // Compute the spread (pSevere/pBand/cleanMean) over the audition embeddings'
       // cosines — the same math as the in-book path but seeded from the K renders.
@@ -233,6 +241,20 @@ async function readSegmentsFile(path: string): Promise<SegmentsFileView | null> 
     return JSON.parse(raw) as SegmentsFileView;
   } catch (e) {
     if (e && (e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    return null;
+  }
+}
+
+/** Read cast.json; returns null on missing/malformed (best-effort — mirrors
+ *  readSegmentsFile's swallow-all contract just above). A missing or
+ *  unparseable cast.json yields no hints for any character in this book —
+ *  identical to this function's behavior before cast.json-sourced hints
+ *  existed at all, not a new failure mode. */
+async function readCastJson(bookDir: string): Promise<CastCharacter[] | null> {
+  try {
+    const cast = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
+    return cast?.characters ?? null;
+  } catch {
     return null;
   }
 }
@@ -389,6 +411,13 @@ export async function scoreBook(
   // review finding — see resolveConfiguredEngineByChar's own doc comment).
   const classificationSources = await loadSegmentsFiles(bookDir, chapters);
   const configuredEngineByChar = resolveConfiguredEngineByChar(classificationSources);
+  // srv-36 audition-centroid redesign: cast.json is the only place evidence
+  // quotes live, so it's read once here (best-effort — see readCastJson) and
+  // threaded onto each character's Option-B voice info as `hint`, letting
+  // auditionCentroid build a per-render pool of distinct evidence quotes
+  // instead of one repeated canned line.
+  const castChars = await readCastJson(bookDir);
+  const castById = new Map((castChars ?? []).map((c) => [c.id, c] as const));
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   for (const cd of chapterData) {
@@ -408,6 +437,7 @@ export async function scoreBook(
         // modelKey, then 0.6B for legacy segments with neither stamp.
         const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
         const modelKey = canonicalModelKeyForEngine(engine, renderKey);
+        const castChar = castById.get(charId);
         voiceInfoByChar.set(charId, {
           voiceName: snap.resolvedVoiceName,
           modelKey,
@@ -416,6 +446,7 @@ export async function scoreBook(
             // attributes may not be in the snapshot; fall back to empty
             attributes: snap.attributes,
           },
+          hint: castChar ? buildHintFromCast(castChar) : undefined,
         });
       }
     }
