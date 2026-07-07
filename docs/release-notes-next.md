@@ -24,7 +24,7 @@ extend as more lands. Restructured 2026-07-05 into the anatomy below (was a
 flat, unthemed accretion) — see CONTRIBUTING.md "Release notes".
 -->
 
-**A cast-first, hardening release.** Confirming a cast now lands you with your characters instead of the manuscript, and a new pre-flight check stops a book from generating with an undesigned Qwen voice rather than failing loudly mid-render. Everything else tightens what's already there: a Mac or graphics-card-free machine now runs multiple voices at full speed instead of queueing behind a small-GPU habit, a chapter stuck behind a confirmed fallback actually starts, and a run of casting, mobile, and LAN-access fixes round out the polish.
+**A cast-first, quality-gated release.** Confirming a cast now lands you with your characters instead of the manuscript, a new pre-flight check stops a book from generating with an undesigned Qwen voice rather than failing loudly mid-render, and every book now ships a visible, exportable quality-gate report — the acoustic, transcript, voice-match, and cast-continuity checks the pipeline already runs, made legible for the first time. Everything else tightens what's already there: a Mac or graphics-card-free machine now runs multiple voices at full speed instead of queueing behind a small-GPU habit, a chapter stuck behind a confirmed fallback actually starts, and a run of casting, mobile, and LAN-access fixes round out the polish.
 
 ---
 
@@ -50,6 +50,33 @@ Confirming a cast now takes you straight to your characters, and starting a rend
   flag, stamped at enqueue by the proceed-anyway path so the per-chapter
   `awaiting_fallback_confirm` gate doesn't re-prompt for that run's fresh
   chapters — later enqueues still get the per-chapter backstop (#1278).
+
+### 🛡️ Per-book quality gate report (new) — fs-51
+Every book now ships a visible, exportable "quality gate" receipt — the acoustic, transcript, voice-match, and cast-continuity checks the pipeline already runs, aggregated into one honest card instead of buried in per-chapter detail.
+
+- **New `GET /api/books/{bookId}/qa-report`** composes the existing signal-QA,
+  ASR content-QA, srv-36 voice-drift, and cast-config-drift signals into one
+  `BookQaReport`, computed fresh on every call (nothing new persisted) —
+  display and the text/JSON export can never diverge from each other, since
+  both read the same endpoint (#1433, Closes #973).
+- **A new `QaReportCard`** on both the Listen view (post-generation) and the
+  Generation view (live, refetching on chapter/run completion) — built around
+  a "never show a false pass" rule: a check that never ran, had nothing to
+  check, or was checked incompletely never renders as clean.
+  `chaptersEligible`/`chaptersScored`/`chaptersEmbedFailed` distinguish "gate
+  off" from "nothing to check" from "an isolated embed failure," computed
+  independently of `scoreBook`'s own control flow so the three states can
+  never be confused (#1433).
+- **Fixed a real, pre-existing correctness gap surfaced while building
+  this**: a chapter re-recorded via manual splice or QA-repair was spreading
+  its stale pre-re-record `qa`/`suspect`/`asr` verdict forward instead of
+  writing the fresh one — a repair that genuinely failed to fix a bad
+  sentence could have its `suspect: true` silently cleared to `undefined`.
+  Both `chapter-splice.ts` and `chapter-qa-repair.ts` now write a fresh
+  verdict from the actual re-recorded audio (#1433).
+- **Text and JSON export**, reusing the same aggregated data the card shows —
+  a clean book reads `"Every line held."`, a partial-coverage book states its
+  coverage fractions plainly rather than hiding them.
 
 ---
 
@@ -106,3 +133,7 @@ Confirming a cast now takes you straight to your characters, and starting a rend
 - **The srv-36 voice-consistency scorer rendered its Option-B audition centroid on a hardcoded 0.6B Qwen tier**, regardless of the tier the chapter actually rendered under — the 8GB-card OOM on a pure-1.7B render. `aggregate.ts` built each too-thin/bimodal character's `AuditionCharacter.modelKey` via `canonicalModelKeyForEngine(engine, 'qwen3-tts-0.6b')`, and since that helper returns a Qwen request key verbatim, EVERY Qwen audition (K=12 full synths) ran on the 0.6B base. During a 1.7B render this pulled the 0.6B base co-resident with the 1.7B synth (dedicated VRAM full → spill into shared → OOM/stall), AND embedded the reference under a model whose speaker space isn't comparable to the 1.7B-rendered anchors (a corrupt centroid vs the anchors it scores against). The audition now renders under the character's **per-character effective render tier**, stamped onto each `CharacterSnapshot.modelKey` via `buildCharacterSnapshots` using the SAME elevate-only `resolveCharacterQwenTier` helper `routeFor` synthesises under (extracted to `per-character-engine.ts`, now shared by routeFor, `computeUsedQwenTiers`, and the snapshot stamp so the three can't drift). aggregate prefers `snapshot.modelKey`, falling back to the chapter-level `segments.json` `modelKey`, then 0.6B for legacy pre-stamp files — so an elevated Qwen character in a **non-Qwen-default** book (Kokoro default + a per-character 1.7B pin) is no longer under-tiered to 0.6B either. Hardened with a post-scoring `reconcileResidentQwenTiers` re-assert (`afterChapterFinalized` uses the render tiers `scoreBook` now returns — no extra segments re-read) so a stray unused tier can't linger co-resident after the between-chapters audition pass. New `aggregate-audition-tier.test.ts` + `character-snapshots.test.ts` cases pin the per-character tier resolution (incl. the mixed-engine case), the legacy fallback, and the keep-flag derivation. Follow-up #1386 to replace the 12×-same-short-quote audition with a better reference sample (#1387).
 - **Follow-up to the above: two correctness bugs + a placebo test in the same tier-reconcile change, caught by an independent review.** (1) `buildCharacterSnapshots` stamped an **un-pinned** Qwen character (no per-character `ttsModelKey`) in a **non-Qwen-default** book with the RAW run key — a Kokoro-default book's `runModelKey` `kokoro-v1` was written onto a `voiceEngine:'qwen'` snapshot, though the character actually renders on Qwen 0.6B — because it passed the raw key into `resolveCharacterQwenTier` while `routeFor` canonicalizes to the Qwen engine first; the render-integrity keep-flags then missed the in-use 0.6B tier. It now canonicalizes the run key to Qwen first, matching `routeFor` (the override case was already correct). (2) The post-audition `reconcileResidentQwenTiers` derived its keep-flags from `scoreBook`'s finalized-chapters-only view, which can't see an **in-flight sibling chapter** of the same book mid-render on a tier no finished chapter used yet — so it could `/unload` that tier out from under the active render. It now reconciles against the run's FULL-cast tier set (`computeUsedQwenTiers`, the same source the run-start reconcile uses), computed once and threaded into `afterChapterFinalized`; `scoreBook`'s now-unused keep-flag return reverts to `void`. (3) `generation-spk.test.ts` mocked `scoreBook` to return `undefined`, so the `.then(keep => keep.keep06 …)` handler threw a `TypeError` swallowed by the outer `.catch` — the reconcile-wiring branch was never actually exercised; the test now mocks the reconcile and asserts it fires with the full-cast flags. The **cross-book** variant of bug (2) — a global `/unload` decided per-book can still evict a tier a *concurrently-running different book* uses — needs an active-generation tier registry and is tracked as a follow-up (#1395, Closes #1394, Refs #1393).
 - **The Qwen Code2Wav codec decode can now run on GPU instead of CPU** (side-25, #1374), behind a new `QWEN_CODEC_DEVICE` Advanced Settings knob — default `cpu`, unchanged behaviour out of the box. Root cause: `Qwen3TTSTokenizer` is a plain Python object, not an `nn.Module`, so it was silently skipped by the sidecar's existing device-move logic and always stayed on CPU regardless of where the Qwen model itself loaded — measured at ~40-50% of every batch's compute. `auto` mirrors the Qwen instance's own resolved device (not an independent probe), with an OOM-safe rollback (a real `.to('cpu')` call, never just a cached-attribute reset) if the move fails partway through. Two new companion knobs, `QWEN_CODEC_CHUNK_SIZE`/`QWEN_CODEC_LEFT_CONTEXT_SIZE`, bound onto the codec decoder via `functools.partial` (the library's `chunked_decode` doesn't accept these as call-site arguments) let an operator shape the GPU activation peak on a tight card. Real-hardware smoke test added for the 0.6B-Base and VoiceDesign load paths the existing golden-audio suite doesn't cover. On-box overnight acceptance + the decision to flip any given box's default to `auto` is a follow-up, owed post-merge.
+
+---
+
+**Full changelog:** v1.10.0...v1.11.0
