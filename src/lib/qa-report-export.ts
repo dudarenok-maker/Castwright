@@ -25,15 +25,11 @@ function voiceMatchLine(r: BookQaReport): string {
      Appended to every non-empty branch below rather than duplicated per
      branch. */
   const inconclusiveSuffix = vd.inconclusiveCount > 0 ? `, ${vd.inconclusiveCount} chapters inconclusive` : '';
-  const characterShortfall = vd.charactersChecked < vd.charactersOnRoster;
   const embedShortfall = vd.chaptersScored < vd.chaptersEligible;
   if (embedShortfall) {
     return `Voice match — ${vd.chaptersScored} of ${vd.chaptersEligible} eligible chapters scored (${vd.chaptersEmbedFailed} couldn't be embedded), ${vd.mismatches.length} mismatches${inconclusiveSuffix}`;
   }
-  const base = characterShortfall
-    ? `Voice match — ${vd.charactersChecked} of ${vd.charactersOnRoster} characters checked`
-    : `Voice match — ${vd.charactersOnRoster} of ${vd.charactersOnRoster} characters checked`;
-  return `${base}, ${vd.mismatches.length} mismatches${inconclusiveSuffix}`;
+  return `Voice match — ${vd.charactersChecked} of ${vd.charactersOnRoster} characters checked, ${vd.mismatches.length} mismatches${inconclusiveSuffix}`;
 }
 
 function castContinuityLine(r: BookQaReport): string {
