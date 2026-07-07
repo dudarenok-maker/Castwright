@@ -131,10 +131,22 @@ for (const { bookDir, author, series, title, state } of books) {
       voiceName: name,
       manifestLang: manifestLang ?? '(missing manifest)',
     });
+    /* Scope the clear to the contaminated qwen slot only — overrideTtsVoices
+       is a per-engine map (srv-18), so a character with a legitimate,
+       correctly-in-language Kokoro/Coqui/Gemini override alongside the bad
+       qwen one must keep it. voiceState/ttsModelKey are only reset when
+       qwen is (or defaults to being) the ACTIVE engine — otherwise a
+       character actively using another engine would have its real,
+       unrelated state wiped by a stale qwen leftover. */
     const out = { ...c };
-    delete out.overrideTtsVoices;
-    delete out.voiceState;
-    delete out.ttsModelKey;
+    const engines = { ...(c.overrideTtsVoices ?? {}) };
+    delete engines.qwen;
+    if (Object.keys(engines).length > 0) out.overrideTtsVoices = engines;
+    else delete out.overrideTtsVoices;
+    if (!c.ttsEngine || c.ttsEngine === 'qwen') {
+      delete out.voiceState;
+      delete out.ttsModelKey;
+    }
     next.push(out);
   }
 
