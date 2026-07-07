@@ -2806,6 +2806,29 @@ describe('synthesiseChapter pre-assembly QA gate', () => {
     expect(result.segments.some((s) => s.sentenceIds.includes(1))).toBe(true);
   });
 
+  it('stamps qaRetries counting actual re-record attempts for a segment that recovers', async () => {
+    // 1-sentence chapter: first take renders silence (flagged suspect), the
+    // retry renders a clean tone. Mirrors the "re-records a bad segment in
+    // place" fixture above but with a single sentence so segments[0] is
+    // unambiguous — a retry that fixed the line must still count.
+    const provider = makeContentProvider((_text, nth) => (nth === 1 ? 'silence' : 'tone'));
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'This troublesome line keeps dropping out.')],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+      maxSegmentRerecords: 2,
+      segmentQaThresholds: RMS_ONLY,
+    });
+
+    expect(result.segments[0].qa?.status).toBe('ok');
+    expect(result.segments[0].qaRetries).toBe(1);
+    // ASR gate wasn't configured for this chapter, so its counter never fires.
+    expect(result.segments[0].asrRetries).toBeUndefined();
+  });
+
   it('is disabled by default (no re-records, no qa stamp) — back-compat', async () => {
     const provider = makeContentProvider(() => 'silence');
     const result = await synthesiseChapter({
