@@ -904,6 +904,20 @@ export async function synthesiseChapter(
   const castById = new Map(cast.map((c) => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
 
+  /* Orphaned characterId safety net. A sentence can reference a characterId
+     that has no corresponding entry in `cast` at all — e.g. a stray
+     attribution to a real-world person quoted in front matter (a book's
+     foreword author, an epigraph byline) that never made it into cast.json,
+     or a cast/sentence-data drift between a subset re-analysis and the
+     roster it produced. That is NOT the same failure as "known character,
+     no voice designed" (MissingDesignedVoiceError below) — the id doesn't
+     exist in the Cast view at all, so naming it in a hard error gives the
+     user nothing they can act on. Fall back to the narrator's voice for
+     that line instead and log once per offending id, so a data-consistency
+     bug degrades a single line's delivery rather than failing the whole
+     chapter. */
+  const warnedUnknownCharacterIds = new Set<string>();
+
   /* Pool width — how many groups we *attempt* at once. Real GPU concurrency
      is still capped by the global `gpuSemaphore` each `synthesize` acquires,
      so a width > the semaphore cap just queues; it never oversubscribes. At
@@ -1040,7 +1054,17 @@ export async function synthesiseChapter(
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
     const cached = resolvedByIndex.get(group.index);
     if (cached) return cached;
-    const character = castById.get(group.characterId) ?? { id: group.characterId };
+    let character = castById.get(group.characterId);
+    if (!character) {
+      if (!warnedUnknownCharacterIds.has(group.characterId)) {
+        warnedUnknownCharacterIds.add(group.characterId);
+        console.warn(
+          `[synthesise-chapter] sentence group references characterId "${group.characterId}" ` +
+            `which is not in this book's cast — falling back to the narrator voice for this line.`,
+        );
+      }
+      character = castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+    }
     const baseRoute = routeFor(character);
     const baseVoice = pickVoiceForEngine(
       baseRoute.engine,
