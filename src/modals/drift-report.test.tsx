@@ -9,8 +9,8 @@
      - Side-by-side ProfileCompareCard renders both columns and highlights
        the changed factor. */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { DriftReportModal, type DriftBookGroupView } from './drift-report';
@@ -18,14 +18,26 @@ import { uiSlice } from '../store/ui-slice';
 import { groupDriftEvents } from '../store/revisions-slice';
 import type { DriftEvent, Character, Voice } from '../lib/types';
 
-vi.mock('../lib/use-sample-playback', () => ({
-  useSamplePlayback: () => ({
-    isPlaying: false,
-    currentUrl: null,
-    play: vi.fn(),
-    stop: vi.fn(),
-    pause: vi.fn(),
+/* Same mocking idiom as compare-cast-modal.test.tsx: a mutable shared
+   object standing in for the module-singleton playback state, so
+   `DriftListenWidget`'s `useAbAudition` sees real play/pause transitions
+   without touching a real <audio> element or leaking singleton state
+   across test files. */
+const samplePlaybackState = {
+  isPlaying: false,
+  currentUrl: null as string | null,
+  play: vi.fn(async (url: string) => {
+    samplePlaybackState.currentUrl = url;
+    samplePlaybackState.isPlaying = true;
   }),
+  stop: vi.fn(() => {
+    samplePlaybackState.isPlaying = false;
+    samplePlaybackState.currentUrl = null;
+  }),
+  playUntilEnded: vi.fn(async () => ({ cancelled: false })),
+};
+vi.mock('../lib/use-sample-playback', () => ({
+  useSamplePlayback: () => samplePlaybackState,
 }));
 
 const getVoiceSampleSpy = vi.fn((_args: unknown) =>
@@ -322,29 +334,20 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
   });
 });
 
-/* Bug 8 — Listen button A/B player. */
+/* Bug 8 — Listen button A/B player. Rebuilt on the shared-singleton
+   playback pattern (use-sample-playback + use-ab-audition) instead of two
+   real <audio> elements per row — see the crash-scale describe block below
+   for why. */
 describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
-  let playSpy: ReturnType<typeof vi.spyOn>;
-  let pauseSpy: ReturnType<typeof vi.spyOn>;
-  let playASpy: ReturnType<typeof vi.spyOn>;
-  let pauseASpy: ReturnType<typeof vi.spyOn>;
-  let playBSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
-    playSpy = vi
-      .spyOn(window.HTMLMediaElement.prototype, 'play')
-      .mockImplementation(() => Promise.resolve());
-    pauseSpy = vi
-      .spyOn(window.HTMLMediaElement.prototype, 'pause')
-      .mockImplementation(() => {});
-    playASpy = playSpy;
-    pauseASpy = pauseSpy;
-    playBSpy = playSpy;
+    samplePlaybackState.isPlaying = false;
+    samplePlaybackState.currentUrl = null;
+    samplePlaybackState.play.mockClear();
+    samplePlaybackState.stop.mockClear();
     getVoiceSampleSpy.mockClear();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     cleanup();
   });
 
@@ -377,11 +380,73 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     ).toBeInTheDocument();
   });
 
-  it('Play chapter calls .play() on the chapter audio element', () => {
+  it('never mounts a real <audio> element, even with Listen open', () => {
+    const { container } = renderModalWithVoices([makeEvent({})]);
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    expect(container.querySelectorAll('audio')).toHaveLength(0);
+  });
+
+  it('Play chapter calls the shared playback singleton with the chapter audio URL', () => {
     renderModalWithVoices([makeEvent({})]);
     fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
     fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
-    expect(playASpy).toHaveBeenCalled();
+    /* `forCharacter` disambiguates rows sharing the same chapter across two
+       different characters against the one shared playback singleton — see
+       the "distinct rows for the same chapter" test below. */
+    expect(samplePlaybackState.play).toHaveBeenCalledWith(
+      '/api/books/b-keeper/chapters/1/audio?forCharacter=eliza',
+    );
+  });
+
+  it("two characters drifting on the same chapter do not mutex each other's Chapter button", async () => {
+    /* Groups are keyed by (book, character, snapshot) — not by chapter — so
+       the same chapterId can appear in two different characters' rows.
+       Regression: both used to resolve to the identical bare chapter URL
+       against the one shared singleton, so playing one row's audio falsely
+       flipped the OTHER character's unrelated row to "Pause chapter" too. */
+    const elizaEvent = makeEvent({
+      id: 'drift:b-keeper:1:eliza:voice',
+      characterId: 'eliza',
+      chapterId: 1,
+    });
+    const stenEvent = makeEvent({
+      id: 'drift:b-keeper:1:sten:voice',
+      characterId: 'sten',
+      chapterId: 1,
+    });
+    const stenVoice: Voice = { id: 'voice-sten', character: 'Sten', attributes: [] } as unknown as Voice;
+    const bothCharacters: Character[] = [
+      characters[0],
+      { ...characters[1], voiceId: 'voice-sten' },
+    ];
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <DriftReportModal
+          groupsByBook={[
+            group([elizaEvent, stenEvent], { bookId: 'b-keeper', characters: bothCharacters }),
+          ]}
+          voices={[elizaVoice, stenVoice]}
+          onClose={vi.fn()}
+          onRegenerateChapter={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('drift-listen-drift:b-keeper:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-chapter-drift:b-keeper:1:eliza:voice'));
+    await waitFor(() =>
+      expect(screen.getByTestId('drift-play-chapter-drift:b-keeper:1:eliza:voice')).toHaveTextContent(
+        'Pause chapter',
+      ),
+    );
+    /* Sten's row shows the idle "Chapter" label, not "Pause chapter" —
+       the shared singleton is playing eliza's disambiguated URL, which no
+       longer collides with Sten's. */
+    fireEvent.click(screen.getByTestId('drift-listen-drift:b-keeper:1:sten:voice'));
+    expect(screen.getByTestId('drift-play-chapter-drift:b-keeper:1:sten:voice')).toHaveTextContent(
+      'Chapter',
+    );
   });
 
   it('Play voice fetches the sample URL on first click and plays it', async () => {
@@ -389,27 +454,357 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
     fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
     await waitFor(() => expect(getVoiceSampleSpy).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(playBSpy).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(samplePlaybackState.play).toHaveBeenCalledWith(
+        '/audio/voices/voice-eliza-kokoro-v1-cafe.mp3',
+      ),
+    );
   });
 
-  it('starting B while A is playing pauses A first (mutex)', async () => {
+  it('starting B while A is playing hands the mutex to B (only one side shows Pause)', async () => {
     renderModalWithVoices([makeEvent({})]);
     fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
     fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
-    expect(playASpy).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice')).toHaveTextContent(
+        'Pause chapter',
+      ),
+    );
+
     fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
-    await waitFor(() => expect(playBSpy).toHaveBeenCalled());
-    expect(pauseASpy).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice')).toHaveTextContent(
+        'Pause voice',
+      ),
+    );
+    /* There's only one real track in the whole app now — Chapter reverts
+       to idle the moment Voice takes over the shared singleton. */
+    expect(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice')).toHaveTextContent(
+      'Chapter',
+    );
   });
 
-  it('closing the modal pauses both audio elements (cleanup)', () => {
+  it('unmounting the widget while its own track is playing stops the shared singleton', async () => {
     const { unmount } = renderModalWithVoices([makeEvent({})]);
     fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
     fireEvent.click(screen.getByTestId('drift-play-chapter-drift:book-A:1:eliza:voice'));
-    expect(playASpy).toHaveBeenCalled();
-    pauseASpy.mockClear();
+    await waitFor(() => expect(samplePlaybackState.play).toHaveBeenCalled());
+    samplePlaybackState.stop.mockClear();
     unmount();
-    expect(pauseASpy).toHaveBeenCalled();
+    expect(samplePlaybackState.stop).toHaveBeenCalled();
+  });
+
+  it('does not start audio (or set state) if the row unmounts while the voice-sample fetch is still in flight', async () => {
+    /* Regression: the old <audio>-ref implementation guarded the post-await
+       resume with `if (!el || !url) return;` (the ref goes null on
+       unmount), so a stale resolve was a silent no-op. The shared-singleton
+       rewrite dropped the equivalent check. */
+    let resolveSample!: (v: {
+      url: string;
+      durationSec: number;
+      cached: boolean;
+      modelKey: 'kokoro-v1';
+    }) => void;
+    getVoiceSampleSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSample = resolve;
+        }),
+    );
+    const { unmount } = renderModalWithVoices([makeEvent({})]);
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
+    await waitFor(() => expect(getVoiceSampleSpy).toHaveBeenCalledTimes(1));
+
+    unmount();
+    samplePlaybackState.play.mockClear();
+    await act(async () => {
+      resolveSample({
+        url: '/audio/voices/voice-eliza-kokoro-v1-cafe.mp3',
+        durationSec: 12,
+        cached: true,
+        modelKey: 'kokoro-v1',
+      });
+      await Promise.resolve();
+    });
+    expect(samplePlaybackState.play).not.toHaveBeenCalled();
+  });
+});
+
+/* jsdom has no IntersectionObserver. Same technique as
+   change-log.test.tsx's infinite-scroll stub, but this one captures the
+   callback + target so a test can simulate the sentinel scrolling into
+   view instead of only asserting the sentinel renders. */
+class ControllableIntersectionObserver {
+  static instances: ControllableIntersectionObserver[] = [];
+  callback: IntersectionObserverCallback;
+  target: Element | null = null;
+  root: Element | null = null;
+  rootMargin = '';
+  thresholds: number[] = [];
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    ControllableIntersectionObserver.instances.push(this);
+  }
+  observe(target: Element) {
+    this.target = target;
+  }
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+  intersect() {
+    if (!this.target) return;
+    this.callback(
+      [{ isIntersecting: true, target: this.target } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
+let originalIO: typeof IntersectionObserver | undefined;
+
+/* Backstop for the reported "375 chapters flagged across 10 books" hang.
+   `DriftReportModal` no longer decides scope (layout.tsx does, before the
+   `groupsByBook` prop even reaches here) — these tests pin the two things
+   the component itself is responsible for: never mounting a real <audio>
+   element regardless of row count, and never mounting more than one page
+   of group cards at a time. */
+describe('DriftReportModal — scale regression (375-chapters browser-hang report)', () => {
+  const N = 50; // comfortably above GROUPS_PAGE_SIZE (20)
+
+  function manyCharactersAndVoices() {
+    const chars: Character[] = Array.from({ length: N }, (_, i) => ({
+      id: `char-${i}`,
+      name: `Character ${i}`,
+      role: 'Minor',
+      color: 'slot-4',
+      voiceId: `voice-${i}`,
+    }) as Character);
+    const manyVoices: Voice[] = chars.map(
+      (c) => ({ id: c.voiceId, character: c.name, attributes: [] }) as unknown as Voice,
+    );
+    const events: DriftEvent[] = chars.map((c, i) =>
+      makeEvent({
+        id: `drift:book-A:${i}:${c.id}:voice`,
+        characterId: c.id,
+        chapterId: i,
+        chapterTitle: `Chapter ${i}`,
+      }),
+    );
+    return { chars, manyVoices, events };
+  }
+
+  beforeAll(() => {
+    originalIO = (globalThis as { IntersectionObserver?: typeof IntersectionObserver })
+      .IntersectionObserver;
+    (globalThis as { IntersectionObserver: unknown }).IntersectionObserver =
+      ControllableIntersectionObserver;
+  });
+  afterAll(() => {
+    if (originalIO) {
+      (globalThis as { IntersectionObserver: typeof IntersectionObserver }).IntersectionObserver =
+        originalIO;
+    } else {
+      delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+    }
+  });
+  beforeEach(() => {
+    ControllableIntersectionObserver.instances = [];
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('mounts zero real <audio> elements no matter how many rows carry a matched voice', () => {
+    const { chars, manyVoices, events } = manyCharactersAndVoices();
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    const { container } = render(
+      <Provider store={store}>
+        <DriftReportModal
+          groupsByBook={[group(events, { characters: chars })]}
+          voices={manyVoices}
+          onClose={vi.fn()}
+          onRegenerateChapter={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(container.querySelectorAll('audio')).toHaveLength(0);
+  });
+
+  it('renders only the first page of group cards, not all of them at once', () => {
+    const { chars, events } = manyCharactersAndVoices();
+    const { container } = render(
+      <DriftReportModal
+        groupsByBook={[group(events, { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const cards = container.querySelectorAll('article[data-testid^="drift-group-"]');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.length).toBeLessThan(N);
+    expect(screen.getByTestId('drift-book-load-more-book-A')).toBeInTheDocument();
+  });
+
+  it('reveals another page once the load-more sentinel scrolls into view', () => {
+    const { chars, events } = manyCharactersAndVoices();
+    const { container } = render(
+      <DriftReportModal
+        groupsByBook={[group(events, { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const before = container.querySelectorAll('article[data-testid^="drift-group-"]').length;
+    act(() => {
+      ControllableIntersectionObserver.instances[0]?.intersect();
+    });
+    const after = container.querySelectorAll('article[data-testid^="drift-group-"]').length;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('does not collapse the revealed page when the same book gains or loses a group (dismiss/regen/background poll)', () => {
+    const { chars, events } = manyCharactersAndVoices();
+    const { container, rerender } = render(
+      <DriftReportModal
+        groupsByBook={[group(events, { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    act(() => ControllableIntersectionObserver.instances[0]?.intersect());
+    const revealedBefore = container.querySelectorAll(
+      'article[data-testid^="drift-group-"]',
+    ).length;
+    expect(revealedBefore).toBeGreaterThan(20); // confirms the reveal actually grew past page 1
+
+    /* Simulate one group disappearing (a dismiss, a regen, or the
+       background drift poll clearing an event) — the book id is
+       unchanged, only the group count shrinks. */
+    rerender(
+      <DriftReportModal
+        groupsByBook={[group(events.slice(1), { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const revealedAfter = container.querySelectorAll(
+      'article[data-testid^="drift-group-"]',
+    ).length;
+    /* Regression: this used to reset straight back to the first 20 cards
+       any time `orderedGroups.length` changed for ANY reason, silently
+       discarding the user's scroll-reveal progress. */
+    expect(revealedAfter).toBeGreaterThan(20);
+  });
+
+  it('omits the sentinel once every group has been revealed', () => {
+    const { chars, events } = manyCharactersAndVoices();
+    render(
+      <DriftReportModal
+        groupsByBook={[group(events, { characters: chars })]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* 50 groups / 20 per page → 3 reveals to exhaust the list. */
+    act(() => ControllableIntersectionObserver.instances[0]?.intersect());
+    act(() => ControllableIntersectionObserver.instances[0]?.intersect());
+    act(() => ControllableIntersectionObserver.instances[0]?.intersect());
+    expect(screen.queryByTestId('drift-book-load-more-book-A')).toBeNull();
+  });
+
+  it('a small book with fewer groups than one page never shows the sentinel', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeEvent({})])]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('drift-book-load-more-book-A')).toBeNull();
+  });
+});
+
+/* "This book" / "Series" scope toggle. Scoping itself happens in
+   layout.tsx before `groupsByBook` reaches this component — these tests
+   only pin the toggle UI: it's hidden by default, appears when the caller
+   says a series is available, and calls back on click. */
+describe('DriftReportModal — book/series scope toggle', () => {
+  it('hides the toggle when seriesAvailable is not set', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeEvent({})])]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('drift-report-scope-toggle')).toBeNull();
+  });
+
+  it('hides the toggle when seriesAvailable is true but no onScopeChange is wired', () => {
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeEvent({})])]}
+        seriesAvailable
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('drift-report-scope-toggle')).toBeNull();
+  });
+
+  it('renders "This book" pressed by default and calls onScopeChange("series") on click', () => {
+    const onScopeChange = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeEvent({})])]}
+        seriesAvailable
+        scope="book"
+        onScopeChange={onScopeChange}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('drift-report-scope-book')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('drift-report-scope-series')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    fireEvent.click(screen.getByTestId('drift-report-scope-series'));
+    expect(onScopeChange).toHaveBeenCalledWith('series');
+  });
+
+  it('renders "Series" pressed when scope="series" and calls onScopeChange("book") on click', () => {
+    const onScopeChange = vi.fn();
+    render(
+      <DriftReportModal
+        groupsByBook={[group([makeEvent({})])]}
+        seriesAvailable
+        scope="series"
+        onScopeChange={onScopeChange}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('drift-report-scope-series')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    fireEvent.click(screen.getByTestId('drift-report-scope-book'));
+    expect(onScopeChange).toHaveBeenCalledWith('book');
   });
 });
 

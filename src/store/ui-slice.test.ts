@@ -21,6 +21,7 @@ const baseState = (stage: Stage): UiState => ({
   revisionHistoryFor: null,
   showDriftReport: false,
   driftReportCharacterFilter: null,
+  driftReportScope: 'book',
   previewMode: false,
   selectedModel: DEFAULT_MODEL,
   ttsModelKey: DEFAULT_TTS_MODEL,
@@ -393,5 +394,29 @@ describe('uiSlice — openHelp', () => {
   it('openHelp with no payload sets stage to { kind: help, focusCode: undefined }', () => {
     const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.openHelp());
     expect(s.stage).toEqual({ kind: 'help', focusCode: undefined });
+  });
+});
+
+/* Fixes the "375 chapters across 10 books" Drift Report browser-hang
+   report — the modal now defaults to the active book and offers a
+   "Series" toggle instead of always rendering the whole workspace. */
+describe('uiSlice — driftReportScope (drift modal book/series toggle)', () => {
+  it('defaults to "book" scope', () => {
+    const s = baseState({ kind: 'books' });
+    expect(s.driftReportScope).toBe('book');
+  });
+
+  it('setDriftReportScope switches to "series"', () => {
+    const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.setDriftReportScope('series'));
+    expect(s.driftReportScope).toBe('series');
+  });
+
+  it('closing the drift report resets scope back to "book"', () => {
+    const opened = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setDriftReportScope('series'),
+    );
+    const closed = uiSlice.reducer(opened, uiActions.setShowDriftReport(false));
+    expect(closed.driftReportScope).toBe('book');
   });
 });

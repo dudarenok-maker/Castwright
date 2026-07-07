@@ -9,6 +9,7 @@ import {
   selectPresentLanguages,
   languageLabel,
   LANGUAGE_LABELS,
+  findSeriesBookIds,
 } from './library-slice';
 import type { LibraryBook, LibraryResponse } from '../lib/types';
 
@@ -231,5 +232,45 @@ describe('librarySlice — language filter (fe-16)', () => {
     expect(languageLabel('es')).toBe(LANGUAGE_LABELS.es);
     expect(languageLabel('fr')).toBe(LANGUAGE_LABELS.fr);
     expect(languageLabel('pt')).toBe('pt');
+  });
+});
+
+/* Powers the Drift Report's "Series" scope toggle — series membership
+   comes from the already-loaded library scan, no server round-trip. */
+describe('findSeriesBookIds', () => {
+  const authors: LibraryResponse['authors'] = [
+    {
+      name: 'Della Renwick',
+      series: [
+        {
+          name: 'The Hollow Tide',
+          books: [
+            book({ bookId: 'book-A' }),
+            book({ bookId: 'book-B' }),
+            book({ bookId: 'book-C' }),
+          ],
+        },
+      ],
+    },
+    {
+      name: 'Someone Else',
+      series: [{ name: 'Standalone Shelf', books: [book({ bookId: 'book-D' })] }],
+    },
+  ];
+
+  it('returns every book id in the same series as the given book', () => {
+    expect(findSeriesBookIds(authors, 'book-B')).toEqual(['book-A', 'book-B', 'book-C']);
+  });
+
+  it('returns just the book itself when its series has only one book', () => {
+    expect(findSeriesBookIds(authors, 'book-D')).toEqual(['book-D']);
+  });
+
+  it('returns just the book itself when the book is not found in the library', () => {
+    expect(findSeriesBookIds(authors, 'unknown-book')).toEqual(['unknown-book']);
+  });
+
+  it('returns an empty array for a null bookId', () => {
+    expect(findSeriesBookIds(authors, null)).toEqual([]);
   });
 });

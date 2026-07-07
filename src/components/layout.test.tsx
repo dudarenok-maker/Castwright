@@ -462,12 +462,19 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
     } as DriftEvent;
   }
 
-  it('falls through bookMeta.saved → library.books → bookId for the BOOK header', async () => {
+  it('falls through bookMeta.saved → library.books → bookId for the BOOK header, scoped to the active book by default', async () => {
     const store = makeStore();
+    /* Landing on a book (via openBook) fires the per-book disk hydrate
+       effect for book-A-slug; this test doesn't care about
+       manuscript/cast state, so resolve to "nothing persisted" rather
+       than wiring up a matching manuscript hydrate like the other
+       openBook-driven tests in this file do. */
+    getBookStateMock.mockResolvedValue(null);
 
-    /* Two-book seed: book-A has BOTH bookMeta.saved AND library.books;
-       book-B has ONLY library.books. The new fallback is what surfaces
-       the clean "The Ebb" title for book-B; before the fix, book-B's
+    /* Two-book seed, same series: book-A has BOTH bookMeta.saved AND
+       library.books; book-B has ONLY library.books. The fallback is what
+       surfaces the clean "The Ebb" title for book-B once the Series
+       toggle brings it into view; before the fallback fix, book-B's
        header rendered the raw "book-B-slug" string. */
     const library: LibraryResponse = {
       authors: [
@@ -500,7 +507,9 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
        selector buckets them into two book entries. Each book section
        in drift-report.tsx always renders a BOOK header (PR #165), so
        both `view.bookTitle` values must resolve correctly via the
-       saved → library → bookId priority chain. */
+       saved → library → bookId priority chain — but only once the user
+       expands scope to the series; book-A is the only book on screen by
+       default (fixes the "375 chapters across 10 books" hang). */
     store.dispatch(
       revisionsActions.hydrateFromBookState({
         drift: [
@@ -510,9 +519,16 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
       }),
     );
 
+    /* Land on book-A as the active book so the default "book" scope has
+       something concrete to scope to. Deliberately 'confirm' (cast_pending)
+       rather than 'ready' — the 'ready'-only 30s active-book poll effect
+       would otherwise immediately fire pollRevisions({bookId: 'book-A-slug'})
+       against the file's default empty mock and wipe the drift event this
+       test just seeded via its own per-book replace semantics. */
+    store.dispatch(uiActions.openBook({ id: 'book-A-slug', status: 'cast_pending' }));
     store.dispatch(uiActions.setShowDriftReport(true));
 
-    const { findByText, queryByText } = render(
+    const { findByText, queryByText, findByTestId } = render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/']}>
           <Routes>
@@ -522,18 +538,27 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
       </Provider>,
     );
 
-    /* book-A: saved meta wins over library entry. */
+    /* Default scope: only the active book (book-A) renders. Saved meta
+       wins over the library entry for its title. */
     expect(await findByText('Saved title — The Hollow Tide')).toBeTruthy();
-    /* book-B: library title surfaces (the fix). Without it the header
-       would render the raw "book-B-slug". */
+    expect(queryByText('The Ebb')).toBeNull();
+    /* The library entry's "Library title — The Hollow Tide" must NOT win for
+       book-A as the drift modal's BOOK section heading; the saved-meta
+       short-circuit guards against a regression that flipped the priority
+       order. Scoped to the heading role (not plain queryByText) because
+       the top-bar breadcrumb for the now-active book-A-slug legitimately
+       renders that same library title elsewhere on the page. */
+    expect(
+      screen.queryByRole('heading', { level: 4, name: 'Library title — The Hollow Tide' }),
+    ).toBeNull();
+
+    /* Expanding to the series brings book-B into view — its title
+       resolves through library.books since it has no saved meta. */
+    fireEvent.click(await findByTestId('drift-report-scope-series'));
     expect(await findByText('The Ebb')).toBeTruthy();
     /* Neither raw bookId leaks into the modal as a title. */
     expect(queryByText('book-A-slug')).toBeNull();
     expect(queryByText('book-B-slug')).toBeNull();
-    /* The library entry's "Library title — The Hollow Tide" must NOT win for
-       book-A; the saved-meta short-circuit guards against a regression
-       that flipped the priority order. */
-    expect(queryByText('Library title — The Hollow Tide')).toBeNull();
   });
 });
 
