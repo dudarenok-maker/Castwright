@@ -7,6 +7,7 @@ import {
   selectDriftByBook,
   selectDriftForBook,
   selectDriftGroupsByBook,
+  scopeDriftGroupsByBook,
   distinctDriftChapterCount,
 } from './revisions-slice';
 import type { Revision, DriftEvent, RevisionsResponse } from '../lib/types';
@@ -938,5 +939,43 @@ describe('revisionsSlice — markRevisionPlayable', () => {
       revisionsActions.markRevisionPlayable({ chapterId: 99 }),
     );
     expect(next.pending).toEqual(start.pending);
+  });
+});
+
+/* Fixes the "375 chapters flagged across 10 books" Drift Report browser-hang
+   report — `selectDriftGroupsByBook` buckets the whole workspace (the
+   background cross-book poll fills it for every book), so the modal needs a
+   render-time scope on top. */
+describe('scopeDriftGroupsByBook', () => {
+  const s = revisionsSlice.reducer(
+    undefined,
+    revisionsActions.applyPoll({
+      drift: [
+        drift('d-a', { bookId: 'book-A' }),
+        drift('d-b', { bookId: 'book-B' }),
+        drift('d-c', { bookId: 'book-C' }),
+      ],
+    }),
+  );
+  const groupsByBook = selectDriftGroupsByBook({ revisions: s });
+
+  it('"book" scope keeps only the active book', () => {
+    const result = scopeDriftGroupsByBook(groupsByBook, 'book', 'book-B', ['book-B']);
+    expect(result.map((g) => g.bookId)).toEqual(['book-B']);
+  });
+
+  it('"series" scope keeps every book in the given series list', () => {
+    const result = scopeDriftGroupsByBook(groupsByBook, 'series', 'book-A', ['book-A', 'book-B']);
+    expect(result.map((g) => g.bookId).sort()).toEqual(['book-A', 'book-B']);
+  });
+
+  it('"series" scope with a single-book series behaves like "book" scope', () => {
+    const result = scopeDriftGroupsByBook(groupsByBook, 'series', 'book-A', ['book-A']);
+    expect(result.map((g) => g.bookId)).toEqual(['book-A']);
+  });
+
+  it('falls back to the unscoped list when there is no active book (defensive)', () => {
+    const result = scopeDriftGroupsByBook(groupsByBook, 'book', null, []);
+    expect(result).toBe(groupsByBook);
   });
 });

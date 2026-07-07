@@ -18,9 +18,13 @@ import {
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { castDesignActions } from '../store/cast-design-slice';
-import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-slice';
+import {
+  revisionsActions,
+  selectDriftGroupsByBook,
+  scopeDriftGroupsByBook,
+} from '../store/revisions-slice';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
-import { libraryActions } from '../store/library-slice';
+import { libraryActions, findSeriesBookIds } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
@@ -232,6 +236,27 @@ export function Layout() {
     ? (characters.find((c) => c.id === openProfileId) ?? null)
     : null;
 
+  /* Series membership for the Drift Report's "This book / Series" toggle —
+     derived from the already-loaded library scan (no server round-trip).
+     `seriesAvailable` gates whether the toggle renders at all (a
+     standalone book has nothing to expand to). */
+  const driftSeriesBookIds = useMemo(
+    () => findSeriesBookIds(library.authors, bookId),
+    [library.authors, bookId],
+  );
+  const driftSeriesAvailable = driftSeriesBookIds.length > 1;
+
+  /* Scope down to the active book (default) or its series before the
+     per-book view is built, so the modal never receives — and never has to
+     render — drift for books the user isn't looking at. Fixes the "375
+     chapters flagged across 10 books" browser-hang report: the background
+     cross-book poll (plan 83) fills `driftGroupsByBook` for the whole
+     workspace by design; this is purely a render-time scope. */
+  const scopedDriftGroupsByBook = useMemo(
+    () => scopeDriftGroupsByBook(driftGroupsByBook, ui.driftReportScope, bookId, driftSeriesBookIds),
+    [driftGroupsByBook, ui.driftReportScope, bookId, driftSeriesBookIds],
+  );
+
   /* Zip the slice-level grouped drift selection with book titles + the
      active book's cast for the modal's `groupsByBook` prop. Memoised so
      unrelated re-renders don't break referential equality (the modal's
@@ -239,7 +264,7 @@ export function Layout() {
      here is what lets it skip a render). */
   const driftGroupsByBookView = useMemo(
     () =>
-      driftGroupsByBook.map((g) => ({
+      scopedDriftGroupsByBook.map((g) => ({
         bookId: g.bookId,
         /* bookMeta.saved is sparse (only books the user has actively
            opened/edited this session); library.books always carries a
@@ -252,7 +277,7 @@ export function Layout() {
         characters: g.bookId === bookId ? characters : [],
         groups: g.groups,
       })),
-    [driftGroupsByBook, bookMetaSaved, library.books, characters, bookId],
+    [scopedDriftGroupsByBook, bookMetaSaved, library.books, characters, bookId],
   );
   const profileVoice = profileCharacter
     ? (voices.find((v) => v.id === profileCharacter.voiceId) ?? null)
@@ -1922,6 +1947,9 @@ export function Layout() {
           voices={voices}
           filterCharacterId={ui.driftReportCharacterFilter}
           onClearFilter={() => dispatch(uiActions.clearDriftReportCharacterFilter())}
+          scope={ui.driftReportScope}
+          onScopeChange={(scope) => dispatch(uiActions.setDriftReportScope(scope))}
+          seriesAvailable={driftSeriesAvailable}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
           /* Drift "Regenerate" → an immediate whole-chapter regen (plan 114:
              the per-character path was removed). The drifted chapter is

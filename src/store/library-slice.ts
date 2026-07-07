@@ -39,6 +39,27 @@ function flattenAuthors(authors: LibraryResponse['authors']): LibraryBook[] {
   return out;
 }
 
+/** Book ids sharing a series with `bookId`, per the already-loaded library
+    scan (`authors[].series[].books[]`) — no server round-trip needed. Used
+    to scope the Voice Drift Detector's "Series" toggle. Returns just
+    `[bookId]` when the book isn't found or its series has only one book,
+    so callers can treat the result as "the scope" without a separate
+    standalone check. */
+export function findSeriesBookIds(
+  authors: LibraryResponse['authors'],
+  bookId: string | null,
+): string[] {
+  if (!bookId) return [];
+  for (const author of authors) {
+    for (const series of author.series) {
+      if (series.books.some((b) => b.bookId === bookId)) {
+        return series.books.map((b) => b.bookId);
+      }
+    }
+  }
+  return [bookId];
+}
+
 export const librarySlice = createSlice({
   name: 'library',
   initialState,
