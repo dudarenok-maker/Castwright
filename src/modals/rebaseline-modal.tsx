@@ -262,11 +262,15 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
          OWN home book (its stamped sourceBookId for a sibling, the anchor
          bookId for an anchor-book row) — not always the anchor `bookId` — or
          two different books' same-slug voiceId-less characters (narrator,
-         unknown-male, ...) share one cache-file prefix. */
-      const sampleVoiceId = matched?.id ?? sampleScopeFor(
-        { id: characterId, voiceId: character?.voiceId },
-        character?.sourceBookId ?? bookId,
-      );
+         unknown-male, ...) share one cache-file prefix. Same call shape as
+         playCurrent below (falls back to a characterId-only stand-in only
+         for the rare charById miss, so both sites read identically). */
+      const sampleVoiceId =
+        matched?.id ??
+        sampleScopeFor(
+          character ?? { id: characterId },
+          character?.sourceBookId ?? bookId,
+        );
       const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, {
         persona,
         sampleVoiceId,

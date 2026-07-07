@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { uiSelectors } from '../store/ui-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import {
   playEmotionVariantSample,
@@ -57,12 +58,10 @@ export function SentenceEmotionControl({
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const markStale = useMarkCharacterStaleIfRendered();
-  /* Optional-chained (matches manuscript.tsx's own bookId selector) — many
-     existing tests render this component in a store with no `ui` slice
-     wired up at all, and this preview affordance degrades gracefully to the
-     old unscoped sample behaviour when a book id genuinely isn't available. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? undefined);
+  /* undefined (not uiSelectors.bookId's `null`) so this degrades to
+     sampleScopeFor's old unscoped fallback when a book id genuinely isn't
+     available, matching every other sampleScopeFor call site. */
+  const bookId = useAppSelector(uiSelectors.bookId) ?? undefined;
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
