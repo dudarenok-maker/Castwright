@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { OverrideRow } from './override-row';
 import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
 
@@ -119,7 +119,7 @@ describe('OverrideRow — overridden', () => {
 /* ─── onChange coercion ──────────────────────────────────────────────────── */
 
 describe('OverrideRow — onChange coercion', () => {
-  it('calls onChange with a number when a number input changes', () => {
+  it('does not call onChange while typing a number — only on blur', () => {
     const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
     const value = makeValue({ effective: 10 });
     const onChange = vi.fn();
@@ -132,12 +132,44 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('spinbutton');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '5' } });
     fireEvent.change(input, { target: { value: '55' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledWith(55);
     expect(typeof onChange.mock.calls[0][0]).toBe('number');
   });
 
-  it('calls onChange with an integer when an integer input changes', () => {
+  it('keeps showing the newly committed value immediately after blur, before the store confirms it', () => {
+    // Regression: the draft-resync effect used to depend on `editing`
+    // directly, so the blur handler's setEditing(false) — which happens
+    // in the same tick as dispatching the save, before it resolves — would
+    // itself re-run the effect against the still-stale `value.effective`
+    // and snap the field back to the OLD value for the duration of the
+    // in-flight save. `value.effective` is deliberately left at its
+    // pre-edit value here to simulate that in-flight window.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '55' } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith(55);
+    expect(input.value).toBe('55');
+  });
+
+  it('calls onChange with an integer on blur when an integer input changes', () => {
     const descriptor = makeDescriptor({ type: 'integer', min: 1, max: 10, step: 1 });
     const value = makeValue({ effective: 3 });
     const onChange = vi.fn();
@@ -150,9 +182,401 @@ describe('OverrideRow — onChange coercion', () => {
       />,
     );
     const input = screen.getByRole('spinbutton');
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '7' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith(7);
     expect(Number.isInteger(onChange.mock.calls[0][0])).toBe(true);
+  });
+
+  it('reverts the draft to the last effective value on blur when the typed number is invalid', () => {
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input.value).toBe('10');
+  });
+
+  it('does not call onChange while typing a string — only on blur', () => {
+    const descriptor = makeDescriptor({ type: 'string', default: 'hello' });
+    const value = makeValue({ effective: 'hello', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'hell' } });
+    fireEvent.change(input, { target: { value: 'hello world' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledWith('hello world');
+  });
+
+  it('does not commit on blur when the field was focused/blurred but never edited (tab-through)', () => {
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton');
+    // Tab landing on this field (e.g. as focus moves off a preceding row)
+    // then away again, with no edit in between, must not fire a save.
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not commit on blur when the typed value equals the current effective value', () => {
+    const descriptor = makeDescriptor({ type: 'string', default: 'hello' });
+    const value = makeValue({ effective: 'hello', source: 'default' });
+    const onChange = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('abandons an uncommitted edit instead of committing it when Revert is clicked directly', () => {
+    // Regression, round 1: a mousedown-preventDefault was tried first to
+    // stop this race, but that also blocks the blur the draft-resync effect
+    // needs — the abandoned edit ended up silently re-committing (recreating
+    // the override the click was reverting) on the row's next real blur.
+    // Regression, round 2: a relatedTarget check was tried next, but WebKit
+    // (desktop Safari, all iOS browsers) doesn't move focus to a <button>
+    // on click the way Chromium/Firefox do, so no blur — and no
+    // relatedTarget — ever fired there either. The fix forces the blur
+    // itself, imperatively, via document.activeElement.blur() in
+    // beginConfigAction — reproduced here with a real DOM .focus() call
+    // (not fireEvent.focus) so document.activeElement is genuinely the
+    // input, matching what the fix actually reads.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 5, source: 'override', overridden: true });
+    const onChange = vi.fn();
+    const onRevert = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={onRevert}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    const revertButton = screen.getByRole('button', { name: /revert/i });
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.mouseDown(revertButton);
+    fireEvent.click(revertButton);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onRevert).toHaveBeenCalledOnce();
+    expect(input.value).toBe('5');
+  });
+
+  it('does not clobber a fresh re-edit if an earlier rejected save resolves late', async () => {
+    // Regression: the rejection .catch originally reset the draft
+    // unconditionally. If the user refocuses the same field and starts a
+    // new edit before the EARLIER save's rejection arrives, that stale
+    // rejection must not stomp the in-progress edit.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    let rejectFirstSave: (() => void) | undefined;
+    const onChange = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFirstSave = () => reject(new Error('save failed'));
+        }),
+    );
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    // A real input.blur() (not fireEvent.blur, which dispatches the event
+    // without moving document.activeElement) so the next .focus() below is
+    // a genuine focus transition rather than a same-element no-op.
+    act(() => input.blur());
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '42' } });
+
+    await act(async () => {
+      rejectFirstSave?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(input.value).toBe('42');
+  });
+
+  it('does not clobber an already-committed newer edit if an earlier rejected save resolves late', async () => {
+    // Regression: the previous fix guarded only on "is the user still
+    // mid-typing" (editingRef), which isn't enough — a SECOND edit that's
+    // itself already been committed (blurred, its own save dispatched) is
+    // no longer "mid-typing" either, so the first edit's stale rejection
+    // would still clobber it back to the pre-edit-1 value. Only the most
+    // recent commit's own rejection should be allowed to revert the draft.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    let rejectFirstSave: (() => void) | undefined;
+    const onChange = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirstSave = () => reject(new Error('save failed'));
+          }),
+      )
+      .mockImplementationOnce(() => new Promise(() => {})); // second save never resolves either way
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+
+    // Edit 1: 10 -> 99, committed (save in flight, not yet resolved).
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    act(() => input.blur());
+    expect(onChange).toHaveBeenNthCalledWith(1, 99);
+
+    // Edit 2: refocus, 99 -> 55, ALSO committed before edit 1 resolves.
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '55' } });
+    act(() => input.blur());
+    expect(onChange).toHaveBeenNthCalledWith(2, 55);
+
+    // Now edit 1's stale save rejects. It must not clobber edit 2's value.
+    await act(async () => {
+      rejectFirstSave?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(input.value).toBe('55');
+  });
+
+  it('does not clobber a value already reset externally while the original save is still pending', async () => {
+    // Regression: the previous guard (commitSeqRef) only tracked NEWER
+    // LOCAL commits — it didn't account for value.effective changing via
+    // an EXTERNAL Revert/Reset on the same field while the original save
+    // was still in flight. Replaced with a single generationRef bumped on
+    // any value.effective change too, not just local commits.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    let rejectSave: (() => void) | undefined;
+    const onChange = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = () => reject(new Error('save failed'));
+        }),
+    );
+    const { rerender } = render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ effective: 10 })}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+
+    // Edit: 10 -> 99, committed, save in flight (not yet resolved).
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    act(() => input.blur());
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    // Externally, the field gets reset to its real default (0) — e.g. the
+    // user clicked Revert and resetKnob resolved — before the original
+    // save settles. Simulated by re-rendering with the new value, same as
+    // a real store update flowing down as a prop change.
+    rerender(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ effective: 0 })}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    expect(input.value).toBe('0');
+
+    // The original (99) save's stale rejection arrives. It must NOT
+    // clobber the already-correct, already-reset value.
+    await act(async () => {
+      rejectSave?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(input.value).toBe('0');
+  });
+
+  it("does not abandon an unrelated row's in-progress edit when a different row's Revert is clicked", () => {
+    // Regression: beginConfigAction used to blur/abandon whatever was
+    // GLOBALLY focused (document.activeElement), regardless of which
+    // row's Revert button was actually clicked. Now scoped to the
+    // clicked button's own row via inputRef.
+    const descriptorA = makeDescriptor({ key: 'knob_a', label: 'Knob A', type: 'number' });
+    const valueA = makeValue({ key: 'knob_a', effective: 5 });
+    const onChangeA = vi.fn();
+
+    const descriptorB = makeDescriptor({ key: 'knob_b', label: 'Knob B', type: 'number' });
+    const valueB = makeValue({
+      key: 'knob_b',
+      effective: 7,
+      source: 'override',
+      overridden: true,
+    });
+    const onRevertB = vi.fn();
+
+    render(
+      <>
+        <OverrideRow
+          descriptor={descriptorA}
+          value={valueA}
+          onChange={onChangeA}
+          onRevert={vi.fn()}
+        />
+        <OverrideRow descriptor={descriptorB} value={valueB} onChange={vi.fn()} onRevert={onRevertB} />
+      </>,
+    );
+    const inputA = screen.getByRole('spinbutton', { name: 'Knob A' }) as HTMLInputElement;
+    const revertB = screen.getByRole('button', { name: /revert/i });
+
+    // Mid-typing in Row A, never blurred...
+    act(() => inputA.focus());
+    fireEvent.change(inputA, { target: { value: '99' } });
+
+    // ...then click Row B's Revert.
+    fireEvent.mouseDown(revertB);
+    fireEvent.click(revertB);
+
+    expect(onRevertB).toHaveBeenCalledOnce();
+    expect(onChangeA).not.toHaveBeenCalled();
+    // Row A's in-progress edit must be untouched — still showing what was
+    // typed, not silently abandoned back to 5.
+    expect(inputA.value).toBe('99');
+  });
+
+  it('abandons an uncommitted edit when Tab lands focus directly on Revert (keyboard nav)', () => {
+    // Regression: an earlier version of the fix dropped the relatedTarget
+    // check entirely in favor of an onMouseDown-only mechanism, which
+    // never fires for keyboard navigation — tabbing straight from a knob
+    // input to its own Revert button (the common case, since Revert sits
+    // right after its knob in tab order) would otherwise commit the edit
+    // via the ordinary blur-commit path before Revert could abandon it.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 5, source: 'override', overridden: true });
+    const onChange = vi.fn();
+    const onRevert = vi.fn();
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={onRevert}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    const revertButton = screen.getByRole('button', { name: /revert/i });
+
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '99' } });
+    // Tab's own focus change blurs the input with relatedTarget set to
+    // whatever receives focus next — no mousedown involved at all.
+    fireEvent.blur(input, { relatedTarget: revertButton });
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input.value).toBe('5');
+  });
+
+  it('does not leave an unhandled rejection when a boolean save fails', async () => {
+    const descriptor = makeDescriptor({ type: 'boolean', default: false });
+    const value = makeValue({ effective: false, source: 'default' });
+    const onChange = vi.fn(() => Promise.reject(new Error('save failed')));
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onChange).toHaveBeenCalledWith(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('reverts the draft to the last known value if the save is rejected', async () => {
+    // Regression: with the local draft buffer, a rejected saveOverride left
+    // `value.effective` untouched (config-slice only updates on fulfilled),
+    // so the draft stayed frozen on the unsaved value forever with no
+    // visible sign the save never landed.
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn(() => Promise.reject(new Error('save failed')));
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={value}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith(99);
+    await waitFor(() => expect(input.value).toBe('10'));
   });
 
   it('calls onChange with the option string when an enum select changes', () => {

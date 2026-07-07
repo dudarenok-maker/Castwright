@@ -8,6 +8,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { ConfigGroup } from '../../lib/types';
+import { beginConfigAction } from './override-row';
 
 /* ── Nav context ─────────────────────────────────────────────────────────── */
 
@@ -113,6 +114,12 @@ export function SettingsSection({
           <button
             type="button"
             aria-label="Reset section"
+            /* See override-row.tsx's beginConfigAction/isConfigActionTarget
+               — abandons, rather than commits, whatever's mid-edit in the
+               currently-focused knob input, whether reached by mouse or
+               by Tab. */
+            data-config-action
+            onMouseDown={() => beginConfigAction()}
             onClick={onResetSection}
             className="shrink-0 px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/60 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
           >

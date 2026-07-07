@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
-import { OverrideRow } from '../components/settings/override-row';
+import { OverrideRow, beginConfigAction } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -335,6 +335,12 @@ export function AdvancedView() {
           <div className="flex items-center justify-end">
             <button
               type="button"
+              /* See override-row.tsx's beginConfigAction/isConfigActionTarget
+                 — abandons, rather than commits, whatever's mid-edit in the
+                 currently-focused knob input, whether reached by mouse or
+                 by Tab. */
+              data-config-action
+              onMouseDown={() => beginConfigAction()}
               onClick={handleResetAll}
               className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0"
             >
@@ -372,7 +378,7 @@ export function AdvancedView() {
                         key={d.key}
                         descriptor={d}
                         value={{ ...value, staleReason: deriveStaleReason(d, value, gpuDevices) }}
-                        onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw }))}
+                        onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw })).unwrap()}
                         onRevert={() => dispatch(resetKnob(d.key))}
                         gpuDevices={gpuDevices}
                       />
