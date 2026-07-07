@@ -25,6 +25,15 @@ export function isRerecordableSegment(seg: ChapterSegment): boolean {
 export interface SynthOutput {
   pcm: Buffer;
   sampleRate: number;
+  /** fs-51 — the freshly-computed QA/ASR verdict for this re-recorded
+      segment, when the caller's synth ran the gates. Absent when the
+      caller didn't run QA/ASR for this call (legacy behavior). */
+  qa?: ChapterSegment['qa'];
+  suspect?: ChapterSegment['suspect'];
+  asr?: ChapterSegment['asr'];
+  asrSuspect?: ChapterSegment['asrSuspect'];
+  qaRetries?: ChapterSegment['qaRetries'];
+  asrRetries?: ChapterSegment['asrRetries'];
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -50,7 +59,19 @@ export async function buildSynthReplacements(
       out.sampleRate === opts.chapterSampleRate
         ? out.pcm
         : resamplePcm16(out.pcm, out.sampleRate, opts.chapterSampleRate);
-    replacements.push({ startSegmentIndex: i, endSegmentIndex: i, pcm });
+    replacements.push({
+      startSegmentIndex: i,
+      endSegmentIndex: i,
+      pcm,
+      freshVerdict: {
+        qa: out.qa,
+        suspect: out.suspect,
+        asr: out.asr,
+        asrSuspect: out.asrSuspect,
+        qaRetries: out.qaRetries,
+        asrRetries: out.asrRetries,
+      },
+    });
   }
   return replacements;
 }

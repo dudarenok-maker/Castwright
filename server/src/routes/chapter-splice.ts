@@ -54,6 +54,8 @@ import {
 } from '../audio/finalize-chapter-write.js';
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
+import { configValue } from '../config/resolver.js';
+import { asrEnabled, resolveAsrRerecords, resolveAsrSampleEvery } from '../tts/segment-asr-qa.js';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
@@ -304,8 +306,22 @@ chapterSpliceRouter.post(
               signal: controller.signal,
               chapterTitleNarration: undefined,
               narratorCharacterId: 'narrator',
+              maxSegmentRerecords: configValue<number>('qa.seg.maxRerecords'),
+              ...(asrEnabled()
+                ? { asr: { maxRerecords: resolveAsrRerecords(), sampleEvery: resolveAsrSampleEvery() } }
+                : {}),
             });
-            return { pcm: r.pcm, sampleRate: r.sampleRate };
+            const s = r.segments[0];
+            return {
+              pcm: r.pcm,
+              sampleRate: r.sampleRate,
+              qa: s?.qa,
+              suspect: s?.suspect,
+              asr: s?.asr,
+              asrSuspect: s?.asrSuspect,
+              qaRetries: s?.qaRetries,
+              asrRetries: s?.asrRetries,
+            };
           },
         });
       }

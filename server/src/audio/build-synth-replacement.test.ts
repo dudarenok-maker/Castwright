@@ -96,4 +96,26 @@ describe('buildSynthReplacements', () => {
     });
     expect(reps[0].pcm.length).toBe(pcm.length);
   });
+
+  it('carries the fresh verdict from the synth output onto the replacement', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+        suspect: undefined,
+      }),
+    });
+    expect(reps[0].freshVerdict).toEqual({
+      qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+      suspect: undefined,
+      asr: undefined,
+      asrSuspect: undefined,
+      qaRetries: undefined,
+      asrRetries: undefined,
+    });
+  });
 });
