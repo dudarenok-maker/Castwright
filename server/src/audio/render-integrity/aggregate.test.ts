@@ -301,6 +301,53 @@ describe('scoreBook', () => {
     expect(await readCentroids(dir)).toBeNull();
   });
 
+  it("classifies a character book-wide from the SAME chapter population qa-report.ts uses — first chapter wins even when that first chapter has no embeddings sibling (PR #1433 round-2 review finding)", async () => {
+    // fs-51 PR #1433 round-2 finding: scoreBook's OWN classifier call used to
+    // feed resolveConfiguredEngineByChar its embeddings-filtered `chapterData`
+    // list (chapters where readEmbeddings succeeded), NOT the full
+    // segments.json population qa-report.ts's loadSegmentsFiles produces. A
+    // character whose first-ever rendered chapter is missing its embeddings
+    // sibling would then be classified by scoreBook from a DIFFERENT "first"
+    // chapter than qa-report.ts sees — able to disagree book-wide.
+    //
+    // Fixture: hero renders Kokoro in ch1 (segments.json only — NO
+    // embeddings.json, e.g. an embed failure), then Qwen in ch2 (segments.json
+    // AND embeddings.json). Before the fix, scoreBook's chapterData list
+    // skipped ch1 entirely (no embeddings sibling) so its classifier saw ch2
+    // FIRST → classified hero 'qwen' → scored ch2 and could write a
+    // voice-mismatch verdict for a character qa-report.ts (whose classifier
+    // sees ch1 first, from the unfiltered list) would classify 'kokoro' and
+    // exclude from the roster entirely — a self-contradictory report. After
+    // the fix, scoreBook classifies hero 'kokoro' book-wide (ch1 wins, same
+    // as qa-report.ts) and never scores hero anywhere.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-missing-emb-first-'));
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+
+    // ch1: segments.json only — NO embeddings.json sibling.
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      segments: [{ characterId: 'hero', sentenceIds: [1], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'kokoro' } },
+    }));
+
+    // ch2: segments.json AND embeddings.json — fully processable.
+    const rows2 = [{ characterId: 'hero', sentenceIds: [2], vec: vec(0) }];
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), rows2, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      segments: rows2.map((r) => ({ characterId: 'hero', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    // hero classified 'kokoro' book-wide (ch1 wins) → never scored, even in
+    // ch2 where embeddings ARE present and hero's per-chapter engine is qwen.
+    expect(await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'))).toBeNull();
+    expect(await readCentroids(dir)).toBeNull();
+  });
+
   it('skips Kokoro-configured characters entirely', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-kok-'));
     const { mkdirSync } = await import('node:fs');

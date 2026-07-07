@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import { audioDir } from '../workspace/paths.js';
 import { writeVerdicts, writeAttempted, attemptedPath } from './render-integrity/verdicts-io.js';
+import { scoreBook } from './render-integrity/aggregate.js';
+import { writeEmbeddings, EMBEDDINGS_VERSION } from './render-integrity/embeddings-io.js';
 import { buildAudioQaReport } from './qa-report.js';
 
 async function makeBook(): Promise<string> {
@@ -242,6 +244,63 @@ describe('buildAudioQaReport', () => {
     // — matching what scoreBook will actually attempt to score.
     expect(report.voiceDrift.chaptersEligible).toBe(0);
     expect(report.voiceDrift.charactersOnRoster).toBe(0);
+  });
+
+  it('never produces an orphaned voice-mismatch when a character\'s first-ever chapter is missing its embeddings sibling (PR #1433 round-2 review finding)', async () => {
+    // fs-51 PR #1433 round-2 finding: qa-report.ts's classifier
+    // (resolveConfiguredEngineByChar) is fed the FULL segments.json
+    // population via loadSegmentsFiles, regardless of embeddings
+    // availability. scoreBook's OWN classifier call used to be fed a
+    // DIFFERENT, embeddings-filtered chapter list — so the two could
+    // disagree about which chapter is "first" for a character whose
+    // first-ever rendered chapter has no embeddings sibling, producing a
+    // self-contradictory report: a voice-mismatch row for a character the
+    // same report's roster says was never checked.
+    //
+    // Fixture: hero renders Kokoro in ch1 (segments.json only, embeddings
+    // write failed/never happened) then Qwen in ch2 (segments.json AND
+    // embeddings.json — fully processable). This is a REAL on-disk run of
+    // scoreBook (not a hand-crafted verdict file), so it exercises both
+    // call sites' actual classifier inputs end-to-end.
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'kokoro-v1', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'hero' })],
+      characterSnapshots: { hero: { voiceEngine: 'kokoro' } },
+      // deliberately NO embeddings.json sibling written for ch1
+    });
+
+    // 10 clean anchor vectors clustered at angle 0 (clears CENTROID_MIN_N so
+    // scoreBook takes the 'in-book' reference path, not the too-thin
+    // fallback) plus one deliberately drifted vector at sentenceId 99 — a
+    // genuine 'voice-mismatch' under the pre-fix bug, not a masking
+    // 'inconclusive' verdict.
+    const angleVec = (theta: number) => Float32Array.from([Math.cos(theta), Math.sin(theta), 0, 0, 0, 0, 0, 0]);
+    const rows2: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 10; i++) rows2.push({ characterId: 'hero', sentenceIds: [i], vec: angleVec(0.02 * i) });
+    rows2.push({ characterId: 'hero', sentenceIds: [99], vec: angleVec(1.2) }); // drifted
+    await writeEmbeddings(join(audioDir(dir), 'ch2.embeddings.json'), rows2, EMBEDDINGS_VERSION);
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: rows2.map((r) => seg({ characterId: 'hero', sentenceIds: r.sentenceIds })),
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    });
+
+    // Run the REAL scoreBook against this fixture — with the round-2 fix,
+    // it agrees with qa-report.ts that hero is kokoro book-wide (ch1 wins)
+    // and never scores hero, so it writes no verdict file for ch2.
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    // Both call sites agree: hero is kokoro book-wide, never on the roster.
+    expect(report.voiceDrift.charactersOnRoster).toBe(0);
+    expect(report.voiceDrift.chaptersEligible).toBe(0);
+    // No orphaned mismatch row: scoreBook wrote no verdict file for ch2, so
+    // there is nothing for the roster to disagree with.
+    expect(report.voiceDrift.mismatches).toEqual([]);
   });
 
   it('does not count a segment toward acoustic.chaptersFlagged when qa is clean and suspect is unset', async () => {

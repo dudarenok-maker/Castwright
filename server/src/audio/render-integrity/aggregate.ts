@@ -23,6 +23,7 @@
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { audioDir } from '../../workspace/paths.js';
+import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
 import { writeVerdicts, writeAttempted, attemptedPath, type VerdictRow } from './verdicts-io.js';
 import {
@@ -104,6 +105,20 @@ export interface EngineClassificationSource {
  * are in scope (see the fs-51 PR #1433 review finding: a per-chapter
  * re-derivation in qa-report.ts could disagree with scoreBook's book-wide
  * verdict, producing a false "embed failed" count).
+ *
+ * Round-2 correctness note: sharing the FUNCTION isn't sufficient — both
+ * callers must also feed it the identically-filtered chapter POPULATION, or
+ * "first chapter wins" can still disagree. `qa-report.ts` calls this with
+ * `loadSegmentsFiles`'s output: every chapter with a segments.json, full
+ * stop. `scoreBook` used to call this with its own `chapterData` (chapters
+ * that ALSO passed its Phase-1 embeddings-sibling check) — a character whose
+ * first-ever rendered chapter is missing its embeddings sibling would then
+ * be classified from a DIFFERENT "first" chapter by the two call sites. A
+ * character's configured engine is a rendering-configuration fact, not an
+ * embeddings-availability fact, so `scoreBook` now also calls
+ * `loadSegmentsFiles` for this classification step specifically, and applies
+ * its own embeddings-sibling skip separately/downstream, as a per-chapter
+ * scoring-eligibility check — never conflating the two.
  *
  * @param orderedSources Segments-file-like views, in the SAME chapter order
  *   the caller wants "first" to mean.
@@ -361,10 +376,19 @@ export async function scoreBook(
 
   // Collect all character IDs and their configured engines (from characterSnapshots),
   // book-wide, first-chapter-wins — via the single shared implementation also used
-  // by qa-report.ts (resolveConfiguredEngineByChar), so the two can never disagree.
-  const configuredEngineByChar = resolveConfiguredEngineByChar(
-    chapterData.map((cd) => ({ characterSnapshots: cd.snapshots })),
-  );
+  // by qa-report.ts (resolveConfiguredEngineByChar). Crucially, this is fed the
+  // SAME unfiltered chapter population qa-report.ts uses (every chapter with a
+  // segments.json, via the shared loadSegmentsFiles, regardless of embeddings
+  // availability) — NOT this function's own `chapterData` (which Phase 1 already
+  // filtered down to chapters with a READABLE embeddings sibling). A character's
+  // configured engine is a rendering-configuration fact (what characterSnapshots
+  // says), not an embeddings-availability fact; feeding the classifier a
+  // differently-filtered list than qa-report.ts's would let "first chapter wins"
+  // disagree between the two call sites whenever a character's first-ever
+  // rendered chapter is missing its embeddings sibling (fs-51 PR #1433 round-2
+  // review finding — see resolveConfiguredEngineByChar's own doc comment).
+  const classificationSources = await loadSegmentsFiles(bookDir, chapters);
+  const configuredEngineByChar = resolveConfiguredEngineByChar(classificationSources);
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   for (const cd of chapterData) {
