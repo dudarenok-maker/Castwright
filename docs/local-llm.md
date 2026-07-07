@@ -46,7 +46,12 @@ and the policy is documented at the top of the same file.
 
 ## The VRAM budget — the actual constraint
 
-8 GB total on the dev box. Three things compete for it:
+8 GB total on the dev box — the site's "sweet spot" tier (`HARDWARE_LINE` in
+`src/lib/brand.ts`). The site's entry-point tier is 6 GB (`GPU_VRAM_BUDGET`
+drops to `6` there, per INSTALL.md's config table); the budget below scales
+down accordingly — expect the 9B/8B analyzer options and Coqui to no longer
+co-reside with anything else, and more frequent cross-engine eviction via
+`withGpuLoad`. Three things compete for the 8 GB case:
 
 | Tenant                 | Resident size     | When it's loaded                    |
 | ---------------------- | ----------------- | ----------------------------------- |
