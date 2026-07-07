@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { scoreBook } from './aggregate.js';
-import { readVerdicts } from './verdicts-io.js';
+import { readVerdicts, readAttempted, attemptedPath } from './verdicts-io.js';
 import { readCentroids } from './centroids-io.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 
@@ -79,6 +79,40 @@ describe('scoreBook', () => {
 
     const centroids = await readCentroids(dir);
     expect(centroids!['hero'].referenceKind).toBe('in-book');
+
+    // The attempted sentinel is written for a chapter that scored successfully too —
+    // "attempted" and "scored" aren't mutually exclusive; every processed chapter
+    // gets a sentinel regardless of outcome.
+    expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch1'))).toBe(true);
+  });
+
+  it('writes the attempted sentinel even when the embeddings sibling is missing (fleet-wide embed-failure signal)', async () => {
+    // fs-51 correctness fix: a chapter with a stochastic-voiced character whose
+    // `.embeddings.json` sibling is missing must still leave evidence that
+    // scoreBook tried to process it — otherwise "the gate never ran" and "the
+    // gate ran and embedding failed for every chapter" both look identical
+    // (chaptersScored === 0 book-wide) to qa-report.ts's aggregation. The
+    // sentinel is written BEFORE the missing-embeddings skip so its presence
+    // alone proves scoreBook began this chapter's per-chapter processing.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-noemb-'));
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+
+    // Segments file exists (stochastic voice) but NO embeddings.json sibling.
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      segments: [{ characterId: 'hero', sentenceIds: [1], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // No verdict file — scoring never happened for this chapter.
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).toBeNull();
+
+    // But the attempted sentinel IS present — proving scoreBook tried.
+    expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch1'))).toBe(true);
   });
 
   it('too-few anchors → audition fallback → null (no sidecar) → all segments inconclusive with referenceKind too-short', async () => {

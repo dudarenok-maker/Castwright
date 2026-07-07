@@ -65,7 +65,15 @@ function VoiceMatchRow({ report }: { report: BookQaReport }) {
       </div>
     );
   }
-  if (vd.chaptersScored === 0) {
+  /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the
+     gate never ran" — a fleet-wide embedding failure (the gate attempted
+     every eligible chapter, but embeddings failed for literally all of
+     them) ALSO produces chaptersScored === 0, while chaptersEmbedFailed is
+     now correctly nonzero for that case. Only show the "never ran"
+     invitation copy when chaptersEmbedFailed is ALSO 0 — otherwise fall
+     through to the eligible-chapters-scored branch below, which already
+     renders the honest "0 of N eligible chapters scored" fraction. */
+  if (vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>

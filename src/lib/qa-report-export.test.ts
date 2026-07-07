@@ -28,6 +28,17 @@ describe('formatQaReportText', () => {
     expect(text).not.toContain('18 of 18 characters checked');
   });
 
+  it('surfaces a fleet-wide embed failure instead of "not run" when chaptersScored is 0 but chaptersEmbedFailed is nonzero', () => {
+    // fs-51 correctness fix — see the matching qa-report-card.test.tsx case.
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, chaptersScored: 0, chaptersEmbedFailed: 12 },
+    };
+    const text = formatQaReportText(report, 'Book');
+    expect(text).toContain("0 of 12 eligible chapters scored (12 couldn't be embedded)");
+    expect(text).not.toContain('Voice match — not run for this book');
+  });
+
   it('appends the inconclusive-chapter count to the voice-match line when nonzero', () => {
     const report = { ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, inconclusiveCount: 2 } };
     const text = formatQaReportText(report, 'Book');

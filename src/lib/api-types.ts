@@ -4226,6 +4226,7 @@ export interface components {
                 attribution: "full" | "legacy-unattributed";
                 chaptersEligible: number;
                 chaptersScored: number;
+                /** @description Eligible chapters the voice-drift gate attempted but never produced a verdict for (an embedding failure). Nonzero for both an isolated failure (some chapters scored, this one didn't) and a fleet-wide failure (every eligible chapter was attempted but ALL of them failed, so chaptersScored is also 0) — the two are otherwise indistinguishable from chaptersScored alone. Stays 0 only when the gate was never attempted on any eligible chapter ("gate off"). */
                 chaptersEmbedFailed: number;
                 charactersOnRoster: number;
                 charactersChecked: number;

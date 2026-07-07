@@ -12,7 +12,13 @@ function asrLine(r: BookQaReport): string {
 function voiceMatchLine(r: BookQaReport): string {
   const vd = r.voiceDrift;
   if (vd.chaptersEligible === 0) return 'Voice match — no stochastic-voiced characters in this book';
-  if (vd.chaptersScored === 0) return 'Voice match — not run for this book';
+  /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the
+     gate never ran" — a fleet-wide embedding failure (every eligible
+     chapter attempted, all of them failed) also produces chaptersScored
+     === 0, but chaptersEmbedFailed is now correctly nonzero for that case.
+     Only report "not run" when chaptersEmbedFailed is ALSO 0; otherwise
+     fall through to the embedShortfall branch below. */
+  if (vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) return 'Voice match — not run for this book';
   /* fs-51 round-3 review fix — the spec requires the inconclusive-chapter
      count to be surfaced on this row (usually short quotes below the
      minimum-duration gate), not silently dropped to the JSON export only.

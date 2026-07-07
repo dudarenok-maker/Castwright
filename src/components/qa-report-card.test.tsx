@@ -39,6 +39,23 @@ describe('QaReportCard', () => {
     expect(screen.queryByText(/18 of 18 characters checked/i)).not.toBeInTheDocument();
   });
 
+  it('shows the fleet-wide embed-failure fraction instead of "not run" when every eligible chapter was attempted and all failed', () => {
+    // fs-51 correctness fix: chaptersScored === 0 no longer means "the gate
+    // never ran" on its own — a fleet-wide embedding failure (the gate
+    // attempted every eligible chapter, all of them failed to embed) also
+    // produces chaptersScored === 0, but now surfaces a nonzero
+    // chaptersEmbedFailed. The row must lead with the honest "0 of N scored"
+    // fraction, not the "flip on render-integrity checking" invitation copy
+    // that implies the gate never ran.
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, chaptersScored: 0, chaptersEmbedFailed: 12 },
+    };
+    render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test Book" />);
+    expect(screen.getByText(/0 of 12 eligible chapters scored/i)).toBeInTheDocument();
+    expect(screen.queryByText(/flip on render-integrity checking/i)).not.toBeInTheDocument();
+  });
+
   it('shows the inconclusive-chapter count on the voice-match row when nonzero', () => {
     const report = { ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, inconclusiveCount: 2 } };
     render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test Book" />);

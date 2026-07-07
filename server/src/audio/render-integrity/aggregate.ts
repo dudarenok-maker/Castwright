@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { audioDir } from '../../workspace/paths.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
-import { writeVerdicts, type VerdictRow } from './verdicts-io.js';
+import { writeVerdicts, writeAttempted, attemptedPath, type VerdictRow } from './verdicts-io.js';
 import {
   writeCentroids,
   type CharacterCentroid,
@@ -237,6 +237,14 @@ export async function scoreBook(
   const chapterData: ChapterData[] = [];
 
   for (const ch of chapters) {
+    // fs-51 correctness fix: write the attempted sentinel BEFORE the
+    // missing-embeddings skip below, unconditionally. Its presence is the
+    // only on-disk evidence that scoreBook began this chapter's per-chapter
+    // processing — the <slug>.render-integrity.json verdict file only exists
+    // when scoring actually completed, so it can't (by itself) distinguish
+    // "never ran" from "ran and failed" (see qa-report.ts).
+    await writeAttempted(attemptedPath(root, ch.slug));
+
     const embPath = join(root, `${ch.slug}.embeddings.json`);
     const segPath = join(root, `${ch.slug}.segments.json`);
 

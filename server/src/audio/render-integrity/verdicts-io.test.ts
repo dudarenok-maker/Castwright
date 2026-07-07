@@ -2,7 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeVerdicts, readVerdicts, deriveBookOutline, type VerdictRow } from './verdicts-io.js';
+import {
+  writeVerdicts,
+  readVerdicts,
+  deriveBookOutline,
+  writeAttempted,
+  readAttempted,
+  attemptedPath,
+  type VerdictRow,
+} from './verdicts-io.js';
 
 // Spy on embeddings-io to assert deriveBookOutline NEVER touches it.
 vi.mock('./embeddings-io.js', () => ({
@@ -69,6 +77,18 @@ describe('verdicts-io', () => {
     await writeVerdicts(p, [mismatch, inconclusive]);
     const back = await readVerdicts(p);
     expect(back).toEqual([mismatch, inconclusive]);
+  });
+});
+
+describe('attempted sentinel', () => {
+  it('round-trips: absent by default, true after write', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'attempted-'));
+    const p = attemptedPath(dir, 'ch1');
+
+    expect(await readAttempted(p)).toBe(false);
+
+    await writeAttempted(p);
+    expect(await readAttempted(p)).toBe(true);
   });
 });
 
@@ -238,5 +258,43 @@ describe('deriveBookOutline', () => {
     expect(outline.scoredChapterIds.sort()).toEqual([1, 2]);
     expect(outline.inconclusiveChapterIds).toEqual([2]);
     expect(outline.counts.uncheckedCharacters).toEqual(['oduvan']);
+  });
+
+  it('reports attemptedChapterIds from sentinel files, independent of whether scoring completed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'outline-attempted-'));
+    const audioDir = join(dir, 'audio');
+    mkdirSync(audioDir);
+
+    // ch1: attempted AND scored (a verdict file exists).
+    await writeAttempted(attemptedPath(audioDir, 'ch1'));
+    await writeVerdicts(join(audioDir, 'ch1.render-integrity.json'), [
+      {
+        characterId: 'wren',
+        sentenceIds: [1],
+        verdict: 'voice-match',
+        cosine: 0.9,
+        severity: null,
+        fixable: false,
+        expectedEngine: 'qwen',
+        renderedEngine: 'qwen',
+        referenceKind: 'in-book',
+        windowed: false,
+        chapterId: 1,
+      },
+    ]);
+
+    // ch2: attempted but NOT scored (embeddings failed for this chapter — no verdict file).
+    await writeAttempted(attemptedPath(audioDir, 'ch2'));
+
+    // ch3: never attempted at all (no sentinel, no verdict file).
+
+    const outline = await deriveBookOutline(dir, [
+      { id: 1, slug: 'ch1' },
+      { id: 2, slug: 'ch2' },
+      { id: 3, slug: 'ch3' },
+    ]);
+
+    expect(outline.attemptedChapterIds).toEqual([1, 2]);
+    expect(outline.scoredChapterIds).toEqual([1]);
   });
 });

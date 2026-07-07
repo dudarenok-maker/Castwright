@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import { audioDir } from '../workspace/paths.js';
-import { writeVerdicts } from './render-integrity/verdicts-io.js';
+import { writeVerdicts, writeAttempted, attemptedPath } from './render-integrity/verdicts-io.js';
 import { buildAudioQaReport } from './qa-report.js';
 
 async function makeBook(): Promise<string> {
@@ -109,21 +109,60 @@ describe('buildAudioQaReport', () => {
       segments: [seg()],
       characterSnapshots: { wren: { voiceEngine: 'qwen' } },
     });
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
     await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
       { characterId: 'wren', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
     ]);
-    // Chapter 2: eligible, but no verdict file — an embed failure, not "off"
-    // (the gate is confirmed on by chapter 1's verdict file above).
+    // Chapter 2: eligible, and ATTEMPTED (scoreBook began processing it), but
+    // no verdict file — an isolated embed failure, not "off" (the gate is
+    // confirmed on by chapter 1's verdict file above, and by ch2's own sentinel).
     await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
       bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
       modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
       segments: [seg({ characterId: 'oduvan' })],
       characterSnapshots: { oduvan: { voiceEngine: 'qwen' } },
     });
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch2'));
 
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
     expect(report.voiceDrift.chaptersEligible).toBe(2);
     expect(report.voiceDrift.chaptersScored).toBe(1);
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(1);
+  });
+
+  it('distinguishes a fleet-wide embedding failure (gate ran, attempted every chapter, all failed) from the gate being off', async () => {
+    // fs-51 correctness fix: before this fix, chaptersEmbedFailed was gated on
+    // `chaptersScored > 0`, so a book where the voice-drift gate ran and
+    // attempted EVERY eligible chapter but failed to embed ALL of them was
+    // indistinguishable from the gate never having run at all — both produced
+    // chaptersScored === 0 and chaptersEmbedFailed === 0. The attempted
+    // sentinel (written unconditionally by scoreBook's per-chapter loop,
+    // regardless of embed outcome) makes this real: both chapters here are
+    // eligible AND attempted, but neither has a verdict file.
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg()],
+      characterSnapshots: { wren: { voiceEngine: 'qwen' } },
+    });
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'oduvan' })],
+      characterSnapshots: { oduvan: { voiceEngine: 'qwen' } },
+    });
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch2'));
+
+    // No verdict files anywhere — same on-disk shape as "gate off" EXCEPT
+    // for the two attempted sentinels above.
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(2);
+    expect(report.voiceDrift.chaptersScored).toBe(0);
+    // Fleet-wide failure now reads distinctly nonzero — previously this was 0,
+    // identical to the genuinely-off case in the first test above.
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(2);
   });
 });

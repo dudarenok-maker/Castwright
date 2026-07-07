@@ -20,6 +20,15 @@ export interface AudioQaReport {
     attribution: 'full' | 'legacy-unattributed';
     chaptersEligible: number;
     chaptersScored: number;
+    /** Eligible chapters that scoreBook attempted (see the attempted
+     *  sentinel in render-integrity/verdicts-io.ts) but never produced a
+     *  verdict file for — an embedding failure. Correctly nonzero for BOTH
+     *  an isolated failure (some chapters scored, this one didn't) AND a
+     *  fleet-wide failure (the gate ran and attempted every eligible
+     *  chapter, but embeddings failed for literally all of them, so
+     *  chaptersScored is also 0). Stays 0 only when the gate was never
+     *  attempted on any eligible chapter at all ("gate off") — see the
+     *  computation below. */
     chaptersEmbedFailed: number;
     charactersOnRoster: number;
     charactersChecked: number;
@@ -75,14 +84,22 @@ export async function buildAudioQaReport(
     : 'full';
   const uncheckedSet = new Set(outline.counts.uncheckedCharacters);
   const chaptersScored = outline.scoredChapterIds.filter((id) => eligibleChapterIds.has(id)).length;
-  /* fs-51 — an eligible chapter with no verdict file is either "gate off"
-     (chaptersScored is 0 everywhere) or an isolated embeddings failure
-     (the gate demonstrably ran, since something else in the book WAS
-     scored). Only attribute to embed-failure when there's evidence the
-     gate is on — otherwise this would misreport "gate off" as "embed
-     failed" for the same reason presence-based detection failed for the
-     whole-book case (see the spec's round-3 finding). */
-  const chaptersEmbedFailed = chaptersScored > 0 ? eligibleChapterIds.size - chaptersScored : 0;
+  /* fs-51 correctness fix — an eligible chapter with no verdict file is
+     either "gate off" (never attempted) or an embeddings failure (the gate
+     DID attempt it, but no verdict file resulted). The prior heuristic
+     (`chaptersScored > 0 ? ... : 0`) used "something else in the book WAS
+     scored" as its only evidence the gate ran — which made a FLEET-WIDE
+     embedding failure (every eligible chapter attempted, all of them
+     failed, so chaptersScored is ALSO 0) indistinguishable from the gate
+     never running at all. The attempted sentinel (render-integrity/
+     verdicts-io.ts's attemptedPath/writeAttempted, written by scoreBook's
+     per-chapter loop regardless of outcome) is real, chapter-level evidence
+     of an attempt, so both cases are now distinguishable: chaptersEmbedFailed
+     is nonzero whenever an eligible chapter was attempted but unscored,
+     whether that's isolated or book-wide. It's 0 only when NO eligible
+     chapter was ever attempted — genuinely "gate off". */
+  const attemptedEligibleCount = outline.attemptedChapterIds.filter((id) => eligibleChapterIds.has(id)).length;
+  const chaptersEmbedFailed = attemptedEligibleCount > 0 ? attemptedEligibleCount - chaptersScored : 0;
 
   return {
     chaptersRendered: segFiles.length,
