@@ -653,6 +653,15 @@ export async function forEachMatchingCastCharacter(
   voiceId: string,
   seriesFilter: { author: string; series: string } | undefined,
   mutate: (character: CastCharacter) => CastCharacter,
+  /* fs-61 — when `seriesFilter` is absent, restrict the walk to exactly this
+     bookId instead of the whole workspace. Every standalone book resolves to
+     the same synthetic (author: X, series: "Standalones") pair, so a caller
+     with "this book has no series" (isStandalone → seriesFilter omitted)
+     must NOT fall through to a workspace-wide match on a bare character id
+     like "narrator" — that silently overwrites the SAME id in every other
+     unrelated (or different-language) standalone book. Omit only for the
+     genuinely-global PUT /:voiceId/override 'workspace' scope. */
+  onlyBookId?: string,
 ): Promise<number> {
   let updated = 0;
   for (const authorName of listDirs(BOOKS_ROOT)) {
@@ -665,6 +674,8 @@ export async function forEachMatchingCastCharacter(
           if (state.isStandalone === true) continue;
           if (state.author !== seriesFilter.author || state.series !== seriesFilter.series)
             continue;
+        } else if (onlyBookId) {
+          if (state.bookId !== onlyBookId) continue;
         }
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
@@ -708,33 +719,44 @@ export async function applyOverrideToCastFiles(
      excluded from a series scope (a standalone's cast isn't series
      continuity). Omit for the original workspace-wide behaviour. */
   seriesFilter?: { author: string; series: string },
+  /* fs-61 — pass the calling book's id when `seriesFilter` is omitted
+     because the book has no series (e.g. a standalone design action), so
+     the write stays book-scoped instead of sweeping every book in the
+     workspace sharing the same bare character id. Only the genuinely-global
+     PUT /:voiceId/override 'workspace' scope should omit both. */
+  onlyBookId?: string,
 ): Promise<number> {
-  const updated = await forEachMatchingCastCharacter(voiceId, seriesFilter, (original) => {
-    const normalised = normaliseCastCharacter(original);
-    const replacement: CastCharacter = { ...normalised };
-    if (override === null) {
-      delete replacement.overrideTtsVoices;
-    } else {
-      const map = { ...(normalised.overrideTtsVoices ?? {}) };
-      /* Preserve any existing slot detail (notably qwen emotion `variants`)
-         when (re)assigning the base name — a base re-design, or its series
-         propagation, must NOT wipe designed variants. */
-      map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
-      replacement.overrideTtsVoices = map;
-      /* Setting a per-engine voice override is a deliberate "use this
-         engine for this character" action (the only callers — the cast
-         picker + the series rebaseline — only write when switching the
-         character TO that engine). Pin `ttsEngine` so the switch
-         propagates across the series: otherwise other books get the
-         voice slot but keep the wrong active engine (plan 108 — "wrong
-         model in this book"). */
-      replacement.ttsEngine = override.engine;
-    }
-    /* Always remove the legacy singular field — normaliseCastCharacter
-       already folded it into the map. */
-    delete replacement.overrideTtsVoice;
-    return replacement;
-  });
+  const updated = await forEachMatchingCastCharacter(
+    voiceId,
+    seriesFilter,
+    (original) => {
+      const normalised = normaliseCastCharacter(original);
+      const replacement: CastCharacter = { ...normalised };
+      if (override === null) {
+        delete replacement.overrideTtsVoices;
+      } else {
+        const map = { ...(normalised.overrideTtsVoices ?? {}) };
+        /* Preserve any existing slot detail (notably qwen emotion `variants`)
+           when (re)assigning the base name — a base re-design, or its series
+           propagation, must NOT wipe designed variants. */
+        map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
+        replacement.overrideTtsVoices = map;
+        /* Setting a per-engine voice override is a deliberate "use this
+           engine for this character" action (the only callers — the cast
+           picker + the series rebaseline — only write when switching the
+           character TO that engine). Pin `ttsEngine` so the switch
+           propagates across the series: otherwise other books get the
+           voice slot but keep the wrong active engine (plan 108 — "wrong
+           model in this book"). */
+        replacement.ttsEngine = override.engine;
+      }
+      /* Always remove the legacy singular field — normaliseCastCharacter
+         already folded it into the map. */
+      delete replacement.overrideTtsVoice;
+      return replacement;
+    },
+    onlyBookId,
+  );
   /* Override changes don't affect the base-voice catalog itself, but call
      this anyway so a future invocation refreshes /speakers cleanly if the
      sidecar was bounced in between. Cheap and side-effect free. */

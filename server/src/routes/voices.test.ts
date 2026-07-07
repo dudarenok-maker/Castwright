@@ -33,6 +33,9 @@ let applyTierToCastFiles: (
   ttsModelKey: 'qwen3-tts-1.7b' | null,
   seriesFilter?: { author: string; series: string },
 ) => Promise<number>;
+let applyOverrideToCastFiles: typeof import('./voices.js').applyOverrideToCastFiles;
+let standaloneA: { bookId: string };
+let standaloneB: { bookId: string };
 
 function writeBookOnDisk(
   workspace: string,
@@ -79,12 +82,17 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ voicesRouter, applyTierToCastFiles: atcf }, paths, baseVoices] = await Promise.all([
+  const [
+    { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf },
+    paths,
+    baseVoices,
+  ] = await Promise.all([
     import('./voices.js'),
     import('../workspace/paths.js'),
     import('../tts/base-voices.js'),
   ]);
   applyTierToCastFiles = atcf;
+  applyOverrideToCastFiles = aotcf;
   invalidateBaseVoiceCache = baseVoices.invalidateBaseVoiceCache;
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
   bookTwoId = paths.makeBookId(AUTHOR, SERIES, BOOK_TWO);
@@ -143,6 +151,35 @@ beforeAll(async () => {
       },
     ],
   );
+
+  /* fs-61 — two UNRELATED standalone books that both happen to use the bare
+     id "narrator" (no explicit voiceId — the common case for a fresh,
+     undesigned character). Every standalone shares the same synthetic
+     (author, series) = ("Castwright", "Standalones") pair, so a caller with
+     no seriesFilter must scope to exactly one bookId — otherwise designing
+     "narrator" in one book silently overwrites the other's. */
+  const standaloneABookId = paths.makeBookId('Castwright', 'Standalones', 'Standalone A');
+  const standaloneBBookId = paths.makeBookId('Castwright', 'Standalones', 'Standalone B');
+  writeBookOnDisk(
+    workspaceRoot,
+    'Castwright',
+    'Standalones',
+    'Standalone A',
+    standaloneABookId,
+    [{ id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' }],
+    true,
+  );
+  writeBookOnDisk(
+    workspaceRoot,
+    'Castwright',
+    'Standalones',
+    'Standalone B',
+    standaloneBBookId,
+    [{ id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' }],
+    true,
+  );
+  standaloneA = { bookId: standaloneABookId };
+  standaloneB = { bookId: standaloneBBookId };
 
   app = express();
   app.use(express.json());
@@ -1207,5 +1244,65 @@ describe('applyTierToCastFiles', () => {
     await applyTierToCastFiles('v_brann', 'qwen3-tts-1.7b', { author: AUTHOR, series: SERIES });
     const other = readCastFromDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
     expect(other.characters[0].ttsModelKey).toBeUndefined();
+  });
+});
+
+/* fs-61 regression (2026-07-07): designing a character's voice in a
+   standalone book computes no seriesFilter (a standalone has no series
+   continuity) — before this fix, `applyOverrideToCastFiles` fell through to
+   its workspace-wide walk, matching on the character's bare id ("narrator")
+   and silently overwriting every OTHER standalone book's same-id character
+   too, including a different-language one (a Qwen voice bakes its design
+   language into the .pt, so this produced garbled audio). The design-flow
+   callers (single-design.ts, cast-design.ts) now pass the calling book's id
+   so the write stays scoped to exactly that book. */
+describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
+  afterEach(async () => {
+    /* Reset both standalones' narrator override between cases. */
+    await applyOverrideToCastFiles('narrator', null, undefined, standaloneA.bookId);
+    await applyOverrideToCastFiles('narrator', null, undefined, standaloneB.bookId);
+  });
+
+  it('with no seriesFilter but an onlyBookId, touches only that book', async () => {
+    const n = await applyOverrideToCastFiles(
+      'narrator',
+      { engine: 'qwen', name: 'qwen-standalone-a-voice' },
+      undefined,
+      standaloneA.bookId,
+    );
+    expect(n).toBe(1);
+
+    const a = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone A');
+    expect(
+      (a.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen?.name,
+    ).toBe('qwen-standalone-a-voice');
+
+    /* The sibling standalone — same bare id "narrator", unrelated book —
+       must be untouched. This is the exact regression: before the fix this
+       would also read 'qwen-standalone-a-voice'. */
+    const b = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone B');
+    expect(b.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+
+  it('with neither seriesFilter nor onlyBookId, still sweeps the whole workspace (unchanged default)', async () => {
+    const n = await applyOverrideToCastFiles('narrator', {
+      engine: 'qwen',
+      name: 'qwen-workspace-wide',
+    });
+    /* Both standalones share the bare id "narrator" — the explicit,
+       genuinely-global scope (only used by PUT /:voiceId/override's
+       'workspace' scope) still matches every one, deliberately. (Other
+       unrelated fixtures elsewhere in this file also use the bare id
+       "narrator" and share this workspace, so `n` counts more than just
+       our two — assert our two specifically, not the total.) */
+    expect(n).toBeGreaterThanOrEqual(2);
+    const a = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone A');
+    const b = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone B');
+    expect(
+      (a.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen?.name,
+    ).toBe('qwen-workspace-wide');
+    expect(
+      (b.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen?.name,
+    ).toBe('qwen-workspace-wide');
   });
 });

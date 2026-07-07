@@ -367,9 +367,17 @@ async function runDesignJob(
 
           if (!emotion) {
             /* Base path — persist the override exactly as the drawer does. Match
-               key is the character's voiceId/id, the name is the `qwen-…` id. */
+               key is the character's voiceId/id, the name is the `qwen-…` id.
+               fs-61 — pass job.bookId so a standalone (no seriesFilter) writes
+               ONLY this book instead of sweeping every book in the workspace
+               sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
+            await applyOverrideToCastFiles(
+              matchKey,
+              { engine: 'qwen', name: voiceId },
+              seriesFilter,
+              job.bookId,
+            );
             job.done += 1;
             broadcast(job, { type: 'character_designed', characterId, voiceId });
           } else {
