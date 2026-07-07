@@ -756,6 +756,48 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
     expect(narrator.generated).toBe(true);
     expect(narrator.usedIn).toBe(1);
   });
+
+  it('emits distinct familyKey values for two unrelated books sharing a bare id', async () => {
+    const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+    const alpha = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+    );
+    const beta = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+    );
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha.familyKey).toBeTruthy();
+    expect(beta.familyKey).toBeTruthy();
+    expect(alpha.familyKey).not.toBe(beta.familyKey);
+  });
+
+  it("pinning Alpha's narrator (by familyKey) never pins Beta's unrelated same-id narrator", async () => {
+    const before = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+    const alpha = before.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+    );
+    try {
+      const pinRes = await request(app)
+        .put(`/api/voices/${encodeURIComponent(alpha.familyKey)}/pin`)
+        .send({ pinned: true });
+      expect(pinRes.status).toBe(204);
+
+      const after = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+      const alphaAfter = after.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+      );
+      const betaAfter = after.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+      );
+      expect(alphaAfter.pinned).toBe(true);
+      expect(betaAfter.pinned).toBeFalsy();
+    } finally {
+      await request(app)
+        .put(`/api/voices/${encodeURIComponent(alpha.familyKey)}/pin`)
+        .send({ pinned: false });
+    }
+  });
 });
 
 describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {

@@ -205,9 +205,15 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
+  /* familyKey (falling back to id) — unlike the cast view, this page shows
+     every book's voices side by side with no single "current" book, so two
+     unrelated books' same-slug, voiceId-less voices (narrator/unknown-male/
+     female) can share bare `id` here. Selecting one must never toggle the
+     other. */
   const toggleSelect = (v: Voice) => {
+    const key = v.familyKey ?? v.id;
     setSelectedVoiceIds((prev) =>
-      prev.includes(v.id) ? prev.filter((id) => id !== v.id) : [...prev, v.id],
+      prev.includes(key) ? prev.filter((id) => id !== key) : [...prev, key],
     );
   };
 
@@ -322,7 +328,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      click handler triggers the fetch). */
   const compareDerivations = useMemo(() => {
     const selectedVoices = selectedVoiceIds
-      .map((id) => library.find((v) => v.id === id))
+      .map((id) => library.find((v) => (v.familyKey ?? v.id) === id))
       .filter((v): v is Voice => !!v);
     let badge: 'same' | 'different' | null = null;
     if (selectedVoices.length === 2 && selectedVoices[0].ttsVoice && selectedVoices[1].ttsVoice) {
@@ -909,11 +915,15 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   }
 
   function togglePin(voice: Voice) {
+    /* familyKey (falling back to id) — the bare id alone can collide across
+       unrelated books for a voiceId-less character (narrator, unknown-male,
+       unknown-female), which would pin/unpin the wrong book's voice. */
+    const key = voice.familyKey ?? voice.id;
     const next = !voice.pinned;
-    dispatch(voicesActions.setPinned({ voiceId: voice.id, pinned: next }));
-    api.setVoicePin(voice.id, next).catch((err) => {
+    dispatch(voicesActions.setPinned({ voiceId: key, pinned: next }));
+    api.setVoicePin(key, next).catch((err) => {
       console.error('[voices] pin failed', err);
-      dispatch(voicesActions.setPinned({ voiceId: voice.id, pinned: !next }));
+      dispatch(voicesActions.setPinned({ voiceId: key, pinned: !next }));
     });
   }
 
@@ -1799,7 +1809,7 @@ function VoiceFamilySection({
                         pinned={!!v.pinned}
                         onTogglePin={onTogglePin}
                         onSelect={onOpenCharacter}
-                        selected={selectedVoiceIds.includes(v.id)}
+                        selected={selectedVoiceIds.includes(v.familyKey ?? v.id)}
                         onToggleSelect={onToggleSelect}
                       />
                     ))}
@@ -1911,7 +1921,7 @@ function QwenStatusSection({
                           pinned={!!v.pinned}
                           onTogglePin={onTogglePin}
                           onSelect={onOpenCharacter}
-                          selected={selectedVoiceIds.includes(v.id)}
+                          selected={selectedVoiceIds.includes(v.familyKey ?? v.id)}
                           onToggleSelect={onToggleSelect}
                           badge={
                             group.status === 'designed' ? (

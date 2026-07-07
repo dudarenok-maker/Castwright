@@ -121,8 +121,12 @@ export function VoiceLibraryPanel({
     { id: 'current', label: 'This book' },
     ...(hasSeriesVoices ? [{ id: 'library' as Tab, label: 'Series' }] : []),
   ];
+  /* `characters` here is always the currently-open book's own cast, so opt
+     into the current-book restriction — a same-id foreign-book voice (the
+     narrator/unknown-male/unknown-female collision) must never resolve to
+     one of this book's own characters. */
   const findCharacter = (v: Voice) =>
-    characters ? findCharacterForVoice(v, characters) : undefined;
+    characters ? findCharacterForVoice(v, characters, true) : undefined;
   /* Aside mode keeps the legacy sticky-card sizing. Sheet mode strips
      the rounded card chrome + height cap so the panel can lie flush
      inside the bottom-sheet (which provides its own border + radius
@@ -179,7 +183,12 @@ export function VoiceLibraryPanel({
         ) : (
           shown.map((v) => (
             <VoiceCard
-              key={v.id}
+              /* familyKey (falling back to id) — two unrelated books' same-
+                 slug, voiceId-less voices (narrator/unknown-male/female) can
+                 share bare `id` in this flat, all-books array, which would
+                 otherwise collide on the React key and cross-highlight both
+                 cards as the active assign target. */
+              key={v.familyKey ?? v.id}
               voice={v}
               draggingVoiceId={draggingVoiceId}
               setDraggingVoiceId={setDraggingVoiceId}
@@ -188,7 +197,7 @@ export function VoiceLibraryPanel({
               onOpenProfile={onOpenProfile}
               onPlaySample={onPlaySample}
               onTapAssign={onTapAssign}
-              isAssigningTarget={assigningVoiceId === v.id}
+              isAssigningTarget={assigningVoiceId === (v.familyKey ?? v.id)}
             />
           ))
         )}
@@ -260,7 +269,7 @@ export function VoiceCard({
   isAssigningTarget = false,
   badge,
 }: VoiceCardProps) {
-  const isDragging = draggingVoiceId === voice.id;
+  const isDragging = draggingVoiceId === (voice.familyKey ?? voice.id);
   const canOpenProfile = !!(character && onOpenProfile);
   const canPlay = !!(character && onPlaySample);
   const interactive = !!onSelect || canOpenProfile;
@@ -274,7 +283,7 @@ export function VoiceCard({
     <div
       draggable
       onDragStart={(e) => {
-        setDraggingVoiceId(voice.id);
+        setDraggingVoiceId(voice.familyKey ?? voice.id);
         e.dataTransfer.effectAllowed = 'copy';
       }}
       onDragEnd={() => setDraggingVoiceId(null)}

@@ -3165,8 +3165,10 @@ export interface components {
             voices: components["schemas"]["BaseVoice"][];
         };
         Voice: {
-            /** @description Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id. */
+            /** @description Stable id used to hash a TTS prebuilt voice. Defaults to character.voiceId or character.id. NOT globally unique across the whole workspace-wide voices array — a voiceId-less character (narrator, unknown-male, unknown-female) can share this bare id with an unrelated book's same-slug character. Safe for same-book joins (see src/lib/voice-character-link.ts); use `familyKey` for anything that needs a globally-unique identity (React keys, cross-book selection, pin state). */
             id: string;
+            /** @description Globally-unique key across the whole workspace-wide voices array: the explicit voiceId when the source character set one (deliberate cross-book reuse), else a book-scoped key so two unrelated books' same-slug, voiceId-less characters (narrator/unknown-male/unknown-female) never collide. Use this for React list keys, cross-book multi-select, and the pin endpoint. Always present on a real server response; consumers should fall back to `id` when absent (e.g. an older/local test fixture). */
+            familyKey?: string;
             /** @description srv-43 — the designed voice's immutable identity, copied from the source Character. Optional; absent for catalog voices and pre-srv-43 designs. */
             voiceUuid?: string;
             character: string;

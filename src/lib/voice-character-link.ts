@@ -37,9 +37,24 @@ export function findVoiceForCharacter(c: Character, library: Voice[]): Voice | u
   return library.find((v) => v.id === c.id);
 }
 
-export function findCharacterForVoice(v: Voice, characters: Character[]): Character | undefined {
+export function findCharacterForVoice(
+  v: Voice,
+  characters: Character[],
+  /** Restrict the bare-id fallback to a voice that actually belongs to the
+      CURRENTLY-OPEN book (`v.source === 'current'`). Opt-in (default false)
+      because not every caller's `characters` is that book's own roster —
+      the cross-book duplicate-review flow (views/voices.tsx) intentionally
+      matches a voice against an arbitrary OTHER book's roster it fetched on
+      demand, where `source` describes the globally-open book, not that
+      roster. Only the cast view's voice-library panel needs this: its
+      `characters` IS always the open book's own cast, so a same-id foreign
+      voice (the narrator/unknown-male/unknown-female collision) must never
+      resolve to one of ITS characters. */
+  restrictToCurrentBook = false,
+): Character | undefined {
   const explicit = characters.find((c) => c.voiceId === v.id);
   if (explicit) return explicit;
+  if (restrictToCurrentBook && v.source !== 'current') return undefined;
   return characters.find((c) => c.id === v.id);
 }
 

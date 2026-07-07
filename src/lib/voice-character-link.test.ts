@@ -109,6 +109,41 @@ describe('findCharacterForVoice', () => {
     const characters = [makeChar('marlow')];
     expect(findCharacterForVoice(v, characters)).toBeUndefined();
   });
+
+  it("with restrictToCurrentBook=true, never matches a foreign book's same-id voice to this book's own character (no voiceId link)", () => {
+    /* Regression: the cast view's voice-library panel always passes the
+       currently-open book's own roster and opts into this restriction.
+       Two unrelated books' voiceId-less narrators share bare id 'narrator'
+       — a foreign book's voice card must never resolve to this book's own
+       narrator character just because the ids coincide. */
+    const foreignNarratorVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'unrelated-book',
+    };
+    const characters = [makeChar('narrator')];
+    expect(findCharacterForVoice(foreignNarratorVoice, characters, true)).toBeUndefined();
+  });
+
+  it("with restrictToCurrentBook=true, still matches by bare id when the voice IS this book's own (source: 'current')", () => {
+    const ownNarratorVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
+    const characters = [makeChar('narrator')];
+    expect(findCharacterForVoice(ownNarratorVoice, characters, true)?.id).toBe('narrator');
+  });
+
+  it('defaults to unrestricted (matches by bare id regardless of source) for the cross-book duplicate-review flow', () => {
+    /* views/voices.tsx intentionally matches a voice against an arbitrary
+       OTHER book's own roster it fetched on demand — `source` there
+       describes the globally-open book, not the roster being searched, so
+       the default (no third arg) must NOT apply the current-book guard. */
+    const otherBooksVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'some-other-book',
+    };
+    const thatBooksOwnCharacters = [makeChar('narrator')];
+    expect(findCharacterForVoice(otherBooksVoice, thatBooksOwnCharacters)?.id).toBe('narrator');
+  });
 });
 
 describe('pickMergeSurvivor', () => {

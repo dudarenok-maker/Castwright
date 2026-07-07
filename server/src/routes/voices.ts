@@ -72,6 +72,14 @@ export const voicesRouter = Router();
 
 interface DerivedVoice {
   id: string;
+  /** Globally-unique key across the whole workspace-wide voices array: the
+      explicit voiceId when the source character set one (deliberate
+      cross-book reuse — the SAME value as `id` in that case), else a
+      book-scoped key. `id` alone is NOT safe for this — two unrelated
+      books' voiceId-less narrator/unknown-male/unknown-female characters
+      share the same literal `id`. Use this for React list keys, cross-book
+      multi-select, and the pin endpoint; use `id` for same-book joins. */
+  familyKey: string;
   character: string;
   bookTitle: string;
   bookId: string;
@@ -407,6 +415,7 @@ async function aggregateVoices(
               : ttsVoiceRaw;
           acc.set(dedupKey, {
             id,
+            familyKey: dedupKey,
             character: c.name ?? id,
             bookTitle: state.title,
             bookId: state.bookId,
@@ -424,7 +433,12 @@ async function aggregateVoices(
             usedIn: 1,
             source: isCurrent ? 'current' : 'library',
             reusable: isNarratorId(id, c.name) || undefined,
-            pinned: pinned.has(id) || undefined,
+            /* Keyed on `dedupKey` (== `familyKey`), NOT the bare `id` — a
+               pin toggled from the client sends `familyKey` as the
+               `:voiceId` route param (src/views/voices.tsx togglePin), so
+               reading it back must use the same book-scoped key or pin
+               state bleeds across unrelated books' same-slug characters. */
+            pinned: pinned.has(dedupKey) || undefined,
             /* srv-43 Wave 2: key on the STORAGE key (qwenStoreKey) so a uuid-
                bearing voice (storage key = qwen-<uuid>) still matches the
                rendered snapshot even though ttsVoice.name is now qwen-<voiceId>. */

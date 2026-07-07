@@ -83,6 +83,22 @@ describe('voicesSlice — setPinned', () => {
     );
     expect(next.voices).toEqual(start.voices);
   });
+
+  it("matches by familyKey, not the bare id, so pinning one book's voice never bleeds onto an unrelated book's same-id voice", () => {
+    /* Two unrelated books' voiceId-less narrators share bare id 'narrator'
+       but get distinct familyKey values from the server (book-scoped). */
+    const alpha = voice('narrator', { familyKey: 'book-alpha::narrator', bookId: 'book-alpha' });
+    const beta = voice('narrator', { familyKey: 'book-beta::narrator', bookId: 'book-beta' });
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [alpha, beta] }));
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.setPinned({ voiceId: 'book-alpha::narrator', pinned: true }),
+    );
+    const alphaAfter = next.voices.find((v) => v.bookId === 'book-alpha')!;
+    const betaAfter = next.voices.find((v) => v.bookId === 'book-beta')!;
+    expect(alphaAfter.pinned).toBe(true);
+    expect(betaAfter.pinned).toBeUndefined();
+  });
 });
 
 describe('voicesSlice — markSampled', () => {

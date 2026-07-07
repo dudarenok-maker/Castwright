@@ -276,7 +276,19 @@ export function CastView({
      it clears all of them, so the actionable unit is the chapter. */
   const driftChapterCountFor = (id: string) => distinctDriftChapterCount(driftByChar(id));
   const totalDriftChapters = distinctDriftChapterCount(driftEvents);
-  const findVoice = (id?: string) => library.find((v) => v.id === id);
+  /* Same bare-id collision voice-character-link.ts's findVoiceForCharacter
+     guards against: two unrelated books' voiceId-less characters (narrator,
+     unknown-male/female) can share a bare id, so the aggregated `library`
+     array can legitimately carry two entries with the same `id`. `id` here
+     is actually `familyKey ?? id` (voice-library-panel.tsx sets
+     draggingVoiceId from that pair, and it's globally unique), so this
+     already disambiguates in the common case; the `source: 'current'`
+     preference is a second layer for a fixture/edge-case with no
+     familyKey, where a dropped voice always belongs to (or was dragged
+     from) this book's own panel. */
+  const findVoice = (id?: string) =>
+    library.find((v) => (v.familyKey ?? v.id) === id && v.source === 'current') ??
+    library.find((v) => (v.familyKey ?? v.id) === id);
   /* A character's effective engine = its per-character override, else the
      project default. Qwen is the only override that diverges from the project
      model key, so the sample/Stop-detection prefix must use the Qwen key for
@@ -629,7 +641,9 @@ export function CastView({
      pill on the active voice cancels (sets back to null); tapping it on
      a different voice swaps to that voice. */
   function handleTapAssignToggle(voice: Voice) {
-    setAssigningVoice((prev) => (prev?.id === voice.id ? null : voice));
+    setAssigningVoice((prev) =>
+      (prev?.familyKey ?? prev?.id) === (voice.familyKey ?? voice.id) ? null : voice,
+    );
   }
 
   /* Plan 81 wave 3 — responsive layout split:
@@ -1458,7 +1472,7 @@ export function CastView({
               void playSampleFor(c, v);
             }}
             onTapAssign={handleTapAssignToggle}
-            assigningVoiceId={assigningVoice?.id ?? null}
+            assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
             bookLanguage={bookLanguage}
           />
         </aside>
@@ -1522,11 +1536,14 @@ export function CastView({
                      can see + tap the character rows below. The sticky
                      assignment banner stays visible regardless. */
                   handleTapAssignToggle(v);
-                  if (!assigningVoice || assigningVoice.id !== v.id) {
+                  if (
+                    !assigningVoice ||
+                    (assigningVoice.familyKey ?? assigningVoice.id) !== (v.familyKey ?? v.id)
+                  ) {
                     setShowLibrary(false);
                   }
                 }}
-                assigningVoiceId={assigningVoice?.id ?? null}
+                assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
                 bookLanguage={bookLanguage}
               />
             </div>

@@ -854,6 +854,83 @@ describe('CastView desktop drag-drop is intact', () => {
     });
     expect(setCharacters).toHaveBeenCalled();
   });
+
+  it("resolves a drag-and-drop to this book's own voice, not an unrelated book's same-id voice", () => {
+    /* Regression: two unrelated books' voiceId-less characters (e.g. both
+       named-generically 'narrator') can share a bare Voice.id in the
+       aggregated library array now that the server no longer merges them
+       cross-book without an explicit voiceId. `draggingVoiceId` only ever
+       carries the bare id, so `findVoice` must prefer this book's own
+       `source: 'current'` entry — otherwise a same-id foreign-book entry
+       (listed first here, to prove order independence) silently wins. */
+    const ownNarratorVoice: Voice = {
+      id: 'narrator',
+      character: 'Narrator',
+      bookTitle: 'The Northern Star',
+      bookId: 'b_current',
+      attributes: [],
+      gradient: ['#000', '#fff'],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: { provider: 'coqui', name: 'Aaron Dreschner', description: 'Mid' },
+    };
+    const foreignNarratorVoice: Voice = {
+      ...ownNarratorVoice,
+      bookId: 'b_other',
+      bookTitle: 'Some Other Book',
+      source: 'library',
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+    });
+    let castRef: Character[] = [marrow];
+    const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
+      castRef = typeof next === 'function' ? next(castRef) : next;
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={castRef}
+          setCharacters={setCharacters}
+          library={[foreignNarratorVoice, ownNarratorVoice]}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    /* Default tab is 'current' (no series voices), so only the own-book
+       card renders — exactly the "user only ever touched their own card"
+       scenario the bug still breaks, since findVoice re-searches the WHOLE
+       library array by bare id regardless of which card was dragged. */
+    const libraryCard = screen
+      .getAllByText('Narrator')
+      .map((el) => el.closest('div[draggable]'))
+      .find((n): n is HTMLElement => !!n);
+    expect(libraryCard).toBeTruthy();
+    act(() => {
+      fireEvent.dragStart(libraryCard!, {
+        dataTransfer: { effectAllowed: 'copy', setData: () => {} },
+      });
+    });
+    const marrowRow = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragOver(marrowRow);
+      fireEvent.drop(marrowRow);
+    });
+    const updated = castRef.find((c) => c.id === 'marrow');
+    expect(updated?.voiceId).toBe('narrator');
+    /* matchedFrom is only stamped for a source:'library' voice — its absence
+       proves the own-book (source:'current') entry was applied. */
+    expect(updated?.matchedFrom).toBeUndefined();
+  });
 });
 
 /* Plan 81 wave 4 — tap-to-assign is the touch-friendly parallel path

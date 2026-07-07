@@ -622,6 +622,67 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
     expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-brann');
   });
+
+  it("prefers the character's own voiceUuid over a stale/foreign one on the matched library voice (Qwen)", async () => {
+    /* Regression: `stagedVoiceUuid` (the top of the fallback chain) is
+       seeded ONCE at mount from `character.voiceUuid ?? voice?.voiceUuid`
+       and nothing re-syncs it afterward. So the only way `character.voiceUuid`
+       vs `voice?.voiceUuid` ordering actually matters is when BOTH are
+       absent at mount (stagedVoiceUuid stays undefined) and the `character`
+       prop is later updated in place — e.g. the parent's cast refetches
+       while the drawer stays open — to carry a real voiceUuid, while
+       `voice` (a derived, cross-book lookup — the same collision class
+       cast.tsx's playSampleFor was fixed for) still carries an unrelated,
+       stale/foreign one. The character's fresh, unambiguous voiceUuid must
+       win. Mirrors the equivalent fix in src/views/cast.tsx's playSampleFor. */
+    const qwenCharNoUuidYet: Character = {
+      ...brann,
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-brann' } },
+    };
+    const foreignVoiceNoUuidYet: Voice = {
+      id: 'brann',
+      character: 'Brann',
+      bookTitle: 'Some Other Book',
+      bookId: 'other-book',
+      attributes: [],
+      gradient: ['#000', '#fff'],
+      usedIn: 1,
+      source: 'library',
+      ttsVoice: { provider: 'qwen', name: 'qwen-brann', description: 'Designed voice' },
+    };
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    const { rerender } = render(
+      <Provider store={makeStore()}>
+        <ProfileDrawer
+          character={qwenCharNoUuidYet}
+          voice={foreignVoiceNoUuidYet}
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+    /* Same component instance, updated props: the character's own cast.json
+       now carries its real voiceUuid; the matched library voice (an
+       unrelated book's same-id entry) carries a different, foreign one. */
+    rerender(
+      <Provider store={makeStore()}>
+        <ProfileDrawer
+          character={{ ...qwenCharNoUuidYet, voiceUuid: 'own-uuid-correct' }}
+          voice={{ ...foreignVoiceNoUuidYet, voiceUuid: 'foreign-uuid-from-other-book' }}
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+    expect(args.voice.voiceUuid).toBe('own-uuid-correct');
+  });
 });
 
 describe('ProfileDrawer downgrade to background bucket', () => {
