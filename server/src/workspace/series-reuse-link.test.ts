@@ -247,6 +247,40 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(characters[0].matchedFrom).toBeUndefined();
   });
 
+  /* fs-61 regression (2026-07-07): the per-language Coalfall demo books all
+     share `author: "Castwright"` + the synthetic `series: "Standalones"`
+     folder name, so an (author, series) match alone treated them as series-
+     mates — auto-linking a Spanish/Russian character to the English book's
+     Qwen voice. Qwen bakes its design language into the .pt, so the reused
+     voice read the wrong language (garbled audio). isStandaloneBookId must
+     veto the link even when author+series otherwise match. */
+  it('never links between two standalones sharing the synthetic "Standalones" series', async () => {
+    const characters: LinkableCharacter[] = [
+      { id: 'wren-new', name: 'Wren', gender: 'female', ageRange: 'teen' },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, {
+      ...baseOptions(),
+      isStandaloneBookId: async () => true,
+    });
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+  });
+
+  /* fs-61 defense-in-depth: a language mismatch vetoes a link even between
+     two REAL (non-standalone) series-mates — Qwen bakes its design language
+     into the .pt, so this must never depend solely on the standalone check. */
+  it('never links across a language boundary, even within a real series', async () => {
+    const characters: LinkableCharacter[] = [
+      { id: 'wren-new', name: 'Wren', gender: 'female', ageRange: 'teen' },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, {
+      ...baseOptions(),
+      resolveBookLanguage: async (id) => (id === BOOK1 ? 'en' : 'es'),
+    });
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+  });
+
   /* srv-13 — the fresh analyzer roster carries NO notLinkedTo, so without the
      pre-seed the link pass re-links a pair the user separated on a prior run.
      Seeding the guard fields from the prior cast first must prevent that. */
@@ -422,6 +456,60 @@ describe('pruneStaleReuseLinks', () => {
   it('is a no-op when there are no links to check', async () => {
     const chars: LinkableCharacter[] = [{ id: 'oduvan', name: 'Oduvan', voiceState: 'generated' }];
     expect(await pruneStaleReuseLinks(COALFALL, chars, opts())).toBe(0);
+  });
+
+  /* fs-61 regression (2026-07-07): two DIFFERENT standalone books (e.g. the
+     English and Spanish Coalfall demo books) both resolve to the same
+     (author: "Castwright", series: "Standalones") pair — that placeholder
+     match must never count as "same series" continuity. Without the
+     isStandaloneBookId veto, this stale link would be KEPT (sameSeries
+     would be true) instead of dropped. */
+  it('drops a stale link between two standalones sharing the synthetic series', async () => {
+    const SIBLING = 'castwright__standalones__el-encargo-de-coalfall';
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrador',
+        voiceState: 'reused',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+        matchedFrom: {
+          bookId: SIBLING,
+          characterId: 'narrator',
+          bookTitle: 'El Encargo de Coalfall',
+          confidence: 1,
+        },
+      },
+    ];
+    const dropped = await pruneStaleReuseLinks(COALFALL, chars, {
+      ...opts(),
+      resolveAuthorSeries: async (id) =>
+        id === SIBLING ? { author: 'Castwright', series: 'Standalones' } : (META[id] ?? null),
+      isStandaloneBookId: async (id) => id === COALFALL || id === SIBLING,
+    });
+    expect(dropped).toBe(1);
+    expect(chars[0].matchedFrom).toBeFalsy();
+    expect(chars[0].voiceState).toBe('generated');
+  });
+
+  /* fs-61 defense-in-depth: a stale link across a language boundary must be
+     dropped even between two real (non-standalone) same-series books — the
+     language veto is independent of the standalone/author/series checks. */
+  it('drops a stale link across a language boundary within a real series', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        voiceState: 'reused',
+        matchedFrom: { bookId: KEEPER1, characterId: 'wren', bookTitle: 'Book One', confidence: 1 },
+      },
+    ];
+    const dropped = await pruneStaleReuseLinks(KEEPER2, chars, {
+      ...opts(),
+      resolveBookLanguage: async (id) => (id === KEEPER1 ? 'fr' : 'en'),
+    });
+    expect(dropped).toBe(1);
+    expect(chars[0].matchedFrom).toBeFalsy();
   });
 });
 

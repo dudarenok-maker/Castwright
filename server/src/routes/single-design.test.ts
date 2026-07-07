@@ -153,6 +153,7 @@ describe('single-design job — first design', () => {
       'c1', // matchKey = character.voiceId ?? character.id
       { engine: 'qwen', name: 'qwen-c1' },
       expect.anything(),
+      bookDir, // fs-61 — book-scoped fallback when there's no seriesFilter
     );
   });
 });

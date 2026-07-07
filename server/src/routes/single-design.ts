@@ -169,9 +169,17 @@ async function runSingleDesign(
       return;
     }
 
-    /* First design: auto-persist exactly as the bulk job does. */
+    /* First design: auto-persist exactly as the bulk job does. fs-61 —
+       pass job.bookDir so a standalone (no seriesFilter) writes ONLY this
+       book instead of sweeping every book in the workspace sharing the
+       same bare character id (e.g. "narrator"). */
     const matchKey = character.voiceId ?? character.id;
-    await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
+    await applyOverrideToCastFiles(
+      matchKey,
+      { engine: 'qwen', name: voiceId },
+      seriesFilter,
+      job.bookDir,
+    );
     endJob(job, {
       type: 'designed',
       characterId: job.characterId,
