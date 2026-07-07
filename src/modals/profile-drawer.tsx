@@ -1721,6 +1721,18 @@ export function ProfileDrawer({
                      cast.json (the server-written variant clobbered on Save). */
                   qwen: { ...(character.overrideTtsVoices?.qwen ?? {}), name: qwenVoiceId },
                 };
+                /* srv-43 — stagedVoiceUuid (seeded on design/tune approve,
+                   line ~1105) was previously ONLY read by the in-drawer
+                   "Play 12s" sample request, never persisted here. Without
+                   it, a character whose row had no prior voiceUuid (first
+                   design, or one that was never stamped) saves with a
+                   correct overrideTtsVoices.qwen.name but a null voiceUuid —
+                   pickVoiceForEngine's qwen branch (voice-mapping.ts)
+                   ignores the override name for the actual synth key and
+                   falls back to `qwen-<character.id>`, a file that was
+                   never written, 409-ing every future sample/generation
+                   even though the cast row shows "Designed". */
+                next.voiceUuid = stagedVoiceUuid ?? character.voiceUuid;
               }
               /* Conflict reset: drop the library voiceId + matchedFrom so the
                  cast view falls back to the engine's prebuilt-voice pick. The
