@@ -384,6 +384,10 @@ chapterQaRepairRouter.post(
           let bestAsr: AsrClassification | null = null;
           /* Edit 3b (srv-36): extend running best-state with bestCosine. */
           let bestCosine: number | null = null;
+          /* fs-51 — count this segment's own re-record attempts so the
+             accepted (or still-suspect) take's retry count can be returned
+             alongside its verdict, instead of always reporting undefined. */
+          let retryCount = 0;
 
           /* Edit 5 (srv-36): extend isAcceptable with the conditional acoustic term.
              The acoustic gate ONLY applies when candidate.acoustic === true AND a
@@ -411,6 +415,7 @@ chapterQaRepairRouter.post(
 
           for (let attempt = 1; attempt <= maxRerecords; attempt++) {
             if (controller.signal.aborted) break;
+            retryCount += 1;
             send({ type: 'progress', chapterId, segmentIndex: segIndex, attempt, progress: 0.5 });
             const r = await synthesiseChapter({
               sentences: subset,
@@ -470,7 +475,21 @@ chapterQaRepairRouter.post(
               }
             }
           }
-          return best;
+          /* fs-51 — return the accepted (or still-suspect) take's own verdict so
+             buildSynthReplacements's freshVerdict reflects the actual outcome of
+             THIS repair, instead of leaving every field undefined (which used to
+             silently clear a pre-existing `suspect: true` to `undefined` even
+             when the repair failed to fix the sentence). */
+          return {
+            pcm: best.pcm,
+            sampleRate: best.sampleRate,
+            qa: bestVerdict ?? undefined,
+            suspect: accepted ? undefined : true,
+            asr: bestAsr ?? undefined,
+            asrSuspect: accepted || !asrOn ? undefined : bestAsr?.verdict === 'drift' ? true : undefined,
+            qaRetries: retryCount || undefined,
+            asrRetries: asrOn ? retryCount || undefined : undefined,
+          };
         },
       });
 
