@@ -11,21 +11,65 @@
         rely on this fallback.
 
    Without (2) the cast Voice column shows "No library voice" on every row
-   of a freshly-analysed book and the library panel cards stay inert. */
+   of a freshly-analysed book and the library panel cards stay inert.
+
+   Rule (2) has a real collision, though: the analyzer assigns the SAME
+   literal id ('narrator', 'unknown-male', 'unknown-female') to every book's
+   narrator and auto-folded background-bucket character, and neither ever
+   gets an explicit voiceId. Two unrelated books' narrators both fall back
+   to bare id 'narrator', so the aggregated `library` array can carry two
+   entries with that same id — one this character's own (`source:
+   'current'`), one an unrelated book's (`source: 'library'`). A plain
+   `.find()` would return whichever happens to be array-first. Preferring a
+   `source: 'current'` match first removes that ambiguity — but ONLY when
+   `c` itself is known to belong to the currently-open book (see
+   `preferCurrentBook` below). */
 
 import type { Character, Voice } from './types';
 
-export function findVoiceForCharacter(c: Character, library: Voice[]): Voice | undefined {
+export function findVoiceForCharacter(
+  c: Character,
+  library: Voice[],
+  /** Prefer a `source: 'current'` match for the bare-id fallback. Opt-in
+      (default false) because not every caller's `c` belongs to the
+      globally-open book — compare-cast-modal.tsx and rebaseline-modal.tsx
+      intentionally resolve a voice for an arbitrary OTHER book's character
+      (a cross-book comparison/rebaseline side), where preferring the
+      open book's own same-id voice would silently substitute the wrong
+      book's voice (including its sample audio). Only callers whose `c` is
+      guaranteed to be the currently-open book's own character (the cast
+      view, the voice-readiness gate) should pass true. */
+  preferCurrentBook = false,
+): Voice | undefined {
   if (c.voiceId) {
     const explicit = library.find((v) => v.id === c.voiceId);
     if (explicit) return explicit;
   }
+  if (preferCurrentBook) {
+    const currentBookMatch = library.find((v) => v.id === c.id && v.source === 'current');
+    if (currentBookMatch) return currentBookMatch;
+  }
   return library.find((v) => v.id === c.id);
 }
 
-export function findCharacterForVoice(v: Voice, characters: Character[]): Character | undefined {
+export function findCharacterForVoice(
+  v: Voice,
+  characters: Character[],
+  /** Restrict the bare-id fallback to a voice that actually belongs to the
+      CURRENTLY-OPEN book (`v.source === 'current'`). Opt-in (default false)
+      because not every caller's `characters` is that book's own roster —
+      the cross-book duplicate-review flow (views/voices.tsx) intentionally
+      matches a voice against an arbitrary OTHER book's roster it fetched on
+      demand, where `source` describes the globally-open book, not that
+      roster. Only the cast view's voice-library panel needs this: its
+      `characters` IS always the open book's own cast, so a same-id foreign
+      voice (the narrator/unknown-male/unknown-female collision) must never
+      resolve to one of ITS characters. */
+  restrictToCurrentBook = false,
+): Character | undefined {
   const explicit = characters.find((c) => c.voiceId === v.id);
   if (explicit) return explicit;
+  if (restrictToCurrentBook && v.source !== 'current') return undefined;
   return characters.find((c) => c.id === v.id);
 }
 

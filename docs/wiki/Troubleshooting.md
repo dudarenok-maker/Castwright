@@ -180,6 +180,10 @@ See [Multi-language Support](Multi-language-Support) for the detection walkthrou
 
 For a non-English book, the voice picker hides voices that don't speak the book's language — a French cast doesn't want a Spanish-only voice turning up as an option. A small note under the list says how many are hidden and why ("N hidden · can't read French"); tap "show all" to bring them back if you want to browse anyway. English books are unaffected — every voice you own is available.
 
+### My narrator (or an "unknown" background voice) shows as already Generated on a book I've never rendered
+
+Fixed as of v1.11.0 — update if you're still seeing this. The narrator and the small shared "unknown male/female" voice every book uses for one-line extras could, on a brand-new book, quietly borrow a status, hidden-language flag, or even a sample recording from an unrelated book's narrator, because the two happened to start from the same generic name behind the scenes. Every book's narrator and background voices now keep entirely to themselves — nothing to do on your end beyond updating.
+
 ### What does "Higher quality" mean, and should I turn it on?
 
 Every Qwen voice can render on two models: the everyday 0.6B (fast) or the larger 1.7B — better prosody and emotional range, noticeably slower and heavier on VRAM. Pin it per character from the voice picker, for a whole book at Start Generation, for a single chapter at Regenerate, or for your whole cast in one tap from the Cast view ("Pin 1.7B quality to all Qwen cast"). It also unlocks per-line direction and the vocal reactions (gasps, sighs, laughs) — those only render on the 1.7B tier. Worth it for a book you care about; leave everyday books on the fast tier.

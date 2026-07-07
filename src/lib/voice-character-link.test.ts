@@ -57,6 +57,59 @@ describe('findVoiceForCharacter', () => {
     const c = makeChar('marlow');
     expect(findVoiceForCharacter(c, [])).toBeUndefined();
   });
+
+  it("with preferCurrentBook=true, prefers the current book's own voice over an unrelated book sharing the same bare id (no voiceId)", () => {
+    /* Real-world collision: the analyzer assigns the SAME literal id
+       ('narrator', 'unknown-male', 'unknown-female') to every book's
+       narrator / auto-folded background character, and neither ever gets an
+       explicit voiceId. Two unrelated books' narrators both resolve to bare
+       id 'narrator' — the current book's own `source: 'current'` entry must
+       win over a same-id `source: 'library'` entry from a different book,
+       regardless of array order (the server can't guarantee scan order).
+       Only safe for callers whose `c` is guaranteed to be the currently-
+       open book's own character (cast.tsx, voice-readiness-selectors.ts). */
+    const c = makeChar('narrator');
+    const ownBookVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
+    const foreignBookVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'unrelated-book',
+    };
+    expect(findVoiceForCharacter(c, [foreignBookVoice, ownBookVoice], true)).toBe(ownBookVoice);
+    expect(findVoiceForCharacter(c, [ownBookVoice, foreignBookVoice], true)).toBe(ownBookVoice);
+  });
+
+  it('with preferCurrentBook=true, falls back to any bare-id match when no current-book voice is present', () => {
+    const c = makeChar('narrator');
+    const libraryVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'unrelated-book',
+    };
+    expect(findVoiceForCharacter(c, [libraryVoice], true)).toBe(libraryVoice);
+  });
+
+  it('defaults to unrestricted (no current-book preference) for the cross-book compare/rebaseline flows', () => {
+    /* compare-cast-modal.tsx and rebaseline-modal.tsx resolve a voice for an
+       arbitrary OTHER book's character (a specific comparison/rebaseline
+       side, not the globally-open book) — they must NOT get the
+       preferCurrentBook substitution, or they'd silently resolve the
+       open book's own same-id voice instead of that side's real one. The
+       default (no third arg) just matches by bare id, whichever comes
+       first — same as pre-fix behavior, so these callers see no change. */
+    const c = makeChar('narrator');
+    const openBooksOwnVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
+    const thisSidesRealVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'the-actual-book-being-compared',
+    };
+    /* thisSidesRealVoice listed first → unrestricted default returns it,
+       proving the current-book entry is NOT preferred unless opted in. */
+    expect(findVoiceForCharacter(c, [thisSidesRealVoice, openBooksOwnVoice])).toBe(
+      thisSidesRealVoice,
+    );
+  });
 });
 
 describe('findCharacterForVoice', () => {
@@ -79,6 +132,41 @@ describe('findCharacterForVoice', () => {
     const v = makeVoice('v_orphan', 'Orphan');
     const characters = [makeChar('marlow')];
     expect(findCharacterForVoice(v, characters)).toBeUndefined();
+  });
+
+  it("with restrictToCurrentBook=true, never matches a foreign book's same-id voice to this book's own character (no voiceId link)", () => {
+    /* Regression: the cast view's voice-library panel always passes the
+       currently-open book's own roster and opts into this restriction.
+       Two unrelated books' voiceId-less narrators share bare id 'narrator'
+       — a foreign book's voice card must never resolve to this book's own
+       narrator character just because the ids coincide. */
+    const foreignNarratorVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'unrelated-book',
+    };
+    const characters = [makeChar('narrator')];
+    expect(findCharacterForVoice(foreignNarratorVoice, characters, true)).toBeUndefined();
+  });
+
+  it("with restrictToCurrentBook=true, still matches by bare id when the voice IS this book's own (source: 'current')", () => {
+    const ownNarratorVoice: Voice = { ...makeVoice('narrator', 'Narrator'), source: 'current' };
+    const characters = [makeChar('narrator')];
+    expect(findCharacterForVoice(ownNarratorVoice, characters, true)?.id).toBe('narrator');
+  });
+
+  it('defaults to unrestricted (matches by bare id regardless of source) for the cross-book duplicate-review flow', () => {
+    /* views/voices.tsx intentionally matches a voice against an arbitrary
+       OTHER book's own roster it fetched on demand — `source` there
+       describes the globally-open book, not the roster being searched, so
+       the default (no third arg) must NOT apply the current-book guard. */
+    const otherBooksVoice: Voice = {
+      ...makeVoice('narrator', 'Narrator'),
+      source: 'library',
+      bookId: 'some-other-book',
+    };
+    const thatBooksOwnCharacters = [makeChar('narrator')];
+    expect(findCharacterForVoice(otherBooksVoice, thatBooksOwnCharacters)?.id).toBe('narrator');
   });
 });
 

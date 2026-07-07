@@ -276,7 +276,19 @@ export function CastView({
      it clears all of them, so the actionable unit is the chapter. */
   const driftChapterCountFor = (id: string) => distinctDriftChapterCount(driftByChar(id));
   const totalDriftChapters = distinctDriftChapterCount(driftEvents);
-  const findVoice = (id?: string) => library.find((v) => v.id === id);
+  /* Same bare-id collision voice-character-link.ts's findVoiceForCharacter
+     guards against: two unrelated books' voiceId-less characters (narrator,
+     unknown-male/female) can share a bare id, so the aggregated `library`
+     array can legitimately carry two entries with the same `id`. `id` here
+     is actually `familyKey ?? id` (voice-library-panel.tsx sets
+     draggingVoiceId from that pair, and it's globally unique), so this
+     already disambiguates in the common case; the `source: 'current'`
+     preference is a second layer for a fixture/edge-case with no
+     familyKey, where a dropped voice always belongs to (or was dragged
+     from) this book's own panel. */
+  const findVoice = (id?: string) =>
+    library.find((v) => (v.familyKey ?? v.id) === id && v.source === 'current') ??
+    library.find((v) => (v.familyKey ?? v.id) === id);
   /* A character's effective engine = its per-character override, else the
      project default. Qwen is the only override that diverges from the project
      model key, so the sample/Stop-detection prefix must use the Qwen key for
@@ -289,8 +301,12 @@ export function CastView({
      the rows. Counts every emotion character's missing variants; `hasBase`
      splits the actionable-now total (`readyTasks`) from the work blocked behind
      a missing base voice (`blockedTasks`/`blockedChars`). */
+  /* Every findVoiceForCharacter call in this view passes preferCurrentBook:
+     true — `c` always comes from `characters`, this view's own open book's
+     roster, so preferring a same-id `source: 'current'` match is safe (see
+     the function's doc comment for why that's NOT true everywhere). */
   const isQwenForVariants = (c: Character): boolean =>
-    effectiveEngineFor(c) === 'qwen' || findVoiceForCharacter(c, library)?.ttsVoice?.provider === 'qwen';
+    effectiveEngineFor(c) === 'qwen' || findVoiceForCharacter(c, library, true)?.ttsVoice?.provider === 'qwen';
   const variantTasks = useMemo(
     () => buildVariantTasks(characters, usedEmotions, isQwenForVariants),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -302,7 +318,7 @@ export function CastView({
      StatusPill resolves its labels (matched library voice + effective engine)
      so the chips and the rows can't disagree. */
   const statusKeysFor = (c: Character): string[] =>
-    statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c), usedEmotions.get(c.id));
+    statusFilterKeys(c, findVoiceForCharacter(c, library, true), effectiveEngineFor(c), usedEmotions.get(c.id));
 
   /* "Design full cast" — every character whose lifecycle is "Needs voice" (a
      Qwen-effective character with no designed voice), most-spoken first. Built
@@ -313,7 +329,7 @@ export function CastView({
       characters
         .filter(
           (c) =>
-            resolveVoiceStatus(c, findVoiceForCharacter(c, library), effectiveEngineFor(c))
+            resolveVoiceStatus(c, findVoiceForCharacter(c, library, true), effectiveEngineFor(c))
               .lifecycle?.label === 'Needs voice',
         )
         .slice()
@@ -424,7 +440,7 @@ export function CastView({
     const tally = new Map<string, { color: StatusPillColor; count: number }>();
     for (const c of characters) {
       const effectiveEngine = c.ttsEngine ?? ttsEngine;
-      const voice = findVoiceForCharacter(c, library);
+      const voice = findVoiceForCharacter(c, library, true);
       const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(c, voice, effectiveEngine);
       const lifecycleKey = lifecycle?.label ?? 'Unset';
       const lifecycleColor: StatusPillColor = lifecycle?.color ?? 'neutral';
@@ -506,12 +522,19 @@ export function CastView({
        srv-43: also inject voiceUuid (parity with profile-drawer.tsx) so the
        server's qwenStorageKey resolves the uuid-keyed cache entry the design
        route wrote, instead of the legacy name-derived key — otherwise the
-       voice-sample cache hash differs and every Play misses and re-synthesises. */
+       voice-sample cache hash differs and every Play misses and re-synthesises.
+       The character's OWN voiceUuid (read straight from this book's
+       cast.json) wins over the matched library voice's — that field is the
+       unambiguous ground truth, whereas the matched voice is a derived,
+       cross-book lookup that can (and did — a real cross-book identity
+       collision in the aggregator) carry a stale/foreign uuid. The matched
+       voice's uuid only fills in for a reused character that carries none
+       of its own (the bespoke design lives on the matched Voice instead). */
     const requestSubject: Voice =
       effectiveEngine === 'qwen' && designedQwenVoiceId
         ? {
             ...subject,
-            voiceUuid: voice?.voiceUuid ?? c.voiceUuid,
+            voiceUuid: c.voiceUuid ?? voice?.voiceUuid,
             overrideTtsVoices: {
               ...(subject.overrideTtsVoices ?? {}),
               qwen: { name: designedQwenVoiceId },
@@ -622,7 +645,9 @@ export function CastView({
      pill on the active voice cancels (sets back to null); tapping it on
      a different voice swaps to that voice. */
   function handleTapAssignToggle(voice: Voice) {
-    setAssigningVoice((prev) => (prev?.id === voice.id ? null : voice));
+    setAssigningVoice((prev) =>
+      (prev?.familyKey ?? prev?.id) === (voice.familyKey ?? voice.id) ? null : voice,
+    );
   }
 
   /* Plan 81 wave 3 — responsive layout split:
@@ -775,8 +800,10 @@ export function CastView({
             {/* fe-46 — always visible, never disabled; the voice-readiness
                 gate lives at generation start, not at this navigation step. */}
             <PrimaryButton variant="dark" icon={false} onClick={onContinueToManuscript}>
-              Continue to manuscript
-              <IconChevR className="w-4 h-4" />
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                Continue to manuscript
+                <IconChevR className="w-4 h-4" />
+              </span>
             </PrimaryButton>
           </div>
         </div>
@@ -955,7 +982,7 @@ export function CastView({
 
         {/* Plan 81 wave 3 — md:+ table layout (legacy, unchanged contract). */}
         <div className="hidden md:block bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
-          <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] gap-x-3 px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
+          <div className="grid grid-cols-[40px_1.9fr_1fr_1.6fr_0.5fr_1fr_1fr_110px] gap-x-3 px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
             <span></span>
             <span>Character</span>
             <span>Role</span>
@@ -966,7 +993,7 @@ export function CastView({
             <span>Sample</span>
           </div>
           {filtered.map((c, i) => {
-            const voice = findVoiceForCharacter(c, library);
+            const voice = findVoiceForCharacter(c, library, true);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = sampleScopeFor(c);
@@ -999,7 +1026,7 @@ export function CastView({
                   }
                   onOpenProfile(c.id);
                 }}
-                className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] gap-x-3 px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
+                className={`w-full grid grid-cols-[40px_1.9fr_1fr_1.6fr_0.5fr_1fr_1fr_110px] gap-x-3 px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
               >
                 <span
                   onClick={(e) => {
@@ -1149,7 +1176,7 @@ export function CastView({
                   </button>
                   {row?.error && (
                     <span
-                      className="text-[10px] text-red-600/80 truncate max-w-[130px]"
+                      className="text-[10px] text-red-600/80 truncate max-w-[100px]"
                       title={row.error}
                     >
                       ⚠ {row.error}
@@ -1171,7 +1198,7 @@ export function CastView({
             for touch devices). */}
         <div className="md:hidden flex flex-col gap-3">
           {filtered.map((c) => {
-            const voice = findVoiceForCharacter(c, library);
+            const voice = findVoiceForCharacter(c, library, true);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = sampleScopeFor(c);
@@ -1451,7 +1478,7 @@ export function CastView({
               void playSampleFor(c, v);
             }}
             onTapAssign={handleTapAssignToggle}
-            assigningVoiceId={assigningVoice?.id ?? null}
+            assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
             bookLanguage={bookLanguage}
           />
         </aside>
@@ -1515,11 +1542,14 @@ export function CastView({
                      can see + tap the character rows below. The sticky
                      assignment banner stays visible regardless. */
                   handleTapAssignToggle(v);
-                  if (!assigningVoice || assigningVoice.id !== v.id) {
+                  if (
+                    !assigningVoice ||
+                    (assigningVoice.familyKey ?? assigningVoice.id) !== (v.familyKey ?? v.id)
+                  ) {
                     setShowLibrary(false);
                   }
                 }}
-                assigningVoiceId={assigningVoice?.id ?? null}
+                assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
                 bookLanguage={bookLanguage}
               />
             </div>

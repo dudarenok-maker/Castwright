@@ -72,6 +72,14 @@ export const voicesRouter = Router();
 
 interface DerivedVoice {
   id: string;
+  /** Globally-unique key across the whole workspace-wide voices array: the
+      explicit voiceId when the source character set one (deliberate
+      cross-book reuse — the SAME value as `id` in that case), else a
+      book-scoped key. `id` alone is NOT safe for this — two unrelated
+      books' voiceId-less narrator/unknown-male/unknown-female characters
+      share the same literal `id`. Use this for React list keys, cross-book
+      multi-select, and the pin endpoint; use `id` for same-book joins. */
+  familyKey: string;
   character: string;
   bookTitle: string;
   bookId: string;
@@ -282,6 +290,20 @@ async function aggregateVoices(
           const c = normaliseCastCharacter(rawC);
           const id = c.voiceId ?? c.id;
           if (!id) continue;
+          /* Cross-book MERGE key — deliberately separate from the public `id`
+             above. An explicit `voiceId` is the only real signal that two
+             characters in different books are meant to be the same voice
+             (series continuity, deliberate reuse). Without one, bare `c.id`
+             is NOT a safe cross-book identity: the analyzer assigns the same
+             literal id ('narrator', 'unknown-male', 'unknown-female') to
+             EVERY book's narrator and auto-folded background-bucket
+             character, so two unrelated standalone books can coincidentally
+             share it. Scoping the fold key by bookId in that case stops one
+             book's generated/sampled/languageCode/voiceUuid from bleeding
+             into an unrelated book's same-slug character. `id` itself stays
+             the bare `voiceId ?? c.id` so the frontend's same-book id-
+             fallback join (voice-character-link.ts) is unaffected. */
+          const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
           /* The sample-cache scope keys on `char-<id>` (not bare `<id>`) for a
              voiceId-less character — matching the frontend's sampleScopeFor —
              so it can diverge from `id` above. Compute it explicitly. */
@@ -296,7 +318,7 @@ async function aggregateVoices(
           const overrideMap = c.overrideTtsVoices ?? null;
           const overrideForEngine = overrideMap?.[engine] ?? null;
           const legacyShape = overrideForEngine ? { engine, name: overrideForEngine.name } : null;
-          const existing = acc.get(id);
+          const existing = acc.get(dedupKey);
           if (existing) {
             existing.books.add(state.bookId);
             existing.usedIn = existing.books.size;
@@ -391,8 +413,9 @@ async function aggregateVoices(
             engine === 'qwen' && ttsVoiceRaw.name
               ? { ...ttsVoiceRaw, name: `qwen-${id}` }
               : ttsVoiceRaw;
-          acc.set(id, {
+          acc.set(dedupKey, {
             id,
+            familyKey: dedupKey,
             character: c.name ?? id,
             bookTitle: state.title,
             bookId: state.bookId,
@@ -410,7 +433,20 @@ async function aggregateVoices(
             usedIn: 1,
             source: isCurrent ? 'current' : 'library',
             reusable: isNarratorId(id, c.name) || undefined,
-            pinned: pinned.has(id) || undefined,
+            /* Keyed on `dedupKey` (== `familyKey`), NOT the bare `id` — a
+               pin toggled from the client sends `familyKey` as the
+               `:voiceId` route param (src/views/voices.tsx togglePin), so
+               reading it back must use the same book-scoped key or pin
+               state bleeds across unrelated books' same-slug characters.
+               `pinned.has(id)` is a MIGRATION fallback: a pin set before
+               this change persisted the bare id (the only scheme that
+               existed then) in voices.json, and nothing rewrites that file
+               on upgrade — without this fallback a pre-existing pin on a
+               voiceId-less character would silently vanish. Harmless
+               false-positive risk only for the exact pre-existing
+               cross-book ambiguity this whole fix addresses, which is no
+               worse than the pin behavior before this change. */
+            pinned: (pinned.has(dedupKey) || pinned.has(id)) || undefined,
             /* srv-43 Wave 2: key on the STORAGE key (qwenStoreKey) so a uuid-
                bearing voice (storage key = qwen-<uuid>) still matches the
                rendered snapshot even though ttsVoice.name is now qwen-<voiceId>. */

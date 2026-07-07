@@ -34,9 +34,14 @@ export const voicesSlice = createSlice({
       s.voices = a.payload.voices;
     },
     /* Optimistic pin toggle. PUT /api/voices/:id/pin still fires from the
-       view; transient mismatches are cheap (next hydrate corrects them). */
+       view; transient mismatches are cheap (next hydrate corrects them).
+       `voiceId` here is actually the voice's `familyKey` (falling back to
+       `id` for an older/local fixture with no familyKey) — matching by the
+       bare `id` alone would flip the pin on the wrong voice whenever two
+       unrelated books share a voiceId-less character's id (narrator,
+       unknown-male, unknown-female). */
     setPinned: (s, a: PayloadAction<{ voiceId: string; pinned: boolean }>) => {
-      const v = s.voices.find((v) => v.id === a.payload.voiceId);
+      const v = s.voices.find((v) => (v.familyKey ?? v.id) === a.payload.voiceId);
       if (v) v.pinned = a.payload.pinned || undefined;
     },
     /* Optimistic "Sampled" flip. Fired after a successful 12s audition synth
