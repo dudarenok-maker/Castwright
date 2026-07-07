@@ -40,6 +40,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
+import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import { applyOverrideToCastFiles } from './voices.js';
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
@@ -328,11 +329,15 @@ async function runDesignJob(
       }
 
       /* bug #1411 code-review follow-up: must match sample-scope.ts's
-         sampleScopeFor / voices.ts's sampleScope book-scoped fallback
-         (`char-<bookId>__<id>`), or a bulk-designed voiceId-less character's
-         audition caches under the pre-fix unscoped key and the Voices
-         Library reads it back as "Not sampled". */
-      const baseSampleVoiceId = character.voiceId ?? `char-${job.bookId}__${characterId}`;
+         sampleScopeFor / voices.ts's read-side scope, or a bulk-designed
+         voiceId-less character's audition caches under a scope the Voices
+         Library never looks up and reads back as "Not sampled".
+         sampleScopeForCharacter is the single shared source of this formula
+         (voice-sample-cache.ts) — don't recompute it inline here. */
+      const baseSampleVoiceId = sampleScopeForCharacter(
+        { id: characterId, voiceId: character.voiceId },
+        job.bookId,
+      );
       const sampleVoiceId = emotion
         ? `${baseSampleVoiceId}__${emotion}`
         : baseSampleVoiceId;

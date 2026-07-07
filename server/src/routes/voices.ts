@@ -60,7 +60,7 @@ import {
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
-import { listVoiceSampleFiles } from '../tts/voice-sample-cache.js';
+import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 
 /* The single model key the bespoke Qwen engine synthesises under (mirror of
    the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
@@ -306,19 +306,17 @@ async function aggregateVoices(
           const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
           /* The sample-cache scope keys on `char-<bookId>__<id>` (not bare
              `<id>`) for a voiceId-less character — matching the frontend's
-             sampleScopeFor — so it can diverge from `id` above. bug #1411:
-             this MUST match sampleScopeFor's book-scoped fallback, or a
+             sampleScopeFor and cast-design.ts's design-time write — so it
+             can diverge from `id` above. bug #1411: this MUST match, or a
              voiceId-less character sampled in one book falsely reads as
              Sampled in every other book whose analyzer-assigned id
-             coincidentally matches (narrator, unknown-male, ...) — the sample
-             cache dir is workspace-global, so an unscoped prefix check can't
-             tell them apart. `__` (not a hyphen, and NOT `dedupKey`'s `::`)
-             joins bookId and id — see sample-scope.ts's comment: this string
-             becomes part of an actual cache filename and is matched below by
-             a raw prefix check (not sanitised first), so the separator must
-             stay inside voice-sample-cache.ts's asciiFileScope allow-list or
-             the write path silently diverges from this read path. */
-          const sampleScope = c.voiceId ?? `char-${state.bookId}__${c.id}`;
+             coincidentally matches (narrator, unknown-male, ...) — the
+             sample cache dir is workspace-global, so an unscoped prefix
+             check can't tell them apart. sampleScopeForCharacter is the
+             single shared source of this formula (voice-sample-cache.ts) —
+             don't recompute it inline here, that's exactly the drift this
+             extraction closed. */
+          const sampleScope = sampleScopeForCharacter(c, state.bookId);
           /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
              Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
              Used to key generated-flag lookups against renderedQwenNames (which
