@@ -2098,7 +2098,10 @@ async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateRespo
    drift, voice-drift mismatches, config-drift events). */
 async function realGetQaReport(bookId: string): Promise<BookQaReport> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/qa-report`);
-  if (!res.ok) throw new Error(`getQaReport failed: ${res.status}`);
+  if (!res.ok)
+    throw new Error(
+      `QA report fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
   return res.json();
 }
 

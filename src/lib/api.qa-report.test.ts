@@ -50,10 +50,10 @@ describe('api.getQaReport — wire contract', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/books/b1/qa-report'));
   });
 
-  it('throws on a non-ok response', async () => {
+  it('throws on a non-ok response, surfacing the status and response body', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })));
 
-    await expect(api.getQaReport('b1')).rejects.toThrow(/500/);
+    await expect(api.getQaReport('b1')).rejects.toThrow(/QA report fetch failed \(500\): boom/);
   });
 
   it('URL-encodes the bookId', async () => {
