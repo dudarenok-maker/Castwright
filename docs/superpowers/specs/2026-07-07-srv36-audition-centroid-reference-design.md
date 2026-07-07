@@ -60,43 +60,72 @@ addressing this coupling would silently break the fallback path for most charact
 
 ## Design
 
-### 1. Dedicated sample text for audition renders
+### 1. Evidence plumbing, and a per-render text pool (not one shared long text)
 
-`buildSampleText`/`MAX_CHARS`=320 (`server/src/tts/voice-sample-cache.ts`) is shared with the
-voice-preview routes (`routes/voice-sample.ts`, `routes/qwen-voice.ts`) — a user-facing "hear
-this voice" clip, where a short sample is correct and this spec does not touch it.
+**Corrections from adversarial review, round 1 (2026-07-07):** the first draft assumed
+`hint?.evidence` was available wherever `auditionCentroid` runs, and that concatenating those
+quotes into one longer *shared* text (rendered N times) would fix Problem #2. Both were wrong,
+found by tracing the actual production call site rather than trusting the surrounding code
+comments:
 
-`audition-centroid.ts` gains its own text builder, used only by this module:
+**(a) No evidence reaches the audition site today — this needs real plumbing, not a read.**
+`aggregate.ts`'s `scoreBook` builds `voiceInfoByChar` (`aggregate.ts:296-304`) from
+`SegmentsFileView.characterSnapshots` alone — `voiceEngine`/`resolvedVoiceName`/`modelKey`/
+`attributes`, no `hint`. `scoreBook` never reads `cast.json`, the only place
+`CastCharacter.evidence` lives. So `hint` is `undefined` on every real invocation today, and
+*any* evidence-based text logic — including the existing per-render duration-floor retry,
+which already reads `hint.evidence` — silently no-ops to the canned line in production. The
+first draft's claim that this was "a small, local change, not new plumbing" was wrong; it
+only checked the too-thin/bimodal *branching* wiring (genuinely small), not the *evidence*
+wiring (genuinely new).
+
+**Fix:** `scoreBook` also loads `cast.json` once per call (`castJsonPath(bookDir)`, already
+exported from `workspace/paths.ts`), builds a `Map<string, CastCharacter>` by `id`, and
+threads `buildHintFromCast(castChar)` — already used for this exact purpose at render time,
+`character-snapshots.ts:39` — onto `voiceInfoByChar`'s new `hint` field when a matching cast
+entry exists. One extra file read plus a lookup, reusing an existing reader/builder pair
+rather than inventing a new one. Corollary: this also makes the pre-existing but previously
+dead duration-floor retry path functional for the first time.
+
+**(b) One shared longer text doesn't widen the variance the tolerance band is built from.**
+`pSevere`/`pBand`/`cleanMean` are the spread of the N embeddings' cosines to their own
+centroid. If all N renders still speak one identical text — even a longer, concatenated one —
+the only source of cross-sample variance is still the TTS engine's own sampling noise for a
+fixed utterance, not genuine content diversity. A longer *shared* text makes each individual
+embedding more phonetically complete/representative, but that's a different axis from what
+Problem #2 is actually about.
+
+**Fix:** build a pool of up to N *distinct* texts — the character's evidence quotes
+(stripped, deduped, longest-first, each capped at a reasonable length), cycling through them
+to fill N slots when there are fewer than N distinct quotes, falling back to the canned line
+(unchanged) only when there's no evidence at all. Each render in the pool now speaks
+genuinely different content when evidence supports it — the axis Problem #2 needs moved, not
+just a longer version of the same one-utterance problem.
 
 ```ts
-/** Longer, richer sample text for audition renders — concatenates as many
- *  evidence quotes as fit (longest-first) instead of picking just one, so a
- *  single render carries more phonetic/prosodic variety. Falls back to the
- *  existing canned line, unchanged, when there's no evidence. */
-const AUDITION_MAX_CHARS = 900;
+const AUDITION_QUOTE_MAX_CHARS = 320; // matches voice-sample-cache.ts's MAX_CHARS
 
-function buildAuditionSampleText(voice: VoiceLike, hint?: CharacterHint): string {
+function buildAuditionTexts(
+  voice: VoiceLike,
+  hint: CharacterHint | undefined,
+  count: number,
+): string[] {
   const cleaned = (hint?.evidence ?? [])
     .map(stripQuoteMarks)
     .filter((s) => s.length > 0)
-    .sort((a, b) => b.length - a.length);
+    .sort((a, b) => b.length - a.length)
+    .map((s) => s.slice(0, AUDITION_QUOTE_MAX_CHARS));
 
   if (cleaned.length === 0) {
-    return buildSampleText(voice, hint); // canned fallback line, unchanged
+    const canned = buildSampleText(voice, hint); // unchanged fallback
+    return Array(count).fill(canned);
   }
-
-  let text = '';
-  for (const quote of cleaned) {
-    const next = text ? `${text} ${quote}` : quote;
-    if (next.length > AUDITION_MAX_CHARS) break;
-    text = next;
-  }
-  return text || cleaned[0].slice(0, AUDITION_MAX_CHARS);
+  return Array.from({ length: count }, (_, i) => cleaned[i % cleaned.length]);
 }
 ```
 
-`AUDITION_MAX_CHARS`=900 is a starting point (roughly 3x the preview cap, still bounded) —
-calibration-tunable like the existing `BIMODAL_GAP_THRESHOLD`, not a hard requirement.
+This still shares zero code/constants with the voice-preview `buildSampleText`/`MAX_CHARS`
+path (untouched — see Out of scope).
 
 ### 2. Pool composition splits by *why* the fallback is needed
 
@@ -114,11 +143,21 @@ local change, not new plumbing:
   existing zero-anchor behavior is just the low end of the same formula.
 - **Bimodal** (`result.kind === 'in-book' && result.bimodal`): do **not** pass anchors in —
   they're the unreliable data causing the split. Falls back to a pure audition-only pool,
-  same shape as today, just with the smaller K and richer text from §1.
+  same shape as today, just with the smaller pool size and per-render text pool from §1.
+  See §3 for the second, new way a character can end up in this same "no anchors" treatment.
 
-### 3. New, decoupled target pool size
+### 3. Target pool size — with real margin, and a safety check on the blended pool
 
-Introduce a new constant in `audition-centroid.ts`, independent of `centroid.ts`'s
+**Correction from adversarial review, round 1:** the first draft rendered exactly `max(0,
+target − anchors.length)` new samples — zero margin above the bare deficit. But the Problem
+section's own reasoning credits K=12 with deliberate margin for occasional under-duration
+renders; rendering the bare deficit throws that margin away and would tip more too-thin
+characters into `too-short` than today, the opposite of the intended robustness. The first
+draft also never said what happens if the *blended* pool itself comes back bimodal — a new
+failure mode this redesign introduces (anchors and synthetic renders had never been mixed
+into one `buildCentroid` call before).
+
+Introduce two new constants in `audition-centroid.ts`, independent of `centroid.ts`'s
 `CENTROID_MIN_N`=10 (which stays exactly as-is — it continues to gate the *in-book* path
 only):
 
@@ -128,21 +167,53 @@ only):
  *  in-book path — this pool is deliberately smaller since it's a synthetic
  *  backup, not a statistically rigorous sample. */
 export const AUDITION_POOL_TARGET_N = 6;
+/** Extra render attempts allowed above the bare deficit, to absorb
+ *  duration-floor failures — restores the margin K=12 used to provide. */
+const AUDITION_POOL_MARGIN = 2;
 ```
 
-`auditionCentroid` renders `max(0, AUDITION_POOL_TARGET_N - existingAnchors.length)` new
-samples, embeds each, and calls `buildCentroid([...existingAnchors, ...newEmbeddings], {
-minN: AUDITION_POOL_TARGET_N })` — using `buildCentroid`'s existing (currently-unused) `minN`
-override so that once the pool reaches target size it gets the full trim/bimodal-check
-treatment (`kind: 'in-book'` internally, relabeled `'audition'` by the caller), rather than
-the degenerate `'too-thin'` path. If duration-floor failures (per-render retry logic,
-unchanged) leave the pool short of target, the existing "too-short → inconclusive" behavior
-applies exactly as today.
+Pool-filling: draw up to `deficit + AUDITION_POOL_MARGIN` texts from
+`buildAuditionTexts(..., deficit + AUDITION_POOL_MARGIN)` (§1), rendering/embedding each with
+the existing per-render duration-floor retry (now functional per §1a), and stop as soon as
+`existingAnchors.length + newEmbeddings.length` reaches `AUDITION_POOL_TARGET_N`. If the pool
+still falls short after exhausting the margin, the existing "too-short → inconclusive"
+behavior applies exactly as today — the same outcome as when every render already failed the
+duration floor.
 
-**Net effect:** worst case (0 anchors, no evidence) drops from 12 renders to 6 — a 2x cut;
-typical too-thin characters with some anchors already need noticeably fewer than that.
-Diversity improves because the rendered text is richer (§1), and the too-thin pool now
-contains genuine in-book acoustic samples rather than only synthetic repeats.
+Then call `buildCentroid([...existingAnchors, ...newEmbeddings], { minN:
+AUDITION_POOL_TARGET_N })` — using `buildCentroid`'s existing `minN` override (exercised today
+only by `centroid.test.ts`'s own unit tests, unused by either production caller) so that once
+the pool reaches target size it gets the full trim/bimodal-check treatment (`kind: 'in-book'`
+internally, relabeled `'audition'` by the caller) instead of the degenerate `'too-thin'` path.
+
+**Bimodal safety check on the blended pool (new):** if `result.bimodal` comes back `true` on
+this combined pool — the character's real anchors split from the new audition renders, or
+from each other, once blended — discard the anchors for this character and render the full
+`AUDITION_POOL_TARGET_N` (+margin) audition samples fresh, ignoring anchors entirely: the same
+treatment the bimodal branch above already gets. One re-attempt, not a recursive retry loop.
+This prevents silently shipping a centroid built from exactly the kind of cluster split the
+bimodal check exists to catch.
+
+**Net effect:** worst case (0 anchors, no evidence) drops from 12 renders to
+`AUDITION_POOL_TARGET_N + AUDITION_POOL_MARGIN` = 8 once margin is restored honestly — a real
+but more modest cut than the first draft's unqualified 2x. Typical too-thin characters with
+some anchors need fewer still, down to zero new renders when anchors alone already meet
+target. This is a **directional** improvement, not a measured one — no before/after
+false-positive rate is available for this chore to compare against (see Accepted limitation
+below and Out of scope). What's concretely fixed without needing a measurement to know it was
+wrong: same-text-only cross-sample variance, and burning full-model renders on characters that
+already have usable real anchors sitting unused.
+
+### Accepted limitation: percentile estimates at N=6 are coarser than at N=12
+
+Halving the typical pool size makes `percentile()` (used for `pSevere`/`pBand`) noisier than
+today — a real cost of the smaller pool, not a benefit, and this spec doesn't attempt to
+quantify by how much. Accepted because (a) this reference is explicitly a best-effort backup
+for characters the in-book path already can't trust, not a rigorously-sampled statistic, and
+(b) for the common too-thin case the pool isn't purely synthetic at N=6 — it's real anchors
+topped up, higher-fidelity input than 12 synthetic repeats regardless of raw count. If on-box
+dogfood shows this producing materially more false positives/negatives than today, raising
+`AUDITION_POOL_TARGET_N` is a one-constant change, not a redesign.
 
 ### 4. Signature change
 
@@ -154,19 +225,28 @@ except for the K/pool-size assertions called out below).
 ## Testing
 
 - `audition-centroid.test.ts`: update the hardcoded `CENTROID_K`-based call-count assertions
-  to the new `AUDITION_POOL_TARGET_N`-based top-up math; add cases for (a) anchors alone
-  already meeting target → zero new renders, (b) partial anchors → partial top-up, (c) zero
-  anchors → full target-count renders (today's shape, smaller K), (d) the richer
-  `buildAuditionSampleText` concatenation (multiple quotes fit vs. overflow truncation vs.
-  no-evidence fallback).
+  to the new `AUDITION_POOL_TARGET_N`/`AUDITION_POOL_MARGIN`-based top-up math; add cases for
+  (a) anchors alone already meeting target → zero new renders, (b) partial anchors → partial
+  top-up, (c) zero anchors → full target+margin renders (today's shape, smaller pool), (d)
+  `buildAuditionTexts` cycling through fewer-than-N distinct quotes vs. the no-evidence canned
+  fallback, (e) the pool-filling loop stopping early once target is reached vs. exhausting the
+  margin and falling to `too-short`, (f) a blended pool that comes back `bimodal: true` →
+  anchors discarded, full fresh audition-only pool rendered instead.
 - `aggregate.test.ts` / `aggregate-audition-tier.test.ts`: assert too-thin characters' anchors
-  are passed into `auditionCentroid` and bimodal characters' are not; assert the combined pool
-  (not just fresh renders) drives the resulting `cleanMean`/`pSevere`/`pBand`.
+  are passed into `auditionCentroid` and bimodal characters' are not; assert `scoreBook` loads
+  `cast.json` and threads `buildHintFromCast` onto `voiceInfoByChar` (including the
+  no-matching-cast-entry case, where `hint` stays `undefined` and the canned-line fallback
+  applies exactly as before this change); assert the combined pool (not just fresh renders)
+  drives the resulting `cleanMean`/`pSevere`/`pBand`.
 - No e2e coverage needed — this is a backend scoring-pipeline change with no new UI surface;
   existing srv-36 render-integrity coverage (Phase 1) is the relevant regression net.
 
 ## Out of scope
 
+- Measuring the current or post-change false-positive/negative rate of the drift-tolerance
+  band. This spec fixes two mechanisms known to be wrong without measurement (same-text-only
+  variance; discarding usable real anchors) — it does not attempt a before/after study. If
+  on-box dogfood surfaces a regression, see the Accepted limitation note above.
 - Any change to the shared `buildSampleText`/`MAX_CHARS` used by the voice-preview routes —
   untouched by this spec.
 - Re-tuning `CENTROID_MIN_N`, `BIMODAL_GAP_THRESHOLD`, or other in-book-path constants in
