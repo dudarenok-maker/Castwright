@@ -458,6 +458,15 @@ chapterQaRepairRouter.post(
           }
           if (!best) throw new Error('Re-record produced no audio.');
           const accepted = isAcceptable(bestVerdict, bestAsr, bestCosine, candidate);
+          /* Same signal/ASR-only predicate isAcceptable gates on before it ever
+             applies the conditional acoustic term (see isAcceptable above) —
+             true whenever the take's OWN signal-QA + ASR verdicts are clean,
+             independent of whether the acoustic/voice-drift cosine check also
+             passed. Used below to tell "genuinely bad take" apart from
+             "acoustically drifted but otherwise clean take" so the two don't
+             share one generic `suspect` flag. */
+          const signalAndAsrOk =
+            bestVerdict != null && bestVerdict.status === 'ok' && (!asrOn || bestAsr == null || bestAsr.verdict !== 'drift');
           if (!accepted) {
             stillSuspect.push(segIndex);
           } else {
@@ -479,12 +488,26 @@ chapterQaRepairRouter.post(
              buildSynthReplacements's freshVerdict reflects the actual outcome of
              THIS repair, instead of leaving every field undefined (which used to
              silently clear a pre-existing `suspect: true` to `undefined` even
-             when the repair failed to fix the sentence). */
+             when the repair failed to fix the sentence).
+
+             `suspect` is stamped ONLY for a genuine signal-QA/ASR problem
+             (`!signalAndAsrOk`) — NOT merely for `!accepted`. A repair rejected
+             purely by the acoustic/voice-drift cosine gate (signal-QA and ASR
+             both clean; `accepted` is false only because of the conditional
+             acoustic term in isAcceptable) must not feed the generic `suspect`
+             flag: that flag rolls into qa-report.ts's `acoustic.chaptersFlagged`
+             count and finalize-chapter-write.ts's suspect-reason fallback, both
+             of which are meant to represent signal-QA/ASR problems. The
+             voice-drift signal for that case already has its own dedicated
+             home — the "Voice match" row, driven by render-integrity.json
+             (written by srv-36's scoreBook independently of this route) — so
+             leaving `suspect` undefined here doesn't drop the signal, it just
+             stops double-counting/mislabeling it on the acoustic side. */
           return {
             pcm: best.pcm,
             sampleRate: best.sampleRate,
             qa: bestVerdict ?? undefined,
-            suspect: accepted ? undefined : true,
+            suspect: signalAndAsrOk ? undefined : true,
             asr: bestAsr ?? undefined,
             asrSuspect: accepted || !asrOn ? undefined : bestAsr?.verdict === 'drift' ? true : undefined,
             qaRetries: retryCount || undefined,

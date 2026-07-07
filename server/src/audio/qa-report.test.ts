@@ -165,4 +165,40 @@ describe('buildAudioQaReport', () => {
     // identical to the genuinely-off case in the first test above.
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(2);
   });
+
+  it('does not count a segment toward acoustic.chaptersFlagged when qa is clean and suspect is unset', async () => {
+    // Companion to the chapter-qa-repair.ts fix: a repair rejected PURELY by
+    // the acoustic/voice-drift cosine gate (signal-QA genuinely clean) must
+    // leave the segment's `suspect` field unset, not `true` — this segment
+    // shape (qa.status 'ok', suspect absent) is exactly what that fix now
+    // writes for that case, and it must not inflate this count.
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'kokoro-v1', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 } })],
+      characterSnapshots: { wren: { voiceEngine: 'kokoro' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.acoustic.chaptersFlagged).toBe(0);
+  });
+
+  it('still counts a segment toward acoustic.chaptersFlagged for a genuine signal-QA/ASR suspect', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'kokoro-v1', synthesizedAt: new Date(0).toISOString(),
+      segments: [
+        seg({
+          qa: { status: 'suspect', reasons: ['long_silence'], rms: 0.001, longestSilenceSec: 5, durationSec: 6, expectedSec: 1 },
+          suspect: true,
+        }),
+      ],
+      characterSnapshots: { wren: { voiceEngine: 'kokoro' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.acoustic.chaptersFlagged).toBe(1);
+  });
 });
