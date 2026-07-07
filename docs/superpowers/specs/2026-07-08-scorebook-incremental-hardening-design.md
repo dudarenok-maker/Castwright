@@ -2,7 +2,7 @@
 status: draft
 date: 2026-07-08
 topic: srv-36 scoreBook hardening — incremental per-character writes, resumability, and user-visible progress
-revision: 2 — post adversarial review (round 1); see "Round-1 review fixes" note below each revised section
+revision: 3 — post adversarial review (rounds 1 and 2); see "Round-N review fix" callouts
 ---
 
 # scoreBook hardening — incremental writes, resumability, and progress visibility
@@ -81,8 +81,15 @@ resolves every character before Phase 4 scores and writes anything. This design 
 4's per-character work into that same loop: the instant `resolveCharacterReference` resolves for
 a character, before moving to the next one, `scoreBook`:
 
+0. **Run start (new, round-2 review fix):** `scoreBook` calls `readCentroids(bookDir)` once
+   into an in-memory map before the character loop begins. Today's `scoreBook` never reads
+   `centroids.json` — it only ever builds `centroidRows` fresh and overwrites at the end
+   (`aggregate.ts:486-504`). Both the retry-cap counting above and the "reuse a persisted
+   audition centroid, skip resynthesis" optimization below depend on this prior state being
+   loaded; without it neither works (the round-2 review's finding #5).
 1. Upserts that character's row into `centroids.json` (`writeCentroids` becomes a per-character
-   upsert, not a single end-of-run batch write).
+   upsert — read-modify-write against the map loaded in step 0, not a single end-of-run batch
+   write).
 2. Computes that character's verdict rows against every `chapterData` entry it appears in and
    merges them into each affected chapter's verdict file via a new
    `mergeVerdictRows(path, characterId, rows)`: read the existing file if present, drop any
@@ -135,28 +142,67 @@ already in `centroids.json`. Instead, the cost split is:
   enough data) gets persisted as such immediately — but a `null` gets a bounded number of
   retries first (see below), not unconditional forever-pending status.
 
-**Retry cap for `null` returns (round-1 review fix — see below).** `auditionCentroid` returning
-`null` cannot distinguish "sidecar down right now" from "this character's voice can never
-synthesize" (an orphaned `qwen-<uuid>.pt`, a missing voice ref). Left uncapped, a permanently
-broken character would pin its chapters in "incomplete" forever, with the Resume button
-re-running the same doomed synthesis every click — strictly worse than today's graceful
-`inconclusive` degrade. Fix: extend each `CharacterCentroid` row (`centroids-io.ts`) with an
-optional `pendingAttempts?: number`. On a `null` return, upsert a placeholder row `{
-characterId, status: 'pending', pendingAttempts: prior + 1 }` (no `centroid`/`referenceKind` —
-distinguishable from a resolved row). Once `pendingAttempts` reaches a cap (**3**, matching the
-existing `maxAsrRerecords`-style small-retry-budget convention elsewhere in this codebase), the
-next `null` instead persists `referenceKind: 'too-short'` (today's existing degrade path) and
-stops being offered a "still pending" state — same terminal behavior as a character that was
-too-short from the start, just reached via a bounded number of failed attempts instead of
-immediately. A *success* at any point before the cap resets `pendingAttempts` implicitly (the
-row is overwritten with a real resolved row).
+**Retry cap for `null` returns — a separate, small persisted artifact, and an explicitly
+absorbing terminal state (round-1 AND round-2 review fix — both rounds found real gaps here).**
+
+`auditionCentroid` returning `null` cannot distinguish "sidecar down right now" from "this
+character's voice can never synthesize" (an orphaned `qwen-<uuid>.pt`, a missing voice ref).
+Left uncapped, a permanently broken character pins its chapters in "incomplete" forever, with
+the Resume button re-running the same doomed synthesis every click.
+
+- **New artifact, not a `centroids.json` field.** Round 1's draft proposed a `pending`-status
+  row inside `centroids.json` itself; round 2 correctly flagged that this (a) breaks
+  `CharacterCentroid`'s existing all-required-fields contract for every other reader (the repair
+  route reads `cleanMean` unconditionally) and (b) never specified whether the counter survives
+  a degrade, so it silently reset every cycle. Fix: track attempts in a **separate** small
+  artifact, `render-integrity.pending-attempts.json` (sibling to `centroids.json`, same
+  `audioDir`), shape `Record<characterId, number>` — write/read helpers `readPendingAttempts`/
+  `writePendingAttempts` in a new `pending-attempts-io.ts`, same `writeJsonAtomic` pattern as
+  every other srv-36 artifact. `centroids.json` itself is **untouched in shape** — every row
+  written to it is still a fully-resolved `CharacterCentroid` exactly as today; a character with
+  no row in `centroids.json` yet is simply "not resolved," full stop, same as today.
+- **The cycle, made explicit:**
+  1. `scoreBook` run start: `readCentroids` (see the new step below) and `readPendingAttempts`
+     once, both into in-memory maps.
+  2. For a stochastic character with no resolved row in `centroids.json` yet: cheap recompute
+     (always). If still too-thin/bimodal, call `auditionCentroid`.
+     - **Success** (`kind: 'audition'`): write the resolved row to `centroids.json`;
+       **delete** that character's entry from the pending-attempts map (so a character that
+       later needs the fallback again — e.g. re-render with new content — starts a fresh count,
+       not a stale high one).
+     - **`null`** (transient failure): read `prior = pendingAttempts[characterId] ?? 0`. If
+       `prior + 1 < 3`: write `pendingAttempts[characterId] = prior + 1`; character stays
+       unresolved this run (nothing in `centroids.json`), genuinely retried next trigger.
+       Otherwise (`prior + 1 >= 3` — a small, conservative, arbitrarily-chosen bound; not
+       claimed to match any other specific retry constant elsewhere in this codebase): write a
+       **terminal** `referenceKind: 'too-short'` row to `centroids.json` (today's existing
+       degrade shape, unchanged), **and delete** the character's pending-attempts entry (the
+       counter's job is done; nothing left to count).
+  3. For a character that already has a **`too-short`** row in `centroids.json` (whether from
+     genuine too-thin data or from a spent cap): the cheap in-book recompute **still runs every
+     time** (harmless, and lets a character upgrade if new chapters add real anchors — unchanged
+     from §2's upgrade guarantee above). But `auditionCentroid` is **never called again** for a
+     character already sitting on a `too-short` row — that is what makes the state absorbing.
+     This is the same behavior a genuinely-too-thin-from-the-start character already gets today;
+     the cap just reaches the same terminal state instead of hitting it on attempt 1.
+  4. `writePendingAttempts` is called once at the end of the run with the updated map (a single
+     write, not per-character — the map is small and short-lived by construction).
+
+  A *success* at any point before the cap is a clean exit from the cycle (step 2's success
+  branch); the pending-attempts entry never lingers past a resolved outcome either way.
 
 > **Round-1 review fix:** the original draft treated every `null` as indefinitely retriable with
-> no cap, which the adversarial review correctly flagged as the single most dangerous assumption
-> in the spec — it can permanently brick a book's Voice Match report on one bad voice file, with
-> a Resume button that never actually helps. Confirmed with the user: cap retries, then degrade
-> to `inconclusive`/`too-short`, matching today's graceful-degrade behavior (see the design
-> session's "Permanent-failure policy" decision).
+> no cap. Confirmed with the user: cap retries, then degrade to `inconclusive`/`too-short`,
+> matching today's graceful-degrade behavior (see the design session's "Permanent-failure
+> policy" decision).
+>
+> **Round-2 review fix:** round 1's cap didn't specify whether `pendingAttempts` survived a
+> degrade — without persistence the counter reset every run and the character oscillated
+> too-short→pending→too-short forever, never actually stopping. Round 2 also flagged that
+> stuffing a partial `pending` shape into `centroids.json` broke its existing contract for other
+> readers. Both are fixed above: a dedicated artifact (no schema pollution) and an explicit,
+> traced absorbing state (step 3: a `too-short` row — capped or genuine — permanently skips
+> `auditionCentroid`, full stop).
 
 ### 3. New SSE events
 
@@ -183,30 +229,60 @@ refactor, not just routing through the existing map:
 
 - **Extract `triggerScoring(ctx: { bookId, bookDir, chapters, justFinalizedSlugs?, keep })`** out
   of `afterChapterFinalized`'s body (`generation.ts:154-181`) into its own exported function.
-  It owns the `scoringInFlight` check/set/delete, the `scoreBook(...)` call (§1/§3's new
-  per-character callback wired in here), and the post-run `reconcileResidentQwenTiers(ctx.keep)`
-  — unchanged from today's logic, just callable from more than one place.
+  It owns the **`qa.speaker.enabled` guard** (moved here from `afterChapterFinalized`'s line 136
+  — see the round-2 fix below), the `scoringInFlight` check/set/delete, the `scoreBook(...)`
+  call (§1/§3's new per-character callback wired in here), and the post-run
+  `reconcileResidentQwenTiers(ctx.keep)` — unchanged from today's logic, just callable from more
+  than one place and now internally self-gating regardless of caller.
 - **`afterChapterFinalized`** keeps its existing `writeAttempted` call, then calls
   `triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug] })` — behaviorally
   identical to today.
-- **The new route** calls `triggerScoring({ bookId, bookDir, chapters })` — `justFinalizedSlugs`
-  omitted, matching `scoreBook`'s existing back-compat default ("omit to treat every chapter in
-  `chapters` as just-finalized," `aggregate.ts:299-302`) — appropriate here since a manual resume
-  has no single "just finished" chapter to scope to. **`keep` is computed the same way the
-  run-start reconcile computes it today** (the existing full-cast-tier derivation already used
-  once at generation-run start) — reused, not reimplemented, so the resume path gets the same
-  post-audition VRAM-hygiene reconcile the chapter-finalize path already has. This closes the
-  VRAM-leak gap the adversarial review flagged: without it, a base tier pulled by the resume
-  path's audition-centroid fallback would linger resident with nothing to evict it.
+- **The new route** calls `triggerScoring({ bookId, bookDir, chapters, justFinalizedSlugs: [] })`.
+
+> **Round-2 review fix — `justFinalizedSlugs` must be an explicit empty array, not omitted.**
+> The original draft omitted it, relying on `scoreBook`'s back-compat default (treat every
+> chapter as just-finalized) — but that stamps the "attempted" sentinel on **every** chapter
+> regardless of whether its embeddings exist yet, reopening exactly the GH #1436 race (a chapter
+> still mid-render gets falsely marked "attempted," reading as a transient false "embed failed").
+> An **explicit empty array** means only condition (b) in `scoreBook`'s per-chapter loop
+> (`aggregate.ts:367` — "this chapter's embeddings sibling is independently present on disk
+> right now") can stamp a chapter, which correctly skips anything still mid-render.
+>
+> **Belt-and-suspenders: the route also refuses to run while the book has an active generation
+> job.** The empty-array fix prevents *false attempted stamps*, but a resume click during active
+> generation would still needlessly compete with real chapter synthesis for sidecar time. The
+> route checks the same in-progress signal `queue-boot.ts`'s orphan-reset sweep uses (a book
+> with a workspace queue entry in `in_progress` state) and returns `409 Conflict` if the book is
+> currently generating — resume is specifically for the "book is done rendering, a run got
+> killed, nothing left to auto-retrigger it" case; it isn't meant to run alongside a live render.
+
+**`keep` derivation — round-2 review fix.** The original draft claimed the resume route reuses
+"the same way the run-start reconcile computes it today" — but that computation
+(`computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey)`,
+`generation.ts:734`) takes `engine`/`modelKey` from the **HTTP request body of a live generation
+POST** (`generation.ts:595`, `body.modelKey`) — there is no equivalent live value for a resume
+call with no active render. Reusing the function *shape* while inventing new *inputs* for it
+is not "the same," so the spec now says precisely what those inputs are for the resume path:
+`projectDefaultEngine`/`runDefaultQwenModelKey` are read from the **most recently rendered
+chapter's `segments.json`** (`chapterTitle`/`modelKey` fields — the same `cd.modelKey` `scoreBook`
+Phase 1 already reads for the audition-centroid tier selection, `aggregate.ts` "Prefer the
+PER-CHARACTER stamp... fall back to the chapter-level modelKey" comment). This is a
+best-effort proxy for "what tier does this book actually use," not a claim of run-start
+fidelity — acceptable because, per the belt-and-suspenders guard above, resume never runs
+concurrently with an in-flight sibling chapter render, so the run-start reconcile's specific
+"don't evict a tier an in-flight sibling needs" concern (`generation.ts:726-732`'s superset
+tradeoff) doesn't apply here; a book with no chapters rendered yet has nothing to derive from
+and skips the reconcile (mirrors `qwenInUse` being false today).
 
 `POST /api/books/:bookId/resume-scoring` calls `triggerScoring(...)`, which safely no-ops
 (no duplicate run, quick return) if a run is already active for that book, via the same
 `scoringInFlight` map both paths now share through the extracted helper. No new job/queue
-machinery. This is the explicit user-triggered path for the "book is fully rendered, a run got
-killed, nothing will auto-retrigger it" case — by design, no automatic boot-time reconciliation
-(kept out of scope; see Out of scope).
+machinery beyond the existing in-progress check reused above. This is the explicit
+user-triggered path for the "book is fully rendered, a run got killed, nothing will
+auto-retrigger it" case — by design, no automatic boot-time reconciliation (kept out of scope;
+see Out of scope).
 
-### 5. Redefine "fully scored" at chapter granularity — in `qa-report.ts`, not `deriveBookOutline`
+### 5. Redefine "fully scored" at chapter granularity, and add a `charactersPending` signal
 
 `scoredChapterIds` currently means "a verdict file exists at all" (`verdicts-io.ts:121-122`) —
 was all-or-nothing because verdict files were only ever written once, complete. Now that verdict
@@ -218,26 +294,55 @@ chapter*.
 `resolveConfiguredEngineByChar` — but that returns a **book-wide** character→engine map, not a
 per-chapter roster ("which characters appear in *this* chapter"). Taken literally as written, no
 chapter would ever satisfy "covers every stochastic character in the book," so `scoredChapterIds`
-would be permanently empty. The fix: **this computation belongs in `qa-report.ts`, which already
-does it correctly** for `eligibleChapterIds` (`qa-report.ts:92-98` — for each chapter, read its
-own `characterSnapshots` keys, keep the ones classified stochastic book-wide). Reuse that exact
-per-chapter roster: a chapter is fully scored when the verdict rows' `characterId` set is a
-superset of that chapter's own eligible-character roster. `deriveBookOutline`
-(`verdicts-io.ts`) is untouched — it stays a dumb per-chapter file reader; the roster-aware
-"fully scored" judgment is computed where the roster data already lives.
+would be permanently empty.
+
+**Round-2 review fix — the "leave `deriveBookOutline` untouched" constraint from round 1 was
+itself wrong and is retracted.** `qa-report.ts`'s existing segments loop (`qa-report.ts:92-98`)
+has the per-chapter *roster* half (which characters appear in a chapter), but collapses it into
+flat, chapter-agnostic sets (`stochasticCharacterIds`, `eligibleChapterIds`) — it doesn't retain
+a per-chapter map. The other half — which characters *actually have verdict rows* in a given
+chapter — lives only in the verdict files, read exclusively by `deriveBookOutline`, which today
+returns only file-level presence (`scoredChapterIds`), not per-chapter character coverage.
+Computing "fully scored" needs both halves in one place, so both get a small, scoped extension
+rather than the round-1 "computed elsewhere, nothing touched" claim:
+
+- `qa-report.ts`'s segments loop additionally builds `rosterByChapter: Map<number, Set<string>>`
+  (one line added to the existing loop it already runs — no new I/O).
+- `deriveBookOutline` (`verdicts-io.ts`) additionally builds
+  `verdictCharactersByChapter: Map<number, Set<string>>` from the **same** per-chapter verdict-row
+  read it already does (`verdicts-io.ts:110-135` already iterates every row — this just also
+  collects `row.characterId` into a per-chapter set alongside the existing mismatch/inconclusive/
+  too-short bookkeeping). No new file read; the same I/O this function already performs.
+- `qa-report.ts` computes `scoredChapterIds` as: for each chapter, is
+  `verdictCharactersByChapter.get(chapterId)` a superset of `rosterByChapter.get(chapterId)`?
+  This replaces `deriveBookOutline`'s current "verdict file exists" test for that specific
+  purpose (the raw per-chapter presence check `deriveBookOutline` does elsewhere — `issues`,
+  `inconclusiveChapterIds` — is unaffected, still file-presence-driven as today).
+
+**New signal: `charactersPending` — round-2 review fix for the Resume-button-never-goes-away
+bug.** A capped (§2) character permanently persists a `too-short` row, which — same as a
+genuinely-too-thin-from-the-start character always has — keeps it out of `charactersChecked`
+forever (`qa-report.ts`'s existing `uncheckedCharacterIds` semantics, unchanged). Round 2
+correctly flagged that if the Resume button (§6) gates on `charactersChecked <
+charactersOnRoster`, it would show — uselessly, forever — for a book whose only "unchecked"
+characters are already terminal, since clicking Resume can't help a character that's stopped
+being reattempted. The Resume button needs a *narrower* signal: is there a stochastic character
+with **no row in `centroids.json` at all** (genuinely incomplete — either never yet attempted,
+or mid-retry-cycle under the §2 cap)? A terminal `too-short` character (capped or genuine) *has*
+a row, so it's correctly excluded. `qa-report.ts` adds one more read — `readCentroids(bookDir)`
+(already exported, `centroids-io.ts`) — and computes
+`charactersPending = stochasticCharacterIds - keys(centroids)`, exposed as a new field:
+`AudioQaReport.voiceDrift.charactersPending: string[]`. This is the one new top-level field this
+design adds (round 1 claimed none were needed; round 2's finding showed that claim was false
+for exactly this case).
 
 **Reconciling with `chaptersEmbedFailed`.** A chapter can now be attempted, have some (not all)
-characters' rows written, and have one or more characters still genuinely `pending` (§2) — this
-is neither "scored" nor "embed failed" (embeddings succeeded; scoring is incomplete, not
-broken). `chaptersEmbedFailed`'s computation (`qa-report.ts:122`,
-`attemptedEligibleCount - chaptersScored`) must exclude a chapter from the embed-failed count
-while any of its roster characters are still `pending` — only a chapter with zero pending
-characters and still not fully scored counts as genuinely embed-failed. The existing
-`charactersOnRoster`/`charactersChecked`/`uncheckedCharacterIds` fields (`qa-report.ts:42-46`)
-already carry enough information for the frontend to distinguish "still in progress" from
-"actually failed"; no new top-level fields are needed on `AudioQaReport.voiceDrift` — this
-section's fix just makes sure `chaptersEmbedFailed` doesn't fire prematurely while characters
-are mid-resolution.
+characters' rows written, and have one or more characters still in `charactersPending` — this is
+neither "scored" nor "embed failed" (embeddings succeeded; scoring is incomplete, not broken).
+`chaptersEmbedFailed`'s computation (`qa-report.ts:122`, `attemptedEligibleCount -
+chaptersScored`) must exclude a chapter from the embed-failed count while any of its own
+`rosterByChapter` characters are in the book-level `charactersPending` set — only a chapter with
+zero pending roster characters and still not fully scored counts as genuinely embed-failed.
 
 ### 6. Frontend: three-state Voice Match row
 
@@ -259,36 +364,54 @@ are mid-resolution.
 
 1. **Live, in progress** (SSE progress state present for this book): "⏳ Checking character
    voices — X of Y done."
-2. **Static, incomplete, no active run** (fetched report shows `charactersChecked <
-   charactersOnRoster`, no live SSE progress for this book — e.g. after a page load/reconnect
-   post-restart): today's factual "X of Y characters checked so far" line + an inline **Resume
-   scoring** button calling the new route. Disabled/shows "already running" if the click races
-   an active run (the route's no-op response).
-3. **Complete**: unchanged — "N of M eligible chapters scored, K mismatches."
+2. **Static, incomplete, resumable** (fetched report shows `charactersPending.length > 0` —
+   §5's new field, **not** `charactersChecked < charactersOnRoster` — and no live SSE progress
+   for this book, e.g. after a page load/reconnect post-restart): today's factual "X of Y
+   characters checked so far" line + an inline **Resume scoring** button calling the new route.
+   Shows "already running" if the click races an active run, or a plain error if the route
+   returns 409 (book currently generating — see §4's guard).
+3. **Complete**: `charactersPending.length === 0` — unchanged copy, "N of M eligible chapters
+   scored, K mismatches." **A book with one or more permanently-capped characters also reaches
+   this state** (round-2 review fix): those characters sit in `uncheckedCharacterIds` exactly as
+   a genuinely-too-thin character always has — visible in the existing mismatch/unchecked
+   detail, not hidden — but the row itself reads "complete," with no dead-end Resume button,
+   because there's genuinely nothing left to resume.
 
 ## Testing
 
 - `server/src/audio/render-integrity/aggregate.test.ts` (extend): per-character writes land
   mid-loop, cheap-first-ordered (assert `centroids.json`/verdict files update using an injected,
   controllable synth/embed fn between characters, and that an already-≥floor character's row
-  lands before a too-thin character's); a second `scoreBook` call doesn't re-invoke the expensive
-  synth fn for an already-audition-resolved character with no new anchors, but *does* upgrade a
-  character from audition→in-book once new anchors clear the floor; a `null` `auditionCentroid`
-  return leaves the character as a `pending`-status row (not a resolved one) and increments
-  `pendingAttempts`; after 3 consecutive `null`s the 4th call persists `referenceKind:
-  'too-short'` instead of retrying again; a success at any point before the cap resets to a
-  resolved row.
+  lands before a too-thin character's); `scoreBook` calls `readCentroids` at run start and a
+  second call doesn't re-invoke the expensive synth fn for an already-audition-resolved
+  character with no new anchors, but *does* upgrade a character from audition→in-book once new
+  anchors clear the floor; a `null` `auditionCentroid` return writes to the new
+  `pending-attempts.json` artifact (not `centroids.json`, which stays untouched for that
+  character) and increments its count; after 3 consecutive `null`s the 4th call persists a
+  terminal `referenceKind: 'too-short'` row to `centroids.json` AND clears the character's
+  pending-attempts entry; a **5th call for that same character never invokes the synth fn
+  again** (the absorbing-state assertion the round-2 review specifically asked for); a success
+  at any point before the cap writes a resolved row and clears any pending-attempts entry.
 - `server/src/audio/qa-report.test.ts` (extend): a chapter with some-but-not-all characters
   resolved reports accurate `charactersChecked`/`charactersOnRoster` but is excluded from
-  `chaptersScored` until fully covered against *that chapter's own* roster (not the book-wide
-  set — a test with characters split across chapters should confirm chapter A can be "fully
-  scored" while chapter B, containing a different character, isn't); a chapter with a `pending`
-  (not yet capped) character is excluded from `chaptersEmbedFailed`, not miscounted into it.
-- New test for the extracted `triggerScoring` helper: both call sites (chapter-finalize,
-  resume route) produce identical `scoreBook` + `reconcileResidentQwenTiers` behavior; the
-  resume-route path's `keep` matches the run-start tier derivation.
+  `chaptersScored` until `verdictCharactersByChapter` is a superset of that chapter's own
+  `rosterByChapter` (not the book-wide set — a test with characters split across chapters should
+  confirm chapter A can be "fully scored" while chapter B, containing a different character,
+  isn't); a chapter with a character present in `charactersPending` is excluded from
+  `chaptersEmbedFailed`, not miscounted into it; a chapter whose only "unchecked" character is
+  terminally capped (present in `uncheckedCharacterIds`, absent from `charactersPending`) IS
+  counted as fully scored / not embed-failed — the capped-vs-still-pending distinction is the
+  crux of this whole round's fix, so this case gets its own explicit test.
+- New test for the extracted `triggerScoring` helper: both call sites (chapter-finalize, resume
+  route) produce correct `scoreBook` + `reconcileResidentQwenTiers` behavior; `triggerScoring`
+  itself no-ops when `qa.speaker.enabled` is off (assert both callers inherit this without
+  duplicating the check); the resume-route path derives `keep` from the most recently rendered
+  chapter's `segments.json` `modelKey` (not a live request value, since none exists).
 - New route test for `POST /api/books/:bookId/resume-scoring`: triggers `scoreBook` via
-  `triggerScoring`; no-ops without starting a duplicate run when one's already in flight.
+  `triggerScoring` with `justFinalizedSlugs: []` (assert a chapter mid-render — segments.json
+  present, embeddings.json absent — does NOT get a false "attempted" stamp from this call);
+  no-ops without starting a duplicate run when one's already in flight; returns `409` when the
+  book has an `in_progress` queue entry (active generation).
 - SSE emission test at the `scoreBook` call site: `scoring_started` → N × `scoring_progress` →
   `scoring_complete`, in order, correct counts.
 - `generation-stream-runner` test: the three new SSE types drive the right toast/change-log/
