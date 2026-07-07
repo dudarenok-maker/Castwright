@@ -82,11 +82,19 @@ Opus whole-branch review).
    to check," never "not run" — computed independently in
    `server/src/audio/qa-report.ts` from `segments.json`'s
    `characterSnapshots`, not derived from `scoreBook`'s output.
-2. **`chaptersEmbedFailed` is only ever attributed when the gate demonstrably
-   ran elsewhere in the book** (`chaptersScored > 0`) — `qa-report.ts`'s
-   `chaptersEmbedFailed = chaptersScored > 0 ? eligible - scored : 0`. A
-   whole-book embed failure with zero `chaptersScored` anywhere must degrade
-   to "not run," never to a false "embed failed" count.
+2. **`chaptersEmbedFailed` must distinguish "gate off" from a fleet-wide
+   embedding failure, not conflate them.** A per-chapter `attempted` sentinel
+   (`<slug>.render-integrity-attempted.json`, written unconditionally by
+   `scoreBook`'s per-chapter loop before the missing-embeddings skip) makes
+   "the gate genuinely never touched this book" (`attemptedChapterIds` empty)
+   distinguishable from "the gate ran and failed for every eligible chapter"
+   (attempted-but-unscored for all of them) — `qa-report.ts`'s
+   `chaptersEmbedFailed = (attemptedChapterIds ∩ eligibleChapterIds).length - chaptersScored`.
+   **Update (post-merge-review fix, 2026-07-07):** the original ship used a
+   coarser `chaptersScored > 0 ? eligible - scored : 0` heuristic, which
+   correctly avoided a false "embed failed" claim but couldn't tell "off"
+   apart from "ran and failed everywhere" — an independent code review on
+   PR #1433 found this and the sentinel mechanism above closed it.
 3. **`QaReportCard`'s `VoiceMatchRow` and `qa-report-export.ts`'s
    `voiceMatchLine` must share identical branch priority**: an embed
    shortfall (`chaptersScored < chaptersEligible`) leads ahead of the
