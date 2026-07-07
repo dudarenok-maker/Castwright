@@ -620,6 +620,212 @@ describe('GET /api/voices — languageCode on designed Qwen voices', () => {
   });
 });
 
+describe('GET /api/voices — cross-book identity collision on a shared, no-voiceId id', () => {
+  /* Real-world bug: the analyzer assigns the SAME literal id ('narrator',
+     'unknown-male', 'unknown-female') to every book's narrator / auto-folded
+     background-bucket character, and — unlike a deliberately reused voice —
+     these never get an explicit `voiceId` (only a per-book `voiceUuid`).
+     aggregateVoices used to key its workspace-wide fold on `c.voiceId ?? c.id`,
+     so two totally unrelated standalone books both landed in the SAME
+     acc-map slot purely by id coincidence, and one book's `generated` /
+     `languageCode` / `voiceUuid` bled into the other's.
+
+     Two standalone books, unrelated authors, both with a 'narrator' Qwen
+     character and NO voiceId:
+       - Alpha (English): rendered chapter 1 — narrator IS generated.
+       - Beta (Russian): designed but never rendered — narrator is NOT
+         generated.
+     Querying with each book as currentBookId must return THAT book's own
+     narrator (own languageCode, own voiceUuid, own generated status,
+     usedIn:1) — never the other book's. */
+  const ALPHA_AUTHOR = 'Alpha Author';
+  const ALPHA_TITLE = 'Alpha Book';
+  const BETA_AUTHOR = 'Beta Author';
+  const BETA_TITLE = 'Beta Book';
+  let alphaBookId: string;
+  let betaBookId: string;
+
+  let alphaManifestPath: string;
+  let betaManifestPath: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId, qwenVoiceSidecarPath }, { dirname }] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('node:path'),
+    ]);
+    alphaBookId = makeBookId(ALPHA_AUTHOR, 'Standalones', ALPHA_TITLE);
+    betaBookId = makeBookId(BETA_AUTHOR, 'Standalones', BETA_TITLE);
+
+    const alphaDir = writeBookOnDisk(
+      workspaceRoot,
+      ALPHA_AUTHOR,
+      'Standalones',
+      ALPHA_TITLE,
+      alphaBookId,
+      [
+        {
+          id: 'narrator',
+          name: 'Narrator',
+          voiceUuid: 'ALPHAUUID1',
+          ttsEngine: 'qwen',
+          overrideTtsVoices: { qwen: { name: 'qwen-ALPHAUUID1' } },
+          attributes: [],
+          lines: 100,
+          scenes: 1,
+        },
+      ],
+      true,
+    );
+    /* Give Alpha a chapter and a rendered segments snapshot so its narrator
+       is genuinely `generated`. writeBookOnDisk seeds state.json with an
+       empty chapters array — rewrite it with one chapter. */
+    const alphaStatePath = join(alphaDir, '.audiobook', 'state.json');
+    const alphaState = JSON.parse(readFileSync(alphaStatePath, 'utf8'));
+    alphaState.chapters = [{ id: 1, slug: '01-one', title: 'One' }];
+    writeFileSync(alphaStatePath, JSON.stringify(alphaState));
+    mkdirSync(join(alphaDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(alphaDir, 'audio', '01-one.segments.json'),
+      JSON.stringify({
+        bookId: alphaBookId,
+        chapterId: 1,
+        chapterTitle: 'One',
+        synthesizedAt: new Date().toISOString(),
+        segments: [],
+        characterSnapshots: {
+          narrator: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ALPHAUUID1' },
+        },
+      }),
+    );
+    alphaManifestPath = qwenVoiceSidecarPath('qwen-ALPHAUUID1');
+    mkdirSync(dirname(alphaManifestPath), { recursive: true });
+    writeFileSync(alphaManifestPath, JSON.stringify({ language: 'English' }));
+
+    writeBookOnDisk(
+      workspaceRoot,
+      BETA_AUTHOR,
+      'Standalones',
+      BETA_TITLE,
+      betaBookId,
+      [
+        {
+          id: 'narrator',
+          name: 'Рассказчик',
+          voiceUuid: 'BETAUUID1',
+          ttsEngine: 'qwen',
+          overrideTtsVoices: { qwen: { name: 'qwen-BETAUUID1' } },
+          attributes: [],
+          lines: 200,
+          scenes: 1,
+        },
+      ],
+      true,
+    );
+    betaManifestPath = qwenVoiceSidecarPath('qwen-BETAUUID1');
+    mkdirSync(dirname(betaManifestPath), { recursive: true });
+    writeFileSync(betaManifestPath, JSON.stringify({ language: 'Russian' }));
+  });
+
+  afterAll(() => {
+    rmSync(alphaManifestPath, { force: true });
+    rmSync(betaManifestPath, { force: true });
+  });
+
+  it("Alpha's own render status/language never bleeds onto Beta", async () => {
+    const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+    expect(res.status).toBe(200);
+    const narrator = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+    );
+    expect(narrator).toBeDefined();
+    expect(narrator.voiceUuid).toBe('BETAUUID1');
+    expect(narrator.languageCode).toBe('ru');
+    expect(narrator.generated).toBeFalsy();
+    expect(narrator.usedIn).toBe(1);
+  });
+
+  it("Beta's own (unrendered) status never suppresses Alpha's real generated flag", async () => {
+    const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${alphaBookId}`);
+    expect(res.status).toBe(200);
+    const narrator = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+    );
+    expect(narrator).toBeDefined();
+    expect(narrator.voiceUuid).toBe('ALPHAUUID1');
+    expect(narrator.languageCode).toBe('en');
+    expect(narrator.generated).toBe(true);
+    expect(narrator.usedIn).toBe(1);
+  });
+
+  it('emits distinct familyKey values for two unrelated books sharing a bare id', async () => {
+    const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+    const alpha = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+    );
+    const beta = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+    );
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha.familyKey).toBeTruthy();
+    expect(beta.familyKey).toBeTruthy();
+    expect(alpha.familyKey).not.toBe(beta.familyKey);
+  });
+
+  it("pinning Alpha's narrator (by familyKey) never pins Beta's unrelated same-id narrator", async () => {
+    const before = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+    const alpha = before.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+    );
+    try {
+      const pinRes = await request(app)
+        .put(`/api/voices/${encodeURIComponent(alpha.familyKey)}/pin`)
+        .send({ pinned: true });
+      expect(pinRes.status).toBe(204);
+
+      const after = await request(app).get(`/api/voices?engine=qwen&currentBookId=${betaBookId}`);
+      const alphaAfter = after.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+      );
+      const betaAfter = after.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === betaBookId,
+      );
+      expect(alphaAfter.pinned).toBe(true);
+      expect(betaAfter.pinned).toBeFalsy();
+    } finally {
+      await request(app)
+        .put(`/api/voices/${encodeURIComponent(alpha.familyKey)}/pin`)
+        .send({ pinned: false });
+    }
+  });
+
+  it("a legacy bare-id pin (set before the familyKey migration) still surfaces as pinned, not silently lost", async () => {
+    /* voices.json's `pinned` array is workspace-global and never rewritten
+       on upgrade. A pin set before this fix stored the bare id ('narrator')
+       — the only scheme that existed then. Simulate that by writing it
+       directly (bypassing the PUT route, which now only ever writes
+       familyKey values), then confirm the read side's legacy fallback
+       still honours it instead of the pin silently vanishing. */
+    const [{ voicesMetaPath }, { writeJsonAtomic }] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../workspace/state-io.js'),
+    ]);
+    try {
+      await writeJsonAtomic(voicesMetaPath(), {
+        pinned: ['narrator'],
+        updatedAt: new Date().toISOString(),
+      });
+      const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${alphaBookId}`);
+      const alpha = res.body.voices.find(
+        (v: { id: string; bookId: string }) => v.id === 'narrator' && v.bookId === alphaBookId,
+      );
+      expect(alpha.pinned).toBe(true);
+    } finally {
+      await writeJsonAtomic(voicesMetaPath(), { pinned: [], updatedAt: new Date().toISOString() });
+    }
+  });
+});
+
 describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
   /* A self-contained author with: a two-book series (Trilogy), a same-author
      spinoff in a DIFFERENT series, and a standalone. Distinct voiceIds per

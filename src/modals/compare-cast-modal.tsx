@@ -280,6 +280,11 @@ function buildSideContext(
      live as the user edits. Sample requests use the same dirty hint via
      buildCharacterHint(character, draft). */
   const merged = mergeDraft(c, draft);
+  /* Deliberately NOT preferCurrentBook: true — `c` here is a specific
+     comparison SIDE's character, which is frequently a DIFFERENT book than
+     the globally-open one (cross-book compare is explicitly supported).
+     Preferring the open book's own same-id voice would silently substitute
+     the wrong book's voice for this side. */
   const matched = findVoiceForCharacter(c, library);
   const sampleVoiceId = sampleScopeFor(c);
   const ttsVoice = matched?.ttsVoice ?? resolveTtsVoiceForCharacter(merged, engine);

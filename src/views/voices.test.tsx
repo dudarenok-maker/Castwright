@@ -453,6 +453,40 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     expect(compareBtn).not.toBeDisabled();
   });
 
+  it("selects both of two unrelated books' same-bare-id voices independently, not as a toggle (cross-book id collision)", () => {
+    /* Regression: the analyzer assigns the same literal id ('narrator',
+       'unknown-male', 'unknown-female') to every book's narrator/auto-
+       folded background character with no voiceId to disambiguate them,
+       so this all-books view can show two entries with the same bare id.
+       Before the familyKey fix, `toggleSelect`/`selectedVoiceIds` keyed on
+       bare id, so selecting the second card just toggled the FIRST one
+       back off (dedup on the shared id) instead of selecting both. */
+    const collidingLibrary: Voice[] = [
+      makeVoice({
+        id: 'narrator',
+        familyKey: 'b1::narrator',
+        character: 'Narrator',
+        bookId: 'b1',
+        bookTitle: 'Book One',
+        source: 'current',
+      }),
+      makeVoice({
+        id: 'narrator',
+        familyKey: 'b-other::narrator',
+        character: 'Narrator',
+        bookId: 'b-other',
+        bookTitle: 'Some Other Book',
+        source: 'library',
+      }),
+    ];
+    renderCompare(collidingLibrary);
+    const checkboxes = screen.getAllByLabelText('Select voice for compare');
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    expect(screen.getAllByLabelText('Deselect voice')).toHaveLength(2);
+  });
+
   it('disables Compare at 3+ selections with "Select exactly 2 voices" (plan 22a)', () => {
     renderCompare();
     const checkboxes = screen.getAllByLabelText('Select voice for compare');

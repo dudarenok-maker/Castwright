@@ -423,6 +423,10 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
 
   /* Audition the CURRENT voice for a character (existing sample path). */
   async function playCurrent(character: Character) {
+    /* Deliberately NOT preferCurrentBook: true — rebaseline walks a SERIES'
+       characters across multiple books, not just the globally-open one;
+       preferring the open book's own same-id voice would silently
+       substitute the wrong book's voice/sample for a sibling-book character. */
     const matched = findVoiceForCharacter(character, voices);
     const voiceId = matched?.id ?? `char-${character.id}`;
     const subject: Voice =

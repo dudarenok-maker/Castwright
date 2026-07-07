@@ -37,8 +37,11 @@ export const selectUndesignedQwenCharacters = createSelector(
     return characters
       .filter(
         (c) =>
-          resolveVoiceStatus(c, findVoiceForCharacter(c, library), c.ttsEngine ?? ttsEngine).lifecycle
-            ?.label === 'Needs voice',
+          /* preferCurrentBook: true — `characters` is state.cast.characters,
+             the currently-open book's own roster (see the doc comment
+             above), so a same-id `source: 'current'` match is safe here. */
+          resolveVoiceStatus(c, findVoiceForCharacter(c, library, true), c.ttsEngine ?? ttsEngine)
+            .lifecycle?.label === 'Needs voice',
       )
       .slice()
       .sort(compareCastRows)

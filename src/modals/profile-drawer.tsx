@@ -631,12 +631,22 @@ export function ProfileDrawer({
        pickVoiceForEngine('qwen', …) resolves it; preserve any other-engine
        slots already on the subject. Non-qwen engines pass through unchanged.
        srv-43: also inject voiceUuid so qwenStorageKey resolves the uuid-keyed
-       cache entry the design route wrote, instead of the legacy name-derived key. */
+       cache entry the design route wrote, instead of the legacy name-derived key.
+       The character's OWN voiceUuid (freshest prop data, read straight from this
+       book's cast.json) wins over the matched library voice's — that field is the
+       unambiguous ground truth, whereas `voice` is a derived, cross-book lookup
+       that can carry a stale/foreign uuid (the same class of bug cast.tsx's
+       playSampleFor was fixed for). `voice?.voiceUuid` only fills in for a
+       genuinely reused character that carries none of its own. */
     const requestSubject =
       effectiveEngine === 'qwen' && designedVoiceId
         ? {
             ...sampleSubject,
-            voiceUuid: stagedVoiceUuid ?? voice?.voiceUuid ?? singleDesign?.preview?.voiceUuid ?? character.voiceUuid,
+            voiceUuid:
+              stagedVoiceUuid ??
+              character.voiceUuid ??
+              voice?.voiceUuid ??
+              singleDesign?.preview?.voiceUuid,
             overrideTtsVoices: {
               ...(voice?.overrideTtsVoices ?? {}),
               qwen: { name: designedVoiceId },

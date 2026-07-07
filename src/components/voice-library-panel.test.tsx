@@ -311,6 +311,80 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
   });
 });
 
+describe('VoiceCard — familyKey identity (cross-book id collision)', () => {
+  /* Regression: two unrelated books' voiceId-less characters (narrator,
+     unknown-male, unknown-female) can share a bare Voice.id in the "All"
+     tab's flat, all-books array. Drag/assign identity must key on
+     familyKey (falling back to id) so highlighting one card can never
+     cross-highlight an unrelated book's same-id card. */
+
+  it('reports familyKey (not the bare id) to setDraggingVoiceId on drag start', () => {
+    const setDraggingVoiceId = vi.fn();
+    const voice = makeVoice('narrator', 'Narrator', { familyKey: 'book-a::narrator' });
+    render(
+      <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={setDraggingVoiceId} />,
+    );
+    const card = screen.getByText('Narrator').closest('div[draggable]')!;
+    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: 'copy', setData: () => {} } });
+    expect(setDraggingVoiceId).toHaveBeenCalledWith('book-a::narrator');
+  });
+
+  it('only highlights the card whose familyKey matches draggingVoiceId, not a same-bare-id sibling', () => {
+    const ownVoice = makeVoice('narrator', 'Narrator', {
+      familyKey: 'book-a::narrator',
+      bookId: 'book-a',
+    });
+    const foreignVoice = makeVoice('narrator', 'Narrator', {
+      familyKey: 'book-b::narrator',
+      bookId: 'book-b',
+      source: 'library',
+    });
+    render(
+      <VoiceLibraryPanel
+        library={[foreignVoice, ownVoice]}
+        draggingVoiceId="book-a::narrator"
+        setDraggingVoiceId={vi.fn()}
+      />,
+    );
+    /* The default tab is "This book" (current-only) — switch to "All" so
+       both the own AND the foreign same-bare-id card render together. */
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    const cards = screen.getAllByText('Narrator').map((el) => el.closest('div[draggable]')!);
+    expect(cards).toHaveLength(2);
+    const draggingCards = cards.filter((c) => c.className.includes('opacity-40'));
+    expect(draggingCards).toHaveLength(1);
+  });
+
+  it('only highlights the card whose familyKey matches assigningVoiceId, not a same-bare-id sibling', () => {
+    const ownVoice = makeVoice('narrator', 'Narrator', {
+      familyKey: 'book-a::narrator',
+      bookId: 'book-a',
+    });
+    const foreignVoice = makeVoice('narrator', 'Narrator', {
+      familyKey: 'book-b::narrator',
+      bookId: 'book-b',
+      source: 'library',
+    });
+    render(
+      <VoiceLibraryPanel
+        library={[foreignVoice, ownVoice]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        onTapAssign={vi.fn()}
+        assigningVoiceId="book-a::narrator"
+      />,
+    );
+    /* The default tab is "This book" (current-only) — switch to "All" so
+       both the own AND the foreign same-bare-id card render together. */
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    /* Only the matching card's Assign pill reads "Cancel" (the active
+       assigning-target state); the foreign same-id card must still read
+       "Assign". */
+    expect(screen.getAllByRole('button', { name: /^Cancel /i })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /^Assign /i })).toHaveLength(1);
+  });
+});
+
 describe('VoiceLibraryPanel — search', () => {
   const lib: Voice[] = [
     makeVoice('v_marlow', 'Marlow Halden', { bookTitle: 'The Hollow Tide' }),
