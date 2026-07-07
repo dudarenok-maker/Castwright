@@ -28,7 +28,11 @@
 
    Additive: the client `applyVoiceMatches` path stays as a fallback. */
 
-import { findAuthorSeriesForBookId } from './series-cast-scan.js';
+import {
+  findAuthorSeriesForBookId,
+  isStandaloneBookId,
+  resolveBookLanguageForBookId,
+} from './series-cast-scan.js';
 import { scanLibraryCharacters, type LibraryCharacterRecord } from './library-cast-scan.js';
 import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
@@ -151,6 +155,17 @@ export interface LinkSeriesReuseOptions {
   ) => Promise<{ author: string; series: string } | null>;
   positions?: () => Promise<Map<string, number | null>>;
   castLoader?: CastLoader;
+  /** Whether a bookId is a standalone (`state.isStandalone === true`) — every
+      standalone shares the synthetic `series: "Standalones"` folder name, so
+      an (author, series) match alone must never be treated as proof of
+      continuity between two standalones. Defaults to the real workspace
+      check (`isStandaloneBookId`). */
+  isStandaloneBookId?: (bookId: string) => Promise<boolean>;
+  /** A book's normalised language — defaults to `resolveBookLanguageForBookId`.
+      A Qwen voice bakes its design language into the .pt, so a cross-language
+      reuse produces garbled audio; every link/prune check vetoes a language
+      mismatch regardless of what the author/series/standalone checks say. */
+  resolveBookLanguage?: (bookId: string) => Promise<string>;
 }
 
 /* Revert a stale-linked character. A pure reuse row's voice was denormalised
@@ -190,8 +205,11 @@ export async function pruneStaleReuseLinks(
   if (linked.length === 0) return 0;
 
   const resolveAuthorSeries = options.resolveAuthorSeries ?? findAuthorSeriesForBookId;
+  const isStandalone = options.isStandaloneBookId ?? isStandaloneBookId;
+  const resolveBookLanguage = options.resolveBookLanguage ?? resolveBookLanguageForBookId;
   const meta = await resolveAuthorSeries(bookId);
   if (!meta) return 0; // can't resolve the current book — don't guess
+  const myLanguage = await resolveBookLanguage(bookId);
 
   const positions = await (options.positions ?? seriesPositionByBookId)();
   const myPos = positions.get(bookId) ?? null;
@@ -201,7 +219,11 @@ export async function pruneStaleReuseLinks(
     const targetBookId = c.matchedFrom!.bookId!;
     const targetMeta = await resolveAuthorSeries(targetBookId);
     const sameSeries =
-      !!targetMeta && targetMeta.author === meta.author && targetMeta.series === meta.series;
+      !!targetMeta &&
+      targetMeta.author === meta.author &&
+      targetMeta.series === meta.series &&
+      !(await isStandalone(targetBookId)) &&
+      (await resolveBookLanguage(targetBookId)) === myLanguage;
     /* Earlier-only guard mirrors the linker: a same-series link is valid only
        when the target is a strictly-lower position. Unknown positions can't
        prove "earlier", so they're treated as acceptable (conservative keep). */
@@ -227,8 +249,11 @@ export async function linkSeriesReuseAtAnalysis(
   if (!bookId || characters.length === 0) return 0;
 
   const resolveAuthorSeries = options.resolveAuthorSeries ?? findAuthorSeriesForBookId;
+  const isStandalone = options.isStandaloneBookId ?? isStandaloneBookId;
+  const resolveBookLanguage = options.resolveBookLanguage ?? resolveBookLanguageForBookId;
   const meta = await resolveAuthorSeries(bookId);
   if (!meta) return 0; // not in library / standalone resolves elsewhere
+  const myLanguage = await resolveBookLanguage(bookId);
 
   const positions = await (options.positions ?? seriesPositionByBookId)();
   const myPosition = positions.get(bookId) ?? null;
@@ -248,6 +273,17 @@ export async function linkSeriesReuseAtAnalysis(
     if (record.bookId === bookId) continue;
     const recMeta = await resolveAuthorSeries(record.bookId);
     if (!recMeta || recMeta.author !== meta.author || recMeta.series !== meta.series) continue;
+    /* A standalone's cast is never part of a series' continuity — every
+       standalone shares the synthetic 'Standalones' folder as its `series`,
+       so the (author, series) check above alone would treat unrelated (or
+       different-language) standalone siblings as series-mates and auto-link
+       their voices (fs-61 regression: a Qwen voice bakes its design language
+       into the .pt, so cross-language reuse produces garbled audio). */
+    if (await isStandalone(record.bookId)) continue;
+    /* fs-61 defense-in-depth: never carry a Qwen voice across a language
+       boundary, even between two "real" series-mates — the .pt is baked
+       to its design language. */
+    if ((await resolveBookLanguage(record.bookId)) !== myLanguage) continue;
     const pos = positions.get(record.bookId) ?? null;
     /* Earlier-book guard: link only against a strictly-lower seriesPosition.
        Unknown positions (null) on either side can't establish "earlier", so

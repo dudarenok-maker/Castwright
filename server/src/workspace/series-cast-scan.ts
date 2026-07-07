@@ -20,6 +20,7 @@ import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
 import { readJson } from './state-io.js';
 import type { BookStateJson } from './scan.js';
+import { bookStateLanguage } from './scan.js';
 
 export interface ScanSeriesOptions {
   /** Optional bookId to exclude from the scan (the book about to use
@@ -39,9 +40,7 @@ export interface ScanSeriesOptions {
    book whose state.json was just written but state.castConfirmed is
    still false — already excluded by scanLibraryCharacters but caller
    may still pass us its bookId). */
-export async function findAuthorSeriesForBookId(
-  targetBookId: string,
-): Promise<{ author: string; series: string } | null> {
+async function findBookStateForBookId(targetBookId: string): Promise<BookStateJson | null> {
   const { existsSync, readdirSync } = await import('node:fs');
   if (!existsSync(BOOKS_ROOT)) return null;
   const authors = readdirSync(BOOKS_ROOT, { withFileTypes: true })
@@ -59,13 +58,42 @@ export async function findAuthorSeriesForBookId(
         const state = await readJson<BookStateJson>(
           stateJsonPath(join(BOOKS_ROOT, authorName, seriesName, titleName)),
         );
-        if (state?.bookId === targetBookId) {
-          return { author: state.author, series: state.series };
-        }
+        if (state?.bookId === targetBookId) return state;
       }
     }
   }
   return null;
+}
+
+export async function findAuthorSeriesForBookId(
+  targetBookId: string,
+): Promise<{ author: string; series: string } | null> {
+  const state = await findBookStateForBookId(targetBookId);
+  return state ? { author: state.author, series: state.series } : null;
+}
+
+/** Whether a book is a standalone (`state.isStandalone === true`). Every
+    standalone book is filed under the same synthetic `series: "Standalones"`
+    folder name, so an (author, series) match alone does NOT prove two
+    standalones share continuity — callers that reuse voices/links across
+    books (series-reuse-link.ts) must additionally exclude standalone targets,
+    the same way scanSeriesCharacters already does for the roster-scan path.
+    Returns `false` for an unresolvable bookId (conservative: don't block a
+    link on a scan failure). */
+export async function isStandaloneBookId(targetBookId: string): Promise<boolean> {
+  const state = await findBookStateForBookId(targetBookId);
+  return state?.isStandalone === true;
+}
+
+/** A book's normalised BCP-47 language (fs-2's `bookStateLanguage`, default
+    `'en'`). Used to veto cross-language voice reuse: a Qwen voice bakes its
+    design language into the on-disk .pt, so matching a character to a
+    voice from a different-language book produces garbled audio (fs-61).
+    Returns `'en'` for an unresolvable bookId — the same conservative
+    default `bookStateLanguage` applies to a book with no `language` field. */
+export async function resolveBookLanguageForBookId(targetBookId: string): Promise<string> {
+  const state = await findBookStateForBookId(targetBookId);
+  return state ? bookStateLanguage(state) : 'en';
 }
 
 /* Filter scanLibraryCharacters to a single (author, series) slice.
