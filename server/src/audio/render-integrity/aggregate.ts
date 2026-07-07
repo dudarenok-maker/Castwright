@@ -156,10 +156,11 @@ interface CharacterReference {
  * from anchor-eligible vectors, derive the clean spread statistics.
  *
  * Task 10 — too-thin / bimodal path: attempt Option-B audition centroid:
- *   render the character's approved audition sample K times, embed each,
- *   and build the centroid from those renders. If the audition sample is
- *   itself too short to produce reliable embeddings → `referenceKind: 'too-short'`
- *   (all segments → inconclusive).
+ *   blend real anchor embeddings (too-thin only) with new audition renders
+ *   under distinct evidence-quote text, up to AUDITION_POOL_TARGET_N +
+ *   AUDITION_POOL_MARGIN total render attempts (see audition-centroid.ts).
+ *   If the resulting pool is still too short for a reliable reference →
+ *   `referenceKind: 'too-short'` (all segments → inconclusive).
  *
  * @param anchorVecs    Anchor-eligible embedding vectors collected from the book.
  * @param voiceInfo     Optional voice info for Option-B (absent when no snapshot).
