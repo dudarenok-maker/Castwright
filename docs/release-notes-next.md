@@ -51,6 +51,33 @@ Confirming a cast now takes you straight to your characters, and starting a rend
   `awaiting_fallback_confirm` gate doesn't re-prompt for that run's fresh
   chapters — later enqueues still get the per-chapter backstop (#1278).
 
+### 🛡️ Per-book quality gate report (new) — fs-51
+Every book now ships a visible, exportable "quality gate" receipt — the acoustic, transcript, voice-match, and cast-continuity checks the pipeline already runs, aggregated into one honest card instead of buried in per-chapter detail.
+
+- **New `GET /api/books/{bookId}/qa-report`** composes the existing signal-QA,
+  ASR content-QA, srv-36 voice-drift, and cast-config-drift signals into one
+  `BookQaReport`, computed fresh on every call (nothing new persisted) —
+  display and the text/JSON export can never diverge from each other, since
+  both read the same endpoint (#973).
+- **A new `QaReportCard`** on both the Listen view (post-generation) and the
+  Generation view (live, refetching on chapter/run completion) — built around
+  a "never show a false pass" rule: a check that never ran, had nothing to
+  check, or was checked incompletely never renders as clean.
+  `chaptersEligible`/`chaptersScored`/`chaptersEmbedFailed` distinguish "gate
+  off" from "nothing to check" from "an isolated embed failure," computed
+  independently of `scoreBook`'s own control flow so the three states can
+  never be confused (#973).
+- **Fixed a real, pre-existing correctness gap surfaced while building
+  this**: a chapter re-recorded via manual splice or QA-repair was spreading
+  its stale pre-re-record `qa`/`suspect`/`asr` verdict forward instead of
+  writing the fresh one — a repair that genuinely failed to fix a bad
+  sentence could have its `suspect: true` silently cleared to `undefined`.
+  Both `chapter-splice.ts` and `chapter-qa-repair.ts` now write a fresh
+  verdict from the actual re-recorded audio (#973).
+- **Text and JSON export**, reusing the same aggregated data the card shows —
+  a clean book reads `"Every line held."`, a partial-coverage book states its
+  coverage fractions plainly rather than hiding them.
+
 ---
 
 ## 🔊 Generation quality & reliability
