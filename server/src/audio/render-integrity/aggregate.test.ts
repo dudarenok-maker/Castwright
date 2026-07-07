@@ -178,6 +178,40 @@ describe('scoreBook', () => {
     expect(centroids!['minor'].referenceKind).toBe('too-short');
   });
 
+  it("classifies a character book-wide by its FIRST chapter's snapshot — a kokoro-then-qwen mid-book switch is never scored, even in the later qwen chapter", async () => {
+    // Companion to qa-report.test.ts's matching eligibility test: confirms
+    // scoreBook's own book-wide, first-chapter-wins classification
+    // (configuredEngineByChar) is unchanged by the fs-51 review-finding fix —
+    // hero renders Kokoro in ch1 (first appearance, wins the classification)
+    // then switches to Qwen in ch2; hero is treated as Kokoro-configured
+    // everywhere and is never scored, including in ch2.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-midswitch-'));
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+
+    const rows1 = [{ characterId: 'hero', sentenceIds: [1], vec: vec(0) }];
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows1, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      segments: rows1.map((r) => ({ characterId: 'hero', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { hero: { voiceEngine: 'kokoro' } },
+    }));
+
+    const rows2 = [{ characterId: 'hero', sentenceIds: [2], vec: vec(0) }];
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), rows2, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      segments: rows2.map((r) => ({ characterId: 'hero', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    expect(await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'))).toBeNull();
+    expect(await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'))).toBeNull();
+    expect(await readCentroids(dir)).toBeNull();
+  });
+
   it('skips Kokoro-configured characters entirely', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-kok-'));
     const { mkdirSync } = await import('node:fs');

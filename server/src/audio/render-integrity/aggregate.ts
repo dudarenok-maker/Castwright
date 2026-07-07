@@ -80,6 +80,48 @@ interface SegmentsFileView {
 /** Stochastic engines (Kokoro-configured characters are skipped). */
 export const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
 
+/** Minimal per-chapter view needed to classify each character's book-wide
+ *  configured engine — just enough structural shape for `characterSnapshots`
+ *  readers across the codebase (both `scoreBook`'s internal `ChapterData`
+ *  and `qa-report.ts`'s `SegmentsFile`) to satisfy it without adapting. */
+export interface EngineClassificationSource {
+  characterSnapshots?: Record<string, { voiceEngine?: string }>;
+}
+
+/**
+ * Resolve each character's book-wide configured TTS engine from an ORDERED
+ * list of per-chapter segments-file views — first chapter's snapshot wins.
+ *
+ * A mid-book engine re-cast (character starts on Kokoro, switches to Qwen
+ * partway through) is classified by its FIRST rendered chapter's snapshot;
+ * later chapters' snapshots for that character are ignored for this
+ * book-wide classification. This is a deliberate simplification (a re-cast
+ * forces new embeddings on re-render anyway), but it MUST be applied
+ * identically everywhere a caller needs to know "is this character
+ * stochastic, book-wide" — `scoreBook`'s Phase 2 anchor/scoring population
+ * AND `qa-report.ts`'s eligibility computation both call this single
+ * implementation so they can never disagree on which characters/chapters
+ * are in scope (see the fs-51 PR #1433 review finding: a per-chapter
+ * re-derivation in qa-report.ts could disagree with scoreBook's book-wide
+ * verdict, producing a false "embed failed" count).
+ *
+ * @param orderedSources Segments-file-like views, in the SAME chapter order
+ *   the caller wants "first" to mean.
+ */
+export function resolveConfiguredEngineByChar(
+  orderedSources: EngineClassificationSource[],
+): Map<string, string> {
+  const configuredEngineByChar = new Map<string, string>();
+  for (const source of orderedSources) {
+    for (const [charId, snap] of Object.entries(source.characterSnapshots ?? {})) {
+      if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
+        configuredEngineByChar.set(charId, snap.voiceEngine);
+      }
+    }
+  }
+  return configuredEngineByChar;
+}
+
 // ── Reference resolution (Task 10 seam) ───────────────────────────────────
 
 interface CharacterReference {
@@ -277,17 +319,16 @@ export async function scoreBook(
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
-  // Collect all character IDs and their configured engines (from characterSnapshots).
-  // First chapter's snapshot wins — a mid-book engine re-cast would mislabel, but
-  // embeddings would be re-generated on re-render, making this acceptable.
-  const configuredEngineByChar = new Map<string, string>();
+  // Collect all character IDs and their configured engines (from characterSnapshots),
+  // book-wide, first-chapter-wins — via the single shared implementation also used
+  // by qa-report.ts (resolveConfiguredEngineByChar), so the two can never disagree.
+  const configuredEngineByChar = resolveConfiguredEngineByChar(
+    chapterData.map((cd) => ({ characterSnapshots: cd.snapshots })),
+  );
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
-      if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
-        configuredEngineByChar.set(charId, snap.voiceEngine);
-      }
       // Collect voice info for Option-B (first chapter's snapshot wins).
       if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;

@@ -5,11 +5,20 @@
    in particular, voiceDrift.chaptersEligible is computed HERE, directly
    from segments.json, rather than derived from scoreBook's output, because
    scoreBook's own early-return control flow can't distinguish "nothing to
-   check" from "never ran" (see the spec's round-3 finding). */
+   check" from "never ran" (see the spec's round-3 finding).
+
+   The per-character STOCHASTIC classification itself, though, is NOT
+   re-derived independently — it calls scoreBook's own book-wide, first-
+   chapter-wins `resolveConfiguredEngineByChar` (a pure helper, no control
+   flow) so this module's eligibility population can never disagree with
+   what scoreBook actually attempts to score (PR #1433 review finding: a
+   per-chapter re-derivation here could classify a character stochastic in
+   a chapter that scoreBook's book-wide view never scores, producing a
+   false "embed failed" count). */
 
 import { loadSegmentsFiles } from './segments-io.js';
 import { deriveBookOutline } from './render-integrity/verdicts-io.js';
-import { STOCHASTIC_ENGINES } from './render-integrity/aggregate.js';
+import { STOCHASTIC_ENGINES, resolveConfiguredEngineByChar } from './render-integrity/aggregate.js';
 
 export interface AudioQaReport {
   chaptersRendered: number;
@@ -53,6 +62,11 @@ export async function buildAudioQaReport(
   const eligibleChapterIds = new Set<number>();
   const stochasticCharacterIds = new Set<string>();
 
+  // Book-wide, first-chapter-wins engine classification — the SAME
+  // implementation scoreBook uses, so a character's eligibility here can
+  // never disagree with which characters/chapters scoreBook actually scores.
+  const configuredEngineByChar = resolveConfiguredEngineByChar(segFiles);
+
   for (const seg of segFiles) {
     let chapterHasSuspect = false;
     for (const s of seg.segments ?? []) {
@@ -70,8 +84,14 @@ export async function buildAudioQaReport(
     }
     if (chapterHasSuspect) chaptersFlaggedSet.add(seg.chapterId);
 
-    for (const [charId, snap] of Object.entries(seg.characterSnapshots ?? {})) {
-      if (snap.voiceEngine && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
+    // A chapter is eligible for a character iff that character APPEARS in
+    // this chapter's own snapshot AND is classified stochastic book-wide —
+    // NOT iff this chapter's own snapshot happens to say a stochastic engine
+    // (that per-chapter value can disagree with the book-wide classification
+    // on a mid-book engine switch; the book-wide one wins, matching scoreBook).
+    for (const charId of Object.keys(seg.characterSnapshots ?? {})) {
+      const engine = configuredEngineByChar.get(charId);
+      if (engine && STOCHASTIC_ENGINES.has(engine)) {
         stochasticCharacterIds.add(charId);
         eligibleChapterIds.add(seg.chapterId);
       }

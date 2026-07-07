@@ -166,6 +166,40 @@ describe('buildAudioQaReport', () => {
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(2);
   });
 
+  it('classifies a mid-book engine switch book-wide (first chapter wins), matching scoreBook — a character voiced by Kokoro in ch1 then switched to Qwen in ch2 is NOT eligible in ch2', async () => {
+    // PR #1433 review finding: qa-report.ts's eligibility loop used to
+    // classify each chapter's stochastic characters from THAT chapter's own
+    // characterSnapshots.voiceEngine — a per-chapter re-derivation that can
+    // disagree with scoreBook's actual book-wide, first-chapter-wins
+    // classification (aggregate.ts's configuredEngineByChar). A character
+    // voiced by Kokoro in the chapter they first appear in, later switched to
+    // Qwen, was incorrectly read as "eligible in the later chapter" here even
+    // though scoreBook classifies that character Kokoro book-wide and never
+    // scores them anywhere — see the companion scoreBook test in
+    // aggregate.test.ts for the matching scoring-side assertion.
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'kokoro-v1', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'hero' })],
+      characterSnapshots: { hero: { voiceEngine: 'kokoro' } },
+    });
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'hero' })],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    // Book-wide classification (first chapter wins) says hero == kokoro, so
+    // hero is never on the stochastic roster and NEITHER chapter is eligible
+    // — matching what scoreBook will actually attempt to score.
+    expect(report.voiceDrift.chaptersEligible).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(0);
+  });
+
   it('does not count a segment toward acoustic.chaptersFlagged when qa is clean and suspect is unset', async () => {
     // Companion to the chapter-qa-repair.ts fix: a repair rejected PURELY by
     // the acoustic/voice-drift cosine gate (signal-QA genuinely clean) must
