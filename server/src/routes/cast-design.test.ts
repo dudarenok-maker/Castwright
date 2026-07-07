@@ -258,6 +258,26 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('bug #1411 code-review follow-up: caches a voiceId-less character\'s sample under the book-scoped scope', async () => {
+    /* narrator has no voiceId, so its sample-cache scope must match
+       sample-scope.ts's / voices.ts's book-scoped fallback (`char-<bookId>__<id>`)
+       — otherwise the Voices Library's aggregateVoices check (which uses that
+       same book-scoped scope) never finds the file this design just cached,
+       and shows "Not sampled" for a voice that was just designed. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['narrator'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'narrator')).toBe(
+      true,
+    );
+    const files = readdirSync(audioDir);
+    expect(files.some((f) => f.startsWith(`char-${bookId}__narrator-${QWEN_KEY}-`))).toBe(true);
+    expect(files.some((f) => f.startsWith(`char-narrator-${QWEN_KEY}-`))).toBe(false);
+  });
+
   it('persona fallback: a persona-less character gets a Gemini persona persisted + designed', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)

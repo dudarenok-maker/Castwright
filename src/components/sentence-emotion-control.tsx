@@ -12,8 +12,9 @@
    control still lets you tag (it survives an engine switch). */
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { uiSelectors } from '../store/ui-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import {
   playEmotionVariantSample,
@@ -57,6 +58,10 @@ export function SentenceEmotionControl({
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const markStale = useMarkCharacterStaleIfRendered();
+  /* undefined (not uiSelectors.bookId's `null`) so this degrades to
+     sampleScopeFor's old unscoped fallback when a book id genuinely isn't
+     available, matching every other sampleScopeFor call site. */
+  const bookId = useAppSelector(uiSelectors.bookId) ?? undefined;
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -100,7 +105,7 @@ export function SentenceEmotionControl({
     setPreviewing(true);
     setNote(null);
     try {
-      const { fellBackToBase } = await playEmotionVariantSample(character, current, playback);
+      const { fellBackToBase } = await playEmotionVariantSample(character, current, playback, bookId);
       if (fellBackToBase) {
         setNote(`no ${current} variant for ${firstName} — renders neutral`);
       }

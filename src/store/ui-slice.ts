@@ -464,7 +464,12 @@ export const uiActions = uiSlice.actions;
 
 export const uiSelectors = {
   stageKind: (s: RootState) => s.ui.stage.kind,
-  bookId: (s: RootState) => (s.ui.stage as { bookId?: string }).bookId ?? null,
+  /* Optional-chained on `s.ui` itself (matches manuscript.tsx's own inline
+     version of this selector) — plenty of existing component tests render
+     with a store that has no `ui` slice wired up at all; a strict `s.ui.stage`
+     read would throw for them instead of just reporting "no book open". */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  bookId: (s: RootState) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null,
   view: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.view : null),
   chapterId: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null),
   profileId: (s: RootState) =>

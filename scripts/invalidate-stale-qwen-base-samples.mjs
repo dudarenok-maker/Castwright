@@ -54,10 +54,13 @@ export function isUuidKeyedQwenRow(character) {
   return !!uuid && name === `qwen-${uuid}`;
 }
 
-/* Sample cache scope — must match src/lib/sample-scope.ts sampleScopeFor:
-   the persisted voiceId, else the `char-<id>` namespace. */
-export function sampleScopeForRow(character) {
-  return character?.voiceId ?? `char-${character?.id}`;
+/* Sample cache scope — must match src/lib/sample-scope.ts sampleScopeFor /
+   server/src/routes/voices.ts (bug #1411 code-review follow-up): the
+   persisted voiceId, else the `char-<bookId>__<id>` namespace. `bookId` is
+   the book this cast row actually lives in — omitted (falls back to the
+   bare `char-<id>` namespace) only when the caller can't resolve one. */
+export function sampleScopeForRow(character, bookId) {
+  return character?.voiceId ?? (bookId ? `char-${bookId}__${character?.id}` : `char-${character?.id}`);
 }
 
 /* Which cache files are stranded base samples of a re-keyed voice. A base
@@ -69,7 +72,9 @@ export function selectStaleBaseSampleFiles({ rows, fileNames, modelKeys = QWEN_S
   const prefixes = [];
   for (const row of rows ?? []) {
     if (!isUuidKeyedQwenRow(row)) continue;
-    const scope = sampleScopeForRow(row);
+    /* `row.bookId` is stamped by the caller (main(), from that row's cast.json's
+       sibling state.json) — not part of the raw cast.json character shape. */
+    const scope = sampleScopeForRow(row, row.bookId);
     for (const mk of modelKeys) prefixes.push(`${scope}-${mk}-`);
   }
   const hit = new Set();
@@ -115,9 +120,27 @@ async function listCastJsons(booksRoot) {
   return out;
 }
 
-function rowsFromCast(cast) {
+function rowsFromCast(cast, bookId) {
   const chars = cast?.characters ?? cast?.cast ?? cast;
-  return Array.isArray(chars) ? chars : Object.values(chars ?? {});
+  const list = Array.isArray(chars) ? chars : Object.values(chars ?? {});
+  /* Stamp bookId onto each row (bug #1411 code-review follow-up) — cast.json
+     itself carries no bookId; sampleScopeForRow needs its owning book to
+     match the server's book-scoped fallback. */
+  return list.map((c) => ({ ...c, bookId }));
+}
+
+/* cast.json's bookId lives in its sibling .audiobook/state.json (same shape
+   the server reads via workspace/paths.ts's stateJsonPath). Missing/unreadable
+   → undefined, degrading sampleScopeForRow to the bare `char-<id>` namespace
+   for that book's rows only. */
+async function bookIdForCastPath(castPath) {
+  try {
+    const statePath = join(dirname(castPath), 'state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8'));
+    return state?.bookId;
+  } catch {
+    return undefined;
+  }
 }
 
 async function main() {
@@ -134,7 +157,8 @@ async function main() {
   const rows = [];
   for (const cp of castPaths) {
     try {
-      rows.push(...rowsFromCast(JSON.parse(await readFile(cp, 'utf8'))));
+      const bookId = await bookIdForCastPath(cp);
+      rows.push(...rowsFromCast(JSON.parse(await readFile(cp, 'utf8')), bookId));
     } catch {
       /* skip unreadable cast.json */
     }

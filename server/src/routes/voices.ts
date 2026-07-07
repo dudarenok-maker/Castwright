@@ -60,7 +60,7 @@ import {
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
-import { listVoiceSampleFiles } from '../tts/voice-sample-cache.js';
+import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 
 /* The single model key the bespoke Qwen engine synthesises under (mirror of
    the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
@@ -304,10 +304,19 @@ async function aggregateVoices(
              the bare `voiceId ?? c.id` so the frontend's same-book id-
              fallback join (voice-character-link.ts) is unaffected. */
           const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
-          /* The sample-cache scope keys on `char-<id>` (not bare `<id>`) for a
-             voiceId-less character — matching the frontend's sampleScopeFor —
-             so it can diverge from `id` above. Compute it explicitly. */
-          const sampleScope = c.voiceId ?? `char-${c.id}`;
+          /* The sample-cache scope keys on `char-<bookId>__<id>` (not bare
+             `<id>`) for a voiceId-less character — matching the frontend's
+             sampleScopeFor and cast-design.ts's design-time write — so it
+             can diverge from `id` above. bug #1411: this MUST match, or a
+             voiceId-less character sampled in one book falsely reads as
+             Sampled in every other book whose analyzer-assigned id
+             coincidentally matches (narrator, unknown-male, ...) — the
+             sample cache dir is workspace-global, so an unscoped prefix
+             check can't tell them apart. sampleScopeForCharacter is the
+             single shared source of this formula (voice-sample-cache.ts) —
+             don't recompute it inline here, that's exactly the drift this
+             extraction closed. */
+          const sampleScope = sampleScopeForCharacter(c, state.bookId);
           /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
              Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
              Used to key generated-flag lookups against renderedQwenNames (which

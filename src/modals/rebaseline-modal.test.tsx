@@ -17,6 +17,7 @@ import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
 
 /* Mock the api surface the modal calls. designQwenVoice returns a derived
@@ -704,5 +705,48 @@ describe('RebaselineModal — per-character failure', () => {
       [string, string, { name: string }]
     >;
     expect(calls[0][2].name).toBe('qwen-maerin');
+  });
+});
+
+describe('RebaselineModal — sample-cache scope across books (bug #1411 follow-up)', () => {
+  it("designs and auditions a sibling's voiceId-less character under ITS OWN book, not the anchor's", async () => {
+    /* Wren is introduced in book-2 (sourceBookId), has NO voiceId, and doesn't
+       collapse into any book-1 row (distinct id, no name/alias match) — this
+       modal explicitly supports designing/auditioning such a sibling from the
+       anchor's own Rebaseline pass. The design + audition calls fire with the
+       anchor's bookId ('book-1') as the API's :bookId param (server-side
+       propagation is unrelated to this fix), but the sample-cache SCOPE inside
+       that call must be namespaced by Wren's OWN book ('book-2'), or an
+       unrelated book-1 character sharing Wren's bare id would collide with
+       her cached audition. */
+    getSeriesCast.mockResolvedValue({
+      characters: [
+        { ...char('wren', 'Wren', 10), voiceId: undefined, sourceBookId: 'book-2' } as Character,
+      ],
+    });
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    // Ten lines is below the principal-cast threshold — select her explicitly.
+    fireEvent.click(screen.getByLabelText('Rebaseline Wren'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-proposal-wren')).toBeInTheDocument());
+
+    expect(designQwenVoice).toHaveBeenCalledWith(
+      'book-1',
+      'wren',
+      expect.objectContaining({ sampleVoiceId: 'char-book-2__wren' }),
+    );
+
+    fireEvent.click(screen.getByTestId('rebaseline-play-current-wren'));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
+    const lastCall = vi.mocked(playSampleWithAutoLoad).mock.calls.at(-1)![0];
+    expect(lastCall.args.voiceId).toBe('char-book-2__wren');
   });
 });

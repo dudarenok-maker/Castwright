@@ -7,12 +7,31 @@ import { describe, it, expect } from 'vitest';
 import {
   buildSampleText,
   djb2,
+  sampleScopeForCharacter,
   voiceSampleFileName,
   voiceSamplePublicUrl,
 } from './voice-sample-cache.js';
 import type { VoiceLike } from './voice-mapping.js';
 
 const VOICE: VoiceLike = { id: 'v_x', character: 'Halloran', attributes: ['Male', 'Gruff'] };
+
+describe('sampleScopeForCharacter', () => {
+  it('keys on the persisted voiceId', () => {
+    expect(sampleScopeForCharacter({ id: 'corvin', voiceId: 'corvin' }, 'book-1')).toBe('corvin');
+  });
+
+  it('bug #1411: book-scopes the char-namespaced fallback for a voiceId-less character', () => {
+    expect(sampleScopeForCharacter({ id: 'narrator' }, 'book-alpha')).toBe(
+      'char-book-alpha__narrator',
+    );
+    expect(sampleScopeForCharacter({ id: 'narrator' }, 'book-beta')).toBe(
+      'char-book-beta__narrator',
+    );
+    expect(sampleScopeForCharacter({ id: 'narrator' }, 'book-alpha')).not.toBe(
+      sampleScopeForCharacter({ id: 'narrator' }, 'book-beta'),
+    );
+  });
+});
 
 describe('djb2', () => {
   it('is stable for realistic ids (the clamp never affects short inputs)', () => {

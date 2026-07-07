@@ -45,6 +45,7 @@ import { rebaselineActions, includedProposals, type Proposal } from '../store/re
 import { selectPrincipalCast } from '../lib/principal-cast';
 import { mergeSeriesCast } from '../lib/merge-series-cast';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
+import { sampleScopeFor } from '../lib/sample-scope';
 import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -256,7 +257,20 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
          use, so the proposed preview doubles as the character's 12s sample. */
       const character = charById.get(characterId);
       const matched = character ? findVoiceForCharacter(character, voices) : undefined;
-      const sampleVoiceId = matched?.id ?? `char-${characterId}`;
+      /* bug #1411 code-review follow-up: this modal walks a series' characters
+         across MULTIPLE books, so the fallback scope must use the character's
+         OWN home book (its stamped sourceBookId for a sibling, the anchor
+         bookId for an anchor-book row) — not always the anchor `bookId` — or
+         two different books' same-slug voiceId-less characters (narrator,
+         unknown-male, ...) share one cache-file prefix. Same call shape as
+         playCurrent below (falls back to a characterId-only stand-in only
+         for the rare charById miss, so both sites read identically). */
+      const sampleVoiceId =
+        matched?.id ??
+        sampleScopeFor(
+          character ?? { id: characterId },
+          character?.sourceBookId ?? bookId,
+        );
       const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, {
         persona,
         sampleVoiceId,
@@ -428,7 +442,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
        preferring the open book's own same-id voice would silently
        substitute the wrong book's voice/sample for a sibling-book character. */
     const matched = findVoiceForCharacter(character, voices);
-    const voiceId = matched?.id ?? `char-${character.id}`;
+    /* bug #1411 code-review follow-up: same book-scoped fallback fix as
+       designOne above — this character may be a sibling from another book. */
+    const voiceId = matched?.id ?? sampleScopeFor(character, character.sourceBookId ?? bookId);
     const subject: Voice =
       matched ??
       ({

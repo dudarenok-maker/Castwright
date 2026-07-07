@@ -482,7 +482,7 @@ export function CastView({
     .sort(compareCastRows);
 
   async function playSampleFor(c: Character, voice: Voice | undefined) {
-    const sampleVoiceId = sampleScopeFor(c);
+    const sampleVoiceId = sampleScopeFor(c, bookId ?? undefined);
     const effectiveEngine = effectiveEngineFor(c);
     const effectiveModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
     /* Server appends a hash of (text, voiceName) to the cached filename so
@@ -996,7 +996,7 @@ export function CastView({
             const voice = findVoiceForCharacter(c, library, true);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
-            const sampleVoiceId = sampleScopeFor(c);
+            const sampleVoiceId = sampleScopeFor(c, bookId ?? undefined);
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
               effectiveEngineFor(c),
               ttsModelKey,
@@ -1201,7 +1201,7 @@ export function CastView({
             const voice = findVoiceForCharacter(c, library, true);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
-            const sampleVoiceId = sampleScopeFor(c);
+            const sampleVoiceId = sampleScopeFor(c, bookId ?? undefined);
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
               effectiveEngineFor(c),
               ttsModelKey,
@@ -1448,6 +1448,7 @@ export function CastView({
             return (
               <CompareCastModal
                 characters={[a, b]}
+                bookIds={[bookId ?? '', bookId ?? '']}
                 library={library}
                 ttsModelKey={ttsModelKey}
                 onSaveSide={(next) =>

@@ -7,7 +7,7 @@ describe('sampleScopeFor', () => {
     expect(sampleScopeFor({ id: 'maerin', voiceId: 'maerin' })).toBe('maerin');
   });
 
-  it('falls back to the char-namespaced id for a character with no voiceId', () => {
+  it('falls back to the char-namespaced id for a character with no voiceId or bookId', () => {
     expect(sampleScopeFor({ id: 'new-char' })).toBe('char-new-char');
     expect(sampleScopeFor({ id: 'new-char', voiceId: null })).toBe('char-new-char');
   });
@@ -22,5 +22,29 @@ describe('sampleScopeFor', () => {
        `voice` argument at all. */
     expect(sampleScopeFor({ id: 'wren' })).toBe('char-wren');
     expect(sampleScopeFor({ id: 'wren', voiceId: undefined })).toBe('char-wren');
+  });
+
+  it('bug #1411: book-scopes the char-namespaced fallback when a bookId is given', () => {
+    expect(sampleScopeFor({ id: 'narrator' }, 'book-alpha')).toBe('char-book-alpha__narrator');
+    expect(sampleScopeFor({ id: 'narrator' }, 'book-beta')).toBe('char-book-beta__narrator');
+    expect(sampleScopeFor({ id: 'narrator' }, 'book-alpha')).not.toBe(
+      sampleScopeFor({ id: 'narrator' }, 'book-beta'),
+    );
+  });
+
+  it('review follow-up: a plain hyphen join would let a hyphen-rich bookId collide with a hyphen-rich id', () => {
+    /* jane__wren-saga__one-two + 'narrator' vs jane__wren-saga__one + 'two-narrator'
+       hyphen-join to the identical string ('char-jane__wren-saga__one-two-narrator').
+       `__` can't be produced by either bookId's own slugging or the character-id
+       generator, so this pair stays distinguishable. */
+    const a = sampleScopeFor({ id: 'narrator' }, 'jane__wren-saga__one-two');
+    const b = sampleScopeFor({ id: 'two-narrator' }, 'jane__wren-saga__one');
+    expect(a).not.toBe(b);
+  });
+
+  it('bug #1411: a persisted voiceId still wins over bookId (deliberate cross-book reuse)', () => {
+    expect(sampleScopeFor({ id: 'narrator', voiceId: 'v_narrator' }, 'book-alpha')).toBe(
+      'v_narrator',
+    );
   });
 });
