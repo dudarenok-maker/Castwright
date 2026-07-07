@@ -75,10 +75,20 @@ export async function buildSynthReplacements(
        populates its fields, and an omitted key here (not `key: undefined`) is
        what makes `spliceChapterSegments`'s `{...segment, ...freshVerdict}`
        spread leave the segment's prior value alone (see the module doc on
-       `SegmentReplacement.freshVerdict` in splice-chapter.ts). */
+       `SegmentReplacement.freshVerdict` in splice-chapter.ts).
+
+       `suspect` is bucketed separately from `qa`/`qaRetries`: it's a UNION
+       signal (synthesise-chapter.ts stamps it from `quarantined ||
+       qa?.status === 'suspect'`, where `quarantined` comes from ASR-driven
+       calibration-bleed detection — independent of the signal-QA gate), so it
+       must be included whenever EITHER gate ran, not gated on signalQaRan
+       alone — otherwise an ASR-only re-record (signal-QA off) whose ASR gate
+       quarantines the take never surfaces that as `suspect`, silently
+       preserving the segment's stale prior verdict over genuinely bad audio. */
     const freshVerdict: NonNullable<SegmentReplacement['freshVerdict']> = {
-      ...(out.signalQaRan ? { qa: out.qa, suspect: out.suspect, qaRetries: out.qaRetries } : {}),
+      ...(out.signalQaRan ? { qa: out.qa, qaRetries: out.qaRetries } : {}),
       ...(out.asrRan ? { asr: out.asr, asrSuspect: out.asrSuspect, asrRetries: out.asrRetries } : {}),
+      ...(out.signalQaRan || out.asrRan ? { suspect: out.suspect } : {}),
     };
     replacements.push({
       startSegmentIndex: i,
