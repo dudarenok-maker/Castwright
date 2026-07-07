@@ -47,14 +47,18 @@ const fetchDesignedPersona = vi.fn((_bookId: string, _characterId: string) =>
   Promise.resolve({ instruct: '' }),
 );
 /* Plan 161 — the A/B compare modal promotes the preview on approve. */
-const promoteQwenVoice = vi.fn((_bookId: string, _characterId: string, args?: unknown) =>
-  Promise.resolve({
-    voiceId: String((args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran').replace(
-      /-preview$/,
-      '',
-    ),
-    url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
-  }),
+const promoteQwenVoice = vi.fn(
+  (_bookId: string, _characterId: string, args?: unknown): Promise<{
+    voiceId: string;
+    url: string;
+    voiceUuid?: string;
+  }> =>
+    Promise.resolve({
+      voiceId: String(
+        (args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran',
+      ).replace(/-preview$/, ''),
+      url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
+    }),
 );
 const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?: unknown) =>
   Promise.resolve(),
