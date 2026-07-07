@@ -371,7 +371,7 @@ This is the largest task. It replaces `resolveCharacterReference` and `scoreBook
 
 **Interfaces:**
 - Consumes: `readCentroids`/`writeCentroids` (`centroids-io.ts`, unchanged), `readPendingAttempts`/`writePendingAttempts` (Task 1), `mergeVerdictRows` (Task 2), `auditionCentroid` (`audition-centroid.ts`, unchanged — already returns exactly the 3-outcome shape this task needs: `null | { kind: 'too-short'; ... } | { kind: 'audition'; ... }`).
-- Produces: `scoreBook(bookDir, chapters, justFinalizedSlugs?, opts?): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean } }>` — new 4th optional param `opts?: { onCharacterScored?: (characterId: string, index: number, total: number) => void }`, new non-void return type (was `Promise<void>`).
+- Produces: `scoreBook(bookDir, chapters, justFinalizedSlugs?, opts?): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }>` — new 4th optional param `opts?: { onRosterKnown?: (total: number) => void; onCharacterScored?: (characterId: string, index: number, total: number) => void }`, new non-void return type (was `Promise<void>`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -683,7 +683,7 @@ export async function scoreBook(
     __testSynthFn?: AuditionCentroidOpts['synthFn'];
     __testEmbedFn?: AuditionCentroidOpts['embedFn'];
   },
-): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean } }> {
+): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }> {
   const NO_TIERS = { usedQwenTiers: { keep06: false, keep17: false } };
   const root = audioDir(bookDir);
   const justFinalized = new Set(justFinalizedSlugs ?? chapters.map((c) => c.slug));
@@ -723,8 +723,16 @@ export async function scoreBook(
   });
   opts?.onRosterKnown?.(orderedChars.length);
 
-  async function scoreAndMergeCharacter(charId: string, ref: CharacterReference): Promise<void> {
+  /** Returns the number of `voice-mismatch` rows written for this character
+   *  this call — accumulated by the caller into a run-total mismatch count
+   *  (round-2 plan-review fix: `scoring_complete`'s `mismatchCount` must be
+   *  a real count, not the hardcoded 0 an earlier draft shipped, which
+   *  would have permanently logged a false "0 mismatches found" into the
+   *  Activity feed via buildScoringCompleteEvent regardless of the actual
+   *  result). */
+  async function scoreAndMergeCharacter(charId: string, ref: CharacterReference): Promise<number> {
     const configuredEngine = configuredEngineByChar.get(charId) ?? '';
+    let mismatchCount = 0;
     for (const cd of chapterData) {
       const rowsForChar: VerdictRow[] = [];
       for (const row of cd.embRows) {
@@ -745,6 +753,7 @@ export async function scoreBook(
         const cosine = cosineToCentroid(Array.from(row.vec), ref.centroid);
         const { verdict, severity } = scoreSegment(cosine, ref, ASSUMED_DURATION_SEC);
         const fixable = verdict === 'voice-mismatch' && severity === 'severe' && STOCHASTIC_ENGINES.has(configuredEngine);
+        if (verdict === 'voice-mismatch') mismatchCount++;
         rowsForChar.push({
           characterId: row.characterId, sentenceIds: row.sentenceIds, verdict, cosine, severity, fixable,
           expectedEngine: configuredEngine, renderedEngine, referenceKind: ref.referenceKind, windowed: false, chapterId: cd.id,
@@ -753,9 +762,11 @@ export async function scoreBook(
       if (rowsForChar.length === 0) continue;
       await mergeVerdictRows(join(root, `${cd.slug}.render-integrity.json`), charId, rowsForChar);
     }
+    return mismatchCount;
   }
 
   let scoredCount = 0;
+  let totalMismatches = 0;
   for (const charId of orderedChars) {
     const anchorVecs = anchorVecsByChar.get(charId)!;
     const persisted = centroidsMap[charId];
@@ -776,7 +787,7 @@ export async function scoreBook(
       delete pendingMap[charId];
       centroidsMap[charId] = { characterId: charId, ...TOO_SHORT_REF };
       await writeCentroids(bookDir, Object.values(centroidsMap));
-      await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
+      totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
       scoredCount++;
       opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
       continue;
@@ -785,7 +796,7 @@ export async function scoreBook(
     delete pendingMap[charId];
     centroidsMap[charId] = { characterId: charId, ...outcome.ref };
     await writeCentroids(bookDir, Object.values(centroidsMap));
-    await scoreAndMergeCharacter(charId, outcome.ref);
+    totalMismatches += await scoreAndMergeCharacter(charId, outcome.ref);
     scoredCount++;
     opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
   }
@@ -797,7 +808,7 @@ export async function scoreBook(
     if (info.modelKey === 'qwen3-tts-0.6b') usedQwenTiers.keep06 = true;
     if (info.modelKey === 'qwen3-tts-1.7b') usedQwenTiers.keep17 = true;
   }
-  return { usedQwenTiers };
+  return { usedQwenTiers, mismatchCount: totalMismatches };
 }
 ```
 
@@ -814,7 +825,7 @@ Run: `cd server && npm run test`
 Expected: FAIL initially in at least these two known locations (found during plan review — fix both, then re-run to confirm PASS):
 
 - **`server/src/audio/render-integrity/aggregate-audition-pool.test.ts`** — line ~98 asserts `.resolves.toBeUndefined()` on a `scoreBook(...)` call. Update to assert against the new `{ usedQwenTiers: {...} }` shape instead (`.resolves.toEqual({ usedQwenTiers: { keep06: expect.any(Boolean), keep17: expect.any(Boolean) } })` or a more specific expected value if the fixture's tiers are known).
-- **`server/src/routes/generation-spk.test.ts`** — this is the actual home of `afterChapterFinalized`'s existing test coverage (not `generation.test.ts`). It `vi.mock`s `scoreBook` and asserts `expect(scoreBook).toHaveBeenCalledWith('/b1', [CH1], ['ch1'])` — now wrong because `triggerScoring` calls `scoreBook(bookDir, chapters, slugs, { onCharacterScored, onRosterKnown })` with a 4th argument; update the assertion to `expect(scoreBook).toHaveBeenCalledWith('/b1', [CH1], ['ch1'], expect.any(Object))`. It also has a `mockImplementationOnce(() => new Promise<void>(() => {}))` (a never-resolving promise used to test in-flight behavior) — its type annotation must change to `new Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean } }>(() => {})` to satisfy the new return type under `noImplicitAny`/strict mode.
+- **`server/src/routes/generation-spk.test.ts`** — this is the actual home of `afterChapterFinalized`'s existing test coverage (not `generation.test.ts`). It `vi.mock`s `scoreBook` and asserts `expect(scoreBook).toHaveBeenCalledWith('/b1', [CH1], ['ch1'])` — now wrong because `triggerScoring` calls `scoreBook(bookDir, chapters, slugs, { onCharacterScored, onRosterKnown })` with a 4th argument; update the assertion to `expect(scoreBook).toHaveBeenCalledWith('/b1', [CH1], ['ch1'], expect.any(Object))`. It also has a `mockImplementationOnce(() => new Promise<void>(() => {}))` (a never-resolving promise used to test in-flight behavior) — its type annotation must change to `new Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }>(() => {})` to satisfy the new return type under `noImplicitAny`/strict mode.
 
 If any FURTHER test file (beyond these two, found via the actual full-suite run) calls `scoreBook(...)` and asserts on its old return shape, fix that assertion too — do not change `scoreBook`'s new contract to accommodate a stale assertion.
 
@@ -1109,7 +1120,7 @@ git commit -m "feat(openapi): add srv-36 scoring SSE tick types, change-log even
 
 **Interfaces:**
 - Consumes: `scoreBook` (Task 3's new signature/return, including the new `onRosterKnown` opt), `isGenerationActive` (already exported in this file, unchanged — reused for Task 7's route guard, not modified here).
-- Produces: `export async function triggerScoring(ctx: { bookId: string; bookDir: string; chapters: { id: number; slug: string }[]; justFinalizedSlugs: Iterable<string>; keep?: { keep06: boolean; keep17: boolean } }): Promise<void>`.
+- Produces: `export async function triggerScoring(ctx: { bookId: string; bookDir: string; chapters: { id: number; slug: string }[]; justFinalizedSlugs: Iterable<string>; keep?: { keep06: boolean; keep17: boolean } }): Promise<void>` (fire-and-forget — resolves once the run is *registered*, not once it *completes*), plus a test-only `export async function __awaitScoringSettled(bookId: string): Promise<void>` for observing the background run's effects deterministically.
 
 **Round-2 plan-review fix — how SSE ticks actually reach a client (this was the plan's most dangerous gap: the round-1 draft defined `onScoringEvent` as a param on `triggerScoring` but no caller ever supplied one, so nothing was ever emitted).** `generation.ts` already has exactly the primitive this needs, module-private and unexported because nothing outside this file has needed it before:
 
@@ -1139,7 +1150,12 @@ function broadcastToBook(bookId: string, ev: unknown): void {
 }
 ```
 
-**Architectural limit, by design, not a bug:** `inFlightByBook.get(bookId)` only has entries while a generation job is actively rendering. `triggerScoring` calls this from BOTH callers — the chapter-finalize path (where a job is normally still open, especially for a multi-chapter run where sibling chapters are still rendering while this call runs in the background) AND the resume route (Task 7), which by construction only ever runs when `isGenerationActive(bookId)` is false — i.e. **no job, no subscribers, `broadcastToBook` is always a silent no-op for the resume path.** This is expected, not a regression: the resume click's progress was never going to be observable live (there is no open stream to push it through), and the spec's frontend design (Task 13) already treats "no live progress" as its own valid state — Task 13 must NOT assume Resume-triggered scoring produces live ticks; see that task's own note.
+**Architectural limit, by design, not a bug — and broader than just the resume path (round-2 plan-review finding).** `inFlightByBook.get(bookId)` only has entries while a generation job is actively rendering, and its entry for a book is deleted (`deregisterJob`) the moment that book's LAST running job drains — which can happen only moments after the final chapter's `afterChapterFinalized` fires, while `scoreBook`'s slow audition-centroid tail (the whole reason this feature exists — "tens of minutes," per the spec's Problem section) is often still running in the background. Two distinct cases end up with no live subscribers to broadcast to:
+
+1. **The resume route (Task 7)** — by construction only ever runs when `isGenerationActive(bookId)` is false. No job, ever, for the whole call.
+2. **The tail of a chapter-finalize-triggered run, once the book's last job has drained** — even though this call started with a live job open, that job can close (all its chapters done) before the slow per-character loop finishes. Live ticks broadcast fine for whatever portion of the run overlaps active rendering (e.g. a sibling chapter still synthesizing while `ren`'s audition-centroid fallback runs), then silently stop being observable once the book finishes rendering, even though `scoreBook` keeps working.
+
+Both are expected, not regressions to fix in this plan: there is no open stream to push a background tick through once nothing is rendering, full stop — holding a job/subscriber alive artificially for the sole purpose of scoring progress would be new, out-of-scope infrastructure (a "fake" job with no actual render work), not a wiring fix. The consequence is that live progress is a **best-effort overlay for the portion of scoring that overlaps active generation**, not a guarantee that the whole scoring pass is observable live — the static "X of Y checked so far" + Resume-button state (Task 13, already designed for exactly the "no live progress right now" case) is what a user sees once the live portion ends, whether because nothing is generating at all (resume) or because generation just finished while scoring was still catching up (the tail case). **Task 14's e2e spec must test the MECHANISM (a tick fires, the UI reflects it, while a job is registered as active) — it must NOT assert that a full scoring run's ticks are ALL guaranteed to arrive live, since the tail case means they may not be.** See Task 14's own note for how its test is scoped accordingly.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1147,18 +1163,29 @@ Read `server/src/routes/generation.test.ts` in full first (it's large — find h
 
 ```typescript
 describe('triggerScoring (srv-36 hardening)', () => {
+  // Round-2 plan-review fix: `triggerScoring` itself is fire-and-forget —
+  // it returns as soon as `scoringInFlight.set(ctx.bookId, run)` completes,
+  // NOT once `run` (the actual scoreBook call + broadcast + reconcile) has
+  // settled. `await triggerScoring(...)` alone races that background work;
+  // every test below that asserts on an EFFECT of the background run must
+  // also `await __awaitScoringSettled(bookId)` (added in Step 3 below,
+  // alongside `triggerScoring`) before asserting.
+
   it('no-ops without calling scoreBook when qa.speaker.enabled is off', async () => {
     // Arrange: configValue('qa.speaker.enabled') returns false (mock/stub per this
     // file's existing configValue-mocking pattern — check how other tests in this
     // file already stub configValue and reuse that exact mechanism).
     const scoreBookSpy = /* spy on the imported scoreBook */;
     await triggerScoring({ bookId: 'b1', bookDir: '/tmp/b1', chapters: [], justFinalizedSlugs: [] });
+    // No __awaitScoringSettled needed here — the qa.speaker.enabled guard
+    // returns synchronously before scoringInFlight is ever set.
     expect(scoreBookSpy).not.toHaveBeenCalled();
   });
 
   it('when keep is supplied, reconciles against it verbatim (chapter-finalize path behavior, unchanged)', async () => {
     const reconcileSpy = /* spy on reconcileResidentQwenTiers */;
     await triggerScoring({ bookId: 'b1', bookDir: /* fixture */, chapters: [{ id: 1, slug: 'ch1' }], justFinalizedSlugs: ['ch1'], keep: { keep06: true, keep17: false } });
+    await __awaitScoringSettled('b1');
     expect(reconcileSpy).toHaveBeenCalledWith({ keep06: true, keep17: false });
   });
 
@@ -1166,6 +1193,7 @@ describe('triggerScoring (srv-36 hardening)', () => {
     const reconcileSpy = /* spy on reconcileResidentQwenTiers */;
     // fixture: a qwen3-tts-1.7b character.
     await triggerScoring({ bookId: 'b1', bookDir: /* fixture */, chapters: [{ id: 1, slug: 'ch1' }], justFinalizedSlugs: [] });
+    await __awaitScoringSettled('b1');
     expect(reconcileSpy).toHaveBeenCalledWith({ keep06: false, keep17: true });
   });
 
@@ -1180,17 +1208,21 @@ describe('triggerScoring (srv-36 hardening)', () => {
     const received: unknown[] = [];
     // subA.send / subB.send both push into `received`, tagged by which sub.
     await triggerScoring({ bookId: 'b1', bookDir: /* 2-character in-book fixture, no sidecar needed */, chapters: [{ id: 1, slug: 'ch1' }], justFinalizedSlugs: ['ch1'] });
+    await __awaitScoringSettled('b1');
     // subA must receive each tick type exactly ONCE (not twice, despite being
     // registered on two jobs); subB must also receive each tick type once.
   });
 
   it('resume-shaped call (no in-flight job for the book) completes without throwing even though broadcastToBook has nothing to send to', async () => {
-    await expect(triggerScoring({ bookId: 'b-not-generating', bookDir: /* fixture */, chapters: [{ id: 1, slug: 'ch1' }], justFinalizedSlugs: [] })).resolves.toBeUndefined();
+    await triggerScoring({ bookId: 'b-not-generating', bookDir: /* fixture */, chapters: [{ id: 1, slug: 'ch1' }], justFinalizedSlugs: [] });
+    await expect(__awaitScoringSettled('b-not-generating')).resolves.toBeUndefined();
   });
 });
 ```
 
 (Fill in the `/* ... */` placeholders using this test file's existing conventions for mocking `configValue`, spying on `scoreBook`/`reconcileResidentQwenTiers`, registering fake in-flight jobs/subscribers, and building a fixture book directory — do not invent new conventions; every other describe block in this file already has these patterns. If `inFlightByBook`/`RunningJob`/`Subscriber` aren't already exported for tests, this task may need to add a test-only export of `inFlightByBook` guarded the same way any other test-only export in this file already is — check for an existing precedent before adding a new one.)
+
+**Round-2 plan-review caution:** the first test needs `scoreBook` mocked/spied-and-never-called; the "broadcasts to every subscriber" and reconcile tests need the REAL `scoreBook` to run against an on-disk fixture so its callbacks actually fire. Toggling a module-level mock of `scoreBook` on and off between tests in the same file is a known flake source in this codebase (module-mock state leaking across tests via `vi.mock`/`importOriginal` timing). Do not `vi.mock('../audio/render-integrity/aggregate.js')` at the top of this file for just the one no-op test — either use `vi.spyOn` scoped and restored per-test (`vi.restoreAllMocks()` in an `afterEach`), or split the "qa.speaker.enabled off" case into its own separate top-level `describe`/file section that never touches the real fixture-running tests' module state. Check this file's existing tests for whichever pattern it already uses elsewhere for a similar mock/real split, and match it.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1227,18 +1259,24 @@ export async function triggerScoring(ctx: {
         broadcastToBook(ctx.bookId, { type: 'scoring_progress', characterId, charactersChecked: index, charactersOnRoster: total });
       },
     });
-    // mismatchCount is a placeholder 0 — a real count requires reading back
-    // this run's verdict rows, which scoreBook doesn't currently surface.
-    // Informational-only on the frontend (toast/Activity copy), not
-    // correctness-critical — computing it precisely is a follow-up, not
-    // part of this plan.
-    broadcastToBook(ctx.bookId, { type: 'scoring_complete', mismatchCount: 0 });
+    broadcastToBook(ctx.bookId, { type: 'scoring_complete', mismatchCount: result.mismatchCount });
     const keep = ctx.keep ?? result.usedQwenTiers;
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
   })()
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
     .finally(() => scoringInFlight.delete(ctx.bookId));
   scoringInFlight.set(ctx.bookId, run);
+}
+
+/** Test-only — `triggerScoring` is deliberately fire-and-forget (same
+ *  rationale as today's inline block: scoreBook can make unbounded blocking
+ *  sidecar calls, so the chapter-finalize/resume callers must never await
+ *  it directly). Tests that need to observe an effect of the background
+ *  run (a reconcile call, a broadcast, a written file) await this instead
+ *  of `triggerScoring` itself. Resolves immediately (undefined) if no run
+ *  is or ever was in flight for `bookId`. */
+export async function __awaitScoringSettled(bookId: string): Promise<void> {
+  await scoringInFlight.get(bookId);
 }
 
 export async function afterChapterFinalized(
@@ -1629,7 +1667,7 @@ In `src/store/generation-stream-runner.ts`, add imports: `buildScoringStartedEve
     }
 ```
 
-(`notificationsActions.pushToast`'s `kind` union must include `'info'` — check `src/store/notifications-slice.ts`'s `Toast['kind']` type; if it's currently `'error' | 'warn'` only, add `'info'` to that union as part of this step, since this is the first non-error/warn toast this codebase has needed — a small, necessary extension of an existing type, not scope creep.)
+(Round-2 plan-review correction: `Toast['kind']` in `src/store/notifications-slice.ts` already includes `'info'` — `'error' | 'warn' | 'info'` — so no type change is needed here; an earlier draft of this plan incorrectly assumed `'info'` didn't exist yet. Do not stage `notifications-slice.ts` in this task's commit unless you actually touched it for some other reason.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1639,7 +1677,7 @@ Expected: PASS. Also run `npx vitest run src/store/notifications-slice.test.ts` 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/store/generation-stream-runner.ts src/store/generation-stream-runner.test.ts src/store/notifications-slice.ts
+git add src/store/generation-stream-runner.ts src/store/generation-stream-runner.test.ts
 git commit -m "feat(frontend): handle scoring_started/progress/complete SSE ticks"
 ```
 
@@ -1890,6 +1928,8 @@ git commit -m "feat(frontend): three-state Voice Match row with live progress an
 **Interfaces:**
 - Consumes: this repo's existing e2e mock-mode SSE-driving helpers — read `e2e/` for the nearest existing spec that drives a mocked generation stream (search for a spec asserting on `chapter_complete`/`warning` ticks) and copy its harness setup exactly; do not invent a new mocking mechanism.
 
+**Scoping note (round-2 plan-review fix):** this spec drives the MOCKED frontend SSE stream directly with hand-fed tick events — it tests "does the UI react correctly when these ticks arrive," which is the mechanism this feature adds. It deliberately does NOT (and cannot, at this layer) assert that a real `scoreBook` run's ticks are guaranteed to arrive live end-to-end on a real server — per Task 6's architectural note, the live portion of a real run is best-effort (broadcasts only while a generation job is registered as active; the tail after the book finishes rendering, or the whole resume path, has no subscriber to reach). That server-side reality is out of scope for an e2e spec driven against the frontend's mock SSE layer; this spec's job is narrower and that's intentional, not an oversight.
+
 - [ ] **Step 1: Write the spec**
 
 ```typescript
@@ -1940,7 +1980,10 @@ git commit -m "test(e2e): cover live voice-match scoring progress and the Resume
 
 ## Self-Review
 
-**Revision history:** this plan went through one round of mandatory adversarial (Opus assumption-checker) review before implementation. Round 1 found two Critical gaps — (a) the SSE events were fully specified end-to-end but no caller of `triggerScoring` ever supplied the `onScoringEvent` callback that would have emitted them, so the primary live-progress feature would have shipped silently dead; (b) `aggregate.ts`'s restructure referenced `CENTROID_MIN_N` without importing it and left `writeVerdicts` imported-but-unused, both hard build errors under this repo's `noUnusedLocals: true` — plus two Significant gaps (an existing test file, `generation-spk.test.ts`, breaks on `scoreBook`'s new arity/return but wasn't named as a file needing updates; `scoring_started` never fired when every character hit a transient failure, exactly the stuck-book scenario Resume exists for). All four are fixed in the current revision: Task 6 now wires SSE via the real `inFlightByBook`/`broadcast` primitives already in `generation.ts` (with an explicit, deliberate limitation documented — resume-triggered scoring has no live subscribers to broadcast to, by construction, and Task 13 accounts for that); Task 3's import instructions are corrected and explicit about the orphaned-import removal; Task 3 Step 6 names `generation-spk.test.ts` and `aggregate-audition-pool.test.ts` explicitly with their exact breaking assertions; Task 3 adds a `onRosterKnown` callback fired before the per-character loop, independent of whether any character resolves.
+**Revision history:** this plan went through two rounds of mandatory adversarial (Opus assumption-checker) review before implementation, plus a third self-reviewed pass (the loop cap for this gate is an initial pass + 2 re-reviews).
+
+- **Round 1** found two Critical gaps — (a) the SSE events were fully specified end-to-end but no caller of `triggerScoring` ever supplied the `onScoringEvent` callback that would have emitted them, so the primary live-progress feature would have shipped silently dead; (b) `aggregate.ts`'s restructure referenced `CENTROID_MIN_N` without importing it and left `writeVerdicts` imported-but-unused, both hard build errors under this repo's `noUnusedLocals: true` — plus two Significant gaps (`generation-spk.test.ts` breaks on `scoreBook`'s new arity/return but wasn't named as a file needing updates; `scoring_started` never fired when every character hit a transient failure, exactly the stuck-book scenario Resume exists for). Fixed: Task 6 now wires SSE via the real `inFlightByBook`/`broadcast` primitives already in `generation.ts`; Task 3's imports are corrected; Task 3 Step 6 names both breaking test files explicitly; Task 3 gained an `onRosterKnown` callback independent of character resolution.
+- **Round 2** verified all four Round-1 fixes hold (no new build-breakers) but found the live-SSE wiring, while now real, was still incompletely described — it goes silent not just on the resume path but also on the *tail* of a chapter-finalize-triggered run once the book's last generation job drains (a real generation job's registration, not just the resume route's absence of one, is what backs `broadcastToBook`'s subscriber list) — plus a hardcoded `mismatchCount: 0` that would have permanently logged a false "0 mismatches found" into the Activity feed regardless of the real result, a test-timing race in Task 6's own unit tests against the fire-and-forget background promise, and a Minor false premise about `ToastKind` needing a new union member (it already has `'info'`). Fixed (self-reviewed, no Round 3 dispatch — all three were precise, unambiguous engineering fixes, not judgment calls, consistent with the reviewer's own "not hard blockers" framing): `scoreAndMergeCharacter` now returns a real per-character mismatch count, accumulated and returned from `scoreBook` as `mismatchCount`, threaded through to `scoring_complete`'s broadcast; the architectural-limit note in Task 6 now covers both the resume path AND the post-render tail, and Task 14's e2e scoping note clarifies it tests the frontend reaction mechanism, not a server-side live-delivery guarantee; Task 6 gained a test-only `__awaitScoringSettled` export and every test asserting on the background run's effects now awaits it; the `ToastKind` premise is corrected.
 
 **Spec coverage** — every numbered section of the spec maps to a task:
 - §1 (interleave + cheap-first order) → Task 3.
