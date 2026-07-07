@@ -104,6 +104,7 @@ import type {
 
 const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
   'regenerate',
+  'generation_run_complete',
   'chapter_complete',
   'chapter_failed',
   'generation_started',
@@ -205,6 +206,28 @@ export function GenerationView({
     }
     latestChapterCompleteId.current = latest;
     hasChapterCompleteBaseline.current = true;
+  }, [activityEvents, refetchQaReport]);
+  /* fs-51 follow-up — the generation-stream middleware no longer dispatches a
+     per-chapter chapter_complete event during a live run; it rolls per-chapter
+     completions into a single generation_run_complete event fired when the
+     run pauses or drains (see buildGenerationRunCompleteEvent). The
+     chapter_complete watcher above is kept for if/when that's re-enabled, but
+     today's real event stream needs this trigger too, or the card never
+     refetches during an actual render. Same "genuinely new id" diffing
+     pattern, tracked independently so either event can fire the refetch. */
+  const latestGenerationRunCompleteId = useRef<number | undefined>(undefined);
+  const hasGenerationRunCompleteBaseline = useRef(false);
+  useEffect(() => {
+    const latest = activityEvents.find((e) => e.type === 'generation_run_complete')?.id;
+    if (
+      hasGenerationRunCompleteBaseline.current &&
+      latest !== undefined &&
+      latest !== latestGenerationRunCompleteId.current
+    ) {
+      refetchQaReport();
+    }
+    latestGenerationRunCompleteId.current = latest;
+    hasGenerationRunCompleteBaseline.current = true;
   }, [activityEvents, refetchQaReport]);
   /* #650 — render-time sentence→speaker map per chapter, for the PRECISE
      reassignment-staleness diff (vs the time-based change-log fallback). */

@@ -887,6 +887,35 @@ describe('GenerationView — fs-51 QA report card', () => {
 
     await waitFor(() => expect(getQaReportSpy).toHaveBeenCalledTimes(2));
   });
+
+  it('refetches the QA report when a generation run completes', async () => {
+    const { store } = renderView();
+
+    await screen.findByText(/quality gate/i);
+    expect(getQaReportSpy).toHaveBeenCalledTimes(1);
+
+    /* Mirrors the real event shape the generation-stream middleware actually
+       dispatches today (see buildGenerationRunCompleteEvent) — chapter_complete
+       is no longer fired per-chapter during a live run; completions roll up
+       into a single generation_run_complete event on pause/drain. */
+    act(() => {
+      store.dispatch(
+        changeLogSlice.actions.appendLogEvent({
+          id: Date.now(),
+          at: new Date().toISOString(),
+          ts: 'Just now',
+          date: 'today',
+          type: 'generation_run_complete',
+          title: 'Generated 1 chapter',
+          note: 'Chapter 1.',
+          actor: 'system',
+          chapterId: 1,
+        }),
+      );
+    });
+
+    await waitFor(() => expect(getQaReportSpy).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('GenerationView — header action once the run is complete', () => {
