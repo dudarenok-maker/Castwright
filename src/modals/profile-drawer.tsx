@@ -1731,8 +1731,15 @@ export function ProfileDrawer({
                    ignores the override name for the actual synth key and
                    falls back to `qwen-<character.id>`, a file that was
                    never written, 409-ing every future sample/generation
-                   even though the cast row shows "Designed". */
-                next.voiceUuid = stagedVoiceUuid ?? character.voiceUuid;
+                   even though the cast row shows "Designed". Same fallback
+                   chain as the sample-play requestSubject above (line
+                   ~645-649) — kept identical so the two resolvers can't
+                   drift apart again. */
+                next.voiceUuid =
+                  stagedVoiceUuid ??
+                  character.voiceUuid ??
+                  voice?.voiceUuid ??
+                  singleDesign?.preview?.voiceUuid;
               }
               /* Conflict reset: drop the library voiceId + matchedFrom so the
                  cast view falls back to the engine's prebuilt-voice pick. The

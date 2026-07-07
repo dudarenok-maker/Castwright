@@ -14,6 +14,7 @@ import {
   playBaseVoiceSampleWithAutoLoad,
 } from '../lib/play-sample-with-auto-load';
 import type { BaseVoice, Character, Voice } from '../lib/types';
+import type { PromoteQwenVoiceResponse } from '../lib/api';
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
@@ -48,11 +49,7 @@ const fetchDesignedPersona = vi.fn((_bookId: string, _characterId: string) =>
 );
 /* Plan 161 — the A/B compare modal promotes the preview on approve. */
 const promoteQwenVoice = vi.fn(
-  (_bookId: string, _characterId: string, args?: unknown): Promise<{
-    voiceId: string;
-    url: string;
-    voiceUuid?: string;
-  }> =>
+  (_bookId: string, _characterId: string, args?: unknown): Promise<PromoteQwenVoiceResponse> =>
     Promise.resolve({
       voiceId: String(
         (args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran',
@@ -1290,8 +1287,12 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
       // deliberately no voiceUuid — mirrors a row that never had one stamped.
     });
     selectQwen();
-    fireEvent.click(screen.getByTestId('qwen-design-voice'));
-
+    /* This test's store has no middleware, so — unlike the "RE-design
+       (existing voice)..." test above, which asserts the click dispatches
+       designSingleRequested — a click on qwen-design-voice here would have
+       no observable effect. The compare overlay is driven directly by the
+       beginSingle/previewReady dispatches below, mirroring what the
+       middleware would do once the (unmocked) redesign request resolves. */
     act(() => {
       store.dispatch(
         castDesignActions.beginSingle({
