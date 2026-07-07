@@ -94,8 +94,9 @@ export function DevicePanel() {
       )}
       {!devices && hw && (hw.platform === 'win32' || hw.platform === 'linux') && (
         <p className="mt-2 text-xs text-ink/60">
-          With an 8&nbsp;GB NVIDIA GPU you get near-realtime rendering; without one, Castwright
-          falls back to the CPU (slower). Load a voice to confirm which device is in use.
+          A 6&nbsp;GB NVIDIA GPU gets you started; 8&nbsp;GB is the sweet spot for near-realtime
+          rendering. Without a GPU, Castwright falls back to the CPU (slower). Load a voice to
+          confirm which device is in use.
         </p>
       )}
     </section>
