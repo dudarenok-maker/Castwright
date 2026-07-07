@@ -25,12 +25,6 @@ prioritized issue in its tier.
 
 ## Must — the beta → full-product spine (marketability & discoverability)
 
-#### `fs-51` — Per-book performance-QA report (visible + exportable acoustic+ASR+drift summary) ([#973](https://github.com/dudarenok-maker/Castwright/issues/973))
-
-- _What:_ Turn the existing **acoustic + ASR + drift** QA gate into a **visible, exportable per-book QA report** — e.g. "*N lines re-recorded, M transcript-verified, 0 drift detected*". Aggregates signals the pipeline already produces; presents and exports them.
-- _Benefit:_ **Proof, not promises.** epub2tts now does ASR-matching; making ours *legibly* more (acoustic + ASR + drift, automatic, per book) defends the QA moat. Beta→full-product **Must**. _Source:_ triage of `brand/oss-gap-backlog-2026-06-20.md` (OSS gap analysis) · triage record: `docs/superpowers/specs/2026-06-21-oss-gap-backlog-triage-design.md` (2026-06-21).
-_Full detail + acceptance:_ [#973](https://github.com/dudarenok-maker/Castwright/issues/973).
-
 #### `fs-38` — Voice cloning (your own / family voice) + cloned-vs-designed library split ([#624](https://github.com/dudarenok-maker/Castwright/issues/624))
 
 - _What:_ In-app voice-sample **capture** (record/upload) with quality guidance + re-take. Explicit **consent on the record** (names the person + permitted use); cloning blocked without it. **Clone + cast** via XTTS (zero-shot reference) first, then Qwen design-to-target; held consistent across book + series. **Voice-library split:** cloned voices get their own `#/voices` section with provenance + consent, **excluded** from the cross-book "offer it back" matcher so a person's voice is never reused into a stranger's book. **Local-only**; export explicit.

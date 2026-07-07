@@ -96,4 +96,157 @@ describe('buildSynthReplacements', () => {
     });
     expect(reps[0].pcm.length).toBe(pcm.length);
   });
+
+  it('carries the fresh verdict from the synth output onto the replacement when the gate ran', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+        suspect: undefined,
+        signalQaRan: true,
+      }),
+    });
+    // toStrictEqual (not toEqual) so a key present-but-undefined is
+    // distinguished from an omitted key — the whole point of this fix.
+    expect(reps[0].freshVerdict).toStrictEqual({
+      qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+      suspect: undefined,
+      qaRetries: undefined,
+    });
+    // The asr/asrSuspect/asrRetries keys are OMITTED entirely (asrRan wasn't
+    // set) — not merely `undefined`-valued.
+    expect('asr' in reps[0].freshVerdict!).toBe(false);
+    expect('asrSuspect' in reps[0].freshVerdict!).toBe(false);
+    expect('asrRetries' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  it('carries the fresh ASR verdict too when asrRan is true', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        signalQaRan: true,
+        qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+        asrRan: true,
+        asr: { verdict: 'clean', reasons: [] } as unknown as ChapterSegment['asr'],
+        asrSuspect: undefined,
+      }),
+    });
+    expect('asr' in reps[0].freshVerdict!).toBe(true);
+    expect('asrSuspect' in reps[0].freshVerdict!).toBe(true);
+    expect('asrRetries' in reps[0].freshVerdict!).toBe(true);
+  });
+
+  /* fs-51 review follow-up — the false-pass bug: a call whose caller never ran
+     a gate (config off) must not let that gate's fields — even though they're
+     all `undefined` on the SynthOutput — overwrite a segment's prior, genuine
+     verdict. buildSynthReplacements must OMIT the whole key group, not
+     include it with undefined values, so spliceChapterSegments's spread
+     leaves the segment's prior fields alone. */
+  it('omits the qa/suspect/qaRetries group entirely when signalQaRan is false — the gate never ran, not "ran clean"', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        // signalQaRan omitted (falsy) — the caller's gate never ran.
+      }),
+    });
+    expect(reps[0].freshVerdict).toStrictEqual({});
+    expect('qa' in reps[0].freshVerdict!).toBe(false);
+    expect('suspect' in reps[0].freshVerdict!).toBe(false);
+    expect('qaRetries' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  it('omits the asr/asrSuspect/asrRetries group entirely when asrRan is false', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        signalQaRan: true,
+        qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+        // asrRan omitted (falsy) — ASR never ran for this call.
+      }),
+    });
+    expect('asr' in reps[0].freshVerdict!).toBe(false);
+    expect('asrSuspect' in reps[0].freshVerdict!).toBe(false);
+    expect('asrRetries' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  /* fs-51 review follow-up (Critical false-pass fix) — `suspect` is a UNION
+     signal (synthesise-chapter.ts stamps it from `quarantined ||
+     qa?.status === 'suspect'`, where `quarantined` is ASR-driven calibration-
+     bleed detection, entirely independent of the signal-QA gate). It must
+     therefore be included in freshVerdict whenever EITHER gate ran, not only
+     when signalQaRan is true — bucketing it under signalQaRan alone let an
+     ASR-only re-record's genuine `suspect: true` (from ASR quarantining dead
+     silence) get silently dropped, leaving the segment's stale prior verdict
+     (often clean) in place while the actual audio was quarantined silence. */
+  it('includes suspect when ONLY asrRan is true (signal-QA gate off) — the ASR-driven quarantine must not be dropped', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        // signalQaRan omitted (false) — qa.seg.maxRerecords=0, gate off.
+        asrRan: true,
+        asr: { verdict: 'drift', reasons: [] } as unknown as ChapterSegment['asr'],
+        suspect: true, // ASR's quarantined-calibration-bleed check fired.
+      }),
+    });
+    expect(reps[0].freshVerdict?.suspect).toBe(true);
+    expect('suspect' in reps[0].freshVerdict!).toBe(true);
+    // qa/qaRetries still correctly omitted — signal-QA itself never ran.
+    expect('qa' in reps[0].freshVerdict!).toBe(false);
+    expect('qaRetries' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  it('includes suspect when ONLY signalQaRan is true (ASR off) — the signal-QA-driven suspect must still propagate', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        signalQaRan: true,
+        qa: { status: 'suspect', reasons: ['clipping'], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
+        suspect: true,
+        // asrRan omitted (false) — ASR never ran for this call.
+      }),
+    });
+    expect(reps[0].freshVerdict?.suspect).toBe(true);
+    expect('asr' in reps[0].freshVerdict!).toBe(false);
+    expect('asrSuspect' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  it('omits suspect entirely when NEITHER gate ran, preserving the segment prior value even if out.suspect happens to be set', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        suspect: true, // stray/meaningless — neither gate ran, must be ignored.
+        // signalQaRan and asrRan both omitted (false).
+      }),
+    });
+    expect(reps[0].freshVerdict).toStrictEqual({});
+    expect('suspect' in reps[0].freshVerdict!).toBe(false);
+  });
 });

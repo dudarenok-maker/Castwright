@@ -18,11 +18,22 @@ vi.mock('../modals/cover-picker', () => ({
     ) : null,
 }));
 
+/* fs-51 — QaReportCard fetches via api.getQaReport on mount. The rest of
+   this file's nested tree (e.g. CompanionAppBanner) calls other api.*
+   methods unconditionally too, so this only overrides getQaReport and
+   keeps every other export (including the real `api` methods) intact via
+   importOriginal, rather than hand-stubbing the whole module. */
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>();
+  return { ...actual, api: { ...actual.api, getQaReport: vi.fn(async () => MOCK_QA_REPORT) } };
+});
+
 import { ListenView } from './listen';
 import { exportsSlice, exportsActions } from '../store/exports-slice';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { MOCK_QA_REPORT } from '../data/qa-report';
 import type { Chapter, Character, Voice, BookExportJob } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
 
@@ -706,6 +717,13 @@ describe('ListenView — export-queue per-row actions (plan 18a)', () => {
     fireEvent.click(screen.getByTitle('Remove'));
 
     expect(store.getState().exports.byBookId['demo__sa__test']).toHaveLength(0);
+  });
+});
+
+describe('ListenView — QA report card (fs-51)', () => {
+  it('renders the QA report card', async () => {
+    renderView();
+    expect(await screen.findByText(/quality gate/i)).toBeInTheDocument();
   });
 });
 

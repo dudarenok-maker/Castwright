@@ -1418,6 +1418,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/qa-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-book QA report (fs-51) — acoustic, ASR, voice-drift, and config-drift signals aggregated for one book. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    bookId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BookQaReport"];
+                    };
+                };
+                /** @description Book not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/exports": {
         parameters: {
             query?: never;
@@ -4151,6 +4196,56 @@ export interface components {
                         remediation: string;
                     };
                 };
+            };
+        };
+        /**
+         * @description Per-book QA report (fs-51) — acoustic, ASR, voice-drift, and
+         *     config-drift signals aggregated live from existing per-chapter
+         *     files (never a new persisted book-level aggregate). See
+         *     `server/src/audio/qa-report.ts` (audio aggregation) and
+         *     `server/src/routes/qa-report.ts` (composes with config drift).
+         */
+        BookQaReport: {
+            bookId: string;
+            /** Format: date-time */
+            generatedAt: string;
+            chaptersRendered: number;
+            chaptersTotal: number;
+            totalLines: number;
+            acoustic: {
+                linesChecked: number;
+                linesRerecorded: number;
+                chaptersFlagged: number;
+            };
+            asr: {
+                linesVerified: number;
+                linesFlaggedDrift: number;
+            };
+            voiceDrift: {
+                /** @enum {string} */
+                attribution: "full" | "legacy-unattributed";
+                chaptersEligible: number;
+                chaptersScored: number;
+                /** @description Eligible chapters the voice-drift gate attempted but never produced a verdict for (an embedding failure). Nonzero for both an isolated failure (some chapters scored, this one didn't) and a fleet-wide failure (every eligible chapter was attempted but ALL of them failed, so chaptersScored is also 0) — the two are otherwise indistinguishable from chaptersScored alone. Stays 0 only when the gate was never attempted on any eligible chapter ("gate off"). */
+                chaptersEmbedFailed: number;
+                charactersOnRoster: number;
+                charactersChecked: number;
+                mismatches: {
+                    characterId: string;
+                    /** @description Absent on rows from legacy verdict files written before chapter-scoping existed (see `voiceDrift.attribution`). */
+                    chapterId?: number;
+                    fixable: boolean;
+                }[];
+                inconclusiveCount: number;
+                uncheckedCharacterIds: string[];
+            };
+            configDrift: {
+                counts: {
+                    mild: number;
+                    moderate: number;
+                    severe: number;
+                };
+                events: components["schemas"]["DriftEvent"][];
             };
         };
         /**

@@ -339,6 +339,11 @@ export interface ChapterSegment {
       per-sentence suspect surface; undefined when the gate passed or did not
       run. */
   suspect?: boolean;
+  /** fs-51 — number of times this segment was actually re-recorded by the
+      signal-QA gate (not merely "still suspect" — an attempt that fixed the
+      line still counts). 0/undefined on the title beat and when the gate
+      didn't run for this segment. */
+  qaRetries?: number;
   /** ASR content-QA verdict (srv-31) — transcript vs manuscript word-error-rate.
       Set only when the ASR pass ran (`opts.asr` provided); absent on the title
       beat and on chapters synthesised without ASR. Carries the transcript + WER
@@ -349,6 +354,8 @@ export interface ChapterSegment {
       "fluent but wrong words" surface. Undefined when ASR passed, was
       inconclusive, or did not run. */
   asrSuspect?: boolean;
+  /** fs-51 — same as `qaRetries`, for the ASR content-QA gate's re-record loop. */
+  asrRetries?: number;
   /** True when this segment's audio bled the voice-design calibration clip
       (#1083) and was QUARANTINED — its take was dropped (replaced with brief
       silence) rather than shipped, after the ASR re-record budget failed to
@@ -1513,6 +1520,7 @@ export async function synthesiseChapter(
   };
 
   const segmentQaByIndex = new Map<number, SegmentQaVerdict>();
+  const qaRetryCountByIndex = new Map<number, number>();
   if (maxSegmentRerecords > 0) {
     /* `ok` beats `suspect`; among two suspects, fewer reasons is less-bad. */
     const isBetter = (a: SegmentQaVerdict, b: SegmentQaVerdict): boolean => {
@@ -1538,6 +1546,7 @@ export async function synthesiseChapter(
       );
       if (pending.length === 0) break;
       for (const group of pending) {
+        qaRetryCountByIndex.set(group.index, (qaRetryCountByIndex.get(group.index) ?? 0) + 1);
         onSegmentRerecord?.({
           group,
           attempt,
@@ -1574,6 +1583,7 @@ export async function synthesiseChapter(
      (the decided persistent-drift policy). Inline here, but the multi-worker
      queue overlaps this chapter's CPU ASR with the next chapter's GPU synth. */
   const segmentAsrByIndex = new Map<number, AsrClassification>();
+  const asrRetryCountByIndex = new Map<number, number>();
   if (asr) {
     const sampleEvery = Math.max(1, Math.floor(asr.sampleEvery ?? 1));
     const maxAsrRerecords = Math.max(0, Math.floor(asr.maxRerecords ?? 0));
@@ -1643,6 +1653,7 @@ export async function synthesiseChapter(
       const pending = sampled.filter((g) => segmentAsrByIndex.get(g.index)!.verdict === 'drift');
       if (pending.length === 0) break;
       for (const group of pending) {
+        asrRetryCountByIndex.set(group.index, (asrRetryCountByIndex.get(group.index) ?? 0) + 1);
         const c = segmentAsrByIndex.get(group.index)!;
         asr.onRerecord?.({
           group,
@@ -1756,8 +1767,10 @@ export async function synthesiseChapter(
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
       qa,
       suspect: quarantined || qa?.status === 'suspect' ? true : undefined,
+      qaRetries: qaRetryCountByIndex.get(group.index) || undefined,
       asr: asrClass,
       asrSuspect: asrClass?.verdict === 'drift' ? true : undefined,
+      asrRetries: asrRetryCountByIndex.get(group.index) || undefined,
       quarantined: quarantined ? true : undefined,
     });
   }

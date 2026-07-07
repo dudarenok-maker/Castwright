@@ -25,6 +25,26 @@ export function isRerecordableSegment(seg: ChapterSegment): boolean {
 export interface SynthOutput {
   pcm: Buffer;
   sampleRate: number;
+  /** fs-51 — the freshly-computed QA/ASR verdict for this re-recorded
+      segment, when the caller's synth ran the gates. Absent when the
+      caller didn't run QA/ASR for this call (legacy behavior). */
+  qa?: ChapterSegment['qa'];
+  suspect?: ChapterSegment['suspect'];
+  asr?: ChapterSegment['asr'];
+  asrSuspect?: ChapterSegment['asrSuspect'];
+  qaRetries?: ChapterSegment['qaRetries'];
+  asrRetries?: ChapterSegment['asrRetries'];
+  /** Did the signal-QA gate actually EXECUTE for this specific call — not
+      "is signal-QA enabled globally," but "did this call evaluate a verdict
+      at all." False (or absent) means `qa`/`suspect`/`qaRetries` above are
+      meaningless placeholders (the gate never ran), NOT "ran clean" — so
+      `buildSynthReplacements` must not let them overwrite a segment's prior,
+      still-valid verdict. */
+  signalQaRan?: boolean;
+  /** Same distinction as `signalQaRan`, for the ASR gate: did ASR verification
+      actually run for this call, gating whether `asr`/`asrSuspect`/`asrRetries`
+      are meaningful. */
+  asrRan?: boolean;
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -50,7 +70,32 @@ export async function buildSynthReplacements(
       out.sampleRate === opts.chapterSampleRate
         ? out.pcm
         : resamplePcm16(out.pcm, out.sampleRate, opts.chapterSampleRate);
-    replacements.push({ startSegmentIndex: i, endSegmentIndex: i, pcm });
+    /* Only let a gate's fields overwrite the segment's prior verdict when that
+       gate actually RAN for this call — a gate that's configured off never
+       populates its fields, and an omitted key here (not `key: undefined`) is
+       what makes `spliceChapterSegments`'s `{...segment, ...freshVerdict}`
+       spread leave the segment's prior value alone (see the module doc on
+       `SegmentReplacement.freshVerdict` in splice-chapter.ts).
+
+       `suspect` is bucketed separately from `qa`/`qaRetries`: it's a UNION
+       signal (synthesise-chapter.ts stamps it from `quarantined ||
+       qa?.status === 'suspect'`, where `quarantined` comes from ASR-driven
+       calibration-bleed detection — independent of the signal-QA gate), so it
+       must be included whenever EITHER gate ran, not gated on signalQaRan
+       alone — otherwise an ASR-only re-record (signal-QA off) whose ASR gate
+       quarantines the take never surfaces that as `suspect`, silently
+       preserving the segment's stale prior verdict over genuinely bad audio. */
+    const freshVerdict: NonNullable<SegmentReplacement['freshVerdict']> = {
+      ...(out.signalQaRan ? { qa: out.qa, qaRetries: out.qaRetries } : {}),
+      ...(out.asrRan ? { asr: out.asr, asrSuspect: out.asrSuspect, asrRetries: out.asrRetries } : {}),
+      ...(out.signalQaRan || out.asrRan ? { suspect: out.suspect } : {}),
+    };
+    replacements.push({
+      startSegmentIndex: i,
+      endSegmentIndex: i,
+      pcm,
+      freshVerdict,
+    });
   }
   return replacements;
 }

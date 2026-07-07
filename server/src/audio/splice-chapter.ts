@@ -35,6 +35,12 @@ export interface SegmentReplacement {
       span with a volume filter applied — same byte length, so each inner
       segment keeps its original relative offset (inner gaps preserved). */
   innerSegmentByteLengths?: number[];
+  /** fs-51 — freshly-computed verdict fields for a re-record. Present only
+      when the replacement's audio content actually changed (a re-record);
+      a gain re-mix (same content, different volume) never sets this, so its
+      segment keeps its prior verdict — the content didn't change, so the
+      prior verdict is still true. */
+  freshVerdict?: Pick<ChapterSegment, 'qa' | 'suspect' | 'asr' | 'asrSuspect' | 'qaRetries' | 'asrRetries'>;
 }
 
 export interface SpliceInput {
@@ -167,6 +173,7 @@ export function spliceChapterSegments(input: SpliceInput): SpliceResult {
           const len = run.innerSegmentByteLengths[j - a];
           newSegments.push({
             ...segments[j],
+            ...(run.freshVerdict ?? {}),
             startSec: pcmDurationSec(cursor, sampleRate),
             endSec: pcmDurationSec(cursor + len, sampleRate),
           });
@@ -181,6 +188,7 @@ export function spliceChapterSegments(input: SpliceInput): SpliceResult {
             // single-segment run: the whole replacement is that one segment
             newSegments.push({
               ...segments[a],
+              ...(run.freshVerdict ?? {}),
               startSec: pcmDurationSec(runNewStart, sampleRate),
               endSec: pcmDurationSec(runNewStart + run.pcm.length, sampleRate),
             });
@@ -197,6 +205,7 @@ export function spliceChapterSegments(input: SpliceInput): SpliceResult {
           const offEnd = endByte(j) - spanStart;
           newSegments.push({
             ...segments[j],
+            ...(run.freshVerdict ?? {}),
             startSec: pcmDurationSec(runNewStart + offIn, sampleRate),
             endSec: pcmDurationSec(runNewStart + offEnd, sampleRate),
           });

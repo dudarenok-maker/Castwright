@@ -17,7 +17,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { castJsonPath, revisionsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
@@ -40,7 +40,7 @@ interface RevisionsPersisted {
   dismissed?: string[];
 }
 
-interface DriftEvent {
+export interface DriftEvent {
   id: string;
   /** Book the event belongs to. Stamped at emit time from the route
       param so the Drift Report modal can group events from multiple
@@ -112,8 +112,19 @@ export async function getRevisionsForBook(
 ): Promise<{ pending: never[]; drift: DriftEvent[] } | null> {
   const located = await findBookByBookId(bookId);
   if (!located) return null;
-  const { bookDir, state } = located;
+  return computeRevisionsForBook(bookId, located.bookDir, located.state);
+}
 
+/* Pure computation split out from getRevisionsForBook (independent review
+   of PR #1433) so a caller that has already resolved the book (e.g.
+   qa-report.ts, which needs bookDir/state for its own audio-QA read) can
+   skip the redundant findBookByBookId disk walk. getRevisionsForBook above
+   stays the entry point for callers that only have a bookId. */
+export async function computeRevisionsForBook(
+  bookId: string,
+  bookDir: string,
+  state: BookStateJson,
+): Promise<{ pending: never[]; drift: DriftEvent[] }> {
   const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
   const cast: CastCharacter[] = castFile?.characters ?? [];
   if (cast.length === 0) {

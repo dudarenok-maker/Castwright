@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useOutletContext } from 'react-router-dom';
 import { helpHrefForFailureCode } from '../lib/router';
@@ -18,6 +18,8 @@ import {
   IconSparkle,
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
+import { QaReportCard } from '../components/qa-report-card';
+import { useQaReport } from '../hooks/use-qa-report';
 import { Stat } from '../components/stat-tiles';
 import { ModelControlPill } from '../components/ModelControlPill';
 import { selectEnginesInUse } from '../store/engines-in-use-selector';
@@ -102,10 +104,36 @@ import type {
 
 const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
   'regenerate',
+  'generation_run_complete',
   'chapter_complete',
   'chapter_failed',
   'generation_started',
 ];
+
+/* fs-51 — shared "fire a callback when a genuinely NEW activity-feed entry
+   of a given type lands" plumbing. Each call owns its own id/baseline ref
+   pair, so calling this once per watched type (as GenerationView does below
+   for `chapter_complete` and `generation_run_complete`) keeps the two
+   triggers fully independent — a new entry of one type never touches the
+   other's baseline state. The baseline guard specifically covers the initial
+   mount run, so a matching entry that already existed at mount doesn't
+   double-fire a callback alongside a caller's own mount-time fetch. */
+function useRefetchOnNewEvent(
+  events: ChangeLogEvent[],
+  eventType: ChangeLogEvent['type'],
+  onNew: () => void,
+) {
+  const latestId = useRef<number | undefined>(undefined);
+  const hasBaseline = useRef(false);
+  useEffect(() => {
+    const latest = events.find((e) => e.type === eventType)?.id;
+    if (hasBaseline.current && latest !== undefined && latest !== latestId.current) {
+      onNew();
+    }
+    latestId.current = latest;
+    hasBaseline.current = true;
+  }, [events, eventType, onNew]);
+}
 
 /* A chapter whose voices span more than one TTS engine (e.g. narrator on
    Kokoro + dialogue on Qwen, per-character routing plan 108). Such a chapter
@@ -178,6 +206,26 @@ export function GenerationView({
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const activityEvents = useAppSelector((s) => s.changeLog.events);
+  /* fs-51 — per-book performance-QA report card. Fetched on mount, then
+     refetched live whenever a fresh chapter_complete entry lands in this
+     book's activity feed (below), so the card's numbers advance as chapters
+     finish rendering instead of only reflecting the state at page load. */
+  const { report: qaReport, loading: qaLoading, error: qaError, refetch: refetchQaReport } =
+    useQaReport(bookId);
+  /* Refetches on a fresh `chapter_complete` entry landing in this book's
+     activity feed (see useRefetchOnNewEvent above for the "genuinely new"
+     diffing + mount-baseline semantics). */
+  useRefetchOnNewEvent(activityEvents, 'chapter_complete', refetchQaReport);
+  /* fs-51 follow-up — the generation-stream middleware no longer dispatches a
+     per-chapter chapter_complete event during a live run; it rolls per-chapter
+     completions into a single generation_run_complete event fired when the
+     run pauses or drains (see buildGenerationRunCompleteEvent). The
+     chapter_complete watcher above is kept for if/when that's re-enabled, but
+     today's real event stream needs this trigger too, or the card never
+     refetches during an actual render. Tracked independently (its own
+     id/baseline refs inside useRefetchOnNewEvent) so either event can fire
+     the refetch without affecting the other's state. */
+  useRefetchOnNewEvent(activityEvents, 'generation_run_complete', refetchQaReport);
   /* #650 — render-time sentence→speaker map per chapter, for the PRECISE
      reassignment-staleness diff (vs the time-based change-log fallback). */
   const renderedSpeakersByChapter = useAppSelector(
@@ -1191,6 +1239,14 @@ export function GenerationView({
           <Stat label="Queued" value={queued} />
           <Stat label="Failed" value={failed} danger />
         </div>
+      </div>
+
+      {/* fs-51 — per-book performance-QA report, live during generation.
+          Kept next to the Overall-progress summary above (rather than in the
+          Activity sidebar below) so it reads as a book-level status card, not
+          a log entry. */}
+      <div className="mb-6 sm:mb-8">
+        <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title ?? ''} />
       </div>
 
       {/* Wave-3 responsive layout: single column on phone + tablet (chapter

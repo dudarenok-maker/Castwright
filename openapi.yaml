@@ -1903,6 +1903,23 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RevisionsResponse' }
 
+  /api/books/{bookId}/qa-report:
+    get:
+      summary: Per-book QA report (fs-51) — acoustic, ASR, voice-drift, and config-drift signals aggregated for one book.
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookQaReport' }
+        '404':
+          description: Book not found
+
   /api/books/{bookId}/exports:
     get:
       summary: List all export jobs for a book (newest-first)
@@ -5533,6 +5550,87 @@ components:
                   code: { $ref: '#/components/schemas/FailureCode' }
                   message: { type: string }
                   remediation: { type: string }
+
+    # --- Per-book QA report (fs-51) ---------------------------------
+    BookQaReport:
+      type: object
+      description: |
+        Per-book QA report (fs-51) — acoustic, ASR, voice-drift, and
+        config-drift signals aggregated live from existing per-chapter
+        files (never a new persisted book-level aggregate). See
+        `server/src/audio/qa-report.ts` (audio aggregation) and
+        `server/src/routes/qa-report.ts` (composes with config drift).
+      required: [bookId, generatedAt, chaptersRendered, chaptersTotal, totalLines, acoustic, asr, voiceDrift, configDrift]
+      properties:
+        bookId: { type: string }
+        generatedAt: { type: string, format: date-time }
+        chaptersRendered: { type: integer }
+        chaptersTotal: { type: integer }
+        totalLines: { type: integer }
+        acoustic:
+          type: object
+          required: [linesChecked, linesRerecorded, chaptersFlagged]
+          properties:
+            linesChecked: { type: integer }
+            linesRerecorded: { type: integer }
+            chaptersFlagged: { type: integer }
+        asr:
+          type: object
+          required: [linesVerified, linesFlaggedDrift]
+          properties:
+            linesVerified: { type: integer }
+            linesFlaggedDrift: { type: integer }
+        voiceDrift:
+          type: object
+          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, mismatches, inconclusiveCount, uncheckedCharacterIds]
+          properties:
+            attribution: { type: string, enum: [full, legacy-unattributed] }
+            chaptersEligible: { type: integer }
+            chaptersScored: { type: integer }
+            chaptersEmbedFailed:
+              type: integer
+              description: >-
+                Eligible chapters the voice-drift gate attempted but never
+                produced a verdict for (an embedding failure). Nonzero for
+                both an isolated failure (some chapters scored, this one
+                didn't) and a fleet-wide failure (every eligible chapter was
+                attempted but ALL of them failed, so chaptersScored is also
+                0) — the two are otherwise indistinguishable from
+                chaptersScored alone. Stays 0 only when the gate was never
+                attempted on any eligible chapter ("gate off").
+            charactersOnRoster: { type: integer }
+            charactersChecked: { type: integer }
+            mismatches:
+              type: array
+              items:
+                type: object
+                required: [characterId, fixable]
+                properties:
+                  characterId: { type: string }
+                  chapterId:
+                    type: integer
+                    description: >-
+                      Absent on rows from legacy verdict files written before
+                      chapter-scoping existed (see `voiceDrift.attribution`).
+                  fixable: { type: boolean }
+            inconclusiveCount: { type: integer }
+            uncheckedCharacterIds:
+              type: array
+              items: { type: string }
+        configDrift:
+          type: object
+          required: [counts, events]
+          properties:
+            counts:
+              type: object
+              required: [mild, moderate, severe]
+              properties:
+                mild: { type: integer }
+                moderate: { type: integer }
+                severe: { type: integer }
+            events:
+              type: array
+              items: { $ref: '#/components/schemas/DriftEvent' }
 
     # --- Listening stats (fs-15 / fs-16) ----------------------------
     ListenStatsPutBody:

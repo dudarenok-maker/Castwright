@@ -23,8 +23,9 @@
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { audioDir } from '../../workspace/paths.js';
+import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
-import { writeVerdicts, type VerdictRow } from './verdicts-io.js';
+import { writeVerdicts, writeAttempted, attemptedPath, type VerdictRow } from './verdicts-io.js';
 import {
   writeCentroids,
   type CharacterCentroid,
@@ -78,7 +79,63 @@ interface SegmentsFileView {
 }
 
 /** Stochastic engines (Kokoro-configured characters are skipped). */
-const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
+export const STOCHASTIC_ENGINES = new Set(['qwen', 'coqui']);
+
+/** Minimal per-chapter view needed to classify each character's book-wide
+ *  configured engine — just enough structural shape for `characterSnapshots`
+ *  readers across the codebase (both `scoreBook`'s internal `ChapterData`
+ *  and `qa-report.ts`'s `SegmentsFile`) to satisfy it without adapting. */
+export interface EngineClassificationSource {
+  characterSnapshots?: Record<string, { voiceEngine?: string }>;
+}
+
+/**
+ * Resolve each character's book-wide configured TTS engine from an ORDERED
+ * list of per-chapter segments-file views — first chapter's snapshot wins.
+ *
+ * A mid-book engine re-cast (character starts on Kokoro, switches to Qwen
+ * partway through) is classified by its FIRST rendered chapter's snapshot;
+ * later chapters' snapshots for that character are ignored for this
+ * book-wide classification. This is a deliberate simplification (a re-cast
+ * forces new embeddings on re-render anyway), but it MUST be applied
+ * identically everywhere a caller needs to know "is this character
+ * stochastic, book-wide" — `scoreBook`'s Phase 2 anchor/scoring population
+ * AND `qa-report.ts`'s eligibility computation both call this single
+ * implementation so they can never disagree on which characters/chapters
+ * are in scope (see the fs-51 PR #1433 review finding: a per-chapter
+ * re-derivation in qa-report.ts could disagree with scoreBook's book-wide
+ * verdict, producing a false "embed failed" count).
+ *
+ * Round-2 correctness note: sharing the FUNCTION isn't sufficient — both
+ * callers must also feed it the identically-filtered chapter POPULATION, or
+ * "first chapter wins" can still disagree. `qa-report.ts` calls this with
+ * `loadSegmentsFiles`'s output: every chapter with a segments.json, full
+ * stop. `scoreBook` used to call this with its own `chapterData` (chapters
+ * that ALSO passed its Phase-1 embeddings-sibling check) — a character whose
+ * first-ever rendered chapter is missing its embeddings sibling would then
+ * be classified from a DIFFERENT "first" chapter by the two call sites. A
+ * character's configured engine is a rendering-configuration fact, not an
+ * embeddings-availability fact, so `scoreBook` now also calls
+ * `loadSegmentsFiles` for this classification step specifically, and applies
+ * its own embeddings-sibling skip separately/downstream, as a per-chapter
+ * scoring-eligibility check — never conflating the two.
+ *
+ * @param orderedSources Segments-file-like views, in the SAME chapter order
+ *   the caller wants "first" to mean.
+ */
+export function resolveConfiguredEngineByChar(
+  orderedSources: EngineClassificationSource[],
+): Map<string, string> {
+  const configuredEngineByChar = new Map<string, string>();
+  for (const source of orderedSources) {
+    for (const [charId, snap] of Object.entries(source.characterSnapshots ?? {})) {
+      if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
+        configuredEngineByChar.set(charId, snap.voiceEngine);
+      }
+    }
+  }
+  return configuredEngineByChar;
+}
 
 // ── Reference resolution (Task 10 seam) ───────────────────────────────────
 
@@ -205,12 +262,22 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
+ * @param justFinalizedSlugs GH #1436 fix — slugs of the chapter(s) whose OWN
+ *   finalize-chapter-write just completed and triggered THIS call, as opposed
+ *   to `chapters` (the full book list, read here for cross-chapter centroid
+ *   purposes only). Only these chapters — plus any chapter whose embeddings
+ *   sibling is independently confirmed present on disk (see the per-chapter
+ *   loop below) — get the "attempted" sentinel written on this pass. Omit to
+ *   treat every chapter in `chapters` as just-finalized (back-compat default
+ *   for direct callers/tests that don't care about the concurrent-render race).
  */
 export async function scoreBook(
   bookDir: string,
   chapters: { id: number; slug: string }[],
+  justFinalizedSlugs?: Iterable<string>,
 ): Promise<void> {
   const root = audioDir(bookDir);
+  const justFinalized = new Set(justFinalizedSlugs ?? chapters.map((c) => c.slug));
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
 
@@ -224,6 +291,7 @@ export async function scoreBook(
   };
 
   type ChapterData = {
+    id: number;
     slug: string;
     embRows: EmbeddingRow[];
     segsByKey: Map<string, SegmentsEntry>;
@@ -240,6 +308,44 @@ export async function scoreBook(
     const segPath = join(root, `${ch.slug}.segments.json`);
 
     const embResult = await readEmbeddings(embPath);
+
+    /* GH #1436 fix: the attempted sentinel is evidence that scoreBook began
+       THIS CHAPTER'S OWN per-chapter processing — it must never be stamped
+       for a chapter that hasn't reached that point in its own lifecycle yet.
+       scoreBook re-scores the WHOLE book on every chapter-done event (so
+       centroids incorporate all rendered audio), and sibling chapters of the
+       same book can render concurrently — so a naive "stamp every chapter in
+       `chapters`, every call" (the pre-fix behaviour) stamped chapters that
+       were still mid-finalize: finalize-chapter-write.ts writes
+       `<slug>.segments.json` BEFORE `<slug>.embeddings.json`, so a sibling
+       chapter can look "eligible" (segments.json present, has a
+       stochastic-voiced character) while its embeddings write genuinely
+       hasn't landed yet — indistinguishable, at that instant, from a real
+       embed failure.
+
+       Stamp "attempted" iff EITHER:
+       (a) this chapter is one of THIS call's justFinalized chapter(s) — the
+           caller (generation.ts) only passes a chapter here once ITS OWN
+           finalize-chapter-write has fully returned (segments AND, if
+           applicable, embeddings already written or genuinely failed), so
+           this is unambiguous positive evidence regardless of embed outcome;
+       (b) this chapter's embeddings sibling is independently present on disk
+           right now — a positive, unambiguous "this chapter's embed step
+           succeeded" signal, true regardless of which chapter triggered this
+           particular run. This is what lets a chapter whose OWN triggering
+           call was coalesced away by a concurrently in-flight sibling run
+           (see generation.ts's single-flight `scoringInFlight`) still pick
+           up its attempted stamp on a LATER run, once its embeddings land.
+
+       A chapter satisfying neither — segments.json present, embeddings.json
+       absent, AND not this call's trigger — is still genuinely mid-finalize
+       from this call's point of view, so it is correctly left unstamped;
+       its own eventual finalize (or a later run observing its embeddings)
+       will stamp it. */
+    if (justFinalized.has(ch.slug) || embResult) {
+      await writeAttempted(attemptedPath(root, ch.slug));
+    }
+
     if (!embResult) continue; // no embeddings sibling → skip this chapter
 
     const segFile = await readSegmentsFile(segPath);
@@ -254,6 +360,7 @@ export async function scoreBook(
     }
 
     chapterData.push({
+      id: ch.id,
       slug: ch.slug,
       embRows: embResult.rows,
       segsByKey,
@@ -267,17 +374,25 @@ export async function scoreBook(
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
-  // Collect all character IDs and their configured engines (from characterSnapshots).
-  // First chapter's snapshot wins — a mid-book engine re-cast would mislabel, but
-  // embeddings would be re-generated on re-render, making this acceptable.
-  const configuredEngineByChar = new Map<string, string>();
+  // Collect all character IDs and their configured engines (from characterSnapshots),
+  // book-wide, first-chapter-wins — via the single shared implementation also used
+  // by qa-report.ts (resolveConfiguredEngineByChar). Crucially, this is fed the
+  // SAME unfiltered chapter population qa-report.ts uses (every chapter with a
+  // segments.json, via the shared loadSegmentsFiles, regardless of embeddings
+  // availability) — NOT this function's own `chapterData` (which Phase 1 already
+  // filtered down to chapters with a READABLE embeddings sibling). A character's
+  // configured engine is a rendering-configuration fact (what characterSnapshots
+  // says), not an embeddings-availability fact; feeding the classifier a
+  // differently-filtered list than qa-report.ts's would let "first chapter wins"
+  // disagree between the two call sites whenever a character's first-ever
+  // rendered chapter is missing its embeddings sibling (fs-51 PR #1433 round-2
+  // review finding — see resolveConfiguredEngineByChar's own doc comment).
+  const classificationSources = await loadSegmentsFiles(bookDir, chapters);
+  const configuredEngineByChar = resolveConfiguredEngineByChar(classificationSources);
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
-      if (!configuredEngineByChar.has(charId) && snap.voiceEngine) {
-        configuredEngineByChar.set(charId, snap.voiceEngine);
-      }
       // Collect voice info for Option-B (first chapter's snapshot wins).
       if (!voiceInfoByChar.has(charId) && snap.voiceEngine && snap.resolvedVoiceName && STOCHASTIC_ENGINES.has(snap.voiceEngine)) {
         const engine = snap.voiceEngine as import('../../tts/model-keys.js').TtsEngine;
@@ -387,6 +502,7 @@ export async function scoreBook(
           renderedEngine,
           referenceKind: 'too-short',
           windowed: false,
+          chapterId: cd.id,
         });
         continue;
       }
@@ -413,6 +529,7 @@ export async function scoreBook(
         renderedEngine,
         referenceKind: ref.referenceKind,
         windowed: false,
+        chapterId: cd.id,
       });
     }
 

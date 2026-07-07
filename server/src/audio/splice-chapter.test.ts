@@ -194,6 +194,22 @@ describe('spliceChapterSegments', () => {
     expect(out.durationSec).toBeCloseTo(5.0, 10); // 4.0 + 0.5 + 0.5
   });
 
+  it('uses the replacement freshVerdict instead of the original segment verdict for a re-record', () => {
+    const { decodedPcm, segments } = fixture();
+    // seg1 (index 1) carries a stale suspect/qa verdict from before the re-record.
+    segments[1].suspect = true;
+    segments[1].qa = { status: 'suspect', reasons: ['old'], rms: 0, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 };
+    const repl: SegmentReplacement = {
+      startSegmentIndex: 1,
+      endSegmentIndex: 1,
+      pcm: sentinelPcm(2000), // same length as seg1's original 1.0s span
+      freshVerdict: { qa: undefined, suspect: undefined, asr: undefined, asrSuspect: undefined, qaRetries: undefined, asrRetries: undefined },
+    };
+    const out = spliceChapterSegments({ decodedPcm, sampleRate: SR, segments, replacements: [repl] });
+    expect(out.segments[1].suspect).toBeUndefined();
+    expect(out.segments[1].qa).toBeUndefined();
+  });
+
   it('invariant: durationSec always equals pcmDurationSec(out.pcm.length)', () => {
     const { decodedPcm, segments } = fixture();
     const out = spliceChapterSegments({

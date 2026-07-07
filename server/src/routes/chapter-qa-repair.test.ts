@@ -9,8 +9,8 @@
    build-synth-replacement + splice-chapter unit tests; here we only assert it
    degrades gracefully when there's nothing to re-synthesise from. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -21,6 +21,50 @@ const SERIES = 'Standalones';
 const TITLE = 'Repair Story';
 const SLUG = 'chapter-one';
 const SR = 24_000;
+
+/* fs-51 — the re-record path re-synthesises with a mocked engine so the
+   "accepted verdict lands on the segment" / "failed repair still marks
+   suspect" tests below don't need a live sidecar. Only the manuscript id
+   used by those fixtures gets a canned analysis cache below; every other
+   manuscriptId (this file's original fixture) still falls through to the
+   real, disk-backed loadAnalysisCache — preserving the existing "no cached
+   analysis" test's behavior unchanged. */
+const VERDICT_MANUSCRIPT_ID = 'm_verdict_test';
+// Short text (low duration-drift `expectedSec`) so the 0.5s re-record fixtures
+// below land inside segment-qa's duration-ratio window regardless of it being
+// the accepted (healthy) or failed (silent) take — only the RMS/silence check
+// should decide acceptance in these tests, not an incidental duration flag.
+const VERDICT_SENTENCES = [{ id: 2, text: 'Yes.' }];
+
+vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
+  return { ...real, synthesiseChapter: vi.fn() };
+});
+
+/* Only exercised by the "acoustic-only rejection" describe block below (which
+   turns on qa.speaker.autoRepair via SEG_SPK_AUTO_REPAIR for its own tests) —
+   returns a vector orthogonal to that block's centroid fixture, so its
+   cosine check reliably lands below cleanMean regardless of the take. */
+vi.mock('../tts/embed-client.js', () => ({
+  embedSegment: vi.fn(async () => {
+    const v = new Float32Array(192).fill(0);
+    v[1] = 1.0;
+    return v;
+  }),
+}));
+
+vi.mock('../store/analysis-cache.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../store/analysis-cache.js')>();
+  return {
+    ...real,
+    loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
+      if (manuscriptId === VERDICT_MANUSCRIPT_ID) {
+        return { chapters: { 1: VERDICT_SENTENCES } };
+      }
+      return real.loadAnalysisCache(manuscriptId);
+    }),
+  };
+});
 
 let workspaceRoot: string;
 let audioRoot: string;
@@ -162,5 +206,345 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair)', () => {
       .send({ dryRun: true });
     const events = parseSse(res.text);
     expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);
+  });
+});
+
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persistence)', () => {
+  /* `workspace/paths.js` resolves WORKSPACE_ROOT from process.env.WORKSPACE_DIR
+     at MODULE LOAD time — the outer beforeAll above already imported it (after
+     setting the env var) once, so this second dynamic import just returns the
+     same cached, correctly-rooted module. A static top-level import would run
+     before the env var is set and lock in the wrong root. */
+  let makeBookId: (author: string, series: string, title: string) => string;
+  let audioDirFn: (bookDir: string) => string;
+  let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
+  // Test-only mock reference — the real synthesiseChapter's opts/result types
+  // aren't worth reproducing here just to type a vi.mocked() handle.
+  let synthesiseChapterMock: any;
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    const mp3 = await import('../tts/mp3.js');
+    const synth = await import('../tts/synthesise-chapter.js');
+    makeBookId = paths.makeBookId;
+    audioDirFn = paths.audioDir;
+    encodePcmToAudio = mp3.encodePcmToAudio;
+    synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+  });
+
+  /** Scaffold a fresh book (own directory, so parallel it()s never share
+      audio/segments files) with segment 0 healthy ('amy') and segment 1
+      dead-silent ('castor') — the silent one is what the signal scan flags
+      and the repair loop re-records. */
+  async function scaffoldVerdictBook(bookTitle: string): Promise<{ bookId: string; chapterSlug: string }> {
+    const author = 'Verdict Author';
+    const series = 'Standalones';
+    const slug = 'chapter-one';
+    const id = makeBookId(author, series, bookTitle);
+
+    const bookDir = join(workspaceRoot, 'books', author, series, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorSilent = Buffer.alloc(SR * 2); // 1s of dead silence — flagged by the signal scan
+    const chapterPcm = Buffer.concat([amy, castorSilent]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${slug}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${slug}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+      }),
+    );
+
+    return { bookId: id, chapterSlug: slug };
+  }
+
+  function readSegmentsJson(bookTitle: string, chapterSlug: string): {
+    segments: Array<{
+      qa?: { status: string; reasons: string[] };
+      suspect?: boolean;
+      qaRetries?: number;
+    }>;
+  } {
+    const bookDir = join(workspaceRoot, 'books', 'Verdict Author', 'Standalones', bookTitle);
+    const segPath = join(audioDirFn(bookDir), `${chapterSlug}.segments.json`);
+    return JSON.parse(readFileSync(segPath, 'utf8'));
+  }
+
+  it('writes the accepted take verdict onto the repaired segment, not the stale pre-repair one', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Accepted Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const segFile = readSegmentsJson('Accepted Story', chapterSlug);
+    expect(segFile.segments[1].suspect).toBeUndefined();
+    expect(segFile.segments[1].qa?.status).toBe('ok');
+    expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
+  });
+
+  it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: Buffer.alloc(Math.round(0.5 * SR) * 2), // dead silence on EVERY attempt — never acceptable
+      sampleRate: SR,
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Failed Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+
+    // The regression this closes: a still-bad repair must persist suspect:true,
+    // not leave the field cleared to undefined by buildSynthReplacements's
+    // unconditional freshVerdict construction (fs-51 Task 3 review finding).
+    const segFile = readSegmentsJson('Failed Story', chapterSlug);
+    expect(segFile.segments[1].suspect).toBe(true);
+    expect(segFile.segments[1].qa?.status).toBe('suspect');
+    expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
+  });
+});
+
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejection does not mislabel suspect)', () => {
+  /* Same dynamic-import rationale as the "fs-51 verdict persistence" describe
+     above (WORKSPACE_ROOT is resolved at module-load time). */
+  let makeBookId: (author: string, series: string, title: string) => string;
+  let audioDirFn: (bookDir: string) => string;
+  let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
+  let synthesiseChapterMock: any;
+
+  const AUTHOR2 = 'Acoustic Author';
+  const SERIES2 = 'Standalones';
+
+  beforeAll(async () => {
+    // qa.speaker.autoRepair defaults OFF; scope it on only for this describe
+    // block's tests so the merge-in-acoustic-candidates branch runs.
+    process.env.SEG_SPK_AUTO_REPAIR = '1';
+    const paths = await import('../workspace/paths.js');
+    const mp3 = await import('../tts/mp3.js');
+    const synth = await import('../tts/synthesise-chapter.js');
+    makeBookId = paths.makeBookId;
+    audioDirFn = paths.audioDir;
+    encodePcmToAudio = mp3.encodePcmToAudio;
+    synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+  });
+
+  afterAll(() => {
+    delete process.env.SEG_SPK_AUTO_REPAIR;
+  });
+
+  function unitVec(axis: number): number[] {
+    const v = new Array<number>(192).fill(0);
+    v[axis] = 1.0;
+    return v;
+  }
+
+  /** Both segments are HEALTHY/loud — the initial per-segment signal/ASR scan
+      flags neither. Only the sibling render-integrity.json marks castor's
+      segment as a fixable voice-mismatch, so it enters the repair loop as a
+      pure acoustic-only candidate (acousticOnly: true, no signal/ASR backing).
+      The mocked embedSegment (axis 1) is orthogonal to the centroid fixture
+      (axis 0), so its cosine is ~0 — always below cleanMean — meaning the
+      re-record is rejected on the acoustic gate on every attempt even though
+      its own signal-QA is clean. */
+  async function scaffoldAcousticOnlyBook(
+    bookTitle: string,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorHealthy = tone(1.0, 12000); // healthy, NOT silent — signal scan won't flag it
+    const chapterPcm = Buffer.concat([amy, castorHealthy]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          centroid: unitVec(0),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'in-book',
+        },
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  function readSegmentsJson(bookTitle: string, chapterSlug: string): {
+    segments: Array<{
+      qa?: { status: string; reasons: string[] };
+      suspect?: boolean;
+      asr?: { verdict: string };
+      asrSuspect?: boolean;
+    }>;
+  } {
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const segPath = join(audioDirFn(bookDir), `${chapterSlug}.segments.json`);
+    return JSON.parse(readFileSync(segPath, 'utf8'));
+  }
+
+  it('does NOT mark the segment suspect:true when signal-QA/ASR are clean and only the acoustic gate rejects it', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — signal-QA clean on every attempt
+      sampleRate: SR,
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldAcousticOnlyBook('Acoustic Only Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    // The acoustic gate never accepts it (cosine ~0 < cleanMean 0.9 on every
+    // attempt) — the repair genuinely doesn't land — but that's a voice-drift
+    // rejection, not a signal-QA/ASR one.
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+
+    const segFile = readSegmentsJson('Acoustic Only Story', chapterSlug);
+    // The take's own signal-QA is genuinely clean — must NOT be mislabeled as
+    // a generic audio-QA suspect. Mislabeling here would inflate qa-report.ts's
+    // acoustic.chaptersFlagged and feed finalize-chapter-write.ts's suspect
+    // reason-string fallback with a misleading "audio QA" label for what is
+    // actually a voice-drift mismatch (the dedicated "Voice match" row, driven
+    // by render-integrity.json, already represents that signal).
+    expect(segFile.segments[1].suspect).toBeUndefined();
+    expect(segFile.segments[1].qa?.status).toBe('ok');
   });
 });

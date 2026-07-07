@@ -384,6 +384,19 @@ chapterQaRepairRouter.post(
           let bestAsr: AsrClassification | null = null;
           /* Edit 3b (srv-36): extend running best-state with bestCosine. */
           let bestCosine: number | null = null;
+          /* fs-51 — count this segment's own re-record attempts so the
+             accepted (or still-suspect) take's retry count can be returned
+             alongside its verdict, instead of always reporting undefined. */
+          let retryCount = 0;
+          /* fs-51 follow-up — unlike `retryCount` above (total attempts in this
+             route's SINGLE combined signal-QA/ASR loop), `asrRetryCount` counts
+             only the attempts the ASR check itself flagged (`a.verdict ===
+             'drift'`) — mirroring synthesise-chapter.ts's independent
+             `asrRetryCountByIndex`, which increments only on ASR-driven
+             re-records from its own separate ASR loop. A segment that needs 3
+             attempts purely on signal-QA (ASR verdict `ok`/absent throughout)
+             must report `asrRetries: undefined`, not 3. */
+          let asrRetryCount = 0;
 
           /* Edit 5 (srv-36): extend isAcceptable with the conditional acoustic term.
              The acoustic gate ONLY applies when candidate.acoustic === true AND a
@@ -411,6 +424,7 @@ chapterQaRepairRouter.post(
 
           for (let attempt = 1; attempt <= maxRerecords; attempt++) {
             if (controller.signal.aborted) break;
+            retryCount += 1;
             send({ type: 'progress', chapterId, segmentIndex: segIndex, attempt, progress: 0.5 });
             const r = await synthesiseChapter({
               sentences: subset,
@@ -428,6 +442,7 @@ chapterQaRepairRouter.post(
             });
             const v = evaluateSegmentPcm(r.pcm, r.sampleRate, text);
             const a = asrOn && text ? await verifyAsr(r.pcm, text) : null;
+            if (a?.verdict === 'drift') asrRetryCount += 1;
             /* Edit 4 (srv-36): embed the pre-resample/pre-loudnorm PCM for the
                acoustic accept-check. Only embed when the candidate is acoustic AND a
                centroid exists for this character — avoid the sidecar round-trip for
@@ -453,6 +468,15 @@ chapterQaRepairRouter.post(
           }
           if (!best) throw new Error('Re-record produced no audio.');
           const accepted = isAcceptable(bestVerdict, bestAsr, bestCosine, candidate);
+          /* Same signal/ASR-only predicate isAcceptable gates on before it ever
+             applies the conditional acoustic term (see isAcceptable above) —
+             true whenever the take's OWN signal-QA + ASR verdicts are clean,
+             independent of whether the acoustic/voice-drift cosine check also
+             passed. Used below to tell "genuinely bad take" apart from
+             "acoustically drifted but otherwise clean take" so the two don't
+             share one generic `suspect` flag. */
+          const signalAndAsrOk =
+            bestVerdict != null && bestVerdict.status === 'ok' && (!asrOn || bestAsr == null || bestAsr.verdict !== 'drift');
           if (!accepted) {
             stillSuspect.push(segIndex);
           } else {
@@ -470,7 +494,42 @@ chapterQaRepairRouter.post(
               }
             }
           }
-          return best;
+          /* fs-51 — return the accepted (or still-suspect) take's own verdict so
+             buildSynthReplacements's freshVerdict reflects the actual outcome of
+             THIS repair, instead of leaving every field undefined (which used to
+             silently clear a pre-existing `suspect: true` to `undefined` even
+             when the repair failed to fix the sentence).
+
+             `suspect` is stamped ONLY for a genuine signal-QA/ASR problem
+             (`!signalAndAsrOk`) — NOT merely for `!accepted`. A repair rejected
+             purely by the acoustic/voice-drift cosine gate (signal-QA and ASR
+             both clean; `accepted` is false only because of the conditional
+             acoustic term in isAcceptable) must not feed the generic `suspect`
+             flag: that flag rolls into qa-report.ts's `acoustic.chaptersFlagged`
+             count and finalize-chapter-write.ts's suspect-reason fallback, both
+             of which are meant to represent signal-QA/ASR problems. The
+             voice-drift signal for that case already has its own dedicated
+             home — the "Voice match" row, driven by render-integrity.json
+             (written by srv-36's scoreBook independently of this route) — so
+             leaving `suspect` undefined here doesn't drop the signal, it just
+             stops double-counting/mislabeling it on the acoustic side. */
+          return {
+            pcm: best.pcm,
+            sampleRate: best.sampleRate,
+            qa: bestVerdict ?? undefined,
+            suspect: signalAndAsrOk ? undefined : true,
+            asr: bestAsr ?? undefined,
+            asrSuspect: accepted || !asrOn ? undefined : bestAsr?.verdict === 'drift' ? true : undefined,
+            qaRetries: retryCount || undefined,
+            asrRetries: asrOn ? asrRetryCount || undefined : undefined,
+            /* fs-51 follow-up — unlike the splice route, THIS route's whole job
+               is signal-QA repair: `bestVerdict` above is always populated by
+               `evaluateSegmentPcm` regardless of any config gate, so the
+               signal-QA "gate" always ran for this call. ASR ran iff this
+               route's own `asrOn` flag is set. */
+            signalQaRan: true,
+            asrRan: asrOn,
+          };
         },
       });
 

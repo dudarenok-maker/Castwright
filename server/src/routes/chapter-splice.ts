@@ -54,6 +54,13 @@ import {
 } from '../audio/finalize-chapter-write.js';
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
+import { configValue } from '../config/resolver.js';
+import {
+  asrEnabled,
+  resolveAsrRerecords,
+  resolveAsrSampleEvery,
+  buildCastNameAllowlist,
+} from '../tts/segment-asr-qa.js';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
@@ -291,6 +298,8 @@ chapterSpliceRouter.post(
             const ids = new Set(seg.sentenceIds);
             const subset = sentences.filter((s) => ids.has(s.id));
             send({ type: 'progress', chapterId, characterId, progress: 0.5 });
+            const maxSegmentRerecords = configValue<number>('qa.seg.maxRerecords');
+            const asrOn = asrEnabled();
             const r = await synthesiseChapter({
               sentences: subset,
               cast: cast.characters,
@@ -304,8 +313,37 @@ chapterSpliceRouter.post(
               signal: controller.signal,
               chapterTitleNarration: undefined,
               narratorCharacterId: 'narrator',
+              maxSegmentRerecords,
+              ...(asrOn
+                ? {
+                    asr: {
+                      maxRerecords: resolveAsrRerecords(),
+                      sampleEvery: resolveAsrSampleEvery(),
+                      language: nonEnglishBook ? bookLanguage : undefined,
+                      nameAllowlist: buildCastNameAllowlist(cast.characters),
+                    },
+                  }
+                : {}),
             });
-            return { pcm: r.pcm, sampleRate: r.sampleRate };
+            const s = r.segments[0];
+            return {
+              pcm: r.pcm,
+              sampleRate: r.sampleRate,
+              qa: s?.qa,
+              suspect: s?.suspect,
+              asr: s?.asr,
+              asrSuspect: s?.asrSuspect,
+              qaRetries: s?.qaRetries,
+              asrRetries: s?.asrRetries,
+              /* fs-51 follow-up — the signal-QA gate only actually evaluates a
+                 verdict when `maxSegmentRerecords > 0` (synthesiseChapter's own
+                 gate); ASR only runs when `asrOn`. Without these flags,
+                 buildSynthReplacements can't tell "gate ran clean" apart from
+                 "gate never ran," and would wipe a segment's genuine prior
+                 suspect/qa verdict whenever the gate is configured off. */
+              signalQaRan: maxSegmentRerecords > 0,
+              asrRan: asrOn,
+            };
           },
         });
       }

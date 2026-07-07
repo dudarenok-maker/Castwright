@@ -16,6 +16,8 @@ import { notificationsActions } from '../store/notifications-slice';
 import { ListenHeader, ListenMetadataEditor } from '../components/listen/listen-header';
 import { ListenPlayerRegion } from '../components/listen/listen-player-region';
 import { ListenDownloadSection } from '../components/listen/listen-download-section';
+import { QaReportCard } from '../components/qa-report-card';
+import { useQaReport } from '../hooks/use-qa-report';
 import type { Chapter, Character, Voice, ExportQueueItem } from '../lib/types';
 import {
   DEFAULT_NARRATOR_CREDIT,
@@ -158,6 +160,8 @@ export function ListenView({
   const bookLanguage = useAppSelector(
     (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
   );
+  /* fs-51 — per-book performance-QA report card, fetched on mount. */
+  const { report: qaReport, loading: qaLoading, error: qaError } = useQaReport(bookId);
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
       <ListenHeader
@@ -244,6 +248,8 @@ export function ListenView({
         }}
         onFixLine={onFixLine}
       />
+
+      <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title} />
 
       <ListenDownloadSection
         queueItems={queueItems}
