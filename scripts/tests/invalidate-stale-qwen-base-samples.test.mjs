@@ -30,6 +30,40 @@ test('sampleScopeForRow: voiceId wins, else char-<id>', () => {
   assert.equal(sampleScopeForRow({ id: 'mr-sweeney' }), 'char-mr-sweeney');
 });
 
+test('bug #1411 code-review follow-up: sampleScopeForRow book-scopes the char-<id> fallback', () => {
+  assert.equal(
+    sampleScopeForRow({ id: 'narrator' }, 'book-alpha'),
+    'char-book-alpha__narrator',
+  );
+  assert.notEqual(
+    sampleScopeForRow({ id: 'narrator' }, 'book-alpha'),
+    sampleScopeForRow({ id: 'narrator' }, 'book-beta'),
+  );
+  // A persisted voiceId still wins over bookId (deliberate cross-book reuse).
+  assert.equal(
+    sampleScopeForRow({ id: 'narrator', voiceId: 'v_narrator' }, 'book-alpha'),
+    'v_narrator',
+  );
+});
+
+test('bug #1411 code-review follow-up: selectStaleBaseSampleFiles matches a re-keyed voiceId-less row by its OWN book', () => {
+  const rows = [
+    {
+      id: 'narrator',
+      bookId: 'book-alpha',
+      voiceUuid: 'kudc6',
+      overrideTtsVoices: { qwen: { name: 'qwen-kudc6' } },
+    },
+  ];
+  const fileNames = [
+    'char-book-alpha__narrator-qwen3-tts-0.6b-aaa111.mp3', // DELETE: this book's stranded base
+    'char-book-beta__narrator-qwen3-tts-0.6b-bbb222.mp3', // KEEP: an unrelated book's narrator
+    'char-narrator-qwen3-tts-0.6b-ccc333.mp3', // KEEP: pre-#1411 unscoped file, not this row's scope
+  ];
+  const got = selectStaleBaseSampleFiles({ rows, fileNames, modelKeys: ['qwen3-tts-0.6b'] });
+  assert.deepEqual(got, ['char-book-alpha__narrator-qwen3-tts-0.6b-aaa111.mp3']);
+});
+
 test('selectStaleBaseSampleFiles: deletes base samples of re-keyed voices, keeps variants/legacy/others, no prefix-collision', () => {
   const rows = [
     { id: 'mr-sweeney', voiceUuid: 'kudc6', overrideTtsVoices: { qwen: { name: 'qwen-kudc6' } } },

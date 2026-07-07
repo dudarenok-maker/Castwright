@@ -304,7 +304,7 @@ async function aggregateVoices(
              the bare `voiceId ?? c.id` so the frontend's same-book id-
              fallback join (voice-character-link.ts) is unaffected. */
           const dedupKey = c.voiceId ?? `${state.bookId}::${id}`;
-          /* The sample-cache scope keys on `char-<bookId>-<id>` (not bare
+          /* The sample-cache scope keys on `char-<bookId>__<id>` (not bare
              `<id>`) for a voiceId-less character — matching the frontend's
              sampleScopeFor — so it can diverge from `id` above. bug #1411:
              this MUST match sampleScopeFor's book-scoped fallback, or a
@@ -312,8 +312,13 @@ async function aggregateVoices(
              Sampled in every other book whose analyzer-assigned id
              coincidentally matches (narrator, unknown-male, ...) — the sample
              cache dir is workspace-global, so an unscoped prefix check can't
-             tell them apart. */
-          const sampleScope = c.voiceId ?? `char-${state.bookId}-${c.id}`;
+             tell them apart. `__` (not a hyphen, and NOT `dedupKey`'s `::`)
+             joins bookId and id — see sample-scope.ts's comment: this string
+             becomes part of an actual cache filename and is matched below by
+             a raw prefix check (not sanitised first), so the separator must
+             stay inside voice-sample-cache.ts's asciiFileScope allow-list or
+             the write path silently diverges from this read path. */
+          const sampleScope = c.voiceId ?? `char-${state.bookId}__${c.id}`;
           /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
              Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
              Used to key generated-flag lookups against renderedQwenNames (which

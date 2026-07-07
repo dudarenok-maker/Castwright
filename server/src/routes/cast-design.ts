@@ -327,7 +327,12 @@ async function runDesignJob(
         }
       }
 
-      const baseSampleVoiceId = character.voiceId ?? `char-${characterId}`;
+      /* bug #1411 code-review follow-up: must match sample-scope.ts's
+         sampleScopeFor / voices.ts's sampleScope book-scoped fallback
+         (`char-<bookId>__<id>`), or a bulk-designed voiceId-less character's
+         audition caches under the pre-fix unscoped key and the Voices
+         Library reads it back as "Not sampled". */
+      const baseSampleVoiceId = character.voiceId ?? `char-${job.bookId}__${characterId}`;
       const sampleVoiceId = emotion
         ? `${baseSampleVoiceId}__${emotion}`
         : baseSampleVoiceId;

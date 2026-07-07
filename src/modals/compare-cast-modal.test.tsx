@@ -181,13 +181,13 @@ describe('CompareCastModal sample playback', () => {
     fireEvent.click(screen.getByLabelText(/Play sample for Halloran/));
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
     expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe(
-      'char-book-alpha-halloran',
+      'char-book-alpha__halloran',
     );
 
     fireEvent.click(screen.getByLabelText(/Play sample for Marcus/));
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(2));
     expect(vi.mocked(playSampleWithAutoLoad).mock.calls[1][0].args.voiceId).toBe(
-      'char-book-beta-marcus',
+      'char-book-beta__marcus',
     );
   });
 });
@@ -211,9 +211,9 @@ describe('CompareCastModal Auto A→B', () => {
 
     await waitFor(() => expect(trace.length).toBe(4));
     expect(trace).toEqual([
-      'synth:char-book-one-halloran',
+      'synth:char-book-one__halloran',
       'ended',
-      'synth:char-book-one-marcus',
+      'synth:char-book-one__marcus',
       'ended',
     ]);
   });
@@ -231,7 +231,7 @@ describe('CompareCastModal Auto A→B', () => {
 
     /* Side A synth fires, the ended-await reports cancelled, so side B
        must not synth. */
-    await waitFor(() => expect(calls).toEqual(['char-book-one-halloran']));
+    await waitFor(() => expect(calls).toEqual(['char-book-one__halloran']));
   });
 });
 

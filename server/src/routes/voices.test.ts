@@ -855,7 +855,7 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
     process.env.VOICE_SAMPLE_AUDIO_DIR = sampleCacheDir;
     try {
       writeFileSync(
-        join(sampleCacheDir, `char-${alphaBookId}-narrator-qwen3-tts-0.6b-deadbeef.mp3`),
+        join(sampleCacheDir, `char-${alphaBookId}__narrator-qwen3-tts-0.6b-deadbeef.mp3`),
         'fake-mp3',
       );
       const res = await request(app).get(`/api/voices?engine=qwen&currentBookId=${alphaBookId}`);

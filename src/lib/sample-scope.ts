@@ -37,13 +37,35 @@
    (#1410) — omitted only for the rare no-book-context caller (e.g. the
    Profile Drawer opened from the Voices Library with nothing open), which
    degrades to the old unscoped behaviour rather than losing the preview
-   affordance entirely. */
+   affordance entirely.
+
+   Joined with `__` (not a plain hyphen) — `bookId` is itself hyphen-rich
+   free text (`slug(author)__slug(series)__slug(title)`), so a hyphen join
+   can still collide across two different (book, characterId) pairs (e.g.
+   book "One-Two"'s `narrator` vs book "One"'s `two-narrator` both hyphen-
+   join to the identical string). `::` (the separator voices.ts's `dedupKey`
+   uses for the same disambiguation, #1410) is NOT safe here even though
+   this value LOOKS like a plain string: it becomes part of an actual cache
+   FILENAME (voiceSampleFileName -> asciiFileScope, voice-sample-cache.ts),
+   and the read side (voices.ts's `hasCachedQwenSample`) matches that
+   filename by a RAW prefix check on this same string — it does NOT run it
+   through asciiFileScope first. A `::` would make asciiFileScope flatten
+   the scope on write (colon isn't in its `[A-Za-z0-9_.-]` allow-list) while
+   the read side keeps matching the unflattened string, breaking the
+   Sampled badge for every voiceId-less character, not just the rare
+   collision case. `__` stays inside that allow-list — `slug()` (bookId's
+   own building block) and the character-id generator (`unicodeKebab`)
+   both only ever collapse runs of non-alnum characters to a SINGLE hyphen,
+   never `__`, so bookId always splits into exactly 3 segments on `__` and
+   an appended id can't introduce a 4th ambiguously. Uses `??` (not a
+   truthy check) for the voiceId branch, matching the server's
+   `c.voiceId ?? …` — a truthy check would diverge from the server for the
+   edge case of an empty-string `voiceId`. */
 export function sampleScopeFor(
   character: { id: string; voiceId?: string | null },
   bookId?: string,
 ): string {
-  if (character.voiceId) return character.voiceId;
-  return bookId ? `char-${bookId}-${character.id}` : `char-${character.id}`;
+  return character.voiceId ?? (bookId ? `char-${bookId}__${character.id}` : `char-${character.id}`);
 }
 
 /* The server names cached sample files as
