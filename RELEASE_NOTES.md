@@ -29,6 +29,7 @@
 - **An early step toward faster narration on newer graphics cards.** A new advanced setting lets Castwright move part of its voice engine's decode work onto your graphics card instead of the processor — off by default while we validate it further, but available now in Advanced Settings for anyone who wants to try it early.
 - **A number or text field in Advanced Settings could stutter mid-edit.** Typing a new value could briefly snap back to the old one before your next keystroke landed. Those fields now wait until you finish (tab or click away) before saving, so what you type is what stays.
 - **A tidier Cast table, and a few settings buttons back in line.** Character names now have more room to breathe in the Cast table, and "Continue to manuscript" no longer splits its arrow onto its own line. On the Account and LAN-access pages, a few buttons that had drifted out of alignment or picked up the wrong shape are back in line with the rest of the app. And in the library's language filter, German, Spanish, and French now show their own name — the same way Russian already did.
+- **The setup check no longer strands you once everything's ready.** If you landed back on the setup page and every check came back green, your only option was to step back through the whole wizard. A "Continue to my library" button now takes you straight back in.
 
 # Castwright 1.10.0
 
