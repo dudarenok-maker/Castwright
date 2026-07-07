@@ -247,12 +247,22 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
+ * @param justFinalizedSlugs GH #1436 fix — slugs of the chapter(s) whose OWN
+ *   finalize-chapter-write just completed and triggered THIS call, as opposed
+ *   to `chapters` (the full book list, read here for cross-chapter centroid
+ *   purposes only). Only these chapters — plus any chapter whose embeddings
+ *   sibling is independently confirmed present on disk (see the per-chapter
+ *   loop below) — get the "attempted" sentinel written on this pass. Omit to
+ *   treat every chapter in `chapters` as just-finalized (back-compat default
+ *   for direct callers/tests that don't care about the concurrent-render race).
  */
 export async function scoreBook(
   bookDir: string,
   chapters: { id: number; slug: string }[],
+  justFinalizedSlugs?: Iterable<string>,
 ): Promise<void> {
   const root = audioDir(bookDir);
+  const justFinalized = new Set(justFinalizedSlugs ?? chapters.map((c) => c.slug));
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
 
@@ -279,18 +289,48 @@ export async function scoreBook(
   const chapterData: ChapterData[] = [];
 
   for (const ch of chapters) {
-    // fs-51 correctness fix: write the attempted sentinel BEFORE the
-    // missing-embeddings skip below, unconditionally. Its presence is the
-    // only on-disk evidence that scoreBook began this chapter's per-chapter
-    // processing — the <slug>.render-integrity.json verdict file only exists
-    // when scoring actually completed, so it can't (by itself) distinguish
-    // "never ran" from "ran and failed" (see qa-report.ts).
-    await writeAttempted(attemptedPath(root, ch.slug));
-
     const embPath = join(root, `${ch.slug}.embeddings.json`);
     const segPath = join(root, `${ch.slug}.segments.json`);
 
     const embResult = await readEmbeddings(embPath);
+
+    /* GH #1436 fix: the attempted sentinel is evidence that scoreBook began
+       THIS CHAPTER'S OWN per-chapter processing — it must never be stamped
+       for a chapter that hasn't reached that point in its own lifecycle yet.
+       scoreBook re-scores the WHOLE book on every chapter-done event (so
+       centroids incorporate all rendered audio), and sibling chapters of the
+       same book can render concurrently — so a naive "stamp every chapter in
+       `chapters`, every call" (the pre-fix behaviour) stamped chapters that
+       were still mid-finalize: finalize-chapter-write.ts writes
+       `<slug>.segments.json` BEFORE `<slug>.embeddings.json`, so a sibling
+       chapter can look "eligible" (segments.json present, has a
+       stochastic-voiced character) while its embeddings write genuinely
+       hasn't landed yet — indistinguishable, at that instant, from a real
+       embed failure.
+
+       Stamp "attempted" iff EITHER:
+       (a) this chapter is one of THIS call's justFinalized chapter(s) — the
+           caller (generation.ts) only passes a chapter here once ITS OWN
+           finalize-chapter-write has fully returned (segments AND, if
+           applicable, embeddings already written or genuinely failed), so
+           this is unambiguous positive evidence regardless of embed outcome;
+       (b) this chapter's embeddings sibling is independently present on disk
+           right now — a positive, unambiguous "this chapter's embed step
+           succeeded" signal, true regardless of which chapter triggered this
+           particular run. This is what lets a chapter whose OWN triggering
+           call was coalesced away by a concurrently in-flight sibling run
+           (see generation.ts's single-flight `scoringInFlight`) still pick
+           up its attempted stamp on a LATER run, once its embeddings land.
+
+       A chapter satisfying neither — segments.json present, embeddings.json
+       absent, AND not this call's trigger — is still genuinely mid-finalize
+       from this call's point of view, so it is correctly left unstamped;
+       its own eventual finalize (or a later run observing its embeddings)
+       will stamp it. */
+    if (justFinalized.has(ch.slug) || embResult) {
+      await writeAttempted(attemptedPath(root, ch.slug));
+    }
+
     if (!embResult) continue; // no embeddings sibling → skip this chapter
 
     const segFile = await readSegmentsFile(segPath);

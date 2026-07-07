@@ -96,6 +96,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
+import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
 
 export const generationRouter = Router();
 
@@ -112,6 +113,18 @@ export async function afterChapterFinalized(
     bookId: string;
     bookDir: string;
     chapters: { id: number; slug: string }[];
+    /** GH #1436 fix — the chapter whose OWN finalize-chapter-write just
+        completed and triggered THIS call. This caller is invoked exactly
+        once per chapter completion, synchronously after that chapter's
+        `finalizeChapterAudioWrite` has fully returned (segments.json AND,
+        if applicable, embeddings.json already landed — or genuinely failed).
+        That makes it the one place with unambiguous, first-hand knowledge of
+        THIS chapter's own attempt outcome, independent of whether the
+        book-wide scoreBook re-score below actually runs for this call (it
+        can be coalesced away by a concurrently in-flight sibling's run via
+        `scoringInFlight`). See the write below and `scoreBook` in
+        aggregate.ts for the full rationale. */
+    justFinalized: { id: number; slug: string };
     /** The Qwen base tier(s) this run's FULL cast uses (elevate-only, same as
         routeFor) — computed once at run start and threaded here so the post-
         audition reconcile evicts only tiers NO chapter of this book will use.
@@ -121,6 +134,23 @@ export async function afterChapterFinalized(
   },
 ) {
   if (!configValue('qa.speaker.enabled')) return;
+
+  /* GH #1436 fix — stamp THIS chapter's own "attempted" sentinel here,
+     unconditionally and BEFORE the single-flight gate below. Previously
+     `scoreBook` stamped the sentinel for EVERY chapter in the full book list
+     on EVERY call — including concurrently-rendering sibling chapters that
+     had only reached `finalize-chapter-write.ts`'s segments.json write, not
+     yet its embeddings.json write, at the instant a DIFFERENT chapter's
+     completion triggered a book-wide re-score. That produced a transient
+     false "embed failed" reading for a chapter that was simply still
+     finishing its own render (see qa-report.ts's chaptersEmbedFailed).
+     Writing it here, scoped to ONLY `ctx.justFinalized` and independent of
+     whether the scoreBook call below actually executes this time (it may be
+     dropped by the single-flight coalesce), closes both the premature-stamp
+     race AND the narrower risk of losing this chapter's own attempted stamp
+     entirely if its trigger is coalesced away. */
+  await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
+
   if (scoringInFlight.has(ctx.bookId)) return;
   /* Fire-and-forget: kick the score pass off and return immediately — the
      caller (chapter-completion path) must NOT await it. scoreBook can make
@@ -130,7 +160,7 @@ export async function afterChapterFinalized(
      turned a slow-but-progressing score pass into a 720s assembly stall on the
      8GB box (#1029). The pass is non-fatal (.catch) and self-cleaning (.finally);
      a stale verdict file just gets overwritten on the next chapter's pass. */
-  const run = scoreBook(ctx.bookDir, ctx.chapters)
+  const run = scoreBook(ctx.bookDir, ctx.chapters, [ctx.justFinalized.slug])
     .then(async () => {
       /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
          run-start `reconcileResidentQwenTiers` fires once; the between-chapters
@@ -1645,11 +1675,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          just finished. Single-flight + non-fatal (see afterChapterFinalized).
          NOT awaited (#1029): the score pass runs in the background so a slow
          audition-centroid render can't starve the no-progress watchdog and
-         stall assembly. */
+         stall assembly. `justFinalized` is THIS chapter (GH #1436) — the
+         only one afterChapterFinalized may stamp "attempted" for on this
+         call; a concurrently-rendering sibling elsewhere in `chapters` must
+         not be marked just because it appears in the full book-wide list. */
       afterChapterFinalized({
         bookId,
         bookDir,
         chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
+        justFinalized: { id: chapter.id, slug: chapter.slug },
         keep: usedQwenTiers,
       });
 

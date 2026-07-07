@@ -166,6 +166,50 @@ describe('buildAudioQaReport', () => {
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(2);
   });
 
+  it('does not count a sibling chapter still mid-finalize (segments.json written, embeddings.json not yet) toward chaptersEmbedFailed (GH #1436)', async () => {
+    // GH #1436: scoreBook used to stamp the "attempted" sentinel for EVERY
+    // chapter in the book on EVERY chapter-done event — including a
+    // concurrently-rendering sibling whose segments.json had landed (so it
+    // looks "eligible") but whose embeddings.json hadn't (finalize-chapter-
+    // write.ts writes segments BEFORE embeddings). That produced a transient
+    // false ALARM: chaptersEmbedFailed counted a chapter that was simply
+    // still finishing its own render as an embed failure. This test fixes
+    // the on-disk shape to what the corrected scoreBook now produces: ch2
+    // has NO attempted sentinel (its own attempt genuinely hasn't happened
+    // yet) even though its segments.json already exists.
+    const dir = await makeBook();
+    // ch1: fully processed — proves the gate is genuinely on for this book.
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg()],
+      characterSnapshots: { wren: { voiceEngine: 'qwen' } },
+    });
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'wren', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    // ch2: still mid-render — segments.json landed (eligible, stochastic
+    // character) but no attempted sentinel and no verdict file, because its
+    // OWN embeddings write (and thus its own scoreBook attempt) hasn't
+    // happened yet.
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'oduvan' })],
+      characterSnapshots: { oduvan: { voiceEngine: 'qwen' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(2);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    // Before the fix, ch1's scoreBook run would have wrongly stamped ch2
+    // "attempted" too (it was in the full book-wide chapters list), making
+    // this 1 — a false alarm for a chapter that was simply still rendering.
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+  });
+
   it('classifies a mid-book engine switch book-wide (first chapter wins), matching scoreBook — a character voiced by Kokoro in ch1 then switched to Qwen in ch2 is NOT eligible in ch2', async () => {
     // PR #1433 review finding: qa-report.ts's eligibility loop used to
     // classify each chapter's stochastic characters from THAT chapter's own

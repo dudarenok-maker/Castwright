@@ -48,10 +48,15 @@ export function attemptedPath(root: string, slug: string): string {
 }
 
 /** Write an "attempted" sentinel for a chapter's render-integrity pass.
- *  Written unconditionally by `scoreBook`'s per-chapter loop, BEFORE the
- *  missing-embeddings skip, so its presence proves scoreBook actually began
- *  processing this chapter — independent of whether it went on to produce a
- *  `<slug>.render-integrity.json` verdict file. This is what lets
+ *  Written by `scoreBook`'s per-chapter loop for a chapter that either (a)
+ *  triggered this particular scoreBook call (its own finalize-chapter-write
+ *  just completed), or (b) already has its embeddings sibling on disk — see
+ *  the loop in aggregate.ts for the full rationale (GH #1436: a chapter must
+ *  never be stamped "attempted" solely because a concurrently-rendering
+ *  SIBLING chapter's scoreBook run happened to see it in the full book list
+ *  while it was still mid-finalize). Its presence proves scoreBook actually
+ *  began processing THIS chapter — independent of whether it went on to
+ *  produce a `<slug>.render-integrity.json` verdict file. This is what lets
  *  `deriveBookOutline`/qa-report.ts tell "the gate never ran" (no sentinel
  *  anywhere) apart from "the gate ran and failed for every eligible chapter"
  *  (sentinels present, chaptersScored stays 0). */

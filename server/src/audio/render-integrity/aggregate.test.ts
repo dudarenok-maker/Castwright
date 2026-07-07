@@ -115,6 +115,95 @@ describe('scoreBook', () => {
     expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch1'))).toBe(true);
   });
 
+  it('does not stamp the attempted sentinel for a sibling chapter still mid-finalize (GH #1436)', async () => {
+    // GH #1436: finalize-chapter-write.ts writes `<slug>.segments.json` BEFORE
+    // `<slug>.embeddings.json`. Sibling chapters of the same book can render
+    // concurrently, so chapter 1 finishing (and triggering this scoreBook run)
+    // can race chapter 2's OWN finalize: chapter 2's segments.json has landed
+    // (so it looks "eligible" — a stochastic-voiced character) but its
+    // embeddings.json hasn't landed yet. Only chapter 1 is passed as
+    // `justFinalizedSlugs` (it's the one whose completion triggered this call)
+    // — chapter 2 must be left unstamped, since scoreBook has no evidence
+    // chapter 2's OWN attempt has actually happened yet.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-race-'));
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+
+    const rows = [{ characterId: 'hero', sentenceIds: [1], vec: vec(0) }];
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      segments: [{ characterId: 'hero', sentenceIds: [1], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    // ch2: segments.json written (eligible — same stochastic character) but
+    // NO embeddings.json sibling yet — still genuinely mid-finalize.
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      segments: [{ characterId: 'hero', sentenceIds: [2], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    // Only ch1 triggered this call.
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }], ['ch1']);
+
+    expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch1'))).toBe(true);
+    // The race this bug report describes: ch2 must NOT be marked "attempted"
+    // just because it appeared in the full book-wide `chapters` list scanned
+    // by ch1's scoreBook run.
+    expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch2'))).toBe(false);
+  });
+
+  it('self-heals a coalesced-away trigger once the sibling chapter\'s own embeddings land on a later run (GH #1436)', async () => {
+    // Complement to the test above: once ch2's embeddings genuinely DO exist
+    // on disk (its own finalize-chapter-write completed), a LATER scoreBook
+    // run — even one triggered by a different chapter entirely — must mark it
+    // attempted. The embeddings sibling's presence is independent, positive
+    // evidence of ch2's own completed attempt, regardless of who triggered
+    // this particular call.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-race-heal-'));
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+
+    const rows = [{ characterId: 'hero', sentenceIds: [1], vec: vec(0) }];
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      segments: [{ characterId: 'hero', sentenceIds: [1], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    // ch2 now has ITS OWN embeddings too (its finalize completed since the
+    // earlier test's snapshot in time).
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      segments: [{ characterId: 'hero', sentenceIds: [2], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    // A THIRD chapter's completion triggers this run — ch2 is not the trigger.
+    writeFileSync(join(dir, 'audio', 'ch3.segments.json'), JSON.stringify({
+      chapterId: 3,
+      segments: [{ characterId: 'hero', sentenceIds: [3], renderedFallbackEngine: null }],
+      characterSnapshots: { hero: { voiceEngine: 'qwen' } },
+    }));
+
+    await scoreBook(
+      dir,
+      [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }, { id: 3, slug: 'ch3' }],
+      ['ch3'],
+    );
+
+    // ch2 is attempted purely because its embeddings sibling exists — not
+    // because it was this call's trigger.
+    expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch2'))).toBe(true);
+    // ch3 IS this call's trigger, so it's attempted regardless of its own
+    // (absent) embeddings — matching the fleet-wide-failure invariant above.
+    expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch3'))).toBe(true);
+  });
+
   it('too-few anchors → audition fallback → null (no sidecar) → all segments inconclusive with referenceKind too-short', async () => {
     // Fixture: only 3 anchor-eligible vectors (below CENTROID_MIN_N=10) for a
     // Qwen character. This triggers the too-thin branch → auditionCentroid is called.
