@@ -14,6 +14,7 @@ import {
   playBaseVoiceSampleWithAutoLoad,
 } from '../lib/play-sample-with-auto-load';
 import type { BaseVoice, Character, Voice } from '../lib/types';
+import type { PromoteQwenVoiceResponse } from '../lib/api';
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
@@ -47,14 +48,14 @@ const fetchDesignedPersona = vi.fn((_bookId: string, _characterId: string) =>
   Promise.resolve({ instruct: '' }),
 );
 /* Plan 161 — the A/B compare modal promotes the preview on approve. */
-const promoteQwenVoice = vi.fn((_bookId: string, _characterId: string, args?: unknown) =>
-  Promise.resolve({
-    voiceId: String((args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran').replace(
-      /-preview$/,
-      '',
-    ),
-    url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
-  }),
+const promoteQwenVoice = vi.fn(
+  (_bookId: string, _characterId: string, args?: unknown): Promise<PromoteQwenVoiceResponse> =>
+    Promise.resolve({
+      voiceId: String(
+        (args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran',
+      ).replace(/-preview$/, ''),
+      url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
+    }),
 );
 const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?: unknown) =>
   Promise.resolve(),
@@ -1258,6 +1259,72 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     await waitFor(() => expect(screen.queryByTestId('voice-compare-overlay')).toBeNull());
     /* Resolving the compare cleared the slice. */
     expect(store.getState().castDesign.active).toBeNull();
+  });
+
+  it('persists the freshly-approved voiceUuid on Save (regression: srv-43 uuid was staged in-drawer only, dropped on Save)', async () => {
+    /* A character whose row has NO voiceUuid yet (e.g. designed before srv-43,
+       or never stamped) redesigns via the A/B compare and approves — approve
+       seeds `stagedVoiceUuid` from the server's response, which was
+       previously read ONLY by the in-drawer "Play 12s" button and never
+       carried into the Character object handed to onSave. Without it, the
+       saved cast row keeps overrideTtsVoices.qwen.name (correct) but a null
+       voiceUuid, so pickVoiceForEngine (server/src/tts/voice-mapping.ts)
+       falls back to `qwen-<character.id>` instead of the real uuid-keyed
+       file at synth time — a 409 voice_not_designed even though the row
+       shows "Designed". */
+    promoteQwenVoice.mockClear();
+    promoteQwenVoice.mockResolvedValueOnce({
+      voiceId: 'qwen-fresh-uuid-abc123',
+      url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
+      voiceUuid: 'fresh-uuid-abc123',
+    });
+    const { store, onSave } = renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceId: 'v_hal',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      voiceStyle: 'a steady adult voice',
+      // deliberately no voiceUuid — mirrors a row that never had one stamped.
+    });
+    selectQwen();
+    /* This test's store has no middleware, so — unlike the "RE-design
+       (existing voice)..." test above, which asserts the click dispatches
+       designSingleRequested — a click on qwen-design-voice here would have
+       no observable effect. The compare overlay is driven directly by the
+       beginSingle/previewReady dispatches below, mirroring what the
+       middleware would do once the (unmocked) redesign request resolves. */
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-fresh-uuid-abc123-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('voice-compare-approve'));
+    await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId('voice-compare-overlay')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const next = onSave.mock.calls[0][0] as Character;
+    expect(next.voiceUuid).toBe('fresh-uuid-abc123');
   });
 
   it('FIRST design (no existing voice) dispatches a first-design request; never opens the compare modal', async () => {
