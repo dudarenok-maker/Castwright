@@ -21,6 +21,7 @@ import {
   ChapterSynthTimeoutError,
   MissingDesignedVoiceError,
   RecycleStormError,
+  buildHintFromCast,
   type CastCharacter,
 } from './synthesise-chapter.js';
 import { pickVoiceForEngine } from './voice-mapping.js';
@@ -2593,6 +2594,94 @@ describe('synthesiseChapter — forbidKokoroFallback (fs-2 never-cross-language)
        engine is called. */
     expect(qwen.calls).toHaveLength(0);
     expect(kokoro.calls).toHaveLength(0);
+  });
+});
+
+/* Orphaned characterId — a sentence references an id with no entry in `cast`
+   at all (data drift, e.g. a stray front-matter attribution to a real-world
+   person quoted in a foreword — see the "Юный дрессировщик" ch3 incident,
+   sentence attributed to "radiy-pogodin" with no matching cast.json entry).
+   This must degrade to the narrator voice for that line, never hard-throw
+   MissingDesignedVoiceError naming an id the user has never seen in Cast
+   view. Distinct from the "known character, no voice designed" case above,
+   which is a real, actionable error and must keep throwing. */
+describe('synthesiseChapter — orphaned characterId falls back to narrator', () => {
+  it('falls back to the narrator voice instead of throwing, and warns once', async () => {
+    const cast: CastCharacter[] = [{ id: 'narrator', name: 'Alice', gender: 'female' }];
+    const provider = makeProvider();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const expectedVoice = pickVoiceForEngine('kokoro', toVoiceLike(cast[0]), buildHintFromCast(cast[0]));
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'ghost-character')],
+      cast,
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].voiceName).toBe(expectedVoice);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('ghost-character');
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.characterId).toBe('ghost-character');
+
+    warnSpy.mockRestore();
+  });
+
+  it('still throws MissingDesignedVoiceError for a KNOWN undesigned character (unaffected by the fallback)', async () => {
+    const cast: CastCharacter[] = [{ id: 'sofiya', name: 'Sofiya', gender: 'female' }];
+    const qwen = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'sofiya')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        forbidKokoroFallback: true,
+        bookLanguage: 'ru',
+      }),
+    ).rejects.toBeInstanceOf(MissingDesignedVoiceError);
+  });
+
+  it('names the orphaned characterId in the error when the substituted narrator ALSO has no designed voice', async () => {
+    /* Narrow double-failure case (found in review): the book's narrator has no
+       designed Qwen voice either, so the substitution still throws — but the
+       error text must carry the original orphaned id, not just "narrator",
+       so the real data-consistency bug stays debuggable. */
+    const cast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator', gender: 'neutral' }];
+    const qwen = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'radiy-pogodin')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        forbidKokoroFallback: true,
+        bookLanguage: 'ru',
+      }),
+    ).rejects.toThrow(/radiy-pogodin/);
+
+    warnSpy.mockRestore();
   });
 });
 
