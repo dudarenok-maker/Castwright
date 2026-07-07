@@ -67,6 +67,10 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
 });
 
 beforeAll(async () => {
+  /* Force the ASR gate on so the `asr: {...}` options block (including the
+     nameAllowlist/language additions under test) actually gets built —
+     asrEnabled() defaults to false (SEG_ASR_ENABLED unset). */
+  process.env.SEG_ASR_ENABLED = '1';
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-fresh-verdict-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
@@ -147,6 +151,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  delete process.env.SEG_ASR_ENABLED;
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -160,7 +165,17 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-51 fresh ve
 
     expect(res.status).toBeLessThan(400);
     expect(vi.mocked(synthesiseChapter)).toHaveBeenCalledWith(
-      expect.objectContaining({ maxSegmentRerecords: expect.any(Number) }),
+      expect.objectContaining({
+        maxSegmentRerecords: expect.any(Number),
+        /* fs-51 review follow-up: the splice route's ASR options must match
+           generation.ts's — the cast's names as the WER allowlist (so a
+           re-recorded line naming "Castor" isn't zero-tolerance-flagged),
+           and `language` for an English book (this fixture) is `undefined`. */
+        asr: expect.objectContaining({
+          nameAllowlist: expect.arrayContaining(['Amy', 'Castor']),
+          language: undefined,
+        }),
+      }),
     );
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8')) as {

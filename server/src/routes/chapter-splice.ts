@@ -55,7 +55,12 @@ import {
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { configValue } from '../config/resolver.js';
-import { asrEnabled, resolveAsrRerecords, resolveAsrSampleEvery } from '../tts/segment-asr-qa.js';
+import {
+  asrEnabled,
+  resolveAsrRerecords,
+  resolveAsrSampleEvery,
+  buildCastNameAllowlist,
+} from '../tts/segment-asr-qa.js';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
@@ -308,7 +313,14 @@ chapterSpliceRouter.post(
               narratorCharacterId: 'narrator',
               maxSegmentRerecords: configValue<number>('qa.seg.maxRerecords'),
               ...(asrEnabled()
-                ? { asr: { maxRerecords: resolveAsrRerecords(), sampleEvery: resolveAsrSampleEvery() } }
+                ? {
+                    asr: {
+                      maxRerecords: resolveAsrRerecords(),
+                      sampleEvery: resolveAsrSampleEvery(),
+                      language: nonEnglishBook ? bookLanguage : undefined,
+                      nameAllowlist: buildCastNameAllowlist(cast.characters),
+                    },
+                  }
                 : {}),
             });
             const s = r.segments[0];
