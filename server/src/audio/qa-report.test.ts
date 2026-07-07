@@ -50,6 +50,7 @@ describe('buildAudioQaReport', () => {
     expect(report.asr.linesVerified).toBe(0); // ASR field absent on this fixture → not verified
     expect(report.voiceDrift.chaptersEligible).toBe(1); // wren is qwen-voiced
     expect(report.voiceDrift.chaptersScored).toBe(0); // no render-integrity.json written
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0); // gate genuinely off, not an embed failure
   });
 
   it('reports chaptersEligible = 0 for an all-Kokoro book, distinct from not-run', async () => {
@@ -64,6 +65,7 @@ describe('buildAudioQaReport', () => {
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
     expect(report.voiceDrift.chaptersEligible).toBe(0);
     expect(report.voiceDrift.charactersOnRoster).toBe(0);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0); // nothing eligible to check
   });
 
   it('counts sentenceIds, not segment-group counts, for lines', async () => {
