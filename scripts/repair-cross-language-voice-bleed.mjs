@@ -34,7 +34,7 @@
  * though avoid running it while a design job is actively writing the SAME
  * book's cast.json.
  */
-import { readdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const APPLY = process.argv.includes('--apply');
