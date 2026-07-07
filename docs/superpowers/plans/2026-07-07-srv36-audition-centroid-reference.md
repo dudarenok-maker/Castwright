@@ -739,11 +739,14 @@ Closes #1386"
 
 **Files:**
 - Create: `server/src/audio/render-integrity/aggregate-audition-pool.test.ts`
+- Create: `server/src/audio/render-integrity/aggregate-audition-pool-real.test.ts`
 - Modify: `server/src/audio/render-integrity/aggregate.ts`
 
 **Interfaces:**
 - Consumes: `AuditionCharacter`, `auditionCentroid` from Task 1's `./audition-centroid.js` (unchanged import, now called with a second `opts` argument); `castJsonPath` from `../../workspace/paths.js`; `readJson` from `../../workspace/state-io.js`; `buildHintFromCast`, `CastCharacter` from `../../tts/synthesise-chapter.js`.
 - Produces: no new exports — `scoreBook`'s external signature and `resolveCharacterReference`'s behavior-visible contract are unchanged; only the internal `auditionCentroid` call gains real evidence + anchors.
+
+**Why two test files, not one:** `aggregate-audition-pool.test.ts` mocks `auditionCentroid` entirely (matching the established pattern in `aggregate-audition-tier.test.ts`) to test the plumbing in isolation without a sidecar. But that means it can never prove the actual point of this redesign — that blended anchors drive the resulting `cleanMean`/`pSevere`/`pBand` — because the mock never returns a real `'audition'` result. `aggregate-audition-pool-real.test.ts` closes that gap with ONE test that exercises the REAL (unmocked) `auditionCentroid`, using a fixture engineered to need zero synthetic renders (anchors already at/above the default `AUDITION_POOL_TARGET_N`=6, so `auditionCentroid`'s phase-A loop never calls `synth()` at all) — safe to run without a sidecar, and it directly locks the spec's Testing section requirement ("assert the combined pool … drives the resulting `cleanMean`/`pSevere`/`pBand`").
 
 ### Step 1: Write the failing test file
 
@@ -903,12 +906,124 @@ describe('scoreBook — cast.json evidence threading + anchor blending (srv-36 r
 
 - [ ] **Note for the implementer:** if the "passes NO anchors for a bimodal character" fixture doesn't actually trigger `result.kind === 'in-book' && result.bimodal` in `resolveCharacterReference` (i.e. `auditionSpy` is never called because the 10-vector pool classified as a clean `in-book` non-bimodal reference instead), widen the axis separation the same way as Task 1's note — the invariant under test (bimodal → no anchors) is what matters, not these exact vectors.
 
-### Step 2: Run the test, confirm it fails
+### Step 2: Write the second (unmocked) test file
 
-- [ ] Run: `cd server && npx vitest run src/audio/render-integrity/aggregate-audition-pool.test.ts`
-- [ ] Expected: FAIL — `character.hint` is `undefined` in every case (including the "matching cast entry" case, which should be populated), because `aggregate.ts` doesn't read `cast.json` yet and never passes `existingAnchors`.
+- [ ] Create `server/src/audio/render-integrity/aggregate-audition-pool-real.test.ts`:
 
-### Step 3: Modify `aggregate.ts`
+```ts
+/* srv-36 audition-centroid redesign: the whole point of blending real
+   anchor embeddings into the Option-B pool is that they drive the
+   resulting cleanMean/pSevere/pBand — but aggregate-audition-pool.test.ts
+   mocks auditionCentroid entirely, so it can never prove that. This file
+   exercises the REAL (unmocked) auditionCentroid via a fixture engineered
+   to need ZERO synthetic renders: a too-thin character (< CENTROID_MIN_N=10
+   anchor-eligible embeddings, so centroid.ts routes it to the audition
+   fallback) whose anchor count is already at/above auditionCentroid's
+   DEFAULT AUDITION_POOL_TARGET_N (6) — scoreBook calls auditionCentroid
+   with no targetN/margin override, so the default (6) applies. With
+   existingAnchors.length >= 6, auditionCentroid's phase-A deficit is 0, so
+   its render loop never calls synth() at all — safe to run without a
+   sidecar, no mock needed. */
+
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { scoreBook } from './aggregate.js';
+import { readCentroids } from './centroids-io.js';
+import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
+
+// A unit vector in a given axis direction, dim=8, tiny deterministic jitter —
+// a single tight cluster (not bimodal), mirroring the codebase's existing
+// vec() helpers in aggregate.test.ts / aggregate-audition-tier.test.ts.
+function axisVec(axis: number, i: number, dim = 8): number[] {
+  const dir = new Array(dim).fill(0);
+  dir[axis] = 1;
+  dir[(axis + 1) % dim] = (i % 3) * 0.005;
+  let norm = 0;
+  for (const v of dir) norm += v * v;
+  norm = Math.sqrt(norm);
+  return dir.map((v) => v / norm);
+}
+const vec = (i: number) => Float32Array.from(axisVec(0, i));
+
+describe('scoreBook — real (unmocked) auditionCentroid drives the spread from blended anchors', () => {
+  it('a too-thin character whose anchors already meet the default target gets referenceKind "audition" with a real, anchor-derived cleanMean', async () => {
+    // Belt-and-suspenders against #1242/#1243 (a dev box's own live sidecar
+    // on :9000 turning a "fails fast" assumption into a 15s hang): point
+    // LOCAL_TTS_URL at a guaranteed-empty ephemeral port. After Task 2's fix
+    // this test never actually reaches the network (existingAnchors alone
+    // meet target, so auditionCentroid's synth() loop never runs) — but the
+    // guard keeps this test safe to run standalone at ANY point in the TDD
+    // cycle, including the pre-fix "confirm it fails" step, which (before
+    // existingAnchors is threaded through) DOES attempt a real network call.
+    const probe = createServer();
+    const ephemeralPort = await new Promise<number>((resolve) => {
+      probe.listen(0, '127.0.0.1', () => {
+        const addr = probe.address();
+        resolve(typeof addr === 'object' && addr ? addr.port : 0);
+      });
+    });
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const prevLocalTtsUrl = process.env.LOCAL_TTS_URL;
+    process.env.LOCAL_TTS_URL = `http://127.0.0.1:${ephemeralPort}`;
+
+    const dir = mkdtempSync(join(tmpdir(), 'spk-pool-real-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+
+    // 8 anchor-eligible vectors: below CENTROID_MIN_N=10 (too-thin per
+    // centroid.ts) but above AUDITION_POOL_TARGET_N=6 (so auditionCentroid
+    // needs zero new renders — existingAnchors alone already meet target).
+    const rows = Array.from({ length: 8 }, (_, i) => ({
+      characterId: 'thurid',
+      sentenceIds: [i],
+      vec: vec(i),
+    }));
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(dir, 'audio', 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        modelKey: 'qwen3-tts-1.7b',
+        segments: rows.map((r) => ({
+          characterId: 'thurid',
+          sentenceIds: r.sentenceIds,
+          renderedFallbackEngine: null,
+        })),
+        characterSnapshots: { thurid: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-thurid' } },
+      }),
+    );
+    // No cast.json — hint stays undefined, irrelevant here since no text
+    // ever gets rendered (deficit=0, zero synth() calls).
+
+    try {
+      await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    } finally {
+      if (prevLocalTtsUrl === undefined) delete process.env.LOCAL_TTS_URL;
+      else process.env.LOCAL_TTS_URL = prevLocalTtsUrl;
+    }
+
+    const centroids = await readCentroids(dir);
+    expect(centroids).not.toBeNull();
+    const ref = centroids!['thurid'];
+    // Real auditionCentroid returned kind='audition' (built purely from the
+    // 8 blended anchors, zero synthetic renders) — NOT 'too-short'.
+    expect(ref.referenceKind).toBe('audition');
+    // The 8 anchors are a tight single cluster, so their cosines to their
+    // own centroid are all very close to 1 — cleanMean must reflect that
+    // real spread, not a placeholder/zero value.
+    expect(ref.cleanMean).toBeGreaterThan(0.9);
+  });
+});
+```
+
+### Step 3: Run both new test files, confirm they fail
+
+- [ ] Run: `cd server && npx vitest run src/audio/render-integrity/aggregate-audition-pool.test.ts src/audio/render-integrity/aggregate-audition-pool-real.test.ts`
+- [ ] Expected: FAIL. `aggregate-audition-pool.test.ts`: `character.hint` is `undefined` in every case (including the "matching cast entry" case, which should be populated), because `aggregate.ts` doesn't read `cast.json` yet and never passes `existingAnchors`. `aggregate-audition-pool-real.test.ts`: `existingAnchors` is never passed, so real `auditionCentroid` renders the full default target+margin from scratch and (with no sidecar reachable in this test env) returns `null` → `referenceKind` is `'too-short'`, not `'audition'`.
+
+### Step 4: Modify `aggregate.ts`
 
 - [ ] Add imports — modify the existing import block near the top of `server/src/audio/render-integrity/aggregate.ts`:
 
@@ -1020,26 +1135,26 @@ async function readCastJson(bookDir: string): Promise<CastCharacter[] | null> {
 
 (Only the `castChars`/`castById` lines above the `voiceInfoByChar` declaration, and the trailing `hint: castChar ? buildHintFromCast(castChar) : undefined,` line inside `voiceInfoByChar.set(...)`, are additions — the render-tier resolution logic in between is unchanged.)
 
-### Step 4: Run the new test, confirm it passes
+### Step 5: Run both new test files, confirm they pass
 
-- [ ] Run: `cd server && npx vitest run src/audio/render-integrity/aggregate-audition-pool.test.ts`
-- [ ] Expected: PASS, all 5 tests green.
+- [ ] Run: `cd server && npx vitest run src/audio/render-integrity/aggregate-audition-pool.test.ts src/audio/render-integrity/aggregate-audition-pool-real.test.ts`
+- [ ] Expected: PASS — 5 tests green in the mocked file, 1 test green in the real (unmocked) file. The real file's test now takes the zero-network path (`existingAnchors` is threaded through, deficit=0), confirming both that the plumbing works AND that it's fast/no-sidecar-required in this state.
 
-### Step 5: Run the full existing render-integrity suite, confirm no regressions
+### Step 6: Run the full existing render-integrity suite, confirm no regressions
 
 - [ ] Run: `cd server && npx vitest run src/audio/render-integrity/`
 - [ ] Expected: PASS — in particular, `aggregate.test.ts`'s "too-few anchors" test (no `cast.json` on disk, real network call to an empty ephemeral port) and all 3 fixtures in `aggregate-audition-tier.test.ts` (no `cast.json` on disk either) must stay green, confirming the best-effort `readCastJson` never throws on a missing file.
 
-### Step 6: Typecheck
+### Step 7: Typecheck
 
 - [ ] Run: `npm run typecheck`
 - [ ] Expected: no errors.
 
-### Step 7: Commit
+### Step 8: Commit
 
 - [ ] 
 ```bash
-git add server/src/audio/render-integrity/aggregate.ts server/src/audio/render-integrity/aggregate-audition-pool.test.ts
+git add server/src/audio/render-integrity/aggregate.ts server/src/audio/render-integrity/aggregate-audition-pool.test.ts server/src/audio/render-integrity/aggregate-audition-pool-real.test.ts
 git commit -m "refactor(server): thread cast.json evidence and in-book anchors into the audition centroid
 
 srv-36: scoreBook now reads cast.json once (best-effort) and threads each
@@ -1047,7 +1162,9 @@ character's evidence quotes onto the Option-B AuditionCharacter as \`hint\`
 — previously always undefined in production, silently no-oping the
 duration-floor retry and forcing every fallback onto the canned sample
 line. Too-thin characters' real anchor embeddings are now blended into
-the fallback pool; bimodal characters' are correctly excluded.
+the fallback pool (proven via one unmocked, sidecar-free integration
+test asserting the resulting cleanMean); bimodal characters' are
+correctly excluded.
 
 Refs #1386"
 ```
@@ -1095,7 +1212,8 @@ Design spec (3 rounds of adversarial review): `docs/superpowers/specs/2026-07-07
 
 ## Test plan
 - [x] `audition-centroid.test.ts` rewritten — 17 cases covering pool-fill math, per-slot retry semantics, text cycling, the bimodal-blend cost-cap regression, and the round-3 shortfall regression.
-- [x] New `aggregate-audition-pool.test.ts` — 5 cases covering hint threading (match/no-match/missing-cast.json) and the too-thin/bimodal anchor split.
+- [x] New `aggregate-audition-pool.test.ts` — 5 cases covering hint threading (match/no-match/missing-cast.json) and the too-thin/bimodal anchor split (via a mocked `auditionCentroid`).
+- [x] New `aggregate-audition-pool-real.test.ts` — 1 case exercising the REAL (unmocked) `auditionCentroid` end-to-end, proving blended anchors actually drive the resulting `cleanMean` — the mocked test file above can't prove this on its own.
 - [x] Existing `aggregate.test.ts` + `aggregate-audition-tier.test.ts` unaffected (both have fixtures with no cast.json on disk — confirms the best-effort read doesn't regress them).
 - [x] `npm run verify:fast:branch` green.
 
