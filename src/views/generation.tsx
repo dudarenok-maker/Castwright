@@ -110,6 +110,31 @@ const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
   'generation_started',
 ];
 
+/* fs-51 — shared "fire a callback when a genuinely NEW activity-feed entry
+   of a given type lands" plumbing. Each call owns its own id/baseline ref
+   pair, so calling this once per watched type (as GenerationView does below
+   for `chapter_complete` and `generation_run_complete`) keeps the two
+   triggers fully independent — a new entry of one type never touches the
+   other's baseline state. The baseline guard specifically covers the initial
+   mount run, so a matching entry that already existed at mount doesn't
+   double-fire a callback alongside a caller's own mount-time fetch. */
+function useRefetchOnNewEvent(
+  events: ChangeLogEvent[],
+  eventType: ChangeLogEvent['type'],
+  onNew: () => void,
+) {
+  const latestId = useRef<number | undefined>(undefined);
+  const hasBaseline = useRef(false);
+  useEffect(() => {
+    const latest = events.find((e) => e.type === eventType)?.id;
+    if (hasBaseline.current && latest !== undefined && latest !== latestId.current) {
+      onNew();
+    }
+    latestId.current = latest;
+    hasBaseline.current = true;
+  }, [events, eventType, onNew]);
+}
+
 /* A chapter whose voices span more than one TTS engine (e.g. narrator on
    Kokoro + dialogue on Qwen, per-character routing plan 108). Such a chapter
    can't be reduced to a single drift comparison, so the row shows a per-engine
@@ -187,48 +212,20 @@ export function GenerationView({
      finish rendering instead of only reflecting the state at page load. */
   const { report: qaReport, loading: qaLoading, error: qaError, refetch: refetchQaReport } =
     useQaReport(bookId);
-  /* Tracks the most recent chapter_complete-typed activity-feed entry (by
-     id) so the effect below can tell "a NEW one just landed" apart from
-     "the same set re-rendered" — including the very first entry ever
-     appearing (baseline was "none"). `hasChapterCompleteBaseline` guards the
-     initial mount run specifically, so the mount's own fetch above isn't
-     double-fired by this effect too. */
-  const latestChapterCompleteId = useRef<number | undefined>(undefined);
-  const hasChapterCompleteBaseline = useRef(false);
-  useEffect(() => {
-    const latest = activityEvents.find((e) => e.type === 'chapter_complete')?.id;
-    if (
-      hasChapterCompleteBaseline.current &&
-      latest !== undefined &&
-      latest !== latestChapterCompleteId.current
-    ) {
-      refetchQaReport();
-    }
-    latestChapterCompleteId.current = latest;
-    hasChapterCompleteBaseline.current = true;
-  }, [activityEvents, refetchQaReport]);
+  /* Refetches on a fresh `chapter_complete` entry landing in this book's
+     activity feed (see useRefetchOnNewEvent above for the "genuinely new"
+     diffing + mount-baseline semantics). */
+  useRefetchOnNewEvent(activityEvents, 'chapter_complete', refetchQaReport);
   /* fs-51 follow-up — the generation-stream middleware no longer dispatches a
      per-chapter chapter_complete event during a live run; it rolls per-chapter
      completions into a single generation_run_complete event fired when the
      run pauses or drains (see buildGenerationRunCompleteEvent). The
      chapter_complete watcher above is kept for if/when that's re-enabled, but
      today's real event stream needs this trigger too, or the card never
-     refetches during an actual render. Same "genuinely new id" diffing
-     pattern, tracked independently so either event can fire the refetch. */
-  const latestGenerationRunCompleteId = useRef<number | undefined>(undefined);
-  const hasGenerationRunCompleteBaseline = useRef(false);
-  useEffect(() => {
-    const latest = activityEvents.find((e) => e.type === 'generation_run_complete')?.id;
-    if (
-      hasGenerationRunCompleteBaseline.current &&
-      latest !== undefined &&
-      latest !== latestGenerationRunCompleteId.current
-    ) {
-      refetchQaReport();
-    }
-    latestGenerationRunCompleteId.current = latest;
-    hasGenerationRunCompleteBaseline.current = true;
-  }, [activityEvents, refetchQaReport]);
+     refetches during an actual render. Tracked independently (its own
+     id/baseline refs inside useRefetchOnNewEvent) so either event can fire
+     the refetch without affecting the other's state. */
+  useRefetchOnNewEvent(activityEvents, 'generation_run_complete', refetchQaReport);
   /* #650 — render-time sentence→speaker map per chapter, for the PRECISE
      reassignment-staleness diff (vs the time-based change-log fallback). */
   const renderedSpeakersByChapter = useAppSelector(
