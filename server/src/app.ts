@@ -59,6 +59,7 @@ import { requireSameOrigin } from './csrf-origin.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
+import { qaReportRouter } from './routes/qa-report.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
 import { qwenInstallRouter } from './routes/qwen-install.js';
@@ -185,6 +186,7 @@ app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a sl
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
 app.use('/api', revisionsBulkRouter); // plan 83 — bulk /revisions?bookIds=... for cross-book fan-out
+app.use('/api/books', qaReportRouter); // fs-51 — mounts /:bookId/qa-report
 app.use('/api', worktreesRouter); // plan 86 — dev-only GET /worktrees (404s in production)
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample

@@ -40,7 +40,7 @@ interface RevisionsPersisted {
   dismissed?: string[];
 }
 
-interface DriftEvent {
+export interface DriftEvent {
   id: string;
   /** Book the event belongs to. Stamped at emit time from the route
       param so the Drift Report modal can group events from multiple
