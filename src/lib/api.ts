@@ -56,6 +56,7 @@ import type {
   SeriesMemoryDetail,
   GpuDevicesResponse,
   AnalyzerDeviceResponse,
+  BookQaReport,
 } from './types';
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
@@ -80,6 +81,7 @@ import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
+import { MOCK_QA_REPORT } from '../data/qa-report';
 import { parseDuration } from './time';
 /* Bundled mock audio assets — two short tones so the a/b player + mini
    player + voice samples have something audible to render under
@@ -2090,6 +2092,18 @@ async function realGetAnalysisState(bookId: string): Promise<AnalysisStateRespon
 async function mockGetAnalysisState(_bookId: string): Promise<AnalysisStateResponse | null> {
   await wait(20);
   return null;
+}
+
+/* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR
+   drift, voice-drift mismatches, config-drift events). */
+async function realGetQaReport(bookId: string): Promise<BookQaReport> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/qa-report`);
+  if (!res.ok) throw new Error(`getQaReport failed: ${res.status}`);
+  return res.json();
+}
+
+async function mockGetQaReport(_bookId: string): Promise<BookQaReport> {
+  return MOCK_QA_REPORT;
 }
 
 /* Workspace-wide cold-boot scan. Library layout calls this once on
@@ -8813,6 +8827,7 @@ const real = {
   restartSidecar: realRestartSidecar,
   getGpuDevices: realGetGpuDevices,
   getAnalyzerDevice: realGetAnalyzerDevice,
+  getQaReport: realGetQaReport,
 };
 
 const mock = {
@@ -9056,6 +9071,7 @@ const mock = {
   restartSidecar: mockRestartSidecar,
   getGpuDevices: mockGetGpuDevices,
   getAnalyzerDevice: mockGetAnalyzerDevice,
+  getQaReport: mockGetQaReport,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
