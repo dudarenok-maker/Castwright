@@ -27,6 +27,21 @@ glyph) start collapsed; the rest start open.
   set in `server/.env`, a banner explains that env var overrides every
   per-engine device pin in group 5, with a link to switch to per-engine pins.
 
+**There's no Save button — by design.** Every field autosaves; that's the
+whole point of the page (that's also why there's a **Revert** button per
+field and **Reset section**/**Reset all**, instead of a Cancel). A
+checkbox, dropdown, or GPU picker saves the instant you pick a new value.
+A **number or text field saves when you leave it** — tab to the next
+field, click elsewhere, or click that field's own **Revert** — not on
+every keystroke. That's deliberate: typing "32768" one digit at a time and
+firing a save on every digit would be both wasteful and, on a slow
+connection, could make the field visibly flicker back to the old value
+mid-type. Clicking **Revert** (or a **Reset** button) on a field you're
+still typing into discards whatever you'd typed rather than saving it
+first — so if you change your mind partway through, walking away from the
+keyboard/mouse and clicking Revert is the same as never having typed
+anything.
+
 Apply-tag legend used in every table below: **live** (takes effect
 immediately), **restart · sidecar** (needs the TTS sidecar restarted),
 **restart · app** (needs the whole app restarted), **rebuilds env** (rebuilds
