@@ -112,11 +112,21 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
   });
 
   it('does NOT show a Resume button when charactersPending is empty, even if some characters are permanently unchecked', () => {
+    // Regression for the round-2/round-3 review finding: this fixture must
+    // keep charactersChecked < charactersOnRoster (a permanent shortfall,
+    // NOT an interrupted-mid-run signal) while charactersPending stays [].
+    // If VoiceMatchRow ever regressed to gating on
+    // `charactersChecked < charactersOnRoster` instead of on
+    // `charactersPending.length > 0`, this fixture would make that bug
+    // visible — a fixture with charactersChecked === charactersOnRoster
+    // can't distinguish the two gating strategies.
     const report = {
       ...MOCK_QA_REPORT,
       voiceDrift: {
         ...MOCK_QA_REPORT.voiceDrift,
         chaptersEligible: 12,
+        charactersChecked: 15,
+        charactersOnRoster: 18,
         charactersPending: [],
         uncheckedCharacterIds: ['pell-hollis'],
       },
@@ -139,6 +149,29 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test" bookId="b1" />);
     await userEvent.click(screen.getByRole('button', { name: /resume scoring/i }));
     expect(resumeSpy).toHaveBeenCalledWith('b1');
+    resumeSpy.mockRestore();
+  });
+
+  it('re-enables the Resume button after a failed resumeScoring call, so the user can retry', async () => {
+    // Regression coverage for the catch branch — the one place the row could
+    // get permanently stuck (button disabled forever showing "Resuming…")
+    // if a bug crept into the failure path.
+    const resumeSpy = vi.spyOn(api, 'resumeScoring').mockRejectedValue(new Error('network error'));
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: {
+        ...MOCK_QA_REPORT.voiceDrift,
+        chaptersEligible: 12,
+        chaptersScored: 6,
+        charactersPending: ['ren'],
+      },
+    };
+    render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test" bookId="b1" />);
+    const button = screen.getByRole('button', { name: /resume scoring/i });
+    await userEvent.click(button);
+    expect(resumeSpy).toHaveBeenCalledWith('b1');
+    const retryButton = await screen.findByRole('button', { name: /resume scoring/i });
+    expect(retryButton).not.toBeDisabled();
     resumeSpy.mockRestore();
   });
 });

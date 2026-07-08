@@ -125,7 +125,13 @@ function VoiceMatchRow({
                   // here would invite a confusing repeat click.
                   setResumed(true);
                 } catch {
-                  setResuming(false); // a real failure (not the 409 already-running case) — let them retry
+                  // Any rejection lands here, including a 409 (a resume-triggered
+                  // scoreBook run is already in progress) — api.resumeScoring does
+                  // NOT swallow the 409, it throws just like any other failure (see
+                  // realResumeScoring in api.ts). There's no special-cased handling:
+                  // the button simply re-enables so the user can retry, same as for
+                  // a network error or any other rejection.
+                  setResuming(false);
                 }
               }}
               disabled={resuming}
