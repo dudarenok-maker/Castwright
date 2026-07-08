@@ -352,4 +352,61 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(runner.openBookCount()).toBe(0);
     expect(cancelMock).toHaveBeenCalledTimes(2);
   });
+
+  it('surfaces a `scoring_started` tick — progress state seeded at 0, an info toast, and a change-log event', () => {
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
+    onTickFor('b1', 1)({
+      type: 'scoring_started',
+      charactersOnRoster: 4,
+    } as unknown as GenerationTick);
+
+    expect(store.getState().chapters.scoringProgress['b1']).toEqual({
+      charactersChecked: 0,
+      charactersOnRoster: 4,
+    });
+
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe('info');
+    expect(toasts[0].message).toMatch(/4 to verify/);
+    expect(toasts[0].dedupeKey).toBe('voice-match-scoring:b1');
+
+    const events = store.getState().changeLog.events.filter((e) => e.type === 'scoring_started');
+    expect(events).toHaveLength(1);
+  });
+
+  it('applies a `scoring_progress` tick to the progress state without pushing an additional toast', () => {
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
+    const tick = onTickFor('b1', 1);
+    tick({ type: 'scoring_started', charactersOnRoster: 4 } as unknown as GenerationTick);
+    tick({
+      type: 'scoring_progress',
+      charactersChecked: 2,
+      charactersOnRoster: 4,
+    } as unknown as GenerationTick);
+
+    expect(store.getState().chapters.scoringProgress['b1']).toEqual({
+      charactersChecked: 2,
+      charactersOnRoster: 4,
+    });
+    /* Only the scoring_started toast — scoring_progress must not stack more. */
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+
+  it('surfaces a `scoring_complete` tick — clears the progress state and appends a completion change-log event', () => {
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
+    const tick = onTickFor('b1', 1);
+    tick({ type: 'scoring_started', charactersOnRoster: 4 } as unknown as GenerationTick);
+    tick({ type: 'scoring_complete', mismatchCount: 1 } as unknown as GenerationTick);
+
+    expect(store.getState().chapters.scoringProgress['b1']).toBeUndefined();
+    const events = store.getState().changeLog.events.filter((e) => e.type === 'scoring_complete');
+    expect(events).toHaveLength(1);
+  });
 });
