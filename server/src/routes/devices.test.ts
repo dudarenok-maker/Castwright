@@ -85,6 +85,11 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _requireLanToken = null;
+  // Flush any fire-and-forget touchLastSeen write isValidDeviceToken kicked
+  // off (e.g. the "accepts a minted device token" test below) before wiping
+  // the workspace — otherwise the in-flight write can race the recursive rm
+  // and intermittently fail with ENOTEMPTY.
+  await deviceTokens._flushPendingWritesForTests();
   delete process.env.WORKSPACE_DIR;
   delete process.env.LAN_HTTPS;
   delete process.env.LAN_AUTH_TOKEN;
