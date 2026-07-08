@@ -16,9 +16,13 @@
    a chapter that scoreBook's book-wide view never scores, producing a
    false "embed failed" count). */
 
+import { join } from 'node:path';
 import { loadSegmentsFiles } from './segments-io.js';
 import { deriveBookOutline } from './render-integrity/verdicts-io.js';
 import { STOCHASTIC_ENGINES, resolveConfiguredEngineByChar } from './render-integrity/aggregate.js';
+import { readEmbeddings } from './render-integrity/embeddings-io.js';
+import { readCentroids } from './render-integrity/centroids-io.js';
+import { audioDir } from '../workspace/paths.js';
 
 export interface AudioQaReport {
   chaptersRendered: number;
@@ -41,6 +45,12 @@ export interface AudioQaReport {
     chaptersEmbedFailed: number;
     charactersOnRoster: number;
     charactersChecked: number;
+    /** srv-36 hardening — stochastic characters that have appeared on a
+     *  chapter's embeddings roster but have no row yet in
+     *  render-integrity.centroids.json — still mid-retry-cycle, not stuck.
+     *  A chapter whose only unscored roster character is in this list is
+     *  excluded from chaptersEmbedFailed (see the computation below). */
+    charactersPending: string[];
     mismatches: Array<{ characterId: string; chapterId?: number; fixable: boolean }>;
     inconclusiveCount: number;
     uncheckedCharacterIds: string[];
@@ -66,6 +76,27 @@ export async function buildAudioQaReport(
   // implementation scoreBook uses, so a character's eligibility here can
   // never disagree with which characters/chapters scoreBook actually scores.
   const configuredEngineByChar = resolveConfiguredEngineByChar(segFiles);
+
+  // srv-36 hardening — per-chapter roster sourced from embeddings.json
+  // (which character actually has embeddable rows in THIS chapter), not
+  // from segments.json's characterSnapshots presence — a character can
+  // appear in a chapter's snapshot (they speak there) yet have every one of
+  // their lines fall under the duration floor, producing zero embedding
+  // rows for them in that chapter even though they resolve fine elsewhere
+  // in the book. Sourcing the roster from embeddings keeps such a character
+  // from blocking that chapter's "fully scored" check below.
+  const rosterByChapter = new Map<number, Set<string>>();
+  for (const ch of chapters) {
+    const embPath = join(audioDir(bookDir), `${ch.slug}.embeddings.json`);
+    const embResult = await readEmbeddings(embPath);
+    if (!embResult) continue;
+    const chapterChars = new Set<string>();
+    for (const row of embResult.rows) {
+      const engine = configuredEngineByChar.get(row.characterId);
+      if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(row.characterId);
+    }
+    if (chapterChars.size > 0) rosterByChapter.set(ch.id, chapterChars);
+  }
 
   for (const seg of segFiles) {
     let chapterHasSuspect = false;
@@ -103,23 +134,43 @@ export async function buildAudioQaReport(
     ? 'legacy-unattributed'
     : 'full';
   const uncheckedSet = new Set(outline.counts.uncheckedCharacters);
-  const chaptersScored = outline.scoredChapterIds.filter((id) => eligibleChapterIds.has(id)).length;
-  /* fs-51 correctness fix — an eligible chapter with no verdict file is
-     either "gate off" (never attempted) or an embeddings failure (the gate
-     DID attempt it, but no verdict file resulted). The prior heuristic
-     (`chaptersScored > 0 ? ... : 0`) used "something else in the book WAS
-     scored" as its only evidence the gate ran — which made a FLEET-WIDE
-     embedding failure (every eligible chapter attempted, all of them
-     failed, so chaptersScored is ALSO 0) indistinguishable from the gate
-     never running at all. The attempted sentinel (render-integrity/
-     verdicts-io.ts's attemptedPath/writeAttempted, written by scoreBook's
-     per-chapter loop regardless of outcome) is real, chapter-level evidence
-     of an attempt, so both cases are now distinguishable: chaptersEmbedFailed
-     is nonzero whenever an eligible chapter was attempted but unscored,
-     whether that's isolated or book-wide. It's 0 only when NO eligible
-     chapter was ever attempted — genuinely "gate off". */
+
+  const centroids = (await readCentroids(bookDir)) ?? {};
+  const charactersPending = Array.from(stochasticCharacterIds).filter((id) => !(id in centroids));
+
+  /* srv-36 hardening — chaptersScored/chaptersEmbedFailed are now
+     roster-aware: a chapter is "fully scored" iff EVERY character on its
+     embeddings-sourced roster (rosterByChapter, above) has a verdict row
+     for that chapter (outline.verdictCharactersByChapter), not merely iff
+     a verdict file exists for the chapter at all (the old file-presence
+     test). This also replaces the fs-51 `attemptedEligibleCount -
+     chaptersScored` subtraction: with per-character incremental verdict
+     writes (Task 2/3), a chapter can be partially scored (some roster
+     characters resolved, others still mid-retry-cycle) without being fully
+     scored OR fully embed-failed. A chapter whose only unscored roster
+     character is still charactersPending (no centroids row yet — still
+     working) is excluded from chaptersEmbedFailed; only a chapter that was
+     attempted and has an unscored roster character NOT in charactersPending
+     (i.e. genuinely stuck) counts. */
+  const chaptersScored = Array.from(rosterByChapter.entries())
+    .filter(([chapterId, roster]) => {
+      const verdictChars = outline.verdictCharactersByChapter.get(chapterId);
+      if (!verdictChars) return false;
+      return Array.from(roster).every((id) => verdictChars.has(id));
+    })
+    .map(([chapterId]) => chapterId).length;
+
   const attemptedEligibleCount = outline.attemptedChapterIds.filter((id) => eligibleChapterIds.has(id)).length;
-  const chaptersEmbedFailed = attemptedEligibleCount > 0 ? attemptedEligibleCount - chaptersScored : 0;
+  const chaptersEmbedFailed = attemptedEligibleCount > 0
+    ? Array.from(eligibleChapterIds).filter((chapterId) => {
+        const roster = rosterByChapter.get(chapterId);
+        const verdictChars = outline.verdictCharactersByChapter.get(chapterId);
+        const fullyScored = !!roster && !!verdictChars && Array.from(roster).every((id) => verdictChars.has(id));
+        if (fullyScored) return false;
+        const hasPendingRosterChar = roster && Array.from(roster).some((id) => charactersPending.includes(id));
+        return !hasPendingRosterChar && outline.attemptedChapterIds.includes(chapterId);
+      }).length
+    : 0;
 
   return {
     chaptersRendered: segFiles.length,
@@ -140,6 +191,7 @@ export async function buildAudioQaReport(
       chaptersEmbedFailed,
       charactersOnRoster: stochasticCharacterIds.size,
       charactersChecked: Array.from(stochasticCharacterIds).filter((id) => !uncheckedSet.has(id)).length,
+      charactersPending,
       mismatches: outline.issues.map((r) => ({
         characterId: r.characterId,
         chapterId: r.chapterId,
