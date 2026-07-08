@@ -2125,6 +2125,7 @@ const HOLLOW_TIDE_QA_REPORT: BookQaReport = {
     chaptersEmbedFailed: 0,
     charactersOnRoster: 6,
     charactersChecked: 6,
+    charactersPending: [],
     mismatches: [{ characterId: 'insp-cray', chapterId: 2, fixable: true }],
     inconclusiveCount: 0,
     uncheckedCharacterIds: [],
