@@ -103,4 +103,15 @@ function main() {
   if (missing > 0 || failed > 0) process.exitCode = 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// Only run when invoked directly (not when imported by tests) — comparing
+// resolved filesystem paths rather than raw URL strings so this works on
+// Windows too (`file://${process.argv[1]}` never matches a Windows path),
+// mirroring the same guard already used in build-release-zip.mjs.
+const invokedAsCli = (() => {
+  try {
+    return path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+})();
+if (invokedAsCli) main();
