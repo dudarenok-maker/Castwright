@@ -7,6 +7,7 @@ import {
   HOLLOW_TIDE_CONTINUE,
   HOLLOW_TIDE_LISTEN_PROGRESS,
 } from './hollow-tide';
+import { MOCK_SERIES_MEMORY } from '../series-memory';
 
 describe('Hollow Tide marketing fixtures', () => {
   it('exposes the Marin Vale "The Hollow Tide" four-book series', () => {
@@ -253,5 +254,48 @@ describe('Hollow Tide marketing fixtures', () => {
       const shared = [...nameCounts.values()].filter((n) => n > 1);
       expect(shared.length).toBeGreaterThanOrEqual(1);
     });
+  });
+});
+
+describe('Hollow Tide series-memory fixture (marketing/wiki screenshots)', () => {
+  it('the library chip summary and the detail resolver entry agree with each other', () => {
+    const marin = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Marin Vale');
+    const series = marin!.series.find((s) => s.name === 'The Hollow Tide');
+    const summary = series?.seriesMemory;
+    const detail = MOCK_SERIES_MEMORY['Marin Vale::The Hollow Tide'];
+
+    expect(summary).toBeDefined();
+    expect(detail).toBeDefined();
+
+    // The chip's headline count must match the reveal panel's actual roster —
+    // nothing keeps these two hand-authored fixtures in sync automatically.
+    expect(summary!.carriedCount).toBe(detail.carried.count);
+    expect(summary!.carriedCount).toBe(detail.carried.characters.length);
+    expect(summary!.confirmedBookCount).toBe(detail.series.confirmedBookCount);
+    expect(summary!.spanBooks).toBe(detail.series.spanBooks);
+  });
+
+  it('every carried character is a real Hollow Tide voice, not a leftover Northern Coast name', () => {
+    const detail = MOCK_SERIES_MEMORY['Marin Vale::The Hollow Tide'];
+    const hollowTideVoiceIds = new Set(HOLLOW_TIDE_VOICES.voices.map((v) => v.id));
+    for (const c of detail.carried.characters) {
+      expect(hollowTideVoiceIds.has(c.voiceId)).toBe(true);
+    }
+    // None of the Northern Coast Trilogy's invented ids leaked in.
+    const northernCoastIds = ['narrator', 'v-carrick', 'v-mara', 'v-doran'];
+    for (const c of detail.carried.characters) {
+      expect(northernCoastIds).not.toContain(c.voiceId);
+    }
+  });
+
+  it('the detail entry’s book ids/titles match the real HOLLOW_TIDE_LIBRARY entries', () => {
+    const marin = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Marin Vale');
+    const series = marin!.series.find((s) => s.name === 'The Hollow Tide');
+    const detail = MOCK_SERIES_MEMORY['Marin Vale::The Hollow Tide'];
+    for (const b of detail.series.books) {
+      const real = series?.books.find((rb) => rb.bookId === b.bookId);
+      expect(real).toBeDefined();
+      expect(real!.title).toBe(b.title);
+    }
   });
 });
