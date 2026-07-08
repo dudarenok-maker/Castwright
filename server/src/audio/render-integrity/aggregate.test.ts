@@ -414,7 +414,7 @@ describe('scoreBook — incremental per-character writes (srv-36 hardening)', ()
     const resolveOrder: string[] = [];
     const fakeSynth = async ({ voiceName }: { voiceName: string }) => {
       resolveOrder.push(voiceName.includes('ren') ? 'ren-synth' : voiceName);
-      return { pcm: Buffer.alloc(48_000 * 2), sampleRate: 48_000 }; // 1s of silence, clears MIN_DURATION_SEC
+      return { pcm: Buffer.alloc(48_000 * 2), sampleRate: 48_000, mimeType: 'audio/wav' }; // 1s of silence, clears MIN_DURATION_SEC
     };
     const fakeEmbed = async () => vec(0.02);
 
@@ -422,7 +422,7 @@ describe('scoreBook — incremental per-character writes (srv-36 hardening)', ()
       onCharacterScored: (characterId: string) => resolveOrder.push(`scored:${characterId}`),
       __testSynthFn: fakeSynth,
       __testEmbedFn: fakeEmbed,
-    } as never);
+    });
 
     // narrator (already-clears-the-floor) must be scored before ren (needs synthesis).
     const narratorScoredIdx = resolveOrder.indexOf('scored:narrator');
@@ -455,7 +455,7 @@ describe('scoreBook — incremental per-character writes (srv-36 hardening)', ()
 
     const throwingSynth = async () => { throw new Error('sidecar unreachable'); };
 
-    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth } as never);
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth });
 
     expect((await readCentroids(dir))?.ren).toBeUndefined();
     expect((await readPendingAttempts(dir))?.ren).toBe(1);
@@ -480,14 +480,14 @@ describe('scoreBook — incremental per-character writes (srv-36 hardening)', ()
     const throwingSynth = async () => { synthCalls++; throw new Error('sidecar unreachable'); };
 
     for (let i = 0; i < 3; i++) {
-      await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth } as never);
+      await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth });
     }
     expect(synthCalls).toBe(3);
     expect((await readCentroids(dir))?.ren.referenceKind).toBe('too-short');
     expect((await readPendingAttempts(dir))?.ren).toBeUndefined();
 
     // 4th call — the state is absorbing, the synth fn must NOT fire again.
-    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth } as never);
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth });
     expect(synthCalls).toBe(3);
   });
 
@@ -506,18 +506,18 @@ describe('scoreBook — incremental per-character writes (srv-36 hardening)', ()
     );
     // Renders that never clear MIN_DURATION_SEC — auditionCentroid exhausts
     // its budget and returns { kind: 'too-short' }, not null.
-    const tooShortSynth = async () => ({ pcm: Buffer.alloc(10), sampleRate: 48_000 });
+    const tooShortSynth = async () => ({ pcm: Buffer.alloc(10), sampleRate: 48_000, mimeType: 'audio/wav' });
 
     let synthCalls = 0;
     const countingSynth = async (...args: Parameters<typeof tooShortSynth>) => { synthCalls++; return tooShortSynth(...args); };
 
-    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: countingSynth } as never);
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: countingSynth });
 
     expect((await readCentroids(dir))?.ren.referenceKind).toBe('too-short');
     expect((await readPendingAttempts(dir))?.ren).toBeUndefined();
 
     const callsAfterFirst = synthCalls;
-    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: countingSynth } as never);
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: countingSynth });
     expect(synthCalls).toBe(callsAfterFirst); // absorbing — no second attempt
   });
 
