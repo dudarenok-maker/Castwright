@@ -12,7 +12,11 @@ A line that still doesn't clear after its retries ships anyway with the best tak
 
 Expanding a Suspect chapter's row on the Generate screen shows exactly where the trouble is: a waveform strip with each flagged stretch rendered as an amber band, an "N issues to review" caption, and a tooltip on each band naming the reason — a line rendered suspiciously short against how long it should have taken to say, or a line whose words drifted from the script.
 
-![Suspect chapter — two flagged lines, one caught acoustically and one caught by the content check](images/the-quality-gate/01-suspect-chapter.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-quality-gate/01-suspect-chapter-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-quality-gate/01-suspect-chapter.png">
+  <img alt="Suspect chapter — two flagged lines, one caught acoustically and one caught by the content check" src="images/the-quality-gate/01-suspect-chapter.png">
+</picture>
 
 A chapter that clears cleanly shows none of this — no Suspect badge, no amber band, every character row reads Done straight through. That's the gate working quietly in the common case: nothing to review because nothing needed a re-record.
 
@@ -24,13 +28,21 @@ Flags are severity-tiered — **Severe**, **Moderate**, **Mild** — and open in
 
 The report opens scoped to the book you're in. If that book is part of a series, a **This book** / **Series** toggle sits at the top — flip it to pull in flags from every other title sharing the cast. However many chapters are flagged, the list loads a screenful at a time; scroll, and the rest follows.
 
-![Voice drift report — severity-tiered flags with the Auto-regen control on a Severe event](images/the-quality-gate/02-voice-drift-report.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-quality-gate/02-voice-drift-report-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-quality-gate/02-voice-drift-report.png">
+  <img alt="Voice drift report — severity-tiered flags with the Auto-regen control on a Severe event" src="images/the-quality-gate/02-voice-drift-report.png">
+</picture>
 
 ## Where a flag follows you: the preview surface
 
 A Suspect flag isn't stranded on the Generate screen. The same amber-marked waveform follows the audio wherever you play it — including the mini-player that pins to the bottom of every view. Hit preview on a chapter from Generate, or play it from the Listen tab's chapter list, and a bad take lights up amber in the scrubber before you've even pressed play — so a flagged line never has to be rediscovered by ear from scratch.
 
-![The same flag in the mini-player — a bad take lights up amber before you've pressed play](images/the-quality-gate/03-preview-surface.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-quality-gate/03-preview-surface-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-quality-gate/03-preview-surface.png">
+  <img alt="The same flag in the mini-player — a bad take lights up amber before you've pressed play" src="images/the-quality-gate/03-preview-surface.png">
+</picture>
 
 ## The receipt: a quality-gate report card for the whole book
 

@@ -10,13 +10,21 @@ An English book gets a "Proceed anyway — generic Kokoro fallback voices" escap
 
 Below, *The Harborlight Ledger* hits "Approve cast & start generating" with one character — Harbor Clerk — still undesigned. The gate lists exactly who's missing a voice and offers both paths: design them now, or proceed anyway on the generic Kokoro fallback.
 
-![Voice-readiness gate — one character still needs a voice](images/generating-audio/voice-readiness-gate.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/generating-audio/voice-readiness-gate-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/generating-audio/voice-readiness-gate.png">
+  <img alt="Voice-readiness gate — one character still needs a voice" src="images/generating-audio/voice-readiness-gate.png">
+</picture>
 
 ## While it's rendering
 
 Chapters list down the left; the whole run's overall progress, a completed/in-progress/queued/failed breakdown, and an activity feed sit at the top.
 
-![Generation progress with per-chapter counters](images/generating-audio/02-generation-progress.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/generating-audio/02-generation-progress-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/generating-audio/02-generation-progress.png">
+  <img alt="Generation progress with per-chapter counters" src="images/generating-audio/02-generation-progress.png">
+</picture>
 
 ## Previewing a finished chapter
 
@@ -28,7 +36,11 @@ Nothing here is final the moment it renders. Two regeneration paths cover the tw
 
 **Per chapter.** Click Regenerate on any chapter and choose a reason and a scope — just this chapter, or this chapter and every one after it. Below, *Saltgrave* mid-render (7 of 11 done) with Chapter 1's regenerate dialog open:
 
-![Regenerate dialog — reason picker and scope tiles](images/generating-audio/04-regenerate-chapter.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/generating-audio/04-regenerate-chapter-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/generating-audio/04-regenerate-chapter.png">
+  <img alt="Regenerate dialog — reason picker and scope tiles" src="images/generating-audio/04-regenerate-chapter.png">
+</picture>
 
 Confirming flips that chapter from done back to in-progress and re-queues it.
 
@@ -36,6 +48,10 @@ Confirming flips that chapter from done back to in-progress and re-queues it.
 
 Below, Insp. Cray's voice change previewed on *Saltgrave* Chapter 1 — the A/current and B/new-draft takes side by side, ready to accept (fanning the rest of his chapters out to regenerate) or reject and re-adjust:
 
-![Preview A/B revision player — voice change on Chapter 1](images/generating-audio/preview-ab-revision-player.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/generating-audio/preview-ab-revision-player-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/generating-audio/preview-ab-revision-player.png">
+  <img alt="Preview A/B revision player — voice change on Chapter 1" src="images/generating-audio/preview-ab-revision-player.png">
+</picture>
 
 Next: every rendered line — regenerated or not — still has to clear [The Quality Gate](The-Quality-Gate) before it counts as done.

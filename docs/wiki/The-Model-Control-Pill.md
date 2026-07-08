@@ -12,7 +12,11 @@ ready," with **DEFAULT**, **FALLBACK**, and **verified** badges, and the
 action is **Stop** — the same control that loaded it now unloads it and
 frees the VRAM.
 
-![Model Manager row — Kokoro loaded and ready](images/the-model-control-pill/03-pill-loaded.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-model-control-pill/03-pill-loaded-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-model-control-pill/03-pill-loaded.png">
+  <img alt="Model Manager row — Kokoro loaded and ready" src="images/the-model-control-pill/03-pill-loaded.png">
+</picture>
 
 An engine still loading shows an amber "Loading …" pill with its button
 disabled, so a second click can't fire mid-load; one that's installed but not
@@ -23,12 +27,20 @@ shows an install/repair action instead of this pill — there's nothing to
 load until that step completes. See [Voice Engines](Voice-Engines) for what
 each engine's row looks like in those states.
 
-![Model Manager row — llama3.1:8b idle with a Load model action](images/the-model-control-pill/idle-state.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-model-control-pill/idle-state-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-model-control-pill/idle-state.png">
+  <img alt="Model Manager row — llama3.1:8b idle with a Load model action" src="images/the-model-control-pill/idle-state.png">
+</picture>
 
 Below, `llama3.1:8b`: installed on disk but not resident in GPU memory, so the pill reads a neutral "llama3.1:8b idle" and the action is **Load model** rather than Stop.
 
 Click **Load model** and that same row flips to an amber "Loading llama3.1:8b…" pill with its button disabled and relabeled **Loading…**, so a second click can't fire mid-load.
 
-![Model Manager row — llama3.1:8b loading, with a disabled Loading… button](images/the-model-control-pill/loading-state.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-model-control-pill/loading-state-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-model-control-pill/loading-state.png">
+  <img alt="Model Manager row — llama3.1:8b loading, with a disabled Loading… button" src="images/the-model-control-pill/loading-state.png">
+</picture>
 
 Next: [Library Management](Library-Management).

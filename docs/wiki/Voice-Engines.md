@@ -18,7 +18,11 @@ even before Qwen or Coqui are set up. Below, Kokoro's row in Model Manager:
 fully installed, **DEFAULT** + **FALLBACK** badges, **verified** integrity,
 loaded and ready with a **Stop** action.
 
-![Model Manager — Installed models, Kokoro row](images/the-model-control-pill/03-pill-loaded.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/the-model-control-pill/03-pill-loaded-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/the-model-control-pill/03-pill-loaded.png">
+  <img alt="Model Manager — Installed models, Kokoro row" src="images/the-model-control-pill/03-pill-loaded.png">
+</picture>
 
 ## Coqui XTTS v2
 
@@ -29,7 +33,11 @@ present, Coqui gets the same idle/loading/ready pill as any other engine (see
 installed: **Installed** badge, **Load model** pill, and an **Update** toggle
 for reinstalling the package.
 
-![Model Manager — Coqui XTTS v2 row, installed](images/voice-engines/coqui-row.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/voice-engines/coqui-row-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/voice-engines/coqui-row.png">
+  <img alt="Model Manager — Coqui XTTS v2 row, installed" src="images/voice-engines/coqui-row.png">
+</picture>
 
 ## Qwen (default generation engine)
 
@@ -42,7 +50,11 @@ unloaded independently. Below, the Base (0.6B) row installed and idle: an
 so size-based integrity pinning doesn't apply the way it does for Kokoro),
 **Installed** badge, and a **Load model** pill.
 
-![Model Manager — Qwen3-TTS Base (0.6B) row, installed](images/voice-engines/qwen-row.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/voice-engines/qwen-row-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/voice-engines/qwen-row.png">
+  <img alt="Model Manager — Qwen3-TTS Base (0.6B) row, installed" src="images/voice-engines/qwen-row.png">
+</picture>
 
 ## Gemini
 
@@ -56,6 +68,10 @@ Qwen; a Qwen-engine character designs a bespoke voice instead (see
 — a Gemini voice reused across two cast members in *The Hollow Tide* series —
 with **Audition base voice** and **Rebaseline the series** actions.
 
-![Voice Library — a Gemini voice family reused across a series](images/voice-engines/04-gemini.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/voice-engines/04-gemini-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/voice-engines/04-gemini.png">
+  <img alt="Voice Library — a Gemini voice family reused across a series" src="images/voice-engines/04-gemini.png">
+</picture>
 
 Next: [The Model Control Pill](The-Model-Control-Pill).

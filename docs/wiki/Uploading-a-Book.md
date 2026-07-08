@@ -9,7 +9,11 @@ directly, or try the built-in demo book. Pick an analysis model here too —
 see [Analysis & the Analyzer](Analysis-and-the-Analyzer) for what the local
 vs. cloud choice means.
 
-![Upload](images/uploading-a-book/01-upload.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/uploading-a-book/01-upload-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/uploading-a-book/01-upload.png">
+  <img alt="Upload" src="images/uploading-a-book/01-upload.png">
+</picture>
 
 ## 2. Confirm title, author, and chapters
 
@@ -34,12 +38,20 @@ sentence by sentence, drag a boundary to move a cut, or highlight text
 inside a sentence to split it off and reassign that piece to a different
 character.
 
-![Manuscript paragraphs](images/uploading-a-book/02-manuscript-paragraphs.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/uploading-a-book/02-manuscript-paragraphs-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/uploading-a-book/02-manuscript-paragraphs.png">
+  <img alt="Manuscript paragraphs" src="images/uploading-a-book/02-manuscript-paragraphs.png">
+</picture>
 
 **Restructure chapters** — merge, split, reorder, rename, or
 include/exclude chapters. Sentence attribution and voice assignments carry
 across the edit.
 
-![Restructure](images/uploading-a-book/03-restructure.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/uploading-a-book/03-restructure-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/uploading-a-book/03-restructure.png">
+  <img alt="Restructure" src="images/uploading-a-book/03-restructure.png">
+</picture>
 
 Next: [Manuscript Management](Manuscript-Management), or straight on to [Analysis & the Analyzer](Analysis-and-the-Analyzer).
