@@ -9,6 +9,7 @@ import {
   writeAttempted,
   readAttempted,
   attemptedPath,
+  mergeVerdictRows,
   type VerdictRow,
 } from './verdicts-io.js';
 
@@ -296,5 +297,57 @@ describe('deriveBookOutline', () => {
 
     expect(outline.attemptedChapterIds).toEqual([1, 2]);
     expect(outline.scoredChapterIds).toEqual([1]);
+  });
+});
+
+describe('mergeVerdictRows', () => {
+  it('writes rows fresh when no file exists yet', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verdicts-merge-'));
+    const path = join(dir, 'ch1.render-integrity.json');
+    await mergeVerdictRows(path, 'narrator', [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    const rows = await readVerdicts(path);
+    expect(rows).toHaveLength(1);
+    expect(rows![0].characterId).toBe('narrator');
+  });
+
+  it('replaces only the given character\'s rows, leaving other characters\' rows untouched', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verdicts-merge-'));
+    const path = join(dir, 'ch1.render-integrity.json');
+    await mergeVerdictRows(path, 'narrator', [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    await mergeVerdictRows(path, 'ren', [
+      { characterId: 'ren', sentenceIds: [2], verdict: 'inconclusive', cosine: 0, severity: 'inconclusive', fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'too-short', windowed: false, chapterId: 1 },
+    ]);
+    // Re-merge narrator with a NEW row set — old narrator rows must be dropped, ren's rows survive.
+    await mergeVerdictRows(path, 'narrator', [
+      { characterId: 'narrator', sentenceIds: [1, 3], verdict: 'voice-match', cosine: 0.95, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    const rows = await readVerdicts(path);
+    expect(rows!.filter((r) => r.characterId === 'narrator')).toHaveLength(1);
+    expect(rows!.find((r) => r.characterId === 'narrator')!.sentenceIds).toEqual([1, 3]);
+    expect(rows!.filter((r) => r.characterId === 'ren')).toHaveLength(1);
+  });
+});
+
+describe('deriveBookOutline — verdictCharactersByChapter', () => {
+  it('collects the distinct characterIds with verdict rows per chapter', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verdicts-outline-'));
+    const root = join(dir, 'audio');
+    mkdirSync(root, { recursive: true });
+    await writeVerdicts(join(root, 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+      { characterId: 'ren', sentenceIds: [2], verdict: 'inconclusive', cosine: 0, severity: 'inconclusive', fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'too-short', windowed: false, chapterId: 1 },
+    ]);
+    const outline = await deriveBookOutline(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(outline.verdictCharactersByChapter.get(1)).toEqual(new Set(['narrator', 'ren']));
+  });
+
+  it('an unscored chapter has no entry in verdictCharactersByChapter', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verdicts-outline-'));
+    const outline = await deriveBookOutline(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(outline.verdictCharactersByChapter.get(1)).toBeUndefined();
   });
 });
