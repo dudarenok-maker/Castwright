@@ -20,7 +20,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
   return (
     <div
       data-testid="series-share-card"
-      className="aspect-[4/5] w-full max-w-sm mx-auto rounded-2xl bg-[#1b1714] text-cream p-7 flex flex-col"
+      className="aspect-[4/5] w-full max-w-sm mx-auto rounded-2xl bg-[#1b1714] text-[#f4efec] p-7 flex flex-col"
     >
       {/* Wordmark */}
       <div className="flex items-center gap-1.5 font-semibold">
@@ -36,7 +36,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
       {/* Hero number */}
       <div data-testid="card-hero-number" className="font-serif text-5xl font-bold mt-1">
         {heroNum}{' '}
-        <span className="text-xl text-cream/70 font-normal">{heroLabel}</span>
+        <span className="text-xl text-[#f4efec]/70 font-normal">{heroLabel}</span>
       </div>
 
       {/* Elevated claim */}
@@ -45,7 +45,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
       </p>
 
       {/* Quiet claim */}
-      <p className="text-cream/70 text-sm mt-1">{spanBooks} books. The same cast.</p>
+      <p className="text-[#f4efec]/70 text-sm mt-1">{spanBooks} books. The same cast.</p>
 
       {/* Cast wall */}
       <div className="flex-1 flex flex-wrap content-center justify-center items-center gap-x-2 gap-y-1 my-4 text-center">
@@ -58,7 +58,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
           </span>
         ))}
         {overflow > 0 && (
-          <span className={`${nameSize} text-cream/50`}>
+          <span className={`${nameSize} text-[#f4efec]/50`}>
             {' '}…and {overflow} more of your cast
           </span>
         )}
@@ -66,7 +66,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
 
       {/* Footer */}
       <div className="flex justify-between items-end text-[11px]">
-        <span className="text-cream/60">
+        <span className="text-[#f4efec]/60">
           {owner ? `${owner}'s` : 'Your'} cast · kept true
         </span>
         <span className="text-magenta font-bold">castwright.ai</span>

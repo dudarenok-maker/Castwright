@@ -41,8 +41,8 @@ function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }
   return (
     <div className="grid grid-cols-[1fr_auto] gap-3 items-center py-2 border-t border-white/10">
       <div>
-        <div className="font-serif text-cream">{c.character}</div>
-        <div className="text-[11px] text-cream/55">
+        <div className="font-serif text-[#f4efec]">{c.character}</div>
+        <div className="text-[11px] text-[#f4efec]/55">
           {c.voiceLabel}
           {c.voiceKind !== 'preset' && (
             <span className="ml-1.5 rounded px-1 py-0.5 bg-magenta/10 text-magenta text-[10px] font-semibold">
@@ -50,7 +50,7 @@ function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }
             </span>
           )}
           {!c.carriedFullSpan && (
-            <span className="text-cream/40"> · from Bk {c.bookIndices[0]}</span>
+            <span className="text-[#f4efec]/40"> · from Bk {c.bookIndices[0]}</span>
           )}
         </div>
       </div>
@@ -120,7 +120,7 @@ export function SeriesMemoryReveal({
         // rebaseline). The old `min-h-screen sm:min-h-0 overflow-auto` had NO
         // max-height, so a large carried cast grew the panel past the viewport
         // and pushed the footer (Share / Export) off-screen — unusable.
-        className="bg-[#1b1714] text-cream w-full sm:max-w-2xl sm:rounded-2xl p-7 h-full sm:h-auto sm:max-h-[90vh] overflow-y-auto scrollbar-thin"
+        className="bg-[#1b1714] text-[#f4efec] w-full sm:max-w-2xl sm:rounded-2xl p-7 h-full sm:h-auto sm:max-h-[90vh] overflow-y-auto scrollbar-thin"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Sticky so Close stays reachable while scrolling a long cast list;
@@ -128,16 +128,16 @@ export function SeriesMemoryReveal({
         <div className="flex justify-end sticky top-0 z-10 -mx-7 -mt-7 px-7 pt-7 pb-2 bg-[#1b1714]">
           <button
             onClick={onClose}
-            className="p-2 rounded-full hover:bg-white/10 text-cream/60"
+            className="p-2 rounded-full hover:bg-white/10 text-[#f4efec]/60"
             aria-label="Close"
           >
             <IconClose className="w-4 h-4" />
           </button>
         </div>
         {failed ? (
-          <p className="text-cream/60">Couldn't load series memory.</p>
+          <p className="text-[#f4efec]/60">Couldn't load series memory.</p>
         ) : !detail ? (
-          <p className="text-cream/60">Loading…</p>
+          <p className="text-[#f4efec]/60">Loading…</p>
         ) : (
           <>
             <p className="text-[11px] uppercase tracking-[0.14em] text-magenta font-semibold">
@@ -146,7 +146,7 @@ export function SeriesMemoryReveal({
             <h2 id="sm-reveal-heading" className="font-serif text-2xl mt-2">
               {spell(bookCount)} books in, and not a voice has changed.
             </h2>
-            <p className="text-cream/60 mt-1 mb-5">
+            <p className="text-[#f4efec]/60 mt-1 mb-5">
               {spell(detail.carried.count)} voices, yours — book after book.
             </p>
             {detail.carried.characters.map((c) => (
@@ -161,7 +161,7 @@ export function SeriesMemoryReveal({
               </button>
               <button
                 onClick={() => exportJson(detail, series)}
-                className="text-xs text-cream/60 underline"
+                className="text-xs text-[#f4efec]/60 underline"
               >
                 Export data (.json)
               </button>
