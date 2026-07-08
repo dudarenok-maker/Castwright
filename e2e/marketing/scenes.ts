@@ -50,7 +50,7 @@ export interface Scene {
    drives the confirm-metadata screen's real "Auto-detected Russian —
    verify" chip. See the language-detect-russian scene below for why this
    replaces the brief's original (nonexistent) "Detecting language" phase. */
-const RUSSIAN_PASTE_TEXT = `# Дело о Коалфолле
+const RUSSIAN_PASTE_TEXT = `# Заказ Коалфолла
 
 ## Глава первая — Стук
 
