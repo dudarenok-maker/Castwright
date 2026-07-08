@@ -108,6 +108,8 @@ const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
   'chapter_complete',
   'chapter_failed',
   'generation_started',
+  'scoring_started',
+  'scoring_complete',
 ];
 
 /* fs-51 — shared "fire a callback when a genuinely NEW activity-feed entry
@@ -206,6 +208,10 @@ export function GenerationView({
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const activityEvents = useAppSelector((s) => s.changeLog.events);
+  /* srv-36 hardening — live per-book scoreBook progress, ticked over SSE
+     during an active generation run (generation-stream-runner.ts). Undefined
+     when no scoring pass is currently in flight for this book. */
+  const scoringProgress = useAppSelector((s) => s.chapters.scoringProgress[bookId]);
   /* fs-51 — per-book performance-QA report card. Fetched on mount, then
      refetched live whenever a fresh chapter_complete entry lands in this
      book's activity feed (below), so the card's numbers advance as chapters
@@ -1246,7 +1252,14 @@ export function GenerationView({
           Activity sidebar below) so it reads as a book-level status card, not
           a log entry. */}
       <div className="mb-6 sm:mb-8">
-        <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title ?? ''} />
+        <QaReportCard
+          report={qaReport}
+          loading={qaLoading}
+          error={qaError}
+          bookTitle={title ?? ''}
+          bookId={bookId}
+          scoringProgress={scoringProgress}
+        />
       </div>
 
       {/* Wave-3 responsive layout: single column on phone + tablet (chapter

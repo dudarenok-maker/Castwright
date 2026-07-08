@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
+import { api } from '../lib/api';
 import { Pill } from './primitives';
 
 interface QaReportCardProps {
@@ -8,6 +10,8 @@ interface QaReportCardProps {
   loading: boolean;
   error: boolean;
   bookTitle: string;
+  bookId: string;
+  scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
 }
 
 function slugify(title: string): string {
@@ -55,13 +59,82 @@ function TranscriptRow({ report }: { report: BookQaReport }) {
   );
 }
 
-function VoiceMatchRow({ report }: { report: BookQaReport }) {
+function VoiceMatchRow({
+  report,
+  bookId,
+  scoringProgress,
+}: {
+  report: BookQaReport;
+  bookId: string;
+  scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
+}) {
   const vd = report.voiceDrift;
+  const [resuming, setResuming] = useState(false);
+  const [resumed, setResumed] = useState(false);
+
   if (vd.chaptersEligible === 0) {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
         <span className="text-sm text-ink/50">No stochastic-voiced characters in this book — nothing for this check to do.</span>
+      </div>
+    );
+  }
+  /* srv-36 hardening — live progress from an in-flight SSE-streamed scoreBook
+     pass (see chapters-slice.ts scoringProgress). Takes priority over every
+     other state below: while a scoring pass is actively running, the row
+     should reflect that live progress rather than the last-persisted
+     snapshot in `report.voiceDrift`. */
+  if (scoringProgress) {
+    return (
+      <div className="flex items-center justify-between py-2">
+        <span className="text-sm text-ink/70">Voice match</span>
+        <span className="text-sm text-ink">
+          ⏳ Checking character voices — {scoringProgress.charactersChecked} of {scoringProgress.charactersOnRoster} done
+        </span>
+      </div>
+    );
+  }
+  /* srv-36 hardening — charactersPending means a prior scoreBook pass was
+     interrupted mid-run (e.g. server restart) and left work undone that no
+     live SSE stream will ever resume on its own (Task 6/7's architecture:
+     broadcastToBook only reaches subscribers of an active generation job).
+     Offer a manual Resume button; see the round-2 plan-review note on why
+     the button doesn't revert to clickable after a successful click. */
+  if (vd.charactersPending.length > 0) {
+    return (
+      <div className="flex items-center justify-between py-2">
+        <span className="text-sm text-ink/70">Voice match</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-ink">
+            {vd.charactersChecked} of {vd.charactersOnRoster} characters checked so far
+          </span>
+          {resumed ? (
+            <span className="text-xs text-ink/50">Resuming — check back in a few minutes</span>
+          ) : (
+            <button
+              onClick={async () => {
+                setResuming(true);
+                try {
+                  await api.resumeScoring(bookId);
+                  // Deliberately stays disabled after success (does NOT revert to
+                  // clickable) — a resume-triggered scoreBook run produces no live
+                  // SSE progress (see Task 6/7's architecture note), so nothing
+                  // will update this row again until the user next reloads the
+                  // book and useQaReport re-fetches. Reverting to "Resume scoring"
+                  // here would invite a confusing repeat click.
+                  setResumed(true);
+                } catch {
+                  setResuming(false); // a real failure (not the 409 already-running case) — let them retry
+                }
+              }}
+              disabled={resuming}
+              className="text-xs font-semibold text-ink/70 hover:text-ink px-3 py-1 rounded-full border border-ink/10 disabled:opacity-50"
+            >
+              {resuming ? 'Resuming…' : 'Resume scoring'}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -126,7 +199,7 @@ function CastContinuityRow({ report }: { report: BookQaReport }) {
   );
 }
 
-export function QaReportCard({ report, loading, error, bookTitle }: QaReportCardProps) {
+export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress }: QaReportCardProps) {
   if (loading) {
     return <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 text-sm text-ink/50">Loading QA report…</div>;
   }
@@ -147,7 +220,7 @@ export function QaReportCard({ report, loading, error, bookTitle }: QaReportCard
       <div className="divide-y divide-ink/5">
         <AcousticRow report={report} />
         <TranscriptRow report={report} />
-        <VoiceMatchRow report={report} />
+        <VoiceMatchRow report={report} bookId={bookId} scoringProgress={scoringProgress} />
         <CastContinuityRow report={report} />
       </div>
       <div className="flex gap-2 mt-4">
