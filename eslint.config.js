@@ -230,8 +230,12 @@ export default tseslint.config(
      that rule was merged into `@typescript-eslint/no-require-imports`,
      and `tseslint.configs.recommended` applies its rules globally (no
      `files` restriction), so the relaxation must be carried forward under
-     the new rule name to keep CommonJS scripts (e.g. preflight-ffmpeg.cjs)
-     lint-clean. This is the SAME relaxation, not a new one. */
+     the new rule name to keep CommonJS scripts (e.g. preflight-ffmpeg.cjs
+     and the pinokio/ subtree) lint-clean. This is the SAME relaxation, not
+     a new one. pinokio.js itself is genuine ESM (no require()) as of the
+     ops-16/#1458 fix — kept in this glob only because the file-list below
+     already covers root-level Node scripts uniformly; the rule simply
+     doesn't fire on it. */
   {
     files: [
       'scripts/**/*.mjs',
