@@ -3672,7 +3672,7 @@ components:
       properties:
         type:
           type: string
-          enum: [progress, chapter_assembling, chapter_verifying, chapter_recovering, chapter_complete, chapter_failed, idle, resume_from, warning, chapter_awaiting_fallback_confirm]
+          enum: [progress, chapter_assembling, chapter_verifying, chapter_recovering, chapter_complete, chapter_failed, idle, resume_from, warning, chapter_awaiting_fallback_confirm, scoring_started, scoring_progress, scoring_complete]
           description: |
             `chapter_assembling` is emitted between the last per-group synthesis
             tick and `chapter_complete`, while the server concatenates the PCM,
@@ -3702,6 +3702,16 @@ components:
             affected characters in `fallbackCharacters` so the frontend can
             prompt the user to confirm or skip. The worker frees its slot; other
             chapters keep flowing. See plan `docs/features/archive/102-global-queue-modal.md`.
+            `scoring_started` / `scoring_progress` / `scoring_complete` (srv-36
+            hardening) surface the voice-match background scoring pass:
+            `scoring_started` fires once when a scoreBook run begins, carrying
+            `charactersOnRoster`; `scoring_progress` fires once per character
+            resolved, carrying `characterId` (reusing the existing field above)
+            plus updated `charactersChecked`/`charactersOnRoster`;
+            `scoring_complete` fires once at the end, carrying final
+            `charactersChecked`/`charactersOnRoster`/`mismatchCount`. Scoped to
+            the book the stream handle belongs to (no separate `bookId` field
+            needed — same as every other tick type here).
         chapterId: { type: integer }
         characterId:
           type: string
@@ -3839,6 +3849,15 @@ components:
             properties:
               id: { type: string }
               name: { type: string }
+        charactersOnRoster:
+          type: integer
+          description: srv-36 hardening — total stochastic characters being scored this run. Carried on scoring_started/scoring_progress/scoring_complete.
+        charactersChecked:
+          type: integer
+          description: srv-36 hardening — characters resolved so far this run. Carried on scoring_progress/scoring_complete.
+        mismatchCount:
+          type: integer
+          description: srv-36 hardening — total voice-mismatch verdicts found. Carried on scoring_complete only.
 
     # --- Generation queue ------------------------------------------
 
@@ -4452,6 +4471,8 @@ components:
                 import,
                 library_add,
                 reparse,
+                scoring_started,
+                scoring_complete,
               ],
           }
         title: { type: string }
@@ -5582,7 +5603,7 @@ components:
             linesFlaggedDrift: { type: integer }
         voiceDrift:
           type: object
-          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, mismatches, inconclusiveCount, uncheckedCharacterIds]
+          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, mismatches, inconclusiveCount, uncheckedCharacterIds]
           properties:
             attribution: { type: string, enum: [full, legacy-unattributed] }
             chaptersEligible: { type: integer }
@@ -5600,6 +5621,17 @@ components:
                 attempted on any eligible chapter ("gate off").
             charactersOnRoster: { type: integer }
             charactersChecked: { type: integer }
+            charactersPending:
+              type: array
+              items: { type: string }
+              description: >-
+                srv-36 hardening — stochastic characters with no row in
+                centroids.json yet: genuinely incomplete (never attempted, or
+                mid-retry-cycle under the transient-failure cap). Drives the
+                frontend's Resume-scoring affordance — narrower than
+                "charactersChecked < charactersOnRoster", which also stays
+                true forever for a terminally too-short character (nothing
+                left to resume for those).
             mismatches:
               type: array
               items:
