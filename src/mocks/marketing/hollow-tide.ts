@@ -601,17 +601,27 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
           ],
           /* Series-memory marketing/wiki screenshots — gates series-memory-chip's
              render (library-grid.tsx:102: `{series.seriesMemory && (<SeriesMemoryChip …>`).
-             Carried cast = the three `usedIn: 3` recurring voices in
-             HOLLOW_TIDE_VOICES (Narrator, Insp. Cray, Dr. Wren), confirmed present
-             in books 1-2 (both already cast; books 3-4 aren't part of the carried
-             span yet). perBook.principalCount mirrors each book's own
-             characterCount above (7, 6) so the two never silently drift apart. */
+             confirmedBookCount/spanBooks are the "how many books has this cast
+             carried across" headline (SeriesMemorySummary — types.ts: "M for
+             in-app surfaces … NOT series.books.length"), deliberately decoupled
+             from the physical shelf (still 4 real cards: hollow-tide-1..4) — the
+             minimal path to a true "twelve books in" claim without inventing 8
+             more book cards (which would also break hollow-tide.test.ts's
+             "four-book series" assertion). Carried cast = 5 voices: the three
+             `usedIn: 3` recurring ones (Narrator, Insp. Cray, Dr. Wren) plus two
+             more real HOLLOW_TIDE_VOICES entries (Constance Vale, Magistrate
+             Cross) promoted to "carried across the series" for this fixture —
+             kept to 5 (not 12) so the reveal panel's roster still fits the
+             1280×720 capture viewport without a layout change. perBook stays
+             scoped to the 2 books that actually have rendered content
+             (principalCount mirrors each book's own characterCount above, 7/6)
+             — it's backing data only, not rendered by SeriesMemoryChip/Reveal. */
           seriesMemory: {
-            carriedCount: 3,
+            carriedCount: 5,
             bespokeCount: 0,
             designedCount: 0,
-            confirmedBookCount: 2,
-            spanBooks: 2,
+            confirmedBookCount: 12,
+            spanBooks: 12,
             perBook: [
               { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 3 },
               { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 3 },
