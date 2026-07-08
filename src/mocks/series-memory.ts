@@ -184,7 +184,7 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
           // read bookIndices/carriedFullSpan, not firstBookId).
           firstBookId: 'hollow-tide-2',
           lastBookId: 'hollow-tide-6',
-          bookIndices: [2, 3, 4, 5, 6],
+          bookIndices: HOLLOW_TIDE_FULL_SPAN.slice(1),
           carriedFullSpan: false,
           totalLines: 70,
         },
