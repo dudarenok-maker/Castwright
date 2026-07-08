@@ -108,77 +108,137 @@ export const generationRouter = Router();
    scoring failure must never break generation. */
 const scoringInFlight = new Map<string, Promise<void>>();
 
-export async function afterChapterFinalized(
-  ctx: {
-    bookId: string;
-    bookDir: string;
-    chapters: { id: number; slug: string }[];
-    /** GH #1436 fix — the chapter whose OWN finalize-chapter-write just
-        completed and triggered THIS call. This caller is invoked exactly
-        once per chapter completion, synchronously after that chapter's
-        `finalizeChapterAudioWrite` has fully returned (segments.json AND,
-        if applicable, embeddings.json already landed — or genuinely failed).
-        That makes it the one place with unambiguous, first-hand knowledge of
-        THIS chapter's own attempt outcome, independent of whether the
-        book-wide scoreBook re-score below actually runs for this call (it
-        can be coalesced away by a concurrently in-flight sibling's run via
-        `scoringInFlight`). See the write below and `scoreBook` in
-        aggregate.ts for the full rationale. */
-    justFinalized: { id: number; slug: string };
-    /** The Qwen base tier(s) this run's FULL cast uses (elevate-only, same as
-        routeFor) — computed once at run start and threaded here so the post-
-        audition reconcile evicts only tiers NO chapter of this book will use.
-        NOT derived from the finalized-chapters-only score pass, which can't see
-        an in-flight sibling chapter's tier (the Finding-2 race). */
-    keep: { keep06: boolean; keep17: boolean };
-  },
-) {
+export async function triggerScoring(ctx: {
+  bookId: string;
+  bookDir: string;
+  chapters: { id: number; slug: string }[];
+  justFinalizedSlugs: Iterable<string>;
+  /** Full-cast-superset tier set, supplied by the chapter-finalize path
+      (unchanged from today — protects an in-flight sibling chapter's tier,
+      see the reconcile comment below). Omitted by the resume route, which
+      has no live run to derive a superset from and instead reconciles
+      against scoreBook's own precise usedQwenTiers — safe there because
+      resume never runs concurrently with an in-flight sibling render. */
+  keep?: { keep06: boolean; keep17: boolean };
+}): Promise<void> {
   if (!configValue('qa.speaker.enabled')) return;
-
-  /* GH #1436 fix — stamp THIS chapter's own "attempted" sentinel here,
-     unconditionally and BEFORE the single-flight gate below. Previously
-     `scoreBook` stamped the sentinel for EVERY chapter in the full book list
-     on EVERY call — including concurrently-rendering sibling chapters that
-     had only reached `finalize-chapter-write.ts`'s segments.json write, not
-     yet its embeddings.json write, at the instant a DIFFERENT chapter's
-     completion triggered a book-wide re-score. That produced a transient
-     false "embed failed" reading for a chapter that was simply still
-     finishing its own render (see qa-report.ts's chaptersEmbedFailed).
-     Writing it here, scoped to ONLY `ctx.justFinalized` and independent of
-     whether the scoreBook call below actually executes this time (it may be
-     dropped by the single-flight coalesce), closes both the premature-stamp
-     race AND the narrower risk of losing this chapter's own attempted stamp
-     entirely if its trigger is coalesced away. */
-  await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
-
   if (scoringInFlight.has(ctx.bookId)) return;
+
   /* Fire-and-forget: kick the score pass off and return immediately — the
-     caller (chapter-completion path) must NOT await it. scoreBook can make
-     unbounded blocking sidecar calls (the audition-centroid path renders the
-     sample K=12× + ECAPA-embeds each, per too-thin/bimodal character), and it
-     feeds no progress to the per-chapter no-progress watchdog. Awaiting it here
-     turned a slow-but-progressing score pass into a 720s assembly stall on the
-     8GB box (#1029). The pass is non-fatal (.catch) and self-cleaning (.finally);
-     a stale verdict file just gets overwritten on the next chapter's pass. */
-  const run = scoreBook(ctx.bookDir, ctx.chapters, [ctx.justFinalized.slug])
-    .then(async () => {
-      /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
-         run-start `reconcileResidentQwenTiers` fires once; the between-chapters
-         Option-B audition can transiently pull a base tier the render doesn't
-         use (a legacy segments file with no stamped modelKey → the 0.6B audition
-         fallback), which would then linger co-resident with the 1.7B synth (the
-         8GB-card OOM). Reconcile against the run's FULL-cast tier set (`ctx.keep`,
-         the same target the run-start reconcile used), NOT the finalized-chapters
-         view scoreBook sees — that view misses an in-flight sibling chapter's
-         tier and would evict it mid-render (Finding 2). reconcile only evicts
-         tiers NOT in that set, so the in-use tier stays warm and a mixed-tier
-         book keeps both. Best-effort; skipped when the run uses no Qwen tier. */
-      if (ctx.keep.keep06 || ctx.keep.keep17) await reconcileResidentQwenTiers(ctx.keep);
-    })
+     caller (chapter-completion / resume path) must NOT await it. scoreBook
+     can make unbounded blocking sidecar calls (the audition-centroid path
+     renders the sample K=12× + ECAPA-embeds each, per too-thin/bimodal
+     character), and it feeds no progress to the per-chapter no-progress
+     watchdog. Awaiting it here turned a slow-but-progressing score pass into
+     a 720s assembly stall on the 8GB box (#1029). The pass is non-fatal
+     (.catch) and self-cleaning (.finally); a stale verdict file just gets
+     overwritten on the next trigger's pass.
+
+     SSE wiring (round-2 plan-review fix — see the plan's architectural-limit
+     note): `onRosterKnown`/`onCharacterScored` push ticks via
+     `broadcastToBook`, which fans out to every subscriber of every
+     currently in-flight job for this book, looked up LIVE from
+     `inFlightByBook` — NOT captured here. This is a best-effort overlay for
+     whatever portion of the run overlaps active generation; once every job
+     for the book has drained, there is no open stream left to push a tick
+     through, and the pass keeps working silently in the background (the
+     static "X of Y checked so far" + Resume-scoring affordance covers that
+     case instead — see qa-report.ts). */
+  const run = (async () => {
+    const result = await scoreBook(ctx.bookDir, ctx.chapters, ctx.justFinalizedSlugs, {
+      onRosterKnown: (total) => {
+        broadcastToBook(ctx.bookId, { type: 'scoring_started', charactersOnRoster: total });
+      },
+      onCharacterScored: (characterId, index, total) => {
+        broadcastToBook(ctx.bookId, {
+          type: 'scoring_progress',
+          characterId,
+          charactersChecked: index,
+          charactersOnRoster: total,
+        });
+      },
+    });
+    broadcastToBook(ctx.bookId, { type: 'scoring_complete', mismatchCount: result.mismatchCount });
+    /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
+       run-start `reconcileResidentQwenTiers` fires once; the between-chapters
+       Option-B audition can transiently pull a base tier the render doesn't
+       use (a legacy segments file with no stamped modelKey → the 0.6B audition
+       fallback), which would then linger co-resident with the 1.7B synth (the
+       8GB-card OOM). Reconcile against the run's FULL-cast tier set (`ctx.keep`,
+       the same target the run-start reconcile used) when supplied — NOT the
+       finalized-chapters view scoreBook sees, which misses an in-flight
+       sibling chapter's tier and would evict it mid-render (Finding 2). The
+       resume route has no such superset to protect, so it falls back to
+       scoreBook's own precise usedQwenTiers. reconcile only evicts tiers NOT
+       in the target set, so the in-use tier stays warm and a mixed-tier book
+       keeps both. Best-effort; skipped when the run uses no Qwen tier. */
+    const keep = ctx.keep ?? result.usedQwenTiers;
+    if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
+  })()
     // generation.ts has NO `log`/`logger` symbol — it logs via console.warn throughout.
     .catch((e) => console.warn(`[generation] render-integrity score pass failed: ${String(e)}`))
     .finally(() => scoringInFlight.delete(ctx.bookId));
   scoringInFlight.set(ctx.bookId, run);
+}
+
+/** Test-only — `triggerScoring` is deliberately fire-and-forget (same
+ *  rationale as the inline comment above: scoreBook can make unbounded
+ *  blocking sidecar calls, so the chapter-finalize/resume callers must never
+ *  await it directly). Tests that need to observe an effect of the
+ *  background run (a reconcile call, a broadcast, a written file) await this
+ *  instead of `triggerScoring` itself. Resolves immediately (undefined) if
+ *  no run is or ever was in flight for `bookId`. */
+export async function __awaitScoringSettled(bookId: string): Promise<void> {
+  await scoringInFlight.get(bookId);
+}
+
+export async function afterChapterFinalized(ctx: {
+  bookId: string;
+  bookDir: string;
+  chapters: { id: number; slug: string }[];
+  /** GH #1436 fix — the chapter whose OWN finalize-chapter-write just
+      completed and triggered THIS call. This caller is invoked exactly
+      once per chapter completion, synchronously after that chapter's
+      `finalizeChapterAudioWrite` has fully returned (segments.json AND,
+      if applicable, embeddings.json already landed — or genuinely failed).
+      That makes it the one place with unambiguous, first-hand knowledge of
+      THIS chapter's own attempt outcome, independent of whether the
+      book-wide scoreBook re-score below actually runs for this call (it
+      can be coalesced away by a concurrently in-flight sibling's run via
+      `scoringInFlight`). See the write below and `scoreBook` in
+      aggregate.ts for the full rationale. */
+  justFinalized: { id: number; slug: string };
+  /** The Qwen base tier(s) this run's FULL cast uses (elevate-only, same as
+      routeFor) — computed once at run start and threaded here so the post-
+      audition reconcile evicts only tiers NO chapter of this book will use.
+      NOT derived from the finalized-chapters-only score pass, which can't see
+      an in-flight sibling chapter's tier (the Finding-2 race). */
+  keep: { keep06: boolean; keep17: boolean };
+}) {
+  /* This guard is intentionally DUPLICATED with `triggerScoring`'s own
+     `qa.speaker.enabled` check below, rather than relocated there (round-3
+     fix) — both callers get independent protection, so a future third
+     caller of `triggerScoring` that forgets its own gating can't silently
+     inherit this one's. */
+  if (!configValue('qa.speaker.enabled')) return;
+
+  /* GH #1436 fix — stamp THIS chapter's own "attempted" sentinel here,
+     unconditionally and BEFORE `triggerScoring`'s single-flight gate.
+     Previously `scoreBook` stamped the sentinel for EVERY chapter in the
+     full book list on EVERY call — including concurrently-rendering sibling
+     chapters that had only reached `finalize-chapter-write.ts`'s
+     segments.json write, not yet its embeddings.json write, at the instant a
+     DIFFERENT chapter's completion triggered a book-wide re-score. That
+     produced a transient false "embed failed" reading for a chapter that was
+     simply still finishing its own render (see qa-report.ts's
+     chaptersEmbedFailed). Writing it here, scoped to ONLY `ctx.justFinalized`
+     and independent of whether the scoreBook call below actually executes
+     this time (it may be dropped by the single-flight coalesce), closes both
+     the premature-stamp race AND the narrower risk of losing this chapter's
+     own attempted stamp entirely if its trigger is coalesced away. */
+  await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
+
+  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep });
 }
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
@@ -484,6 +544,36 @@ function deregisterJob(key: string, job: RunningJob): void {
   if (inFlightByChapter.size === 0) allowSleep();
 }
 
+/** Test-only — register a minimal fake `RunningJob` for `bookId` carrying
+ *  the given subscribers, so tests can exercise `broadcastToBook`'s
+ *  fan-out/de-dup behavior directly (via `inFlightByBook`) without driving
+ *  a real SSE POST end-to-end. Returns a cleanup function that deregisters
+ *  the job — call it once the test is done so the fake job doesn't leak
+ *  into `inFlightByBook` for later tests sharing this module's state. */
+export function __registerFakeJobForTest(
+  bookId: string,
+  subscribers: { send: (ev: unknown) => void; res: Response }[],
+): () => void {
+  const key = `${bookId}::test-${Math.random().toString(36).slice(2)}`;
+  const job: RunningJob = {
+    controller: new AbortController(),
+    subscribers: new Set(subscribers),
+    bookId,
+    chapterId: null,
+    queueEntryId: null,
+    fallbackConfirmed: false,
+    currentChapterId: null,
+    lastProgressTick: null,
+    runTotal: 0,
+    runDoneBase: 0,
+    completedThisRun: new Set(),
+    runInProgress: new Set(),
+    hadSibling: false,
+  };
+  registerJob(key, job);
+  return () => deregisterJob(key, job);
+}
+
 /** True when any generation job is currently in flight for the book. Exposed
     so sibling routes can refuse operations that would race the write path
     (chapter-audio reject restore would clobber a mid-render file). */
@@ -530,6 +620,34 @@ function broadcast(job: RunningJob, ev: unknown): void {
          cleanup hook on req.on('close') will drop it from the Set on its
          own tick. We don't want one dead socket to abort the broadcast
          for the rest of the room. */
+    }
+  }
+}
+
+/** srv-36 hardening — push an arbitrary tick to every client currently
+ *  subscribed to ANY of this book's in-flight jobs. Unlike `broadcast`
+ *  (one job → its subscribers), this fans out to every live job for the
+ *  book, because `scoreBook` re-scores the whole book, not one chapter.
+ *  De-duplicated by underlying `res`: the bare-resume reconnect path
+ *  (below, in the subscribe branch) can register the SAME client's
+ *  {send,res} as a distinct Subscriber into MULTIPLE sibling jobs for one
+ *  book, and without de-duping that client would receive one copy of this
+ *  tick per sibling job. Unlike `broadcast`, ticks pushed here are NOT
+ *  enriched with the run-level aggregates (runDone/runTotal/queueEntryId) —
+ *  those are per-job concepts and a scoring tick isn't scoped to one. */
+function broadcastToBook(bookId: string, ev: unknown): void {
+  const jobs = inFlightByBook.get(bookId);
+  if (!jobs) return;
+  const uniqueSubs = new Map<Response, Subscriber>();
+  for (const job of jobs) {
+    for (const sub of job.subscribers) uniqueSubs.set(sub.res, sub);
+  }
+  for (const sub of uniqueSubs.values()) {
+    try {
+      sub.send(ev);
+    } catch {
+      /* A subscriber whose socket already died is harmless to skip — see
+         broadcast()'s identical rationale above. */
     }
   }
 }

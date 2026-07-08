@@ -20,7 +20,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../audio/render-integrity/aggregate.js', () => ({ scoreBook: vi.fn(async () => {}) }));
+vi.mock('../audio/render-integrity/aggregate.js', () => ({
+  scoreBook: vi.fn(async () => ({ usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 })),
+}));
 /* GH #1436 fix — afterChapterFinalized now writes the "attempted" sentinel
    for its own justFinalized chapter directly, before the single-flight gate.
    Mocked here (rather than hitting the real filesystem at bogus paths like
@@ -66,7 +68,7 @@ describe('afterChapterFinalized', () => {
       keep: NO_QWEN,
     });
     expect(scoreBook).toHaveBeenCalledOnce();
-    expect(scoreBook).toHaveBeenCalledWith('/b1', [CH1], ['ch1']);
+    expect(scoreBook).toHaveBeenCalledWith('/b1', [CH1], ['ch1'], expect.any(Object));
   });
 
   it('writes the attempted sentinel for justFinalized unconditionally, even when a scoreBook run is already coalesced away (GH #1436)', async () => {
