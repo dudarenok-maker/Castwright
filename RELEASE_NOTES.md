@@ -33,6 +33,7 @@
 - **A tidier Cast table, and a few settings buttons back in line.** Character names now have more room to breathe in the Cast table, and "Continue to manuscript" no longer splits its arrow onto its own line. On the Account and LAN-access pages, a few buttons that had drifted out of alignment or picked up the wrong shape are back in line with the rest of the app. And in the library's language filter, German, Spanish, and French now show their own name — the same way Russian already did.
 - **The setup check no longer strands you once everything's ready.** If you landed back on the setup page and every check came back green, your only option was to step back through the whole wizard. A "Continue to my library" button now takes you straight back in.
 - **A stray line could stop a whole chapter cold.** On rare occasions — a foreword that mentions someone who isn't really a character in your story, say — a single line could end up pointed at a "character" your cast never actually had, and the chapter would refuse to perform at all until you tracked it down. Castwright now quietly reads that line in the narrator's voice instead and keeps going, so one odd line never holds up the rest of the chapter.
+- **Your series-memory card is readable again, in light mode.** The panel that shows your cast carrying across a series — and the card you can share from it — could render its text dark-on-dark and unreadable if you're using Castwright in light theme. It's back to its proper light color, wherever you find it.
 
 # Castwright 1.10.0
 
