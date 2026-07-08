@@ -1079,7 +1079,7 @@ export const SCENES: Scene[] = [
     action: async (page) => {
       await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
     },
-    waitForAfterAction: 'text=books in, and not a voice has changed',
+    waitForAfterAction: 'text=books in, and the cast carries through',
     strict: true,
   },
   {
@@ -1092,7 +1092,7 @@ export const SCENES: Scene[] = [
     waitFor: '[data-testid="series-memory-chip"]',
     action: async (page) => {
       await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
-      await page.waitForSelector('text=books in, and not a voice has changed', { timeout: 5000 });
+      await page.waitForSelector('text=books in, and the cast carries through', { timeout: 5000 });
       await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
     },
     waitForAfterAction: 'text=Download image',

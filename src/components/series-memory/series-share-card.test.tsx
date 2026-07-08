@@ -19,8 +19,8 @@ describe('SeriesShareCard', () => {
     render(<SeriesShareCard detail={detail} seriesName="The Ninth House" owner="Alex" />);
     const card = screen.getByTestId('series-share-card');
     expect(within(card).getByTestId('card-hero-number')).toHaveTextContent('39 designed voices'); // not the wall's "Name39"
-    expect(within(card).getByText(/kept true across all 12 books/)).toBeInTheDocument();
-    expect(within(card).getByText('12 books. The same cast.')).toBeInTheDocument(); // locked claim line
+    expect(within(card).getByText(/kept true, book after book/)).toBeInTheDocument();
+    expect(within(card).getByText('12 books in. The cast carries through.')).toBeInTheDocument(); // locked claim line
     expect(within(card).getByText('castwright.ai')).toBeInTheDocument();            // non-removable branding
     expect(within(card).getByText(/Alex's cast · kept true/)).toBeInTheDocument();
     expect(within(card).queryByText('✦')).toBeNull();                              // no stock sparkle separator
@@ -28,8 +28,7 @@ describe('SeriesShareCard', () => {
   it('uses spanBooks (not series length) so the claim cannot overclaim', () => {
     const turnover = { ...detail, series: { ...detail.series, confirmedBookCount: 12, spanBooks: 10 } };
     render(<SeriesShareCard detail={turnover} seriesName="X" />);
-    expect(screen.getByText(/kept true across all 10 books/)).toBeInTheDocument();
-    expect(screen.getByText('10 books. The same cast.')).toBeInTheDocument();
+    expect(screen.getByText('10 books in. The cast carries through.')).toBeInTheDocument();
   });
   it('falls back to "Your cast · kept true" when no owner is set (never "undefined")', () => {
     render(<SeriesShareCard detail={detail} seriesName="X" />);

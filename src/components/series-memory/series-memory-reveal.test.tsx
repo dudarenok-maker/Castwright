@@ -73,9 +73,9 @@ describe('SeriesMemoryReveal', () => {
         fetcher={async () => detail}
       />,
     );
-    await waitFor(() => screen.getByText(/not a voice has changed/));
+    await waitFor(() => screen.getByText(/the cast carries through/));
     expect(
-      screen.getByText(/Three books in, and not a voice has changed\./),
+      screen.getByText(/Three books in, and the cast carries through\./),
     ).toBeInTheDocument();
     expect(screen.getByText('Marrow')).toBeInTheDocument();
     expect(screen.getByText(/from Bk 2/)).toBeInTheDocument(); // Sela late joiner
@@ -127,8 +127,8 @@ describe('SeriesMemoryReveal', () => {
         fetcher={async () => detail}
       />,
     );
-    await waitFor(() => screen.getByText(/not a voice has changed/));
-    expect(screen.getByRole('dialog')).toHaveAccessibleName(/not a voice has changed/);
+    await waitFor(() => screen.getByText(/the cast carries through/));
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(/the cast carries through/);
   });
 
   it('close button calls onClose', async () => {

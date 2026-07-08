@@ -41,11 +41,11 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
 
       {/* Elevated claim */}
       <p className="font-serif text-peach text-lg font-semibold">
-        kept true across all {spanBooks} books
+        kept true, book after book
       </p>
 
       {/* Quiet claim */}
-      <p className="text-cream/70 text-sm mt-1">{spanBooks} books. The same cast.</p>
+      <p className="text-cream/70 text-sm mt-1">{spanBooks} books in. The cast carries through.</p>
 
       {/* Cast wall */}
       <div className="flex-1 flex flex-wrap content-center justify-center items-center gap-x-2 gap-y-1 my-4 text-center">
