@@ -2109,6 +2109,19 @@ async function mockGetQaReport(_bookId: string): Promise<BookQaReport> {
   return MOCK_QA_REPORT;
 }
 
+async function realResumeScoring(bookId: string): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/resume-scoring`, { method: 'POST' });
+  if (!res.ok && res.status !== 409)
+    throw new Error(
+      `Resume scoring failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  if (res.status === 409) throw Object.assign(new Error('Book is currently generating.'), { code: 'generation-active' });
+}
+
+async function mockResumeScoring(_bookId: string): Promise<void> {
+  // No-op in mock mode — there's no real scoreBook to trigger.
+}
+
 /* Workspace-wide cold-boot scan. Library layout calls this once on
    mount; if any snapshots come back AND no live analysis stream is
    already in the slice, the pill seeds from the most-recent one (the
@@ -8831,6 +8844,7 @@ const real = {
   getGpuDevices: realGetGpuDevices,
   getAnalyzerDevice: realGetAnalyzerDevice,
   getQaReport: realGetQaReport,
+  resumeScoring: realResumeScoring,
 };
 
 const mock = {
@@ -9075,6 +9089,7 @@ const mock = {
   getGpuDevices: mockGetGpuDevices,
   getAnalyzerDevice: mockGetAnalyzerDevice,
   getQaReport: mockGetQaReport,
+  resumeScoring: mockResumeScoring,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
