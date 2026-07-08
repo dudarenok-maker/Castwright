@@ -298,4 +298,27 @@ describe('Hollow Tide series-memory fixture (marketing/wiki screenshots)', () =>
       expect(real!.title).toBe(b.title);
     }
   });
+
+  it('every carried character\'s firstBookId/lastBookId/bookIndices/carriedFullSpan agree with each other', () => {
+    // Regression test for a bug that recurred twice: fixing firstBookId
+    // alone (e.g. for a character who joins mid-series) without also
+    // updating bookIndices/carriedFullSpan, leaving them still claiming
+    // full 1-N presence — the reveal panel's per-row dot strip and
+    // "from Bk N" hint read bookIndices/carriedFullSpan, not firstBookId.
+    const marin = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Marin Vale');
+    const series = marin!.series.find((s) => s.name === 'The Hollow Tide');
+    const perBook = series!.seriesMemory!.perBook;
+    const indexOf = new Map(perBook.map((b) => [b.bookId, b.index]));
+    const detail = MOCK_SERIES_MEMORY['Marin Vale::The Hollow Tide'];
+
+    for (const c of detail.carried.characters) {
+      expect(indexOf.has(c.firstBookId)).toBe(true);
+      expect(indexOf.has(c.lastBookId)).toBe(true);
+      expect(c.bookIndices[0]).toBe(indexOf.get(c.firstBookId));
+      expect(c.bookIndices[c.bookIndices.length - 1]).toBe(indexOf.get(c.lastBookId));
+      expect(c.carriedFullSpan).toBe(
+        c.bookIndices.length === detail.series.spanBooks && c.bookIndices[0] === 1,
+      );
+    }
+  });
 });
