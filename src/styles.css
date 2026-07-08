@@ -21,6 +21,14 @@
 
   --color-purple-deep: var(--purple-deep);
 
+  /* Fixed literal, NOT theme-flipping (unlike the --color-* tokens above,
+     which all resolve through a var() that flips at [data-theme='dark']).
+     Needed for components with a hardcoded-dark card background (e.g.
+     series-memory-reveal.tsx) whose text must stay light regardless of the
+     app's light/dark theme. Same literal as dark-mode --ink (line ~161)
+     and .floating-pill-inverse's pinned color (below). */
+  --color-cream: #f4efec;
+
   --font-sans: 'General Sans', 'Neue Montreal', Inter, system-ui, sans-serif;
   --font-serif: Lora, Georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;

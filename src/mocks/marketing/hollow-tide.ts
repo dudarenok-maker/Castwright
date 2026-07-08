@@ -939,13 +939,14 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       bookId: 'hollow-tide-2',
       bookSeries: 'The Hollow Tide',
       attributes: ['Male', 'Baritone', 'RP English', '60s', 'Imperious'],
-      // usedIn: 2, not 1 — carried beyond just Saltgrave in the series-memory
-      // fixture (series-memory.ts). Kept below 3 deliberately: this file's
-      // own test (hollow-tide.test.ts, "recurring principals have usedIn >= 3
-      // and source current") reserves usedIn >= 3 for the original
-      // source:'current' trio — Cross is source:'library', so a higher
-      // number here would wrongly pull him into that group.
-      usedIn: 2,
+      // Stays 1 — his real per-book cast data only casts him in Saltgrave.
+      // The series-memory "carried across the series" story (series-memory.ts)
+      // is a separate fixture that doesn't read this field, so bumping it
+      // wouldn't feed that narrative anyway; it would only trip
+      // voice-library-panel.tsx's `source === 'library' && usedIn > 1`
+      // reuse badge on the ordinary Cast/Voice Library screen, showing a
+      // misleading "★×2" next to a character who's genuinely in 1 book.
+      usedIn: 1,
       source: 'library',
       inCurrentSeries: true,
       ttsVoice: geminiTts('Charon', 'Informative'),

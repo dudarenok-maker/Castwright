@@ -69,14 +69,14 @@ export function ShareCardModal({
       onClick={onClose}
     >
       <div
-        className="relative bg-[#1b1714] text-[#f4efec] rounded-2xl p-6 w-full max-w-sm"
+        className="relative bg-[#1b1714] text-cream rounded-2xl p-6 w-full max-w-sm"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close button — mirrors series-memory-reveal.tsx pattern */}
         <div className="flex justify-end mb-2">
           <button
             onClick={onClose}
-            className="p-2 rounded-full hover:bg-white/10 text-[#f4efec]/60"
+            className="p-2 rounded-full hover:bg-white/10 text-cream/60"
             aria-label="Close"
           >
             <IconClose className="w-4 h-4" />
@@ -101,7 +101,7 @@ export function ShareCardModal({
           <button
             onClick={downloadPng}
             disabled={busy}
-            className="rounded-full px-5 py-2.5 font-semibold text-[#f4efec] border border-[#f4efec]/30 hover:bg-white/10 disabled:opacity-60"
+            className="rounded-full px-5 py-2.5 font-semibold text-cream border border-cream/30 hover:bg-white/10 disabled:opacity-60"
           >
             {busy ? 'Rendering…' : 'Download image (.png)'}
           </button>
