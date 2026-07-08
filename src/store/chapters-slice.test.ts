@@ -1136,7 +1136,7 @@ describe('chaptersSlice — setChapterHeld ("Not queued", Bug 1)', () => {
 
 describe('scoringProgress (srv-36 hardening)', () => {
   it('setScoringProgress records progress keyed by bookId', () => {
-    let state = chaptersSlice.reducer(baseState([]), chaptersActions.setScoringProgress({ bookId: 'b1', charactersChecked: 2, charactersOnRoster: 5 }));
+    const state = chaptersSlice.reducer(baseState([]), chaptersActions.setScoringProgress({ bookId: 'b1', charactersChecked: 2, charactersOnRoster: 5 }));
     expect(state.scoringProgress.b1).toEqual({ charactersChecked: 2, charactersOnRoster: 5 });
   });
 
