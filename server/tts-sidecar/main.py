@@ -517,6 +517,17 @@ _POISON_EXIT_CODE = 42
 # the way the poison code was for the (now-retired) start.ps1 supervisor loop.
 _RESTART_EXIT_CODE = 43
 
+# Exit code for a Qwen model-load fault that a fresh process is known to clear
+# (the intermittent "Cannot copy out of meta tensor" failure — see
+# _schedule_model_load_fault_restart). Deliberately NOT 43: the Node
+# supervisor's onChildExit treats repeated code-43 exits within a short window
+# as "this device is structurally too small for the model" and permanently
+# holds TTS down after a few of them (sidecar-supervisor.ts RESTART43_STREAK_*).
+# That diagnosis doesn't apply here — this is a load-time library fault, not a
+# VRAM-sizing one — so it gets its own code and falls through to the generic
+# backoff-respawn path instead.
+_MODEL_LOAD_FAULT_EXIT_CODE = 44
+
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
 # socket buffers flush within a couple of ms, but we give a generous
@@ -2068,9 +2079,17 @@ class QwenEngine(Engine):
                 model_id, resolved_impl, self._device,
             )
             return model
-        except Exception:
+        except Exception as e:
             model = None
             _reclaim_host_and_vram()
+            # The intermittent meta-tensor `.to(device)` fault (see
+            # _schedule_model_load_fault_restart) never clears by retrying in
+            # this same process — only a fresh sidecar has been observed to
+            # load cleanly. Schedule a self-recycle so the NEXT attempt (this
+            # request still gets its normal 500 below) hits a clean process
+            # instead of failing identically forever.
+            if isinstance(e, NotImplementedError) and "meta tensor" in str(e).lower():
+                _schedule_model_load_fault_restart(model_id, str(e))
             raise
 
     def _ensure_device_resolved(self) -> None:
@@ -4250,8 +4269,8 @@ def _should_soft_recycle(commit_mb: float, soft_mb: float, hard_mb: float) -> bo
     return soft_mb > 0 and commit_mb >= soft_mb and not _should_restart(commit_mb, hard_mb)
 
 
-def _restart_now() -> None:  # pragma: no cover - hard process exit; patched in tests
-    os._exit(_RESTART_EXIT_CODE)
+def _restart_now(exit_code: int = _RESTART_EXIT_CODE) -> None:  # pragma: no cover - hard process exit; patched in tests
+    os._exit(exit_code)
 
 
 def _drain_grace_ms() -> int:
@@ -4286,7 +4305,7 @@ def _max_text_length() -> int:
         return _DEFAULT_MAX_TEXT_LENGTH
 
 
-def _drain_then_restart(grace_ms: int) -> None:
+def _drain_then_restart(grace_ms: int, exit_code: int = _RESTART_EXIT_CODE) -> None:
     """Wait (bounded by `grace_ms`) for `_inflight_synth` to reach 0, then arm the
     flush-delayed hard exit. Runs on a daemon thread so it never needs an event
     loop (the watchdog schedules it; tests call _schedule_restart_exit directly).
@@ -4305,7 +4324,7 @@ def _drain_then_restart(grace_ms: int) -> None:
         )
     else:
         log.info("sidecar recycle: in-flight synth drained — self-exiting now.")
-    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
+    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now, args=(exit_code,)).start()
 
 
 _last_restart_card: Optional[dict] = None
@@ -4376,6 +4395,41 @@ def _schedule_restart_exit(
         _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
     )
     threading.Thread(target=_drain_then_restart, args=(grace_ms,), daemon=True).start()
+
+
+def _schedule_model_load_fault_restart(model_id: str, detail: str) -> None:
+    """Schedule a self-exit after a Qwen model-load fault that only a fresh
+    process is known to clear — the intermittent "Cannot copy out of meta
+    tensor; no data!" `.to(device)` failure in `_load_qwen_model` (recurring
+    since 2026-05-26, ~86 occurrences: some submodule the checkpoint doesn't
+    cover lands on the meta device despite `low_cpu_mem_usage=False`, and
+    every RELOAD in the same process keeps failing identically — only a fresh
+    process has been observed to load the model cleanly). Mirrors
+    `_schedule_restart_exit`'s idempotent-schedule + drain + hard-exit shape
+    (shares `_restart_scheduled`/`_restart_pending` so at most one restart is
+    ever in flight regardless of trigger), but uses
+    `_MODEL_LOAD_FAULT_EXIT_CODE` instead of `_RESTART_EXIT_CODE` so the
+    Node supervisor's code-43 streak-trip ("device structurally too small")
+    never fires for this unrelated fault class."""
+    global _restart_scheduled, _restart_pending
+    if _restart_scheduled:
+        return
+    _restart_scheduled = True
+    _restart_pending = True
+    _write_restart_breadcrumb(None, f"qwen model-load fault ({model_id})")
+    grace_ms = _drain_grace_ms()
+    log.warning(
+        "Qwen model=%s failed to load (%s) — this is the known intermittent "
+        "meta-tensor load fault that only a fresh process clears. Draining %d "
+        "in-flight synth (grace %dms) then self-exiting (code %d) so the "
+        "server respawns a clean sidecar.",
+        model_id, detail, _inflight_synth, grace_ms, _MODEL_LOAD_FAULT_EXIT_CODE,
+    )
+    threading.Thread(
+        target=_drain_then_restart,
+        args=(grace_ms, _MODEL_LOAD_FAULT_EXIT_CODE),
+        daemon=True,
+    ).start()
 
 
 async def _memory_watchdog() -> None:

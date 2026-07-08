@@ -304,7 +304,7 @@ def test_schedule_restart_is_idempotent(monkeypatch):
     wait past the flush delay to confirm it fired once. With nothing in flight
     (srv-17c) the drain returns immediately, so this is also the no-wait path."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_restart_scheduled", False)
     monkeypatch.setattr(main, "_restart_pending", False)
     monkeypatch.setattr(main, "_inflight_synth", 0)  # nothing to drain → exits at once
@@ -360,7 +360,7 @@ def test_drain_waits_for_inflight_then_exits(monkeypatch):
     once the counter reaches 0 — so the in-flight chapter finishes on its worker
     instead of failing."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_inflight_synth", 1)  # one chapter mid-synth
 
@@ -379,7 +379,7 @@ def test_drain_grace_expiry_exits_anyway(monkeypatch):
     """If the grace expires with a synth STILL in flight, exit regardless — the
     server's in-worker recovery re-renders that chapter (best-effort drain)."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_inflight_synth", 1)  # never drains
 
@@ -394,7 +394,7 @@ def test_drain_disabled_exits_immediately(monkeypatch):
     """SIDECAR_DRAIN_GRACE_MS=0 → draining disabled: exit at once even with synth
     in flight (the pre-srv-17c immediate-recycle behaviour)."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_inflight_synth", 5)  # would block if draining
 
@@ -667,7 +667,7 @@ def test_recycle_endpoint_schedules_clean_exit(monkeypatch):
     `_restart_pending`, fires exactly ONE exit, and a second POST is a no-op
     (idempotent via `_restart_scheduled`)."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_restart_scheduled", False)
     monkeypatch.setattr(main, "_restart_pending", False)
@@ -690,7 +690,7 @@ def test_recycle_endpoint_drains_inflight_before_exit(monkeypatch):
     """A /recycle while a synth is in flight holds the exit (the drain fence)
     until the in-flight count reaches 0 — the in-flight chapter finishes here."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_restart_scheduled", False)
     monkeypatch.setattr(main, "_restart_pending", False)
