@@ -611,7 +611,9 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
              Carried cast = 5 voices: the three `usedIn: 3` recurring ones
              (Narrator, Insp. Cray, Dr. Wren) plus two more real
              HOLLOW_TIDE_VOICES entries (Constance Vale, Magistrate Cross)
-             promoted to "carried across the series" for this fixture.
+             promoted to "carried across the series" for this fixture. Cross
+             joins from Book 2 (his real firstBookId in series-memory.ts), so
+             book 1's carriedPresent is 4, not 5 — every other book counts all 5.
 
              perBook MUST have one entry per book in the confirmedBookCount/
              spanBooks span (6), not just the 2 real ones — SeriesSparkline
@@ -624,9 +626,13 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
              aria-label right next to the chip's "6 books" — the exact
              self-contradiction a marketing screenshot must not show. Books
              1-2 keep their real principalCount (7/6, mirroring characterCount
-             above); books 3-6 are synthetic (no corresponding
-             HOLLOW_TIDE_LIBRARY entry) — same "decoupled from the physical
-             shelf" simplification as confirmedBookCount/spanBooks. */
+             above) and real bookIds; books 3-6 use a distinct
+             `hollow-tide-future-N` id (NOT the real `hollow-tide-3`/
+             `hollow-tide-4` bookIds, which already exist in HOLLOW_TIDE_LIBRARY
+             with their own real, much smaller characterCount — 0 and 3 — that
+             would otherwise directly contradict this row's invented
+             principalCount the moment someone views the library in table view,
+             which always renders the real characterCount per row). */
           seriesMemory: {
             carriedCount: 5,
             bespokeCount: 0,
@@ -634,12 +640,12 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
             confirmedBookCount: 6,
             spanBooks: 6,
             perBook: [
-              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 5 },
+              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 4 },
               { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 5 },
-              { bookId: 'hollow-tide-3', index: 3, principalCount: 6, carriedPresent: 5 },
-              { bookId: 'hollow-tide-4', index: 4, principalCount: 5, carriedPresent: 5 },
-              { bookId: 'hollow-tide-5', index: 5, principalCount: 7, carriedPresent: 5 },
-              { bookId: 'hollow-tide-6', index: 6, principalCount: 6, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-3', index: 3, principalCount: 6, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-4', index: 4, principalCount: 5, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-5', index: 5, principalCount: 7, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-6', index: 6, principalCount: 6, carriedPresent: 5 },
             ],
           },
         },
@@ -894,7 +900,11 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       bookId: 'hollow-tide-1',
       bookSeries: 'The Hollow Tide',
       attributes: ['Female', 'Soprano', 'Southern English', '50s', 'Grieving'],
-      usedIn: 1,
+      // usedIn: 2, not 1 — promoted to "carried across the series" in the
+      // series-memory fixture (series-memory.ts), so the voice library's own
+      // reuse count must agree with that story rather than still reading as
+      // a one-book-only voice.
+      usedIn: 2,
       source: 'current',
       ttsVoice: geminiTts('Sulafat', 'Warm'),
     }),
@@ -929,7 +939,13 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       bookId: 'hollow-tide-2',
       bookSeries: 'The Hollow Tide',
       attributes: ['Male', 'Baritone', 'RP English', '60s', 'Imperious'],
-      usedIn: 1,
+      // usedIn: 2, not 1 — carried beyond just Saltgrave in the series-memory
+      // fixture (series-memory.ts). Kept below 3 deliberately: this file's
+      // own test (hollow-tide.test.ts, "recurring principals have usedIn >= 3
+      // and source current") reserves usedIn >= 3 for the original
+      // source:'current' trio — Cross is source:'library', so a higher
+      // number here would wrongly pull him into that group.
+      usedIn: 2,
       source: 'library',
       inCurrentSeries: true,
       ttsVoice: geminiTts('Charon', 'Informative'),

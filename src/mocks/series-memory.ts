@@ -175,13 +175,17 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
           engine: 'gemini',
           voiceKind: 'preset',
           // Cross is a Saltgrave (Book 2) character in the source fixture
-          // (HOLLOW_TIDE_VOICES, hollow-tide.ts) — firstBookId must say so,
-          // not Book 1 like the other four (a copy-paste miss caught by
-          // code review before this fixture's first real precedent existed).
+          // (HOLLOW_TIDE_VOICES, hollow-tide.ts) — firstBookId, bookIndices,
+          // and carriedFullSpan must all agree he isn't in Book 1 (an earlier
+          // review round fixed firstBookId alone and missed that these two
+          // sibling fields still claimed full 1-6 presence, reintroducing the
+          // same "present a book early" bug through a different field — the
+          // reveal panel's per-row dot strip and the "· from Bk N" hint both
+          // read bookIndices/carriedFullSpan, not firstBookId).
           firstBookId: 'hollow-tide-2',
           lastBookId: 'hollow-tide-6',
-          bookIndices: HOLLOW_TIDE_FULL_SPAN,
-          carriedFullSpan: true,
+          bookIndices: [2, 3, 4, 5, 6],
+          carriedFullSpan: false,
           totalLines: 70,
         },
       ],
