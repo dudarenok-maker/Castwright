@@ -323,7 +323,7 @@ _Full detail + acceptance:_ [#1239](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit:_ server-side enforcement that no `--no-verify` local bypass or fresh clone can sidestep; the local guard (plan 163) becomes belt-and-suspenders. Required status checks deliberately excluded (would deadlock doc-only PRs that skip `verify.yml`).
 _Full detail + acceptance:_ [#429](https://github.com/dudarenok-maker/Castwright/issues/429).
 
-#### `fs-72` — VRAM MB-accounting policy + two-model-split UI (Wave 4 — beta 12/16GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
+#### `fs-74` — VRAM MB-accounting policy + two-model-split UI (Wave 4 — beta 12/16GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
 
 - _What:_ Wave 1 already gives 12/16GB cards coexistence via the gpu.safeCoexistMb threshold (a roomy card doesn't evict). Wave 4 refines this for beta testers who run better cards than the 8GB dev box: (1) per-(engine,mode) MB cost table vs detected VRAM (non-additive Qwen synth/design modes) so a 12GB card with a heavy combo that passes the coarse threshold but would overcommit is caught; (2) two-model analysis-split warn+confirm UI when phase0/phase1 use two different local models that won't co-fit. Design: docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md §7; context in docs/features/222.
 - _Benefit:_ Beta testers on 12/16GB cards get accurate overcommit protection (not just the coarse 8GB-dev-box threshold) and a clear warning instead of a silent OOM when two local models cannot co-fit during analysis.
