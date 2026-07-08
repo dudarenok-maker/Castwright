@@ -780,7 +780,13 @@ export const SCENES: Scene[] = [
         s?.dispatch({ type: 'ui/setTtsModelKey', payload: 'qwen3-tts-0.6b' });
       });
     },
-    waitForAfterAction: 'text=Qwen ·',
+    /* Must confirm the DESIGNED-voice branch specifically, not just that the
+       engine switched to Qwen — confirm-cast.tsx:476 renders the "Qwen · "
+       provider-label span unconditionally whenever ttsVoice.provider is
+       'qwen', even on the "No voice designed yet" fallback (tts-voice-
+       mapping.ts:333), so 'text=Qwen ·' alone would still pass if
+       bernsteinturmCast's overrideTtsVoices.qwen.name ever regressed. */
+    waitForAfterAction: 'text=Designed voice',
     strict: true,
   },
   {

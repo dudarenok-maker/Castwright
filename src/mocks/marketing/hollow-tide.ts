@@ -900,11 +900,13 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       bookId: 'hollow-tide-1',
       bookSeries: 'The Hollow Tide',
       attributes: ['Female', 'Soprano', 'Southern English', '50s', 'Grieving'],
-      // usedIn: 2, not 1 — promoted to "carried across the series" in the
-      // series-memory fixture (series-memory.ts), so the voice library's own
-      // reuse count must agree with that story rather than still reading as
-      // a one-book-only voice.
-      usedIn: 2,
+      // Stays 1 — voice-library-panel.tsx's reuse badge only reads usedIn
+      // when source === 'library' (this entry is 'current'), so bumping it
+      // wouldn't render anything anyway. The "carried across the series"
+      // story lives entirely in series-memory.ts, which doesn't read this
+      // field either (see Magistrate Cross's comment above for the same
+      // reasoning).
+      usedIn: 1,
       source: 'current',
       ttsVoice: geminiTts('Sulafat', 'Warm'),
     }),
