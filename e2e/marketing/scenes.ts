@@ -969,9 +969,12 @@ export const SCENES: Scene[] = [
        (Saltgrave) so the receipt's mixed figures agree with the same book's
        existing chapter-suspect/voice-drift-report/preview-flagged scenes
        (Task 3's HOLLOW_TIDE_QA_REPORT reuses HOLLOW_TIDE_DRIFT_EVENTS). No
-       action needed — the Listen view calls useQaReport(bookId) with the
+       `action` needed — the Listen view calls useQaReport(bookId) with the
        route's own bookId (src/views/listen.tsx), the same per-book routing
-       every other book-scoped scene in this file already relies on. */
+       every other book-scoped scene in this file already relies on. The card
+       sits below the fold, so `scrollTo` (added after Task 6's visual
+       verification caught the original scene missing it) brings it into
+       frame. */
     id: 'qa-report-card',
     hash: '#/books/hollow-tide-2/listen',
     viewports: ['desktop'],
