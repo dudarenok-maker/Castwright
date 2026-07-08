@@ -118,13 +118,19 @@ export async function touchLastSeen(id: string, now: number): Promise<void> {
   await persist(next);
 }
 
+/** Tracks the most recent fire-and-forget `touchLastSeen` write so tests can
+ *  await it — see `_flushPendingWritesForTests`. */
+let pendingWrite: Promise<unknown> | null = null;
+
 /** Sync token check used by the LAN guard (cache-backed). */
 export function isValidDeviceToken(rawToken: string): boolean {
   const now = Date.now();
   const device = findValidDevice(loadSync(), rawToken, now);
   if (!device) return false;
   // Best-effort touch — must not throw on the sync guard path; swallow any rejection.
-  if (shouldTouchLastSeen(device, now)) void touchLastSeen(device.id, now).catch(() => {});
+  if (shouldTouchLastSeen(device, now)) {
+    pendingWrite = touchLastSeen(device.id, now).catch(() => {});
+  }
   return true;
 }
 
@@ -166,4 +172,12 @@ export function listDevices(): PublicDevice[] {
 /** Test hook — clears the in-memory cache so a fresh workspace is re-read. */
 export function _resetDeviceTokenCacheForTests(): void {
   cache = null;
+}
+
+/** Test hook — await the last fire-and-forget `touchLastSeen` write kicked
+ *  off by `isValidDeviceToken`, so a temp-workspace teardown (recursive rm)
+ *  run right after doesn't race the in-flight write and intermittently fail
+ *  with ENOTEMPTY. */
+export async function _flushPendingWritesForTests(): Promise<void> {
+  await pendingWrite;
 }
