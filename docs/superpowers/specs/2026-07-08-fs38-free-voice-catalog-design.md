@@ -66,39 +66,73 @@ research pass found, so none of the three appear in the final §5 table.
 
 ## 3. Curation model & data shape
 
-One small hand-maintained list is the only curated artifact:
+**Revision note:** an earlier draft of this section proposed hand-tagging every reader by
+ear (a human listens to a clip and judges gender/age). A second adversarial pass quantified
+that as 150-200+ subjective, unbounded-labor entries to deliver real per-bucket choice across
+5 languages × 3 genders × 4 age-ranges — not "a few dozen," and with no named owner. Rejected
+outright. Curation is now a two-stage **automated pipeline**, run as an offline
+build/maintenance job (not a live request path, not part of the wizard) that produces a data
+file the wizard reads:
 
 ```
-{ readerId: string, language: 'en'|'es'|'fr'|'de'|'ru',
+{ readerId: string, displayName: string, language: 'en'|'es'|'fr'|'de'|'ru',
   gender: 'male'|'female'|'neutral', ageRange: 'child'|'teen'|'adult'|'elderly',
-  bookIds: string[] }
+  confidence: 'coarse' | 'refined', bookIds: string[] }
 ```
 
 `gender`/`ageRange` reuse the exact enum already defined for `characterHint` in
 `openapi.yaml` (used today by the Gemini prebuilt-voice picker) — the free-voice catalog
 speaks the same persona vocabulary as voice design, not a new one.
 
-**`bookIds` exists because there is no reverse lookup.** Neither LibriVox's API nor
-archive.org's item metadata supports "list every book reader X narrated" — LibriVox's
-audiobooks feed filters only by `id`/`title`/`author`/`genre`, and archive.org's `creator`
-field on a LibriVox item is the book's *author* (e.g. "Lewis Carroll"), not the reader; there
-is no narrator field at all. Reader identity is only discoverable *forwards*, per book you
-already know about (`?id=<bookId>&extended=1` returns each section's `readers[].reader_id`).
-So the curated artifact has to name each tagged reader's book(s) explicitly, found once by a
-human via LibriVox's own site during curation — the same one-time cost as tagging the reader
-at all, just one field heavier. What stays genuinely **live** (no manual re-curation) is the
-*content* of those known books: chapter listing and direct file URLs, resolved at browse/clone
-time via the `id`-based feed and archive.org's metadata API. A tagged reader's *new*
-work published after curation won't surface automatically — re-scanning readers for
-additional books is a periodic manual/maintenance task, not an automatic one. A few dozen
-entries across 5 languages is the expected scale, fewer for Russian.
+**Stage 1 — deterministic reader discovery (no LLM, no manual labor).** Page through
+LibriVox's audiobooks feed per language with `extended=1` (confirmed in §2 to include each
+section's `readers[].reader_id`/`display_name`); this is what supplies `bookIds` — a reader
+is only discoverable *forwards*, per book, so the crawl itself builds the reverse index that
+manual research would otherwise have had to construct by hand. Output: every
+`{readerId, displayName, language, bookIds[]}` the crawl finds, capped by however large a
+scope Wave 3 sizes it to (e.g. top-N readers by catalog size per language, or the full
+per-language catalog) — coverage is now bounded by crawl scope and API budget, not by hours
+of human listening.
 
-Wave 3 planning owns the exact endpoint/caching contract for this resolution step, and should
-confirm the LibriVox feed responds successfully to a normal server-side request before
-building on it — direct fetches during this spec's review were blocked with a 403 (consistent
-with bot-blocking on the request, not confirmed evidence of an outage, but unverified either
-way). This spec fixes the data shape and the "hand-tag readers + their known books, live-fetch
-each book's current content" split, not the wire protocol.
+**Stage 2 — classification, tiered by what's configured:**
+
+- **Local tier (always runs, no external dependency):** a deterministic acoustic pass —
+  average fundamental frequency (F0/pitch) over one representative clip per candidate reader,
+  computed via a lightweight estimator (autocorrelation-based, buildable on the existing
+  `numpy` dependency without a new heavy library, or `librosa`'s pitch tracker if that's an
+  acceptable new dep — Wave 3's call). F0 is a well-established, reasonably reliable proxy
+  for **gender** (adult-male vs. adult-female/child ranges are well separated) and can
+  distinguish **child vs. not-child** on elevated pitch, but is honestly **not** capable of
+  reliably separating teen/adult/elderly from pitch alone — those default to `adult` at
+  `confidence: 'coarse'` when only the local tier ran.
+- **Gemini tier (upgrade, when `GEMINI_API_KEY` is configured — same opt-in convention as
+  `ANALYZER=gemini` elsewhere in this codebase):** the representative clip is sent to
+  Gemini's multimodal audio input (new wiring — today's `server/src/tts/gemini.ts` only
+  handles Gemini audio *output*/TTS, not audio-in classification, though it's the same
+  `@google/genai` client) with a classification prompt, producing the full
+  `gender`/`ageRange` judgment (including teen/elderly distinctions the local tier can't
+  make) at `confidence: 'refined'`. This is an **upgrade path, not a symmetric fallback** —
+  local and Gemini are not equally capable, and the spec is explicit about that asymmetry
+  rather than implying parity.
+
+**Human role shrinks to optional spot-checking, not required labor:** no one is required to
+listen to every entry before it ships. `confidence: 'coarse'` entries are a known-weaker
+signal the UI can surface honestly (e.g., de-emphasized or labeled "approximate" for
+non-child age brackets tagged without Gemini). A lightweight "this doesn't match" report
+affordance on a catalog entry (Wave 3 UI detail) feeds a re-classification queue instead of
+requiring proactive human QA of the whole list up front.
+
+**Freshness:** re-running Stage 1 periodically (a scheduled job, not a live per-request path)
+picks up a known reader's newly-published books automatically — still not something a human
+has to remember to do by hand, since it's the same deterministic crawl, just re-triggered.
+
+Wave 3 planning owns the exact job/scheduling mechanics, the pitch-estimator implementation
+choice, and the Gemini prompt/schema — and should confirm the LibriVox feed responds
+successfully to a normal server-side request before building on it (direct fetches during
+this spec's review were blocked with a 403, consistent with bot-blocking on the request, not
+confirmed evidence of an outage, but unverified either way). This spec fixes the pipeline
+shape (deterministic discovery → tiered classification → confidence-tagged output) and the
+data shape, not the wire protocol or exact job cadence.
 
 ## 4. Wizard flow & rights handling
 
@@ -169,9 +203,8 @@ spec and the Wave 3 plan.
 
 ## 7. Out of scope
 
-- Automated voice-characteristic analysis (pitch/age heuristics) to auto-derive tags —
-  rejected in favor of hand-maintained tags; revisit only if the hand-maintained list proves
-  too costly to keep current.
+- A human QA pass over every catalog entry before it ships (§3) — spot-checking and a
+  user-facing "report a mismatch" affordance replace mandatory manual review.
 - Any source beyond LibriVox for the **in-app** integration (Common Voice etc. stay
   wiki-only, caution-tier or omitted).
 - Expanding language coverage beyond the 5 currently shipped (EN/ES/FR/DE/RU).
