@@ -415,7 +415,7 @@ const coalfallRuCast: Character[] = [
 
 const coalfallRu = bookState({
   bookId: 'coalfall-commission-ru',
-  title: 'Дело о Коалфолле',
+  title: 'Заказ Коалфолла',
   author: 'Castwright',
   series: 'Standalones',
   seriesPosition: null,
@@ -653,7 +653,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
                  screenshots. Reuses the Coalfall cover asset (no new
                  image dependency), per the same convention as hollow-tide-4. */
               bookId: 'coalfall-commission-ru',
-              title: 'Дело о Коалфолле',
+              title: 'Заказ Коалфолла',
               author: 'Castwright',
               series: 'Standalones',
               seriesPosition: null,
