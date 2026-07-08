@@ -566,7 +566,15 @@ const HOLLOW_TIDE_QA_REPORT: BookQaReport = {
     uncheckedCharacterIds: [],
   },
   configDrift: {
-    counts: { mild: 0, moderate: 1, severe: 1 },
+    // Derived from HOLLOW_TIDE_DRIFT_EVENTS rather than hand-typed, so the
+    // counts can never silently drift from the events list they summarize —
+    // the same "two hand-authored fixtures with no sync guard" hazard Task 2's
+    // seriesMemory/MOCK_SERIES_MEMORY consistency test exists to prevent.
+    counts: {
+      mild: HOLLOW_TIDE_DRIFT_EVENTS.filter((e) => e.severity === 'mild').length,
+      moderate: HOLLOW_TIDE_DRIFT_EVENTS.filter((e) => e.severity === 'moderate').length,
+      severe: HOLLOW_TIDE_DRIFT_EVENTS.filter((e) => e.severity === 'severe').length,
+    },
     events: HOLLOW_TIDE_DRIFT_EVENTS,
   },
 };
@@ -618,7 +626,9 @@ Append to the `SCENES` array in `e2e/marketing/scenes.ts`, before the closing `]
        (Saltgrave) so the receipt's mixed figures agree with the same book's
        existing chapter-suspect/voice-drift-report/preview-flagged scenes
        (Task 3's HOLLOW_TIDE_QA_REPORT reuses HOLLOW_TIDE_DRIFT_EVENTS). No
-       action needed — the card loads on mount via useQaReport. */
+       action needed — the Listen view calls useQaReport(bookId) with the
+       route's own bookId (src/views/listen.tsx), the same per-book routing
+       every other book-scoped scene in this file already relies on. */
     id: 'qa-report-card',
     hash: '#/books/hollow-tide-2/listen',
     viewports: ['desktop'],
@@ -628,11 +638,19 @@ Append to the `SCENES` array in `e2e/marketing/scenes.ts`, before the closing `]
     /* Emotion + delivery-direction story — a single line (Coalfall ch.4,
        sentence 107) carrying both chips filled in: the emotion chip
        (already-existing fixture data) and the new instruct chip (Task 1's
-       fixture patch). Passive load, no action needed. */
+       fixture patch). Passive load, no action needed.
+
+       NOT `[data-sentence-id="107"] [data-testid="instruct-chip"]` — the
+       chip is rendered as a SIBLING of the `data-sentence-id` span, not a
+       descendant (sentence-instruct-control.tsx / manuscript.tsx's own
+       comment: chips sit outside the text span deliberately, so they never
+       perturb the selection→split offset math). A descendant selector can
+       never match. Instead target the chip's own aria-label, which bakes in
+       Task 1's exact instruct text — unambiguous regardless of DOM nesting. */
     id: 'manuscript-emotion-direction',
     hash: '#/books/coalfall-commission/manuscript?chapter=4',
     viewports: ['desktop'],
-    waitFor: '[data-sentence-id="107"] [data-testid="instruct-chip"]',
+    waitFor: '[aria-label="Delivery direction: shouted from across the yard, half-laughing — edit"]',
     scrollTo: '[data-sentence-id="107"]',
   },
   {
@@ -652,7 +670,15 @@ Append to the `SCENES` array in `e2e/marketing/scenes.ts`, before the closing `]
   {
     /* Series memory — "N books in, not a voice changed" reveal panel,
        opened from the library shelf's series-memory-chip (Task 2's fixture
-       fix is what makes this chip render at all under DEMO_CAPTURE). */
+       fix is what makes this chip render at all under DEMO_CAPTURE).
+
+       Depends on the library rendering in CARD view, not table view — the
+       chip only exists in library-grid.tsx, never library-table.tsx
+       (book-library.tsx:228's effectiveViewMode reads a persisted
+       localStorage value, defaulting to 'card' on the empty storage a fresh
+       Playwright context always has). This holds today; if that default or
+       a persisted value ever flips to 'table', this scene and
+       series-share-card below silently stop finding the chip. */
     id: 'series-memory-reveal',
     hash: '#/',
     viewports: ['desktop'],
@@ -750,8 +776,8 @@ test('stagingPlan maps a scene id + viewport to the correct source path and outp
   ]);
 });
 
-test('the manifest has an entry for every scene added in this pass', () => {
-  const newSceneIds = [
+test('the manifest has an entry for every scene this pass captures for the four approved stories (3 pre-existing, re-captured only + 5 brand-new from Task 4 + 2 language scenes, re-captured only)', () => {
+  const storySceneIds = [
     'chapter-suspect',
     'voice-drift-report',
     'preview-flagged',
@@ -763,7 +789,7 @@ test('the manifest has an entry for every scene added in this pass', () => {
     'series-memory-reveal',
     'series-share-card',
   ];
-  for (const id of newSceneIds) {
+  for (const id of storySceneIds) {
     assert.ok(
       MANIFEST.some((e) => e.scene === id),
       `manifest is missing an entry for scene "${id}"`,
@@ -943,7 +969,7 @@ Expected: all scenes (including the 5 new ones from Task 4) pass, producing `<id
 - [ ] **Step 2: Run the staging script**
 
 Run: `npm run stage:marketing-screenshots`
-Expected: reports `staged 23/23 files into ...` with zero `missing source` warnings, and `brand/go-to-market/launch-post-images/marketing-site/screenshots/` now contains 46 `.webp` files (23 manifest entries × light + dark).
+Expected: reports `staged 46/46 files into ...` (23 manifest entries × light + dark) with zero `missing source` warnings, and `brand/go-to-market/launch-post-images/marketing-site/screenshots/` now contains 46 `.webp` files.
 
 - [ ] **Step 3: Verify the Quality Gate scenes**
 
@@ -980,7 +1006,11 @@ Read `series-share-card.webp` and confirm the same three names appear on the exp
 
 If either fails, the fixture fix in Task 2 is wrong — re-check the two edits and their consistency test before re-running the capture.
 
-- [ ] **Step 7: Note anything dropped**
+- [ ] **Step 7: Spot-check the dark variants**
+
+Steps 3-6 above only read the light `.webp` for each new/changed scene. Read the `-dark` counterpart for the four highest-risk ones — `quality-gate-report-card-dark.webp`, `emotion-delivery-direction-dark.webp`, `series-memory-reveal-dark.webp`, `series-share-card-dark.webp` — and confirm the same content is legible in dark mode: no chip, badge, or text rendering invisible-on-invisible (e.g. a dark-on-dark chip), and no clipping specific to the dark theme's layout. If any of the four look wrong in dark, the light-mode confirmation above does not carry over automatically — fix and re-run before proceeding.
+
+- [ ] **Step 8: Note anything dropped**
 
 If any scene's screenshot doesn't match its intended claim after a reasonable fix attempt, do not silently ship it — note it explicitly in Task 7's handover doc under "not covered by this pass" rather than letting a wrong or missing shot pass as done.
 
