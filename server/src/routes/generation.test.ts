@@ -1874,6 +1874,15 @@ describe('triggerScoring (srv-36 hardening)', () => {
       expect(countByType(receivedB, 'scoring_started')).toBe(1);
       expect(countByType(receivedB, 'scoring_progress')).toBe(2);
       expect(countByType(receivedB, 'scoring_complete')).toBe(1);
+      // Per the documented GenerationTick contract, scoring_complete carries
+      // the FINAL charactersChecked/charactersOnRoster alongside
+      // mismatchCount — not just mismatchCount alone.
+      const completeEvent = receivedA.find((e) => e.type === 'scoring_complete') as
+        | { charactersChecked?: number; charactersOnRoster?: number; mismatchCount?: number }
+        | undefined;
+      expect(completeEvent?.charactersChecked).toBe(2);
+      expect(completeEvent?.charactersOnRoster).toBe(2);
+      expect(completeEvent?.mismatchCount).toEqual(expect.any(Number));
     } finally {
       cleanupJob1();
       cleanupJob2();

@@ -144,12 +144,21 @@ export async function triggerScoring(ctx: {
      through, and the pass keeps working silently in the background (the
      static "X of Y checked so far" + Resume-scoring affordance covers that
      case instead — see qa-report.ts). */
+  /* Tracked across the onCharacterScored callback (mirroring scoring_progress
+     below) so the terminal scoring_complete broadcast can carry the final
+     charactersChecked/charactersOnRoster per the documented GenerationTick
+     contract, instead of just mismatchCount. */
+  let finalCharactersChecked = 0;
+  let finalCharactersOnRoster = 0;
   const run = (async () => {
     const result = await scoreBook(ctx.bookDir, ctx.chapters, ctx.justFinalizedSlugs, {
       onRosterKnown: (total) => {
+        finalCharactersOnRoster = total;
         broadcastToBook(ctx.bookId, { type: 'scoring_started', charactersOnRoster: total });
       },
       onCharacterScored: (characterId, index, total) => {
+        finalCharactersChecked = index;
+        finalCharactersOnRoster = total;
         broadcastToBook(ctx.bookId, {
           type: 'scoring_progress',
           characterId,
@@ -158,7 +167,12 @@ export async function triggerScoring(ctx: {
         });
       },
     });
-    broadcastToBook(ctx.bookId, { type: 'scoring_complete', mismatchCount: result.mismatchCount });
+    broadcastToBook(ctx.bookId, {
+      type: 'scoring_complete',
+      charactersChecked: finalCharactersChecked,
+      charactersOnRoster: finalCharactersOnRoster,
+      mismatchCount: result.mismatchCount,
+    });
     /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
        run-start `reconcileResidentQwenTiers` fires once; the between-chapters
        Option-B audition can transiently pull a base tier the render doesn't
