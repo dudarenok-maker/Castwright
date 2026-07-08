@@ -601,20 +601,51 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
           ],
           /* Series-memory marketing/wiki screenshots — gates series-memory-chip's
              render (library-grid.tsx:102: `{series.seriesMemory && (<SeriesMemoryChip …>`).
-             Carried cast = the three `usedIn: 3` recurring voices in
-             HOLLOW_TIDE_VOICES (Narrator, Insp. Cray, Dr. Wren), confirmed present
-             in books 1-2 (both already cast; books 3-4 aren't part of the carried
-             span yet). perBook.principalCount mirrors each book's own
-             characterCount above (7, 6) so the two never silently drift apart. */
+             confirmedBookCount/spanBooks are the "how many books has this cast
+             carried across" headline (SeriesMemorySummary — types.ts: "M for
+             in-app surfaces … NOT series.books.length"), deliberately decoupled
+             from the physical shelf (still 4 real cards: hollow-tide-1..4) —
+             kept to 6 (not a bigger number) so the gap against the shelf's own
+             "4 books" label (rendered right beside the chip in library-grid.tsx)
+             reads as real growth, not a jarring, suspicious-looking mismatch.
+             Carried cast = 5 voices: the three `usedIn: 3` recurring ones
+             (Narrator, Insp. Cray, Dr. Wren) plus two more real
+             HOLLOW_TIDE_VOICES entries (Constance Vale, Magistrate Cross)
+             promoted to "carried across the series" for this fixture. Cross
+             joins from Book 2 (his real firstBookId in series-memory.ts), so
+             book 1's carriedPresent is 4, not 5 — every other book counts all 5.
+
+             perBook MUST have one entry per book in the confirmedBookCount/
+             spanBooks span (6), not just the 2 real ones — SeriesSparkline
+             (rendered next to SeriesMemoryChip in library-grid.tsx) reads
+             perBook.length for its bar count and carriedPresent per bar; the
+             ONE other real precedent (Northern Coast Trilogy, library.ts)
+             always keeps perBook.length === confirmedBookCount === spanBooks,
+             so a shorter perBook under a "6 books" claim would render a
+             sparkline contradicting its own "carried across 6 books"
+             aria-label right next to the chip's "6 books" — the exact
+             self-contradiction a marketing screenshot must not show. Books
+             1-2 keep their real principalCount (7/6, mirroring characterCount
+             above) and real bookIds; books 3-6 use a distinct
+             `hollow-tide-future-N` id (NOT the real `hollow-tide-3`/
+             `hollow-tide-4` bookIds, which already exist in HOLLOW_TIDE_LIBRARY
+             with their own real, much smaller characterCount — 0 and 3 — that
+             would otherwise directly contradict this row's invented
+             principalCount the moment someone views the library in table view,
+             which always renders the real characterCount per row). */
           seriesMemory: {
-            carriedCount: 3,
+            carriedCount: 5,
             bespokeCount: 0,
             designedCount: 0,
-            confirmedBookCount: 2,
-            spanBooks: 2,
+            confirmedBookCount: 6,
+            spanBooks: 6,
             perBook: [
-              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 3 },
-              { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 3 },
+              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 4 },
+              { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-3', index: 3, principalCount: 6, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-4', index: 4, principalCount: 5, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-5', index: 5, principalCount: 7, carriedPresent: 5 },
+              { bookId: 'hollow-tide-future-6', index: 6, principalCount: 6, carriedPresent: 5 },
             ],
           },
         },
@@ -869,6 +900,12 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       bookId: 'hollow-tide-1',
       bookSeries: 'The Hollow Tide',
       attributes: ['Female', 'Soprano', 'Southern English', '50s', 'Grieving'],
+      // Stays 1 — voice-library-panel.tsx's reuse badge only reads usedIn
+      // when source === 'library' (this entry is 'current'), so bumping it
+      // wouldn't render anything anyway. The "carried across the series"
+      // story lives entirely in series-memory.ts, which doesn't read this
+      // field either (see Magistrate Cross's comment above for the same
+      // reasoning).
       usedIn: 1,
       source: 'current',
       ttsVoice: geminiTts('Sulafat', 'Warm'),
@@ -904,6 +941,13 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       bookId: 'hollow-tide-2',
       bookSeries: 'The Hollow Tide',
       attributes: ['Male', 'Baritone', 'RP English', '60s', 'Imperious'],
+      // Stays 1 — his real per-book cast data only casts him in Saltgrave.
+      // The series-memory "carried across the series" story (series-memory.ts)
+      // is a separate fixture that doesn't read this field, so bumping it
+      // wouldn't feed that narrative anyway; it would only trip
+      // voice-library-panel.tsx's `source === 'library' && usedIn > 1`
+      // reuse badge on the ordinary Cast/Voice Library screen, showing a
+      // misleading "★×2" next to a character who's genuinely in 1 book.
       usedIn: 1,
       source: 'library',
       inCurrentSeries: true,

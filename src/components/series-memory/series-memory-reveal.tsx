@@ -144,7 +144,7 @@ export function SeriesMemoryReveal({
               series memory · {series}
             </p>
             <h2 id="sm-reveal-heading" className="font-serif text-2xl mt-2">
-              {spell(bookCount)} books in, and not a voice has changed.
+              {spell(bookCount)} books in, and the cast carries through.
             </h2>
             <p className="text-cream/60 mt-1 mb-5">
               {spell(detail.carried.count)} voices, yours — book after book.

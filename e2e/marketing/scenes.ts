@@ -762,6 +762,31 @@ export const SCENES: Scene[] = [
     hash: '#/books/der-bernsteinturm/confirm',
     viewports: ['desktop'],
     waitFor: '[aria-label^="Open profile for"]',
+    /* confirm-cast.tsx:80 resolves the shown suggested-voice engine from the
+       GLOBAL account default (`engineForModelKey(s.ui.ttsModelKey)`), not
+       from the book or character — real behavior, not a fixture bug. Qwen is
+       the product's actual default engine now, so force ttsModelKey to a
+       Qwen key before the shot rather than letting whatever the marketing
+       account's default happens to be (previously Kokoro) show instead —
+       bernsteinturmCast's characters already carry a designed
+       `overrideTtsVoices.qwen.name`, so switching the engine renders their
+       real designed voice ("Qwen · qwen-erzaehlerin · Designed voice")
+       instead of a generic Kokoro preset suggestion. */
+    action: async (page) => {
+      await page.evaluate(() => {
+        const s = (
+          window as unknown as { __store__?: { dispatch: (a: unknown) => void } }
+        ).__store__;
+        s?.dispatch({ type: 'ui/setTtsModelKey', payload: 'qwen3-tts-0.6b' });
+      });
+    },
+    /* Must confirm the DESIGNED-voice branch specifically, not just that the
+       engine switched to Qwen — confirm-cast.tsx:476 renders the "Qwen · "
+       provider-label span unconditionally whenever ttsVoice.provider is
+       'qwen', even on the "No voice designed yet" fallback (tts-voice-
+       mapping.ts:333), so 'text=Qwen ·' alone would still pass if
+       bernsteinturmCast's overrideTtsVoices.qwen.name ever regressed. */
+    waitForAfterAction: 'text=Designed voice',
     strict: true,
   },
   {
@@ -1054,7 +1079,7 @@ export const SCENES: Scene[] = [
     action: async (page) => {
       await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
     },
-    waitForAfterAction: 'text=books in, and not a voice has changed',
+    waitForAfterAction: 'text=books in, and the cast carries through',
     strict: true,
   },
   {
@@ -1067,7 +1092,7 @@ export const SCENES: Scene[] = [
     waitFor: '[data-testid="series-memory-chip"]',
     action: async (page) => {
       await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
-      await page.waitForSelector('text=books in, and not a voice has changed', { timeout: 5000 });
+      await page.waitForSelector('text=books in, and the cast carries through', { timeout: 5000 });
       await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
     },
     waitForAfterAction: 'text=Download image',

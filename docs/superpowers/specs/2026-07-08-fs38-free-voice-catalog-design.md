@@ -36,57 +36,124 @@ Wikimedia Commons spoken-word. Only **LibriVox** clears the bar for in-app integ
   needs. (Common Voice, by contrast, is thousands of anonymous speakers each reading one
   unrelated few-second sentence — no "narrator" to pick, and no single speaker has enough
   continuous audio to clone well.)
-- **Fetchability:** official catalog API (`librivox.org/api/info`, queryable by language/
-  reader) plus archive.org's metadata API, which enumerates stable, direct per-chapter MP3
-  URLs for a given book identifier. No rehosting needed — the wizard fetches live from the
-  resolved URL at clone time.
+- **Fetchability:** LibriVox's public API (base feed `librivox.org/api/feed/audiobooks/`,
+  queryable by `id`/`title`/`author`/`genre`, with an `extended=1` mode that includes
+  per-section reader data — confirmed by reading the API's actual source, not the
+  `/api/info` docs page cited in an earlier draft of this spec, which is not itself an
+  endpoint) plus archive.org's metadata API, which enumerates stable, direct per-chapter
+  MP3 URLs for a given book identifier (confirmed live against a real item). No rehosting
+  needed — the wizard fetches live from the resolved URL at clone time. **Neither API
+  supports resolving "which books has reader X narrated" directly** — see §3 for how the
+  curation model works around that.
 - **Coverage:** EN is massive; ES/FR/DE have solid dedicated sections; RU exists but is
   noticeably thinner.
 
-Common Voice, OpenSLR, M-AILABS, and Wikimedia Commons were all rejected for the **in-app
-integration** specifically (non-commercial-only licensing on some corpora, link-rot risk on
-dead/mirrored hosts, bulk-archive-only access with no stable per-clip URL, or a license scope
-that covers "voice tech training" but is ambiguous about identifiable-voice cloning
-specifically). A separate, lighter research pass for the wiki page (§5) found that
-Wikimedia Commons' language-specific spoken-word/Spoken-Wikipedia collections are in fact
-worth recommending there (CC-BY-SA is a clear, if attribution-bound, license, and the
-per-language collections are substantial) even though they didn't clear the in-app bar;
-Common Voice, OpenSLR, and M-AILABS did not resurface as competitive against the
-native-language alternatives that pass found, so none of the three appear in the final §5
-table.
+Common Voice, OpenSLR, and M-AILABS were all rejected for the **in-app integration**
+specifically (non-commercial-only licensing on some corpora, link-rot risk on dead/mirrored
+hosts, bulk-archive-only access with no stable per-clip URL, or a license scope that covers
+"voice tech training" but is ambiguous about identifiable-voice cloning specifically). A
+separate, lighter research pass for the wiki page (§5) found that Wikimedia Commons'
+language-specific spoken-word/Spoken-Wikipedia collections are worth recommending there
+(CC-BY-SA is a clear license, and the per-language collections are substantial) — but
+Commons is **deliberately kept out of the in-app integration too, for a reason distinct from
+the others**: CC-BY-SA carries a ShareAlike clause, and if a voice clone is treated as a
+derivative of the source recording, ShareAlike could arguably extend to the *generated
+output* — an acceptable judgment call for a user manually cloning their own picked file, but
+not a risk to build an automated commercial pipeline around. PD-only (LibriVox) is the
+in-app bar; CC-BY-SA is a fine flagged wiki recommendation. Common Voice, OpenSLR, and
+M-AILABS did not resurface as competitive against the native-language alternatives the wiki
+research pass found, so none of the three appear in the final §5 table.
 
 ## 3. Curation model & data shape
 
-One small hand-maintained list is the only curated artifact:
+**Revision note:** an earlier draft of this section proposed hand-tagging every reader by
+ear (a human listens to a clip and judges gender/age). A second adversarial pass quantified
+that as 150-200+ subjective, unbounded-labor entries to deliver real per-bucket choice across
+5 languages × 3 genders × 4 age-ranges — not "a few dozen," and with no named owner. Rejected
+outright. Curation is now a two-stage **automated pipeline**, run as an offline
+build/maintenance job (not a live request path, not part of the wizard) that produces a data
+file the wizard reads:
 
 ```
-{ readerId: string, language: 'en'|'es'|'fr'|'de'|'ru',
-  gender: 'male'|'female'|'neutral', ageRange: 'child'|'teen'|'adult'|'elderly' }
+{ readerId: string, displayName: string, language: 'en'|'es'|'fr'|'de'|'ru',
+  gender: 'male'|'female'|'neutral', ageRange: 'child'|'teen'|'adult'|'elderly',
+  confidence: 'coarse' | 'refined', bookIds: string[] }
 ```
 
 `gender`/`ageRange` reuse the exact enum already defined for `characterHint` in
 `openapi.yaml` (used today by the Gemini prebuilt-voice picker) — the free-voice catalog
 speaks the same persona vocabulary as voice design, not a new one.
 
-This list is vetted by hand, per reader, once — a few dozen entries across 5 languages is
-the expected scale, fewer for Russian. It is **not** a list of specific clip URLs: the
-actual books/chapters available for a tagged reader are resolved live via LibriVox's catalog
-API (by readerId) and archive.org's metadata API (direct chapter URLs from a book
-identifier), so the content itself stays current without repeated manual re-curation.
-Wave 3 planning owns the exact endpoint/caching contract for this resolution step; this spec
-fixes the data shape and the "hand-tag readers, live-fetch content" split, not the wire
-protocol.
+**Stage 1 — deterministic reader discovery (no LLM, no manual labor).** Page through
+LibriVox's audiobooks feed per language with `extended=1` (confirmed in §2 to include each
+section's `readers[].reader_id`/`display_name`); this is what supplies `bookIds` — a reader
+is only discoverable *forwards*, per book, so the crawl itself builds the reverse index that
+manual research would otherwise have had to construct by hand. Output: every
+`{readerId, displayName, language, bookIds[]}` the crawl finds, capped by however large a
+scope Wave 3 sizes it to (e.g. top-N readers by catalog size per language, or the full
+per-language catalog) — coverage is now bounded by crawl scope and API budget, not by hours
+of human listening.
+
+**Stage 2 — classification, tiered by what's configured:**
+
+- **Local tier (always runs, no external dependency):** a deterministic acoustic pass —
+  average fundamental frequency (F0/pitch) over one representative clip per candidate reader,
+  computed via a lightweight estimator (autocorrelation-based, buildable on the existing
+  `numpy` dependency without a new heavy library, or `librosa`'s pitch tracker if that's an
+  acceptable new dep — Wave 3's call). F0 is a well-established, reasonably reliable proxy
+  for **gender** (adult-male vs. adult-female/child ranges are well separated) and can
+  distinguish **child vs. not-child** on elevated pitch, but is honestly **not** capable of
+  reliably separating teen/adult/elderly from pitch alone — those default to `adult` at
+  `confidence: 'coarse'` when only the local tier ran.
+- **Gemini tier (upgrade, when `GEMINI_API_KEY` is configured — same opt-in convention as
+  `ANALYZER=gemini` elsewhere in this codebase):** the representative clip is sent to
+  Gemini's multimodal audio input (new wiring — today's `server/src/tts/gemini.ts` only
+  handles Gemini audio *output*/TTS, not audio-in classification, though it's the same
+  `@google/genai` client) with a classification prompt, producing the full
+  `gender`/`ageRange` judgment (including teen/elderly distinctions the local tier can't
+  make) at `confidence: 'refined'`. This is an **upgrade path, not a symmetric fallback** —
+  local and Gemini are not equally capable, and the spec is explicit about that asymmetry
+  rather than implying parity.
+
+**Human role shrinks to optional spot-checking, not required labor:** no one is required to
+listen to every entry before it ships. `confidence: 'coarse'` entries are a known-weaker
+signal the UI can surface honestly (e.g., de-emphasized or labeled "approximate" for
+non-child age brackets tagged without Gemini). A lightweight "this doesn't match" report
+affordance on a catalog entry (Wave 3 UI detail) feeds a re-classification queue instead of
+requiring proactive human QA of the whole list up front.
+
+**Freshness:** re-running Stage 1 periodically (a scheduled job, not a live per-request path)
+picks up a known reader's newly-published books automatically — still not something a human
+has to remember to do by hand, since it's the same deterministic crawl, just re-triggered.
+
+Wave 3 planning owns the exact job/scheduling mechanics, the pitch-estimator implementation
+choice, and the Gemini prompt/schema — and should confirm the LibriVox feed responds
+successfully to a normal server-side request before building on it (direct fetches during
+this spec's review were blocked with a 403, consistent with bot-blocking on the request, not
+confirmed evidence of an outage, but unverified either way). This spec fixes the pipeline
+shape (deterministic discovery → tiered classification → confidence-tagged output) and the
+data shape, not the wire protocol or exact job cadence.
 
 ## 4. Wizard flow & rights handling
 
 "Browse free voices" is a third entry point in the existing clone/imported wizard (fs-38
-spec §4), alongside "Record" and "Upload your own." It opens a filter — language (defaults
-to the book's language) × gender × age-range — over the tagged-reader list, with a preview
-player per reader streamed live from the resolved archive.org URL. Selecting a reader/clip
-feeds it into the **same** ffmpeg-ingest → quality-check/Whisper-transcript →
-consent-attestation → clone pipeline as a manual upload; from the pipeline's perspective this
-is just another audio source, not a new mechanism. Provenance is `imported`, unchanged from
-the existing spec.
+spec §4), alongside "Record" and "Upload your own." **It runs as a preliminary sub-step
+ahead of the base wizard's step 1** rather than slotting into step 2 ("Record or upload")
+directly: the base spec's step 1 (consent/attestation first) is ordered that way because the
+*content* of the attestation needs to be known before the rest of the flow — for a personal
+clone that means the person's name (to bake into the reading script); for a catalog entry it
+means which reader/book/rights-note apply, which isn't knowable until a specific entry is
+picked. So the flow is: **pick a catalog entry first → then enter the base wizard's step 1
+with `sourceAttestation` pre-filled** (source: LibriVox, book/reader identity, rights note) —
+the user confirms/edits rather than typing from scratch, and every step from there on
+(quality-check, Whisper transcript, name & shelve) runs exactly as it does for a manual
+upload. Provenance is `imported`, unchanged from the existing spec.
+
+**Fetch failure is a first-class state, not an edge case left to whatever the browser does
+by default:** if the archive.org fetch times out, 404s, or the source is otherwise
+unreachable, the catalog entry shows an inline error with **Retry** and a **"Switch to
+Upload instead"** action that hands off to the existing manual path with no lost context —
+never a silent hang, never a dead end.
 
 The consent/attestation screen pre-fills the existing `sourceAttestation: { source, rightsNote,
 attestedAt }` field (no new consent mechanism) with a standard note making explicit: the
@@ -116,12 +183,14 @@ gets recommended, not just "exists and is free":**
 | EN | LibriVox; Wikimedia Commons Spoken Wikipedia (CC-BY-SA); LoyalBooks (mirrors PD); Project Gutenberg audiobooks (PD) | Internet Archive general spoken-word collections (mixed per-item licensing) |
 | ES | LibriVox; LoyalBooks ES; Wikimedia Commons Spanish spoken-word (CC-BY-SA) | AlbaLearning (site framing is "personal use," reuse rights unclear) |
 | FR | LibriVox; Wikimedia Commons French spoken-word (CC-BY-SA) | Litteratureaudio.com (no stated reuse license); Audiocité (cites CC/PD sources but pulls content on complaint — verify per recording); BnF/Gallica PD holdings (not deeply verified) |
-| DE | LibriVox; Wikimedia "Gesprochene Wikipedia" German (CC-BY-SA, ~400+ hrs — the largest non-LibriVox option found for any language) | Vorleser.net (reads as "free to listen," not clearly "free to reuse") |
-| RU | LibriVox RU (thin — ~60 titles, but the cleanest license) | Internet Archive RU audiobook collection (mixed/unclear per-item provenance); Baza Knig / Babavera (likely restrictive — mentioned as existing, not recommended) |
+| DE | LibriVox; Wikimedia "Gesprochene Wikipedia" German (mixed CC-BY-SA/CC-BY per file, same as the other languages' Commons entries — largest non-LibriVox collection found for any language by file count, ~1,748 files in the category, though total-hours figures cited elsewhere for this collection are unverified and should be treated as illustrative, not confirmed) | Vorleser.net (reads as "free to listen," not clearly "free to reuse") |
+| RU | LibriVox RU (thin — title count cited elsewhere as ~60 is unverified; confirmed only as "visibly smaller than the other 4 languages," not to an exact number) | Internet Archive RU audiobook collection (mixed/unclear per-item provenance); Baza Knig / Babavera (likely restrictive — mentioned as existing, not recommended) |
 
 Russian is called out explicitly as the thinnest language — genuinely ~2 usable options
 today. The list is not padded to match the other languages' length; an honest gap is more
-useful than false parity.
+useful than false parity. Exact title/hour counts throughout this table are sourced from
+research-agent passes, not independently re-verified line-by-line; treat them as directional,
+not as numbers to cite externally without a fresh check.
 
 ## 6. Phasing
 
@@ -134,9 +203,8 @@ spec and the Wave 3 plan.
 
 ## 7. Out of scope
 
-- Automated voice-characteristic analysis (pitch/age heuristics) to auto-derive tags —
-  rejected in favor of hand-maintained tags; revisit only if the hand-maintained list proves
-  too costly to keep current.
+- A human QA pass over every catalog entry before it ships (§3) — spot-checking and a
+  user-facing "report a mismatch" affordance replace mandatory manual review.
 - Any source beyond LibriVox for the **in-app** integration (Common Voice etc. stay
   wiki-only, caution-tier or omitted).
 - Expanding language coverage beyond the 5 currently shipped (EN/ES/FR/DE/RU).

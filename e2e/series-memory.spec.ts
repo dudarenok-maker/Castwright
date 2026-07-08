@@ -40,9 +40,9 @@ test.describe('series-memory: chip → reveal → share card', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-    /* Headline: "{spell(bookCount)} books in, and not a voice has changed."
-       bookCount = 3 → "Three books in, and not a voice has changed." */
-    await expect(dialog.getByText(/not a voice has changed/i)).toBeVisible({ timeout: 5_000 });
+    /* Headline: "{spell(bookCount)} books in, and the cast carries through."
+       bookCount = 3 → "Three books in, and the cast carries through." */
+    await expect(dialog.getByText(/the cast carries through/i)).toBeVisible({ timeout: 5_000 });
 
     /* "Share this cast" button is inside the reveal. */
     await dialog.getByText('Share this cast').click();

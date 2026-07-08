@@ -127,12 +127,29 @@ for (const scene of SCENES) {
     const themes = (
       process.env.CAPTURE_THEME ? [process.env.CAPTURE_THEME] : ['light', 'dark']
     ) as ('light' | 'dark')[];
+    const fullPage = scene.fullPage ?? process.env.CAPTURE_FULLPAGE === '1';
+    /* Full-page screenshots scroll-and-stitch multiple viewport-sized strips
+       together. top-bar.tsx's `<header className="sticky top-0 z-40 …">`
+       stays pinned to whatever viewport slice was active when Playwright
+       captured it, so it gets composited into the stitched image at that
+       scroll offset instead of once at the true top — a duplicated/misplaced
+       header floating mid-page on any fullPage scene tall enough to need
+       more than one strip. Forcing it to `position: static` just for the
+       fullPage shot renders it once, in its real DOM position (the top of
+       the page). Scoped to `header.z-40` (top-bar.tsx's own z-index, unique
+       among this codebase's <header> elements) rather than the broader
+       `header.sticky`, which also matches revision-diff.tsx's unrelated
+       `sticky top-0 z-10` in-page header — flattening that one too would be
+       an unintended regression for any fullPage scene landing on that view. */
+    if (fullPage) {
+      await page.addStyleTag({ content: 'header.z-40 { position: static !important; }' });
+    }
     for (const theme of themes) {
       await page.emulateMedia({ colorScheme: theme });
       await page.waitForTimeout(400); // settle the theme re-render
       await page.screenshot({
         path: resolve(OUT, `${scene.id}.${vp}.${theme}.png`),
-        fullPage: scene.fullPage ?? process.env.CAPTURE_FULLPAGE === '1',
+        fullPage,
       });
     }
   });
