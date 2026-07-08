@@ -118,9 +118,10 @@ export async function touchLastSeen(id: string, now: number): Promise<void> {
   await persist(next);
 }
 
-/** Tracks the most recent fire-and-forget `touchLastSeen` write so tests can
- *  await it — see `_flushPendingWritesForTests`. */
-let pendingWrite: Promise<unknown> | null = null;
+/** Tracks in-flight fire-and-forget `touchLastSeen` writes so tests can await
+ *  them all — see `_flushPendingWritesForTests`. A Set (not a single slot)
+ *  so a second touch fired before the first settles isn't dropped. */
+const pendingWrites = new Set<Promise<unknown>>();
 
 /** Sync token check used by the LAN guard (cache-backed). */
 export function isValidDeviceToken(rawToken: string): boolean {
@@ -129,7 +130,9 @@ export function isValidDeviceToken(rawToken: string): boolean {
   if (!device) return false;
   // Best-effort touch — must not throw on the sync guard path; swallow any rejection.
   if (shouldTouchLastSeen(device, now)) {
-    pendingWrite = touchLastSeen(device.id, now).catch(() => {});
+    const write = touchLastSeen(device.id, now).catch(() => {});
+    pendingWrites.add(write);
+    void write.finally(() => pendingWrites.delete(write));
   }
   return true;
 }
@@ -174,10 +177,10 @@ export function _resetDeviceTokenCacheForTests(): void {
   cache = null;
 }
 
-/** Test hook — await the last fire-and-forget `touchLastSeen` write kicked
- *  off by `isValidDeviceToken`, so a temp-workspace teardown (recursive rm)
- *  run right after doesn't race the in-flight write and intermittently fail
- *  with ENOTEMPTY. */
+/** Test hook — await every fire-and-forget `touchLastSeen` write kicked off
+ *  by `isValidDeviceToken`, so a temp-workspace teardown (recursive rm) run
+ *  right after doesn't race an in-flight write and intermittently fail with
+ *  ENOTEMPTY. */
 export async function _flushPendingWritesForTests(): Promise<void> {
-  await pendingWrite;
+  await Promise.all(pendingWrites);
 }
