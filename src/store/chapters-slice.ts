@@ -89,6 +89,9 @@ export interface ChaptersState {
       same book coexist as separate entries; the layout pill selectors
       aggregate across `Object.values`. */
   activeStreams: Record<string, ActiveStreamSnapshot>;
+  /** srv-36 hardening — scorebook per-chapter progress tracking, keyed by bookId.
+      Records how many characters have been scored in the QA gate. */
+  scoringProgress: Record<string, { charactersChecked: number; charactersOnRoster: number }>;
   /** #650 — render-time sentence→speaker map per rendered chapter
       (`{ [chapterId]: { [sentenceId]: characterId } }`), hydrated from the
       book-state GET. The Generate view diffs it against the live manuscript to
@@ -106,9 +109,6 @@ export interface ChaptersState {
       path only). Optional: absent until a hydrate carries one, so the existing
       ChaptersState test literals need no edit. */
   renderedInstructByChapter?: Record<number, Record<number, string>>;
-  /** srv-36 hardening — scorebook per-chapter progress tracking, keyed by bookId.
-      Records how many characters have been scored in the QA gate. */
-  scoringProgress: Record<string, { charactersChecked: number; charactersOnRoster: number }>;
 }
 
 const initialState: ChaptersState = {
@@ -118,9 +118,9 @@ const initialState: ChaptersState = {
   lastTickAt: null,
   currentBookId: null,
   activeStreams: {},
+  scoringProgress: {},
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
-  scoringProgress: {},
 };
 
 export const chaptersSlice = createSlice({

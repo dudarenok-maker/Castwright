@@ -49,14 +49,12 @@ function renderModal(
     preloadedState: {
       chapters: {
         chapters: chapter ? [chapter] : [],
-        paused: false,
         lastError: null,
         generationStartedAt: null,
-        pendingRegen: null,
-        regenEpoch: 0,
         lastTickAt: null,
         currentBookId: null,
         activeStreams: {},
+        scoringProgress: {},
         renderedSpeakersByChapter: {},
         renderedTextByChapter: {},
       },
