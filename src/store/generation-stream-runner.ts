@@ -22,6 +22,8 @@ import {
   buildGenerationStartedEvent,
   buildGenerationRunCompleteEvent,
   buildChapterFailedEvent,
+  buildScoringStartedEvent,
+  buildScoringCompleteEvent,
 } from '../lib/change-log';
 import { chaptersActions } from './chapters-slice';
 import { changeLogActions } from './change-log-slice';
@@ -436,6 +438,25 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           dedupeKey: `fallback-confirm:${ev.queueEntryId ?? ev.chapterId}`,
         }),
       );
+    } else if (ev.type === 'scoring_started') {
+      dispatch(chaptersActions.setScoringProgress({ bookId, charactersChecked: 0, charactersOnRoster: ev.charactersOnRoster ?? 0 }));
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'info',
+          message: `Checking character voices in the background — ${ev.charactersOnRoster ?? 0} to verify.`,
+          dedupeKey: `voice-match-scoring:${bookId}`,
+        }),
+      );
+      if (sliceMatchesHandle) {
+        dispatch(changeLogActions.appendLogEvent(buildScoringStartedEvent({ charactersOnRoster: ev.charactersOnRoster ?? 0 })));
+      }
+    } else if (ev.type === 'scoring_progress') {
+      dispatch(chaptersActions.setScoringProgress({ bookId, charactersChecked: ev.charactersChecked ?? 0, charactersOnRoster: ev.charactersOnRoster ?? 0 }));
+    } else if (ev.type === 'scoring_complete') {
+      dispatch(chaptersActions.clearScoringProgress(bookId));
+      if (sliceMatchesHandle) {
+        dispatch(changeLogActions.appendLogEvent(buildScoringCompleteEvent({ mismatchCount: ev.mismatchCount ?? 0 })));
+      }
     } else if (ev.type === 'idle') {
       /* Server's idle tick is the unambiguous "no more work" signal for this
          chapter's stream — tear it down by its composite key, leaving sibling

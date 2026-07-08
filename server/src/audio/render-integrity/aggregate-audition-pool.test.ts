@@ -95,7 +95,10 @@ describe('scoreBook — cast.json evidence threading + anchor blending (srv-36 r
     const dir = mkdtempSync(join(tmpdir(), 'spk-pool-hint-missing-'));
     await writeThuridFixture(dir, 3); // no .audiobook dir written at all
 
-    await expect(scoreBook(dir, [{ id: 1, slug: 'ch1' }])).resolves.toBeUndefined();
+    await expect(scoreBook(dir, [{ id: 1, slug: 'ch1' }])).resolves.toEqual({
+      usedQwenTiers: { keep06: expect.any(Boolean), keep17: expect.any(Boolean) },
+      mismatchCount: expect.any(Number),
+    });
 
     expect(auditionSpy).toHaveBeenCalledTimes(1);
     const [character] = auditionSpy.mock.calls[0] as unknown as [{ hint?: unknown }];

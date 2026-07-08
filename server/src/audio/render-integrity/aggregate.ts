@@ -26,19 +26,21 @@ import { audioDir, castJsonPath } from '../../workspace/paths.js';
 import { readJson } from '../../workspace/state-io.js';
 import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
-import { writeVerdicts, writeAttempted, attemptedPath, type VerdictRow } from './verdicts-io.js';
+import { writeAttempted, attemptedPath, mergeVerdictRows, type VerdictRow } from './verdicts-io.js';
 import {
+  readCentroids,
   writeCentroids,
   type CharacterCentroid,
 } from './centroids-io.js';
-import { buildCentroid } from './centroid.js';
+import { CENTROID_MIN_N, buildCentroid } from './centroid.js';
 import {
   cosineToCentroid,
   percentile,
   scoreSegment,
   CUTOFFS,
 } from './score.js';
-import { auditionCentroid, type AuditionCharacter } from './audition-centroid.js';
+import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } from './audition-centroid.js';
+import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io.js';
 import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
 
@@ -149,87 +151,96 @@ interface CharacterReference {
   referenceKind: 'in-book' | 'audition' | 'too-short';
 }
 
+/** Discriminates the three things that can happen when a character's
+ *  in-book anchors alone aren't enough (srv-36 hardening, spec §2):
+ *  - 'resolved': a usable reference — either real in-book anchors, or a
+ *    successful (or reused-from-a-prior-run) audition centroid.
+ *  - 'too-short': a CONCLUSIVE negative result — no voice info to attempt
+ *    audition at all, or auditionCentroid completed its full render budget
+ *    and the pool is still too thin/bimodal. Terminal: never retried.
+ *  - 'transient-failure': auditionCentroid's synth/embed call itself threw
+ *    (sidecar unreachable, timeout). NOT terminal — the caller tracks a
+ *    bounded retry count (pending-attempts-io.ts) and only degrades to
+ *    'too-short' after the cap is spent. Nothing is written for this
+ *    outcome — the character stays genuinely unresolved this run. */
+type ReferenceOutcome =
+  | { status: 'resolved' | 'too-short'; ref: CharacterReference }
+  | { status: 'transient-failure' };
+
+const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
+
+function persistedAsRef(row: CharacterCentroid): CharacterReference {
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind };
+}
+
 /**
  * Resolve the centroid reference for a character.
  *
- * In-book path (kind='in-book', !bimodal): compute the character's centroid
- * from anchor-eligible vectors, derive the clean spread statistics.
+ * In-book path: compute the character's centroid from anchor-eligible
+ * vectors, derive the clean spread statistics. Always attempted fresh, every
+ * call — cheap (pure local math, no TTS) — so a character can upgrade from
+ * a prior audition/too-short result the moment enough real anchors exist
+ * (srv-36 hardening, spec §2).
  *
- * Task 10 — too-thin / bimodal path: attempt Option-B audition centroid:
- *   blend real anchor embeddings (too-thin only) with new audition renders
- *   under distinct evidence-quote text, up to AUDITION_POOL_TARGET_N +
- *   AUDITION_POOL_MARGIN total render attempts (see audition-centroid.ts).
- *   If the resulting pool is still too short for a reliable reference →
- *   `referenceKind: 'too-short'` (all segments → inconclusive).
+ * Too-thin/bimodal path: if `persisted` is already a terminal `'too-short'`
+ * row, that state is ABSORBING — return it verbatim, never call
+ * `auditionCentroid` again. If `persisted` is a successful `'audition'` row,
+ * reuse it verbatim — no new renders. Otherwise (no persisted state, or a
+ * stale 'in-book' row that no longer qualifies), attempt the Option-B
+ * audition centroid; its three possible outcomes map onto this function's
+ * three outcomes 1:1 (see `ReferenceOutcome`'s doc comment).
  *
- * @param anchorVecs    Anchor-eligible embedding vectors collected from the book.
- * @param voiceInfo     Optional voice info for Option-B (absent when no snapshot).
+ * @param anchorVecs  Anchor-eligible embedding vectors collected from the book.
+ * @param voiceInfo   Optional voice info for Option-B (absent when no snapshot).
+ * @param persisted   This character's prior-run row from centroids.json, if any.
+ * @param auditionOpts  Test-only synth/embed fn overrides, forwarded to auditionCentroid.
  */
 async function resolveCharacterReference(
   anchorVecs: Float32Array[],
-  voiceInfo?: AuditionCharacter,
-): Promise<CharacterReference> {
+  voiceInfo: AuditionCharacter | undefined,
+  persisted: CharacterCentroid | undefined,
+  auditionOpts?: Pick<AuditionCentroidOpts, 'synthFn' | 'embedFn'>,
+): Promise<ReferenceOutcome> {
   const result = buildCentroid(anchorVecs);
 
   if (result.kind === 'in-book' && !result.bimodal) {
-    // In-book path: compute the clean spread over the anchor-eligible set.
     const centroidArr = Array.from(result.centroid);
     const cosines = anchorVecs
       .map((v) => cosineToCentroid(Array.from(v), centroidArr))
       .sort((a, b) => a - b);
-
     const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
     const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
     const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-
-    return {
-      centroid: centroidArr,
-      cleanMean,
-      pSevere,
-      pBand,
-      referenceKind: 'in-book',
-    };
+    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book' } };
   }
 
-  // Task 10: too-thin OR bimodal → Option-B audition centroid.
-  if (voiceInfo) {
-    const audition = await auditionCentroid(voiceInfo, {
-      // Too-thin: blend the real anchors in (better signal than synthetic-only).
-      // Bimodal: pass none — the anchors ARE the untrustworthy data causing
-      // the split; auditionCentroid falls back to a pure audition-only pool.
-      existingAnchors: result.kind === 'too-thin' ? anchorVecs : [],
-    });
-    if (audition && audition.kind === 'audition') {
-      // Compute the spread (pSevere/pBand/cleanMean) over the audition embeddings'
-      // cosines — the same math as the in-book path but seeded from the K renders.
-      const centroidArr = Array.from(audition.centroid);
-      const cosines = audition.embeddings
-        .map((v) => cosineToCentroid(Array.from(v), centroidArr))
-        .sort((a, b) => a - b);
-
-      const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
-      const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
-      const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-
-      return {
-        centroid: centroidArr,
-        cleanMean,
-        pSevere,
-        pBand,
-        referenceKind: 'audition',
-      };
-    }
+  if (persisted?.referenceKind === 'too-short') {
+    return { status: 'too-short', ref: persistedAsRef(persisted) };
+  }
+  if (persisted?.referenceKind === 'audition') {
+    return { status: 'resolved', ref: persistedAsRef(persisted) };
+  }
+  if (!voiceInfo) {
+    return { status: 'too-short', ref: TOO_SHORT_REF };
   }
 
-  // No usable reference (too-short, null sidecar, or no voiceInfo) →
-  // all segments for this character score inconclusive.
-  return {
-    centroid: [],
-    cleanMean: 0,
-    pSevere: 0,
-    pBand: 0,
-    referenceKind: 'too-short',
-  };
+  const audition = await auditionCentroid(voiceInfo, {
+    existingAnchors: result.kind === 'too-thin' ? anchorVecs : [],
+    synthFn: auditionOpts?.synthFn,
+    embedFn: auditionOpts?.embedFn,
+  });
+
+  if (audition === null) return { status: 'transient-failure' };
+  if (audition.kind === 'too-short') return { status: 'too-short', ref: TOO_SHORT_REF };
+
+  const centroidArr = Array.from(audition.centroid);
+  const cosines = audition.embeddings
+    .map((v) => cosineToCentroid(Array.from(v), centroidArr))
+    .sort((a, b) => a - b);
+  const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
+  const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
+  const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition' } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────
@@ -275,12 +286,18 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  * persists them, then scores every embedding row per chapter and writes
  * `<slug>.render-integrity.json`.
  *
- * Idempotent — safe to re-run; files are overwritten each call.
+ * Idempotent — safe to re-run; files are overwritten each call. Per-character
+ * resolution + persistence is interleaved (srv-36 hardening): each character's
+ * centroid row and verdict rows land on disk as soon as THAT character
+ * resolves, cheap-first ordered, instead of batching every character to a
+ * single write at the end. A character whose audition-centroid synth/embed
+ * call transiently fails is retried (bounded, see pending-attempts-io.ts) on
+ * a later call rather than blocking this run's other characters.
  *
- * Returns nothing: the caller's post-audition VRAM reconcile no longer derives
- * its keep-flags from here (a finalized-chapters-only view can't see an in-flight
- * sibling chapter's tier — the Finding-2 race). It reconciles against the run's
- * FULL-cast tier set instead, computed once at run start.
+ * The caller's post-audition VRAM reconcile no longer derives its keep-flags
+ * from this function's return: a finalized-chapters-only view can't see an
+ * in-flight sibling chapter's tier (the Finding-2 race). It reconciles
+ * against the run's FULL-cast tier set instead, computed once at run start.
  *
  * @param bookDir  The book's root directory on disk.
  * @param chapters Array of `{ id, slug }` identifying the book's chapters.
@@ -292,12 +309,30 @@ function segKey(characterId: string, sentenceIds: number[]): string {
  *   loop below) — get the "attempted" sentinel written on this pass. Omit to
  *   treat every chapter in `chapters` as just-finalized (back-compat default
  *   for direct callers/tests that don't care about the concurrent-render race).
+ * @param opts Optional progress callbacks + test-only synth/embed overrides.
+ * @returns The Qwen tiers actually seen this run, and the total number of
+ *   `voice-mismatch` verdict rows written.
  */
 export async function scoreBook(
   bookDir: string,
   chapters: { id: number; slug: string }[],
   justFinalizedSlugs?: Iterable<string>,
-): Promise<void> {
+  opts?: {
+    /** Fires exactly once, before the per-character loop starts, with the
+        final roster size — independent of whether any character actually
+        resolves this run (round-2 plan-review fix: firing "started" lazily
+        inside the first onCharacterScored callback meant a run where every
+        character hit a transient failure — the exact "book is stuck, please
+        resume" scenario this feature targets — never announced itself as
+        started at all). */
+    onRosterKnown?: (total: number) => void;
+    onCharacterScored?: (characterId: string, index: number, total: number) => void;
+    /** Test-only — forwarded to every auditionCentroid call this run. */
+    __testSynthFn?: AuditionCentroidOpts['synthFn'];
+    __testEmbedFn?: AuditionCentroidOpts['embedFn'];
+  },
+): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }> {
+  const NO_TIERS = { usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 };
   const root = audioDir(bookDir);
   const justFinalized = new Set(justFinalizedSlugs ?? chapters.map((c) => c.slug));
 
@@ -392,7 +427,7 @@ export async function scoreBook(
   }
 
   // No chapter data → nothing to do
-  if (chapterData.length === 0) return;
+  if (chapterData.length === 0) return NO_TIERS;
 
   // ── Phase 2: Gather anchor-eligible vectors per character ───────────────
 
@@ -458,7 +493,7 @@ export async function scoreBook(
     if (STOCHASTIC_ENGINES.has(engine)) stochasticChars.add(charId);
   }
 
-  if (stochasticChars.size === 0) return; // No stochastic characters → nothing to score
+  if (stochasticChars.size === 0) return NO_TIERS; // No stochastic characters → nothing to score
 
   // Gather anchor-eligible vectors per character:
   // eligible iff: stochastic-configured AND per-segment renderedFallbackEngine unset/null
@@ -481,93 +516,111 @@ export async function scoreBook(
     }
   }
 
-  // ── Phase 3: Build centroids + compute per-character spread ────────────
+  // ── Phase 3+4: resolve, persist, and score each character as it resolves ──
+  // srv-36 hardening: interleaved instead of two separate batch phases, so
+  // a cheap character's result is visible on disk immediately instead of
+  // waiting for every character (including expensive too-thin ones) to
+  // finish first. Cheap-first ordered so that's ALSO true in practice, not
+  // just in theory (an expensive character sorting first in the old
+  // first-chapter-appearance order would otherwise still delay the first
+  // write for no reason).
 
-  const characterCentroids = new Map<string, CharacterReference>();
-  const centroidRows: CharacterCentroid[] = [];
+  const centroidsMap: Record<string, CharacterCentroid> = (await readCentroids(bookDir)) ?? {};
+  const pendingMap: Record<string, number> = (await readPendingAttempts(bookDir)) ?? {};
+  const MAX_PENDING_ATTEMPTS = 3;
 
-  for (const charId of stochasticChars) {
-    const anchorVecs = anchorVecsByChar.get(charId)!;
-    const ref = await resolveCharacterReference(anchorVecs, voiceInfoByChar.get(charId));
-    characterCentroids.set(charId, ref);
-    centroidRows.push({
-      characterId: charId,
-      centroid: ref.centroid,
-      cleanMean: ref.cleanMean,
-      pSevere: ref.pSevere,
-      pBand: ref.pBand,
-      referenceKind: ref.referenceKind,
-    });
+  const orderedChars = Array.from(stochasticChars).sort((a, b) => {
+    const aReady = (anchorVecsByChar.get(a)?.length ?? 0) >= CENTROID_MIN_N ? 0 : 1;
+    const bReady = (anchorVecsByChar.get(b)?.length ?? 0) >= CENTROID_MIN_N ? 0 : 1;
+    return aReady - bReady;
+  });
+  opts?.onRosterKnown?.(orderedChars.length);
+
+  /** Returns the number of `voice-mismatch` rows written for this character
+   *  this call — accumulated by the caller into a run-total mismatch count
+   *  (round-2 plan-review fix: `scoring_complete`'s `mismatchCount` must be
+   *  a real count, not the hardcoded 0 an earlier draft shipped, which
+   *  would have permanently logged a false "0 mismatches found" into the
+   *  Activity feed via buildScoringCompleteEvent regardless of the actual
+   *  result). */
+  async function scoreAndMergeCharacter(charId: string, ref: CharacterReference): Promise<number> {
+    const configuredEngine = configuredEngineByChar.get(charId) ?? '';
+    let mismatchCount = 0;
+    for (const cd of chapterData) {
+      const rowsForChar: VerdictRow[] = [];
+      for (const row of cd.embRows) {
+        if (row.characterId !== charId) continue;
+        const key = segKey(row.characterId, row.sentenceIds);
+        const seg = cd.segsByKey.get(key);
+        const renderedFallback = seg?.renderedFallbackEngine ?? null;
+        const renderedEngine = (renderedFallback != null && renderedFallback !== '') ? renderedFallback : configuredEngine;
+
+        if (ref.referenceKind === 'too-short') {
+          rowsForChar.push({
+            characterId: row.characterId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
+            cosine: 0, severity: 'inconclusive', fixable: false,
+            expectedEngine: configuredEngine, renderedEngine, referenceKind: 'too-short', windowed: false, chapterId: cd.id,
+          });
+          continue;
+        }
+        const cosine = cosineToCentroid(Array.from(row.vec), ref.centroid);
+        const { verdict, severity } = scoreSegment(cosine, ref, ASSUMED_DURATION_SEC);
+        const fixable = verdict === 'voice-mismatch' && severity === 'severe' && STOCHASTIC_ENGINES.has(configuredEngine);
+        if (verdict === 'voice-mismatch') mismatchCount++;
+        rowsForChar.push({
+          characterId: row.characterId, sentenceIds: row.sentenceIds, verdict, cosine, severity, fixable,
+          expectedEngine: configuredEngine, renderedEngine, referenceKind: ref.referenceKind, windowed: false, chapterId: cd.id,
+        });
+      }
+      if (rowsForChar.length === 0) continue;
+      await mergeVerdictRows(join(root, `${cd.slug}.render-integrity.json`), charId, rowsForChar);
+    }
+    return mismatchCount;
   }
 
-  // Persist centroids (repair route reads them in Task 13)
-  await writeCentroids(bookDir, centroidRows);
+  let scoredCount = 0;
+  let totalMismatches = 0;
+  for (const charId of orderedChars) {
+    const anchorVecs = anchorVecsByChar.get(charId)!;
+    const persisted = centroidsMap[charId];
 
-  // ── Phase 4: Score every chapter's embedding rows ──────────────────────
+    const outcome = await resolveCharacterReference(
+      anchorVecs,
+      voiceInfoByChar.get(charId),
+      persisted,
+      { synthFn: opts?.__testSynthFn, embedFn: opts?.__testEmbedFn },
+    );
 
-  for (const cd of chapterData) {
-    const verdictRows: VerdictRow[] = [];
-
-    for (const row of cd.embRows) {
-      if (!stochasticChars.has(row.characterId)) continue;
-
-      const ref = characterCentroids.get(row.characterId);
-      if (!ref) continue;
-
-      const configuredEngine = configuredEngineByChar.get(row.characterId) ?? '';
-      const key = segKey(row.characterId, row.sentenceIds);
-      const seg = cd.segsByKey.get(key);
-      const renderedFallback = seg?.renderedFallbackEngine ?? null;
-      const renderedEngine = (renderedFallback != null && renderedFallback !== '') ? renderedFallback : configuredEngine;
-
-      // Too-short placeholder: segments → inconclusive
-      if (ref.referenceKind === 'too-short') {
-        verdictRows.push({
-          characterId: row.characterId,
-          sentenceIds: row.sentenceIds,
-          verdict: 'inconclusive',
-          cosine: 0,
-          severity: 'inconclusive',
-          fixable: false,
-          expectedEngine: configuredEngine,
-          renderedEngine,
-          referenceKind: 'too-short',
-          windowed: false,
-          chapterId: cd.id,
-        });
-        continue;
+    if (outcome.status === 'transient-failure') {
+      const prior = pendingMap[charId] ?? 0;
+      if (prior + 1 < MAX_PENDING_ATTEMPTS) {
+        pendingMap[charId] = prior + 1;
+        continue; // genuinely unresolved this run — nothing written, retried next trigger
       }
-
-      // Acoustic scoring against the character's centroid.
-      // ALL embedded segments — including fallback renders — are scored acoustically
-      // per spec §4.1. Fallback segments usually flag (Kokoro timbre is far from a
-      // Qwen centroid → low cosine → voice-mismatch), but via the real metric.
-      // The stored `cosine` is always the real measurement (Task 13 reads it).
-      const cosine = cosineToCentroid(Array.from(row.vec), ref.centroid);
-      const { verdict, severity } = scoreSegment(cosine, ref, ASSUMED_DURATION_SEC);
-
-      const fixable = verdict === 'voice-mismatch' && severity === 'severe'
-        && STOCHASTIC_ENGINES.has(configuredEngine);
-
-      verdictRows.push({
-        characterId: row.characterId,
-        sentenceIds: row.sentenceIds,
-        verdict,
-        cosine,
-        severity,
-        fixable,
-        expectedEngine: configuredEngine,
-        renderedEngine,
-        referenceKind: ref.referenceKind,
-        windowed: false,
-        chapterId: cd.id,
-      });
+      delete pendingMap[charId];
+      centroidsMap[charId] = { characterId: charId, ...TOO_SHORT_REF };
+      await writeCentroids(bookDir, Object.values(centroidsMap));
+      totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
+      scoredCount++;
+      opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
+      continue;
     }
 
-    if (verdictRows.length === 0) continue;
-
-    const verdictPath = join(root, `${cd.slug}.render-integrity.json`);
-    await writeVerdicts(verdictPath, verdictRows);
+    delete pendingMap[charId];
+    centroidsMap[charId] = { characterId: charId, ...outcome.ref };
+    await writeCentroids(bookDir, Object.values(centroidsMap));
+    totalMismatches += await scoreAndMergeCharacter(charId, outcome.ref);
+    scoredCount++;
+    opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
   }
+
+  await writePendingAttempts(bookDir, pendingMap);
+
+  const usedQwenTiers = { keep06: false, keep17: false };
+  for (const info of voiceInfoByChar.values()) {
+    if (info.modelKey === 'qwen3-tts-0.6b') usedQwenTiers.keep06 = true;
+    if (info.modelKey === 'qwen3-tts-1.7b') usedQwenTiers.keep17 = true;
+  }
+  return { usedQwenTiers, mismatchCount: totalMismatches };
 }
 

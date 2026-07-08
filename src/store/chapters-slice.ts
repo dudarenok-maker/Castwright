@@ -89,6 +89,9 @@ export interface ChaptersState {
       same book coexist as separate entries; the layout pill selectors
       aggregate across `Object.values`. */
   activeStreams: Record<string, ActiveStreamSnapshot>;
+  /** srv-36 hardening — scorebook per-chapter progress tracking, keyed by bookId.
+      Records how many characters have been scored in the QA gate. */
+  scoringProgress: Record<string, { charactersChecked: number; charactersOnRoster: number }>;
   /** #650 — render-time sentence→speaker map per rendered chapter
       (`{ [chapterId]: { [sentenceId]: characterId } }`), hydrated from the
       book-state GET. The Generate view diffs it against the live manuscript to
@@ -115,6 +118,7 @@ const initialState: ChaptersState = {
   lastTickAt: null,
   currentBookId: null,
   activeStreams: {},
+  scoringProgress: {},
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
 };
@@ -180,6 +184,19 @@ export const chaptersSlice = createSlice({
         `streamKey`. The header pill hides entirely when no streams remain. */
     clearActiveStream: (s, a: PayloadAction<string>) => {
       delete s.activeStreams[a.payload];
+    },
+
+    setScoringProgress: (
+      s,
+      a: PayloadAction<{ bookId: string; charactersChecked: number; charactersOnRoster: number }>,
+    ) => {
+      s.scoringProgress[a.payload.bookId] = {
+        charactersChecked: a.payload.charactersChecked,
+        charactersOnRoster: a.payload.charactersOnRoster,
+      };
+    },
+    clearScoringProgress: (s, a: PayloadAction<string>) => {
+      delete s.scoringProgress[a.payload];
     },
 
     /** Bug E — cross-book heartbeat + counter refresh from a server tick

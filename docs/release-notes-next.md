@@ -78,6 +78,22 @@ Every book now ships a visible, exportable "quality gate" receipt — the acoust
   a clean book reads `"Every line held."`, a partial-coverage book states its
   coverage fractions plainly rather than hiding them.
 
+### 🩺 Live voice-match progress + a manual resume for a stuck check (new) — fs-72
+The voice-match check used to batch every character's result until the whole book's cast was done — a book with many minor characters could sit at "0 of N scored" for the entire generation with zero indication it was actually working, and a killed check on an already-rendered book had no way to pick back up.
+
+- **Each character's voice-match result now saves the moment it's ready**,
+  cheapest characters first — no more waiting on your book's rarest voices
+  before you see anything at all (Closes #1449).
+- **A live "Checking character voices — X of Y done" readout** on the
+  Quality Gate card, plus a matching Activity feed entry, while the check
+  runs in the background during generation.
+- **A "Resume scoring" button** appears if a check gets interrupted (e.g. a
+  restart) on a book that's already finished rendering, with nothing left to
+  automatically pick it back up.
+- **A transient hiccup checking a character's voice now genuinely retries**
+  (up to 3 times) instead of being permanently marked "can't be checked" —
+  only a character whose voice truly can't be built settles into that state.
+
 ---
 
 ## 🔊 Generation quality & reliability

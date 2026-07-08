@@ -90,4 +90,14 @@ export const LOG_TYPES: Record<ChangeLogType, LogTypeMeta> = {
     label: 'Library updated',
   },
   reparse: { icon: <IconRefresh className="w-3.5 h-3.5" />, color: '#3C194F', label: 'Re-parsed' },
+  scoring_started: {
+    icon: <IconSparkle className="w-3.5 h-3.5" />,
+    color: '#3C194F',
+    label: 'Scoring started',
+  },
+  scoring_complete: {
+    icon: <IconCheck className="w-3.5 h-3.5" />,
+    color: '#2F7A57',
+    label: 'Scoring complete',
+  },
 };

@@ -249,7 +249,7 @@ export function ListenView({
         onFixLine={onFixLine}
       />
 
-      <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title} />
+      <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title} bookId={bookId} />
 
       <ListenDownloadSection
         queueItems={queueItems}

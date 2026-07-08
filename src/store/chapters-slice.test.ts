@@ -32,6 +32,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   activeStreams: {},
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
+  scoringProgress: {},
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>
@@ -1130,6 +1131,19 @@ describe('chaptersSlice — setChapterHeld ("Not queued", Bug 1)', () => {
       chaptersActions.setChapterHeld({ chapterId: 99, held: true }),
     );
     expect(next.chapters).toEqual(start.chapters);
+  });
+});
+
+describe('scoringProgress (srv-36 hardening)', () => {
+  it('setScoringProgress records progress keyed by bookId', () => {
+    const state = chaptersSlice.reducer(baseState([]), chaptersActions.setScoringProgress({ bookId: 'b1', charactersChecked: 2, charactersOnRoster: 5 }));
+    expect(state.scoringProgress.b1).toEqual({ charactersChecked: 2, charactersOnRoster: 5 });
+  });
+
+  it('clearScoringProgress removes the entry for that book', () => {
+    let state = chaptersSlice.reducer(baseState([]), chaptersActions.setScoringProgress({ bookId: 'b1', charactersChecked: 2, charactersOnRoster: 5 }));
+    state = chaptersSlice.reducer(state, chaptersActions.clearScoringProgress('b1'));
+    expect(state.scoringProgress.b1).toBeUndefined();
   });
 });
 

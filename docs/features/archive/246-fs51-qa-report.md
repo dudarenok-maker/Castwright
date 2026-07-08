@@ -8,10 +8,12 @@ owner: null
 
 > Status: stable
 > Key files: `server/src/audio/qa-report.ts`, `server/src/routes/qa-report.ts`,
+> `server/src/audio/render-integrity/{aggregate,pending-attempts-io,verdicts-io,centroids-io}.ts`,
+> `server/src/routes/generation.ts` (`triggerScoring`/`broadcastToBook`),
 > `src/components/qa-report-card.tsx`, `src/hooks/use-qa-report.ts`,
-> `src/lib/qa-report-export.ts`
+> `src/lib/qa-report-export.ts`, `src/store/{chapters-slice,generation-stream-runner}.ts`
 > URL surface: `#/books/<id>/listen` (Listen view), `#/books/<id>/generate` (Generation view)
-> OpenAPI ops: `GET /api/books/{bookId}/qa-report`
+> OpenAPI ops: `GET /api/books/{bookId}/qa-report`, `POST /api/books/{bookId}/resume-scoring` (fs-72)
 
 ## Benefit / Rationale
 
@@ -111,6 +113,66 @@ Opus whole-branch review).
    verdict is still valid. Only `buildSynthReplacements`-produced
    (re-record) replacements set it.
 
+### fs-72 additions (2026-07-08) — incremental writes, resumability, progress visibility
+
+`scoreBook()` used to batch every character's result until the whole book's
+cast was resolved before writing anything — a book with many minor
+characters (needing the expensive live-TTS "audition centroid" fallback)
+showed a stuck "0 of N scored" reading for tens of minutes with zero
+progress indication, and a killed/interrupted run on an already-fully-
+rendered book had no way to resume. Design spec:
+`docs/superpowers/specs/2026-07-08-scorebook-incremental-hardening-design.md`
+(3 rounds of adversarial review). Implementation plan:
+`docs/superpowers/plans/2026-07-08-scorebook-incremental-hardening.md`
+(2 rounds + 1 self-reviewed round, 14 tasks via
+`superpowers:subagent-driven-development`).
+
+6. **`scoreBook` persists each character immediately upon resolving**
+   (`centroids.json` upsert + `mergeVerdictRows` per affected chapter),
+   cheap-first ordered (`anchorVecsByChar.length >= CENTROID_MIN_N` sorts
+   first) — not batched to the end of the per-character loop. Verified by
+   `aggregate.test.ts`'s cheap-before-expensive ordering assertion.
+7. **A character's reference resolution has three distinguishable
+   outcomes, not two.** `auditionCentroid` returns `null` (transient sidecar
+   failure — retriable, bounded at 3 attempts via
+   `pending-attempts-io.ts`'s counter) | `{kind:'too-short'}` (pool
+   completed, still too thin — terminal immediately, no retry) |
+   `{kind:'audition'}` (success). Folding `null` and `{kind:'too-short'}`
+   into the same terminal bucket (the pre-fs-72 behavior) permanently
+   mislabels a transient sidecar hiccup as "can't be checked, ever." A
+   terminal `too-short` row (capped or genuine) is **absorbing** —
+   `auditionCentroid` is never re-invoked for it again, though the cheap
+   in-book recompute still runs every call so a character can upgrade if
+   new anchors arrive.
+8. **`charactersPending` (new `voiceDrift` field) is deliberately narrower
+   than `charactersChecked < charactersOnRoster`.** It means "no row in
+   `centroids.json` at all" (genuinely incomplete — never attempted, or
+   mid-retry-cycle). A terminally-capped character has a row (a terminal
+   `too-short` one) and is correctly excluded — gating the frontend's
+   Resume-scoring button on the wider condition instead would show a
+   permanently useless button for a book whose only unchecked characters
+   are already terminal.
+9. **The per-chapter roster used for "fully scored" is sourced from each
+   chapter's `embeddings.json`, not from `characterSnapshots`/segments.json
+   presence.** A character can speak in a chapter (on the snapshot) yet have
+   zero embeddable lines there (every line under the duration floor) —
+   using snapshot presence as the roster made such a chapter permanently
+   unscoreable, a false "embed failed" on an otherwise healthy chapter.
+10. **`triggerScoring` (extracted from the inline `scoreBook` call in
+    `afterChapterFinalized`) is fire-and-forget and single-flighted per
+    book** (`scoringInFlight`), shared by both the chapter-finalize path and
+    the new manual resume route. Live SSE progress
+    (`scoring_started`/`scoring_progress`/`scoring_complete`, broadcast via
+    a new `broadcastToBook` helper reusing the existing `inFlightByBook`/
+    `broadcast` primitives, de-duplicated by the underlying `res` so a
+    bare-resume-reconnected client registered into multiple sibling jobs
+    doesn't receive one tick per job) is **best-effort, not guaranteed** —
+    a resume-triggered run has no active generation job to broadcast
+    through by construction, and the tail of a chapter-finalize-triggered
+    run can outlive the book's last job draining. The static
+    "X of Y checked so far" + Resume button state is the fallback for both
+    cases, not a bug.
+
 ## Test plan
 
 ### Automated coverage
@@ -146,12 +208,53 @@ Opus whole-branch review).
   and the card's full branch-priority matrix (embed-failure-leads,
   no-stochastic-characters distinct from not-run, inconclusive-count shown).
 - Vitest frontend (`src/views/listen.test.tsx`, `src/views/generation.test.tsx`)
-  — card mounted on both views; Generation view refetches on both a new
-  `chapter_complete` entry and a new `generation_run_complete` entry
-  (independent, non-interfering triggers).
+  — card mounted on both views; Generation view refetches on a new
+  `chapter_complete`, `generation_run_complete`, **and `scoring_complete`
+  (fs-72)** entry (independent, non-interfering triggers).
 - Playwright e2e (`e2e/qa-report.spec.ts`) — the Listen-view card renders and
   both export buttons trigger real browser downloads with the expected
   filenames.
+
+**fs-72 additions:**
+
+- Vitest server (`server/src/audio/render-integrity/pending-attempts-io.test.ts`)
+  — the retry-attempts artifact round-trips and overwrites (not merges).
+- Vitest server (`server/src/audio/render-integrity/aggregate.test.ts`) —
+  incremental per-character writes land mid-loop, cheap-first ordered; all
+  three `auditionCentroid` outcomes (`null`/`{kind:'too-short'}`/success)
+  route correctly; the absorbing-state assertion (a 5th call for an
+  already-terminal character never re-invokes the synth fn); `usedQwenTiers`/
+  `mismatchCount` returned correctly.
+- Vitest server (`server/src/audio/render-integrity/verdicts-io.test.ts`) —
+  `mergeVerdictRows` read-modify-write idempotence; `verdictCharactersByChapter`
+  per-chapter coverage.
+- Vitest server (`server/src/audio/qa-report.test.ts`) — `rosterByChapter`
+  sourced from `embeddings.json` (a snapshot-present/zero-embedding-rows
+  character doesn't block "fully scored"); `charactersPending` narrower than
+  `charactersChecked < charactersOnRoster`; `chaptersEmbedFailed` excludes a
+  chapter with a still-pending roster character but counts one whose only
+  unscored character is terminally capped.
+- Vitest server (`server/src/routes/generation.test.ts`) — `triggerScoring`'s
+  fire-and-forget semantics (via a test-only `__awaitScoringSettled`), the
+  duplicated (not relocated) `qa.speaker.enabled` guard, `keep` derivation
+  (verbatim when supplied, from `scoreBook`'s `usedQwenTiers` when omitted),
+  and `broadcastToBook`'s de-dup-by-`res`.
+- Vitest server (`server/src/routes/qa-report.test.ts`) — the resume route's
+  202/409/404 responses, and that `justFinalizedSlugs: []` doesn't falsely
+  mark a mid-render chapter "attempted."
+- Vitest frontend (`src/store/chapters-slice.test.ts`,
+  `src/store/generation-stream-runner.test.ts`) — `scoringProgress` state;
+  the three new SSE tick types drive the right dispatches (`scoring_progress`
+  positively asserted to NOT spam a toast per character).
+- Vitest frontend (`src/components/qa-report-card.test.tsx`) — all three
+  `VoiceMatchRow` states; the Resume button's gating condition
+  (`charactersPending.length > 0`, not the wider proxy) verified against a
+  fixture designed to diverge between the two; the failure/retry path
+  (button re-enables after a rejected `resumeScoring` call).
+- Playwright e2e (`e2e/generation-scoring-progress.spec.ts`) — live progress
+  UI reaction to hand-fed SSE ticks, the Activity feed entry, and the Resume
+  button's appearance/click — scoped to frontend reactivity against the mock
+  SSE layer, not a server-side live-delivery guarantee (see invariant 10).
 
 ### Manual acceptance walkthrough
 
@@ -177,7 +280,18 @@ Run in mock mode (`VITE_USE_MOCKS=true`, the default for `npm run dev`).
 - **Any change to when/whether the underlying gates run** — this report only
   aggregates and presents existing signals, except the fresh-verdict-on-
   re-record fix above, which corrects a pre-existing correctness gap the
-  report's own honesty requirement surfaced.
+  report's own honesty requirement surfaced, and fs-72's manual resume
+  route (§ fs-72 additions), which is an explicit user-triggered action, not
+  an automatic change to the gate's own run conditions.
+- **fs-72: reducing the audition-centroid's render cost** (a smaller target
+  pool for very minor characters, parallelizing across characters) —
+  explicitly deferred; that pass only changed *when* results persist and
+  *whether* a run survives interruption, not how expensive the fallback
+  synthesis itself is.
+- **fs-72: boot-time reconciliation** (auto-resuming a stalled run on server
+  startup) — considered and rejected in favor of the manual Resume button;
+  avoids surprising the user with unrequested background GPU work right
+  after a restart.
 - **A "QA history over time" view** — the report reflects the book's current
   render state only, not a trend across regenerations.
 - **Backfilling `chapterId` onto already-rendered books'
@@ -203,3 +317,11 @@ Opus whole-branch review found no Critical/Important code defects — the
 end-to-end across the task interactions (verdict-writing, coverage
 computation, both re-record paths, and the card/export branch priority).
 Closes #973.
+
+**fs-72 shipped 2026-07-08.** Branch `feat/server-scorebook-incremental-hardening`,
+14 SDD tasks + fix rounds. All 14 tasks individually reviewed (three with a
+fix round for real findings: retry-cap terminality, `deriveBookOutline`
+roster-source correction, and Resume-button test rigor/comment accuracy). A
+final Opus whole-branch review found one Important defect (`scoring_complete`
+wasn't wired to `refetchQaReport`, so the card could stay stale after a
+background pass finished — fixed) and no Critical defects. Closes #1449.
