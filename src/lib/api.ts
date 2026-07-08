@@ -2105,20 +2105,63 @@ async function realGetQaReport(bookId: string): Promise<BookQaReport> {
   return res.json();
 }
 
-async function mockGetQaReport(_bookId: string): Promise<BookQaReport> {
-  /* srv-36 hardening (Task 14 e2e) — the mock ignores bookId and always
-     returns the same fixed MOCK_QA_REPORT (voiceDrift.charactersPending is
-     always []), so there's no way to reach the Resume-scoring branch of
+/* Quality Gate marketing/wiki screenshots — a realistic mixed report for
+   Saltgrave (hollow-tide-2), reusing the SAME two drift events the
+   voice-drift-report scene already shows for this book, so the QA receipt
+   and the drift modal agree with each other rather than telling two
+   different stories about the same book. */
+const HOLLOW_TIDE_QA_REPORT: BookQaReport = {
+  bookId: 'hollow-tide-2',
+  generatedAt: '2026-06-12T09:00:00.000Z',
+  chaptersRendered: 7,
+  chaptersTotal: 11,
+  totalLines: 640,
+  acoustic: { linesChecked: 640, linesRerecorded: 5, chaptersFlagged: 1 },
+  asr: { linesVerified: 640, linesFlaggedDrift: 2 },
+  voiceDrift: {
+    attribution: 'full',
+    chaptersEligible: 7,
+    chaptersScored: 7,
+    chaptersEmbedFailed: 0,
+    charactersOnRoster: 6,
+    charactersChecked: 6,
+    charactersPending: [],
+    mismatches: [{ characterId: 'insp-cray', chapterId: 2, fixable: true }],
+    inconclusiveCount: 0,
+    uncheckedCharacterIds: [],
+  },
+  configDrift: {
+    // Derived from HOLLOW_TIDE_DRIFT_EVENTS rather than hand-typed, so the
+    // counts can never silently drift from the events list they summarize —
+    // the same "two hand-authored fixtures with no sync guard" hazard Task 2's
+    // seriesMemory/MOCK_SERIES_MEMORY consistency test exists to prevent.
+    counts: {
+      mild: HOLLOW_TIDE_DRIFT_EVENTS.filter((e) => e.severity === 'mild').length,
+      moderate: HOLLOW_TIDE_DRIFT_EVENTS.filter((e) => e.severity === 'moderate').length,
+      severe: HOLLOW_TIDE_DRIFT_EVENTS.filter((e) => e.severity === 'severe').length,
+    },
+    events: HOLLOW_TIDE_DRIFT_EVENTS,
+  },
+};
+
+async function mockGetQaReport(bookId: string): Promise<BookQaReport> {
+  /* srv-36 hardening (Task 14 e2e) — the mock otherwise ignores bookId and
+     always returns the same fixed MOCK_QA_REPORT (voiceDrift.charactersPending
+     is always []), so there's no way to reach the Resume-scoring branch of
      VoiceMatchRow (src/components/qa-report-card.tsx) through the mock's
      default response. Browser-level specs can seed
      `window.__mockQaReportOverride` to force an arbitrary report shape —
      mirrors the existing `window.__mockGenConcurrency` idiom
-     (mockStreamGeneration, above) rather than inventing a new mechanism. */
+     (mockStreamGeneration, above) rather than inventing a new mechanism.
+     Checked first (test-authored, most specific intent) — falls through to
+     the marketing capture's own hollow-tide-2 override below when unset. */
   const override =
     typeof window !== 'undefined'
       ? (window as unknown as { __mockQaReportOverride?: BookQaReport }).__mockQaReportOverride
       : undefined;
-  return override ?? MOCK_QA_REPORT;
+  if (override) return override;
+  if (DEMO_CAPTURE && bookId === 'hollow-tide-2') return HOLLOW_TIDE_QA_REPORT;
+  return MOCK_QA_REPORT;
 }
 
 async function realResumeScoring(bookId: string): Promise<void> {

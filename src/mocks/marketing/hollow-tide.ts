@@ -415,7 +415,7 @@ const coalfallRuCast: Character[] = [
 
 const coalfallRu = bookState({
   bookId: 'coalfall-commission-ru',
-  title: 'Дело о Коалфолле',
+  title: 'Заказ Коалфолла',
   author: 'Castwright',
   series: 'Standalones',
   seriesPosition: null,
@@ -599,6 +599,24 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               tags: ['series-1'],
             },
           ],
+          /* Series-memory marketing/wiki screenshots — gates series-memory-chip's
+             render (library-grid.tsx:102: `{series.seriesMemory && (<SeriesMemoryChip …>`).
+             Carried cast = the three `usedIn: 3` recurring voices in
+             HOLLOW_TIDE_VOICES (Narrator, Insp. Cray, Dr. Wren), confirmed present
+             in books 1-2 (both already cast; books 3-4 aren't part of the carried
+             span yet). perBook.principalCount mirrors each book's own
+             characterCount above (7, 6) so the two never silently drift apart. */
+          seriesMemory: {
+            carriedCount: 3,
+            bespokeCount: 0,
+            designedCount: 0,
+            confirmedBookCount: 2,
+            spanBooks: 2,
+            perBook: [
+              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 3 },
+              { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 3 },
+            ],
+          },
         },
       ],
     },
@@ -635,7 +653,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
                  screenshots. Reuses the Coalfall cover asset (no new
                  image dependency), per the same convention as hollow-tide-4. */
               bookId: 'coalfall-commission-ru',
-              title: 'Дело о Коалфолле',
+              title: 'Заказ Коалфолла',
               author: 'Castwright',
               series: 'Standalones',
               seriesPosition: null,

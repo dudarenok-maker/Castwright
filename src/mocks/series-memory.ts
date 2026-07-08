@@ -74,4 +74,68 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
       ],
     },
   },
+  /* Marketing/wiki series-memory screenshots — the Hollow Tide series
+     (hollow-tide.ts). Carried cast = the three `usedIn: 3` recurring voices
+     in HOLLOW_TIDE_VOICES (hollow-tide.ts:790-823): Narrator, Insp. Cray, Dr.
+     Wren, all designed in Book 1 and carried into Book 2. Kept consistent
+     with HOLLOW_TIDE_LIBRARY's series.seriesMemory summary (hollow-tide.ts) —
+     same carriedCount (3), same confirmedBookCount (2) — see
+     hollow-tide.test.ts for the assertion that locks the two together. */
+  'Marin Vale::The Hollow Tide': {
+    series: {
+      confirmedBookCount: 2,
+      spanBooks: 2,
+      books: [
+        { bookId: 'hollow-tide-1', title: 'The Drowning Bell', index: 1, principalCount: 7 },
+        { bookId: 'hollow-tide-2', title: 'Saltgrave',         index: 2, principalCount: 6 },
+      ],
+    },
+    carried: {
+      count: 3,
+      bespokeCount: 0,
+      designedCount: 0,
+      // Ordered by totalLines desc, matching the Northern Coast entry's convention.
+      characters: [
+        {
+          character: 'Narrator',
+          aliases: [],
+          voiceId: 'v_marin_narrator',
+          voiceLabel: 'Warm · Gemini',
+          engine: 'gemini',
+          voiceKind: 'preset',
+          firstBookId: 'hollow-tide-1',
+          lastBookId: 'hollow-tide-2',
+          bookIndices: [1, 2],
+          carriedFullSpan: true,
+          totalLines: 610,
+        },
+        {
+          character: 'Insp. Cray',
+          aliases: [],
+          voiceId: 'v_marin_cray',
+          voiceLabel: 'Informative · Gemini',
+          engine: 'gemini',
+          voiceKind: 'preset',
+          firstBookId: 'hollow-tide-1',
+          lastBookId: 'hollow-tide-2',
+          bookIndices: [1, 2],
+          carriedFullSpan: true,
+          totalLines: 480,
+        },
+        {
+          character: 'Dr. Wren',
+          aliases: [],
+          voiceId: 'v_marin_wren',
+          voiceLabel: 'Breezy · Gemini',
+          engine: 'gemini',
+          voiceKind: 'preset',
+          firstBookId: 'hollow-tide-1',
+          lastBookId: 'hollow-tide-2',
+          bookIndices: [1, 2],
+          carriedFullSpan: true,
+          totalLines: 355,
+        },
+      ],
+    },
+  },
 };

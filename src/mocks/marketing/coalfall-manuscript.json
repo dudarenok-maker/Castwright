@@ -1153,7 +1153,8 @@
       "characterId": "sela",
       "text": "“Sela!”",
       "confidence": 0.95,
-      "emotion": "excited"
+      "emotion": "excited",
+      "instruct": "shouted from across the yard, half-laughing"
     },
     {
       "id": 108,
