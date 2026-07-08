@@ -35,6 +35,7 @@ owner: null
 
 - `pinokio/lib/resolve-release.test.js` (6), `write-env.test.js` (2), `menu.test.js` (3) — `npm run test:pinokio` (node:test), in `test:all` + the `verify-cache` `test:pinokio` step (scope `pinokio/**`).
 - The declarative `pinokio/*.js` scripts are not unit-testable (no headless Pinokio); they are validated by the on-box acceptance matrix below.
+- `scripts/tests/pinokio-entry.test.mjs` (`npm run test:hooks`) dynamically imports root `pinokio.js` and asserts it loads without a `ReferenceError` and that `.menu()` delegates correctly — pins the CommonJS-globals-under-`type:module` bug found during #822 acceptance (bug #1458). Root `pinokio.js` must stay genuine ESM (`import`/`export default`); only `pinokio/**` is the CommonJS island.
 
 ## On-box manual acceptance (Windows + macOS)
 

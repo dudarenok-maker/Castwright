@@ -2,9 +2,17 @@
 // accessors and delegates ordering to the unit-tested pinokio/lib/menu.js.
 // Accessor shapes below match shipping Pinokio apps (TRELLIS/comfy/facefusion);
 // confirmed on-box in the regression plan acceptance matrix.
-const buildMenu = require(__dirname + '/pinokio/lib/menu.js');
+//
+// This file lives at the repo root, under the root package.json's
+// "type": "module" — Pinokio's runtime dynamically imports it in-process, so
+// it must be genuine ESM (CommonJS globals like require/__dirname/module
+// throw a ReferenceError at import time here). pinokio/lib/menu.js stays
+// CommonJS (its own pinokio/package.json overrides type back to commonjs
+// for the scripts Pinokio spawns as subprocesses); importing it from ESM
+// picks up its `module.exports` as the default export.
+import buildMenu from './pinokio/lib/menu.js';
 
-module.exports = {
+export default {
   version: '1.0',
   title: 'Castwright',
   description: 'Any book, performed by a full cast — effortlessly.',
