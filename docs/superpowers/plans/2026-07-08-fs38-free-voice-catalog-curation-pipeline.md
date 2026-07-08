@@ -4,7 +4,7 @@
 
 **Goal:** Build the automated curation pipeline from `docs/superpowers/specs/2026-07-08-fs38-free-voice-catalog-design.md` §3 — a tool that crawls LibriVox for candidate readers/books, classifies each reader's gender/age-range (local acoustic heuristic always, Gemini multimodal upgrade when configured), and writes a confidence-tagged catalog data file. No manual per-entry tagging.
 
-**Architecture:** Two-stage pipeline as plain, independently-testable functions under `server/src/voice-catalog/`, driven by a thin CLI entry point (`server/scripts/voice-catalog-build.ts`, run via `npx tsx`). Stage 1 (discovery) is a pure HTTP-paginating crawler with no LLM involvement. Stage 2 (classification) fetches one representative audio clip per candidate reader, runs a deterministic pitch-based classifier unconditionally, and upgrades the result via Gemini's multimodal audio input when `GEMINI_API_KEY` is configured. All network-touching functions take an injectable fetch/client so unit tests stay hermetic — no live network calls in the test suite.
+**Architecture:** Two-stage pipeline as plain, independently-testable functions under `server/src/voice-catalog/`, driven by a thin CLI entry point (`server/scripts/voice-catalog-build.ts`, run via `npx tsx`). Stage 1 (discovery) is a pure HTTP-paginating crawler with no LLM involvement. Stage 2 (classification) fetches one representative audio clip per candidate reader, runs a deterministic pitch-based classifier unconditionally, and upgrades the result via Gemini's multimodal audio input when `GEMINI_API_KEY` is configured. All network-touching functions take an injectable fetch/client so unit tests stay hermetic — no live network calls in the test suite. **This is a periodic (every 3-4 months), human-attended job, not a live/continuous pipeline** — a third adversarial pass found that assuming an unattended, on-demand-repeatable crawl against LibriVox's live API was safe was the real risk here, not curation cost (see Global Constraints and spec §3's revision note). The tool's output is a committed, deliberately-stale static artifact; a reader/book not in it simply isn't offered in-app until the next refresh.
 
 **Tech Stack:** TypeScript (server workspace conventions), Vitest (`npm run test:server`), Node's built-in `fetch`, `@google/genai` (already a `server/` dependency), ffmpeg via `child_process.spawn` (existing pattern in `server/src/tts/loudnorm.ts`).
 
@@ -17,6 +17,7 @@
 - The book→reader link is **forwards-only**: `?id=<bookId>&extended=1` returns `sections[].readers[].{reader_id, display_name}` for a *known* book; there is no reverse "books by reader" query (confirmed via source). Discovery therefore accumulates `{readerId, bookIds}` pairs by crawling every book and reading its readers, not by querying per reader.
 - Archive.org's identifier for a LibriVox book comes from the feed's `url_iarchive` field (confirmed present in the extended API response, e.g. `https://raw.githubusercontent.com/LibriVox/librivox-catalog/master/application/libraries/Librivox_API.php`: `$project['url_iarchive'] = $row['url_iarchive'];`) — parse the archive.org identifier out of that URL rather than guessing one from the title.
 - **One detail could not be verified during spec review and must be confirmed by whoever runs Task 1**: the exact top-level JSON key wrapping the array of book records in `https://librivox.org/api/feed/audiobooks/?format=json`. Every direct fetch attempt during review returned HTTP 403 (consistent with bot-blocking on the request signature, not confirmed evidence the API is down). Community documentation snippets consistently reference a `books` array key; Task 1 Step 1 has the implementer confirm this against a real response before trusting the parser.
+- **This tool is run manually, every 3-4 months, by a human — not continuously, not on a schedule, not triggered by end-user machines.** A third adversarial pass on an earlier draft of this plan found the real danger wasn't curation cost (already fixed once), it was assuming an unattended, on-demand-repeatable crawl against LibriVox's live API was safe: LibriVox has ~20,000+ titles, so a full crawl at 50/page is ~400+ sequential requests with no server-side language filter — and every direct fetch to `librivox.org` during this plan's own research returned HTTP 403. Because of this, the crawler paces its requests (a real delay between pages, not a tight loop) and sends an identifying User-Agent, and Task 2's crawl captures everything Task 7 needs in ONE pass — an earlier draft of this plan had the CLI redundantly re-crawl the entire catalog a second time, doubling exposure to whatever caused those 403s for no reason. The tool's output (`server/data/voice-catalog/free-voice-catalog.json`) is a committed, static artifact; a reader/book not in it simply isn't offered in-app (spec §3) — staleness between refreshes is an accepted, deliberate trade-off, not a bug.
 
 ---
 
@@ -175,6 +176,14 @@ server/data/voice-catalog/
     fetchImpl?: typeof fetch;
   }
 
+  /* This tool runs as an occasional, human-attended job (every 3-4 months —
+     spec §3), not a live service, but sends a real identifying User-Agent
+     regardless: every direct fetch to this host during spec/plan review
+     returned HTTP 403 (bot-blocking suspected, never confirmed as anything
+     else), and a plain fetch() with Node's default UA is exactly the kind
+     of request that gets flagged. This costs nothing and may help. */
+  const USER_AGENT = 'Castwright-VoiceCatalog/1.0 (+https://castwright.ai; periodic manual catalog refresh)';
+
   export async function fetchAudiobooksPage(opts: FetchAudiobooksPageOptions): Promise<unknown> {
     const doFetch = opts.fetchImpl ?? fetch;
     const params = new URLSearchParams({
@@ -185,7 +194,7 @@ server/data/voice-catalog/
     });
     if (opts.since !== undefined) params.set('since', String(opts.since));
     const url = `${FEED_BASE}?${params.toString()}`;
-    const res = await doFetch(url);
+    const res = await doFetch(url, { headers: { 'User-Agent': USER_AGENT } });
     if (!res.ok) {
       throw new Error(`LibriVox feed request failed: ${res.status} ${res.statusText} (${url})`);
     }
@@ -259,7 +268,9 @@ server/data/voice-catalog/
 
 **Interfaces:**
 - Consumes: `fetchAudiobooksPage`, `parseAudiobooksPage`, `DiscoveredBook` from Task 1.
-- Produces: `interface ReaderIndexEntry { readerId: string; displayName: string; language: string; bookIds: string[] }`, `function crawlReaders(opts: { targetLanguages: string[]; pageSize?: number; since?: number; fetchImpl?: typeof fetch; maxPages?: number }): Promise<ReaderIndexEntry[]>`.
+- Produces: `interface ReaderIndexEntry { readerId: string; displayName: string; language: string; bookIds: string[] }`, `interface CrawlResult { readers: ReaderIndexEntry[]; bookArchiveUrls: Record<string, string | null> }`, `function crawlReaders(opts: { targetLanguages: string[]; pageSize?: number; since?: number; fetchImpl?: typeof fetch; maxPages?: number; delayMs?: number; sleepImpl?: (ms: number) => Promise<void> }): Promise<CrawlResult>`.
+
+  `bookArchiveUrls` exists so Task 7's CLI never needs a second pass over the same pages purely to recover `urlIarchive` — an earlier draft of this plan had the CLI redundantly re-crawl the entire catalog a second time for exactly that, doubling the request count for no reason. This single function now captures both views (reader index AND book→archive-url map) from the one pass it already makes.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -275,11 +286,11 @@ server/data/voice-catalog/
   describe('crawlReaders', () => {
     it('pages until an empty page, filters by target language, and accumulates bookIds per reader', async () => {
       const page1 = fakeResponse([
-        { id: '1', title: 'A', language: 'English', url_iarchive: null, sections: [{ readers: [{ reader_id: 'r1', display_name: 'Reader One' }] }] },
+        { id: '1', title: 'A', language: 'English', url_iarchive: 'https://archive.org/details/book-1', sections: [{ readers: [{ reader_id: 'r1', display_name: 'Reader One' }] }] },
         { id: '2', title: 'B', language: 'Russian', url_iarchive: null, sections: [{ readers: [{ reader_id: 'r2', display_name: 'Reader Two' }] }] },
       ]);
       const page2 = fakeResponse([
-        { id: '3', title: 'C', language: 'English', url_iarchive: null, sections: [{ readers: [{ reader_id: 'r1', display_name: 'Reader One' }] }] },
+        { id: '3', title: 'C', language: 'English', url_iarchive: 'https://archive.org/details/book-3', sections: [{ readers: [{ reader_id: 'r1', display_name: 'Reader One' }] }] },
         { id: '4', title: 'D', language: 'French', url_iarchive: null, sections: [{ readers: [{ reader_id: 'r3', display_name: 'Reader Three' }] }] },
       ]);
       const page3 = fakeResponse([]);
@@ -288,22 +299,31 @@ server/data/voice-catalog/
         .mockResolvedValueOnce(page1)
         .mockResolvedValueOnce(page2)
         .mockResolvedValueOnce(page3);
+      const sleepImpl = vi.fn().mockResolvedValue(undefined);
 
-      const index = await crawlReaders({
+      const result = await crawlReaders({
         targetLanguages: ['English', 'Russian'],
         pageSize: 2,
         fetchImpl: fetchImpl as unknown as typeof fetch,
+        sleepImpl,
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(3);
-      expect(index).toEqual(
+      expect(result.readers).toEqual(
         expect.arrayContaining([
           { readerId: 'r1', displayName: 'Reader One', language: 'English', bookIds: ['1', '3'] },
           { readerId: 'r2', displayName: 'Reader Two', language: 'Russian', bookIds: ['2'] },
         ]),
       );
       // French reader excluded — not a target language.
-      expect(index.find((r) => r.readerId === 'r3')).toBeUndefined();
+      expect(result.readers.find((r) => r.readerId === 'r3')).toBeUndefined();
+      // bookArchiveUrls captured from the SAME pass — no second crawl needed.
+      expect(result.bookArchiveUrls).toEqual({
+        '1': 'https://archive.org/details/book-1',
+        '2': null,
+        '3': 'https://archive.org/details/book-3',
+        '4': null,
+      });
     });
 
     it('stops early at maxPages even if more pages would follow', async () => {
@@ -311,8 +331,35 @@ server/data/voice-catalog/
         { id: '1', title: 'A', language: 'English', url_iarchive: null, sections: [{ readers: [{ reader_id: 'r1', display_name: 'R' }] }] },
       ]);
       const fetchImpl = vi.fn().mockResolvedValue(page);
-      await crawlReaders({ targetLanguages: ['English'], pageSize: 1, maxPages: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+      await crawlReaders({
+        targetLanguages: ['English'],
+        pageSize: 1,
+        maxPages: 2,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        sleepImpl: vi.fn().mockResolvedValue(undefined),
+      });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it('paces requests with a delay between pages rather than firing them in a tight loop', async () => {
+      const page1 = fakeResponse([
+        { id: '1', title: 'A', language: 'English', url_iarchive: null, sections: [{ readers: [{ reader_id: 'r1', display_name: 'R' }] }] },
+      ]);
+      const page2 = fakeResponse([]);
+      const fetchImpl = vi.fn().mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
+      const sleepImpl = vi.fn().mockResolvedValue(undefined);
+
+      await crawlReaders({
+        targetLanguages: ['English'],
+        pageSize: 1,
+        delayMs: 300,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        sleepImpl,
+      });
+
+      // One delay between page 1 and page 2 — not after the final (empty) page.
+      expect(sleepImpl).toHaveBeenCalledTimes(1);
+      expect(sleepImpl).toHaveBeenCalledWith(300);
     });
   });
   ```
@@ -335,6 +382,17 @@ server/data/voice-catalog/
     bookIds: string[];
   }
 
+  export interface CrawlResult {
+    readers: ReaderIndexEntry[];
+    /** Captured from the SAME pass as `readers` — Task 7's CLI needs this to
+     *  resolve each book's archive.org URL, and doing it here means the CLI
+     *  never has to re-crawl the whole catalog a second time just to get it
+     *  (an earlier draft of this plan did exactly that, doubling request
+     *  count against a host that's already shown a 100% 403 rate on far
+     *  gentler probing — see Global Constraints). */
+    bookArchiveUrls: Record<string, string | null>;
+  }
+
   export interface CrawlReadersOptions {
     targetLanguages: string[];
     pageSize?: number;
@@ -343,15 +401,27 @@ server/data/voice-catalog/
     /** Safety cap so a bug in the empty-page termination check can't loop
      *  forever against the live API. */
     maxPages?: number;
+    /** Delay between page requests. This is a one-time/periodic
+     *  human-attended job (spec §3), not a live service, but every direct
+     *  fetch to librivox.org during spec/plan review returned HTTP 403 —
+     *  pacing requests is cheap insurance against making that worse. */
+    delayMs?: number;
+    /** Injectable so tests never actually wait. Defaults to a real timer. */
+    sleepImpl?: (ms: number) => Promise<void>;
   }
 
-  export async function crawlReaders(opts: CrawlReadersOptions): Promise<ReaderIndexEntry[]> {
+  const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  export async function crawlReaders(opts: CrawlReadersOptions): Promise<CrawlResult> {
     const pageSize = opts.pageSize ?? 50;
     const maxPages = opts.maxPages ?? 10_000;
+    const delayMs = opts.delayMs ?? 250;
+    const sleep = opts.sleepImpl ?? defaultSleep;
     const targetSet = new Set(opts.targetLanguages);
     // readerId -> entry (bookIds accumulate as a Set to naturally dedupe
     // across pages before the final array conversion).
     const byReader = new Map<string, { displayName: string; language: string; bookIds: Set<string> }>();
+    const bookArchiveUrls: Record<string, string | null> = {};
 
     let offset = 0;
     for (let page = 0; page < maxPages; page += 1) {
@@ -366,6 +436,7 @@ server/data/voice-catalog/
 
       for (const book of books) {
         if (!targetSet.has(book.language)) continue;
+        bookArchiveUrls[book.id] = book.urlIarchive;
         for (const reader of book.readers) {
           const existing = byReader.get(reader.readerId);
           if (existing) {
@@ -381,14 +452,20 @@ server/data/voice-catalog/
       }
 
       offset += pageSize;
+      // No delay after the last page — nothing follows it to wait for.
+      const morePagesLikely = books.length === pageSize;
+      if (morePagesLikely) await sleep(delayMs);
     }
 
-    return Array.from(byReader, ([readerId, entry]) => ({
-      readerId,
-      displayName: entry.displayName,
-      language: entry.language,
-      bookIds: Array.from(entry.bookIds),
-    }));
+    return {
+      readers: Array.from(byReader, ([readerId, entry]) => ({
+        readerId,
+        displayName: entry.displayName,
+        language: entry.language,
+        bookIds: Array.from(entry.bookIds),
+      })),
+      bookArchiveUrls,
+    };
   }
   ```
 
@@ -413,7 +490,9 @@ server/data/voice-catalog/
 - Test: `server/src/voice-catalog/fetch-sample-clip.test.ts`
 
 **Interfaces:**
-- Produces: `function extractArchiveIdentifier(urlIarchive: string): string | null`, `function pickRepresentativeFile(files: { name: string; format?: string }[]): string | null`, `async function fetchSampleClipPcm(opts: { urlIarchive: string; fetchImpl?: typeof fetch; spawnImpl?: typeof spawn; sampleRate?: number }): Promise<Int16Array>`.
+- Produces: `function extractArchiveIdentifier(urlIarchive: string): string | null`, `function pickRepresentativeFile(files: { name: string; format?: string }[]): string | null`, `interface SampleClip { pcm: Int16Array; sampleRate: number; mp3Bytes: Buffer }`, `async function fetchSampleClipPcm(opts: { urlIarchive: string; fetchImpl?: typeof fetch; spawnImpl?: typeof spawn; sampleRate?: number }): Promise<SampleClip>`.
+
+  Returns **both** the decoded PCM (for Task 4's pitch classifier, which needs raw samples) **and** the original, still-encoded `mp3Bytes` (for Task 5's Gemini classifier, which needs a real encoded container — Gemini's documented `generateContent` audio input accepts `audio/wav`/`audio/mp3`/etc., not raw headerless PCM; raw PCM inlineData is documented specifically for the *Live* API, a different endpoint). An earlier draft of this plan decoded to PCM and sent that same PCM to Gemini with an invented `audio/l16` mimeType — this doesn't match any documented Gemini input format, so Gemini calls would very likely fail on every single request. Passing the untouched MP3 bytes straight through avoids the whole problem instead of trying to fix the mimeType string.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -478,7 +557,7 @@ server/data/voice-catalog/
         return fakeChild;
       });
 
-      const pcm = await fetchSampleClipPcm({
+      const clip = await fetchSampleClipPcm({
         urlIarchive: 'https://archive.org/details/alice_in_wonderland_librivox',
         fetchImpl: fetchImpl as unknown as typeof fetch,
         spawnImpl: spawnImpl as unknown as typeof import('node:child_process').spawn,
@@ -489,7 +568,11 @@ server/data/voice-catalog/
         2,
         'https://archive.org/download/alice_in_wonderland_librivox/ch01.mp3',
       );
-      expect(Array.from(pcm)).toEqual([100, -100, 200]);
+      expect(Array.from(clip.pcm)).toEqual([100, -100, 200]);
+      expect(clip.sampleRate).toBe(16_000);
+      // The ORIGINAL encoded bytes must survive untouched for Task 5's Gemini
+      // call — not re-derived from the decoded PCM.
+      expect(Buffer.from(clip.mp3Bytes)).toEqual(Buffer.from(mp3Bytes));
     });
 
     it('throws when the book has no archive.org link', async () => {
@@ -531,6 +614,15 @@ server/data/voice-catalog/
     return anyMp3 ? anyMp3.name : null;
   }
 
+  export interface SampleClip {
+    pcm: Int16Array;
+    sampleRate: number;
+    /** The original, still-encoded MP3 bytes as downloaded — kept alongside
+     *  the decoded PCM so Task 5's Gemini call can send a real encoded
+     *  container instead of raw PCM (see the Task interfaces note above). */
+    mp3Bytes: Buffer;
+  }
+
   export interface FetchSampleClipOptions {
     urlIarchive: string;
     fetchImpl?: typeof fetch;
@@ -540,7 +632,7 @@ server/data/voice-catalog/
     sampleRate?: number;
   }
 
-  export async function fetchSampleClipPcm(opts: FetchSampleClipOptions): Promise<Int16Array> {
+  export async function fetchSampleClipPcm(opts: FetchSampleClipOptions): Promise<SampleClip> {
     const identifier = opts.urlIarchive ? extractArchiveIdentifier(opts.urlIarchive) : null;
     if (!identifier) {
       throw new Error(`fetchSampleClipPcm: no usable archive.org identifier in "${opts.urlIarchive}"`);
@@ -559,7 +651,8 @@ server/data/voice-catalog/
     if (!audioRes.ok) throw new Error(`archive.org download failed for "${identifier}/${fileName}"`);
     const mp3Bytes = Buffer.from(await audioRes.arrayBuffer());
 
-    return decodeMp3ToPcm(mp3Bytes, sampleRate, doSpawn);
+    const pcm = await decodeMp3ToPcm(mp3Bytes, sampleRate, doSpawn);
+    return { pcm, sampleRate, mp3Bytes };
   }
 
   /* Same spawn/pipe/windowsHide convention as runLoudnormFirstPass
@@ -730,6 +823,20 @@ server/data/voice-catalog/
     return { gender: 'male', ageRange: 'adult', confidence: 'coarse', averageHz };
   }
 
+  /* Deliberately NOT a global-max search over the whole lag range. Naive
+     autocorrelation pitch detection is well documented to be prone to
+     octave errors on real (harmonically-rich) speech — a strong second
+     harmonic can produce a HIGHER raw correlation at a shorter lag than the
+     true fundamental, or a real period's exact multiple can score higher
+     at a longer lag, either of which would silently report a pitch that's
+     2x or 0.5x the truth. Scanning from the SHORTEST lag (highest
+     frequency) upward and taking the FIRST lag that clears the voicing
+     threshold is the standard mitigation: it commits to the first
+     plausible period rather than continuing to search for a numerically
+     larger (but not necessarily more correct) peak further out. This still
+     won't be perfect on real speech — it's a coarse heuristic, honestly
+     scoped as such (spec §3) — but it removes the most obvious failure
+     mode a pure global-max search has. */
   function autocorrelationPeak(
     frame: Int16Array,
     minLag: number,
@@ -741,16 +848,13 @@ server/data/voice-catalog/
     const zeroLagEnergy = dot(floats, floats, 0);
     if (zeroLagEnergy === 0) return { bestLag: 0, strength: 0 };
 
-    let bestLag = 0;
-    let bestValue = 0;
     for (let lag = minLag; lag <= maxLag && lag < floats.length; lag += 1) {
-      const value = dot(floats, floats, lag);
-      if (value > bestValue) {
-        bestValue = value;
-        bestLag = lag;
+      const strength = dot(floats, floats, lag) / zeroLagEnergy;
+      if (strength >= VOICING_THRESHOLD) {
+        return { bestLag: lag, strength };
       }
     }
-    return { bestLag, strength: bestValue / zeroLagEnergy };
+    return { bestLag: 0, strength: 0 };
   }
 
   function dot(a: Float64Array, b: Float64Array, lag: number): number {
@@ -781,8 +885,19 @@ server/data/voice-catalog/
 - Test: `server/src/voice-catalog/classify-gemini.test.ts`
 
 **Interfaces:**
-- Consumes: `Gender`, `AgeRange` from `types.ts`.
-- Produces: `interface GeminiClassification { gender: Gender; ageRange: AgeRange; confidence: 'refined' }`, `async function classifyByGemini(opts: { pcm: Int16Array; sampleRate: number; apiKey: string; modelId?: string; clientFactory?: (apiKey: string) => { models: { generateContent: (args: unknown) => Promise<unknown> } } }): Promise<GeminiClassification>`.
+- Consumes: `Gender`, `AgeRange` from `types.ts`, `SampleClip.mp3Bytes` from Task 3.
+- Produces: `interface GeminiClassification { gender: Gender; ageRange: AgeRange; confidence: 'refined' }`, `async function classifyByGemini(opts: { mp3Bytes: Buffer; apiKey: string; modelId?: string; clientFactory?: (apiKey: string) => { models: { generateContent: (args: unknown) => Promise<unknown> } } }): Promise<GeminiClassification>`.
+
+  **Takes the original encoded MP3 bytes, not decoded PCM.** An earlier draft
+  of this task sent raw PCM as `inlineData` with an invented `audio/l16;rate=…`
+  mimeType — verified against Gemini's own documentation, that's wrong: raw
+  PCM `inlineData` is documented specifically for the *Live API* (a separate,
+  real-time endpoint); the standard `generateContent` audio-understanding
+  path documents encoded container formats (`audio/wav`, `audio/mp3`,
+  `audio/aac`, `audio/ogg`, `audio/flac`, `audio/aiff`). Sending raw PCM here
+  would very likely have every single call fail. Since Task 3 already has the
+  untouched MP3 bytes in hand before it decodes them, the fix is to just pass
+  those through instead of re-deriving or re-encoding anything.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -799,31 +914,34 @@ server/data/voice-catalog/
   }
 
   describe('classifyByGemini', () => {
-    it('sends the PCM as inline audio with a classification prompt and parses the JSON reply', async () => {
+    it('sends the original MP3 bytes as inline audio with a classification prompt and parses the JSON reply', async () => {
       const { generateContent, factory } = fakeClientFactory(
         '{"gender": "female", "ageRange": "elderly"}',
       );
-      const pcm = new Int16Array([1, 2, 3]);
+      const mp3Bytes = Buffer.from([1, 2, 3]);
 
-      const result = await classifyByGemini({ pcm, sampleRate: 16_000, apiKey: 'test-key', clientFactory: factory });
+      const result = await classifyByGemini({ mp3Bytes, apiKey: 'test-key', clientFactory: factory });
 
       expect(result).toEqual({ gender: 'female', ageRange: 'elderly', confidence: 'refined' });
       const call = generateContent.mock.calls[0][0];
-      expect(call.contents[0].parts[0].inlineData.mimeType).toBe('audio/l16;rate=16000');
+      // audio/mp3 is one of Gemini's documented generateContent audio input
+      // formats — unlike raw PCM, which is Live-API-only.
+      expect(call.contents[0].parts[0].inlineData.mimeType).toBe('audio/mp3');
+      expect(call.contents[0].parts[0].inlineData.data).toBe(mp3Bytes.toString('base64'));
       expect(call.contents[0].parts[1].text).toMatch(/gender/i);
     });
 
     it('throws a clear error when Gemini returns text that is not valid classification JSON', async () => {
       const { factory } = fakeClientFactory('sorry, I cannot help with that');
       await expect(
-        classifyByGemini({ pcm: new Int16Array([1]), sampleRate: 16_000, apiKey: 'k', clientFactory: factory }),
+        classifyByGemini({ mp3Bytes: Buffer.from([1]), apiKey: 'k', clientFactory: factory }),
       ).rejects.toThrow(/parse/i);
     });
 
     it('throws when the parsed gender/ageRange values are outside the known enums', async () => {
       const { factory } = fakeClientFactory('{"gender": "robot", "ageRange": "adult"}');
       await expect(
-        classifyByGemini({ pcm: new Int16Array([1]), sampleRate: 16_000, apiKey: 'k', clientFactory: factory }),
+        classifyByGemini({ mp3Bytes: Buffer.from([1]), apiKey: 'k', clientFactory: factory }),
       ).rejects.toThrow(/gender/i);
     });
   });
@@ -860,8 +978,11 @@ server/data/voice-catalog/
   }
 
   export interface ClassifyByGeminiOptions {
-    pcm: Int16Array;
-    sampleRate: number;
+    /** The original, still-encoded MP3 bytes (Task 3's `SampleClip.mp3Bytes`)
+     *  — NOT decoded PCM. Gemini's `generateContent` audio input documents
+     *  encoded containers (`audio/wav`, `audio/mp3`, etc.); raw PCM inlineData
+     *  is Live-API-only. */
+    mp3Bytes: Buffer;
     apiKey: string;
     modelId?: string;
     /** Injectable so tests never construct a real GoogleGenAI client. */
@@ -872,14 +993,13 @@ server/data/voice-catalog/
     const client = (opts.clientFactory ?? ((apiKey: string) => new GoogleGenAI({ apiKey })))(opts.apiKey);
     const model = opts.modelId ?? 'gemini-3.1-flash';
 
-    const pcmBuffer = Buffer.from(opts.pcm.buffer, opts.pcm.byteOffset, opts.pcm.byteLength);
     const response = (await client.models.generateContent({
       model,
       contents: [
         {
           role: 'user',
           parts: [
-            { inlineData: { mimeType: `audio/l16;rate=${opts.sampleRate}`, data: pcmBuffer.toString('base64') } },
+            { inlineData: { mimeType: 'audio/mp3', data: opts.mp3Bytes.toString('base64') } },
             { text: CLASSIFICATION_PROMPT },
           ],
         },
@@ -929,8 +1049,15 @@ server/data/voice-catalog/
 - Test: `server/src/voice-catalog/build-catalog.test.ts`
 
 **Interfaces:**
-- Consumes: `ReaderIndexEntry` (Task 2), `fetchSampleClipPcm` (Task 3), `classifyByPitch` (Task 4), `classifyByGemini` (Task 5), `CatalogEntry` (Task 1's `types.ts`). Note `fetchSampleClipPcm` needs a `urlIarchive`, but `ReaderIndexEntry` only carries `bookIds` — the orchestrator needs each reader's first book's `urlIarchive`, so it takes a small lookup function rather than re-deriving it.
-- Produces: `async function buildCatalog(opts: { readers: ReaderIndexEntry[]; resolveBookArchiveUrl: (bookId: string) => string | null; geminiApiKey?: string; fetchSampleClipPcmImpl?: typeof fetchSampleClipPcm; classifyByGeminiImpl?: typeof classifyByGemini }): Promise<CatalogEntry[]>`.
+- Consumes: `ReaderIndexEntry` (Task 2), `fetchSampleClipPcm`/`SampleClip` (Task 3), `classifyByPitch` (Task 4), `classifyByGemini` (Task 5), `CatalogEntry` (Task 1's `types.ts`). Note `fetchSampleClipPcm` needs a `urlIarchive`, but `ReaderIndexEntry` only carries `bookIds` — the orchestrator needs each reader's first book's `urlIarchive`, so it takes a small lookup function rather than re-deriving it (Task 7 supplies this directly from `crawlReaders`'s `bookArchiveUrls`, no second crawl).
+- Produces: `async function buildCatalog(opts: { readers: ReaderIndexEntry[]; resolveBookArchiveUrl: (bookId: string) => string | null; geminiApiKey?: string; fetchSampleClipPcmImpl?: typeof fetchSampleClipPcm; classifyByGeminiImpl?: typeof classifyByGemini; onGeminiError?: (readerId: string, err: unknown) => void }): Promise<CatalogEntry[]>`.
+
+  `onGeminiError` exists so a systemic Gemini failure (e.g. a bad API key, or
+  — before Task 5's MP3-bytes fix — an invalid input format) doesn't look
+  identical to "no key configured" from the outside. Without it, a bare
+  `catch {}` swallowing every Gemini error meant the CLI's "0 refined"
+  summary line couldn't distinguish "not configured" from "configured but
+  failing on every call" — a real observability gap a prior review flagged.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -941,7 +1068,11 @@ server/data/voice-catalog/
   import type { ReaderIndexEntry } from './crawl-readers.js';
 
   vi.mock('./fetch-sample-clip.js', () => ({
-    fetchSampleClipPcm: vi.fn().mockResolvedValue(new Int16Array([1, 2, 3])),
+    fetchSampleClipPcm: vi.fn().mockResolvedValue({
+      pcm: new Int16Array([1, 2, 3]),
+      sampleRate: 16_000,
+      mp3Bytes: Buffer.from([9, 9, 9]),
+    }),
   }));
   vi.mock('./classify-pitch.js', () => ({
     classifyByPitch: vi.fn().mockReturnValue({ gender: 'male', ageRange: 'adult', confidence: 'coarse', averageHz: 110 }),
@@ -988,7 +1119,7 @@ server/data/voice-catalog/
     it('falls back to the coarse pitch tier for a reader whose clip fetch fails, without aborting the whole run', async () => {
       const fetchSampleClipPcmImpl = vi
         .fn()
-        .mockResolvedValueOnce(new Int16Array([1]))
+        .mockResolvedValueOnce({ pcm: new Int16Array([1]), sampleRate: 16_000, mp3Bytes: Buffer.from([9]) })
         .mockRejectedValueOnce(new Error('archive.org unreachable'));
       const entries = await buildCatalog({
         readers: READERS,
@@ -1004,6 +1135,21 @@ server/data/voice-catalog/
         resolveBookArchiveUrl: () => null,
       });
       expect(entries).toHaveLength(0);
+    });
+
+    it('reports a Gemini failure via onGeminiError instead of silently indistinguishable from "not configured"', async () => {
+      const classifyByGeminiImpl = vi.fn().mockRejectedValue(new Error('invalid API key'));
+      const onGeminiError = vi.fn();
+      const entries = await buildCatalog({
+        readers: [READERS[0]],
+        resolveBookArchiveUrl: () => 'https://archive.org/details/whatever',
+        geminiApiKey: 'bad-key',
+        classifyByGeminiImpl,
+        onGeminiError,
+      });
+      expect(onGeminiError).toHaveBeenCalledWith('r1', expect.any(Error));
+      // Still falls back to the coarse pitch tier rather than dropping the reader.
+      expect(entries[0].confidence).toBe('coarse');
     });
   });
   ```
@@ -1026,13 +1172,19 @@ server/data/voice-catalog/
   export interface BuildCatalogOptions {
     readers: ReaderIndexEntry[];
     /** Given a bookId, resolve its archive.org details URL — the caller
-     *  looks this up from the DiscoveredBook records the crawl (Task 2)
-     *  read, keyed by id. Returns null if unresolvable. */
+     *  passes this straight from `crawlReaders`'s `bookArchiveUrls` (Task 2),
+     *  captured in the same crawl pass, not a second one. Returns null if
+     *  unresolvable. */
     resolveBookArchiveUrl: (bookId: string) => string | null;
     geminiApiKey?: string;
     sampleRate?: number;
     fetchSampleClipPcmImpl?: typeof fetchSampleClipPcm;
     classifyByGeminiImpl?: typeof classifyByGemini;
+    /** Called when the Gemini upgrade fails for a reader (bad key, quota,
+     *  wrong input format, etc.) so a systemic failure is distinguishable
+     *  from "no key configured" — without this, both looked identical from
+     *  the CLI's "N refined" summary. */
+    onGeminiError?: (readerId: string, err: unknown) => void;
   }
 
   export async function buildCatalog(opts: BuildCatalogOptions): Promise<CatalogEntry[]> {
@@ -1045,27 +1197,30 @@ server/data/voice-catalog/
       const archiveUrl = reader.bookIds.map(opts.resolveBookArchiveUrl).find((u) => u !== null);
       if (!archiveUrl) continue; // no book with a resolvable archive.org link — nothing to sample
 
-      let pcm: Int16Array;
+      let clip: { pcm: Int16Array; mp3Bytes: Buffer };
       try {
-        pcm = await doFetchClip({ urlIarchive: archiveUrl, sampleRate });
+        clip = await doFetchClip({ urlIarchive: archiveUrl, sampleRate });
       } catch {
         continue; // one reader's clip failing shouldn't abort the whole crawl-classify run
       }
 
-      const coarse = classifyByPitch(pcm, sampleRate);
+      const coarse = classifyByPitch(clip.pcm, sampleRate);
       let gender = coarse.gender;
       let ageRange = coarse.ageRange;
       let confidence: 'coarse' | 'refined' = 'coarse';
 
       if (opts.geminiApiKey) {
         try {
-          const refined = await doClassifyGemini({ pcm, sampleRate, apiKey: opts.geminiApiKey });
+          const refined = await doClassifyGemini({ mp3Bytes: clip.mp3Bytes, apiKey: opts.geminiApiKey });
           gender = refined.gender;
           ageRange = refined.ageRange;
           confidence = 'refined';
-        } catch {
+        } catch (err) {
           // Gemini upgrade is best-effort — the coarse pitch classification
-          // already computed above stands if it fails.
+          // already computed above stands if it fails — but the failure
+          // itself is surfaced, not silently indistinguishable from
+          // "GEMINI_API_KEY wasn't set at all".
+          opts.onGeminiError?.(reader.readerId, err);
         }
       }
 
@@ -1087,7 +1242,7 @@ server/data/voice-catalog/
 - [ ] **Step 4: Run test to verify it passes**
 
   Run: `cd server && npx vitest run src/voice-catalog/build-catalog.test.ts`
-  Expected: PASS (4 tests)
+  Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1106,9 +1261,9 @@ server/data/voice-catalog/
 - Modify: `.gitignore` (if `server/data/voice-catalog/` should be generated, not hand-edited — see step 3)
 
 **Interfaces:**
-- Consumes: `crawlReaders` (Task 2), `buildCatalog` (Task 1's `types.ts` + Task 6), `DiscoveredBook`/`fetchAudiobooksPage`/`parseAudiobooksPage` (Task 1) — the CLI needs `resolveBookArchiveUrl`, which means it must ALSO retain the full `DiscoveredBook` records from the crawl (not just the reader index) to look up each `bookId`'s `urlIarchive`.
+- Consumes: `crawlReaders`/`CrawlResult` (Task 2), `buildCatalog` (Task 6), `CatalogEntry` (Task 1's `types.ts`).
 
-This task's `crawlReaders` call signature from Task 2 only returns `ReaderIndexEntry[]`, which drops `urlIarchive`. Rather than changing Task 2's tested contract, the CLI does its own lightweight second pass: build a `bookId -> urlIarchive` map from the same crawl by calling `parseAudiobooksPage` results directly (the CLI is the one caller who needs both views of the same crawl data, so this composition lives here, not in the shared library functions).
+`crawlReaders` (Task 2) now returns BOTH the reader index and the `bookArchiveUrls` map from the same single pass — the CLI calls it exactly once. An earlier draft of this task had the CLI redundantly re-crawl the entire catalog a second time purely to recover `urlIarchive`; that's gone.
 
 - [ ] **Step 1: Write the CLI script**
 
@@ -1118,7 +1273,6 @@ This task's `crawlReaders` call signature from Task 2 only returns `ReaderIndexE
   // server/scripts/voice-catalog-build.ts
   import { writeFile, mkdir } from 'node:fs/promises';
   import { dirname, join } from 'node:path';
-  import { fetchAudiobooksPage, parseAudiobooksPage } from '../src/voice-catalog/librivox-client.js';
   import { crawlReaders } from '../src/voice-catalog/crawl-readers.js';
   import { buildCatalog } from '../src/voice-catalog/build-catalog.js';
 
@@ -1126,28 +1280,12 @@ This task's `crawlReaders` call signature from Task 2 only returns `ReaderIndexE
   const OUTPUT_PATH = join(import.meta.dirname, '..', 'data', 'voice-catalog', 'free-voice-catalog.json');
 
   async function main() {
-    console.log(`[voice-catalog] Crawling LibriVox for languages: ${TARGET_LANGUAGES.join(', ')}...`);
+    console.log(
+      `[voice-catalog] This is a periodic, human-attended refresh (spec §3: run every 3-4 ` +
+        `months, not continuously). Crawling LibriVox for: ${TARGET_LANGUAGES.join(', ')}...`,
+    );
 
-    // Two passes over the same pagination range: crawlReaders (Task 2) builds
-    // the deduped reader->bookIds index; this second, cheap pass over the
-    // same pages builds bookId->urlIarchive purely from already-parsed data
-    // (no extra network calls — same fetchAudiobooksPage/parseAudiobooksPage
-    // primitives, run once more since crawlReaders doesn't expose per-book
-    // archive URLs as part of its tested contract).
-    const bookArchiveUrls = new Map<string, string | null>();
-    let offset = 0;
-    const pageSize = 50;
-    for (;;) {
-      const raw = await fetchAudiobooksPage({ offset, limit: pageSize });
-      const books = parseAudiobooksPage(raw);
-      if (books.length === 0) break;
-      for (const book of books) {
-        if (TARGET_LANGUAGES.includes(book.language)) bookArchiveUrls.set(book.id, book.urlIarchive);
-      }
-      offset += pageSize;
-    }
-
-    const readers = await crawlReaders({ targetLanguages: TARGET_LANGUAGES, pageSize });
+    const { readers, bookArchiveUrls } = await crawlReaders({ targetLanguages: TARGET_LANGUAGES });
     console.log(`[voice-catalog] Discovered ${readers.length} candidate readers.`);
 
     const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -1155,16 +1293,29 @@ This task's `crawlReaders` call signature from Task 2 only returns `ReaderIndexE
       console.log('[voice-catalog] GEMINI_API_KEY not set — classifying with the local pitch tier only (coarse age precision).');
     }
 
+    let geminiFailureCount = 0;
     const catalog = await buildCatalog({
       readers,
-      resolveBookArchiveUrl: (bookId) => bookArchiveUrls.get(bookId) ?? null,
+      resolveBookArchiveUrl: (bookId) => bookArchiveUrls[bookId] ?? null,
       geminiApiKey,
+      onGeminiError: (readerId, err) => {
+        geminiFailureCount += 1;
+        console.warn(`[voice-catalog] Gemini classification failed for reader ${readerId}:`, err);
+      },
     });
-    console.log(`[voice-catalog] Classified ${catalog.length} readers (${catalog.filter((c) => c.confidence === 'refined').length} refined via Gemini).`);
+
+    const refinedCount = catalog.filter((c) => c.confidence === 'refined').length;
+    console.log(`[voice-catalog] Classified ${catalog.length} readers (${refinedCount} refined via Gemini).`);
+    if (geminiApiKey && refinedCount === 0 && geminiFailureCount > 0) {
+      console.warn(
+        '[voice-catalog] GEMINI_API_KEY was set but every Gemini call failed — check the warnings ' +
+          'above (bad key, quota, or an API/format mismatch), not just "Gemini not configured".',
+      );
+    }
 
     await mkdir(dirname(OUTPUT_PATH), { recursive: true });
     await writeFile(OUTPUT_PATH, JSON.stringify(catalog, null, 2) + '\n', 'utf8');
-    console.log(`[voice-catalog] Wrote ${OUTPUT_PATH}`);
+    console.log(`[voice-catalog] Wrote ${OUTPUT_PATH} — commit this file; next refresh due in 3-4 months.`);
   }
 
   main().catch((err) => {
@@ -1201,22 +1352,29 @@ This task's `crawlReaders` call signature from Task 2 only returns `ReaderIndexE
   git commit -m "feat(server): fs-38 voice-catalog build CLI + npm script wiring"
   ```
 
-- [ ] **Step 5 (manual, not part of the automated task loop): run it for real**
+- [ ] **Step 5 (manual, run every 3-4 months by a human — not part of the automated task loop, not scheduled, not triggered by end users):**
 
-  This requires live network access to LibriVox/archive.org and takes real wall-clock time (potentially long — the crawl pages through the full multi-hundred-thousand-record catalog once). Optionally set `GEMINI_API_KEY` first for refined classification:
+  This requires live network access to LibriVox/archive.org and takes real wall-clock time — LibriVox has ~20,000+ titles (confirmed), so a full crawl at 50/page (the default) is ~400+ sequential requests, paced with a delay between pages (Task 2). Optionally set `GEMINI_API_KEY` first for refined classification:
 
   ```bash
   npm run voice-catalog:build
   ```
 
-  Before trusting the result: confirm Task 1 Step 1's live-shape verification actually happened (the `RESPONSE_KEY` constant matches reality), and spot-check a handful of entries in the output file against LibriVox's own site (does "Reader One" really sound like what got tagged?) — this is the "optional spot-check" QA the spec (§3) describes, not a blocking gate.
+  Before trusting the result: confirm Task 1 Step 1's live-shape verification actually happened (the `RESPONSE_KEY` constant matches reality), and spot-check a handful of entries in the output file against LibriVox's own site (does "Reader One" really sound like what got tagged?) — this is the "optional spot-check" QA the spec (§3) describes, not a blocking gate. **Commit the resulting `free-voice-catalog.json`** — it's the static, deliberately-stale artifact the in-app catalog reads (spec §3); a reader/book not in it isn't offered in-app until the next refresh.
 
 ---
 
 ## Self-Review
 
-**1. Spec coverage:** §3's two-stage pipeline (deterministic discovery, no LLM; tiered classification, local-always + Gemini-upgrade) is fully covered by Tasks 1-6, with Task 7 as the composition root. §3's "confidence tagging" (`'coarse'` vs `'refined'`) is threaded through `CatalogEntry` and both classifiers. §3's "Wave 3 owns the exact endpoint/caching contract" is respected — this plan stops at producing the data file; no wizard-facing endpoint is built here. §4 (wizard) and §5 (wiki) are explicitly out of scope per the Global Constraints section, consistent with spec §6's phasing. §2's rejected-sources rationale and §7's out-of-scope list require no code.
+**1. Spec coverage:** §3's two-stage pipeline (deterministic discovery, no LLM; tiered classification, local-always + Gemini-upgrade) is fully covered by Tasks 1-6, with Task 7 as the composition root. §3's "confidence tagging" (`'coarse'` vs `'refined'`) is threaded through `CatalogEntry` and both classifiers. §3's revised framing — periodic, human-attended refresh producing a committed static artifact, not a live/continuous pipeline — is reflected in Global Constraints, Task 2's pacing, and Task 7's console messaging and Step 5. §4 (wizard) and §5 (wiki) are explicitly out of scope per the Global Constraints section, consistent with spec §6's phasing. §2's rejected-sources rationale and §7's out-of-scope list require no code.
 
 **2. Placeholder scan:** No TBD/TODO markers. Task 1's "detail that couldn't be verified" is handled as a concrete manual verification step with a real command and a named constant to adjust, not a vague placeholder. Task 7 Step 5 is explicitly marked as manual/outside the TDD loop rather than pretending an automated step ran against live data.
 
-**3. Type consistency:** `Gender`/`AgeRange` defined once in Task 1's `types.ts`, imported (never redefined) by Tasks 4, 5, 6. `ReaderIndexEntry` defined in Task 2, consumed by Task 6 without renaming fields. `CatalogEntry` defined in Task 1, produced by Task 6, consumed by Task 7 — field names (`readerId`, `displayName`, `language`, `gender`, `ageRange`, `confidence`, `bookIds`) match exactly across all three. `fetchSampleClipPcm`'s options shape (`urlIarchive`, `fetchImpl`, `spawnImpl`, `sampleRate`) matches between Task 3's definition and Task 6's/Task 7's call sites.
+**3. Type consistency:** `Gender`/`AgeRange` defined once in Task 1's `types.ts`, imported (never redefined) by Tasks 4, 5, 6. `ReaderIndexEntry`/`CrawlResult` defined in Task 2, consumed by Task 6/7 without renaming fields. `CatalogEntry` defined in Task 1, produced by Task 6, consumed by Task 7 — field names match exactly across all three. `SampleClip { pcm, sampleRate, mp3Bytes }` (Task 3) is consumed correctly downstream: Task 4 gets `pcm`, Task 5 gets `mp3Bytes` — no task passes decoded PCM to Gemini.
+
+**4. Findings from the third adversarial pass, addressed in this revision:**
+- **Unattended-crawl risk (most dangerous finding):** resolved by the spec-level pivot to a periodic (3-4 month), human-attended refresh with a committed static output — not by making the crawler itself bulletproof, which wasn't achievable given the observed 403s. The crawler is still made politer regardless (Task 1's User-Agent, Task 2's inter-page delay), since a blocked crawl still wastes a human's attended refresh session.
+- **Gemini raw-PCM bug:** fixed by threading the original `mp3Bytes` through Task 3 → Task 6 → Task 5 instead of re-deriving or reformatting the decoded PCM; Task 5 now sends a documented `audio/mp3` container instead of an invented, undocumented `audio/l16` raw-PCM mimetype.
+- **Redundant double-crawl:** fixed by having Task 2's `crawlReaders` return `bookArchiveUrls` from the same pass, removing Task 7's second full-catalog pagination entirely.
+- **Pitch classifier octave-error risk:** mitigated (not eliminated — still a coarse heuristic, honestly scoped as such) by switching `autocorrelationPeak` from a global-maximum search to a first-strong-peak search, the standard mitigation against locking onto a harmonic multiple of the true fundamental.
+- **Gemini-failure observability gap:** fixed via `onGeminiError`, so a systemic failure (bad key, quota, format mismatch) surfaces distinctly from "GEMINI_API_KEY not set" in the CLI's own output, instead of both looking like "0 refined" with no explanation.
