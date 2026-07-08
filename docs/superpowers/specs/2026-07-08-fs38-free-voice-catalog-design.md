@@ -36,24 +36,33 @@ Wikimedia Commons spoken-word. Only **LibriVox** clears the bar for in-app integ
   needs. (Common Voice, by contrast, is thousands of anonymous speakers each reading one
   unrelated few-second sentence — no "narrator" to pick, and no single speaker has enough
   continuous audio to clone well.)
-- **Fetchability:** official catalog API (`librivox.org/api/info`, queryable by language/
-  reader) plus archive.org's metadata API, which enumerates stable, direct per-chapter MP3
-  URLs for a given book identifier. No rehosting needed — the wizard fetches live from the
-  resolved URL at clone time.
+- **Fetchability:** LibriVox's public API (base feed `librivox.org/api/feed/audiobooks/`,
+  queryable by `id`/`title`/`author`/`genre`, with an `extended=1` mode that includes
+  per-section reader data — confirmed by reading the API's actual source, not the
+  `/api/info` docs page cited in an earlier draft of this spec, which is not itself an
+  endpoint) plus archive.org's metadata API, which enumerates stable, direct per-chapter
+  MP3 URLs for a given book identifier (confirmed live against a real item). No rehosting
+  needed — the wizard fetches live from the resolved URL at clone time. **Neither API
+  supports resolving "which books has reader X narrated" directly** — see §3 for how the
+  curation model works around that.
 - **Coverage:** EN is massive; ES/FR/DE have solid dedicated sections; RU exists but is
   noticeably thinner.
 
-Common Voice, OpenSLR, M-AILABS, and Wikimedia Commons were all rejected for the **in-app
-integration** specifically (non-commercial-only licensing on some corpora, link-rot risk on
-dead/mirrored hosts, bulk-archive-only access with no stable per-clip URL, or a license scope
-that covers "voice tech training" but is ambiguous about identifiable-voice cloning
-specifically). A separate, lighter research pass for the wiki page (§5) found that
-Wikimedia Commons' language-specific spoken-word/Spoken-Wikipedia collections are in fact
-worth recommending there (CC-BY-SA is a clear, if attribution-bound, license, and the
-per-language collections are substantial) even though they didn't clear the in-app bar;
-Common Voice, OpenSLR, and M-AILABS did not resurface as competitive against the
-native-language alternatives that pass found, so none of the three appear in the final §5
-table.
+Common Voice, OpenSLR, and M-AILABS were all rejected for the **in-app integration**
+specifically (non-commercial-only licensing on some corpora, link-rot risk on dead/mirrored
+hosts, bulk-archive-only access with no stable per-clip URL, or a license scope that covers
+"voice tech training" but is ambiguous about identifiable-voice cloning specifically). A
+separate, lighter research pass for the wiki page (§5) found that Wikimedia Commons'
+language-specific spoken-word/Spoken-Wikipedia collections are worth recommending there
+(CC-BY-SA is a clear license, and the per-language collections are substantial) — but
+Commons is **deliberately kept out of the in-app integration too, for a reason distinct from
+the others**: CC-BY-SA carries a ShareAlike clause, and if a voice clone is treated as a
+derivative of the source recording, ShareAlike could arguably extend to the *generated
+output* — an acceptable judgment call for a user manually cloning their own picked file, but
+not a risk to build an automated commercial pipeline around. PD-only (LibriVox) is the
+in-app bar; CC-BY-SA is a fine flagged wiki recommendation. Common Voice, OpenSLR, and
+M-AILABS did not resurface as competitive against the native-language alternatives the wiki
+research pass found, so none of the three appear in the final §5 table.
 
 ## 3. Curation model & data shape
 
@@ -61,32 +70,56 @@ One small hand-maintained list is the only curated artifact:
 
 ```
 { readerId: string, language: 'en'|'es'|'fr'|'de'|'ru',
-  gender: 'male'|'female'|'neutral', ageRange: 'child'|'teen'|'adult'|'elderly' }
+  gender: 'male'|'female'|'neutral', ageRange: 'child'|'teen'|'adult'|'elderly',
+  bookIds: string[] }
 ```
 
 `gender`/`ageRange` reuse the exact enum already defined for `characterHint` in
 `openapi.yaml` (used today by the Gemini prebuilt-voice picker) — the free-voice catalog
 speaks the same persona vocabulary as voice design, not a new one.
 
-This list is vetted by hand, per reader, once — a few dozen entries across 5 languages is
-the expected scale, fewer for Russian. It is **not** a list of specific clip URLs: the
-actual books/chapters available for a tagged reader are resolved live via LibriVox's catalog
-API (by readerId) and archive.org's metadata API (direct chapter URLs from a book
-identifier), so the content itself stays current without repeated manual re-curation.
-Wave 3 planning owns the exact endpoint/caching contract for this resolution step; this spec
-fixes the data shape and the "hand-tag readers, live-fetch content" split, not the wire
-protocol.
+**`bookIds` exists because there is no reverse lookup.** Neither LibriVox's API nor
+archive.org's item metadata supports "list every book reader X narrated" — LibriVox's
+audiobooks feed filters only by `id`/`title`/`author`/`genre`, and archive.org's `creator`
+field on a LibriVox item is the book's *author* (e.g. "Lewis Carroll"), not the reader; there
+is no narrator field at all. Reader identity is only discoverable *forwards*, per book you
+already know about (`?id=<bookId>&extended=1` returns each section's `readers[].reader_id`).
+So the curated artifact has to name each tagged reader's book(s) explicitly, found once by a
+human via LibriVox's own site during curation — the same one-time cost as tagging the reader
+at all, just one field heavier. What stays genuinely **live** (no manual re-curation) is the
+*content* of those known books: chapter listing and direct file URLs, resolved at browse/clone
+time via the `id`-based feed and archive.org's metadata API. A tagged reader's *new*
+work published after curation won't surface automatically — re-scanning readers for
+additional books is a periodic manual/maintenance task, not an automatic one. A few dozen
+entries across 5 languages is the expected scale, fewer for Russian.
+
+Wave 3 planning owns the exact endpoint/caching contract for this resolution step, and should
+confirm the LibriVox feed responds successfully to a normal server-side request before
+building on it — direct fetches during this spec's review were blocked with a 403 (consistent
+with bot-blocking on the request, not confirmed evidence of an outage, but unverified either
+way). This spec fixes the data shape and the "hand-tag readers + their known books, live-fetch
+each book's current content" split, not the wire protocol.
 
 ## 4. Wizard flow & rights handling
 
 "Browse free voices" is a third entry point in the existing clone/imported wizard (fs-38
-spec §4), alongside "Record" and "Upload your own." It opens a filter — language (defaults
-to the book's language) × gender × age-range — over the tagged-reader list, with a preview
-player per reader streamed live from the resolved archive.org URL. Selecting a reader/clip
-feeds it into the **same** ffmpeg-ingest → quality-check/Whisper-transcript →
-consent-attestation → clone pipeline as a manual upload; from the pipeline's perspective this
-is just another audio source, not a new mechanism. Provenance is `imported`, unchanged from
-the existing spec.
+spec §4), alongside "Record" and "Upload your own." **It runs as a preliminary sub-step
+ahead of the base wizard's step 1** rather than slotting into step 2 ("Record or upload")
+directly: the base spec's step 1 (consent/attestation first) is ordered that way because the
+*content* of the attestation needs to be known before the rest of the flow — for a personal
+clone that means the person's name (to bake into the reading script); for a catalog entry it
+means which reader/book/rights-note apply, which isn't knowable until a specific entry is
+picked. So the flow is: **pick a catalog entry first → then enter the base wizard's step 1
+with `sourceAttestation` pre-filled** (source: LibriVox, book/reader identity, rights note) —
+the user confirms/edits rather than typing from scratch, and every step from there on
+(quality-check, Whisper transcript, name & shelve) runs exactly as it does for a manual
+upload. Provenance is `imported`, unchanged from the existing spec.
+
+**Fetch failure is a first-class state, not an edge case left to whatever the browser does
+by default:** if the archive.org fetch times out, 404s, or the source is otherwise
+unreachable, the catalog entry shows an inline error with **Retry** and a **"Switch to
+Upload instead"** action that hands off to the existing manual path with no lost context —
+never a silent hang, never a dead end.
 
 The consent/attestation screen pre-fills the existing `sourceAttestation: { source, rightsNote,
 attestedAt }` field (no new consent mechanism) with a standard note making explicit: the
@@ -116,12 +149,14 @@ gets recommended, not just "exists and is free":**
 | EN | LibriVox; Wikimedia Commons Spoken Wikipedia (CC-BY-SA); LoyalBooks (mirrors PD); Project Gutenberg audiobooks (PD) | Internet Archive general spoken-word collections (mixed per-item licensing) |
 | ES | LibriVox; LoyalBooks ES; Wikimedia Commons Spanish spoken-word (CC-BY-SA) | AlbaLearning (site framing is "personal use," reuse rights unclear) |
 | FR | LibriVox; Wikimedia Commons French spoken-word (CC-BY-SA) | Litteratureaudio.com (no stated reuse license); Audiocité (cites CC/PD sources but pulls content on complaint — verify per recording); BnF/Gallica PD holdings (not deeply verified) |
-| DE | LibriVox; Wikimedia "Gesprochene Wikipedia" German (CC-BY-SA, ~400+ hrs — the largest non-LibriVox option found for any language) | Vorleser.net (reads as "free to listen," not clearly "free to reuse") |
-| RU | LibriVox RU (thin — ~60 titles, but the cleanest license) | Internet Archive RU audiobook collection (mixed/unclear per-item provenance); Baza Knig / Babavera (likely restrictive — mentioned as existing, not recommended) |
+| DE | LibriVox; Wikimedia "Gesprochene Wikipedia" German (mixed CC-BY-SA/CC-BY per file, same as the other languages' Commons entries — largest non-LibriVox collection found for any language by file count, ~1,748 files in the category, though total-hours figures cited elsewhere for this collection are unverified and should be treated as illustrative, not confirmed) | Vorleser.net (reads as "free to listen," not clearly "free to reuse") |
+| RU | LibriVox RU (thin — title count cited elsewhere as ~60 is unverified; confirmed only as "visibly smaller than the other 4 languages," not to an exact number) | Internet Archive RU audiobook collection (mixed/unclear per-item provenance); Baza Knig / Babavera (likely restrictive — mentioned as existing, not recommended) |
 
 Russian is called out explicitly as the thinnest language — genuinely ~2 usable options
 today. The list is not padded to match the other languages' length; an honest gap is more
-useful than false parity.
+useful than false parity. Exact title/hour counts throughout this table are sourced from
+research-agent passes, not independently re-verified line-by-line; treat them as directional,
+not as numbers to cite externally without a fresh check.
 
 ## 6. Phasing
 
