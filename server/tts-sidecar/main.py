@@ -2088,7 +2088,12 @@ class QwenEngine(Engine):
             # load cleanly. Schedule a self-recycle so the NEXT attempt (this
             # request still gets its normal 500 below) hits a clean process
             # instead of failing identically forever.
-            if isinstance(e, NotImplementedError) and "meta tensor" in str(e).lower():
+            # Matched on two independent phrases from PyTorch's exact message
+            # ("Cannot copy out of meta tensor; no data! ... use
+            # torch.nn.Module.to_empty() ...") so a partial future rewording
+            # that keeps either one still fires this path.
+            _msg = str(e).lower()  # exc-text-safe: fault-type classification only, never returned
+            if isinstance(e, NotImplementedError) and ("meta tensor" in _msg or "to_empty" in _msg):
                 _schedule_model_load_fault_restart(model_id, str(e))
             raise
 
@@ -4360,41 +4365,61 @@ def _write_restart_breadcrumb(card: Optional[dict], metric_label: str) -> None:
         log.warning("could not write restart breadcrumb (%s) — a downstream auto-revert will lack card info for this trip.", e)
 
 
+def _schedule_recycle_exit(
+    exit_code: int, log_message: str, breadcrumb_reason: str, card: Optional[dict] = None,
+) -> bool:
+    """Shared idempotent-schedule + breadcrumb + drain + hard-exit flow behind
+    every self-recycle trigger (memory-watchdog ceilings, the Qwen load-fault
+    self-recycle, and any future trigger). Flips `_restart_pending` (new synth
+    now fast-fails 503) and hands off to a drain thread that waits out any
+    in-flight chapter/design (srv-17c) before the flush-delayed exit at
+    `exit_code`. Idempotent across ALL triggers (a later call is a no-op)
+    since at most one restart may ever be in flight regardless of cause.
+    Returns True if this call scheduled the exit, False if one was already
+    pending. Callers own their own pre-formatted `log_message` (the metric-
+    breach vs load-fault framings read very differently) and `breadcrumb_reason`."""
+    global _restart_scheduled, _restart_pending, _last_restart_card
+    if _restart_scheduled:
+        return False
+    _restart_scheduled = True
+    _restart_pending = True
+    _last_restart_card = card
+    _write_restart_breadcrumb(card, breadcrumb_reason)
+    grace_ms = _drain_grace_ms()
+    log.warning(log_message)
+    threading.Thread(target=_drain_then_restart, args=(grace_ms, exit_code), daemon=True).start()
+    return True
+
+
 def _schedule_restart_exit(
     metric_mb: float, threshold_mb: float, metric_label: str = "committed memory",
     card: Optional[dict] = None,
 ) -> None:
     """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
-    Idempotent (a later over-ceiling tick won't double-schedule). Flips
-    `_restart_pending` (new synth now fast-fails 503) and hands off to a drain
-    thread that waits out the in-flight chapter (srv-17c) before the
-    flush-delayed exit. `metric_label` names the ceiling that tripped (host
-    "committed memory" vs "reserved VRAM") so the log says which one fired.
-    `card` is None for the pre-existing host-RAM/device-0-VRAM triggers, and
-    the breaching card's dict for a per-card trigger."""
-    global _restart_scheduled, _restart_pending, _last_restart_card
-    if _restart_scheduled:
-        return
-    _restart_scheduled = True
-    _restart_pending = True
-    _last_restart_card = card
-    _write_restart_breadcrumb(card, metric_label)
-    grace_ms = _drain_grace_ms()
-    log.warning(
-        # "breached ... limit" is deliberately direction-NEUTRAL: reserved-VRAM
-        # trips are metric ABOVE ceiling, driver_free_floor trips are free
-        # BELOW floor — the old "crossed the restart ceiling" wording read
-        # backwards for the floor case (review finding, 2026-07-06).
-        "sidecar %s %.0fMB breached the restart limit %.0fMB%s — "
-        "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
-        "server respawns a fresh process. Completed chapters are skipped (srv-16); "
-        "the in-flight chapter finishes here or is re-rendered by the server "
-        "(srv-17c). Raise the ceiling to recycle less often.",
-        metric_label, metric_mb, threshold_mb,
-        f" (card {card['idx']})" if card else "",
-        _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
+    Idempotent (a later over-ceiling tick won't double-schedule — see
+    `_schedule_recycle_exit`). `metric_label` names the ceiling that tripped
+    (host "committed memory" vs "reserved VRAM") so the log says which one
+    fired. `card` is None for the pre-existing host-RAM/device-0-VRAM
+    triggers, and the breaching card's dict for a per-card trigger."""
+    card_suffix = f" (card {card['idx']})" if card else ""
+    _schedule_recycle_exit(
+        _RESTART_EXIT_CODE,
+        (
+            # "breached ... limit" is deliberately direction-NEUTRAL: reserved-VRAM
+            # trips are metric ABOVE ceiling, driver_free_floor trips are free
+            # BELOW floor — the old "crossed the restart ceiling" wording read
+            # backwards for the floor case (review finding, 2026-07-06).
+            f"sidecar {metric_label} {metric_mb:.0f}MB breached the restart limit "
+            f"{threshold_mb:.0f}MB{card_suffix} — "
+            f"draining {_inflight_synth} in-flight synth (grace {_drain_grace_ms()}ms) "
+            f"then self-exiting (code {_RESTART_EXIT_CODE}) so the server respawns a "
+            "fresh process. Completed chapters are skipped (srv-16); the in-flight "
+            "chapter finishes here or is re-rendered by the server (srv-17c). Raise "
+            "the ceiling to recycle less often."
+        ),
+        metric_label,
+        card=card,
     )
-    threading.Thread(target=_drain_then_restart, args=(grace_ms,), daemon=True).start()
 
 
 def _schedule_model_load_fault_restart(model_id: str, detail: str) -> None:
@@ -4404,32 +4429,23 @@ def _schedule_model_load_fault_restart(model_id: str, detail: str) -> None:
     since 2026-05-26, ~86 occurrences: some submodule the checkpoint doesn't
     cover lands on the meta device despite `low_cpu_mem_usage=False`, and
     every RELOAD in the same process keeps failing identically — only a fresh
-    process has been observed to load the model cleanly). Mirrors
-    `_schedule_restart_exit`'s idempotent-schedule + drain + hard-exit shape
-    (shares `_restart_scheduled`/`_restart_pending` so at most one restart is
-    ever in flight regardless of trigger), but uses
-    `_MODEL_LOAD_FAULT_EXIT_CODE` instead of `_RESTART_EXIT_CODE` so the
-    Node supervisor's code-43 streak-trip ("device structurally too small")
-    never fires for this unrelated fault class."""
-    global _restart_scheduled, _restart_pending
-    if _restart_scheduled:
-        return
-    _restart_scheduled = True
-    _restart_pending = True
-    _write_restart_breadcrumb(None, f"qwen model-load fault ({model_id})")
-    grace_ms = _drain_grace_ms()
-    log.warning(
-        "Qwen model=%s failed to load (%s) — this is the known intermittent "
-        "meta-tensor load fault that only a fresh process clears. Draining %d "
-        "in-flight synth (grace %dms) then self-exiting (code %d) so the "
-        "server respawns a clean sidecar.",
-        model_id, detail, _inflight_synth, grace_ms, _MODEL_LOAD_FAULT_EXIT_CODE,
+    process has been observed to load the model cleanly). Shares
+    `_schedule_recycle_exit`'s idempotent-schedule + drain + hard-exit flow
+    with `_schedule_restart_exit` (so at most one restart is ever in flight
+    regardless of trigger), but uses `_MODEL_LOAD_FAULT_EXIT_CODE` instead of
+    `_RESTART_EXIT_CODE` so the Node supervisor's code-43 streak-trip ("device
+    structurally too small") never fires for this unrelated fault class."""
+    _schedule_recycle_exit(
+        _MODEL_LOAD_FAULT_EXIT_CODE,
+        (
+            f"Qwen model={model_id} failed to load ({detail}) — this is the known "
+            "intermittent meta-tensor load fault that only a fresh process clears. "
+            f"Draining {_inflight_synth} in-flight synth (grace {_drain_grace_ms()}ms) "
+            f"then self-exiting (code {_MODEL_LOAD_FAULT_EXIT_CODE}) so the server "
+            "respawns a clean sidecar."
+        ),
+        f"qwen model-load fault ({model_id})",
     )
-    threading.Thread(
-        target=_drain_then_restart,
-        args=(grace_ms, _MODEL_LOAD_FAULT_EXIT_CODE),
-        daemon=True,
-    ).start()
 
 
 async def _memory_watchdog() -> None:
@@ -5524,6 +5540,18 @@ async def qwen_design_voice(req: Request) -> Response:
         else None
     )
 
+    # srv-17c drain fence (see /synthesize): while a recycle is draining,
+    # fast-fail new designs with a 503 instead of letting one start on a
+    # process that's about to hard-exit — _inflight_synth below only protects
+    # a design/mint call already IN FLIGHT when the recycle was scheduled.
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         result = await asyncio.to_thread(
             qwen.design_voice,
@@ -5539,6 +5567,11 @@ async def qwen_design_voice(req: Request) -> Response:
     except Exception:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        # Counted regardless of outcome — a load-fault self-recycle scheduled
+        # WHILE this design is in flight (main.py _schedule_model_load_fault_restart)
+        # must wait for it to actually finish before the process hard-exits.
+        _inflight_synth -= 1
 
     return Response(
         content=result.pcm,
@@ -5587,6 +5620,15 @@ async def qwen_mint_variant(req: Request) -> Response:
         else None
     )
 
+    # srv-17c drain fence — see /synthesize and /qwen/design-voice.
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         result = await asyncio.to_thread(
             qwen.mint_variant,
@@ -5617,6 +5659,8 @@ async def qwen_mint_variant(req: Request) -> Response:
     except Exception:
         log.exception("/qwen/mint-variant failed (baseVoiceId=%s)", base_voice_id)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1
 
     return Response(
         content=result.pcm,

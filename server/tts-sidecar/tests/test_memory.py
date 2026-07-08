@@ -449,6 +449,76 @@ def test_load_reports_not_ready_while_recycling(monkeypatch):
     assert body.get("status") != "ready"  # the gate must treat this as keep-waiting
 
 
+def test_design_voice_fast_fails_503_while_recycling(monkeypatch):
+    """Mirrors test_synthesize_fast_fails_503_while_recycling: a design/mint
+    call started AFTER a recycle is already pending must fast-fail 503 too,
+    not race the drain (code-review finding on the meta-tensor self-recycle:
+    design/mint calls were the only synth-shaped endpoints with NO drain-fence
+    coverage at all)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_restart_pending", True)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/qwen/design-voice",
+            json={"voiceId": "v1", "instruct": "a calm narrator"},
+        )
+
+    assert r.status_code == 503
+    assert "recycling" in r.json()["detail"].lower()
+
+
+def test_design_voice_counts_as_inflight_synth(monkeypatch):
+    """The drain fence `_schedule_model_load_fault_restart` waits on
+    (`_inflight_synth`) must actually cover a design call — a load fault
+    triggered by a SIBLING request must not sever a design that's already
+    mid-GPU-forward. Asserts the counter is 1 while design_voice runs and back
+    to 0 (in the finally) once it returns, matching /synthesize's contract."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    engine = main.QwenEngine()
+    monkeypatch.setitem(main.ENGINES, "qwen", engine)
+    monkeypatch.setattr(main, "_restart_pending", False)
+
+    observed = {}
+
+    def fake_design_voice(*_a, **_k):
+        observed["inflight_during_call"] = main._inflight_synth
+        return main.SynthResult(pcm=b"\x00\x00", sample_rate=24000)
+
+    monkeypatch.setattr(engine, "design_voice", fake_design_voice)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/qwen/design-voice",
+            json={"voiceId": "v1", "instruct": "a calm narrator"},
+        )
+
+    assert r.status_code == 200
+    assert observed["inflight_during_call"] == 1
+    assert main._inflight_synth == 0  # released in the route's `finally`
+
+
+def test_mint_variant_fast_fails_503_while_recycling(monkeypatch):
+    """Same drain-fence coverage as design-voice, for /qwen/mint-variant."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_restart_pending", True)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/qwen/mint-variant",
+            json={
+                "baseVoiceId": "v1",
+                "variantVoiceId": "v1-angry",
+                "emotionInstruct": "angrier",
+            },
+        )
+
+    assert r.status_code == 503
+    assert "recycling" in r.json()["detail"].lower()
+
+
 # --- the diagnostic endpoint ---
 
 
