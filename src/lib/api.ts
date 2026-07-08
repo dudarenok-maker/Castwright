@@ -2106,7 +2106,19 @@ async function realGetQaReport(bookId: string): Promise<BookQaReport> {
 }
 
 async function mockGetQaReport(_bookId: string): Promise<BookQaReport> {
-  return MOCK_QA_REPORT;
+  /* srv-36 hardening (Task 14 e2e) — the mock ignores bookId and always
+     returns the same fixed MOCK_QA_REPORT (voiceDrift.charactersPending is
+     always []), so there's no way to reach the Resume-scoring branch of
+     VoiceMatchRow (src/components/qa-report-card.tsx) through the mock's
+     default response. Browser-level specs can seed
+     `window.__mockQaReportOverride` to force an arbitrary report shape —
+     mirrors the existing `window.__mockGenConcurrency` idiom
+     (mockStreamGeneration, above) rather than inventing a new mechanism. */
+  const override =
+    typeof window !== 'undefined'
+      ? (window as unknown as { __mockQaReportOverride?: BookQaReport }).__mockQaReportOverride
+      : undefined;
+  return override ?? MOCK_QA_REPORT;
 }
 
 async function realResumeScoring(bookId: string): Promise<void> {
