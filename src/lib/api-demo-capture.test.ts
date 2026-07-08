@@ -113,4 +113,42 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     expect(res.pending!.length).toBeGreaterThan(0);
     expect(res.drift!.some((d) => d.bookId === 'sb')).toBe(true);
   });
+
+  it('mockGetQaReport: hollow-tide-2 gets a realistic mixed report under DEMO_CAPTURE', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { api } = await import('./api');
+
+    const report = await api.getQaReport('hollow-tide-2');
+    expect(report.bookId).toBe('hollow-tide-2');
+    expect(report.acoustic.linesRerecorded).toBeGreaterThan(0);
+    expect(report.asr.linesFlaggedDrift).toBeGreaterThan(0);
+    expect(report.configDrift.counts.severe).toBe(1);
+    expect(report.configDrift.counts.moderate).toBe(1);
+    expect(report.configDrift.events.map((e) => e.characterId)).toEqual(['insp-cray', 'dr-wren']);
+    expect(report.voiceDrift.mismatches.length).toBeGreaterThan(0);
+  });
+
+  it('mockGetQaReport: every other book keeps the all-clean MOCK_QA_REPORT under DEMO_CAPTURE', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { api } = await import('./api');
+
+    const report = await api.getQaReport('hollow-tide-1');
+    expect(report.configDrift.counts).toEqual({ mild: 0, moderate: 0, severe: 0 });
+    expect(report.acoustic.linesRerecorded).toBe(0);
+  });
+
+  it('mockGetQaReport: the override never fires outside DEMO_CAPTURE', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '0');
+    const { api } = await import('./api');
+
+    const report = await api.getQaReport('hollow-tide-2');
+    expect(report.configDrift.counts).toEqual({ mild: 0, moderate: 0, severe: 0 });
+    expect(report.acoustic.linesRerecorded).toBe(0);
+  });
 });
