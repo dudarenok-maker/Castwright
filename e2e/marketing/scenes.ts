@@ -991,11 +991,11 @@ export const SCENES: Scene[] = [
        never match. Instead target the chip's own aria-label, which bakes in
        Task 1's exact instruct text — unambiguous regardless of DOM nesting.
 
-       NOT passive-load, unlike most manuscript scenes: chapter 4 has 160
+       NOT passive-load, unlike most manuscript scenes: chapter 4 has 235
        segments (manuscript.tsx's own `virtualEnabled = segments.length >=
-       60`, plan 92), so sentence 107 (segment index 68/160) is unmounted
+       60`, plan 92), so sentence 107 (segment index 106/235) is unmounted
        until scrolled near — chapter 3, which every other manuscript scene in
-       this file uses, has only 48 segments and never crosses that
+       this file uses, has only 57 segments and never crosses that
        threshold, which is why none of them needed this. `waitFor` below only
        confirms the (always-mounted) virtual container exists; `action`
        window-scrolls in a loop until the sentence's span actually mounts,
