@@ -604,27 +604,42 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
              confirmedBookCount/spanBooks are the "how many books has this cast
              carried across" headline (SeriesMemorySummary — types.ts: "M for
              in-app surfaces … NOT series.books.length"), deliberately decoupled
-             from the physical shelf (still 4 real cards: hollow-tide-1..4) — the
-             minimal path to a true "twelve books in" claim without inventing 8
-             more book cards (which would also break hollow-tide.test.ts's
-             "four-book series" assertion). Carried cast = 5 voices: the three
-             `usedIn: 3` recurring ones (Narrator, Insp. Cray, Dr. Wren) plus two
-             more real HOLLOW_TIDE_VOICES entries (Constance Vale, Magistrate
-             Cross) promoted to "carried across the series" for this fixture —
-             kept to 5 (not 12) so the reveal panel's roster still fits the
-             1280×720 capture viewport without a layout change. perBook stays
-             scoped to the 2 books that actually have rendered content
-             (principalCount mirrors each book's own characterCount above, 7/6)
-             — it's backing data only, not rendered by SeriesMemoryChip/Reveal. */
+             from the physical shelf (still 4 real cards: hollow-tide-1..4) —
+             kept to 6 (not a bigger number) so the gap against the shelf's own
+             "4 books" label (rendered right beside the chip in library-grid.tsx)
+             reads as real growth, not a jarring, suspicious-looking mismatch.
+             Carried cast = 5 voices: the three `usedIn: 3` recurring ones
+             (Narrator, Insp. Cray, Dr. Wren) plus two more real
+             HOLLOW_TIDE_VOICES entries (Constance Vale, Magistrate Cross)
+             promoted to "carried across the series" for this fixture.
+
+             perBook MUST have one entry per book in the confirmedBookCount/
+             spanBooks span (6), not just the 2 real ones — SeriesSparkline
+             (rendered next to SeriesMemoryChip in library-grid.tsx) reads
+             perBook.length for its bar count and carriedPresent per bar; the
+             ONE other real precedent (Northern Coast Trilogy, library.ts)
+             always keeps perBook.length === confirmedBookCount === spanBooks,
+             so a shorter perBook under a "6 books" claim would render a
+             sparkline contradicting its own "carried across 6 books"
+             aria-label right next to the chip's "6 books" — the exact
+             self-contradiction a marketing screenshot must not show. Books
+             1-2 keep their real principalCount (7/6, mirroring characterCount
+             above); books 3-6 are synthetic (no corresponding
+             HOLLOW_TIDE_LIBRARY entry) — same "decoupled from the physical
+             shelf" simplification as confirmedBookCount/spanBooks. */
           seriesMemory: {
             carriedCount: 5,
             bespokeCount: 0,
             designedCount: 0,
-            confirmedBookCount: 12,
-            spanBooks: 12,
+            confirmedBookCount: 6,
+            spanBooks: 6,
             perBook: [
-              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 3 },
-              { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 3 },
+              { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 5 },
+              { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 5 },
+              { bookId: 'hollow-tide-3', index: 3, principalCount: 6, carriedPresent: 5 },
+              { bookId: 'hollow-tide-4', index: 4, principalCount: 5, carriedPresent: 5 },
+              { bookId: 'hollow-tide-5', index: 5, principalCount: 7, carriedPresent: 5 },
+              { bookId: 'hollow-tide-6', index: 6, principalCount: 6, carriedPresent: 5 },
             ],
           },
         },
