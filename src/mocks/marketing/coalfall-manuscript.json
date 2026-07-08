@@ -1,4 +1,4 @@
-﻿{
+{
   "sentences": [
     {
       "id": 1,
@@ -181,8 +181,7 @@
       "characterId": "pell-hollis",
       "text": "“Run, you fools — it’ll have the lot of you!”",
       "confidence": 0.65,
-      "emotion": "excited",
-      "instruct": "shouted from across the yard, half-laughing"
+      "emotion": "excited"
     },
     {
       "id": 27,
@@ -456,8 +455,7 @@
       "characterId": "pell-hollis",
       "text": "“That was me shouting,”",
       "confidence": 0.98,
-      "emotion": "excited",
-      "instruct": "shouted from across the yard, half-laughing"
+      "emotion": "excited"
     },
     {
       "id": 9,
@@ -1465,8 +1463,7 @@
       "characterId": "master-oduvan",
       "text": "“Steady — steady — there.”",
       "confidence": 0.96,
-      "emotion": "excited",
-      "instruct": "shouted from across the yard, half-laughing"
+      "emotion": "excited"
     },
     {
       "id": 152,
