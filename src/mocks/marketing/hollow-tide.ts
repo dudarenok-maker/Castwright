@@ -611,7 +611,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
             bespokeCount: 0,
             designedCount: 0,
             confirmedBookCount: 2,
-            spanBooks: 4,
+            spanBooks: 2,
             perBook: [
               { bookId: 'hollow-tide-1', index: 1, principalCount: 7, carriedPresent: 3 },
               { bookId: 'hollow-tide-2', index: 2, principalCount: 6, carriedPresent: 3 },

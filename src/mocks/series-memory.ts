@@ -84,7 +84,7 @@ export const MOCK_SERIES_MEMORY: Record<string, SeriesMemoryDetail> = {
   'Marin Vale::The Hollow Tide': {
     series: {
       confirmedBookCount: 2,
-      spanBooks: 4,
+      spanBooks: 2,
       books: [
         { bookId: 'hollow-tide-1', title: 'The Drowning Bell', index: 1, principalCount: 7 },
         { bookId: 'hollow-tide-2', title: 'Saltgrave',         index: 2, principalCount: 6 },

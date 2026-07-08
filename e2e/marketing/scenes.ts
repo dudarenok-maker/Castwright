@@ -976,6 +976,7 @@ export const SCENES: Scene[] = [
     hash: '#/books/hollow-tide-2/listen',
     viewports: ['desktop'],
     waitFor: 'text=Quality gate',
+    scrollTo: 'text=Quality gate',
   },
   {
     /* Emotion + delivery-direction story — a single line (Coalfall ch.4,
