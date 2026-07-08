@@ -1258,7 +1258,7 @@ server/data/voice-catalog/
 **Files:**
 - Create: `server/scripts/voice-catalog-build.ts`
 - Modify: `package.json` (root — add npm script)
-- Modify: `.gitignore` (if `server/data/voice-catalog/` should be generated, not hand-edited — see step 3)
+- Create: `server/data/voice-catalog/free-voice-catalog.json` (committed placeholder, see Step 3 — this is a shipped static artifact, not gitignored)
 
 **Interfaces:**
 - Consumes: `crawlReaders`/`CrawlResult` (Task 2), `buildCatalog` (Task 6), `CatalogEntry` (Task 1's `types.ts`).
