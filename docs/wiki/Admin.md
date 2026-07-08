@@ -4,7 +4,11 @@
 health checks and throughput at a glance, no logs required. It's reached
 from the **Admin** pill in the top bar.
 
-![Admin overview](images/admin/01-admin-overview.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/admin/01-admin-overview-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/admin/01-admin-overview.png">
+  <img alt="Admin overview" src="images/admin/01-admin-overview.png">
+</picture>
 
 The top of the page is three link-out cards — **About Castwright** (brand
 story, tagline, app version), **Model Manager** (see

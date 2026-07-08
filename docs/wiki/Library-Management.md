@@ -7,7 +7,11 @@ the top-right: card view (a visual grid, good for browsing covers) and table
 view (dense rows, good for scanning many books at once). Both read the same
 underlying data and stay in sync with each other.
 
-![Library grid — cards view](images/library-management/01-library-covers.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/library-management/01-library-covers-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/library-management/01-library-covers.png">
+  <img alt="Library grid — cards view" src="images/library-management/01-library-covers.png">
+</picture>
 
 The header shows your workspace's on-disk root (with a one-click **Copy**),
 four running totals (books, total runtime, distinct voices, in-progress
@@ -30,7 +34,11 @@ every author into one place at the bottom. Below, a three-book series —
 to a single standalone in its own section underneath. The card view shows the
 same grouping as a plain section heading rather than a collapsible one.
 
-![Series grouping — table view](images/library-management/02-series-grouping.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/library-management/02-series-grouping-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/library-management/02-series-grouping.png">
+  <img alt="Series grouping — table view" src="images/library-management/02-series-grouping.png">
+</picture>
 
 Once you've listened across multiple books in a series, a **Series Memory**
 chip appears next to the section header, summarising which characters'

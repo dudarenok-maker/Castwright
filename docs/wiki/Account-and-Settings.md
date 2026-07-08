@@ -6,7 +6,11 @@ overrides — things that seed new books, not per-book choices; once you pick
 a model for a specific book, that book's choice sticks regardless of what's
 set here.
 
-![Account](images/account-and-settings/01-account.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/account-and-settings/01-account-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/account-and-settings/01-account.png">
+  <img alt="Account" src="images/account-and-settings/01-account.png">
+</picture>
 
 At the top, the **Application updates** card shows your installed app +
 sidecar version, whether you're up to date, a **See what's new** link, and

@@ -9,7 +9,11 @@ the two-model analyzer split, TTS sidecar tuning, and server configuration.
 
 ## Device
 
-![Device panel — detected GPU and VRAM](images/model-manager/01-device.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/01-device-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/01-device.png">
+  <img alt="Device panel — detected GPU and VRAM" src="images/model-manager/01-device.png">
+</picture>
 
 The **Device** panel shows the GPU(s) detected on this machine and their
 VRAM — this is what determines which engines are even offered (a CPU-only
@@ -17,7 +21,11 @@ box still runs Kokoro; a GPU box can run Qwen/Coqui too).
 
 ## Installed models
 
-![Installed models — Standard group](images/model-manager/02-installed-models.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/02-installed-models-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/02-installed-models.png">
+  <img alt="Installed models — Standard group" src="images/model-manager/02-installed-models.png">
+</picture>
 
 Every model is grouped under **Standard** (Kokoro, Qwen3-TTS Base 0.6B/1.7B,
 Qwen3-TTS VoiceDesign), **Optional add-ons** (Coqui XTTS v2), **Analyzer
@@ -41,7 +49,11 @@ models (Ollama)**, and **Speech recognition (ASR)**. Each row shows:
 
 ## Defaults for new books
 
-![Defaults for new books](images/model-manager/03-defaults-for-new-books.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/03-defaults-for-new-books-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/03-defaults-for-new-books.png">
+  <img alt="Defaults for new books" src="images/model-manager/03-defaults-for-new-books.png">
+</picture>
 
 | Knob | What it does | Default | Range |
 |---|---|---|---|
@@ -51,7 +63,11 @@ models (Ollama)**, and **Speech recognition (ASR)**. Each row shows:
 
 ## Two-model analyzer split (advanced)
 
-![Two-model analyzer split](images/model-manager/04-analyzer-split.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/04-analyzer-split-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/04-analyzer-split.png">
+  <img alt="Two-model analyzer split" src="images/model-manager/04-analyzer-split.png">
+</picture>
 
 Splits analysis across two models so cast detection and sentence
 attribution run concurrently on different free-tier rate-limit buckets.
@@ -66,7 +82,11 @@ opt in.
 
 ## Voice engine
 
-![Voice engine settings](images/model-manager/05-voice-engine.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/05-voice-engine-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/05-voice-engine.png">
+  <img alt="Voice engine settings" src="images/model-manager/05-voice-engine.png">
+</picture>
 
 | Knob | What it does | Default | Range |
 |---|---|---|---|
@@ -76,7 +96,11 @@ opt in.
 
 ## Server configuration
 
-![Server configuration](images/model-manager/06-server-config.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/06-server-config-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/06-server-config.png">
+  <img alt="Server configuration" src="images/model-manager/06-server-config.png">
+</picture>
 
 | Knob | What it does | Default | Range |
 |---|---|---|---|
@@ -94,7 +118,11 @@ opt in.
 
 ## Install / update analyzer (Ollama)
 
-![Install / update analyzer](images/model-manager/07-install-ollama.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/model-manager/07-install-ollama-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/model-manager/07-install-ollama.png">
+  <img alt="Install / update analyzer" src="images/model-manager/07-install-ollama.png">
+</picture>
 
 Install the Ollama daemon and pull analyzer model weights without dropping
 to a terminal — pull-tag UI plus a live health probe. The voice-engine / ASR

@@ -51,7 +51,11 @@ is disabled.
 
 ## 1. LLM sampling parameters
 
-![LLM sampling parameters](images/advanced-settings/01-llm-sampling-parameters.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/01-llm-sampling-parameters-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/01-llm-sampling-parameters.png">
+  <img alt="LLM sampling parameters" src="images/advanced-settings/01-llm-sampling-parameters.png">
+</picture>
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -64,7 +68,11 @@ is disabled.
 
 ## 2. Analyzer chunking & truncation guards
 
-![Analyzer chunking & truncation guards](images/advanced-settings/02-analyzer-chunking-truncation.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/02-analyzer-chunking-truncation-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/02-analyzer-chunking-truncation.png">
+  <img alt="Analyzer chunking & truncation guards" src="images/advanced-settings/02-analyzer-chunking-truncation.png">
+</picture>
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -78,7 +86,11 @@ is disabled.
 
 ## 3. Analyzer prompts & skills
 
-![Analyzer prompts & skills](images/advanced-settings/03-analyzer-prompts-skills.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/03-analyzer-prompts-skills-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/03-analyzer-prompts-skills.png">
+  <img alt="Analyzer prompts & skills" src="images/advanced-settings/03-analyzer-prompts-skills.png">
+</picture>
 
 **High risk, starts collapsed.** All 6 rows are prompt-shaped — an Edit /
 Revert-to-default pair, not a form control. Editing forks the prompt to
@@ -95,7 +107,11 @@ your own on-disk copy; nothing here changes until you explicitly edit.
 
 ## 4. Analyzer models & endpoints
 
-![Analyzer models & endpoints](images/advanced-settings/04-analyzer-models-endpoints.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/04-analyzer-models-endpoints-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/04-analyzer-models-endpoints.png">
+  <img alt="Analyzer models & endpoints" src="images/advanced-settings/04-analyzer-models-endpoints.png">
+</picture>
 
 > **Not the same knob as [Model Manager](Model-Manager)'s "Analyzer
 > engine."** This one is the server/env-level config knob (defaults to
@@ -119,7 +135,11 @@ your own on-disk copy; nothing here changes until you explicitly edit.
 
 ## 5. Voice engine & device
 
-![Voice engine & device](images/advanced-settings/05-voice-engine-device.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/05-voice-engine-device-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/05-voice-engine-device.png">
+  <img alt="Voice engine & device" src="images/advanced-settings/05-voice-engine-device.png">
+</picture>
 
 **High risk, starts collapsed.** The headline knob is **Accelerator
 profile**: `auto` (default) detects your hardware and picks NVIDIA/CUDA,
@@ -158,7 +178,11 @@ app-pinnable, so it just reports what the daemon is currently doing.
 
 ## 6. Voice batching & throughput
 
-![Voice batching & throughput](images/advanced-settings/06-voice-batching-throughput.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/06-voice-batching-throughput-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/06-voice-batching-throughput.png">
+  <img alt="Voice batching & throughput" src="images/advanced-settings/06-voice-batching-throughput.png">
+</picture>
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -171,7 +195,11 @@ app-pinnable, so it just reports what the daemon is currently doing.
 
 ## 7. Per-sentence QA gates
 
-![Per-sentence QA gates](images/advanced-settings/07-per-sentence-qa-gates.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/07-per-sentence-qa-gates-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/07-per-sentence-qa-gates.png">
+  <img alt="Per-sentence QA gates" src="images/advanced-settings/07-per-sentence-qa-gates.png">
+</picture>
 
 Group risk is **low** overall, but 3 knobs in this group are individually
 **medium** risk (Voice-QA device, Content-QA device, Auto-fix voice
@@ -207,7 +235,11 @@ mismatches) — the table's risk column shows each correctly.
 
 ## 8. Audio loudness targets
 
-![Audio loudness targets](images/advanced-settings/08-audio-loudness-targets.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/08-audio-loudness-targets-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/08-audio-loudness-targets.png">
+  <img alt="Audio loudness targets" src="images/advanced-settings/08-audio-loudness-targets.png">
+</picture>
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -218,7 +250,11 @@ mismatches) — the table's risk column shows each correctly.
 
 ## 9. GPU arbitration, memory & lifecycle
 
-![GPU arbitration, memory & lifecycle](images/advanced-settings/09-gpu-arbitration-memory-lifecycle.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/09-gpu-arbitration-memory-lifecycle-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/09-gpu-arbitration-memory-lifecycle.png">
+  <img alt="GPU arbitration, memory & lifecycle" src="images/advanced-settings/09-gpu-arbitration-memory-lifecycle.png">
+</picture>
 
 **High risk, starts collapsed.** One knob in this group is individually
 **medium** risk (Per-card VRAM free floor) — everything else is high.
@@ -247,7 +283,11 @@ mismatches) — the table's risk column shows each correctly.
 
 ## 10. Gemini rate limits
 
-![Gemini rate limits](images/advanced-settings/10-gemini-rate-limits.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/10-gemini-rate-limits-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/10-gemini-rate-limits.png">
+  <img alt="Gemini rate limits" src="images/advanced-settings/10-gemini-rate-limits.png">
+</picture>
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -257,7 +297,11 @@ mismatches) — the table's risk column shows each correctly.
 
 ## 11. LAN access & device tokens
 
-![LAN access & device tokens](images/advanced-settings/11-lan-access-device-tokens.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/11-lan-access-device-tokens-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/11-lan-access-device-tokens.png">
+  <img alt="LAN access & device tokens" src="images/advanced-settings/11-lan-access-device-tokens.png">
+</picture>
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|

@@ -9,9 +9,13 @@ Follow [Installing Castwright](Installing-Castwright) to bring the app up, then 
 
 Once setup is done, re-opening it later collapses into a compact summary board instead — one row per area with a green or amber dot, so you can see at a glance that everything's still ready, and drill back into a single step only if something needs attention.
 
-![Books view, reached once setup is complete](images/getting-started/01-books-view.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/getting-started/01-books-view-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/getting-started/01-books-view.png">
+  <img alt="Setup summary board — everything ready, one row per area" src="images/getting-started/01-books-view.png">
+</picture>
 
-> **About this screenshot:** the screenshot above is the empty Books view reached *after* setup, not the Setup wizard itself — capturing the wizard's five steps and the re-entry summary board is tracked as a follow-up, since it needs a fresh (never-set-up) install to shoot honestly rather than a staged one.
+> **About this screenshot:** the screenshot above is the re-entry summary board (everything already set up), not the Setup wizard's five-step walkthrough itself — capturing that step-by-step flow is tracked as a follow-up, since it needs a fresh (never-set-up) install to shoot honestly rather than a staged one.
 
 ## 2. Try the built-in sample book
 

@@ -4,7 +4,11 @@ This is where Castwright reads your book. Once a manuscript is saved, the analyz
 
 Under the hood it's a phased pipeline, not one giant pass: chapter boundaries are found first with a measured, observed-rate ETA rather than a guess; each chapter's cast is detected on its own, so one difficult chapter's failure doesn't torch the whole run; and every claimed line of evidence is checked back against your actual source text before it's trusted. The Analysing screen streams all of this live — phase, percentage, ETA, and the cast roster growing in front of you as it's discovered.
 
-![Analysing](images/analysis-and-the-analyzer/01-analysing-progress.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/analysis-and-the-analyzer/01-analysing-progress-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/analysis-and-the-analyzer/01-analysing-progress.png">
+  <img alt="Analysing" src="images/analysis-and-the-analyzer/01-analysing-progress.png">
+</picture>
 
 ## Choosing an analyzer
 
@@ -15,7 +19,11 @@ The model picker on the upload screen groups two kinds of analyzer:
 - **Gemini / Gemma (cloud)** — Google's free-tier API. Useful on a
   low-VRAM machine, or when you'd rather not tie up local compute.
 
-![Analyzer choice](images/analysis-and-the-analyzer/02-analyzer-choice.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/analysis-and-the-analyzer/02-analyzer-choice-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/analysis-and-the-analyzer/02-analyzer-choice.png">
+  <img alt="Analyzer choice" src="images/analysis-and-the-analyzer/02-analyzer-choice.png">
+</picture>
 
 See [Installing Castwright](Installing-Castwright) for setting up either
 path (pulling an Ollama model vs. adding a Gemini API key).

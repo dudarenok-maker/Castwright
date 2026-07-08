@@ -6,7 +6,11 @@ Uploading a book gets a manuscript into Castwright. The **Manuscript** tab — o
 
 The manuscript renders as your book's own prose, paragraph by paragraph, with every sentence carrying a color-coded bar for the speaker Castwright assigned it. Consecutive sentences from the same speaker group into a segment, so a page of dialogue reads as a series of colored blocks rather than a wall of identical text. The narrator gets a neutral grey — deliberately, so narration never competes with the cast for your attention. Below, *The Coalfall Commission*'s Chapter 3: 48 segments, 6 speakers, one line flagged low-confidence, with the chapter sidebar and detected-cast sidebar both visible.
 
-![Manuscript view with color-coded attribution, chapter sidebar, and cast sidebar](images/manuscript-management/01-attribution-view.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/manuscript-management/01-attribution-view-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/manuscript-management/01-attribution-view.png">
+  <img alt="Manuscript view with color-coded attribution, chapter sidebar, and cast sidebar" src="images/manuscript-management/01-attribution-view.png">
+</picture>
 
 ## Fixing an attribution
 
@@ -27,7 +31,11 @@ Every reassignment writes an entry to the **Log** tab, so nothing here is a sile
 
 Beyond fixing lines one at a time, **Review Script** sends a chapter (or the whole book) to a second LLM pass that reads back over the attribution the way a careful editor would — catching a stray speaker tag, a line split between two people, dialogue buried inside a paragraph of narration, or an emotion that doesn't fit. It surfaces every proposed fix in a diff view you accept or wave off line by line, rather than applying anything silently.
 
-![Review Script diff — grouped strip-tag, reassign, and exclude suggestions with per-row checkboxes](images/manuscript-management/review-script-diff.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/manuscript-management/review-script-diff-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/manuscript-management/review-script-diff.png">
+  <img alt="Review Script diff — grouped strip-tag, reassign, and exclude suggestions with per-row checkboxes" src="images/manuscript-management/review-script-diff.png">
+</picture>
 
 Below, Chapter 3's suggestions grouped by kind — strip a stray dialogue tag, reassign a line to a speaker outside the detected cast, or exclude a page-number artefact — with **Select all** per group and a running count of what's checked, so you accept exactly the fixes you want in one **Apply** click.
 
@@ -40,6 +48,10 @@ Need to merge or split chapters instead of fixing attribution? That's **Restruct
 
 Mid-drag, the boundary handle highlights peach and swaps its label to "drop on a sentence," so you always know a reassignment is live before you let go:
 
-![Boundary handle mid-drag, showing the peach highlight and "drop on a sentence" label](images/manuscript-management/boundary-drag.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/manuscript-management/boundary-drag-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/manuscript-management/boundary-drag.png">
+  <img alt="Boundary handle mid-drag, showing the peach highlight and "drop on a sentence" label" src="images/manuscript-management/boundary-drag.png">
+</picture>
 
 Next: with the cast confirmed and the manuscript in good shape, head to [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices).

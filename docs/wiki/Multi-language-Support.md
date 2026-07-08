@@ -14,11 +14,19 @@ in the cast view (Qwen is the engine behind every non-English cast; see
 confirmation screen shows the detected characters with their own-language
 names, each ready to design a Qwen voice for.
 
-![Confirm-details screen — auto-detected Russian, title carried over in Cyrillic](images/multi-language-support/language-detection.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/multi-language-support/language-detection-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/multi-language-support/language-detection.png">
+  <img alt="Confirm-details screen — auto-detected Russian, title carried over in Cyrillic" src="images/multi-language-support/language-detection.png">
+</picture>
 
 Below, *Der Bernsteinturm* — a German standalone — at the cast confirmation step: both detected characters, Erzählerin and Wachtmeister Brandt, keep their German names and roles, each queued to generate a new Qwen voice.
 
-![Cast confirmation for a German book — character names in their own language](images/multi-language-support/non-english-cast-confirmation.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/multi-language-support/non-english-cast-confirmation-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/multi-language-support/non-english-cast-confirmation.png">
+  <img alt="Cast confirmation for a German book — character names in their own language" src="images/multi-language-support/non-english-cast-confirmation.png">
+</picture>
 
 ## Casting a non-English book
 

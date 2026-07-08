@@ -23,7 +23,11 @@ paired via the steps below. `https://localhost:8443` is the one address
 exempt from this: it's recognised as loopback and skips pairing entirely, so
 it's the quickest way to check the app locally without pairing anything.
 
-![Admin page — LAN access card with Authorize a device and the resulting pairing QR](images/mobile-tablet-and-companion-app/lan-access-qr.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/mobile-tablet-and-companion-app/lan-access-qr-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/mobile-tablet-and-companion-app/lan-access-qr.png">
+  <img alt="Admin page — LAN access card with Authorize a device and the resulting pairing QR" src="images/mobile-tablet-and-companion-app/lan-access-qr.png">
+</picture>
 
 Click **Authorize a device** (a device name is optional — it defaults to "Device") and a pairing QR appears right below the card, ready for a phone's camera. When testing from a desktop browser tab on the same machine, a one-click "Open pairing link on castwright.local" link also appears next to the QR — clicking it opens a new tab with the authorization confirmation directly, no camera needed (available only when the friendly hostname is confirmed reachable).
 
@@ -45,7 +49,11 @@ the Books view at a phone viewport: the top bar collapses to a hamburger
 menu, the four stat tiles wrap to two columns, and the card grid drops to
 one column.
 
-![Phone viewport — Books view](images/mobile-tablet-and-companion-app/02-phone-viewport.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/mobile-tablet-and-companion-app/02-phone-viewport-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/mobile-tablet-and-companion-app/02-phone-viewport.png">
+  <img alt="Phone viewport — Books view" src="images/mobile-tablet-and-companion-app/02-phone-viewport.png">
+</picture>
 
 > **Known issue found in an earlier capture at this viewport:** `document.documentElement.scrollWidth` measured wider than `clientWidth` — a genuine horizontal-overflow bug, not a capture artifact. The cause was the workspace-path row under the page header (`WorkspacePathRow` in `src/components/library/library-chrome.tsx`): its path `<span>` carries a fixed `max-w-[520px]` with no responsive breakpoint, so on a narrow phone the row alone can exceed the viewport width and drag the whole page into horizontal scroll — a violation of this project's own "no horizontal overflow at 375×667" mobile testing invariant. Worth re-checking against a current build; flagged as a real bug rather than fixed in this docs pass.
 
@@ -62,7 +70,11 @@ Once paired, the companion app mirrors your library for offline listening,
 tracks finished books in its own shelf, and keeps that shelf and your
 listening position in sync across every paired device.
 
-![Pair a device modal — QR code, expiry countdown, and the manual-code fallback](images/mobile-tablet-and-companion-app/pair-a-device-modal.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/mobile-tablet-and-companion-app/pair-a-device-modal-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/mobile-tablet-and-companion-app/pair-a-device-modal.png">
+  <img alt="Pair a device modal — QR code, expiry countdown, and the manual-code fallback" src="images/mobile-tablet-and-companion-app/pair-a-device-modal.png">
+</picture>
 
 The Listen view's Companion banner opens the same pairing flow: **Pair a device → Scan QR** in the app, pointed at this code — it expires after a few minutes, with **Regenerate code** and a manual-entry fallback if scanning isn't an option.
 
