@@ -122,17 +122,39 @@ non-child age brackets tagged without Gemini). A lightweight "this doesn't match
 affordance on a catalog entry (Wave 3 UI detail) feeds a re-classification queue instead of
 requiring proactive human QA of the whole list up front.
 
-**Freshness:** re-running Stage 1 periodically (a scheduled job, not a live per-request path)
-picks up a known reader's newly-published books automatically — still not something a human
-has to remember to do by hand, since it's the same deterministic crawl, just re-triggered.
+**Third adversarial pass (on the implementation plan, not this spec) found the pipeline's
+biggest real risk wasn't curation cost — it was assuming an unattended, on-demand-repeatable
+crawl against LibriVox's live API was safe.** LibriVox has ~20,000+ titles; a full crawl at
+50/page is ~400+ sequential requests with no server-side language filter (confirmed: none
+exists), and every direct fetch to `librivox.org` during this spec's own research returned
+HTTP 403 (bot-blocking suspected, never confirmed as anything else). Firing hundreds of
+unthrottled requests at a host that already shows a 100% block rate on far gentler probing,
+with no fallback if it fails, is not something to build as a routinely-invoked live pipeline.
 
-Wave 3 planning owns the exact job/scheduling mechanics, the pitch-estimator implementation
-choice, and the Gemini prompt/schema — and should confirm the LibriVox feed responds
-successfully to a normal server-side request before building on it (direct fetches during
-this spec's review were blocked with a 403, consistent with bot-blocking on the request, not
-confirmed evidence of an outage, but unverified either way). This spec fixes the pipeline
-shape (deterministic discovery → tiered classification → confidence-tagged output) and the
-data shape, not the wire protocol or exact job cadence.
+**Revised model: the pipeline is run manually/under human supervision, periodically (every
+3-4 months), not continuously or on-demand.** Its output — the tagged catalog data file — is
+committed to the repo as a static artifact, the same way any other shipped data would be.
+The in-app catalog only ever offers what's in that committed file: **a reader/book that
+isn't in the map simply isn't offered in-app** — the user falls back to the existing manual
+Record/Upload path (§4), or the wiki page (§5) for something to hunt down themselves. This
+is a deliberate trade — staleness (a book published since the last refresh won't appear) in
+exchange for removing the operational risk of an automated crawler hitting a small
+nonprofit's API on every user's machine, or on a schedule, unsupervised. A stale-but-working
+catalog beats a live one that periodically breaks itself.
+
+This also means the pipeline no longer needs to be "cheap to re-run constantly" — it's fine
+for it to take real, human-attended wall-clock time every few months. It should still be a
+**polite, rate-limited** crawl regardless (paced requests, a real User-Agent) — good API
+citizenship doesn't stop mattering just because a human is watching it run, and a blocked
+crawl still wastes a whole refresh cycle.
+
+Wave 3 planning owns the exact refresh-cadence tooling and the Gemini prompt/schema, and
+should confirm the LibriVox feed responds successfully to a normal server-side request before
+building on it (direct fetches during this spec's review were blocked with a 403, consistent
+with bot-blocking on the request, not confirmed evidence of an outage, but unverified either
+way). This spec fixes the pipeline shape (deterministic discovery → tiered classification →
+confidence-tagged, committed output, refreshed periodically by a human) and the data shape,
+not the wire protocol or the exact refresh tooling.
 
 ## 4. Wizard flow & rights handling
 
