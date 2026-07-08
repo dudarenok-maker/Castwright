@@ -232,6 +232,14 @@ export function GenerationView({
      id/baseline refs inside useRefetchOnNewEvent) so either event can fire
      the refetch without affecting the other's state. */
   useRefetchOnNewEvent(activityEvents, 'generation_run_complete', refetchQaReport);
+  /* srv-36 hardening — refetches on a fresh `scoring_complete` entry landing
+     in this book's activity feed, so the Quality Gate card settles to its
+     final "N of M scored" reading once a background scoreBook pass finishes,
+     instead of staying stale until a manual page reload. Tracked
+     independently (its own id/baseline refs inside useRefetchOnNewEvent) so
+     it doesn't affect the chapter_complete/generation_run_complete triggers
+     above. */
+  useRefetchOnNewEvent(activityEvents, 'scoring_complete', refetchQaReport);
   /* #650 — render-time sentence→speaker map per chapter, for the PRECISE
      reassignment-staleness diff (vs the time-based change-log fallback). */
   const renderedSpeakersByChapter = useAppSelector(
