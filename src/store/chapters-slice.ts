@@ -106,6 +106,9 @@ export interface ChaptersState {
       path only). Optional: absent until a hydrate carries one, so the existing
       ChaptersState test literals need no edit. */
   renderedInstructByChapter?: Record<number, Record<number, string>>;
+  /** srv-36 hardening — scorebook per-chapter progress tracking, keyed by bookId.
+      Records how many characters have been scored in the QA gate. */
+  scoringProgress: Record<string, { charactersChecked: number; charactersOnRoster: number }>;
 }
 
 const initialState: ChaptersState = {
@@ -117,6 +120,7 @@ const initialState: ChaptersState = {
   activeStreams: {},
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
+  scoringProgress: {},
 };
 
 export const chaptersSlice = createSlice({
@@ -180,6 +184,19 @@ export const chaptersSlice = createSlice({
         `streamKey`. The header pill hides entirely when no streams remain. */
     clearActiveStream: (s, a: PayloadAction<string>) => {
       delete s.activeStreams[a.payload];
+    },
+
+    setScoringProgress: (
+      s,
+      a: PayloadAction<{ bookId: string; charactersChecked: number; charactersOnRoster: number }>,
+    ) => {
+      s.scoringProgress[a.payload.bookId] = {
+        charactersChecked: a.payload.charactersChecked,
+        charactersOnRoster: a.payload.charactersOnRoster,
+      };
+    },
+    clearScoringProgress: (s, a: PayloadAction<string>) => {
+      delete s.scoringProgress[a.payload];
     },
 
     /** Bug E — cross-book heartbeat + counter refresh from a server tick
